@@ -445,7 +445,7 @@ mod tests {
     use std::{
         fs,
         io::{BufRead, BufReader, Write},
-        net::TcpListener,
+        net::{Shutdown, TcpListener, TcpStream},
         sync::atomic::{AtomicUsize, Ordering},
         thread,
     };
@@ -524,6 +524,38 @@ mod tests {
         assert_eq!((ep.port, ep.pid), (29417, 12));
     }
 
+    // Reads HTTP request headers and drains any Content-Length body so closing
+    // the accepted socket on Windows loopback does not emit a TCP RST
+    // (WSAECONNRESET) into the client's response read.
+    fn read_http_request(stream: &TcpStream) -> String {
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut request = String::new();
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            request.push_str(&line);
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+        }
+        let length = request
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                if name.eq_ignore_ascii_case("content-length") {
+                    value.trim().parse::<usize>().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+        if length > 0 {
+            let mut payload = vec![0; length];
+            reader.read_exact(&mut payload).unwrap();
+        }
+        request
+    }
+
     fn fixture(status: &str, body: &str, extra_headers: &str) -> (u16, thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -533,16 +565,7 @@ mod tests {
             stream
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut request = String::new();
-            loop {
-                let mut line = String::new();
-                reader.read_line(&mut line).unwrap();
-                request.push_str(&line);
-                if line == "\r\n" || line.is_empty() {
-                    break;
-                }
-            }
+            let request = read_http_request(&stream);
             assert!(request.starts_with("GET /health HTTP/1.1\r\n"));
             assert!(request
                 .to_lowercase()
@@ -551,6 +574,8 @@ mod tests {
             assert!(!request.contains("never-echo-this"));
             // A bounded client may close early on an oversized body.
             let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(Shutdown::Write);
         });
         (port, handle)
     }
@@ -639,29 +664,7 @@ mod tests {
                 stream
                     .set_read_timeout(Some(Duration::from_secs(3)))
                     .unwrap();
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut request = String::new();
-                loop {
-                    let mut line = String::new();
-                    reader.read_line(&mut line).unwrap();
-                    request.push_str(&line);
-                    if line == "\r\n" || line.is_empty() {
-                        break;
-                    }
-                }
-                let length = request
-                    .lines()
-                    .find_map(|line| {
-                        let (name, value) = line.split_once(':')?;
-                        if name.eq_ignore_ascii_case("content-length") {
-                            value.trim().parse::<usize>().ok()
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(0);
-                let mut payload = vec![0; length];
-                reader.read_exact(&mut payload).unwrap();
+                let request = read_http_request(&stream);
                 let health = index == 0 || index == 1 || index == 3 || index == 5;
                 let body = if health {
                     assert!(request.starts_with("GET /health "));
@@ -685,6 +688,8 @@ mod tests {
                     body
                 );
                 stream.write_all(response.as_bytes()).unwrap();
+                stream.flush().unwrap();
+                let _ = stream.shutdown(Shutdown::Write);
             }
         });
         let daemon = discover_at(&cache.0).unwrap();
@@ -774,22 +779,15 @@ mod tests {
                 stream
                     .set_read_timeout(Some(Duration::from_secs(3)))
                     .unwrap();
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut request = String::new();
-                loop {
-                    let mut line = String::new();
-                    reader.read_line(&mut line).unwrap();
-                    request.push_str(&line);
-                    if line == "\r\n" || line.is_empty() {
-                        break;
-                    }
-                }
+                let request = read_http_request(&stream);
                 assert!(request.starts_with(expected), "{request}");
                 let response = format!(
                     "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 stream.write_all(response.as_bytes()).unwrap();
+                stream.flush().unwrap();
+                let _ = stream.shutdown(Shutdown::Write);
                 requests.push(request.to_lowercase());
             }
             requests
