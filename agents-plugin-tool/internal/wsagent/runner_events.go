@@ -1400,6 +1400,7 @@ func (c *conv) finishClose() {
 	c.syncHost(false)
 	c.stopProcess("")
 	if len(c.rec.Mail) > 0 || len(c.rec.Reports) > 0 {
+		c.parkedReports = 0
 		c.update(func(rec *Record) { rec.Mail, rec.Reports = nil, nil })
 	}
 	c.heldSenders = nil

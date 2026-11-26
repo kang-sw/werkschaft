@@ -112,6 +112,17 @@ type conv struct {
 	// failure and mcpBroken are State.Failure and State.MCPBroken.
 	failure   *wslive.Notice
 	mcpBroken []string
+	// usageLimitSettled: the last turn to settle had a usage-limit alert
+	// (turnSettled), for publish's exhaustion check (quota_hop.go);
+	// exhausted holds that report's notice by pending report id, and
+	// exhaustReport/exhaustNotice by Record.ReportID, until delivered;
+	// parkedReports counts the Record.Reports a hosted lead keeps for its
+	// scheduled continuation (reportsParked). All loop-owned and in-memory.
+	usageLimitSettled bool
+	exhausted         map[string]wslive.Notice
+	exhaustReport     string
+	exhaustNotice     wslive.Notice
+	parkedReports     int
 	// caps is the catalog profile resolved for the process's harness
 	// version and demoted by its init shape (harnessReported); nil for a
 	// backend without a profile or before the first report. commands is
@@ -1817,7 +1828,7 @@ func (c *conv) hasPendingKick() bool {
 	c.mu.Lock()
 	held := c.held
 	c.mu.Unlock()
-	return held > 0 || len(c.rec.Queued) > 0 || len(c.rec.Mail) > 0 || len(c.rec.Reports) > 0 ||
+	return held > 0 || len(c.rec.Queued) > 0 || len(c.rec.Mail) > 0 || len(c.rec.Reports) > 0 && !c.reportsParked() ||
 		c.rec.DurableTurn != nil || c.kickDeferred.Load() || c.quotaPendingFire ||
 		(c.compactResume && c.compactNote != "")
 }
@@ -1922,7 +1933,10 @@ func (c *conv) kickInput() {
 	// A child's reports (children.go) go with the next message turn, as
 	// mail does.
 	reports := c.rec.Reports
-	if (err != nil || len(held) == 0) && len(mail) == 0 && len(c.rec.Queued) == 0 && len(reports) == 0 && len(pending) == 0 {
+	// Reports parked for a scheduled quota continuation (quota_hop.go) wait
+	// for its turn, or any other input's, and never start one alone.
+	reportsWake := len(reports) > 0 && !c.reportsParked()
+	if (err != nil || len(held) == 0) && len(mail) == 0 && len(c.rec.Queued) == 0 && !reportsWake && len(pending) == 0 {
 		c.voidCancelled()
 		return
 	}
@@ -2041,7 +2055,7 @@ func (c *conv) kickInput() {
 			return
 		}
 	}
-	if len(queue) == 0 && len(mail) == 0 && len(reports) == 0 {
+	if len(queue) == 0 && len(mail) == 0 && !reportsWake {
 		// A cancel took the message after the start: the process waits for
 		// input like after a turn.
 		c.voidCancelled()
@@ -2178,6 +2192,7 @@ func (c *conv) kickInput() {
 			}
 			if len(reports) > 0 {
 				rec.Reports = nil
+				c.parkedReports = 0
 			}
 			c.setPromptBoundary(rec, startedAt, true)
 			if ordinary {
@@ -2219,7 +2234,7 @@ func (c *conv) kickInput() {
 		// a new process, through the loop's inbox signal rather than on
 		// this stack. A send that fails again leaves it for the next inbox
 		// or mail signal, so a send that always fails does not spin.
-		if (len(c.rec.Queued) > 0 || len(c.rec.Mail) > 0 || len(c.rec.Reports) > 0) && !c.sendRetried {
+		if (len(c.rec.Queued) > 0 || len(c.rec.Mail) > 0 || (len(c.rec.Reports) > 0 && !c.reportsParked())) && !c.sendRetried {
 			c.sendRetried = true
 			c.signalInbox()
 		} else {
@@ -2276,6 +2291,7 @@ func (c *conv) kickInput() {
 			}
 			if len(reports) > 0 {
 				rec.Reports = nil
+				c.parkedReports = 0
 			}
 			if ordinary {
 				rec.PendingCompaction = nil

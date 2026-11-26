@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/wscron"
 )
@@ -58,7 +59,14 @@ func (s *Server) handleCron(id json.RawMessage, args map[string]any) response {
 	case hasAdd:
 		spec, ok := args["add"].(map[string]any)
 		if !ok {
-			return toolTextResponse(id, "", errors.New("cron: add must be an object {name, expr, prompt, tz?}"))
+			return toolTextResponse(id, "", errors.New("cron: add must be an object {name, expr | at, prompt, tz?}"))
+		}
+		for key := range spec {
+			switch key {
+			case "name", "expr", "at", "prompt", "tz":
+			default:
+				return toolTextResponse(id, "", fmt.Errorf("cron: unknown add field %q (use name, expr or at, prompt, tz)", key))
+			}
 		}
 		field := func(key string, required bool) (string, error) {
 			raw, present := spec[key]
@@ -74,22 +82,32 @@ func (s *Server) handleCron(id json.RawMessage, args map[string]any) response {
 			}
 			return text, nil
 		}
-		var fields [4]string
-		for i, key := range []string{"name", "expr", "prompt", "tz"} {
-			text, err := field(key, key != "tz")
+		var fields [5]string
+		for i, key := range []string{"name", "expr", "at", "prompt", "tz"} {
+			text, err := field(key, key == "name" || key == "prompt")
 			if err != nil {
 				return toolTextResponse(id, "", err)
 			}
 			fields[i] = text
 		}
-		for key := range spec {
-			switch key {
-			case "name", "expr", "prompt", "tz":
-			default:
-				return toolTextResponse(id, "", fmt.Errorf("cron: unknown add field %q (use name, expr, prompt, tz)", key))
-			}
+		name, expr, at, prompt, tz := fields[0], fields[1], fields[2], fields[3], fields[4]
+		if (expr != "") == (at != "") {
+			return toolTextResponse(id, "", errors.New("cron: add takes exactly one of expr (recurring) or at (one-shot RFC 3339 time)"))
 		}
-		schedID, nextAt, err := sched.Add(owner, fields[0], fields[1], fields[2], fields[3])
+		var schedID, nextAt string
+		var err error
+		if at != "" {
+			if tz != "" {
+				return toolTextResponse(id, "", errors.New("cron: add.tz applies to expr only; give at's offset in the timestamp itself"))
+			}
+			when, perr := time.Parse(time.RFC3339, strings.TrimSpace(at))
+			if perr != nil {
+				return toolTextResponse(id, "", fmt.Errorf("cron: add.at must be an RFC 3339 time such as 2026-01-02T15:04:05+09:00: %v", perr))
+			}
+			schedID, nextAt, err = sched.AddAt(owner, name, prompt, when)
+		} else {
+			schedID, nextAt, err = sched.Add(owner, name, expr, prompt, tz)
+		}
 		if err != nil {
 			return toolTextResponse(id, "", fmt.Errorf("cron add: %w", err))
 		}
@@ -118,10 +136,14 @@ func (s *Server) handleCron(id json.RawMessage, args map[string]any) response {
 			if i.LastAt != "" {
 				last = i.LastAt
 			}
-			out = append(out, map[string]any{
+			entry := map[string]any{
 				"id": i.ID, "name": i.Name, "expr": i.Expr, "tz": i.TZ, "next_at": i.NextAt,
 				"last_at": last, "pending": i.Pending, "dropped": i.Dropped,
-			})
+			}
+			if i.At != "" {
+				entry["at"] = i.At
+			}
+			out = append(out, entry)
 		}
 		return toolJSONResponse(id, out, nil)
 	}
@@ -150,7 +172,11 @@ func formatCronList(list []wscron.Info) string {
 		if i.Pending {
 			pending = "yes"
 		}
-		fmt.Fprintf(&b, "\n%s  %s  %q  tz=%s  next=%s  last=%s  pending=%s  dropped=%d", i.ID, i.Name, i.Expr, i.TZ, next, last, pending, i.Dropped)
+		when := fmt.Sprintf("%q", i.Expr)
+		if i.Expr == "" && i.At != "" {
+			when = "at=" + i.At
+		}
+		fmt.Fprintf(&b, "\n%s  %s  %s  tz=%s  next=%s  last=%s  pending=%s  dropped=%d", i.ID, i.Name, when, i.TZ, next, last, pending, i.Dropped)
 	}
 	return b.String()
 }

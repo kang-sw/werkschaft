@@ -227,6 +227,44 @@ func TestAgentTurnReporterMailsTheParent(t *testing.T) {
 	}
 }
 
+func TestAgentTurnReporterCustomTextPreservesFirstLine(t *testing.T) {
+	setupMailboxTestEnv(t)
+	root := t.TempDir()
+	initGit(t, root)
+	s := NewServer(root, "test")
+	key := mailboxLogin(t, s, 1, root)
+	sub := wswake.Mailbox.Subscribe()
+	defer sub.Close()
+
+	custom := "QUOTA EXHAUSTED: worker (id:childone)\nbackend: claude\nmodel: claude-large\nerror: usage limit\nresets_at: unknown\nskipped_ancestors: none\naction:\n- the worker keeps its conversation: resume it with mailbox.send(to: \"id:childone\") once its quota is back\n"
+	rep := wsagent.TurnReport{
+		Parent: wsagent.ParentRef{Kind: wsagent.ParentLead, ReplyID: wsmailbox.ReplyID(key)},
+		Child:  wsagent.State{ID: "childone", Label: "worker"},
+		Result: wsagent.TurnResult{ID: "childone", Status: wsagent.TurnFailed, Error: "usage limit"},
+		Text:   custom,
+	}
+	if got := wsagent.ReportText(rep); got != custom {
+		t.Fatalf("ReportText(custom) = %q, want %q", got, custom)
+	}
+	report := AgentTurnReporter(io.Discard)
+	report(rep)
+	select {
+	case <-sub.Hard():
+	case <-time.After(time.Second):
+		t.Fatalf("custom report did not wake mailbox waits")
+	}
+	out := callToolWithKey(t, s, 2, key, "mailbox.recv", nil)
+	if !strings.Contains(out, "agent:childone: QUOTA EXHAUSTED: worker (id:childone)\n") {
+		t.Fatalf("custom report must start with QUOTA EXHAUSTED header, got: %q", out)
+	}
+	if strings.Contains(out, "Reply with mailbox.send(to: \"id:childone\").\nQUOTA EXHAUSTED") {
+		t.Fatalf("custom report must not get generic Reply prefix: %q", out)
+	}
+	if strings.Contains(out, "[subagent") {
+		t.Fatalf("custom report must replace generic [subagent] report: %q", out)
+	}
+}
+
 // liveAgents is the agents of key's live state in s.
 
 func TestRetiredPiListUsesCallerOwnership(t *testing.T) {

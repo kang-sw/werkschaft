@@ -408,9 +408,107 @@ func TestCronToolSchemaInventoryAndShippedText(t *testing.T) {
 	if regexp.MustCompile(`\b26\d{4}-|\b[0-9a-f]{7,40}\b`).MatchString(description) {
 		t.Errorf("cron description cites a ticket stem or commit: %s", description)
 	}
-	for _, want := range []string{"@reboot", "UTC", "+HH:MM", "32 schedules", "16 KiB", "not caught up", "lead sessions only"} {
+	for _, want := range []string{"@reboot", "UTC", "+HH:MM", "32 schedules", "16 KiB", "not caught up", "lead sessions only", "one-shot", "RFC 3339"} {
 		if !strings.Contains(description, want) {
 			t.Errorf("cron description lacks %q", want)
 		}
+	}
+}
+
+func TestCronToolOneShotAt(t *testing.T) {
+	f := newCronFixture(t) // now 2026-03-10T00:00:30Z
+	spec := func(kv ...string) map[string]any {
+		m := map[string]any{}
+		for i := 0; i < len(kv); i += 2 {
+			m[kv[i]] = kv[i+1]
+		}
+		return map[string]any{"add": m}
+	}
+	text, isErr := f.call(spec("name", "wake", "at", "2026-03-10T09:10:00+09:00", "prompt", "quota reset: resume"))
+	if isErr || !strings.Contains(text, "id: cron-") || !strings.Contains(text, "next_at: 2026-03-10T09:10:00+09:00") {
+		t.Fatalf("add at = %q, %v", text, isErr)
+	}
+	id := strings.TrimSpace(strings.TrimPrefix(strings.SplitN(text, "\n", 2)[0], "id:"))
+	list, isErr := f.call(nil)
+	if isErr || !strings.Contains(list, id+"  wake  at=2026-03-10T09:10:00+09:00  tz=+09:00  next=2026-03-10T09:10:00+09:00  last=-  pending=no  dropped=0") {
+		t.Fatalf("list = %q, %v", list, isErr)
+	}
+	if text, isErr := f.add("daily", "0 9 * * *", "p", ""); isErr {
+		t.Fatal(text)
+	}
+	raw, isErr := f.call(map[string]any{"format": "json"})
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(raw), &got); isErr || err != nil || len(got) != 2 {
+		t.Fatalf("json list = %q, %v, %v", raw, isErr, err)
+	}
+	for _, e := range got {
+		at, hasAt := e["at"]
+		switch e["name"] {
+		case "wake":
+			if at != "2026-03-10T09:10:00+09:00" || e["expr"] != "" {
+				t.Errorf("one-shot entry = %v", e)
+			}
+		case "daily":
+			if hasAt {
+				t.Errorf("recurring entry carries at: %v", e)
+			}
+		}
+	}
+	addJSON, isErr := f.call(map[string]any{"format": "json", "add": map[string]any{"name": "utc", "at": "2026-03-11T00:00:00Z", "prompt": "p"}})
+	var added map[string]any
+	if err := json.Unmarshal([]byte(addJSON), &added); isErr || err != nil || added["next_at"] != "2026-03-11T00:00:00Z" {
+		t.Fatalf("json add at = %q, %v, %v", addJSON, isErr, err)
+	}
+
+	// Refusals name the rule and write nothing.
+	for _, tc := range []struct {
+		args map[string]any
+		want string
+	}{
+		{spec("name", "x", "expr", "@daily", "at", "2026-03-11T00:00:00Z", "prompt", "p"), "exactly one of expr"},
+		{spec("name", "x", "prompt", "p"), "exactly one of expr"},
+		{spec("name", "x", "at", "2026-03-11T00:00:00Z", "prompt", "p", "tz", "+09:00"), "add.tz applies to expr only"},
+		{spec("name", "x", "at", "tomorrow", "prompt", "p"), "RFC 3339"},
+		{spec("name", "x", "at", "2026-03-11 00:00:00", "prompt", "p"), "RFC 3339"},
+		{spec("name", "x", "at", "2026-03-10T00:00:30Z", "prompt", "p"), "future"},
+		{spec("name", "x", "at", "2026-03-09T00:00:00Z", "prompt", "p"), "future"},
+		{spec("name", "wake", "at", "2026-03-12T00:00:00Z", "prompt", "p"), "already exists"},
+		{map[string]any{"add": map[string]any{"name": "x", "at": 5, "prompt": "p"}}, "add.at must be a string"},
+	} {
+		if text, isErr := f.call(tc.args); !isErr || !strings.Contains(text, tc.want) {
+			t.Errorf("add %v = %q, %v; want an error containing %q", tc.args, text, isErr, tc.want)
+		}
+	}
+	if n := len(f.sched.List("lead")); n != 3 {
+		t.Fatalf("refused adds changed the list: %d schedules", n)
+	}
+
+	// It fires once, is gone from the list, and delete by name of a pending
+	// one-shot works before it fires.
+	if text, isErr := f.call(map[string]any{"delete": "utc"}); isErr || text != "ok" {
+		t.Fatalf("delete one-shot by name = %q, %v", text, isErr)
+	}
+	f.clock.Advance(9*time.Minute + 30*time.Second)
+	held, _ := wsinbox.Held(f.sess.inbox("lead"))
+	if len(held) != 1 || !strings.Contains(held[0].Entry.Text(), `name="wake" at="2026-03-10T09:10:00+09:00">`+"\nquota reset: resume\n</ws:cron>") {
+		t.Fatalf("held = %+v", held)
+	}
+	if list, _ := f.call(nil); strings.Contains(list, "wake") || !strings.HasPrefix(list, "1 schedule\n") {
+		t.Fatalf("list after the one-shot fired = %q", list)
+	}
+	f.clock.Advance(24 * time.Hour)
+	held, _ = wsinbox.Held(f.sess.inbox("lead"))
+	wake := 0
+	for _, h := range held {
+		if h.Entry.Cron != nil && h.Entry.Cron.Name == "wake" {
+			wake++
+		}
+	}
+	if wake != 1 {
+		t.Fatalf("one-shot delivered %d times", wake)
+	}
+	f.restart()
+	if list, _ := f.call(nil); strings.Contains(list, "wake") {
+		t.Fatalf("the delivered one-shot came back after a restart: %q", list)
 	}
 }

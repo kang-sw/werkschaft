@@ -6,15 +6,20 @@ import (
 )
 
 func (c *conv) holdDurable(res TurnResult) error {
+	hadSteers := false
 	return c.commitDurableRecord(func(rec *Record) {
 		finishActiveTurn(rec, c.r.opts.Now().UnixMilli())
 		rec.HeldTurn, rec.TurnOpen, rec.LastTurn = &res, false, nil
 		if rec.DurableTurn != nil {
+			hadSteers = len(rec.DurableSteers) > 0
 			requeueDurableSteers(rec)
 			rec.DurableHeldReportID = rec.DurableTurn.ID
 			rec.DurableTurn = nil
 		}
 	}, func() {
+		if hadSteers {
+			c.parkedReports = 0
+		}
 		c.heldRes, c.holding = &res, true
 	})
 }
@@ -23,6 +28,7 @@ func (c *conv) holdDurable(res TurnResult) error {
 // report before any waiter or report callback can observe the settlement.
 func (c *conv) publishDurableRecord(res TurnResult, keepOpen bool, also func(*Record)) (waited bool, err error) {
 	var pendingID string
+	hadSteers := false
 	err = c.commitDurableRecord(func(rec *Record) {
 		id := rec.DurableHeldReportID
 		if !keepOpen && rec.DurableTurn != nil {
@@ -36,6 +42,7 @@ func (c *conv) publishDurableRecord(res TurnResult, keepOpen bool, also func(*Re
 		}
 		now := c.r.opts.Now()
 		if !keepOpen {
+			hadSteers = len(rec.DurableSteers) > 0
 			requeueDurableSteers(rec)
 			finishActiveTurn(rec, now.UnixMilli())
 			rec.TurnOpen, rec.DurableTurn = false, nil
@@ -55,6 +62,9 @@ func (c *conv) publishDurableRecord(res TurnResult, keepOpen bool, also func(*Re
 		}
 		rec.LastTurn = &PendingReport{ID: pendingID, Result: res, Mark: res.mark}
 	}, func() {
+		if hadSteers {
+			c.parkedReports = 0
+		}
 		c.settled, c.settledReport = res, pendingID
 		c.heldRes, c.holding = nil, false
 	})
