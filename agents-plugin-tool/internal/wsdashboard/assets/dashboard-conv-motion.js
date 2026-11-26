@@ -1237,8 +1237,11 @@
           if (totalDelta > 0) {
             var launchCat = lastTool ? classifyTool(lastTool) : (state.catId !== "thinking" ? state.catId : classifyTool(tool));
             var count = Math.min(3, totalDelta);
+            // Explicit flight list: oks first, then fails; truncation keeps at least one of each kind present.
+            var nFail = deltaFailed > 0 ? Math.max(1, Math.min(deltaFailed, count - (deltaDone > 0 ? 1 : 0))) : 0;
+            var nOk = count - nFail;
             for (var c = 0; c < count; c++) {
-              var isFail = c < deltaFailed && (deltaFailed > 0 && (deltaDone === 0 || c === count - 1));
+              var isFail = c >= nOk;
               var isLast = c === count - 1;
               launchFlight(launchCat, isFail ? "fail" : "ok", isLast ? tokenDelta : 0);
             }

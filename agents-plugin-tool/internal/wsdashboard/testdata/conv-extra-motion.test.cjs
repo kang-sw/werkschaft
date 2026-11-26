@@ -413,6 +413,23 @@ test("state machine transitions idle -> thinking -> pop-in -> sway -> OK/FAIL fl
   h.engine.destroy();
 });
 
+test("mixed OK+FAIL completion batch still launches a FAIL flight (coral +m popup)", t => {
+  const h = createHarness();
+  t.after(() => h.engine.destroy());
+  h.setLiveDOM({ phase: "thinking", done: 1, failed: 0, turn: "t9", turnTokens: 1000, hasActivity: true });
+  h.stepRaf(3, 16);
+  h.setLiveDOM({ phase: "tool", tool: "ws/exec.shell", done: 1, failed: 0, turn: "t9", turnTokens: 1000, hasActivity: true });
+  h.stepRaf(5, 16);
+  h.setLiveDOM({ phase: "tool", tool: "ws/git.diff", done: 2, failed: 1, turn: "t9", turnTokens: 1250, hasActivity: true, hasFails: true });
+  assert.equal(h.engine.getState().flights, 2, "one OK and one FAIL flight launched");
+  let sawFailPopup = false;
+  for (let i = 0; i < 200; i++) {
+    h.stepRaf(1, 16);
+    if (h.engine.getState().popups.some(p => p.text === "+250" && p.jitter)) sawFailPopup = true;
+  }
+  assert.equal(sawFailPopup, true, "last flight in a mixed batch is FAIL and carries the jittering +m popup");
+});
+
 test("+m popup is omitted when exact tokens did not advance or only ~ estimate exists", t => {
   const h = createHarness();
   t.after(() => h.engine.destroy());
