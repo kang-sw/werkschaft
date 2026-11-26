@@ -467,7 +467,10 @@
         "clone_id": "9091c57d68d03c76",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-26T07:40:43Z"
+        "touched_at": "2026-11-26T07:42:08Z",
+        "impl": {
+          "branch": "impl/develop/venue-emote-flame"
+        }
       }
     },
     "261126-refactor-oversized-multi-responsibility-files": {
