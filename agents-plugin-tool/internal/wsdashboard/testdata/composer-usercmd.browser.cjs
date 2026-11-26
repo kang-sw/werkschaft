@@ -211,7 +211,7 @@ async function holdButton(page, locator, ms = 1100) {
         await ask.and(view.locator('[data-hold-state="ready"]')).waitFor({ timeout: 5000 });
         await page.keyboard.up('Space');
         await view.waitForSelector('.ucmd-pop', { state: 'hidden', timeout: 5000 });
-        assert.ok(asked.endsWith('\n' + original), 'Ask sends the exact stored prompt');
+        assert.ok(asked.endsWith('<prompt>' + original + '</prompt>\n</ws:ucmd>'), 'Ask sends the exact stored prompt inside <ws:ucmd>');
         await page.unroute('**/s/livesession/message');
         await openPop(view);
         await holdButton(page, entry.locator('.ucmd-ibtn-del'));

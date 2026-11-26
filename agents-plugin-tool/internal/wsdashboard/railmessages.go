@@ -89,6 +89,7 @@ func (c *railMessages) lastResult(replyID string, rev uint64, dir string) (railM
 					text := rec.Text
 					if rec.Kind == wslive.RingUser {
 						text = withoutImageLines(text)
+						text = formatUserCommandPreview(text)
 					}
 					msg = railMessage{Text: oneLine(text, railMessageRunes), User: rec.Kind == wslive.RingUser}
 					break

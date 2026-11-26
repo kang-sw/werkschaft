@@ -510,10 +510,13 @@ test('1s hold confirmation on Run, Ask Agent (preserving #composer draft), Delet
   await h.flushMicrotasks();
   assert.equal(h.posts.length, 1);
   assert.equal(h.posts[0].route, 'message');
-  assert.match(h.posts[0].body.text, /Run Tests/);
-  assert.match(h.posts[0].body.text, /go test -race \.\//);
-  assert.match(h.posts[0].body.text, /Check failures/);
-  assert.match(h.posts[0].body.text, /cwd: pkg/);
+  assert.equal(h.posts[0].body.text, [
+    '<ws:ucmd label="Run Tests" edited="true">',
+    'User requested execution of the following command.',
+    '<cmd cwd="pkg">go test -race ./...</cmd>',
+    '<prompt>Check failures</prompt>',
+    '</ws:ucmd>'
+  ].join('\n'));
   assert.equal(h.ctext.value, 'unsent composer draft', '#composer draft untouched');
   assert.equal(pop.hidden, true, 'popover closes after ask send');
 
@@ -672,4 +675,44 @@ test('keyboard Space/Enter hold-to-confirm, empty-line ask guard, and 409 stale/
   await h.flushMicrotasks();
   assert.equal(h.warns.at(-1), EN['js.ucmd.withdrawn']);
   assert.equal(h.composer.querySelectorAll('.ucmd-card').length, 0);
+});
+
+test('Ask Agent serializes <ws:ucmd> XML with proper escaping and omits optional edited/cwd when unset', async () => {
+  const h = makeUcmdHarness((url, opts) => {
+    const method = opts.method || 'GET';
+    if (method === 'GET') {
+      return jsonRes({
+        rev: 'e1.1.r1',
+        token: 'tok1',
+        commands: [
+          {
+            id: 'esc',
+            source: 'user',
+            label: 'Build & "Test" <v1> \'ok\'',
+            line: 'echo "a < b" && cat [Image #1] > out.txt',
+            cwd: '',
+            prompt: '',
+            revision: 'r1'
+          }
+        ]
+      });
+    }
+    return jsonRes({}, 404);
+  });
+  await h.flushMicrotasks();
+  h.fire(h.document.getElementById('ucmdbadge'), 'click');
+  const askBtn = h.composer.querySelector('.ucmd-card .ucmd-ibtn-ask');
+  h.holdConfirm(askBtn, 1000);
+  await h.flushMicrotasks();
+  assert.equal(h.posts.length, 1);
+  assert.equal(h.posts[0].body.text, [
+    '<ws:ucmd label="Build &amp; &quot;Test&quot; &lt;v1&gt; &#39;ok&#39;">',
+    'User requested execution of the following command.',
+    '<cmd>echo "a &lt; b" &amp;&amp; cat &#91;Image #1] &gt; out.txt</cmd>',
+    '<prompt>' + EN['js.ucmd.ask.default'] + '</prompt>',
+    '</ws:ucmd>'
+  ].join('\n'));
+  assert.equal(h.posts[0].body.text.includes('edited='), false);
+  assert.equal(h.posts[0].body.text.includes('cwd='), false);
+  assert.equal(h.posts[0].body.text.includes('[Image #1]'), false);
 });
