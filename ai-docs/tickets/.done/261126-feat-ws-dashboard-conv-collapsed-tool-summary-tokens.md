@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-completeness-reviewed: 17b23c13cb6f541a
 sage-review-design-reviewed: 17b23c13cb6f541a
+completed: 2026-11-27
 ---
 
 # Baseline Collapsed Turn Tool Summary & Added Tokens (+Nk tok)
@@ -131,3 +132,21 @@ Ordered sub-steps (one reviewable unit): (a) backend `AddedTokens` capture and t
 - Node DOM harness tests covering: default collapsed state on completed turns, click-to-expand and click-to-collapse toggling `[data-conv-turn-drawer]` & `aria-expanded`, preservation of expanded state across SSE `mergeEntries` / keyed patches without scroll-lock drift, failure count visibility when `failed > 0`, presence of exactly one `[data-conv-turn-tokens]` anchor per turn, a turn with several tool gaps and interleaved replies producing one summary, the active-turn live header (same component, updating as gaps finish), the `~` estimate rendering when `AddedTokens == 0`, the running snapshot field advancing with `UsageContext` and clearing at `RingTurn` write, a span with no closing `RingTurn` falling back to a gap-derived summary, no live header on an idle session, and the wake label surviving the `.turnline` replacement.
 - Locale parity: every table in `wsi18n/tables/` contains the new keys (the parity test in `wsi18n` / `wsdashboard/i18n_test.go` passes).
 - Headless Chromium (Playwright) visual verification in dark and light themes compared side-by-side against the Axis A turn-summary rows in `ai-docs/assets/mockups/261125/whiteboard-chat-view/mockup.html`.
+
+### Result (128a8f42f) - 2026-11-27
+
+Landed on `impl/develop/blurb-feel-bust`:
+- `0a89c5059` wslive: `AddedTokens` on `RingEntry`, `TurnAddedTokens` on `Lead`.
+- `177f24402` wsdashboard collapsed per-turn tool summary (turn-summary builder, template, CSS/JS, tests) and all 11 `wsi18n` locale tables.
+- `128a8f42f` review fix: live header duration now ticks from `TurnStartedAt` (`StartMs`, `data-f="since"`) rather than summing tool durations.
+
+Decisions:
+- Review Important "idle Phase with running TurnStartedAt" left unchanged: Decision 5 and `TestTurnSummaryActiveLiveHeaderAndIdleSuppression` pin idle Phase -> orphan summary, and wslive derives Phase from `turnStartedAt>0` (state.go), so a running turn cannot read idle. Invariant documented on `leadTurnRunning`.
+- Minor, unfixed: live (`turn-live`) vs completed (`turn-<anchor>`) data-key means open state does not carry over at completion; first-usage-mid-turn baseline case has no pinning test.
+
+Verification (all PASS):
+- `go test -race -run 'TestTurnSummary|TestNewFoldedPlainTurnSummary|TestTools|TestAuditCallRows|TestWhiteboardEffects|TestActivityRow|TestConversation|TestCompactTokens|TestBatchRows|TestOpenGap|TestExactTools|TestCSS|TestI18n|TestEntryCache' ./internal/wsdashboard/...` ok
+- `go test -race -run 'TestEveryEnglishKeyIsUsed|TestOtherTables|TestPlaceholders|TestPlural' ./internal/wsi18n/...` ok (`TestEveryUsedKeyIsInTheEnglishTable` fails only on pre-existing ws-input.js keys, fixed on develop at f2668d8ce)
+- `go test -race ./internal/wslive/...` ok (at 0a89c5059); `GOOS=windows go vet ./...` ok
+- `node --test conv-turn-summary.test.cjs convo-scroll-lock.test.cjs` 10/10
+- compared Chromium dark/light captures vs `ai-docs/assets/mockups/261125/whiteboard-chat-view/mockup.html`: match (captured before the review fix; the fix only changes the live duration element).

@@ -257,12 +257,15 @@ type State struct {
 	adapter      string
 	scrub        scrubber
 
-	lead           activityState
-	turnStartedAt  int64
-	turnOrigin     string
-	pendingWake    bool
-	turnWake       bool
-	previousTurnMs int64
+	lead               activityState
+	turnStartedAt      int64
+	turnOrigin         string
+	turnStartTokens    int64
+	hasTurnStartTokens bool
+	turnAddedTokens    int64
+	pendingWake        bool
+	turnWake           bool
+	previousTurnMs     int64
 	summary        summaryState
 	lastTurnOutput *ModelObservation
 	outputRate     *OutputRate
@@ -392,6 +395,12 @@ func (st *State) Apply(ev Event, now int64) (Result, error) {
 		st.turnWake = st.pendingWake && (origin == "" || origin == OriginMail)
 		st.pendingWake = false
 		st.turnStartedAt, st.turnOrigin = at, origin
+		st.turnAddedTokens = 0
+		if tok, ok := usageContextTokens(st.usage); ok {
+			st.turnStartTokens, st.hasTurnStartTokens = tok, true
+		} else {
+			st.turnStartTokens, st.hasTurnStartTokens = 0, false
+		}
 		st.lead.done, st.lead.failed, st.lead.permission = 0, 0, nil
 		// No adapter starts a turn while a compaction runs, so one still
 		// marked running lost its end (the host failed under it): it stops
@@ -416,7 +425,7 @@ func (st *State) Apply(ev Event, now int64) (Result, error) {
 			// Preserve aggregate clipping without extending summaryHistory's
 			// selected v/commit/requests shape or changing provider status.
 			truncated := st.summary.current != nil && st.summary.current.Truncated
-			res.Ring = append(res.Ring, RingEntry{Kind: RingTurn, Origin: st.turnOrigin, WakeTurn: st.turnWake, Done: done, Failed: failed, DurationMs: duration, Reason: ev.Reason, Truncated: truncated, SummaryHistory: st.finishSummary(ev.Reason)})
+			res.Ring = append(res.Ring, RingEntry{Kind: RingTurn, Origin: st.turnOrigin, WakeTurn: st.turnWake, Done: done, Failed: failed, DurationMs: duration, AddedTokens: st.turnAddedTokens, Reason: ev.Reason, Truncated: truncated, SummaryHistory: st.finishSummary(ev.Reason)})
 			st.previousTurnMs = duration
 			st.lastTurnOutput = nil
 			if o := st.observed[""]; o != nil && o.Current.At >= st.turnStartedAt {
@@ -425,6 +434,7 @@ func (st *State) Apply(ev Event, now int64) (Result, error) {
 			}
 		}
 		st.turnStartedAt, st.turnOrigin = 0, ""
+		st.turnStartTokens, st.hasTurnStartTokens, st.turnAddedTokens = 0, false, 0
 		res.Changed = true
 	case KindAgent:
 		if st.staleEvent(ev) || st.nativeSettled(ev) {
@@ -503,6 +513,19 @@ func (st *State) Apply(ev Event, now int64) (Result, error) {
 		usage := normalizeUsage(ev)
 		res.Changed = !reflect.DeepEqual(usage, st.usage)
 		st.usage = usage
+		if st.turnStartedAt > 0 {
+			if tok, ok := usageContextTokens(usage); ok {
+				if !st.hasTurnStartTokens {
+					st.turnStartTokens, st.hasTurnStartTokens = tok, true
+				} else {
+					added := max(tok-st.turnStartTokens, 0)
+					if added != st.turnAddedTokens {
+						st.turnAddedTokens = added
+						res.Changed = true
+					}
+				}
+			}
+		}
 	case KindCompact:
 		if ev.AgentID != "" {
 			return Result{}, fmt.Errorf("compact is the main conversation's only; omit agentId")
@@ -1237,6 +1260,7 @@ func (st *State) Snapshot(now int64) Snapshot {
 			Activity:         st.lead.view(),
 			TurnStartedAt:    st.turnStartedAt,
 			TurnOrigin:       st.turnOrigin,
+			TurnAddedTokens:  st.turnAddedTokens,
 			PreviousTurnMs:   st.previousTurnMs,
 			ReasoningSummary: cloneSummary(st.summary.current),
 		},
@@ -1601,6 +1625,14 @@ func normalizeUsage(ev Event) *Usage {
 		return nil
 	}
 	return u
+}
+
+// usageContextTokens returns the reported context token count when present.
+func usageContextTokens(u *Usage) (int64, bool) {
+	if u == nil || u.Context == nil || u.Context.Tokens == nil {
+		return 0, false
+	}
+	return *u.Context.Tokens, true
 }
 
 // clone is a deep copy, so a snapshot never shares the state's pointers.

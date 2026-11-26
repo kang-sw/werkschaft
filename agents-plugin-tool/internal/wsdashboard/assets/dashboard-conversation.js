@@ -40,7 +40,12 @@
       if (!k) return;
       var old = have[k];
       if (old) {
-        if (!(changed && changed[k]) && old.getAttribute("data-mail-wake") === n.getAttribute("data-mail-wake")) return;
+        if (!(changed && changed[k]) &&
+            old.getAttribute("data-mail-wake") === n.getAttribute("data-mail-wake") &&
+            old.getAttribute("data-turn-absorbed") === n.getAttribute("data-turn-absorbed") &&
+            old.getAttribute("data-turn-live-absorbed") === n.getAttribute("data-turn-live-absorbed") &&
+            old.getAttribute("data-conv-turn") === n.getAttribute("data-conv-turn") &&
+            old.getAttribute("data-turn-rev") === n.getAttribute("data-turn-rev")) return;
         box.replaceChild(n, old);
       } else {
         // New entries are usually the newest (live) or the oldest (history),
