@@ -34,7 +34,7 @@ const buttonOf = (root, label) => root.all().find(c => c.tagName === "BUTTON" &&
 
 function setup({ raw = "", write = true, handler, catalog, verdicts } = {}) {
   const doc = dom();
-  const calls = [], changed = [], notices = [];
+  const calls = [], changed = [], notices = [], selectedPacks = [];
   const state = { raw, write, verdicts };
   const fetch = async (url, init = {}) => {
     calls.push({ url, init, body: typeof init.body === "string" ? JSON.parse(init.body) : init.body });
@@ -51,11 +51,12 @@ function setup({ raw = "", write = true, handler, catalog, verdicts } = {}) {
     doc, signal, options: { signal }, canWrite: () => state.write, raw: () => state.raw,
     verdicts: () => state.verdicts,
     notice: key => notices.push(key),
+    selectPack: id => selectedPacks.push(id),
     catalogChanged: next => changed.push(next)
   });
   if (catalog) section.setCatalog(catalog);
   section.redraw();
-  return { C, doc, section, calls, changed, notices, state, root: section.node };
+  return { C, doc, section, calls, changed, notices, selectedPacks, state, root: section.node };
 }
 
 const listing = (over = {}) => ({
@@ -513,4 +514,148 @@ test("duplicate-ID rows in the initial preview: one id is sent and the selected 
     else assert.match(shown(), /done_import:1/, "import " + label + " counts one");
     assert.ok(!/done_import:2/.test(shown()));
   }
+});
+
+test("local .vrm file picker and drag-and-drop call import-vrm and select the new pack", async () => {
+  const picked = { name: "My Avatar.vrm", size: 128 };
+  const dropped = { name: "Second.vrm", size: 256 };
+  const t = setup({
+    handler: (url) => {
+      if (url.startsWith("/api/companion/packs/import-vrm")) {
+        const isSecond = url.includes("Second");
+        return { status: 200, body: { id: isSecond ? "second" : "my-avatar", name: isSecond ? "Second" : "My Avatar", schema: "ws-companion-vrm/v1", renderer: "vrm", rev: "abc" } };
+      }
+      return { status: 404, body: {} };
+    }
+  });
+  assert.equal(t.calls.length, 0, "no network fetch on initial render");
+
+  const fileInputs = tagged(t.root, "INPUT").filter(c => c.type === "file");
+  assert.equal(fileInputs.length, 2, "zip input and vrm input are both present");
+  assert.equal(fileInputs[0].accept, ".zip,application/zip");
+  assert.equal(fileInputs[1].accept, ".vrm,model/gltf-binary");
+
+  fileInputs[1].files = [picked];
+  fire(fileInputs[1], "change");
+  await tick(); await tick();
+  assert.equal(t.calls.length, 1);
+  assert.equal(t.calls[0].url, "/api/companion/packs/import-vrm?name=My+Avatar&filename=My+Avatar.vrm");
+  assert.equal(t.calls[0].init.headers["Content-Type"], "model/gltf-binary");
+  assert.equal(t.calls[0].init.body, picked);
+  assert.deepEqual(t.selectedPacks, ["my-avatar"], "newly imported VRM pack is selected");
+  assert.deepEqual(t.changed, [null], "catalog refresh is triggered");
+  assert.match(t.root.text(), /js\.companion\.sources\.done_import_vrm:My Avatar/);
+
+  // Drag-and-drop of a non-.vrm file is rejected locally without network calls.
+  const dropzone = cls(t.root, "ws-companion-sources-dropzone")[0];
+  fire(dropzone, "dragover", {});
+  assert.equal(dropzone.attrs["data-drag"], "over");
+  fire(dropzone, "drop", { dataTransfer: { files: [{ name: "notes.txt" }] } });
+  await tick();
+  assert.equal(t.calls.length, 1, "non-.vrm drop sends no request");
+  assert.match(t.root.text(), /js\.companion\.sources\.vrm_ext_error/);
+
+  // Drag-and-drop of a .vrm file uploads and selects it.
+  fire(dropzone, "drop", { dataTransfer: { files: [dropped] } });
+  await tick(); await tick();
+  assert.equal(t.calls.length, 2);
+  assert.equal(t.calls[1].url, "/api/companion/packs/import-vrm?name=Second&filename=Second.vrm");
+  assert.equal(t.calls[1].init.body, dropped);
+  assert.deepEqual(t.selectedPacks, ["my-avatar", "second"]);
+});
+
+test("official VRM CTA shows not-yet-published state when absent and install action when listed", async () => {
+  // Case 1: official marketplace lists no format:"vrm" entry yet.
+  const emptyOfficial = setup({
+    handler: () => ({ status: 200, body: { listing: listing({ source: "official", kind: "zip", official: true, name: "Official", packs: [pack("default", "builtin")] }) } })
+  });
+  assert.equal(emptyOfficial.calls.length, 0, "opt-in CTA fetches nothing until clicked");
+  fire(buttonOf(emptyOfficial.root, "js.companion.sources.official_vrm_button"), "click");
+  await tick(); await tick();
+  assert.deepEqual(emptyOfficial.calls[0].body, { source: "official" });
+  assert.match(emptyOfficial.root.text(), /js\.companion\.sources\.badge_coming_soon/);
+  assert.match(emptyOfficial.root.text(), /js\.companion\.sources\.official_vrm_unavailable/);
+  assert.equal(emptyOfficial.root.all().find(c => c.attrs.role === "alert"), undefined, "not-yet-published is informative, not an error");
+
+  // Case 2: official marketplace lists a format:"vrm" entry with vroidSourceUrl.
+  const vrmEntry = pack("official-vrm", "available", {
+    name: "Official Avatar", format: "vrm", vroidSourceUrl: "https://example.invalid/official-vrm"
+  });
+  const freshCatalog = { packs: [
+    { id: "default", renderer: "2d", schema: "ws-companion/v1" },
+    { id: "official-vrm", name: "Official Avatar", renderer: "vrm", schema: "ws-companion-vrm/v1",
+      origin: { source: "official", kind: "zip", version: "1.0.0", installedAt: "t", official: true } }
+  ] };
+  const liveOfficial = setup({
+    handler: (url) => {
+      if (url.endsWith("/sources/fetch")) {
+        return { status: 200, body: { listing: listing({ source: "official", kind: "zip", official: true, name: "Official", packs: [pack("default", "builtin"), vrmEntry] }) } };
+      }
+      return { status: 200, body: { listing: listing({ source: "official", kind: "zip", official: true, name: "Official", packs: [pack("default", "builtin"), { ...vrmEntry, status: "installed", installed: true }] }), catalog: freshCatalog } };
+    }
+  });
+  fire(buttonOf(liveOfficial.root, "js.companion.sources.official_vrm_button"), "click");
+  await tick(); await tick();
+  const downloadBtn = buttonOf(liveOfficial.root, "js.companion.sources.official_vrm_install:Official Avatar");
+  assert.ok(downloadBtn, "CTA switches to install action when an official VRM entry is listed");
+  // Listing card renders VRM badge and safe https vroidSourceUrl link.
+  const panel = cls(liveOfficial.root, "ws-companion-sources-panel")[0];
+  assert.ok(cls(panel, "ws-companion-vrm-badge").some(b => b.textContent === "js.companion.sources.badge_vrm"), "listing card shows VRM badge");
+  assert.ok(tagged(panel, "A").some(a => a.href === "https://example.invalid/official-vrm" && a.rel === "noopener noreferrer"), "vroidSourceUrl renders as safe https link");
+
+  fire(downloadBtn, "click");
+  await tick(); await tick();
+  assert.deepEqual(liveOfficial.calls.at(-1).body, { source: "official", ids: ["official-vrm"] });
+  assert.deepEqual(liveOfficial.selectedPacks, ["official-vrm"], "installing official VRM selects it");
+  assert.equal(cls(liveOfficial.root, "ws-companion-sources-vrm-cta").length, 0, "CTA hides once a VRM pack is installed");
+  assert.ok(cls(liveOfficial.root, "ws-companion-vrm-badge").length >= 1, "installed VRM card shows VRM badge");
+});
+
+test("companion disabled runs zero WebGL contexts and zero extra fetches", () => {
+  let webglCalls = 0;
+  let fetches = 0;
+  const listeners = {};
+  const stageDoc = {
+    documentElement: { hasAttribute: () => true },
+    body: { append() {}, querySelector: () => null },
+    createElement(tag) {
+      return {
+        tagName: tag.toUpperCase(), className: "", style: {}, dataset: {},
+        getContext(kind) { if (String(kind).includes("webgl")) webglCalls++; return null; },
+        setAttribute() {}, addEventListener() {}, append() {}, remove() {},
+        querySelector: () => null, querySelectorAll: () => []
+      };
+    },
+    getElementById: () => null,
+    querySelector: () => null,
+    addEventListener(type, fn) { (listeners[type] ||= []).push(fn); }
+  };
+  const win = {
+    innerWidth: 1200, innerHeight: 800, devicePixelRatio: 1,
+    matchMedia: () => ({ matches: false, addEventListener() {} }),
+    addEventListener() {}, removeEventListener() {},
+    wsCompanionModalRows: []
+  };
+  const context = vm.createContext({
+    window: win, document: stageDoc, URLSearchParams, AbortController,
+    ResizeObserver: class { observe() {} disconnect() {} },
+    requestAnimationFrame: () => 0,
+    cancelAnimationFrame() {},
+    fetch: async () => { fetches++; return { ok: true, json: async () => ({}) }; },
+    wsT: k => k
+  });
+  for (const name of ["packs", "sources", "settings"]) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
+  }
+  const C = context.window.WsCompanion;
+  const node = stageDoc.createElement("div"), gear = stageDoc.createElement("button");
+  // Construct modal with companion_enabled=false (never opened) and verify zero fetches and zero WebGL calls.
+  C.settingsModal(node, gear, { signal: new AbortController().signal }, {
+    rows: () => [], config: () => ({ enabled: false, pack: "default" }),
+    persona: () => null, presets: () => ({ available: [] }),
+    anchor: () => ({ left: 0, right: 0, top: 0, bottom: 0 }),
+    resetSize() {}, applyPreset() {}, notice() {}, packsChanged() {}
+  });
+  assert.equal(fetches, 0, "zero fetches when companion_enabled is false");
+  assert.equal(webglCalls, 0, "zero WebGL contexts created");
 });

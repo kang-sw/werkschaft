@@ -141,6 +141,10 @@
 .ws-companion-sources input[type="file"] { max-width: 100%; }
 .ws-companion-sources-pick { display: inline-flex; align-items: center; gap: 4px; }
 .ws-companion-sources-badge { padding: 0 6px; border: 1px solid var(--wb-line); border-radius: 999px; color: var(--wb-muted-fg); font-size: 10.5px; }
+.ws-companion-vrm-badge { border-color: var(--wb-primary); color: var(--wb-primary); font-weight: 600; letter-spacing: 0.02em; }
+.ws-companion-sources-vrm-cta { padding: 6px 8px; border-radius: 8px; background: var(--wb-wash); }
+.ws-companion-sources-dropzone { display: grid; gap: 4px; padding: 8px; border: 1px dashed var(--wb-line); border-radius: 8px; background: var(--wb-wash); }
+.ws-companion-sources-dropzone[data-drag="over"] { border-color: var(--wb-primary); background: var(--wb-bg); }
 .ws-companion-sources-warn { color: var(--wb-warn-ink); font-size: 11px; }
 .ws-companion-sources-error { color: var(--wb-danger); font-size: 11px; }
 .ws-companion-sources-ok { color: var(--wb-muted-fg); }

@@ -44,7 +44,7 @@
     // controls maps a row key to the function that refreshes that row's
     // inputs from the live config, sparing the one in use (a row may own
     // several inputs, so refresh never touches the inputs directly).
-    let controls = new Map(), packIds = null, packsRequest = null;
+    let controls = new Map(), packIds = null, packRenderers = new Map(), packsRequest = null;
 
     function canWrite() { return doc.documentElement.hasAttribute("data-sysopen"); }
     // The Sources section renders dashboard.companion_sources, so it has no row of its own here.
@@ -75,11 +75,17 @@
       return [...new Set([...list, ...(typeof value === "string" && value ? [value] : [])])];
     }
 
-    function option(id, selected) { return new Option(id === "" ? wsT("js.companion.follow_preset") : id, id, false, selected); }
+    function option(id, selected, key) {
+      let label = id === "" ? wsT("js.companion.follow_preset") : id;
+      if (key === "dashboard.companion_pack" && packRenderers.get(id) === "vrm") {
+        label = id + " (" + wsT("js.companion.sources.badge_vrm") + ")";
+      }
+      return new Option(label, id, false, selected);
+    }
 
     function fill(select, key) {
       const value = current(key);
-      select.replaceChildren(...choices(key).map(id => option(id, id === value || (id === "" && typeof value !== "string"))));
+      select.replaceChildren(...choices(key).map(id => option(id, id === value || (id === "" && typeof value !== "string"), key)));
     }
 
     function labelled(tag, row) {
@@ -93,11 +99,18 @@
       if (row.key === keyAttachments) return slotsRow(row);
       if (row.key === keyPalette) return paletteRow(row);
       const label = labelled("label", row);
-      let input;
+      let input, vrmBadge = null;
       if (row.key === "dashboard.companion_pack" || row.key === "dashboard.companion_preset" || Object.hasOwn(idLists, row.key)) {
         input = el("select");
         fill(input, row.key);
-        controls.set(row.key, spare => { if (input !== spare) fill(input, row.key); });
+        if (row.key === "dashboard.companion_pack") {
+          vrmBadge = el("span", "ws-companion-sources-badge ws-companion-vrm-badge", wsT("js.companion.sources.badge_vrm"));
+          vrmBadge.hidden = packRenderers.get(current(row.key)) !== "vrm";
+        }
+        controls.set(row.key, spare => {
+          if (input !== spare) fill(input, row.key);
+          if (vrmBadge) vrmBadge.hidden = packRenderers.get(current(row.key)) !== "vrm";
+        });
       } else {
         input = el("input");
         input.type = row.control === "number" ? "number" : "text";
@@ -109,6 +122,7 @@
       input.addEventListener("change", () => write(row.key, value(row, input)), options);
       const box = el("span", "ws-companion-settings-control");
       box.append(input);
+      if (vrmBadge) box.append(vrmBadge);
       if (row.unit) box.append(el("span", "ws-companion-settings-unit", wsT(row.unit)));
       label.append(box);
       return label;
@@ -281,6 +295,10 @@
     function applyCatalog(catalog) {
       if (!Array.isArray(catalog?.packs)) return;
       packIds = catalog.packs.map(pack => pack?.id).filter(C.timingId);
+      packRenderers = new Map();
+      for (const pack of catalog.packs) {
+        if (C.timingId(pack?.id) && typeof pack.renderer === "string") packRenderers.set(pack.id, pack.renderer);
+      }
       if (dialog.open) controls.get("dashboard.companion_pack")?.(null);
       sources.setCatalog(catalog);
     }
@@ -301,11 +319,25 @@
       doc, signal, options, canWrite, notice: hooks.notice,
       raw: () => current(sourcesKey),
       verdicts: () => hooks.config()?.sourceEntries,
+      selectPack(id) {
+        if (typeof id === "string" && id) return write("dashboard.companion_pack", id);
+      },
       catalogChanged(catalog) {
         if (catalog) applyCatalog(catalog); else loadPacks();
         hooks.packsChanged();
       }
     });
+
+    dialog.addEventListener("dragover", event => {
+      if (canWrite()) event.preventDefault();
+    }, options);
+    dialog.addEventListener("drop", event => {
+      const file = event.dataTransfer?.files?.[0];
+      if (!file || !canWrite() || !/\.vrm$/i.test(String(file.name || ""))) return;
+      event.preventDefault();
+      sources.node.open = true;
+      sources.importVrmFile(file);
+    }, options);
 
     // place sets the dialog beside the character, clamped to the viewport:
     // to its right when it fits, else to its left.
