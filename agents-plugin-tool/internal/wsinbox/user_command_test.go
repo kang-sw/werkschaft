@@ -106,6 +106,16 @@ func TestParseUserCommandsSurroundingProseAndMalformed(t *testing.T) {
 	}
 
 	malformed := []string{
+		"<ws:ucmd>\n</ws:ucmd>",
+		"<ws:ucmd label=\"x\">\n</ws:ucmd>",
+		"<ws:ucmd></ws:ucmd>",
+		"<ws:ucmd>\r\n</ws:ucmd>",
+		"<ws:ucmd label=\"x\">\r\n</ws:ucmd>",
+		"<ws:ucmd>\n\n</ws:ucmd>",
+		"<ws:ucmd>\n   \n</ws:ucmd>",
+		"<ws:ucmd>\n\t  \r\n</ws:ucmd>",
+		"<ws:ucmd>\n<ws:ucmd>\n<cmd>echo hi</cmd>\n</ws:ucmd>\n</ws:ucmd>",
+		"before\n<ws:ucmd>\n</ws:ucmd>\nafter",
 		"<ws:ucmd label=\"Unclosed\">\n<cmd>echo hi</cmd>",
 		"<ws:ucmd unknown=\"1\">\n<cmd>echo hi</cmd>\n</ws:ucmd>",
 		"<ws:ucmd edited=\"false\">\n<cmd>echo hi</cmd>\n</ws:ucmd>",

@@ -834,15 +834,30 @@ func splitSelectionContent(text, attachDir, replyID string) (string, []Selection
 		// second boundary grammar or extracting an image from a failed group.
 		if p.Selection == nil && !strings.Contains(p.Text, "<wb:selection") {
 			if strings.Contains(p.Text, "<ws:ucmd") {
+				ups := wsinbox.ParseUserCommands(p.Text)
 				var seg strings.Builder
-				for _, up := range wsinbox.ParseUserCommands(p.Text) {
+				for j, up := range ups {
 					if up.Command != nil {
 						seg.WriteString(up.Text)
 						continue
 					}
 					cleaned, found := userImages(up.Text, attachDir, replyID)
 					images = append(images, found...)
+					prevCmd := j > 0 && ups[j-1].Command != nil
+					nextCmd := j+1 < len(ups) && ups[j+1].Command != nil
+					if cleaned == "" {
+						if prevCmd && nextCmd {
+							seg.WriteByte('\n')
+						}
+						continue
+					}
+					if prevCmd && !strings.HasPrefix(cleaned, "\n") && !strings.HasPrefix(cleaned, "\r\n") {
+						seg.WriteByte('\n')
+					}
 					seg.WriteString(cleaned)
+					if nextCmd && !strings.HasSuffix(cleaned, "\n") {
+						seg.WriteByte('\n')
+					}
 				}
 				parts[i].Text = seg.String()
 			} else {

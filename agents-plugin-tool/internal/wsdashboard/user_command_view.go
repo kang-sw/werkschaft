@@ -45,10 +45,11 @@ func renderUserCommandCardHTML(lang string, cmd *wsinbox.UserCommand) template.H
 // formatUserCommandPreview replaces valid <ws:ucmd> XML blocks in a user
 // message with a compact single-line preview (e.g. "[label] cmd" or "cmd") for
 // the session rail. It also unwraps <ws:user> envelopes when present so rail
-// previews never leak raw XML tags.
+// previews never leak raw XML tags, and strips image attachment lines only
+// outside <ws:ucmd> blocks so literal command lines stay intact.
 func formatUserCommandPreview(text string) string {
 	if !strings.Contains(text, "<ws:ucmd") {
-		return text
+		return withoutImageLines(text)
 	}
 	formatSegment := func(seg string) string {
 		parts := wsinbox.ParseUserCommands(seg)
@@ -66,7 +67,7 @@ func formatUserCommandPreview(text string) string {
 				}
 				continue
 			}
-			if trimmed := strings.TrimSpace(p.Text); trimmed != "" {
+			if trimmed := strings.TrimSpace(withoutImageLines(p.Text)); trimmed != "" {
 				out = append(out, trimmed)
 			}
 		}
