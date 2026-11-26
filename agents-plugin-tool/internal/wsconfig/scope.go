@@ -145,9 +145,28 @@ const (
 
 	// ItemAgentTierAliases maps user-chosen names to agent.spawn tiers:
 	// whitespace-separated name=<harness>.<tier> pairs, for example
-	// "mockup=pi.large quick=claude.small". Global-only: an alias is the
+	// "mockup=werk.large quick=claude.small". Global-only: an alias is the
 	// user's own vocabulary across projects. Builtin default: empty.
+	//
+	// Deprecated: agent.tier_routing user nodes and bundles replace it. It
+	// still resolves (exact-name precedence in TierGraph.Resolve) and stays
+	// declared for config.tune, so an older binary's alias keeps working; the
+	// settings page offers only a clear banner for a stored value.
 	ItemAgentTierAliases = "agent.tier_aliases"
+
+	// ItemAgentTierRoutingExpose lists the user's own agent.tier_routing
+	// nodes and bundles, with their targets, in the lead workflow manual's
+	// "Choosing a tier" section. Values: "on" or "off" (builtin default:
+	// off, which adds nothing). A sibling of agent.tier_routing rather than a
+	// field in it: that value is strictly decoded, so a new field would make
+	// an older binary refuse the whole graph.
+	ItemAgentTierRoutingExpose = "agent.tier_routing_expose"
+
+	// ItemAgentTierRoutingGuidance is the user's free-form routing
+	// preference text (which tier to pick for which work), rendered in the
+	// lead workflow manual's "Choosing a tier" section when non-empty.
+	// Builtin default: empty, which adds nothing.
+	ItemAgentTierRoutingGuidance = "agent.tier_routing_guidance"
 
 	// ItemAgentChildWaitingDays is how many days a spawned child agent may
 	// sit in the child-agent-waiting state (asleep, no turn) after its last
@@ -301,6 +320,12 @@ func init() {
 	RegisterGlobalOnly(ItemWerkEndpoints)
 	RegisterGlobalOnly(ItemAgentChildWaitingDays)
 	RegisterGlobalOnly(ItemAgentKeepAwakeDuringTurns)
+	// The tier routing manual knobs are a cross-project habit like
+	// workflow.lang, so a write naming no scope lands in global; they still
+	// resolve through session > project > repo > global > builtin so a
+	// project can carry its own routing guidance.
+	RegisterDefaultScope(ItemAgentTierRoutingExpose, ScopeGlobal)
+	RegisterDefaultScope(ItemAgentTierRoutingGuidance, ScopeGlobal)
 	// agent.werk_web_search* keys default to global scope (cross-project user
 	// preference for the builtin harness's search behavior) while resolving
 	// through session > project > repo > global > builtin so a project or

@@ -95,6 +95,55 @@ func TestDashboardSettingsUICatalog(t *testing.T) {
 	}
 }
 
+// The tier routing page holds, in order, the expose toggle and the guidance
+// text above the graph editor, then the deprecated aliases row no panel
+// renders (its stored value surfaces only as the page's clear banner).
+func TestDashboardSettingsUICatalogTierRoutingSection(t *testing.T) {
+	raw, err := os.ReadFile("../wsdashboard/assets/dashboard-settings-catalog.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ui []struct{ Key, Section, Control, Surface string }
+	if err := json.Unmarshal(raw, &ui); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, row := range ui {
+		if row.Section == "tier_routing" {
+			got = append(got, row.Key+"/"+row.Control+"/"+row.Surface)
+		}
+	}
+	want := []string{
+		wsconfig.ItemAgentTierRoutingExpose + "/toggle/",
+		wsconfig.ItemAgentTierRoutingGuidance + "/textarea/",
+		wsconfig.ItemAgentTierRouting + "/tier_routing/",
+		wsconfig.ItemAgentTierAliases + "/text/deprecated",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("tier_routing rows = %v, want %v", got, want)
+	}
+	// The daemon still declares the deprecated key (old config.tune writes and
+	// alias resolution keep working), and the expose toggle's default is off.
+	catalog, err := DashboardConfigCatalog("ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := map[string]wsconfigservice.Entry{}
+	for _, entry := range catalog.Entries(wsconfig.ScopeGlobal, wsconfigservice.Layers{}) {
+		entries[entry.Key] = entry
+	}
+	if _, ok := entries[wsconfig.ItemAgentTierAliases]; !ok {
+		t.Fatalf("%s left the daemon catalog", wsconfig.ItemAgentTierAliases)
+	}
+	expose, ok := entries[wsconfig.ItemAgentTierRoutingExpose]
+	if !ok || expose.Default != "off" || !slices.Equal(expose.Enum, []string{"on", "off"}) {
+		t.Fatalf("%s entry = %+v, want default off and the on/off domain", wsconfig.ItemAgentTierRoutingExpose, expose)
+	}
+	if guidance, ok := entries[wsconfig.ItemAgentTierRoutingGuidance]; !ok || len(guidance.Enum) != 0 {
+		t.Fatalf("%s entry = %+v, want free-form text", wsconfig.ItemAgentTierRoutingGuidance, guidance)
+	}
+}
+
 // catalogSurfaces lists the values a catalog row's optional surface field may
 // take. An absent surface means the settings panel.
 var catalogSurfaces = []string{"companion-modal", "deprecated"}
@@ -120,10 +169,12 @@ func TestDashboardSettingsUICatalogSurface(t *testing.T) {
 			if row.Section != "companion" {
 				t.Errorf("%s: companion-modal row left the companion section: %s", row.Key, row.Section)
 			}
-		} else if row.Key == "dashboard.companion_mode" {
+		} else if row.Key == "dashboard.companion_mode" || row.Key == wsconfig.ItemAgentTierAliases {
 			if row.Surface != "deprecated" {
-				t.Errorf("%s is the 0.51.0 alias and must be hidden from the panel, surface %q", row.Key, row.Surface)
+				t.Errorf("%s is a deprecated alias and must be hidden from the panel, surface %q", row.Key, row.Surface)
 			}
+		} else if row.Surface == "deprecated" {
+			t.Errorf("%s: unexpected deprecated surface", row.Key)
 		} else if strings.HasPrefix(row.Key, "dashboard.companion_") && row.Surface != "" {
 			t.Errorf("%s: unexpected surface %q", row.Key, row.Surface)
 		}

@@ -23,6 +23,7 @@ func builtinConfigDefaults() map[string]string {
 		wsconfig.ItemWorkflowTrackerEnabled:    "off",
 		wsconfig.ItemExecNativeToolRemoval:     "on",
 		wsconfig.ItemAgentQuotaContinuation:    "off",
+		wsconfig.ItemAgentTierRoutingExpose:    "off",
 		wsconfig.ItemWorkflowProfile:           "direct",
 		wsconfig.ItemSageReview:                "auto",
 		wsconfig.ItemSageReviewDesign:          "off",
@@ -463,7 +464,7 @@ func buildTuningCatalog(rsrcRoot fs.FS, resolver *wsconfig.Resolver, sessionKey,
 	appendKnob(tierAliasesEntry, tuningKnob{
 		ID:          tierAliasesEntry.Key,
 		Kind:        "workflow_preference",
-		Description: "Your own names for agent.spawn tiers: whitespace-separated name=<harness>.<tier> pairs, for example \"mockup=werk.large quick=claude.small\", with tier small, medium, large, or xlarge. agent.spawn takes an alias as its tier, and agent.tiers lists each alias with the model it resolves to now. A name has no dot; a write that does not parse is refused. Unset (builtin) defines none. Global-only.",
+		Description: "Deprecated: agent.tier_routing user nodes and bundles replace it. Your own names for agent.spawn tiers: whitespace-separated name=<harness>.<tier> pairs, for example \"mockup=werk.large quick=claude.small\", with tier small, medium, large, or xlarge. agent.spawn takes an alias as its tier, and agent.tiers lists each alias with the model it resolves to now. A name has no dot; a write that does not parse is refused. Unset (builtin) defines none. Global-only.",
 		Writer:      tuningWriter{Tool: tierAliasesEntry.WriterTool, FixedArguments: map[string]string{"key": tierAliasesEntry.Key}},
 		Reset: &tuningWriter{
 			Tool:           tierAliasesEntry.ResetTool,
@@ -471,6 +472,36 @@ func buildTuningCatalog(rsrcRoot fs.FS, resolver *wsconfig.Resolver, sessionKey,
 		},
 		ValueFields: tierAliasesEntry.ValueFields,
 		Current:     currentWorkflowPreference(resolver, sessionKey, tierAliasesEntry.Key),
+	})
+
+	exposeEntry := registryEntryByKey(wsconfig.ItemAgentTierRoutingExpose)
+	appendKnob(exposeEntry, tuningKnob{
+		ID:          exposeEntry.Key,
+		Kind:        "workflow_preference",
+		Description: "List your own agent.tier_routing nodes and bundles in the workflow manual (builtin off). on adds, from the next workflow-manual load, each user node as <node>:<size> and each bundle by name with its target to the manual's tier guidance, so the lead can pass them as tiers; built-in groups and playbook roles are never listed, and nothing is added while the graph has no user node or bundle. off adds nothing. Defaults to global scope.",
+		Writer:      tuningWriter{Tool: exposeEntry.WriterTool, FixedArguments: map[string]string{"key": exposeEntry.Key}},
+		Reset: &tuningWriter{
+			Tool:           exposeEntry.ResetTool,
+			FixedArguments: map[string]string{"key": exposeEntry.Key, "reset": "true"},
+		},
+		SelectorFields: exposeEntry.SelectorFields,
+		ValueFields:    exposeEntry.ValueFields,
+		Current:        currentWorkflowPreference(resolver, sessionKey, exposeEntry.Key),
+	})
+
+	guidanceEntry := registryEntryByKey(wsconfig.ItemAgentTierRoutingGuidance)
+	appendKnob(guidanceEntry, tuningKnob{
+		ID:          guidanceEntry.Key,
+		Kind:        "workflow_preference",
+		Description: "Your tier routing preferences in plain language, for example which tier to use for UI mockups or for quick lookups. A non-empty value is added, from the next workflow-manual load, to the manual's tier guidance. Unset (builtin) adds nothing. Defaults to global scope.",
+		Writer:      tuningWriter{Tool: guidanceEntry.WriterTool, FixedArguments: map[string]string{"key": guidanceEntry.Key}},
+		Reset: &tuningWriter{
+			Tool:           guidanceEntry.ResetTool,
+			FixedArguments: map[string]string{"key": guidanceEntry.Key, "reset": "true"},
+		},
+		SelectorFields: guidanceEntry.SelectorFields,
+		ValueFields:    guidanceEntry.ValueFields,
+		Current:        currentWorkflowPreference(resolver, sessionKey, guidanceEntry.Key),
 	})
 
 	{
