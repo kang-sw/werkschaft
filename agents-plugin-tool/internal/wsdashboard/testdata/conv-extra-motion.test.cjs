@@ -242,8 +242,12 @@ function createHarness(opts = {}) {
   win.window = win;
   vm.runInNewContext(motionSource, sandbox);
 
-  const canvas = grid.children.find(c => c.tagName === "CANVAS");
-  assert.ok(canvas, "canvas mounted on swap-stable #grid host");
+  const overlay = grid.children.find(c => c.className === "d-conv-motion-overlay");
+  assert.ok(overlay, "overlay wrapper mounted on swap-stable #grid host");
+  assert.equal(overlay.getAttribute("aria-hidden"), "true");
+  assert.equal(overlay.hidden, true);
+  const canvas = overlay.children.find(c => c.tagName === "CANVAS");
+  assert.ok(canvas, "canvas mounted inside .d-conv-motion-overlay");
   canvas._rect = { left: 0, top: 0, width: 520, height: 320 };
 
   function setLiveDOM({ phase = "idle", tool = "", done = 0, failed = 0, turn = "100", turnTokens = 0, estimated = false, activityAt = 100000, hasActivity = false, tokenX = 300, tokenWidth = 60, hasFails = false }) {
@@ -591,4 +595,43 @@ test("legacy ws.dashboard.layout of tabs or split loads as auto and is never wri
     assert.equal(rootAttrs["data-extra-motion"], "on", "Extra Motion defaults to on");
     assert.equal(writes.some(([k]) => k === "ws.dashboard.layout"), false, "ws.dashboard.layout must never be written");
   }
+});
+
+test("overlay wrapper syncs visibility, observes convoEl via ResizeObserver, and cleans up on destroy", () => {
+  let observed = [];
+  let disconnected = 0;
+  let lastCallback = null;
+  class FakeResizeObserver {
+    constructor(cb) { lastCallback = cb; }
+    observe(el) { observed.push(el); }
+    disconnect() { disconnected++; }
+  }
+  const h = createHarness();
+  h.win.ResizeObserver = FakeResizeObserver;
+  const overlay = h.grid.children.find(c => c.className === "d-conv-motion-overlay");
+  assert.ok(overlay, "overlay exists on #grid");
+  assert.equal(overlay.hidden, true, "overlay hidden while idle");
+
+  h.setLiveDOM({ phase: "tool", tool: "Read", done: 1, turn: "ro1", hasActivity: true });
+  assert.equal(overlay.hidden, false, "overlay visible while active");
+  assert.equal(h.canvas.hidden, false, "canvas visible while active");
+  assert.equal(observed.length, 1, "ResizeObserver attached to #convo when active");
+  assert.equal(observed[0], h.convo);
+
+  // Simulate #convo resize (e.g. composer image tray growing) -> markGeomDirty -> next step re-measures
+  const tokEl = h.convlive.querySelector("[data-conv-turn-tokens]");
+  tokEl._rect = { left: 220, top: 80, width: 60, height: 20 };
+  lastCallback();
+  h.stepRaf(2, 16);
+  assert.equal(h.engine.getState().targetY, 90, "ResizeObserver invalidates cached geometry for next frame");
+
+  // Going idle drains any transient popIn/trails, disconnects ResizeObserver, and hides overlay+canvas
+  h.setLiveDOM({ phase: "idle", done: 1, turn: "ro1", hasActivity: false });
+  h.stepRaf(120, 20);
+  assert.equal(overlay.hidden, true, "overlay hidden when idle");
+  assert.equal(h.canvas.hidden, true, "canvas hidden when idle");
+  assert.equal(disconnected, 1, "ResizeObserver disconnected on stopLoop");
+
+  h.engine.destroy();
+  assert.equal(h.grid.children.includes(overlay), false, "destroy removes overlay wrapper from #grid");
 });

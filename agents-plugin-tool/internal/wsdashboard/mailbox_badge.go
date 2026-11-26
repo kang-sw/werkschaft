@@ -45,6 +45,13 @@ func entryHasMailbox(e ConvEntry) bool {
 			return true
 		}
 	}
+	if e.TurnSummary != nil {
+		for _, g := range e.TurnSummary.Gaps {
+			if g.Mail != nil && entryHasMailbox(*g.Mail) {
+				return true
+			}
+		}
+	}
 	return false
 }
 

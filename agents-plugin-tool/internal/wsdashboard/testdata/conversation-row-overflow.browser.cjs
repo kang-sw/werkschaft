@@ -10,6 +10,9 @@ const [base, shots] = process.argv.slice(2);
       const page = await browser.newPage({ viewport: { width, height: 850 }, colorScheme: 'dark' });
       await page.goto(base + '/s/livesession');
       const convo = page.frameLocator('iframe.sframe.on').locator('#convo');
+      const turnSummary = convo.locator('details.d-turn > summary.d-turn-sum').last();
+      await turnSummary.waitFor({ timeout: 5000 });
+      await turnSummary.click();
       await convo.locator('.mailline.sent .mpeer').filter({ hasText: 'id:recipientmailgeometry' }).waitFor({ timeout: 5000 });
       if (shots) await convo.screenshot({ path: path.join(shots, width + '.png') });
 
@@ -21,7 +24,7 @@ const [base, shots] = process.argv.slice(2);
         const rowMetrics = row => ({
           row: bounds(row),
           trailing: bounds(row.querySelector('.row-time')),
-          icon: bounds(row.querySelector('.row-icon > .i')),
+          icon: bounds(row.querySelector('.row-icon > .i') || row.querySelector('.row-icon')),
         });
         const mail = [...el.querySelectorAll('.mailline > .conv-row')]
           .filter(row => row.querySelector('.mpeer')?.textContent.endsWith('mailgeometry'))
@@ -36,7 +39,7 @@ const [base, shots] = process.argv.slice(2);
             };
           });
         const tool = el.querySelector('.conv-row[data-call="overflow-call"]');
-        const turn = el.querySelector('.turnline > .conv-row');
+        const turn = el.querySelector('details.d-turn > summary.d-turn-sum');
         return {
           scrollWidth: el.scrollWidth, clientWidth: el.clientWidth,
           mail, tool: rowMetrics(tool), turn: rowMetrics(turn),
@@ -57,7 +60,7 @@ const [base, shots] = process.argv.slice(2);
         assert(mail.ellipsized, 'long mail preview ellipsizes');
         assert(mail.arrow.right <= mail.icon.left && mail.icon.right <= mail.address.left,
           'direction arrow, envelope, and address have separate space');
-        assert(Math.abs(mail.icon.left - metrics.turn.icon.left) <= 1, 'mail and turn icons share a gutter');
+        assert(Math.abs(mail.icon.left - metrics.mail[0].icon.left) <= 1, 'folded mail icons share a gutter');
       }
       await page.close();
     }

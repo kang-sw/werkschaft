@@ -519,16 +519,22 @@
         return fb;
       };
 
+      var overlay = null;
       var canvas = opts.canvas || null;
       var ctx = null;
       if (!canvas && d && convoEl) {
         var host = (gridEl && gridEl.classList && gridEl.classList.contains("live")) ? gridEl : convoEl.parentNode;
         if (host) {
+          overlay = d.createElement("div");
+          overlay.className = "d-conv-motion-overlay";
+          overlay.setAttribute("aria-hidden", "true");
+          overlay.hidden = true;
           canvas = d.createElement("canvas");
           canvas.className = "d-conv-motion-canvas";
           canvas.setAttribute("aria-hidden", "true");
           canvas.hidden = true;
-          host.appendChild(canvas);
+          overlay.appendChild(canvas);
+          host.appendChild(overlay);
         }
       }
       if (canvas && typeof canvas.getContext === "function") {
@@ -547,6 +553,7 @@
       var lastTs = 0;
       var lastDrawKey = "";
       var scrollBound = false;
+      var convoRO = null;
       var geomDirty = true;
 
       // Observed live turn tracking
@@ -653,9 +660,20 @@
         if (on) {
           if (convoEl && convoEl.addEventListener) convoEl.addEventListener("scroll", markGeomDirty, { passive: true });
           if (win && win.addEventListener) win.addEventListener("resize", markGeomDirty, { passive: true });
+          if (convoEl && !convoRO) {
+            var RO = (win && win.ResizeObserver) || (typeof ResizeObserver === "function" ? ResizeObserver : null);
+            if (typeof RO === "function") {
+              convoRO = new RO(markGeomDirty);
+              convoRO.observe(convoEl);
+            }
+          }
         } else {
           if (convoEl && convoEl.removeEventListener) convoEl.removeEventListener("scroll", markGeomDirty);
           if (win && win.removeEventListener) win.removeEventListener("resize", markGeomDirty);
+          if (convoRO) {
+            convoRO.disconnect();
+            convoRO = null;
+          }
         }
       }
 
@@ -667,6 +685,7 @@
         lastTs = 0;
         lastDrawKey = "";
         bindActiveListeners(false);
+        if (overlay) overlay.hidden = true;
         if (canvas) {
           if (ctx && state.W > 0 && state.H > 0) ctx.clearRect(0, 0, state.W, state.H);
           canvas.hidden = true;
@@ -690,6 +709,7 @@
           stopLoop();
           return;
         }
+        if (overlay) overlay.hidden = false;
         if (canvas) canvas.hidden = false;
         geomDirty = true;
         bindActiveListeners(true);
@@ -1392,7 +1412,8 @@
           d.removeEventListener("ws-page-visibility", handleVisibilityEvent);
         }
         if (mql && mql.removeEventListener) mql.removeEventListener("change", handleReducedMotionChange);
-        if (canvas && canvas.parentNode && !opts.canvas) canvas.parentNode.removeChild(canvas);
+        if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        else if (canvas && canvas.parentNode && !opts.canvas) canvas.parentNode.removeChild(canvas);
       }
 
       return {

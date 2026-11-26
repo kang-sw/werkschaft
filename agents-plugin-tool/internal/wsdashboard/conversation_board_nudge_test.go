@@ -208,7 +208,7 @@ func TestConversationBoardNudgeMixedBatchAndMalformedMember(t *testing.T) {
 					t.Errorf("missing %q: %s", want, html)
 				}
 			}
-			if strings.Count(html, `class="mail-notification turn-trigger"`) != 3 || strings.Count(html, "<details") != 3 || strings.Count(html, `data-mail-wake="suppressed"`) != 2 || strings.Count(html, "data-entry=") != 5 {
+			if strings.Count(html, `class="mail-notification turn-trigger"`) != 3 || strings.Count(html, `data-conv-turn="1"`) != 1 || strings.Count(html, "<details") != 4 || strings.Count(html, `data-mail-wake="suppressed"`) != 2 || strings.Count(html, "data-entry=") != 5 {
 				t.Fatalf("unexpected mixed rows: %s", html)
 			}
 			for _, r := range ring {

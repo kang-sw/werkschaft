@@ -65,8 +65,11 @@ func TestWhiteboardToggleRendersOnlyOnACapableSession(t *testing.T) {
 		return page
 	}
 	on := render(true)
-	if !strings.Contains(on, `id="wbonly"`) || !strings.Contains(on, `aria-pressed="false"`) || !strings.Contains(on, `id="wbonly-hint" hidden`) {
-		t.Errorf("capable session must offer the toggle, default OFF and hint hidden")
+	if !strings.Contains(on, `id="wbonly"`) || !strings.Contains(on, `aria-pressed="false"`) {
+		t.Errorf("capable session must offer the toggle, default OFF")
+	}
+	if strings.Contains(on, "wbonly-hint") {
+		t.Errorf("capable session must not render #wbonly-hint")
 	}
 	if off := render(false); strings.Contains(off, `id="wbonly"`) {
 		t.Errorf("a session with no ambient must not render the toggle")
