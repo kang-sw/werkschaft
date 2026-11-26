@@ -626,6 +626,8 @@
   "js.board.toolbar.download.title": "이 보드를 zip으로 다운로드",
   "js.board.toolbar.files": "파일",
   "js.board.toolbar.files.title": "파일 (Ctrl+E)",
+  "js.board.toolbar.stage_fill": "전체 너비",
+  "js.board.toolbar.stage_fill.title": "전체 너비 보기 전환",
   "js.board.overview.hint": "바깥 클릭·Esc: 원래 자리로 · 카드 클릭: 그 카드로",
   "js.wb.state.awaiting-confirmation": "확인 대기",
   "js.wb.state.waiting": "대기",

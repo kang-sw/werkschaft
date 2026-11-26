@@ -626,6 +626,8 @@
   "js.board.toolbar.download.title": "Download this board as a zip",
   "js.board.toolbar.files": "Files",
   "js.board.toolbar.files.title": "Files (Ctrl+E)",
+  "js.board.toolbar.stage_fill": "Fill width",
+  "js.board.toolbar.stage_fill.title": "Toggle full-width stage",
   "js.board.overview.hint": "Outside click · Esc: back to your place · Card click: go to that card",
   "js.wb.state.awaiting-confirmation": "Awaiting confirmation",
   "js.wb.state.waiting": "Waiting",

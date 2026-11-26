@@ -62,7 +62,7 @@
   //     sync    {}                    send the header, layout, and title
   //                                   again (the shell's script started)
   //     theme   {theme}               another page picked the theme
-  //     settings {layout, input}      shell's current choices, independent
+  //     settings {layout, input, stageFill?} shell's current choices, independent
   //                                   of whether browser persistence works
   //     companion-gate {active}       enable or release companion observations
   // Frontend-only bound, not a persisted setting or manifest key. Zero keeps

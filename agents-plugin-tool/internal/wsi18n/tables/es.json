@@ -626,6 +626,8 @@
   "js.board.toolbar.download.title": "Descargar este tablero como zip",
   "js.board.toolbar.files": "Archivos",
   "js.board.toolbar.files.title": "Archivos (Ctrl+E)",
+  "js.board.toolbar.stage_fill": "Ancho completo",
+  "js.board.toolbar.stage_fill.title": "Alternar vista de ancho completo",
   "js.board.overview.hint": "Clic fuera · Esc: volver · Clic en tarjeta: ir a ella",
   "js.wb.state.awaiting-confirmation": "Pendiente de confirmación",
   "js.wb.state.waiting": "En espera",
