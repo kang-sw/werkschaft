@@ -1065,13 +1065,17 @@ this route.
   their processes (holder stop: graceful, then killed) before it persists the
   closure; a stop that fails keeps the closure with its holder, which still
   counts as occupancy until a later daemon with a complete holder inventory
-  ends it (`wsagent/dead_binding.go`). A spawned non-lead conversation whose
-  working directory, or a bound checkout's `.git` entry or admin directory,
-  is gone is closed
-  at startup and refused at any later start or wake, so a removed worktree is
-  never repopulated (`goneBinding`, `wsgit.CheckoutRegistrationGone`; an
-  emptied directory that still exists but has lost its `.git` cannot be told
-  apart and is not caught). `worktree.remove` refuses, before it touches
+  ends it (`wsagent/dead_binding.go`). A spawned non-lead conversation with evidence
+  that its worktree was removed (a bound checkout's directory, `.git` entry
+  or admin directory gone, or its root or working directory gone from a
+  parent that still exists and inside no live bound checkout) is closed at
+  startup and refused at any later start or wake, so a removed worktree is
+  never repopulated (`goneBinding`, `wsgit.CheckoutRegistrationGone`). A
+  missing subdirectory of a live checkout, or a path on an unreachable
+  volume, is not evidence: that start fails and can be retried. An emptied
+  directory that still exists but has lost its `.git`, and a worktree of an
+  in-repository pool removed while no daemon ran, cannot be told apart and
+  are not caught. `worktree.remove` refuses, before it touches
   files or Git state, while any bound conversation occupies the worktree (an
   open binding, or a released one whose process still lives), naming each
   one's address, state, holder, PID and cwd; a daemon that cannot answer
