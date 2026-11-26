@@ -458,7 +458,14 @@
       "registered_at": "2026-11-25T12:38:04Z"
     },
     "261126-feat-ws-board-topic-header-hold-counts-and-rail-dot": {
-      "registered_at": "2026-11-26T08:39:04Z"
+      "registered_at": "2026-11-26T08:39:04Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-26T13:04:46Z"
+      }
     },
     "261126-feat-ws-chat-stream-interactive-question-cards": {
       "registered_at": "2026-11-26T08:39:11Z"
