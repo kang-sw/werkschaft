@@ -1180,12 +1180,20 @@ func (s *Server) worktreeBusy(ctx context.Context, target string) bool {
 	if err != nil {
 		return true
 	}
-	for _, child := range occ.Children {
+	return len(occupyingChildren(occ.Children)) > 0
+}
+
+// occupyingChildren are the children that occupy a worktree: bound since its
+// last completed release (or with none recorded), or bound before it but
+// still live. The one definition of "occupied" for acquisition and removal.
+func occupyingChildren(children []wsagent.BoundWorktreeChild) []wsagent.BoundWorktreeChild {
+	var out []wsagent.BoundWorktreeChild
+	for _, child := range children {
 		if !child.BoundBeforeRelease || child.Live {
-			return true
+			out = append(out, child)
 		}
 	}
-	return false
+	return out
 }
 
 // checkWorktreeReleaseNotice reports, before a release changes anything, what

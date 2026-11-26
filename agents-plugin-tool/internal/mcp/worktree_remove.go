@@ -44,13 +44,16 @@ func (r worktreeRemoveResult) text() string {
 // staleAfter (a live worker's tree). It also refuses what release refuses: the
 // primary worktree and any path outside the owned pool.
 func removeWorktree(ctx context.Context, runner wsgit.Runner, env []string, wtPath, poolConfigValue string, staleAfter time.Duration, now time.Time, lookup worktreeProfileLookup) (worktreeRemoveResult, error) {
-	return removeWorktreeFenced(ctx, runner, env, wtPath, poolConfigValue, staleAfter, now, lookup, nil)
+	return removeWorktreeFenced(ctx, runner, env, wtPath, poolConfigValue, staleAfter, now, lookup, nil, nil)
 }
 
 // removeWorktreeFenced is removeWorktree that first reserves the target
 // against exec jobs (worktreeExecFence): a live job refuses the removal,
-// and none starts there until it is done.
-func removeWorktreeFenced(ctx context.Context, runner wsgit.Runner, env []string, wtPath, poolConfigValue string, staleAfter time.Duration, now time.Time, lookup worktreeProfileLookup, fenceExec func(string) (func(), error)) (worktreeRemoveResult, error) {
+// and none starts there until it is done. It then asks occupancy (nil: no
+// daemon to ask, so not occupied) which agents occupy the target and refuses
+// while any does, or when the daemon cannot answer, before any other check,
+// hook, or change.
+func removeWorktreeFenced(ctx context.Context, runner wsgit.Runner, env []string, wtPath, poolConfigValue string, staleAfter time.Duration, now time.Time, lookup worktreeProfileLookup, fenceExec func(string) (func(), error), occupancy func(context.Context, string) (worktreeOccupancy, error)) (worktreeRemoveResult, error) {
 	var res worktreeRemoveResult
 	target, entry, mainRoot, err := ownedPoolWorktree(ctx, runner, wtPath, poolConfigValue, "worktree.remove")
 	if err != nil {
@@ -62,6 +65,29 @@ func removeWorktreeFenced(ctx context.Context, runner wsgit.Runner, env []string
 			return res, fmt.Errorf("worktree.remove refuses %s: %w", target, err)
 		}
 		defer unfence()
+	}
+	if occupancy != nil {
+		occ, err := occupancy(ctx, target)
+		if err != nil {
+			return res, fmt.Errorf("worktree.remove refuses %s: could not check bound agents with the daemon (%v). Nothing was changed. Retry once the daemon answers", target, err)
+		}
+		if occupants := occupyingChildren(occ.Children); len(occupants) > 0 {
+			parts := make([]string, 0, len(occupants))
+			for _, c := range occupants {
+				part := c.Address + " " + c.State
+				if c.Holder != "" {
+					part += " holder=" + c.Holder
+				}
+				if c.PID != 0 {
+					part += " pid=" + strconv.Itoa(c.PID)
+				}
+				if c.Cwd != "" {
+					part += " cwd=" + c.Cwd
+				}
+				parts = append(parts, strings.TrimSpace(part))
+			}
+			return res, fmt.Errorf("worktree.remove refuses %s: agent(s) still occupy this worktree (%s). Nothing was changed. Close or release the agents (worktree.release with force: true stops a released worktree's agents), then remove again", target, strings.Join(parts, "; "))
+		}
 	}
 	res.Path = target
 	if !entry.Detached {

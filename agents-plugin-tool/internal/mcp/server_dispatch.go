@@ -921,7 +921,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			return staticProfileLookup(profiles, err)(name)
 		}
 		staleAfter, _ := worktreeNudgeThresholds(&resolver, key)
-		result, err := removeWorktreeFenced(context.Background(), s.gitRunner(), s.environ(), path, poolRV.Value, staleAfter, time.Now(), lookup, s.worktreeExecFence)
+		result, err := removeWorktreeFenced(context.Background(), s.gitRunner(), s.environ(), path, poolRV.Value, staleAfter, time.Now(), lookup, s.worktreeExecFence, s.worktreeOccupancy)
 		if err != nil {
 			return toolTextResponse(req.ID, "", err)
 		}

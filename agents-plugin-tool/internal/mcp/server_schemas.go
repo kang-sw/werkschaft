@@ -580,7 +580,7 @@ func tools() []map[string]any {
 		},
 		{
 			"name":        "worktree.remove",
-			"description": "Lead-only. Delete a pooled worktree: refuse a dirty one, one whose checked-out branch holds commits no other branch reaches, one whose detached HEAD holds commits no ref reaches, the primary worktree, a path outside the owned pool, and a leased one active more recently than worktree.nudge_stale_days; then run its profile's pre_remove hooks (a failure leaves it in place; skipped with a note when the profile no longer resolves) and remove it with its lease and profile marker, clearing any quarantine. Keeps the checked-out branch. Identify it by path or by a worker session key bound to it. Returns the path, profile, kept branch, and each hook run (argv, scope, exit code). Defaults to text; use format=json for structured output.",
+			"description": "Lead-only. Delete a pooled worktree: refuse a dirty one, one whose checked-out branch holds commits no other branch reaches, one whose detached HEAD holds commits no ref reaches, the primary worktree, a path outside the owned pool, a leased one active more recently than worktree.nudge_stale_days, and one still occupied by bound agents; then run its profile's pre_remove hooks (a failure leaves it in place; skipped with a note when the profile no longer resolves) and remove it with its lease and profile marker, clearing any quarantine. Keeps the checked-out branch. Identify it by path or by a worker session key bound to it. Returns the path, profile, kept branch, and each hook run (argv, scope, exit code). Defaults to text; use format=json for structured output.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
