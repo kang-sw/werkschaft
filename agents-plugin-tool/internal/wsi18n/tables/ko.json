@@ -3722,5 +3722,15 @@
   "js.voice.err.timeout": "음성 인식 시간이 초과되었습니다",
   "js.voice.err.auth": "음성 공급자 키가 거부되었습니다",
   "js.voice.err.too_large": "녹음 크기가 한도를 초과했습니다",
-  "js.voice.err.failed": "음성 인식에 실패했습니다"
+  "js.voice.err.failed": "음성 인식에 실패했습니다",
+  "js.wbupdate.cls.policy": "정책",
+  "js.wbupdate.cls.technical": "기술",
+  "js.wbupdate.cls.announced": "안내됨",
+  "js.wbupdate.cls.check": "확인",
+  "js.wbupdate.unanswered": "미응답",
+  "js.wbupdate.staged_pick": "{0} 선택됨",
+  "js.wbupdate.staged_memo": "메모: {0}",
+  "js.wbupdate.sent_waiting": "전송됨 · 대기",
+  "js.wbupdate.sent_held": "전송됨 · 보류",
+  "js.wbupdate.settled": "확정"
 }

@@ -202,7 +202,10 @@
       // source frame leaves the board during an update.
       if (mpend && !mpend.locked && mpend.frame && !doc.contains(mpend.frame)) hideMention();
     }
-    if (board || name === "convlive") applySent(board);
+    if (board || name === "convlive") {
+      applySent(board);
+      if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
+    }
     if (name === "convlive" || name === "entries") outboxSync();
     if (name === "panels") { drawerSync(); restorePanelReader(el, panelReader); }
     if (name === "git") gitSwapped();

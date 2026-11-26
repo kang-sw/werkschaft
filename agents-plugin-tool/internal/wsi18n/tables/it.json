@@ -3722,5 +3722,15 @@
   "js.voice.err.timeout": "Tempo scaduto per la trascrizione",
   "js.voice.err.auth": "Chiave del provider vocale rifiutata",
   "js.voice.err.too_large": "La registrazione supera il limite di dimensione",
-  "js.voice.err.failed": "Trascrizione non riuscita"
+  "js.voice.err.failed": "Trascrizione non riuscita",
+  "js.wbupdate.cls.policy": "Politica",
+  "js.wbupdate.cls.technical": "Tecnica",
+  "js.wbupdate.cls.announced": "Annunciato",
+  "js.wbupdate.cls.check": "Verifica",
+  "js.wbupdate.unanswered": "senza risposta",
+  "js.wbupdate.staged_pick": "{0} selezionato",
+  "js.wbupdate.staged_memo": "nota: {0}",
+  "js.wbupdate.sent_waiting": "inviato · in attesa",
+  "js.wbupdate.sent_held": "inviato · in sospeso",
+  "js.wbupdate.settled": "definito"
 }

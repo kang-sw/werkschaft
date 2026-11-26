@@ -3722,5 +3722,15 @@
   "js.voice.err.timeout": "Transcription timed out",
   "js.voice.err.auth": "Voice provider key rejected",
   "js.voice.err.too_large": "Recording exceeds size limit",
-  "js.voice.err.failed": "Transcription failed"
+  "js.voice.err.failed": "Transcription failed",
+  "js.wbupdate.cls.policy": "Policy",
+  "js.wbupdate.cls.technical": "Technical",
+  "js.wbupdate.cls.announced": "Announced",
+  "js.wbupdate.cls.check": "Check",
+  "js.wbupdate.unanswered": "unanswered",
+  "js.wbupdate.staged_pick": "{0} selected",
+  "js.wbupdate.staged_memo": "note: {0}",
+  "js.wbupdate.sent_waiting": "sent · waiting",
+  "js.wbupdate.sent_held": "sent · held",
+  "js.wbupdate.settled": "settled"
 }

@@ -3722,5 +3722,15 @@
   "js.voice.err.timeout": "文字起こしがタイムアウトしました",
   "js.voice.err.auth": "音声プロバイダーのキーが拒否されました",
   "js.voice.err.too_large": "録音がサイズ上限を超えています",
-  "js.voice.err.failed": "文字起こしに失敗しました"
+  "js.voice.err.failed": "文字起こしに失敗しました",
+  "js.wbupdate.cls.policy": "方針",
+  "js.wbupdate.cls.technical": "技術",
+  "js.wbupdate.cls.announced": "告知済み",
+  "js.wbupdate.cls.check": "確認",
+  "js.wbupdate.unanswered": "未回答",
+  "js.wbupdate.staged_pick": "{0} 選択済み",
+  "js.wbupdate.staged_memo": "メモ: {0}",
+  "js.wbupdate.sent_waiting": "送信済み · 待機中",
+  "js.wbupdate.sent_held": "送信済み · 保留",
+  "js.wbupdate.settled": "確定"
 }

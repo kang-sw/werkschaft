@@ -959,3 +959,96 @@ html[data-mode="live"][data-sysopen] .exec-view-out[hidden] { display: none; }
 .ucmd-req-cmd { margin: 0; padding: 7px 9px; border-radius: 8px; background: color-mix(in srgb, var(--wb-bg) 62%, transparent); color: var(--wb-fg); font: 12px/1.45 var(--wb-mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; }
 .ucmd-req-cmd code { font: inherit; background: none; padding: 0; }
 .ucmd-req-prompt { font-size: 12.5px; line-height: 1.45; color: var(--wb-fg); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Hydrated chat-stream question link capsules inside .wbupdate-topic cards. */
+:root {
+  --wb-qcap-policy: 178 80 0;
+  --wb-qcap-technical: 36 87 197;
+  --wb-qcap-announced: 29 115 72;
+  --wb-qcap-check: 95 100 107;
+  --wb-qcap-bg-a: .09;
+  --wb-qcap-bd-a: .19;
+  --wb-qcap-hover-bg-a: .15;
+  --wb-qcap-hover-bd-a: .30;
+  --wb-qcap-settled-bg-a: .06;
+  --wb-qcap-settled-bd-a: .13;
+  --wb-qcap-id-a: .92;
+  --wb-qcap-cls-bg-a: .15;
+  --wb-qcap-cls-fg-a: .98;
+  --wb-qcap-ans-dim: #666c75;
+  --wb-qcap-ans-staged: #1e4fd1;
+  --wb-qcap-ans-ok: #1a6d43;
+  --wb-qcap-ans-no: #b42336;
+  --wb-qcap-ans-held: #a15c07;
+  --wb-qcap-ans-sent: #7c47cc;
+  --wb-qcap-ans-settled: #1d7348;
+}
+:root[data-theme="dark"] {
+  --wb-qcap-policy: 224 163 108;
+  --wb-qcap-technical: 122 162 255;
+  --wb-qcap-announced: 108 195 154;
+  --wb-qcap-check: 162 166 173;
+  --wb-qcap-bg-a: .09;
+  --wb-qcap-bd-a: .16;
+  --wb-qcap-hover-bg-a: .15;
+  --wb-qcap-hover-bd-a: .26;
+  --wb-qcap-settled-bg-a: .06;
+  --wb-qcap-settled-bd-a: .12;
+  --wb-qcap-id-a: .88;
+  --wb-qcap-cls-bg-a: .16;
+  --wb-qcap-cls-fg-a: .95;
+  --wb-qcap-ans-dim: rgba(154, 159, 168, .72);
+  --wb-qcap-ans-staged: rgba(156, 187, 255, .86);
+  --wb-qcap-ans-ok: rgba(132, 212, 164, .88);
+  --wb-qcap-ans-no: rgba(244, 150, 160, .88);
+  --wb-qcap-ans-held: rgba(232, 182, 114, .85);
+  --wb-qcap-ans-sent: rgba(200, 174, 248, .85);
+  --wb-qcap-ans-settled: rgba(134, 206, 166, .82);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --wb-qcap-policy: 224 163 108;
+    --wb-qcap-technical: 122 162 255;
+    --wb-qcap-announced: 108 195 154;
+    --wb-qcap-check: 162 166 173;
+    --wb-qcap-bg-a: .09;
+    --wb-qcap-bd-a: .16;
+    --wb-qcap-hover-bg-a: .15;
+    --wb-qcap-hover-bd-a: .26;
+    --wb-qcap-settled-bg-a: .06;
+    --wb-qcap-settled-bd-a: .12;
+    --wb-qcap-id-a: .88;
+    --wb-qcap-cls-bg-a: .16;
+    --wb-qcap-cls-fg-a: .95;
+    --wb-qcap-ans-dim: rgba(154, 159, 168, .72);
+    --wb-qcap-ans-staged: rgba(156, 187, 255, .86);
+    --wb-qcap-ans-ok: rgba(132, 212, 164, .88);
+    --wb-qcap-ans-no: rgba(244, 150, 160, .88);
+    --wb-qcap-ans-held: rgba(232, 182, 114, .85);
+    --wb-qcap-ans-sent: rgba(200, 174, 248, .85);
+    --wb-qcap-ans-settled: rgba(134, 206, 166, .82);
+  }
+}
+.wbupdate-items.wbupdate-hydrated { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 4px; margin-top: 2px; padding: 2px 2px 0; }
+.wbupdate-qitem { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 7px; min-width: 0; }
+.wbupdate a.wbupdate-cap, .wbupdate span.wbupdate-cap { --wb-qcap-rgb: var(--wb-qcap-check); display: inline-flex; align-items: center; gap: 5px; max-width: 100%; height: 22px; padding: 0 7px; min-width: 0; border-radius: 6px; border: 1px solid rgb(var(--wb-qcap-rgb) / var(--wb-qcap-bd-a)); background: rgb(var(--wb-qcap-rgb) / var(--wb-qcap-bg-a)); color: var(--wb-fg); font: 500 11.5px/1 var(--wb-sans); text-decoration: none; overflow-wrap: normal; transition: background .12s, border-color .12s; }
+.wbupdate a.wbupdate-cap { cursor: pointer; }
+.wbupdate a.wbupdate-cap:hover { background: rgb(var(--wb-qcap-rgb) / var(--wb-qcap-hover-bg-a)); border-color: rgb(var(--wb-qcap-rgb) / var(--wb-qcap-hover-bd-a)); text-decoration: none; }
+.wbupdate .wbupdate-cap.wbupdate-cls-policy { --wb-qcap-rgb: var(--wb-qcap-policy); }
+.wbupdate .wbupdate-cap.wbupdate-cls-technical { --wb-qcap-rgb: var(--wb-qcap-technical); }
+.wbupdate .wbupdate-cap.wbupdate-cls-announced { --wb-qcap-rgb: var(--wb-qcap-announced); }
+.wbupdate .wbupdate-cap.wbupdate-cls-check { --wb-qcap-rgb: var(--wb-qcap-check); }
+.wbupdate-qitem[data-wb-state="settled"] .wbupdate-cap { background: rgb(var(--wb-qcap-rgb) / var(--wb-qcap-settled-bg-a)); border-color: rgb(var(--wb-qcap-rgb) / var(--wb-qcap-settled-bd-a)); opacity: .84; }
+.wbupdate-cap-id { flex: none; font: 700 10.5px/1 var(--wb-mono); color: rgb(var(--wb-qcap-rgb) / var(--wb-qcap-id-a)); font-variant-numeric: tabular-nums; }
+.wbupdate-cap-cls { flex: none; display: inline-flex; align-items: center; height: 15px; padding: 0 4px; border-radius: 3px; background: rgb(var(--wb-qcap-rgb) / var(--wb-qcap-cls-bg-a)); color: rgb(var(--wb-qcap-rgb) / var(--wb-qcap-cls-fg-a)); font-size: 9.5px; font-weight: 700; line-height: 1; letter-spacing: .01em; }
+.wbupdate-cap-ttl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--wb-fg); }
+.wbupdate-cap-arr { flex: none; font-size: 10px; line-height: 1; opacity: .38; transition: opacity .12s; }
+.wbupdate a.wbupdate-cap:hover .wbupdate-cap-arr { opacity: .85; }
+.wbupdate-ans { display: inline-flex; align-items: baseline; gap: 4px; min-width: 0; max-width: 100%; font-size: 11px; line-height: 1.35; color: var(--wb-qcap-ans-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wbupdate-ans.st-open { color: var(--wb-qcap-ans-dim); }
+.wbupdate-ans.st-staged { color: var(--wb-qcap-ans-staged); }
+.wbupdate-ans.st-staged-ok { color: var(--wb-qcap-ans-ok); }
+.wbupdate-ans.st-staged-no { color: var(--wb-qcap-ans-no); }
+.wbupdate-ans.st-held { color: var(--wb-qcap-ans-held); }
+.wbupdate-ans.st-sent { color: var(--wb-qcap-ans-sent); }
+.wbupdate-ans.st-settled { color: var(--wb-qcap-ans-settled); }
