@@ -464,7 +464,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-26T13:04:46Z"
+        "touched_at": "2026-11-26T13:06:07Z",
+        "impl": {
+          "branch": "impl/develop/lived-sniff-mumps"
+        }
       }
     },
     "261126-feat-ws-chat-stream-interactive-question-cards": {
