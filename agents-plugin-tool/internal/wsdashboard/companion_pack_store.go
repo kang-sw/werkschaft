@@ -26,7 +26,7 @@ const (
 	companionManifestCap  = 512 << 10
 	companionAssetCap     = 2 << 20
 	companionPackCap      = 16 << 20
-	companionCacheCap     = 64 << 20
+	companionCacheCap     = 128 << 20
 )
 
 //go:embed assets/companion/default/*
@@ -60,6 +60,7 @@ type companionPackInfo struct {
 	ID        string             `json:"id"`
 	Name      string             `json:"name"`
 	Schema    string             `json:"schema"`
+	Renderer  string             `json:"renderer"`
 	Source    string             `json:"source"`
 	Rev       string             `json:"rev"`
 	Presets   []string           `json:"presets"`
@@ -270,8 +271,18 @@ func readCompanionLocalFile(open companionPackOpen, parent companionPackFile, na
 }
 
 func loadCompanionPack(id, source string, budget int, read func(string, int) ([]byte, error)) (*companionPack, string, error) {
+	return loadCompanionPackWithValidator(id, source, budget, read, validateCompanionManifest)
+}
+
+func loadCompanionPackWithValidator(
+	id, source string,
+	budget int,
+	read func(string, int) ([]byte, error),
+	validate func([]byte, string) (companionManifest, []string, error),
+) (*companionPack, string, error) {
+	packCap := companionPackCap
 	readWithinBudget := func(name string, fileCap, used int) ([]byte, error) {
-		cacheLeft, packLeft := budget-used, companionPackCap-used
+		cacheLeft, packLeft := budget-used, packCap-used
 		data, err := read(name, min(fileCap, cacheLeft, packLeft))
 		if errors.Is(err, errCompanionFileLimit) {
 			switch {
@@ -288,17 +299,34 @@ func loadCompanionPack(id, source string, budget int, read func(string, int) ([]
 	if err != nil {
 		return nil, companionManifestName, err
 	}
-	manifest, files, err := validateCompanionManifest(raw, id)
+	manifest, files, err := validate(raw, id)
 	if err != nil {
 		return nil, companionManifestName, err
+	}
+	renderer := companionPackRenderer2D
+	if manifest.Schema == companionPackVRMSchema {
+		renderer = companionPackRendererVRM
+		packCap = companionVrmPackCap
 	}
 	pack := &companionPack{manifest: raw, assets: make(map[string][]byte, len(files)), size: len(raw)}
 	revision := sha256.New()
 	hashCompanionPart(revision, raw)
 	for _, name := range files {
-		data, err := readWithinBudget(name, companionAssetCap, pack.size)
+		data, err := readWithinBudget(name, companionAssetCapFor(manifest.Schema, name), pack.size)
 		if err != nil {
 			return nil, name, err
+		}
+		if manifest.Schema == companionPackVRMSchema {
+			switch {
+			case validCompanionVRMFile(name):
+				if _, err := inspectCompanionVRM(data); err != nil {
+					return nil, name, err
+				}
+			case validCompanionVRMAFile(name):
+				if err := validateCompanionVRMA(data); err != nil {
+					return nil, name, err
+				}
+			}
 		}
 		pack.size += len(data)
 		pack.assets[name] = data
@@ -314,7 +342,7 @@ func loadCompanionPack(id, source string, budget int, read func(string, int) ([]
 		auto.Models = []string{}
 	}
 	pack.info = companionPackInfo{
-		ID: id, Name: manifest.Name, Schema: manifest.Schema, Source: source,
+		ID: id, Name: manifest.Name, Schema: manifest.Schema, Renderer: renderer, Source: source,
 		Rev: hex.EncodeToString(revision.Sum(nil)[:16]), Presets: sortedCompanionKeys(manifest.Presets), AutoMatch: auto,
 		Persona: manifest.Persona,
 	}

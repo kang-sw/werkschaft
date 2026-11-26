@@ -60,14 +60,19 @@ func (d *Daemon) handleCompanionManifest(w http.ResponseWriter, r *http.Request)
 
 func (d *Daemon) handleCompanionAsset(w http.ResponseWriter, r *http.Request) {
 	file := r.PathValue("file")
-	if !validCompanionRaster(file) {
+	var contentType string
+	switch {
+	case validCompanionRaster(file):
+		contentType = "image/webp"
+		if filepath.Ext(file) == ".png" {
+			contentType = "image/png"
+		}
+	case validCompanionVRMFile(file), validCompanionVRMAFile(file):
+		contentType = "model/gltf-binary"
+	default:
 		w.Header().Set("Cache-Control", "private, no-store")
 		http.NotFound(w, r)
 		return
-	}
-	contentType := "image/webp"
-	if filepath.Ext(file) == ".png" {
-		contentType = "image/png"
 	}
 	d.serveCompanionPackFile(w, r, file, contentType)
 }
