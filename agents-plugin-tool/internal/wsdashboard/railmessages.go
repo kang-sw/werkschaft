@@ -82,6 +82,14 @@ func (c *railMessages) lastResult(replyID string, rev uint64, dir string) (railM
 				complete = false
 			} else {
 				for i := len(page.Records) - 1; i >= 0; i-- {
+					if at := page.Records[i].At; !at.IsZero() {
+						if ms := at.UnixMilli(); ms > msg.LastAt {
+							msg.LastAt = ms
+						}
+						break
+					}
+				}
+				for i := len(page.Records) - 1; i >= 0; i-- {
 					rec := page.Records[i]
 					if rec.Kind != wslive.RingUser && rec.Kind != wslive.RingReply {
 						continue
@@ -90,7 +98,8 @@ func (c *railMessages) lastResult(replyID string, rev uint64, dir string) (railM
 					if rec.Kind == wslive.RingUser {
 						text = formatUserCommandPreview(text)
 					}
-					msg = railMessage{Text: oneLine(text, railMessageRunes), User: rec.Kind == wslive.RingUser}
+					msg.Text = oneLine(text, railMessageRunes)
+					msg.User = rec.Kind == wslive.RingUser
 					break
 				}
 			}

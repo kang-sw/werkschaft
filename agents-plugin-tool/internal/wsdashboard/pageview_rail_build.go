@@ -56,10 +56,13 @@ func railExecJobs(jobs map[string]int, project string) int {
 	return n
 }
 
-// railMessage is a session's last conversation message as the rail shows it.
+// railMessage is a session's last conversation message as the rail shows it,
+// plus the newest ring activity timestamp (LastAt, epoch ms) from the same
+// bounded tail read.
 type railMessage struct {
-	Text string
-	User bool
+	Text   string
+	User   bool
+	LastAt int64
 }
 
 // buildRailView groups the listed sessions by workspace and worktree. Stopped
@@ -423,8 +426,20 @@ func sortRailEnded(rows []RailRow, regs map[string]Registration) {
 	})
 }
 
+// sortRailArchived orders archived rows by last active time, newest first,
+// with a stable ReplyID tie-breaker so relative timestamps read monotonically
+// top-to-bottom without heartbeat pollution.
+func sortRailArchived(rows []RailRow) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].LastActive != rows[j].LastActive {
+			return rows[i].LastActive > rows[j].LastActive
+		}
+		return rows[i].ReplyID < rows[j].ReplyID
+	})
+}
+
 // splitRailArchived moves each archived row out of its group's ended list
-// into the group's Archived list, keeping the order the layout gave them.
+// into the group's Archived list, sorted by LastActive descending.
 // It runs after orderRailView, which treats an archived row as ended.
 func splitRailArchived(view *RailView) {
 	split := func(ended, archived *[]RailRow) {
@@ -436,6 +451,7 @@ func splitRailArchived(view *RailView) {
 				keep = append(keep, r)
 			}
 		}
+		sortRailArchived(*archived)
 		*ended = keep
 	}
 	for i := range view.Workspaces {

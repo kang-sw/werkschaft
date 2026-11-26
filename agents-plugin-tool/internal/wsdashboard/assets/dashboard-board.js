@@ -190,6 +190,7 @@
     el.setAttribute("data-h", hash);
     if (board) {
       indexFrames();
+      if (window.WsPanelCard && window.WsPanelCard.sync) window.WsPanelCard.sync();
       if (window.wbForm) window.wbForm();
       bindCapsuleNotes();
       mermaid(ins);
@@ -429,6 +430,7 @@
   function queueGallery() { if (galNarrow && !galFrame) galFrame = requestAnimationFrame(placeGallery); }
   if (cardBoard) {
     if (window.WsPreview) window.WsPreview.setup({ renderDiff: gwRender, post: worktree ? browsePost : post, toast: toast });
+    if (window.WsPanelCard) window.WsPanelCard.setup({ mountFrames: mountFrames, boardBoxes: boardBoxes });
     if (window.WsTerm) window.WsTerm.setup({ post: worktree ? browsePost : post, toast: toast, setCtab: live ? setCtab : null, stage: shStage });
     // The composer's chips come later in this script: the hooks are hoisted
     // functions, and cchips is not yet assigned here.
@@ -500,6 +502,7 @@
         mountFrames(n);
         if (window.wbBindBoard) window.wbBindBoard(n);
         if (window.wbAgo) window.wbAgo(n);
+        if (window.WsPanelCard && window.WsPanelCard.sync) window.WsPanelCard.sync();
         mermaid([n]);
       },
       drag: function (on) {
@@ -509,6 +512,7 @@
         if (h) swap("board", h.hash, h.html, true);
       }
     });
+    if (window.WsPanelCard && window.WsPanelCard.sync) window.WsPanelCard.sync();
     if (worktree) {
       var tools = window.WsCards.toolbar().querySelector(".board-tools"), explorer = doc.createElement("button");
       q(".board-overview, .board-state-filter", tools).forEach(function (n) { n.remove(); });

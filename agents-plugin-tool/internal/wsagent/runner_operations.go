@@ -120,8 +120,9 @@ func (r *Runner) sendFrom(id, text string, operator bool, sender string) (State,
 		c.rec.Sends = c.sends
 		c.cancelModelWaitBackoffForInput()
 		c.cancelQuotaContinuationForInput()
-		if c.rec.Parent != nil {
-			// Any message resets a spawned child's waiting expiry.
+		if c.rec.Parent != nil || c.rec.Lead {
+			// Any message resets a spawned child's waiting expiry and tracks
+			// a hosted lead's last activity in memory (riding recordDirty).
 			c.rec.LastActiveAt = r.opts.Now().UTC().Format(time.RFC3339)
 		}
 	}
@@ -456,15 +457,16 @@ func (r *Runner) SessionMeta(replyID string) (wsdashboard.AgentSessionMeta, bool
 	}
 	safeStop := selfSafe && r.descendantsAllowSafeStop(replyID, rec.Lead)
 	return wsdashboard.AgentSessionMeta{
-		Hosted:     rec.Lead,
-		IsChild:    r.isChildRecord(rec),
-		Closed:     closed,
-		Active:     active,
-		HasProcess: hasProcess,
-		SafeStop:   safeStop,
-		Backend:    rec.Backend,
-		Model:      rec.Model,
-		Effort:     rec.Effort,
+		Hosted:       rec.Lead,
+		IsChild:      r.isChildRecord(rec),
+		Closed:       closed,
+		Active:       active,
+		HasProcess:   hasProcess,
+		SafeStop:     safeStop,
+		Backend:      rec.Backend,
+		Model:        rec.Model,
+		Effort:       rec.Effort,
+		LastActiveAt: rec.LastActiveAt,
 	}, true
 }
 
