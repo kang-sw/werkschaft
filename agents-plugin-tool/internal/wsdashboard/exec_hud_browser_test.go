@@ -32,6 +32,7 @@ type hudBrowserJob struct {
 	EndedAt       int64  `json:"ended_at"`
 	StoppedByUser bool   `json:"stopped_by_user"`
 	StopNotice    string `json:"stop_notice"`
+	Async         bool   `json:"async"`
 	Evicted       int64  `json:"evicted"`
 	segs          []execjob.Segment
 	written       int64
@@ -96,7 +97,7 @@ func (s *hudBrowserSvc) Open(string) (uint64, error) { return 4, nil }
 
 func (s *hudBrowserSvc) summary(j *hudBrowserJob) execjob.HostedSummary {
 	return execjob.HostedSummary{ID: j.ID, Tool: j.Tool, Command: j.Command, Cwd: j.Cwd, State: j.State, Origin: j.Origin, ExitCode: j.ExitCode, Signal: j.Signal,
-		StartedAt: j.StartedAt, EndedAt: j.EndedAt, Written: j.written, StoppedByUser: j.StoppedByUser, StopNotice: j.StopNotice}
+		StartedAt: j.StartedAt, EndedAt: j.EndedAt, Written: j.written, StoppedByUser: j.StoppedByUser, StopNotice: j.StopNotice, Async: j.Async}
 }
 
 func (s *hudBrowserSvc) Jobs(owner string) []execjob.HostedSummary {

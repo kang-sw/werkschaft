@@ -669,3 +669,49 @@ func TestBgExecLiveMarkupOnConvLive(t *testing.T) {
 		}
 	}
 }
+
+// TestExecHUDJobsJSONExposesAsyncFlag verifies /s/<rid>/exec/jobs emits
+// "async":true for backgrounded/async jobs and omits "async" for synchronous jobs.
+func TestExecHUDJobsJSONExposesAsyncFlag(t *testing.T) {
+	f, svc := startHUDFixture(t)
+	zero := 0
+	svc.mu.Lock()
+	svc.jobs["livesession"] = []execjob.HostedSummary{
+		{ID: "exec_async", Tool: "exec.shell", Command: "sleep 99", State: execjob.HostedExited, ExitCode: &zero, Origin: execjob.OriginAgent, Async: true, StartedAt: 100, EndedAt: 200},
+		{ID: "exec_sync", Tool: "exec.shell", Command: "echo hi", State: execjob.HostedExited, ExitCode: &zero, Origin: execjob.OriginAgent, Async: false, StartedAt: 100, EndedAt: 110},
+		{ID: "exec_user", Tool: "exec.shell", Command: "git status", State: execjob.HostedExited, ExitCode: &zero, Origin: execjob.OriginUser, Async: false, StartedAt: 100, EndedAt: 110},
+	}
+	svc.mu.Unlock()
+
+	res := hudGet(f, "/s/livesession/exec/jobs")
+	if res.Code != http.StatusOK {
+		t.Fatalf("GET exec/jobs = %d %s", res.Code, res.Body)
+	}
+	var raw struct {
+		Jobs []map[string]any `json:"jobs"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("unmarshal raw: %v (%s)", err, res.Body)
+	}
+	byID := map[string]map[string]any{}
+	for _, j := range raw.Jobs {
+		byID[j["id"].(string)] = j
+	}
+	if v, ok := byID["exec_async"]["async"]; !ok || v != true {
+		t.Fatalf("exec_async raw JSON = %v, want async:true", byID["exec_async"])
+	}
+	for _, id := range []string{"exec_sync", "exec_user"} {
+		if _, ok := byID[id]["async"]; ok {
+			t.Fatalf("%s raw JSON unexpectedly includes async: %v", id, byID[id])
+		}
+	}
+	var typed struct {
+		Jobs []execJobView `json:"jobs"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &typed); err != nil {
+		t.Fatalf("unmarshal typed: %v", err)
+	}
+	if len(typed.Jobs) != 3 || !typed.Jobs[0].Async || typed.Jobs[1].Async || typed.Jobs[2].Async {
+		t.Fatalf("typed jobs = %+v", typed.Jobs)
+	}
+}

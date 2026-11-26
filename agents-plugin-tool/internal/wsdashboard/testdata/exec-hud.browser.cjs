@@ -205,13 +205,13 @@ async function run(browser, { lang, scheme, full }) {
   // 4. ended states, pinning and the fade timers.
   const t0 = Date.now();
   const ended = [
-    J('exec_ok', 'make -j8', { state: 'exited', exit_code: 0, started_at: t0 - 88000, ended_at: t0 - 11200 }),
+    J('exec_ok', 'make -j8', { state: 'exited', exit_code: 0, async: true, started_at: t0 - 88000, ended_at: t0 - 11200 }),
     J('exec_exit', 'go test ./...', { state: 'exited', exit_code: 2, started_at: t0 - 130000, ended_at: t0 - 44000 }),
-    J('exec_stopped', 'python3 -m http.server', { state: 'stopped', stopped_by_user: true, stop_notice: 'sent', started_at: t0 - 410000, ended_at: t0 - 63000 }),
+    J('exec_stopped', 'python3 -m http.server', { state: 'stopped', async: true, stopped_by_user: true, stop_notice: 'sent', started_at: t0 - 410000, ended_at: t0 - 63000 }),
     J('exec_lost', 'tail -f daemon.log', { state: 'lost', started_at: t0 - 3200000, ended_at: t0 - 1800000 }),
     J('exec_nostart', 'git fetch', { state: 'failed', origin: 'user', started_at: t0 - 5000, ended_at: t0 - 5000 }),
     J('exec_run', 'pnpm vitest --watch', { started_at: t0 - 201000 }),
-    J('exec_just', 'cargo build', { state: 'exited', exit_code: 0, started_at: t0 - 20000, ended_at: t0 - 2000 }),
+    J('exec_just', 'cargo build', { state: 'exited', exit_code: 0, async: true, started_at: t0 - 20000, ended_at: t0 - 2000 }),
   ];
   await setJobs(view, ended);
   await view.waitForSelector('.xgroup:not([hidden]) .xchip');
@@ -240,7 +240,7 @@ async function run(browser, { lang, scheme, full }) {
   assert.equal(await view.locator('.xchip[data-xid="exec_exit"]').count(), 0, 'dismissed');
   // reload: a job that ended before the page loaded is past its windows.
   await post('/set', { notice: 'sent' });
-  await setJobs(view, [J('exec_ok', 'make -j8', { state: 'exited', exit_code: 0, ended_at: Date.now() - 100000 }), J('exec_bad', 'go vet ./...', { state: 'exited', exit_code: 1, ended_at: Date.now() - 100000 }), J('exec_stopped2', 'sleep 1000', { state: 'stopped', ended_at: Date.now() - 100000 }), J('exec_stopfail', 'node server.js', { state: 'stopped', stopped_by_user: true, stop_notice: 'failed', ended_at: Date.now() - 90000 })]);
+  await setJobs(view, [J('exec_ok', 'make -j8', { state: 'exited', exit_code: 0, async: true, ended_at: Date.now() - 100000 }), J('exec_bad', 'go vet ./...', { state: 'exited', exit_code: 1, ended_at: Date.now() - 100000 }), J('exec_stopped2', 'sleep 1000', { state: 'stopped', async: true, ended_at: Date.now() - 100000 }), J('exec_stopfail', 'node server.js', { state: 'stopped', stopped_by_user: true, stop_notice: 'failed', ended_at: Date.now() - 90000 })]);
   await page.reload();
   await view.waitForSelector('#composer[data-cexec="1"]', { state: 'attached' }).catch(() => {});
   const view2 = page.frames().find(x => x !== page.mainFrame() && x.url().includes('/s/livesession'));
@@ -257,6 +257,42 @@ async function run(browser, { lang, scheme, full }) {
   await view3.waitForSelector('.xgroup .xagg.quiet', { timeout: 15000 });
   assert.equal(await view3.locator('.xchip[data-xid="exec_bad"]').count(), 0, 'a dismissed failure stays dismissed across a reload');
   const v = view3;
+
+  // 4b. foreground sync-agent filter: normally-completed sync agent jobs stay out of the strip, quiet "ended N", and peek;
+  // running sync agent, failed/attention sync agent, ended async agent, and ended user `!` jobs remain visible/counted.
+  const tf = Date.now();
+  await setJobs(v, [
+    J('exec_sync_ok_only', 'echo ok', { state: 'exited', exit_code: 0, started_at: tf - 5000, ended_at: tf - 1000 }),
+    J('exec_sync_old_only', 'git status', { state: 'exited', exit_code: 0, started_at: tf - 120000, ended_at: tf - 100000 }),
+  ]);
+  await sleep(200);
+  assert.equal(await hudShown(v), false, 'only normally-completed sync agent jobs leave the strip hidden with no quiet ended pill');
+  await setJobs(v, [
+    J('exec_sync_ok', 'echo ok', { state: 'exited', exit_code: 0, started_at: tf - 5000, ended_at: tf - 1000 }),
+    J('exec_sync_run', 'sleep 30', { started_at: tf - 4000 }),
+    J('exec_sync_fail', 'go test ./...', { state: 'exited', exit_code: 1, started_at: tf - 9000, ended_at: tf - 3000 }),
+    J('exec_async_old', 'make build', { state: 'exited', exit_code: 0, async: true, started_at: tf - 120000, ended_at: tf - 100000 }),
+    J('exec_user_old', 'git diff', { state: 'exited', exit_code: 0, origin: 'user', started_at: tf - 120000, ended_at: tf - 100000 }),
+  ]);
+  await v.waitForSelector('.xchip[data-xid="exec_sync_run"]');
+  const fIds = (await chips(v)).filter(x => x.id).map(x => x.id);
+  assert.ok(!fIds.includes('exec_sync_ok'), 'normally-completed sync agent job is hidden from the strip: ' + fIds);
+  assert.ok(fIds.includes('exec_sync_run'), 'running sync agent job stays visible: ' + fIds);
+  assert.ok(fIds.includes('exec_sync_fail'), 'failed sync agent job stays visible: ' + fIds);
+  await v.click('.xchip[data-xid="exec_sync_run"]');
+  await v.waitForSelector('.xpeek:not([hidden])');
+  const peekTabs = await v.evaluate(() => [...document.querySelectorAll('.xp-tab[data-xtab]')].map(n => n.getAttribute('data-xtab')));
+  assert.ok(!peekTabs.includes('exec_sync_ok'), 'normally-completed sync agent job is excluded from peek tabs: ' + peekTabs);
+  assert.ok(peekTabs.includes('exec_sync_run') && peekTabs.includes('exec_sync_fail') && peekTabs.includes('exec_async_old') && peekTabs.includes('exec_user_old'), 'running, failed, async, and user jobs remain in peek: ' + peekTabs);
+  await page.keyboard.press('Escape');
+  await v.waitForSelector('.xpeek', { state: 'hidden' });
+  await setJobs(v, [
+    J('exec_sync_ok', 'echo ok', { state: 'exited', exit_code: 0, started_at: tf - 120000, ended_at: tf - 100000 }),
+    J('exec_async_old', 'make build', { state: 'exited', exit_code: 0, async: true, started_at: tf - 120000, ended_at: tf - 100000 }),
+    J('exec_user_old', 'git diff', { state: 'exited', exit_code: 0, origin: 'user', started_at: tf - 120000, ended_at: tf - 100000 }),
+  ]);
+  await v.waitForSelector('.xgroup .xagg.quiet');
+  assert.match(await v.evaluate(() => document.querySelector('.xgroup .xagg.quiet').textContent), /2/, 'ended N counts only faded async agent + user jobs, not sync agent jobs');
 
   // 5. tooltip, escaping, the 7-line clamp.
   const evil = '<img src=x onerror="window.__pwn=1">&amp; line\n' + Array.from({ length: 12 }, (_, i) => 'echo line ' + (i + 2)).join('\n');
@@ -326,7 +362,7 @@ async function run(browser, { lang, scheme, full }) {
   assert.ok(await v.evaluate(() => { const o = document.querySelector('.xout'); return o.scrollHeight - o.scrollTop - o.clientHeight < 12; }), 'the jump goes to the tail');
 
   // 8. stop: confirm wording, focus, Esc, timeout, notice, toast.
-  await post('/jobs', [J('exec_s1', 'pnpm vitest --watch'), J('exec_s2', 'python3 -m http.server'), J('exec_s3', 'make watch'), J('exec_u1', 'npm run dev', { origin: 'user' })]);
+  await post('/jobs', [J('exec_s1', 'pnpm vitest --watch', { async: true }), J('exec_s2', 'python3 -m http.server', { async: true }), J('exec_s3', 'make watch', { async: true }), J('exec_u1', 'npm run dev', { origin: 'user' })]);
   await post('/bump');
   await v.waitForSelector('.xchip[data-xid="exec_s1"]');
   await post('/set', { stopMs: 700, notice: 'sent' });
