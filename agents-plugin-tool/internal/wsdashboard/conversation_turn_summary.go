@@ -24,9 +24,12 @@ type TurnSummaryView struct {
 	Live        bool
 	Completed   bool
 	CustomLabel string
-	Calls       int
-	Failed      int
-	DurationMs  int64
+	// Replies lists, space separated, the entry keys of the lead replies the
+	// whiteboard-only fold moves into this summary's drawer.
+	Replies    string
+	Calls      int
+	Failed     int
+	DurationMs int64
 	// StartMs is the running turn's start (live header only); the page ticks
 	// elapsed time from it instead of showing summed tool time.
 	StartMs     int64
@@ -165,6 +168,8 @@ func (v *TurnSummaryView) CacheFingerprint() string {
 	b.WriteString(v.Reason)
 	b.WriteByte('|')
 	b.WriteString(strconv.FormatBool(v.Plain))
+	b.WriteByte('|')
+	b.WriteString(v.Replies)
 	for _, g := range v.Gaps {
 		b.WriteByte(',')
 		b.WriteString(g.EntryKey)
@@ -278,10 +283,6 @@ func collapseCompletedTurnSpan(entries []ConvEntry, spanStart, turnIdx int) {
 		foldPlainTurn(entries, replyIdxs, turnIdx, replyBytes)
 		return
 	}
-	for _, idx := range replyIdxs {
-		entries[idx].TurnKey = "turn-" + entries[toolIdxs[0]].Key
-	}
-
 	turn := entries[turnIdx]
 	anchorIdx := toolIdxs[0]
 	anchor := entries[anchorIdx]
@@ -333,6 +334,7 @@ func collapseCompletedTurnSpan(entries []ConvEntry, spanStart, turnIdx int) {
 		WakeTurn:    turn.WakeTurn,
 		Reason:      turn.Reason,
 		Gaps:        gaps,
+		Replies:     replyKeys(entries, replyIdxs),
 	}
 	if summary.AddedTokens <= 0 {
 		summary.EstTokens = estTurnTokens(toolBytes, replyBytes)
@@ -362,17 +364,24 @@ func foldPlainTurn(entries []ConvEntry, replyIdxs []int, turnIdx int, replyBytes
 		return
 	}
 	first := entries[replyIdxs[0]]
-	key := "turn-plain-" + first.Key
-	summary := NewFoldedPlainTurnSummary(key, "", entries[turnIdx].RingEntry, entries[turnIdx].At, first.AtRFC, replyBytes, "")
+	summary := NewFoldedPlainTurnSummary("turn-plain-"+first.Key, "", entries[turnIdx].RingEntry, entries[turnIdx].At, first.AtRFC, replyBytes, "")
 	summary.Plain = true
 	// The .turnline stays the turn's audit host; a second audit container
 	// inside the hidden summary would duplicate its rows.
 	summary.Completed = false
-	entries[replyIdxs[0]].TurnPlain = summary
-	for _, idx := range replyIdxs {
-		entries[idx].TurnKey = key
+	summary.Replies = replyKeys(entries, replyIdxs)
+	// The summary rides the closing turn entry, so the replies' own markup
+	// (and its cache entries) never changes when the turn completes.
+	entries[turnIdx].TurnPlain = summary
+}
+
+// replyKeys joins the entry keys of the replies at idxs.
+func replyKeys(entries []ConvEntry, idxs []int) string {
+	keys := make([]string, 0, len(idxs))
+	for _, idx := range idxs {
+		keys = append(keys, entries[idx].Key)
 	}
-	entries[turnIdx].TurnKey = key
+	return strings.Join(keys, " ")
 }
 
 func collapseOpenTurnSpan(lead wslive.Lead, entries []ConvEntry, spanStart int) *TurnSummaryView {
@@ -486,11 +495,13 @@ func collapseOpenTurnSpan(lead wslive.Lead, entries []ConvEntry, spanStart int) 
 	for _, idx := range toolIdxs[1:] {
 		entries[idx].TurnAbsorbed = true
 	}
+	var replyIdxs []int
 	for j := spanStart; j < len(entries); j++ {
 		if entries[j].Kind == wslive.RingReply {
-			entries[j].TurnKey = orphan.Key
+			replyIdxs = append(replyIdxs, j)
 		}
 	}
+	orphan.Replies = replyKeys(entries, replyIdxs)
 	return nil
 }
 

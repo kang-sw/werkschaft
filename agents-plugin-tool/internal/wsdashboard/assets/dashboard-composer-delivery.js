@@ -79,7 +79,7 @@
     }
     var body = { utcOffsetMinutes: -new Date().getTimezoneOffset(), text: t, chips: list, topics: notes.map(function (n) { return { topic: n.topic, note: n.value.trim() }; }), mentions: said };
     if (typeof boardIncarnation === "string") body.boardIncarnation = boardIncarnation;
-    if (wbOnlyOn()) body.whiteboard_first = true;
+    if (typeof wbOnlyOn === "function" && wbOnlyOn()) body.whiteboard_first = true;
     if (closing.length) body.closeRequests = closing.map(function (r) { return { topic: r.topic, reason: r.reason }; });
     if (wp.length) body.picks = wp;
     if (wc.length) body.consoles = wc;

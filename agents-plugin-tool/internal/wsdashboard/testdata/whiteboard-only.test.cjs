@@ -52,11 +52,11 @@ class El {
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
 }
 
-function reply(key, turn, text) {
-  return new El("div", { class: "msg fromlead", "data-entry": key, "data-turn": turn }, [new El("div", { class: "bub", text })]);
+function reply(key, text) {
+  return new El("div", { class: "msg fromlead", "data-entry": key }, [new El("div", { class: "bub", text })]);
 }
-function summary(key, plain) {
-  const a = { class: "d-turn", "data-conv-turn": "1", "data-key": key };
+function summary(key, replies, plain) {
+  const a = { class: "d-turn", "data-conv-turn": "1", "data-key": key, "data-replies": replies };
   if (plain) { a["data-conv-turn-plain"] = "1"; a.hidden = ""; }
   return new El("details", a, [new El("span", { "data-conv-turn-folded": "", hidden: "" }), new El("div", { "data-conv-turn-drawer": "" })]);
 }
@@ -89,10 +89,13 @@ function load({ capable = true, stored = null } = {}) {
 }
 
 function populate(box) {
-  const tool = summary("turn-e2", false), plain = summary("turn-plain-e5", true);
-  const turnline = new El("details", { class: "turnline", "data-turn-line": "turn-plain-e5" });
-  const r1 = reply("e3", "turn-e2", "tool reply"), r2 = reply("e5", "turn-plain-e5", "plain reply");
-  [tool, r1, new El("div", { class: "turn-plain-host", "data-entry": "e5" }, [plain, r2]), turnline].forEach((n) => box.appendChild(n));
+  const tool = summary("turn-e2", "e3", false), plain = summary("turn-plain-e5", "e5", true);
+  const turnline = new El("details", { class: "turnline" });
+  const r1 = reply("e3", "tool reply"), r2 = reply("e5", "plain reply");
+  box.appendChild(tool);
+  box.appendChild(r1);
+  box.appendChild(r2);
+  box.appendChild(new El("div", { class: "turn-plain-host", "data-entry": "e6" }, [plain, turnline]));
   return { tool, plain, turnline, r1, r2 };
 }
 
@@ -164,5 +167,5 @@ test("a re-sync after a merge does not duplicate clones", () => {
 
 test("the send path sets whiteboard_first only while ON", () => {
   const delivery = fs.readFileSync(path.join(__dirname, "..", "assets", "dashboard-composer-delivery.js"), "utf8");
-  assert.match(delivery, /if \(wbOnlyOn\(\)\) body\.whiteboard_first = true;/);
+  assert.match(delivery, /if \(typeof wbOnlyOn === "function" && wbOnlyOn\(\)\) body\.whiteboard_first = true;/);
 });

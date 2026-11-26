@@ -20,16 +20,14 @@ func TestWhiteboardFoldMetadataOnReplyAndPlainTurns(t *testing.T) {
 	entries := string(renderIdleHistory(t, ring, "en")[regionEntries].HTML)
 
 	toolKey := "turn-" + ring[1].Name
-	if !strings.Contains(entries, `data-turn="`+toolKey+`"`) {
-		t.Errorf("tool-turn reply must name its summary %q:\n%s", toolKey, entries)
+	if !strings.Contains(entries, `data-key="`+toolKey+`"`) || !strings.Contains(entries, `data-replies="`+ring[2].Name+`"`) {
+		t.Errorf("tool-turn summary must name its reply:\n%s", entries)
 	}
 	plainKey := "turn-plain-" + ring[5].Name
 	for _, want := range []string{
-		`class="turn-plain-host" data-entry="` + ring[5].Name + `"`,
+		`class="turn-plain-host" data-entry="` + ring[6].Name + `"`,
 		`data-key="` + plainKey + `"`,
-		`data-conv-turn-plain="1" hidden`,
-		`data-turn="` + plainKey + `"`,
-		`data-turn-line="` + plainKey + `"`,
+		`data-conv-turn-plain="1" hidden data-replies="` + ring[5].Name + `"`,
 		`data-conv-turn-folded hidden`,
 		`Plain replies folded`,
 	} {
@@ -37,13 +35,15 @@ func TestWhiteboardFoldMetadataOnReplyAndPlainTurns(t *testing.T) {
 			t.Errorf("zero-tool turn missing %q:\n%s", want, entries)
 		}
 	}
-	// The tool turn's summary is a real one, never the hidden plain kind.
 	if got := strings.Count(entries, `data-conv-turn-plain="1"`); got != 1 {
 		t.Errorf("exactly one plain summary expected, got %d", got)
 	}
-	// The hidden summary carries no entry of its own: the host owns the key.
-	if got := strings.Count(entries, `data-entry="`+ring[5].Name+`"`); got != 2 {
-		t.Errorf("host and reply share the reply's key once each, got %d", got)
+	// Replies keep their own markup: no wrapper, no turn attribute, so the
+	// entry cache never re-renders them when a turn completes.
+	for _, name := range []string{ring[2].Name, ring[5].Name} {
+		if !strings.Contains(entries, `<div class="msg fromlead" data-entry="`+name+`"`) {
+			t.Errorf("reply %s must render as a plain top-level row", name)
+		}
 	}
 }
 

@@ -20,29 +20,31 @@
     box.querySelectorAll("[data-conv-turn-plain]").forEach(function (n) { n.hidden = true; });
     box.querySelectorAll("[data-conv-turn-folded]").forEach(function (n) { n.hidden = true; });
     if (!on) return;
-    var turns = {};
-    box.querySelectorAll("[data-conv-turn]").forEach(function (t) { turns[t.getAttribute("data-key")] = t; });
-    var folded = {};
-    box.querySelectorAll(".msg.fromlead[data-turn]").forEach(function (reply) {
-      var key = reply.getAttribute("data-turn"), turn = turns[key];
-      var drawer = turn && turn.querySelector("[data-conv-turn-drawer]");
+    var replies = {};
+    box.querySelectorAll(".msg.fromlead[data-entry]").forEach(function (r) { replies[r.getAttribute("data-entry")] = r; });
+    box.querySelectorAll("[data-conv-turn][data-replies]").forEach(function (turn) {
+      var drawer = turn.querySelector("[data-conv-turn-drawer]"), plain = turn.hasAttribute("data-conv-turn-plain"), any = false;
       if (!drawer) return;
-      var copy = reply.cloneNode(true);
-      copy.removeAttribute("data-entry");
-      copy.removeAttribute("data-turn");
-      copy.setAttribute("data-wb-clone", "1");
-      drawer.appendChild(copy);
-      reply.setAttribute("data-wb-folded", "1");
-      folded[key] = true;
-    });
-    Object.keys(folded).forEach(function (key) {
-      var turn = turns[key];
-      if (turn.hasAttribute("data-conv-turn-plain")) turn.hidden = false;
-      var chip = turn.querySelector("[data-conv-turn-folded]");
-      if (chip && !turn.hasAttribute("data-conv-turn-plain")) chip.hidden = false;
-    });
-    box.querySelectorAll("[data-turn-line]").forEach(function (line) {
-      if (folded[line.getAttribute("data-turn-line")]) line.setAttribute("data-wb-folded", "1");
+      turn.getAttribute("data-replies").split(" ").forEach(function (key) {
+        var reply = replies[key];
+        if (!reply) return;
+        var copy = reply.cloneNode(true);
+        copy.removeAttribute("data-entry");
+        copy.setAttribute("data-wb-clone", "1");
+        drawer.appendChild(copy);
+        reply.setAttribute("data-wb-folded", "1");
+        any = true;
+      });
+      if (!any) return;
+      if (plain) {
+        turn.hidden = false;
+        // The summary stands in for the turn's own .turnline beside it.
+        var line = turn.parentNode && turn.parentNode.querySelector(".turnline");
+        if (line) line.setAttribute("data-wb-folded", "1");
+      } else {
+        var chip = turn.querySelector("[data-conv-turn-folded]");
+        if (chip) chip.hidden = false;
+      }
     });
   }
   function wbApply(on, live) {

@@ -153,12 +153,8 @@ type ConvEntry struct {
 	// by the span's TurnSummary while its .turn-with-summary reasoning host
 	// stays at turn-end position.
 	TurnReasoningOnly bool
-	// TurnKey names the turn summary (its data-key) whose drawer a lead reply
-	// belongs to; the page folds the reply into that drawer while the
-	// whiteboard-only toggle is on. Empty for a reply outside a collapsed turn.
-	TurnKey string
-	// TurnPlain anchors the hidden summary of a completed turn that ran no
-	// tool: it sits at the turn's first reply and holds the folded replies.
+	// TurnPlain is the hidden summary of a completed turn that ran no tool.
+	// It rides the closing turn entry and names the replies it folds.
 	TurnPlain *TurnSummaryView
 }
 
