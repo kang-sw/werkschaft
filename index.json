@@ -490,7 +490,14 @@
       "registered_at": "2026-11-26T13:46:49Z"
     },
     "261126-feat-ws-dashboard-conv-whiteboard-only-mode": {
-      "registered_at": "2026-11-26T13:46:42Z"
+      "registered_at": "2026-11-26T13:46:42Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-26T15:24:05Z"
+      }
     },
     "261126-refactor-oversized-multi-responsibility-files": {
       "registered_at": "2026-11-26T05:40:46Z"
