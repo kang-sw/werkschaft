@@ -321,12 +321,17 @@ func TestDeadBindingCheckoutDeleteWhileReleasePublishesEndedRow(t *testing.T) {
 	testReleasedWorkerDelete(t, releasedWorkerDeleteOptions{restart: true, pauseRelease: true})
 }
 
+// The interrupted-delete variants run with a released holder whose stop
+// fails (wedged): the release keeps it in the persisted closure and in the
+// checkout's occupancy, a replacement daemon whose holder inventory is
+// incomplete restores that occupancy, and the next complete startup
+// inventory ends it (finalizeDeadHolders).
 func TestDeadBindingInterruptedCheckoutDeleteRestoresOccupancy(t *testing.T) {
-	testReleasedWorkerDelete(t, releasedWorkerDeleteOptions{restart: true, interruptDelete: true})
+	testReleasedWorkerDelete(t, releasedWorkerDeleteOptions{restart: true, interruptDelete: true, wedged: true})
 }
 
 func TestDeadBindingInterruptedCheckoutDeleteWithChangedCwd(t *testing.T) {
-	testReleasedWorkerDelete(t, releasedWorkerDeleteOptions{restart: true, interruptDelete: true, changedCwd: true})
+	testReleasedWorkerDelete(t, releasedWorkerDeleteOptions{restart: true, interruptDelete: true, changedCwd: true, wedged: true})
 }
 
 type releasedWorkerDeleteOptions struct {
@@ -334,10 +339,20 @@ type releasedWorkerDeleteOptions struct {
 	pauseRelease    bool
 	interruptDelete bool
 	changedCwd      bool
+	// wedged makes the released worker's holder impossible to end, so the
+	// release's stop fails and the holder stays in the closure.
+	wedged bool
 }
 
 func testReleasedWorkerDelete(t *testing.T, test releasedWorkerDeleteOptions) {
 	t.Helper()
+	if test.wedged {
+		// The release waits closeGrace for a child that ignores its input
+		// EOF. Set before any runner starts, restored after the last stops.
+		restoreGrace := closeGrace
+		closeGrace = 20 * time.Millisecond
+		t.Cleanup(func() { closeGrace = restoreGrace })
+	}
 	h, _ := configureHeldWorkerHarness(t)
 	mail, refusals := newFakeMail(), &wakeRefusals{}
 	if test.restart {
@@ -427,14 +442,43 @@ func testReleasedWorkerDelete(t *testing.T, test releasedWorkerDeleteOptions) {
 	middleID, middleHolder := spawn(lead, middleRoot, middleCwd, "middle")
 	middleKey := h.record(middleID).WSKey
 	leafID, leafHolder := spawn(ParentRef{Kind: ParentConversation, ReplyID: middleID}, h.root, "", "grandchild")
-	assertHolderRunning := func(when string) {
-		t.Helper()
+	if test.wedged {
+		h.holders.set(func() {
+			h.holders.wedged = map[string]error{middleHolder: fmt.Errorf("holder %s: stop refused", middleHolder)}
+		})
+	}
+	holderRunning := func() bool {
 		for _, holder := range h.holders.List().Holders {
 			if holder.ID == middleHolder && holder.Child != nil && holder.Child.State == "running" {
-				return
+				return true
 			}
 		}
-		t.Errorf("released worker's holder is no longer running %s", when)
+		return false
+	}
+	// A forced release ends the released worker's holder and child, then
+	// persists the closure with the holder forgotten; a holder whose stop
+	// fails stays running and named in the persisted closure.
+	checkReleasedHolder := func(when string) {
+		t.Helper()
+		if n := h.holders.opCount("stop " + middleHolder); n != 1 {
+			t.Errorf("%s: the release asked holder %s to stop %d times, want once: %v", when, middleHolder, n, h.holders.opList())
+		}
+		rec := h.record(middleID)
+		if rec.ClosedAt == "" || rec.DeadBindingClosure == nil || rec.DeadBindingClosure.Checkout != worktree {
+			t.Errorf("%s: the release closure is not on disk: %+v", when, rec)
+		}
+		if test.wedged {
+			if !holderRunning() || rec.HolderID != middleHolder {
+				t.Errorf("%s: a holder whose stop failed must stay running and in the closure: running=%v, record holder %q", when, holderRunning(), rec.HolderID)
+			}
+			return
+		}
+		if holderRunning() || rec.HolderID != "" || rec.HostPID != 0 || rec.HolderSeq != 0 {
+			t.Errorf("%s: the released worker's holder survived the release: running=%v, record %+v", when, holderRunning(), rec)
+		}
+		if got, ok := boundByAddress(h.runner.ActiveChildrenInWorktree(worktree))[AgentAddress(middleID)]; ok {
+			t.Errorf("%s: the stopped released worker still occupies the checkout: %+v", when, got)
+		}
 	}
 	if st := h.state(leadID); !st.Process || st.SafeStop {
 		t.Fatalf("lead before checkout release = %+v, want a process and unsafe Stop", st)
@@ -481,7 +525,7 @@ func testReleasedWorkerDelete(t *testing.T, test releasedWorkerDeleteOptions) {
 		}
 	}
 	if test.restart {
-		assertHolderRunning("before deletion")
+		checkReleasedHolder("before deletion")
 	}
 
 	stop := func() reply {
@@ -512,12 +556,13 @@ func testReleasedWorkerDelete(t *testing.T, test releasedWorkerDeleteOptions) {
 		if err := h.runner.PrepareWorktreeHistoryPurge(worktree, map[string]bool{middleID: true}); err != nil {
 			t.Fatal(err)
 		}
+		// The holder whose stop failed is still named by the closure.
 		rec := h.record(middleID)
 		if rec.ClosedAt == "" || rec.DeadBindingClosure == nil ||
 			rec.DeadBindingClosure.Checkout != worktree || rec.HolderID != middleHolder {
 			t.Fatalf("pre-delete record did not persist the held release closure: %+v", rec)
 		}
-		if got := boundByAddress(h.runner.ActiveChildrenInWorktree(worktree))[AgentAddress(middleID)]; !got.Live {
+		if got := boundByAddress(h.runner.ActiveChildrenInWorktree(worktree))[AgentAddress(middleID)]; !got.Live || got.Holder != middleHolder {
 			t.Fatalf("released worker must occupy the checkout before replacement: %+v", got)
 		}
 	} else {
@@ -536,6 +581,11 @@ func testReleasedWorkerDelete(t *testing.T, test releasedWorkerDeleteOptions) {
 		_, dirErr := os.Stat(wsdashboard.SessionDir(h.dir, middleID))
 		d.Close()
 		h.holders.restart()
+		if test.wedged {
+			// The replacement's holder inventory is incomplete, so it cannot
+			// end the retained holder at startup (finalizeDeadHolders).
+			h.holders.set(func() { h.holders.incomplete = true })
+		}
 		if test.changedCwd {
 			if err := os.Remove(middleCwd); err != nil {
 				t.Fatal(err)
@@ -558,7 +608,13 @@ func testReleasedWorkerDelete(t *testing.T, test releasedWorkerDeleteOptions) {
 			t.Errorf("released worker rejoined after checkout deletion under holder %s", c.record().HolderID)
 		}
 		wait(t, "successor holder sweep", h.runner.rejoined)
-		assertHolderRunning("after the replacement daemon's holder sweep")
+		if test.wedged {
+			if !holderRunning() || h.record(middleID).HolderID != middleHolder || h.holders.opCount("stop "+middleHolder) != 1 {
+				t.Errorf("an incomplete inventory ended or forgot the retained holder: running=%v, record %+v, ops %v", holderRunning(), h.record(middleID), h.holders.opList())
+			}
+		} else if holderRunning() || h.holders.opCount("stop "+middleHolder) != 1 {
+			t.Errorf("the released worker's holder came back after replacement: running=%v, ops %v", holderRunning(), h.holders.opList())
+		}
 		mail.deliverFrom(middleKey, leadID, "mail for the released worker")
 		h.runner.DrainDeadBindingMail(middleID)
 		if got := refusals.list(); len(got) != 1 || got[0][0] != leadID || got[0][1] != middleID || !strings.Contains(got[0][2], worktree) {
@@ -566,27 +622,51 @@ func testReleasedWorkerDelete(t *testing.T, test releasedWorkerDeleteOptions) {
 		}
 		checkTree(h.runner)
 		got := boundByAddress(h.runner.ActiveChildrenInWorktree(worktree))[AgentAddress(middleID)]
-		if test.interruptDelete {
-			if !got.Live || got.State != AgentClosed || !got.BoundBeforeRelease {
-				t.Fatalf("released worker occupancy after replacement = %+v, want closed and live", got)
+		if !test.wedged {
+			if got.Address != "" {
+				t.Errorf("worker for the deleted checkout occupies it after replacement: %+v", got)
 			}
-			h.holders.set(func() { h.holders.incomplete = true })
-			if !boundByAddress(h.runner.ActiveChildrenInWorktree(worktree))[AgentAddress(middleID)].Live {
-				t.Fatal("incomplete holder census hid the live worker")
-			}
-			h.holders.exit(middleHolder, 0)
-			if got := h.runner.ActiveChildrenInWorktree(worktree); len(got) != 0 {
-				t.Fatalf("exited worker still blocks checkout reuse: %+v", got)
-			}
-			// Cleanup forgets the exited holder while the census is
-			// still incomplete due to an unrelated holder.
-			h.holders.vanish(middleHolder)
-			if got := h.runner.ActiveChildrenInWorktree(worktree); len(got) != 0 {
-				t.Errorf("checkout reuse blocked after the exited holder was removed: %+v", got)
-			}
-		} else if got.Address != "" {
-			t.Errorf("worker for the deleted checkout occupies it after replacement: %+v", got)
+			return
 		}
+		if !got.Live || got.State != AgentClosed || !got.BoundBeforeRelease || got.Holder != middleHolder {
+			t.Fatalf("released worker occupancy after replacement = %+v, want closed and live under %s", got, middleHolder)
+		}
+		// Under the incomplete census an exited child no longer occupies the
+		// checkout, though its holder is still listed.
+		h.holders.exit(middleHolder, 0)
+		if got := h.runner.ActiveChildrenInWorktree(worktree); len(got) != 0 {
+			t.Fatalf("exited worker still blocks checkout reuse: %+v", got)
+		}
+		// The next start's complete holder inventory ends the retained
+		// holder and forgets it in the closure.
+		successor.Close()
+		h.holders.restart()
+		h.holders.set(func() {
+			h.holders.incomplete = false
+			delete(h.holders.wedged, middleHolder)
+		})
+		h.runner = NewRunner(h.opts)
+		opts.Agents = h.runner
+		third, err := wsdashboard.StartDaemon(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(third.Close)
+		wait(t, "complete holder sweep", h.runner.rejoined)
+		eventually(t, "the retained holder ended and forgotten", func() bool {
+			rec := h.record(middleID)
+			return h.holders.opCount("stop "+middleHolder) == 2 && rec.HolderID == "" && rec.HostPID == 0
+		})
+		if rec := h.record(middleID); rec.ClosedAt == "" || rec.DeadBindingClosure == nil || rec.DeadBindingClosure.Checkout != worktree {
+			t.Errorf("finalizing the retained holder lost the closure: %+v", rec)
+		}
+		if holderRunning() {
+			t.Error("the retained holder still runs after a complete startup inventory")
+		}
+		if got := h.runner.ActiveChildrenInWorktree(worktree); len(got) != 0 {
+			t.Errorf("the ended retained holder still occupies the checkout: %+v", got)
+		}
+		checkTree(h.runner)
 		return
 	}
 	assertStopRefused("busy grandchild after checkout delete")

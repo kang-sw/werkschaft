@@ -133,6 +133,9 @@ type fakeHolders struct {
 	// spawnErr fails Spawn and stopErr Stop (the holder stays); statusErr
 	// fails Status, so a rejoin's replay never learns where it ends.
 	spawnErr, stopErr, statusErr error
+	// wedged holders cannot be ended: the child ignores an input EOF and a
+	// Stop of the holder fails with the error (the holder stays).
+	wedged map[string]error
 	// captureHook, when set, runs as each CaptureNote begins (and may
 	// block it); captureCalls counts the CaptureNote calls begun.
 	captureHook  func()
@@ -426,7 +429,7 @@ func (f *fakeHolders) Input(id string, data []byte, eof bool) error {
 			f.appendLocked(h, wsholder.Event{Event: "output", Stream: "stdout", Data: raw})
 		}
 	}
-	if eof && !h.exited {
+	if eof && !h.exited && f.wedged[id] == nil {
 		// A harness ends when its input does.
 		h.exited = true
 		code := 0
@@ -509,6 +512,9 @@ func (f *fakeHolders) Stop(id string) error {
 	f.ops = append(f.ops, "stop "+id)
 	if f.stopErr != nil {
 		return f.stopErr
+	}
+	if err := f.wedged[id]; err != nil {
+		return err
 	}
 	if h.stream != nil {
 		h.stream.kill()

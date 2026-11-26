@@ -1094,7 +1094,13 @@ func (c *conv) finishedIdleChild() bool {
 	if rec.TurnOpen || rec.HeldTurn != nil || len(rec.Queued) != 0 || len(rec.Mail) != 0 || len(rec.Reports) != 0 {
 		return false
 	}
-	return c.held == 0 && !c.keepsAwakeLocked()
+	// keepsAwakeLocked without its background count: idleNow above already
+	// refused a known running task (bgTasks > 0). Codex reports its count as
+	// unknown (-1) for its process's whole life; workingLocked counts that as
+	// work, so a parent stays awake, but the idle stop (idleNow) ignores it,
+	// and so does this sleep, or no Codex worker would ever sleep here.
+	return c.held == 0 && !c.holding && !c.spawnPending &&
+		(c.wakeRefused || c.sends <= max(c.settled.mark, c.voided))
 }
 
 // sleepFinishedChild stops a finishedIdleChild's process the way its idle

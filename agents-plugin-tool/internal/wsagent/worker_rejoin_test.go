@@ -551,6 +551,8 @@ func heldWorkerRejoinFailureClears(t *testing.T, steered bool) {
 	eventually(t, "the first turn settled", func() bool { return len(got.list()) == 1 && !h.record(id).TurnOpen })
 
 	fail.Store(true)
+	// A crash leaves the idle worker held, so the next daemon rejoins it.
+	detachFinishedAtShutdown(h)
 	h.runner.Close()
 	rec := h.record(id)
 	if rec.HolderID == "" {
