@@ -108,6 +108,7 @@
       q(".arow[data-id] label.ack > input", topic).forEach(function (c) { c.checked = true; });
     } else {
       q(".card.policy[data-id]", topic).forEach(function (card) {
+        if (card.classList.contains("wb-held")) return;
         var opts = q(".opt[data-opt]", card);
         if (opts.some(function (b) { return b.getAttribute("aria-pressed") === "true"; })) return;
         var rec = opts.filter(function (b) { return b.classList.contains("rec"); })[0];

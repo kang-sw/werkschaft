@@ -3722,5 +3722,8 @@
   "js.voice.err.timeout": "Se agotó el tiempo de transcripción",
   "js.voice.err.auth": "Clave del proveedor de voz rechazada",
   "js.voice.err.too_large": "La grabación supera el límite de tamaño",
-  "js.voice.err.failed": "Error en la transcripción"
+  "js.voice.err.failed": "Error en la transcripción",
+  "chip.open": "abiertos",
+  "chip.answered": "respondidos",
+  "chip.held": "en espera"
 }

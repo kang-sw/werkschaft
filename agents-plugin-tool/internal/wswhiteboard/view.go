@@ -416,6 +416,9 @@ func (t TopicView) UnheldAskCount() int {
 	return n
 }
 
+// HeldAskCount is the topic's daemon-held open policy and open check items.
+func (t TopicView) HeldAskCount() int { return t.AskCount() - t.UnheldAskCount() }
+
 // waiting reports whether anything in the topic waits on the user.
 func (t TopicView) waiting() bool { return t.AskCount() > 0 || len(t.Acks) > 0 }
 

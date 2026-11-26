@@ -383,6 +383,435 @@ test('out-of-order hold response does not overwrite newer settled server state',
   assert.equal(h.items[1].classList.contains('wb-held'), true, 'stale response must not overwrite newer hold');
 });
 
+test('pill.js contains zero browser-local hold machinery or localStorage access', () => {
+  for (const forbidden of [
+    'localStorage',
+    'HOLD_PREFIX',
+    'holdStorageKey',
+    'itemFingerprint',
+    'loadHolds',
+    'saveHolds',
+    'reconcileHolds',
+    'onStorage',
+    'st.fingerprint',
+    'st.boardKey'
+  ]) {
+    assert.equal(pillSource.includes(forbidden), false, `pill.js must not contain ${forbidden}`);
+  }
+  const h = makePillHarness([{ id: 1, dataId: '01', top: -100, title: 'Ask' }]);
+  assert.equal(typeof h.win.wbPill.isHeld, 'function');
+  assert.equal(typeof h.win.wbPill.toggleHold, 'function');
+  assert.equal(h.win.wbPill.fingerprint, undefined);
+  assert.equal(h.win.wbPill.boardKey, undefined);
+});
+
+test('.tbar splits policy+check asks into open/answered/held chips, excludes acks, and mirrors live updates to Overview placeholders', async () => {
+  const formSource = fs.readFileSync(path.join(__dirname, '../assets/form.js'), 'utf8');
+  const overviewSource = fs.readFileSync(path.join(__dirname, '../../wsdashboard/assets/overview.js'), 'utf8');
+
+  function matchSingle(el, sel) {
+    sel = sel.trim();
+    if (!sel) return false;
+    const m = sel.match(/^([a-z0-9]*)((?:[.#][\w-]+|\[[\w-]+(?:\^?="[^"]*")?\]|:not\(\[[\w-]+\]\))*)$/i);
+    if (!m) return false;
+    if (m[1] && el.tagName !== m[1].toUpperCase()) return false;
+    const tokens = m[2].match(/[.#][\w-]+|\[[\w-]+(?:\^?="[^"]*")?\]|:not\(\[[\w-]+\]\)/g) || [];
+    return tokens.every(tok => {
+      if (tok[0] === '.') return el.classList.contains(tok.slice(1));
+      if (tok[0] === '#') return el.getAttribute('id') === tok.slice(1);
+      if (tok.startsWith(':not([')) return !el.hasAttribute(tok.slice(6, -2));
+      const pfx = tok.indexOf('^=');
+      if (pfx >= 0) return String(el.getAttribute(tok.slice(1, pfx)) || '').startsWith(tok.slice(pfx + 3, -2));
+      const eq = tok.indexOf('=');
+      if (eq < 0) return el.hasAttribute(tok.slice(1, -1));
+      return el.getAttribute(tok.slice(1, eq)) === tok.slice(eq + 2, -2);
+    });
+  }
+
+  class NodeEl {
+    constructor(tag, attrs = {}, children = []) {
+      this.nodeType = 1;
+      this.tagName = tag.toUpperCase();
+      this.attrs = {};
+      this.children = [];
+      this.parentNode = null;
+      this.style = {};
+      this.hidden = !!attrs._hidden;
+      this.inert = false;
+      this.checked = !!attrs._checked;
+      this.value = attrs._value || '';
+      this._text = attrs._text || '';
+      this._rect = attrs._rect || { top: -200, bottom: -140, left: 0, right: 400, width: 400, height: 60 };
+      this.listeners = {};
+      for (const [k, v] of Object.entries(attrs)) {
+        if (k.startsWith('_')) continue;
+        this.attrs[k] = String(v);
+      }
+      const me = this;
+      this.classList = {
+        contains: c => (me.attrs.class || '').split(/\s+/).filter(Boolean).includes(c),
+        add: c => {
+          const p = (me.attrs.class || '').split(/\s+/).filter(Boolean);
+          if (!p.includes(c)) p.push(c);
+          me.attrs.class = p.join(' ');
+        },
+        remove: c => {
+          me.attrs.class = (me.attrs.class || '').split(/\s+/).filter(x => x && x !== c).join(' ');
+        },
+        toggle: (c, on) => {
+          const want = on === undefined ? !me.classList.contains(c) : !!on;
+          if (want) me.classList.add(c); else me.classList.remove(c);
+          return want;
+        }
+      };
+      for (const ch of children) this.appendChild(ch);
+    }
+    get parentElement() { return this.parentNode; }
+    get firstChild() { return this.children[0] || null; }
+    get className() { return this.attrs.class || ''; }
+    set className(v) { this.attrs.class = String(v); }
+    get id() { return this.attrs.id || ''; }
+    set id(v) { this.attrs.id = String(v); }
+    get textContent() {
+      if (!this.children.length) return this._text;
+      return this._text + this.children.map(c => c.textContent).join('');
+    }
+    set textContent(v) {
+      this._text = String(v);
+      this.children.forEach(c => { c.parentNode = null; });
+      this.children = [];
+    }
+    get isConnected() {
+      for (let p = this; p; p = p.parentNode) if (p === html) return true;
+      return false;
+    }
+    hasAttribute(k) { return k in this.attrs; }
+    getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
+    setAttribute(k, v) { this.attrs[k] = String(v); }
+    removeAttribute(k) { delete this.attrs[k]; }
+    appendChild(n) {
+      if (n.parentNode) n.parentNode.removeChild(n);
+      n.parentNode = this;
+      this.children.push(n);
+      return n;
+    }
+    insertBefore(n, ref) {
+      if (n.parentNode) n.parentNode.removeChild(n);
+      n.parentNode = this;
+      const i = ref ? this.children.indexOf(ref) : -1;
+      if (i < 0) this.children.push(n); else this.children.splice(i, 0, n);
+      return n;
+    }
+    removeChild(n) {
+      const i = this.children.indexOf(n);
+      if (i >= 0) this.children.splice(i, 1);
+      n.parentNode = null;
+      return n;
+    }
+    remove() { if (this.parentNode) this.parentNode.removeChild(this); }
+    contains(n) {
+      for (let p = n; p; p = p.parentNode) if (p === this) return true;
+      return false;
+    }
+    closest(sel) {
+      const parts = sel.split(',').map(s => s.trim());
+      for (let p = this; p; p = p.parentNode) {
+        if (parts.some(part => matchSingle(p, part))) return p;
+      }
+      return null;
+    }
+    cloneNode(deep) {
+      const a = Object.assign({}, this.attrs);
+      a._text = this._text;
+      a._hidden = this.hidden;
+      a._rect = Object.assign({}, this._rect);
+      const clone = new NodeEl(this.tagName.toLowerCase(), a);
+      if (deep) for (const ch of this.children) clone.appendChild(ch.cloneNode(true));
+      return clone;
+    }
+    querySelectorAll(sel) {
+      const parts = sel.split(',').map(s => s.trim()).filter(Boolean);
+      const out = [];
+      for (const s of parts) {
+        if (s.includes(' > ')) {
+          const fromScope = s.startsWith(':scope > ');
+          const chain = (fromScope ? s.slice(':scope > '.length) : s).split(' > ').map(x => x.trim());
+          let cur = fromScope ? [this] : this.querySelectorAll(chain.shift());
+          for (const seg of chain) {
+            const next = [];
+            for (const node of cur) {
+              for (const ch of node.children) if (matchSingle(ch, seg)) next.push(ch);
+            }
+            cur = next;
+          }
+          for (const hit of cur) if (!out.includes(hit)) out.push(hit);
+        } else {
+          const toks = s.split(/\s+/).filter(Boolean);
+          const matchAncestors = (node, idx) => {
+            if (!matchSingle(node, toks[idx])) return false;
+            if (idx === 0) return true;
+            for (let p = node.parentNode; p && p !== this.parentNode; p = p.parentNode) {
+              if (matchAncestors(p, idx - 1)) return true;
+            }
+            return false;
+          };
+          const walk = node => {
+            for (const ch of node.children) {
+              if (matchAncestors(ch, toks.length - 1) && !out.includes(ch)) out.push(ch);
+              walk(ch);
+            }
+          };
+          walk(this);
+        }
+      }
+      return out;
+    }
+    querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+    getBoundingClientRect() { return Object.assign({}, this._rect); }
+    focus() { doc.activeElement = this; }
+    addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
+    removeEventListener(type, fn) {
+      if (!this.listeners[type]) return;
+      this.listeners[type] = this.listeners[type].filter(f => f !== fn);
+    }
+    dispatch(type, evt = {}) {
+      const e = Object.assign({ type, target: this, preventDefault() {}, stopImmediatePropagation() {} }, evt);
+      for (let p = this; p; p = p.parentNode) {
+        for (const fn of (p.listeners[type] || [])) fn(e);
+      }
+    }
+  }
+
+  function makePolicy(id, opts = {}) {
+    const optA = new NodeEl('button', { class: 'opt', 'data-opt': 'a', 'aria-pressed': 'false', _text: 'Option A' });
+    const optB = new NodeEl('button', { class: 'opt rec', 'data-opt': 'b', 'aria-pressed': 'false', _text: 'Option B' });
+    const holdBtn = new NodeEl('button', { class: 'btn mini wb-hold-toggle', 'data-wb-hold': '', 'aria-pressed': opts.held ? 'true' : 'false' });
+    const card = new NodeEl('div', {
+      class: 'card policy' + (opts.held ? ' wb-held' : ''),
+      id: 'item-' + id,
+      'data-id': String(id)
+    }, [optA, optB, holdBtn]);
+    return { card, optA, optB, holdBtn };
+  }
+  function makeCheck(id, opts = {}) {
+    const input = new NodeEl('input', { type: 'checkbox', 'data-id': String(id) });
+    const label = new NodeEl('label', { class: 'ck' }, [input]);
+    const holdBtn = new NodeEl('button', { class: 'btn mini wb-hold-toggle', 'data-wb-hold': '', 'aria-pressed': opts.held ? 'true' : 'false' });
+    const row = new NodeEl('div', {
+      class: 'ckrow' + (opts.held ? ' wb-held' : ''),
+      id: 'item-' + id,
+      'data-id': String(id)
+    }, [label, holdBtn]);
+    return { row, input, holdBtn };
+  }
+  function makeAck(id, opts = {}) {
+    const input = new NodeEl('input', { type: 'checkbox', 'data-id': String(id) });
+    const label = new NodeEl('label', { class: 'ack' }, [input]);
+    const holdBtn = new NodeEl('button', { class: 'btn mini wb-hold-toggle', 'data-wb-hold': '', 'aria-pressed': opts.held ? 'true' : 'false' });
+    const row = new NodeEl('div', {
+      class: 'arow' + (opts.held ? ' wb-held' : ''),
+      id: 'item-' + id,
+      'data-id': String(id)
+    }, [label, holdBtn]);
+    return { row, input, holdBtn };
+  }
+  function makeTopic(name, items, initial) {
+    const openChip = new NodeEl('button', {
+      type: 'button', class: 'chip policy bulk', 'data-bulk': 'policy', 'data-tbar-ask': 'open',
+      _hidden: initial.open === 0
+    }, [new NodeEl('span', { class: 'chip-lbl', _text: '미결' }), new NodeEl('span', { class: 'n', _text: String(initial.open) })]);
+    const ansChip = new NodeEl('span', {
+      class: 'chip wb-chip-ans', 'data-tbar-ask': 'ans', _hidden: true
+    }, [new NodeEl('span', { class: 'chip-lbl', _text: '응답함' }), new NodeEl('span', { class: 'n', _text: '0' })]);
+    const heldChip = new NodeEl('span', {
+      class: 'chip wb-chip-held', 'data-tbar-ask': 'held', _hidden: initial.held === 0
+    }, [new NodeEl('span', { class: 'chip-lbl', _text: '보류' }), new NodeEl('span', { class: 'n', _text: String(initial.held) })]);
+    const ackChip = new NodeEl('button', {
+      type: 'button', class: 'chip ok bulk', 'data-bulk': 'ack'
+    }, [new NodeEl('span', { _text: String(initial.ack || 0) })]);
+    const tbar = new NodeEl('div', { class: 'tbar' }, [
+      new NodeEl('span', { class: 'tname', _text: name }),
+      openChip, ansChip, heldChip, ackChip
+    ]);
+    const tophead = new NodeEl('div', { class: 'tophead' }, [tbar]);
+    const tbody = new NodeEl('div', { class: 'tbody' }, items);
+    const sec = new NodeEl('section', {
+      class: 'topic', id: 'topic-' + name, 'data-topic': name, 'data-size': 'open',
+      _rect: { top: 20, bottom: 112, width: 400, height: 92 }
+    }, [tophead, tbody]);
+    return { sec, openChip, ansChip, heldChip, ackChip };
+  }
+
+  const html = new NodeEl('html', { 'data-rid': 'sess-tbar' });
+  const body = new NodeEl('body');
+  html.appendChild(body);
+  const grid = new NodeEl('main', { class: 'dgrid live' });
+  const bcol = new NodeEl('div', { id: 'bcol' });
+  const board = new NodeEl('div', { id: 'r-board', class: 'r-board' });
+  const toolbar = new NodeEl('div', { class: 'board-toolbar', _rect: { top: -80, bottom: -40, height: 40 } }, [
+    new NodeEl('button', { class: 'board-overview', _rect: { top: -80, bottom: -40, height: 40 } })
+  ]);
+  const bgal = new NodeEl('div', { id: 'bgal', class: 'bgal', _hidden: true }, [
+    new NodeEl('div', { class: 'gal-viewport' }),
+    new NodeEl('div', { class: 'gal-rail' })
+  ]);
+
+  const p1 = makePolicy(1);
+  const p2 = makePolicy(2);
+  const c3 = makeCheck(3);
+  const a4 = makeAck(4);
+  const topic = makeTopic('alpha', [p1.card, p2.card, c3.row, a4.row], { open: 3, held: 0, ack: 1 });
+  board.appendChild(toolbar);
+  board.appendChild(topic.sec);
+  bcol.appendChild(board);
+  grid.appendChild(bcol);
+  body.appendChild(grid);
+  body.appendChild(bgal);
+
+  const frames = [];
+  const doc = {
+    documentElement: html,
+    body,
+    scrollingElement: html,
+    activeElement: null,
+    createElement: tag => new NodeEl(tag),
+    getElementById: id => html.querySelector('#' + id),
+    querySelector: sel => html.querySelector(sel),
+    querySelectorAll: sel => html.querySelectorAll(sel),
+    addEventListener: () => {}
+  };
+  const serverHeld = new Set();
+  const win = {
+    localStorage: makeThrowingStorage(),
+    innerWidth: 1600,
+    innerHeight: 900,
+    scrollY: 0,
+    matchMedia: () => ({ matches: true }),
+    WsCards: { isFourCol: () => true, relayout: () => {} },
+    IntersectionObserver: function () { this.observe = () => {}; this.disconnect = () => {}; },
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    fetch: async (url, init) => {
+      const req = JSON.parse(init.body);
+      if (req.held) serverHeld.add(req.id); else serverHeld.delete(req.id);
+      return { ok: true, status: 200, json: async () => ({ held: Array.from(serverHeld) }) };
+    }
+  };
+  const sessionStore = {};
+  const ctx = vm.createContext({
+    console,
+    document: doc,
+    window: win,
+    IntersectionObserver: win.IntersectionObserver,
+    sessionStorage: {
+      getItem: k => (k in sessionStore ? sessionStore[k] : null),
+      setItem: (k, v) => { sessionStore[k] = String(v); },
+      removeItem: k => { delete sessionStore[k]; }
+    },
+    Set, Map, Array, Object, JSON, Math, String, Number, parseInt, encodeURIComponent,
+    requestAnimationFrame: fn => { frames.push(fn); return frames.length; },
+    cancelAnimationFrame: () => {},
+    performance: { now: () => 0 },
+    innerWidth: 1600,
+    innerHeight: 900,
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    getComputedStyle: () => ({ overflowY: 'visible', marginBottom: '6px', scrollPaddingTop: '0', getPropertyValue: () => '' }),
+    wsT: k => k,
+    Event: function Event(type) { this.type = type; }
+  });
+  const flush = () => { while (frames.length) frames.shift()(); };
+  vm.runInContext(overviewSource, ctx);
+  vm.runInContext('(function(){\n' + formSource + '\n})();', ctx);
+  vm.runInContext(pillSource, ctx);
+  flush();
+
+  const readBar = rootEl => {
+    const bar = rootEl.querySelector(':scope > .tophead > .tbar');
+    const chip = sel => {
+      const el = bar.querySelector(sel);
+      if (!el || el.hidden) return 0;
+      const n = el.querySelector('.n');
+      return Number((n ? n.textContent : el.textContent).trim());
+    };
+    return {
+      open: chip('.chip.policy'),
+      ans: chip('.chip.wb-chip-ans'),
+      held: chip('.chip.wb-chip-held'),
+      ack: chip('.chip.ok')
+    };
+  };
+
+  // Mount Overview and enter Quick Look preview so alpha moves into #bgal and leaves a placeholder in #r-board.
+  win.WsOverview.mount({ board, toolbar, rid: 'sess-tbar', place: () => {}, keep: () => {} });
+  win.WsOverview.toggle();
+  const ph = board.querySelector('.overview-placeholder');
+  assert.ok(ph, 'Overview placeholder created');
+  assert.deepEqual(readBar(topic.sec), { open: 3, ans: 0, held: 0, ack: 1 });
+  assert.deepEqual(readBar(ph), { open: 3, ans: 0, held: 0, ack: 1 });
+
+  // 1. Hold policy #1 inside Quick Look stage (#bgal) -> open 2, ans 0, held 1 on BOTH live topic and placeholder.
+  p1.holdBtn.dispatch('click');
+  flush();
+  await drainMicrotasks();
+  flush();
+  assert.deepEqual(readBar(topic.sec), { open: 2, ans: 0, held: 1, ack: 1 });
+  assert.deepEqual(readBar(ph), { open: 2, ans: 0, held: 1, ack: 1 });
+
+  // 2. Hold ack #4 -> ack does NOT affect policy+check open/ans/held split or .chip.ok.
+  a4.holdBtn.dispatch('click');
+  flush();
+  await drainMicrotasks();
+  flush();
+  assert.equal(a4.row.classList.contains('wb-held'), true);
+  assert.deepEqual(readBar(topic.sec), { open: 2, ans: 0, held: 1, ack: 1 });
+  assert.deepEqual(readBar(ph), { open: 2, ans: 0, held: 1, ack: 1 });
+
+  // 3. Bulk quick-pick on open-ask chip picks unheld policy #2 only (leaving held #1 alone) -> open 1 (check #3), ans 1 (#2), held 1 (#1).
+  topic.openChip.dispatch('click');
+  flush();
+  assert.equal(p2.optB.getAttribute('aria-pressed'), 'true', 'unheld policy picked by bulk button');
+  assert.equal(p1.optB.getAttribute('aria-pressed'), 'false', 'held policy skipped by bulk button');
+  assert.deepEqual(readBar(topic.sec), { open: 1, ans: 1, held: 1, ack: 1 });
+  assert.deepEqual(readBar(ph), { open: 1, ans: 1, held: 1, ack: 1 });
+
+  // 4. Stage check #3 -> open 0 (hidden), ans 2, held 1.
+  c3.input.checked = true;
+  c3.input.dispatch('change');
+  flush();
+  assert.deepEqual(readBar(topic.sec), { open: 0, ans: 2, held: 1, ack: 1 });
+  assert.deepEqual(readBar(ph), { open: 0, ans: 2, held: 1, ack: 1 });
+
+  // 5. Unhold policy #1 -> open 1, ans 2, held 0.
+  p1.holdBtn.dispatch('click');
+  flush();
+  await drainMicrotasks();
+  flush();
+  assert.deepEqual(readBar(topic.sec), { open: 1, ans: 2, held: 0, ack: 1 });
+  assert.deepEqual(readBar(ph), { open: 1, ans: 2, held: 0, ack: 1 });
+
+  // 6. Mark policy #1 sent-sent -> open 0, ans 3, held 0.
+  p1.card.classList.add('sent-sent');
+  win.wbPill.update();
+  flush();
+  assert.deepEqual(readBar(topic.sec), { open: 0, ans: 3, held: 0, ack: 1 });
+  assert.deepEqual(readBar(ph), { open: 0, ans: 3, held: 0, ack: 1 });
+
+  // 7. Server settles all asks and SSE replaces the preview node -> placeholder clears ask chips cleanly.
+  const settledTopic = new NodeEl('section', {
+    class: 'topic quiet', id: 'topic-alpha', 'data-topic': 'alpha', 'data-size': 'open'
+  }, [
+    new NodeEl('div', { class: 'tophead' }, [
+      new NodeEl('div', { class: 'tbar' }, [new NodeEl('span', { class: 'tname', _text: 'alpha' })])
+    ])
+  ]);
+  topic.sec.parentNode.insertBefore(settledTopic, topic.sec);
+  topic.sec.parentNode.removeChild(topic.sec);
+  win.WsOverview.replacePreviewNode(topic.sec, settledTopic);
+  assert.deepEqual(readBar(ph), { open: 0, ans: 0, held: 0, ack: 0 });
+  assert.equal(ph.classList.contains('quiet'), true);
+});
+
 test('in-card find resolves cards only when focus or pointer is inside a non-terminal card and wraps step index', () => {
   const listeners = {};
   const card = {

@@ -1,11 +1,12 @@
 ;(function () {
-  // Open-question pill. Items awaiting the user (open policy, ack, check)
-  // scrolled out of the board's scroll area show a floating pill at that
-  // edge, split into still-open items, browser-local held items, and items
-  // already answered (the form holds a reply, or the dashboard marked one
-  // sent or held), and the tab title carries the still-open total. The
-  // dashboard re-runs this after every board swap, so it tears down what the
-  // previous run attached.
+  // Open-question pill and topic-header ask breakdown. Items awaiting the user
+  // (open policy, ack, check) scrolled out of the board's scroll area show a
+  // floating pill at that edge, split into still-open items, daemon-held items,
+  // and items already answered (the form holds a reply, or the dashboard marked
+  // one sent or held). Each topic's .tophead .tbar mirrors the policy+check
+  // open/answered/held split, and the tab title carries the still-open total.
+  // The dashboard re-runs this after every board swap, so it tears down what
+  // the previous run attached.
   var d = document;
   if (!window.IntersectionObserver) return;
   var host = d.getElementById("bcol") || d.querySelector(".wrap");
@@ -15,92 +16,9 @@
 
   var items = Array.prototype.slice.call(d.querySelectorAll('.card.policy[id^="item-"], .arow[id^="item-"], .ckrow[data-id]:not([data-assumed])'));
 
-  // --- browser-local hold store (never sent to the agent) ------------------
-  // Keyed in localStorage by board identity + item ID, storing a fingerprint
-  // of the item's rendered content at hold time. A changed fingerprint clears
-  // the hold; answering or withdrawing the item drops it.
-  var HOLD_PREFIX = "ws.wb.holds.";
-  function getStorage() {
-    try { return window.localStorage || null; } catch (e) { return null; }
-  }
-  function boardKey() {
-    var html = d.documentElement;
-    if (!html || !html.getAttribute) return "default";
-    var rid = html.getAttribute("data-rid") || html.getAttribute("data-wb-reply") || "";
-    var inc = html.getAttribute("data-board-incarnation") || "";
-    if (rid && inc) return rid + "@" + inc;
-    if (rid) return rid;
-    if (inc) return inc;
-    return (window.location && window.location.pathname) || "default";
-  }
-  function holdStorageKey() { return HOLD_PREFIX + boardKey(); }
   function itemKey(el) {
     if (!el || !el.getAttribute) return "";
     return el.getAttribute("data-id") || el.getAttribute("id") || "";
-  }
-  function normText(s) { return String(s || "").replace(/\s+/g, " ").trim(); }
-  function itemFingerprint(el) {
-    if (!el) return "";
-    var parts = [];
-    var title = el.querySelector && el.querySelector(".title");
-    if (title) parts.push("t:" + normText(title.textContent));
-    var ctx = el.querySelector && el.querySelector(".ctx");
-    if (ctx) parts.push("c:" + normText(ctx.textContent));
-    if (el.querySelectorAll) {
-      Array.prototype.forEach.call(el.querySelectorAll(".why") || [], function (w) {
-        parts.push("w:" + normText(w.textContent));
-      });
-      Array.prototype.forEach.call(el.querySelectorAll(".opt") || [], function (o) {
-        if (!o || !o.hasAttribute || !o.hasAttribute("data-opt")) return;
-        parts.push("o:" + (o.getAttribute("data-opt") || "") + ":" + normText(o.textContent));
-      });
-      var rec = el.querySelector && el.querySelector(".rec-line");
-      if (rec) parts.push("r:" + normText(rec.textContent));
-      Array.prototype.forEach.call(el.querySelectorAll(".links") || [], function (l) {
-        parts.push("l:" + normText(l.textContent));
-      });
-    }
-    var jump = el.querySelector && el.querySelector(".wb-askjump");
-    if (jump && jump.getAttribute) {
-      var jt = jump.querySelector && jump.querySelector(".entry-at");
-      var re = jump.querySelector && jump.querySelector(".wb-askre");
-      var jStamp = jt && jt.getAttribute ? (jt.getAttribute("data-at") || jt.getAttribute("datetime") || "") : "";
-      parts.push("a:" + (jump.getAttribute("href") || "") + ":" + jStamp + ":" + (re ? normText(re.textContent) : ""));
-    }
-    if (!parts.length) {
-      var fb = el.getAttribute ? el.getAttribute("data-wb-fp") : null;
-      parts.push("raw:" + (fb !== null ? fb : normText(el.textContent)));
-    }
-    var raw = parts.join("\n"), h = 2166136261;
-    for (var i = 0; i < raw.length; i++) {
-      h ^= raw.charCodeAt(i);
-      h = Math.imul ? Math.imul(h, 16777619) : ((h * 16777619) >>> 0);
-    }
-    return (h >>> 0).toString(36) + ":" + raw.length;
-  }
-  function loadHolds() {
-    var ls = getStorage();
-    if (!ls) return {};
-    try {
-      var raw = ls.getItem(holdStorageKey());
-      if (!raw) return {};
-      var parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-      var out = {};
-      Object.keys(parsed).forEach(function (k) {
-        if (typeof parsed[k] === "string") out[k] = parsed[k];
-      });
-      return out;
-    } catch (e) { return {}; }
-  }
-  function saveHolds(map) {
-    var ls = getStorage();
-    if (!ls) return;
-    try {
-      var keys = Object.keys(map);
-      if (!keys.length) ls.removeItem(holdStorageKey());
-      else ls.setItem(holdStorageKey(), JSON.stringify(map));
-    } catch (e) {}
   }
 
   // An item's draft state, read from the same form controls form.js builds
@@ -123,7 +41,6 @@
     return responded(el) || el.classList.contains("sent-sent") || el.classList.contains("sent-held");
   }
 
-  var holds = {};
   function sessionReplyId() {
     var html = d.documentElement;
     if (!html || !html.getAttribute) return "";
@@ -167,29 +84,6 @@
     if (b.title !== tip) b.title = tip;
     if (b.getAttribute("aria-label") !== tip) b.setAttribute("aria-label", tip);
   }
-  // Retained unused until Phase 2 browser-local hold cleanup.
-  function reconcileHolds(pruneAbsent) {
-    var openIds = {}, changed = false;
-    items.forEach(function (el) {
-      var k = itemKey(el);
-      if (!k) return;
-      openIds[k] = true;
-      if (!(k in holds)) return;
-      if (answered(el) || holds[k] !== itemFingerprint(el)) {
-        delete holds[k];
-        changed = true;
-      }
-    });
-    if (pruneAbsent && (items.length > 0 || d.querySelector(".topic") || d.querySelector(".reply"))) {
-      Object.keys(holds).forEach(function (k) {
-        if (!openIds[k]) {
-          delete holds[k];
-          changed = true;
-        }
-      });
-    }
-    if (changed) saveHolds(holds);
-  }
   function applyServerHeld(list) {
     if (!Array.isArray(list)) return;
     var set = {};
@@ -202,6 +96,7 @@
       if (!nid || holdPending[nid]) return;
       syncHoldDOM(el, !!set[nid] && !answered(el));
     });
+    syncTopicBars();
     retitle();
     redrawSoon();
   }
@@ -211,6 +106,7 @@
       if (holdPending[nid]) return;
       syncHoldDOM(el, !!prevHeld && !answered(el));
     });
+    syncTopicBars();
     retitle();
     redrawSoon();
   }
@@ -294,6 +190,62 @@
     if (nid && holdPending[nid]) return !!holdPending[nid].held;
     return domHeld(el);
   }
+  function isTopicAsk(el) {
+    return !!(el && el.classList && (el.classList.contains("policy") || el.classList.contains("ckrow")));
+  }
+  function topicBarOf(topic) {
+    if (!topic || !topic.querySelector) return null;
+    try {
+      var direct = topic.querySelector(":scope > .tophead > .tbar");
+      if (direct) return direct;
+    } catch (e) {}
+    return topic.querySelector(".tbar");
+  }
+  function patchAskChip(bar, sel, count) {
+    var chip = bar.querySelector(sel);
+    if (!chip) return false;
+    var changed = false;
+    var hide = count <= 0;
+    if (chip.hidden !== hide) { chip.hidden = hide; changed = true; }
+    var num = chip.querySelector ? chip.querySelector(".n") : null;
+    var text = String(count);
+    if (num) {
+      if (num.textContent !== text) { num.textContent = text; changed = true; }
+    } else if (chip.textContent !== text) {
+      chip.textContent = text;
+      changed = true;
+    }
+    return changed;
+  }
+  // Sync each topic's .tophead .tbar policy+check open/answered/held chips
+  // (excluding acks, which keep .chip.ok) and mirror updates to any active
+  // Overview placeholder. Performs zero layout reads.
+  function syncTopicBars() {
+    var byTopic = new Map();
+    items.forEach(function (el) {
+      if (!isTopicAsk(el)) return;
+      var topic = el.closest ? el.closest("section.topic") : null;
+      if (!topic) return;
+      var c = byTopic.get(topic);
+      if (!c) { c = { open: 0, ans: 0, held: 0 }; byTopic.set(topic, c); }
+      if (answered(el)) c.ans++;
+      else if (held(el)) c.held++;
+      else c.open++;
+    });
+    var openChanged = false;
+    byTopic.forEach(function (c, topic) {
+      var bar = topicBarOf(topic);
+      if (!bar) return;
+      var polChanged = patchAskChip(bar, ".chip.policy", c.open);
+      var ansChanged = patchAskChip(bar, ".chip.wb-chip-ans", c.ans);
+      var heldChanged = patchAskChip(bar, ".chip.wb-chip-held", c.held);
+      if (polChanged) openChanged = true;
+      if ((polChanged || ansChanged || heldChanged) && window.WsOverview && window.WsOverview.syncPlaceholder) {
+        window.WsOverview.syncPlaceholder(topic);
+      }
+    });
+    if (openChanged && window.wbRail && window.wbRail.refresh) window.wbRail.refresh();
+  }
   function toggleHold(el) {
     var rawId = itemKey(el);
     var nid = normItemId(rawId);
@@ -304,12 +256,14 @@
     if (next) delete holdDraftCleared[nid];
     syncHoldDOM(el, next);
     postHold(rawId, next, wasHeld, !next);
+    syncTopicBars();
     retitle();
     redrawSoon();
     return next;
   }
 
   applyHoldDOM();
+  syncTopicBars();
 
   // The dashboard owns the document title; report the still-open total to
   // its hook when one is installed. Held items leave the open total.
@@ -532,8 +486,10 @@
     var topWidth = pills.top.offsetWidth, botWidth = pills.bot.offsetWidth, home = atTop();
     var topGoal = pills.top.wbMeasure ? pills.top.wbMeasure.offsetWidth : 0;
     var botGoal = pills.bot.wbMeasure ? pills.bot.wbMeasure.offsetWidth : 0;
-    // Write phase: sync server-rendered holds (and clear any newly answered), then update pills.
+    // Write phase: sync server-rendered holds (and clear any newly answered),
+    // update topic header open/answered/held chips, then update pills.
     applyHoldDOM();
+    syncTopicBars();
     show("top", above, topWidth, home, topGoal);
     show("bot", below, botWidth, home, botGoal);
     retitle();
@@ -581,17 +537,19 @@
     }
     redraw();
   }
-  function onStorage(e) {
-    if (!e || (e.key !== null && e.key !== holdStorageKey())) return;
-    holds = loadHolds();
-    reconcileHolds(true);
-    applyHoldDOM();
-    retitle();
-    redrawSoon();
-  }
+  // Listen on both #bcol and #bgal (docked gallery + Overview Quick Look stage)
+  // so hold toggles, picks, notes, and bulk picks inside previewed or docked
+  // topics update .tbar chips and Overview placeholders live.
   host.addEventListener("click", onHostClick);
   host.addEventListener("input", redrawSoon);
   host.addEventListener("change", redraw);
+  var gal = d.getElementById ? d.getElementById("bgal") : null;
+  var galHost = gal && gal !== host && (!host.contains || !host.contains(gal)) && gal.addEventListener ? gal : null;
+  if (galHost) {
+    galHost.addEventListener("click", onHostClick);
+    galHost.addEventListener("input", redrawSoon);
+    galHost.addEventListener("change", redraw);
+  }
   // The dashboard's sent marks land after its region swaps, including a
   // conversation-only swap that does not re-run this script, so watch the
   // items' class attributes rather than wait for a board swap.
@@ -639,9 +597,8 @@
   pills.bot.onclick = click("bot");
 
   st.update = redrawSoon;
+  st.syncTopicBars = syncTopicBars;
   st.isHeld = isHeldExternal;
-  st.fingerprint = itemFingerprint;
-  st.boardKey = boardKey;
   st.toggleHold = toggleHold;
   redrawSoon();
   st.off = function () {
@@ -661,5 +618,10 @@
     host.removeEventListener("click", onHostClick);
     host.removeEventListener("input", redrawSoon);
     host.removeEventListener("change", redraw);
+    if (galHost) {
+      galHost.removeEventListener("click", onHostClick);
+      galHost.removeEventListener("input", redrawSoon);
+      galHost.removeEventListener("change", redraw);
+    }
   };
 })();

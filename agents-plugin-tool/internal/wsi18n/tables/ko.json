@@ -3722,5 +3722,8 @@
   "js.voice.err.timeout": "음성 인식 시간이 초과되었습니다",
   "js.voice.err.auth": "음성 공급자 키가 거부되었습니다",
   "js.voice.err.too_large": "녹음 크기가 한도를 초과했습니다",
-  "js.voice.err.failed": "음성 인식에 실패했습니다"
+  "js.voice.err.failed": "음성 인식에 실패했습니다",
+  "chip.open": "미결",
+  "chip.answered": "응답함",
+  "chip.held": "보류"
 }

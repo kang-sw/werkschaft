@@ -3722,5 +3722,8 @@
   "js.voice.err.timeout": "Transcription timed out",
   "js.voice.err.auth": "Voice provider key rejected",
   "js.voice.err.too_large": "Recording exceeds size limit",
-  "js.voice.err.failed": "Transcription failed"
+  "js.voice.err.failed": "Transcription failed",
+  "chip.open": "open",
+  "chip.answered": "answered",
+  "chip.held": "held"
 }

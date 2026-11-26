@@ -3722,5 +3722,8 @@
   "js.voice.err.timeout": "语音转写超时",
   "js.voice.err.auth": "语音提供商密钥被拒绝",
   "js.voice.err.too_large": "录音超出大小限制",
-  "js.voice.err.failed": "语音转写失败"
+  "js.voice.err.failed": "语音转写失败",
+  "chip.open": "未完成",
+  "chip.answered": "已回复",
+  "chip.held": "暂缓"
 }

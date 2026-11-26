@@ -1113,7 +1113,8 @@
             var subEl = rtextEl || (el && el.querySelector && el.querySelector(":scope > .tophead > .tsub"));
             var askChip = el && el.querySelector && el.querySelector(":scope > .tophead > .tbar > .chip.policy");
             var asks = el ? (el.hasAttribute("data-open-asks") ? el.getAttribute("data-open-asks") === "true" : !!askChip) : false;
-            var asksCount = askChip && askChip.textContent ? askChip.textContent.trim() : "";
+            var askNumEl = askChip && !askChip.hidden ? (askChip.querySelector(".n") || askChip) : null;
+            var asksCount = askNumEl && askNumEl.textContent ? askNumEl.textContent.trim() : "";
             var closed = !!(el && el.classList.contains("closed"));
             var rawState = el ? (el.getAttribute("data-state") || "") : "";
             var state = closed ? "closed" : rawState;

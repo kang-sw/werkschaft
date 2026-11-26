@@ -113,8 +113,9 @@
       // The rail shows the topic's visible name (.tname, its label), not
       // data-topic, which carries the key a stemmed topic is addressed by.
       var tn = t.querySelector(":scope > .tophead > .tbar .tname"), pol = t.querySelector(":scope > .tophead > .tbar > .chip.policy");
+      var polN = pol && !pol.hidden ? (pol.querySelector(".n") || pol) : null;
       name = tn ? tn.textContent : t.getAttribute("data-topic");
-      n = pol ? pol.textContent.trim() : "";
+      n = polN ? polN.textContent.trim() : "";
     } else {
       var nm = t.querySelector("[data-rail-name]"), ic = t.querySelector("[data-rail-icon]");
       name = (nm && nm.textContent) || t.getAttribute("data-rail");
@@ -616,7 +617,9 @@
 
   kick();
 
+  st.refresh = kick;
   st.off = function () {
+    st.refresh = null;
     if (raf) cancelAnimationFrame(raf);
     if (motionRaf) cancelAnimationFrame(motionRaf);
     raf = motionRaf = 0;

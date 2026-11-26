@@ -3722,5 +3722,8 @@
   "js.voice.err.timeout": "Zeitüberschreitung bei der Transkription",
   "js.voice.err.auth": "Schlüssel des Sprachanbieters abgelehnt",
   "js.voice.err.too_large": "Aufnahme überschreitet das Größenlimit",
-  "js.voice.err.failed": "Transkription fehlgeschlagen"
+  "js.voice.err.failed": "Transkription fehlgeschlagen",
+  "chip.open": "offen",
+  "chip.answered": "beantwortet",
+  "chip.held": "zurückgestellt"
 }
