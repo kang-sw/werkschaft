@@ -3,6 +3,7 @@ package wswhiteboard
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -243,8 +244,66 @@ func TestTopicCountChipsAreBulkButtonsOnTheDashboard(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantAll(t, string(regions.Board),
-		`<button type="button" class="chip policy bulk" data-bulk="policy" title="to answer · click: pick every recommendation"><svg class="i" aria-hidden="true"><use href="#i-ask"/></svg>1</button>`,
+		`<button type="button" class="chip policy bulk" data-bulk="policy" data-tbar-ask="open" title="to answer · click: pick every recommendation"><svg class="i" aria-hidden="true"><use href="#i-ask"/></svg><span class="chip-lbl">open</span><span class="n">1</span></button>`,
+		`<span class="chip wb-chip-ans" data-tbar-ask="ans" title="answered" hidden><span class="chip-lbl">answered</span><span class="n">0</span></span>`,
+		`<span class="chip wb-chip-held" data-tbar-ask="held" title="held" hidden><svg class="i" aria-hidden="true"><use href="#i-pause"/></svg><span class="chip-lbl">held</span><span class="n">0</span></span>`,
 		`<button type="button" class="chip ok bulk" data-bulk="ack" title="to acknowledge · click: mark all OK"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg>1</button>`)
+}
+
+// TestTopicHeaderSplitOpenAnsweredHeldChips verifies that .tophead .tbar splits
+// policy+check asks into distinct open, answered, and held chips (while leaving
+// .chip.ok ack bulk chips unchanged), hides zero-count chips on initial render,
+// and localizes chip labels.
+func TestTopicHeaderSplitOpenAnsweredHeldChips(t *testing.T) {
+	st := &State{}
+	// Topic "mix": 1 unheld policy (#1), 1 held check (#2), 1 held ack (#3).
+	mustApply(t, st,
+		`<wb:topic name="mix"><wb:add class="policy"><wb:title>p1</wb:title><wb:option>a</wb:option><wb:option>b</wb:option></wb:add><wb:add class="check"><wb:title>c1</wb:title></wb:add><wb:add class="technical"><wb:title>ack1</wb:title></wb:add></wb:topic>`+
+			// Topic "allheld": 1 held policy (#4) -> open chip hidden, held chip visible with 1.
+			`<wb:topic name="allheld"><wb:add class="policy"><wb:title>p2</wb:title><wb:option>a</wb:option><wb:option>b</wb:option></wb:add></wb:topic>`+
+			// Topic "ackonly": 1 held ack (#5) -> no policy+check split chips, only .chip.ok.
+			addXML(ClassTechnical, "ackonly", "ack2"))
+	view := BuildView(st, ViewInput{
+		Layout:  LayoutFull,
+		ReplyID: "r",
+		Held:    []int{2, 3, 4, 5},
+	})
+	view.Lang = "ko"
+	byName := map[string]TopicView{}
+	for _, tv := range view.Topics {
+		byName[tv.Name] = tv
+	}
+	if tv := byName["mix"]; tv.AskCount() != 2 || tv.UnheldAskCount() != 1 || tv.HeldAskCount() != 1 || tv.Quiet {
+		t.Fatalf("mix counts = ask:%d unheld:%d held:%d quiet:%v", tv.AskCount(), tv.UnheldAskCount(), tv.HeldAskCount(), tv.Quiet)
+	}
+	if tv := byName["allheld"]; tv.AskCount() != 1 || tv.UnheldAskCount() != 0 || tv.HeldAskCount() != 1 || tv.Quiet {
+		t.Fatalf("allheld counts = ask:%d unheld:%d held:%d quiet:%v (held topic must not be quiet)", tv.AskCount(), tv.UnheldAskCount(), tv.HeldAskCount(), tv.Quiet)
+	}
+
+	regions, err := RenderRegions(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	board := string(regions.Board)
+	topicHTML := func(name string) string {
+		return regexp.MustCompile(`(?s)<section class="topic[^"]*" id="` + topicAnchor(name) + `" data-topic="` + name + `"[^>]*>.*?</section>`).FindString(board)
+	}
+
+	mix := topicHTML("mix")
+	wantAll(t, mix,
+		`<button type="button" class="chip policy bulk" data-bulk="policy" data-tbar-ask="open" title="답변 필요 · 클릭: 추천안으로 모두 선택"><svg class="i" aria-hidden="true"><use href="#i-ask"/></svg><span class="chip-lbl">미결</span><span class="n">1</span></button>`,
+		`<span class="chip wb-chip-ans" data-tbar-ask="ans" title="응답함" hidden><span class="chip-lbl">응답함</span><span class="n">0</span></span>`,
+		`<span class="chip wb-chip-held" data-tbar-ask="held" title="보류"><svg class="i" aria-hidden="true"><use href="#i-pause"/></svg><span class="chip-lbl">보류</span><span class="n">1</span></span>`,
+		`<button type="button" class="chip ok bulk" data-bulk="ack"`)
+
+	allheld := topicHTML("allheld")
+	wantAll(t, allheld,
+		`<button type="button" class="chip policy bulk" data-bulk="policy" data-tbar-ask="open" title="답변 필요 · 클릭: 추천안으로 모두 선택" hidden><svg class="i" aria-hidden="true"><use href="#i-ask"/></svg><span class="chip-lbl">미결</span><span class="n">0</span></button>`,
+		`<span class="chip wb-chip-held" data-tbar-ask="held" title="보류"><svg class="i" aria-hidden="true"><use href="#i-pause"/></svg><span class="chip-lbl">보류</span><span class="n">1</span></span>`)
+
+	ackonly := topicHTML("ackonly")
+	wantAll(t, ackonly, `<button type="button" class="chip ok bulk" data-bulk="ack"`)
+	wantNone(t, ackonly, `data-tbar-ask="open"`, `data-tbar-ask="ans"`, `data-tbar-ask="held"`)
 }
 
 // bulkPrelude is a minimal board for form.js under node: elements answer
@@ -261,15 +320,16 @@ E.prototype.querySelectorAll = function (s) { return this.sel[s] || []; };
 E.prototype.closest = function (s) { return this.up[s] || null; };
 E.prototype.addEventListener = function (type, fn) { (this.on[type] = this.on[type] || []).push(fn); };
 function opt(letter, rec, pressed) { return new E(["opt"].concat(rec ? ["rec"] : []), { "data-opt": letter, "aria-pressed": pressed ? "true" : "false" }); }
-function card(opts) { return new E(["card", "policy"], {}, { ".opt[data-opt]": opts }); }
+function card(opts, extraCls) { return new E(["card", "policy"].concat(extraCls || []), {}, { ".opt[data-opt]": opts }); }
 function pressed(c) { return c.sel[".opt[data-opt]"].filter(function (b) { return b.attrs["aria-pressed"] === "true"; }).map(function (b) { return b.attrs["data-opt"]; }); }
 function click(el) { (el.on.click || []).forEach(function (fn) { fn({ target: el }); }); }
 // Topic a: a card to pick by its recommendation, one the user already
-// picked otherwise, one with no recommendation; two acknowledgements, one
-// checked. Topic b: one of each, which a's chips must not touch.
-var a1 = card([opt("a"), opt("b", true)]), a2 = card([opt("a", true), opt("b"), opt("c", false, true)]), a3 = card([opt("a"), opt("b")]);
+// picked otherwise, one with no recommendation, and one held card (which bulk
+// open-ask picking must skip); two acknowledgements, one checked. Topic b:
+// one of each, which a's chips must not touch.
+var a1 = card([opt("a"), opt("b", true)]), a2 = card([opt("a", true), opt("b"), opt("c", false, true)]), a3 = card([opt("a"), opt("b")]), a4 = card([opt("a"), opt("b", true)], ["wb-held"]);
 var ak1 = { checked: false }, ak2 = { checked: true };
-var ta = new E(["topic"], {}, { ".card.policy[data-id]": [a1, a2, a3], ".arow[data-id] label.ack > input": [ak1, ak2] });
+var ta = new E(["topic"], {}, { ".card.policy[data-id]": [a1, a2, a3, a4], ".arow[data-id] label.ack > input": [ak1, ak2] });
 var b1 = card([opt("a", true)]), bk1 = { checked: false };
 var tb = new E(["topic"], {}, { ".card.policy[data-id]": [b1], ".arow[data-id] label.ack > input": [bk1] });
 var pol = new E(["chip"], { "data-bulk": "policy" }, {}, { ".topic": ta }), ack = new E(["chip"], { "data-bulk": "ack" }, {}, { ".topic": ta });
@@ -298,13 +358,13 @@ func TestTopicCountChipsStageEveryAnswer(t *testing.T) {
 	script := bulkPrelude + form + form + `
 check("one click handler per chip across runs", [(pol.on.click || []).length, (ack.on.click || []).length], [1, 1]);
 click(pol);
-check("policy picks", [pressed(a1), pressed(a2), pressed(a3)], [["b"], ["c"], []]);
+check("policy picks", [pressed(a1), pressed(a2), pressed(a3), pressed(a4)], [["b"], ["c"], [], []]);
 check("acks untouched by the policy chip", [ak1.checked, ak2.checked], [false, true]);
 click(ack);
 check("ack checks", [ak1.checked, ak2.checked], [true, true]);
 check("other topic untouched", [pressed(b1), bk1.checked], [[], false]);
 click(pol);
-check("a second click", [pressed(a1), pressed(a2), pressed(a3)], [["b"], ["c"], []]);
+check("a second click", [pressed(a1), pressed(a2), pressed(a3), pressed(a4)], [["b"], ["c"], [], []]);
 process.stdout.write(bad.join("\n"));`
 	out, err := nodeScript(node, script).CombinedOutput()
 	if err != nil {

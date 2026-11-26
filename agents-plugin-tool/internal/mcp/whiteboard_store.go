@@ -50,14 +50,16 @@ func (s *sessionStore) openWhiteboard(record *sessionRecord, key string, raw io.
 func (s *sessionStore) snapshotWhiteboard(record *sessionRecord, key string, raw io.Writer, legacy legacyBoardReader, activity bool) error {
 	if s.boards == nil {
 		record.Whiteboard = nil
+		record.boardHeld = nil
 		record.boardUnavailable = true
 		return nil
 	}
 	err := s.boards.useLegacy(record.Root, key, whiteboardLegacyImport(record.Root, key, legacy), activity, func(slot *whiteboardSlot) error {
 		record.Whiteboard = nil
+		record.boardHeld = nil
 		record.boardMockups = nil
 		if slot.board != nil {
-			record.Whiteboard, record.boardRevision = slot.board.Snapshot()
+			record.Whiteboard, record.boardRevision, record.boardHeld = slot.board.SnapshotWithHolds()
 			record.boardInstance = slot.board.Instance()
 			record.boardMockups = slot.board.MockupIndex()
 		}

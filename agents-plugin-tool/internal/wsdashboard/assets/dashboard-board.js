@@ -692,6 +692,8 @@
     if (window.wbForm) window.wbForm();
     mermaid([target]);
     applySent(true);
+    if (window.wbPill && window.wbPill.syncTopicBars) window.wbPill.syncTopicBars();
+    if (window.WsOverview && window.WsOverview.syncPlaceholder) window.WsOverview.syncPlaceholder(target, true);
     restorePreviewFocus(target, focusSaved);
     target.scrollTop = scrollTop;
   }

@@ -61,6 +61,7 @@ type BoardDB struct {
 	revisionSlot       int
 	nextTopic          int
 	topicDirs          map[string]string
+	holds              map[int]boardItemHold
 	mockups            map[string]string
 	mockupRoots        map[string]string
 	checkpointTimer    *time.Timer
@@ -140,6 +141,11 @@ var boardDBSchema = []string{
 	`CREATE TABLE IF NOT EXISTS load_floors (
 		generation INTEGER PRIMARY KEY,
 		loaded_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS item_holds (
+		item_id INTEGER PRIMARY KEY,
+		loaded_at TEXT NOT NULL,
+		item_changed INTEGER NOT NULL
 	)`,
 	`CREATE TABLE IF NOT EXISTS mockup_bundles (
 		entry_id TEXT PRIMARY KEY REFERENCES entries(entry_id) ON DELETE CASCADE,
@@ -313,7 +319,7 @@ func boardDBOpenError(path string, err error) error {
 // table openBoardDBHandle creates is empty.
 func (b *BoardDB) uncommitted() (bool, error) {
 	var n int
-	err := b.db.QueryRow(`SELECT (SELECT COUNT(*) FROM board_meta)+(SELECT COUNT(*) FROM topics)+(SELECT COUNT(*) FROM entries)+(SELECT COUNT(*) FROM panels)+(SELECT COUNT(*) FROM revision_receipts)+(SELECT COUNT(*) FROM load_floors)+(SELECT COUNT(*) FROM mockup_bundles)`).Scan(&n)
+	err := b.db.QueryRow(`SELECT (SELECT COUNT(*) FROM board_meta)+(SELECT COUNT(*) FROM topics)+(SELECT COUNT(*) FROM entries)+(SELECT COUNT(*) FROM panels)+(SELECT COUNT(*) FROM revision_receipts)+(SELECT COUNT(*) FROM load_floors)+(SELECT COUNT(*) FROM item_holds)+(SELECT COUNT(*) FROM mockup_bundles)`).Scan(&n)
 	return err == nil && n == 0, err
 }
 
@@ -527,6 +533,7 @@ func openBoardDBHandle(dir string, opts BoardDBOptions) (*BoardDB, error) {
 		db:          db,
 		opts:        opts,
 		topicDirs:   map[string]string{},
+		holds:       map[int]boardItemHold{},
 		mockups:     map[string]string{},
 		mockupRoots: map[string]string{},
 	}

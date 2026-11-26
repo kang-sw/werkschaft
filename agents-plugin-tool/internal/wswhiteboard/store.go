@@ -158,12 +158,25 @@ const reaskLayout = "2006-01-02T15:04:05.000Z07:00"
 // every such item renders, since a topic that waits on one is never cut by
 // the closed-topic cap. A nil state has none.
 func (s *State) OpenAskCount() int {
+	return s.OpenAskCountExcluding(nil)
+}
+
+// OpenAskCountExcluding is the number of open policy and check items not in
+// held. A nil state has none.
+func (s *State) OpenAskCountExcluding(held []int) int {
 	if s == nil {
 		return 0
 	}
+	var heldSet map[int]bool
+	if len(held) > 0 {
+		heldSet = make(map[int]bool, len(held))
+		for _, id := range held {
+			heldSet[id] = true
+		}
+	}
 	n := 0
 	for _, item := range s.Items {
-		if item.Status == StatusOpen && (item.Class == ClassPolicy || item.Class == ClassCheck) {
+		if item.Status == StatusOpen && (item.Class == ClassPolicy || item.Class == ClassCheck) && !heldSet[item.ID] {
 			n++
 		}
 	}

@@ -87,7 +87,7 @@ func (src *DashboardSessionSource) ReadTopicHistory(reg wsdashboard.Registration
 		}
 		names = []string{name}
 	}
-	board := topicHistoryBoard(record.Root, record.boardInstance, record.boardRevision)
+	board := topicHistoryBoard(record.Root, record.boardInstance, record.boardRevision, record.boardHeld)
 	imageSrc := src.historyImageSrc(record.Root, reg.ReplyID)
 	if memo && target != "" {
 		if frags, hit := src.history.lookup(key, board, names, tickets(record.Root), imageSrc); hit {
@@ -149,10 +149,13 @@ func (src *DashboardSessionSource) ReadTopicHistory(reg wsdashboard.Registration
 
 // topicHistoryBoard keys the board a history render reads: its root, the
 // open board instance (wswhiteboard.BoardDB.Instance: a reopened or
-// recreated board gets a new one), and its content revision, which every
-// board commit moves.
-func topicHistoryBoard(root string, instance, revision uint64) string {
-	return fmt.Sprintf("%s\x00%d\x00%d", root, instance, revision)
+// recreated board gets a new one), its content revision, and its sorted
+// held item IDs (hold writes do not advance the board revision).
+func topicHistoryBoard(root string, instance, revision uint64, held []int) string {
+	if len(held) == 0 {
+		return fmt.Sprintf("%s\x00%d\x00%d", root, instance, revision)
+	}
+	return fmt.Sprintf("%s\x00%d\x00%d\x00%v", root, instance, revision, held)
 }
 
 // peekHistoryBoard resolves reg's session as lookupRecord does (a known
@@ -178,12 +181,13 @@ func (src *DashboardSessionSource) peekHistoryBoard(reg wsdashboard.Registration
 		return "", "", false
 	}
 	var instance, revision uint64
+	var held []int
 	if !src.store.boards.peekHeld(identity.Root, keys[0], func(b *wswhiteboard.BoardDB) {
-		instance, revision = b.Instance(), b.Revision()
+		instance, revision, held = b.Instance(), b.Revision(), b.HeldIDs()
 	}) {
 		return "", "", false
 	}
-	return identity.Root, topicHistoryBoard(identity.Root, instance, revision), true
+	return identity.Root, topicHistoryBoard(identity.Root, instance, revision, held), true
 }
 
 // historyImageSrc is servedViewInput's ImageSrc with the file's version read
