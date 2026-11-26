@@ -473,19 +473,6 @@
         }
       }
     },
-    "261126-feat-ws-dashboard-conv-extra-motion-live-engine": {
-      "registered_at": "2026-11-26T13:46:49Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-26T15:27:12Z",
-        "impl": {
-          "branch": "impl/develop/atlas-giant-suds"
-        }
-      }
-    },
     "261126-refactor-oversized-multi-responsibility-files": {
       "registered_at": "2026-11-26T05:40:46Z"
     },
