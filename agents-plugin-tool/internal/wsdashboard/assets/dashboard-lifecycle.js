@@ -1143,7 +1143,7 @@
     if (!shSettingsEntry && !(typeof rp !== "undefined" && rp.P)) try { ent.el.contentWindow.focus(); } catch (x) { /* unloading */ }
   }
   // Private UI state only: no daemon protocol or persistence contract changes.
-  function shSettings(ent) { shSend(ent, "settings", { layout: layoutMode, input: inputMode }); }
+  function shSettings(ent) { shSend(ent, "settings", { layout: layoutMode, input: inputMode, stageFill: typeof stageFill !== "undefined" && !!stageFill }); }
   function shReload() { if (shOn) try { shOn.el.contentWindow.location.reload(); } catch (x) { /* unloading */ } }
   // shHead shows the shown frame's header: its head region (none while the
   // frame has not named one) and search button, or with the head null the
@@ -1367,6 +1367,12 @@
           setTheme(m.theme, true);
           shBroadcastTheme(root.getAttribute("data-theme") || "", ent);
           break;
+        case "settings":
+          if (typeof m.stageFill === "boolean" && typeof setStageFill === "function" && m.stageFill !== (typeof stageFill !== "undefined" && !!stageFill)) {
+            setStageFill(m.stageFill);
+            shFrames.forEach(function (f) { if (f !== ent) shSettings(f); });
+          }
+          break;
       }
     });
     window.addEventListener("popstate", function () {
@@ -1480,6 +1486,7 @@
     function queueHead() { headDirty = true; queue(); }
     doc.addEventListener("ws-overview", queue);
     doc.addEventListener("ws-audit", queue);
+    doc.addEventListener("ws-stage-fill", queueHead);
     var top = doc.querySelector(".dwrap > .top");
     if (window.ResizeObserver && top) new ResizeObserver(queueHead).observe(top);
     window.addEventListener("resize", queueHead);
@@ -1550,7 +1557,7 @@
       } else if (m.wsShell === "menu") {
         var h = region("head"), chip = h && h.querySelector(".host.hbtn");
         if (chip && WsRail) railPopOpen("sess", chip);
-      } else if (m.wsShell === "settings") { setLayout(m.layout); setInput(m.input); }
+      } else if (m.wsShell === "settings") { setLayout(m.layout); setInput(m.input); if (typeof m.stageFill === "boolean" && typeof setStageFill === "function") setStageFill(m.stageFill); }
       else if (m.wsShell === "theme") setTheme(m.theme, true);
       else if (m.wsShell === "rail-open") { if (typeof tkApi !== "undefined" && tkApi && tkApi.closeStore) tkApi.closeStore(); }
       else if (m.wsShell === "sync") { sent = {}; queueHead(); shPost("title", { title: doc.title }); }

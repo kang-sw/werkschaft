@@ -626,6 +626,8 @@
   "js.board.toolbar.download.title": "Скачать эту доску в виде zip",
   "js.board.toolbar.files": "Файлы",
   "js.board.toolbar.files.title": "Файлы (Ctrl+E)",
+  "js.board.toolbar.stage_fill": "Во всю ширину",
+  "js.board.toolbar.stage_fill.title": "Переключить режим во всю ширину",
   "js.board.overview.hint": "Щелчок снаружи · Esc: назад · Щелчок по карточке: перейти к ней",
   "js.wb.state.awaiting-confirmation": "Ожидают подтверждения",
   "js.wb.state.waiting": "Ожидают",

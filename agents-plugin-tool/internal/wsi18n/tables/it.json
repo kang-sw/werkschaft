@@ -626,6 +626,8 @@
   "js.board.toolbar.download.title": "Scarica questa bacheca come zip",
   "js.board.toolbar.files": "File",
   "js.board.toolbar.files.title": "File (Ctrl+E)",
+  "js.board.toolbar.stage_fill": "Larghezza piena",
+  "js.board.toolbar.stage_fill.title": "Attiva/disattiva vista a larghezza piena",
   "js.board.overview.hint": "Clic fuori · Esc: torna indietro · Clic su scheda: vai alla scheda",
   "js.wb.state.awaiting-confirmation": "In attesa di conferma",
   "js.wb.state.waiting": "In attesa",

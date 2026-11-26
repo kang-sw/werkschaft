@@ -97,6 +97,10 @@
       return true;
     } catch (e) { return false; /* full or denied */ }
   }
+  var STAGE_FILL_KEY = "ws.dashboard.stageFill";
+  function parseStageFill(v) { return v === true || v === "1" || v === "true"; }
+  var stageFill = parseStageFill(load(STAGE_FILL_KEY));
+  if (stageFill) root.setAttribute("data-stage-fill", "");
 
   // --- times: the server writes epoch ms; the page shows local or relative time
   function two(n) { return (n < 10 ? "0" : "") + n; }
@@ -562,6 +566,19 @@
     if (t) { t.placeholder = HINT[inputMode]; growCtext(); }
     syncAutoMultilineUI();
   }
+  function setStageFill(v, user) {
+    var next = parseStageFill(v);
+    var changed = next !== stageFill || root.hasAttribute("data-stage-fill") !== next;
+    stageFill = next;
+    if (root.hasAttribute("data-stage-fill") !== next) root.toggleAttribute("data-stage-fill", next);
+    q(".board-stage-fill").forEach(function (b) { b.setAttribute("aria-pressed", String(next)); });
+    if (user) save(STAGE_FILL_KEY, next ? "1" : null);
+    if (!changed && !user) return;
+    doc.dispatchEvent(new CustomEvent("ws-stage-fill", { detail: { fill: next } }));
+    if (typeof galNarrow !== "undefined" && galNarrow && typeof queueGallery === "function") queueGallery();
+    if (user && framed) shPost("settings", { layout: layoutMode, input: inputMode, stageFill: stageFill });
+  }
+  function toggleStageFill() { setStageFill(!stageFill, true); }
   function setTab(t) {
     grid.setAttribute("data-tab", t);
     q("#tabbar [data-tab]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-tab") === t)); });
@@ -588,6 +605,10 @@
   window.addEventListener("storage", function (e) {
     if (e.key === LAYOUT_KEY) setLayout(e.newValue);
     if (e.key === INPUT_KEY) setInput(e.newValue);
+    if (e.key === STAGE_FILL_KEY || e.key === null) {
+      setStageFill(parseStageFill(e.key === null ? load(STAGE_FILL_KEY) : e.newValue));
+      if (shell) shFrames.forEach(shSettings);
+    }
   });
   // Language: the choice lives in a cookie the server reads, so every page,
   // its stream, and its history render in it from the first byte. An empty

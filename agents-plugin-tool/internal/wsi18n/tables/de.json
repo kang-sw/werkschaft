@@ -626,6 +626,8 @@
   "js.board.toolbar.download.title": "Dieses Board als Zip herunterladen",
   "js.board.toolbar.files": "Dateien",
   "js.board.toolbar.files.title": "Dateien (Ctrl+E)",
+  "js.board.toolbar.stage_fill": "Volle Breite",
+  "js.board.toolbar.stage_fill.title": "Volle Breite umschalten",
   "js.board.overview.hint": "Außen klicken · Esc: zurück · Karte anklicken: zur Karte",
   "js.wb.state.awaiting-confirmation": "Bestätigung ausstehend",
   "js.wb.state.waiting": "Wartend",

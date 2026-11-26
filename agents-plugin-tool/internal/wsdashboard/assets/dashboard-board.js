@@ -431,7 +431,8 @@
           a.href = "/s/" + rid + "/board.zip"; a.download = "";
           doc.body.appendChild(a); a.click(); a.remove();
         },
-        files: worktree ? null : filesSheet
+        files: worktree ? null : filesSheet,
+        stageFill: toggleStageFill
       },
       reveal: function () {
         // Linked/durable cards must not remain behind either explorer surface.

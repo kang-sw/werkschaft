@@ -90,7 +90,7 @@
   var boardw = 0, convow = 0;
   var toolbar = null, overviewOn = false;
   var stateFilter = "all", stateUI = null;
-  var toolbarFit = { width: 0, probing: false, modes: ["", "compact", "dropdown", "tight"] };
+  var toolbarFit = { width: 0, actsWidth: 0, probing: false, modes: ["", "compact", "dropdown", "tight"] };
   var filterValues = ["all", "asks", "researching", "discussing", "waiting", "implementing", "awaiting-confirmation", "closed", "cards", "tickets"];
   var metaFilterValues = ["all", "asks", "closed", "cards", "tickets"];
   var pipelineFilterValues = ["researching", "discussing", "waiting", "implementing", "awaiting-confirmation"];
@@ -154,6 +154,17 @@
       files.setAttribute("aria-expanded", "false");
       files.title = wsT("js.board.toolbar.files.title");
     }
+    if (actions.stageFill) {
+      var fill = mk("button", "board-action board-stage-fill");
+      fill.type = "button";
+      fill.innerHTML = '<svg class="li" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 5v14M22 5v14M6 12h12M9 9l-3 3 3 3M15 9l3 3-3 3"/></svg>';
+      fill.appendChild(mk("span", "board-label", wsT("js.board.toolbar.stage_fill")));
+      fill.title = wsT("js.board.toolbar.stage_fill.title");
+      fill.setAttribute("aria-label", wsT("js.board.toolbar.stage_fill"));
+      fill.setAttribute("aria-pressed", String(doc.documentElement.hasAttribute("data-stage-fill")));
+      fill.addEventListener("click", function (e) { actions.stageFill(e); });
+      acts.appendChild(fill);
+    }
     var actsDiv = mk("span", "board-acts-vdiv");
     actsDiv.setAttribute("aria-hidden", "true");
     acts.appendChild(actsDiv);
@@ -164,6 +175,7 @@
     face.appendChild(row);
     toolbar.appendChild(face);
     toolbarFit.width = 0;
+    toolbarFit.actsWidth = 0;
     toolbarFit.probing = false;
     window.addEventListener("resize", function () { fitToolbar(false); });
     if (window.ResizeObserver) new window.ResizeObserver(function () { fitToolbar(false); }).observe(toolbar);
@@ -405,11 +417,14 @@
     var face = toolbar.firstChild, row = face.firstChild;
     var width = toolbar.getBoundingClientRect().width;
     if (!width) return;
-    if (!force && Math.abs(width - toolbarFit.width) < 0.25) {
+    var acts = row.querySelector(".board-acts");
+    var actsWidth = acts ? acts.getBoundingClientRect().width : 0;
+    if (!force && Math.abs(width - toolbarFit.width) < 0.25 && Math.abs(actsWidth - toolbarFit.actsWidth) < 0.25) {
       placeStatePop();
       return;
     }
     toolbarFit.width = width;
+    toolbarFit.actsWidth = actsWidth;
     var ui = stateUI && stateUI.root.isConnected ? stateUI : null;
     var active = doc.activeElement;
     var wasNarrow = !!(ui && ui.inline.hidden);
@@ -2626,7 +2641,7 @@
     isFourCol: isFourCol,
     // relayout places everything again after the page's layout changed
     // (a width crossing, the layout menu).
-    relayout: function () { if (board) arrange(null); },
+    relayout: function () { if (board) { arrange(null); if (toolbar) fitToolbar(false); } },
     dragging: function () { return !!(dg && dg.on); },
     // move places a topic's or card's node as a drop does (to: pin, docked
     // on a new page; or after and before in the open flow).

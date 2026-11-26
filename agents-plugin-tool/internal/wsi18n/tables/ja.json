@@ -626,6 +626,8 @@
   "js.board.toolbar.download.title": "このボードをzipでダウンロード",
   "js.board.toolbar.files": "ファイル",
   "js.board.toolbar.files.title": "ファイル (Ctrl+E)",
+  "js.board.toolbar.stage_fill": "全幅表示",
+  "js.board.toolbar.stage_fill.title": "全幅表示を切り替え",
   "js.board.overview.hint": "外側クリック・Esc: 元の位置へ · カードクリック: そのカードへ",
   "js.wb.state.awaiting-confirmation": "確認待ち",
   "js.wb.state.waiting": "待機中",

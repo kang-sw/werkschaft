@@ -626,6 +626,8 @@
   "js.board.toolbar.download.title": "Télécharger ce tableau au format zip",
   "js.board.toolbar.files": "Fichiers",
   "js.board.toolbar.files.title": "Fichiers (Ctrl+E)",
+  "js.board.toolbar.stage_fill": "Pleine largeur",
+  "js.board.toolbar.stage_fill.title": "Basculer la vue pleine largeur",
   "js.board.overview.hint": "Clic à l’extérieur · Échap : retour · Clic sur une carte : y accéder",
   "js.wb.state.awaiting-confirmation": "En attente de confirmation",
   "js.wb.state.waiting": "En attente",
