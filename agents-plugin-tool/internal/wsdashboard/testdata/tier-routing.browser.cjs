@@ -76,12 +76,17 @@ const shot = name => shots ? path.join(shots, name) : undefined;
         cardScrollHeight: el.scrollHeight,
         cardClientHeight: el.clientHeight,
         frameHeight: trFrame ? trFrame.getBoundingClientRect().height : 0,
+        frameScrollHeight: trFrame ? trFrame.scrollHeight : 0,
+        frameClientHeight: trFrame ? trFrame.clientHeight : 0,
+        frameOverflowY: trFrame ? getComputedStyle(trFrame).overflowY : '',
         scontentScrollHeight: scontent ? scontent.scrollHeight : 0,
         scontentClientHeight: scontent ? scontent.clientHeight : 0
       };
     });
     assert.ok(modalMetrics.cardScrollHeight <= modalMetrics.cardClientHeight + 2, `tr-card clipped at 1280x800: ${JSON.stringify(modalMetrics)}`);
     assert.ok(modalMetrics.frameHeight >= 120, `tr-frame collapsed at 1280x800: ${JSON.stringify(modalMetrics)}`);
+    assert.strictEqual(modalMetrics.frameOverflowY, 'hidden', `tr-frame overflow-y should be hidden: ${JSON.stringify(modalMetrics)}`);
+    assert.ok(modalMetrics.frameScrollHeight <= modalMetrics.frameClientHeight + 1, `tr-frame vertically scrollable at 1280x800: ${JSON.stringify(modalMetrics)}`);
     assert.ok(modalMetrics.scontentScrollHeight > modalMetrics.scontentClientHeight, `scontent not scrollable at 1280x800: ${JSON.stringify(modalMetrics)}`);
     await page.setViewportSize({ width: 1440, height: 1800 });
     await page.waitForTimeout(100);
