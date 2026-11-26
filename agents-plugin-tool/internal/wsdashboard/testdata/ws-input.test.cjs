@@ -760,3 +760,34 @@ test("memo.js with real WsInput: cross-frame providers, stale-session drop, list
   editArea.dispatchEvent(esc);
   assert.equal(editPop.parentNode, null, "sweeping memo-list detaches inline WsInput popup");
 });
+
+test("draft values preserve raw @mentions across re-renders and stripMentions strips @ only at submit", () => {
+  const { window, doc } = makeHarness();
+
+  // Simulate close-request reason chip re-render & caret preservation with a tracked @mention
+  const reason1 = doc.createElement("textarea");
+  doc.body.appendChild(reason1);
+  const inst1 = window.WsInput.attach(reason1, { keymap: "newline-only" });
+  inst1.setValue("see @src/a.go please");
+  inst1.setMentions([{ start: 4, end: 13, text: "@src/a.go" }]);
+  const savedDraft = { reason: reason1.value, mentions: inst1.getMentions() };
+  assert.equal(savedDraft.reason, "see @src/a.go please", "draft retains raw @mention text");
+
+  // Re-render chip: sweep old field, create fresh field, re-seed raw text + mentions
+  inst1.destroy();
+  const reason2 = doc.createElement("textarea");
+  reason2.value = savedDraft.reason;
+  doc.body.appendChild(reason2);
+  const inst2 = window.WsInput.attach(reason2, { keymap: "newline-only" });
+  inst2.setMentions(savedDraft.mentions);
+  reason2.setSelectionRange(4, 13);
+  assert.equal(reason2.value, "see @src/a.go please", "re-rendered chip preserves raw @mention");
+  assert.equal(reason2.value.slice(reason2.selectionStart, reason2.selectionEnd), "@src/a.go", "restored caret offsets stay aligned");
+  assert.equal(inst2.getMentions().length, 1, "mention tracking survives re-render");
+
+  // Submit strips only tracked @ mentions via stripMentions
+  assert.equal(window.WsInput.stripMentions(savedDraft.reason, savedDraft.mentions), "see src/a.go please");
+  assert.equal(window.WsInput.stripMentions("plain @not-tracked", []), "plain @not-tracked");
+
+  inst2.destroy();
+});

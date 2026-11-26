@@ -703,13 +703,8 @@
     }
 
     function sendText(raw) {
-      var v = typeof raw === "string" ? raw : (field.value || ""), out = "", at = 0;
-      mentions.slice().sort(function (a, b) { return a.start - b.start; }).forEach(function (m) {
-        if (m.start < at || !liveMention(m, v)) return;
-        out += v.slice(at, m.start) + m.text.slice(1);
-        at = m.end;
-      });
-      return out + v.slice(at);
+      var v = typeof raw === "string" ? raw : (field.value || "");
+      return stripMentions(v, mentions);
     }
 
     // --- Per-instance markdown highlighting via WsMdEditor seam ---
@@ -1086,6 +1081,23 @@
     }
   }
 
+  function liveMentionSpan(m, v) {
+    if (!m || typeof m.text !== "string") return false;
+    var before = m.start > 0 ? v.charAt(m.start - 1) : "", after = v.charAt(m.end);
+    return v.slice(m.start, m.end) === m.text && (!before || /\s/.test(before)) && (!after || /\s/.test(after));
+  }
+
+  function stripMentions(raw, list) {
+    var v = String(raw || ""), out = "", at = 0;
+    if (!Array.isArray(list) || !list.length) return v;
+    list.slice().sort(function (a, b) { return a.start - b.start; }).forEach(function (m) {
+      if (m.start < at || !liveMentionSpan(m, v)) return;
+      out += v.slice(at, m.start) + m.text.slice(1);
+      at = m.end;
+    });
+    return out + v.slice(at);
+  }
+
   window.WsInput = {
     attach: attach,
     get: get,
@@ -1095,6 +1107,7 @@
     listContinuation: listContinuation,
     formatCommandRows: formatCommandRows,
     renderCommandRow: renderCommandRow,
-    defaultSlashToken: defaultSlashToken
+    defaultSlashToken: defaultSlashToken,
+    stripMentions: stripMentions
   };
 })();

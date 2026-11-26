@@ -257,7 +257,11 @@
       input.placeholder = wsT("js.closerequest.reason");
       input.setAttribute("aria-label", wsT("js.closerequest.reasonfor", r.topic));
       input.setAttribute("data-close-reason", r.topic);
-      input.addEventListener("input", function () { r.reason = input.wsInput ? input.wsInput.sendText() : input.value; queueDraft(); });
+      input.addEventListener("input", function () {
+        r.reason = input.value;
+        r.mentions = input.wsInput ? input.wsInput.getMentions() : [];
+        queueDraft();
+      });
       el.appendChild(input);
       x.type = "button";
       x.className = "unchip";
@@ -268,7 +272,7 @@
       el.appendChild(x);
       cchips.appendChild(el);
       if (win && win.WsInput) {
-        win.WsInput.attach(input, {
+        var reasonInst = win.WsInput.attach(input, {
           keymap: "newline-only",
           features: {
             markdown: true,
@@ -293,6 +297,7 @@
           mentionLabel: wsT("js.mention.label"),
           slashLabel: wsT("js.cmd.label")
         });
+        if (reasonInst && r.mentions && r.mentions.length) reasonInst.setMentions(r.mentions);
       }
     });
     // A web card's picked element: its selector and text; a console block:
@@ -394,7 +399,7 @@
     var row = s.row && s.row.parentNode;
     if (!row && inlineEditor()) row = q(".wsc-mention", inlineEditor().editor).filter(function (n) { return n.getAttribute("data-wsc-key") === s.key; })[0];
     var rect = row ? row.getBoundingClientRect() : { left: 4, bottom: 4 };
-    placeMention({ ms: s.mentions, x: rect.left, y: rect.bottom, edit: s, comment: s.comment, images: s.images.slice() });
+    placeMention({ ms: s.mentions, x: rect.left, y: rect.bottom, edit: s, comment: s.comment, commentMentions: s.commentMentions, images: s.images.slice() });
     lockMention(); mnote.focus();
     mnote.setSelectionRange(mnote.value.length, mnote.value.length);
   }

@@ -222,8 +222,12 @@
     if (p !== mpend) {
       if (mpend) hideMention();
       p = Object.assign({}, p, { ms: validMentions(p.ms || [p.m]), rid: rid, images: (p.images || []).slice() });
-      if (mnote.wsInput) mnote.wsInput.setValue(p.comment || "");
-      else mnote.value = p.comment || "";
+      if (mnote.wsInput) {
+        mnote.wsInput.setValue(p.comment || "");
+        if (p.commentMentions && p.commentMentions.length) mnote.wsInput.setMentions(p.commentMentions);
+      } else {
+        mnote.value = p.comment || "";
+      }
     }
     p.screenX = x; p.screenY = y;
     mpend = p;
@@ -253,7 +257,7 @@
     var p = mpend;
     if (!p || p.rid !== rid || mcomposing) return;
     if (!p.ms.length) return;
-    var s = { mentions: validMentions(p.ms), comment: mnote.wsInput ? mnote.wsInput.sendText() : mnote.value, images: p.images.slice() }, index = bselections.indexOf(p.edit);
+    var s = { mentions: validMentions(p.ms), comment: mnote.value, commentMentions: mnote.wsInput ? mnote.wsInput.getMentions() : [], images: p.images.slice() }, index = bselections.indexOf(p.edit);
     s.key = index >= 0 ? p.edit.key : "selection-" + Date.now() + "-" + Math.random().toString(36).slice(2);
     if (index >= 0) { s.row = p.edit.row; bselections[index] = s; }
     else bselections.push(s);
