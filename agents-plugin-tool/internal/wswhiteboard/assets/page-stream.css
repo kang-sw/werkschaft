@@ -249,8 +249,17 @@
   .entry-panel > summary > .pmeta, .pmeta-info { gap: 3px 6px; }
   .pfname { max-width: 14ch; }
 }
+/* History in flight (stream.js data-loading): a lazy gap's gutter icon
+   gives way to a same-size tonal ring turned by transform alone, and an
+   earlier panel body shows one quiet skeleton line pulsed by opacity. */
+.history-gap[data-loading] .gap-gutter > .i:nth-child(n) { display: none; }
+.history-gap[data-loading] .gap-gutter::after { content: ""; flex: none; width: 12px; height: 12px; box-sizing: border-box; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--wb-primary) 22%, transparent); border-top-color: color-mix(in srgb, var(--wb-primary) 78%, transparent); animation: wb-history-spin .8s linear infinite; }
+.entry-body[data-lazy][data-loading]::before { content: ""; display: block; width: min(220px, 60%); height: 10px; margin: 2px 0; border-radius: 5px; background: var(--wb-muted); animation: wb-history-pulse 1.1s ease-in-out infinite alternate; }
+@keyframes wb-history-spin { to { transform: rotate(360deg); } }
+@keyframes wb-history-pulse { from { opacity: .45; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
   .entry-panel:not(.msg) > summary, .pchev, .history-gap, .gap-gutter, .gap-actions button { transition: none; }
+  .history-gap[data-loading] .gap-gutter::after, .entry-body[data-lazy][data-loading]::before { animation: none; }
 }
 .topic { position: relative; }
 .doc-body { padding: 10px 14px 12px; overflow-x: auto; overflow-wrap: anywhere; }

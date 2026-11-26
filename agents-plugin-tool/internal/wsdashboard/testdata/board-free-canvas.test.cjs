@@ -314,7 +314,7 @@ function makeFreeCanvasWorld(spec, opts = {}) {
   const timers = new Map();
   const rafs = [];
   const flushes = [];
-  const store = new Map();
+  const store = new Map(Object.entries(opts.store || {}));
 
   const ctx = {
     window: null,
@@ -376,6 +376,7 @@ function makeFreeCanvasWorld(spec, opts = {}) {
     wbHistory: { capture: () => [], init: () => {}, restore: () => {} },
     Date, Math, Set, Map, Array, Object, String, Number, Infinity, isNaN, parseFloat,
   };
+  Object.assign(ctx, opts.extra || {});
   ctx.window = ctx;
   ctx.innerHeight = opts.viewH || 800;
   vm.createContext(ctx);
@@ -1112,4 +1113,26 @@ test('8. WsBoardAnchor.keepFrame protects active mounted window cards, freeOnCar
 
   // CSS contract: #bcol[data-board-free] disables native overflow-anchor with higher specificity than .dgrid.<mode> > .bcol.
   assert.match(boardCssSrc, /\.dgrid:is\(\.live,\s*\.history,\s*\.worktree\)\s*>\s*#bcol\[data-board-free\]\s*\{\s*overflow-anchor:\s*none;\s*\}/);
+});
+
+test('evicted-frame reload: shell-held card heights seed the runway and the saved reading offset lands once', () => {
+  const spec = Array.from({ length: 16 }, (_, i) => ({ topic: `t${i}`, height: 300 + i * 20 }));
+  // The shell table (dashboard-session-view.js boardHeightCache) survives the
+  // frame; a fresh anchor module reads and writes the same Map.
+  const shared = new Map([['t:t9', 777]]);
+  const taken = [];
+  const w = makeFreeCanvasWorld(spec, {
+    viewH: 800,
+    store: { 'ws.dashboard.board-card./s/free/': 't:t6' },
+    extra: { boardHeightCache: () => shared, boardOffsetTake: key => { taken.push(key); return 130; } },
+  });
+  const { ctx, nodes, bcol } = w;
+  assert.equal(vm.runInContext('freeHeightCache', ctx), shared, 'anchor uses the shell-held table');
+  assert.deepEqual(taken, ['t:t6'], 'offset is taken once, for the restored card');
+  const y6 = ctx.WsBoardAnchor.windowInfo().posOf(nodes[6]);
+  assert.equal(bcol.scrollTop, Math.round(y6 - 130), 'restored card lands at its saved reading line, not centered');
+  assert.equal(shared.get('t:t6'), 420, 'measured heights write through to the shell table');
+  // A later select centers as before: the offset applied only to the restore.
+  ctx.WsBoardAnchor.select(nodes[12], { smooth: false });
+  assert.deepEqual(taken, ['t:t6']);
 });

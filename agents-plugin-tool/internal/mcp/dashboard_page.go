@@ -388,35 +388,6 @@ func (src *DashboardSessionSource) BoardArchive(reg wsdashboard.Registration) ([
 	return data, data != nil && err == nil, err
 }
 
-var _ wsdashboard.TopicHistorySource = (*DashboardSessionSource)(nil)
-
-// ReadTopicHistory renders the named topics, or the one topic holding
-// target, with their complete history (wswhiteboard.RenderTopicFragments)
-// under the served page's link rule: what the served board's lazy history
-// leaves out, fetched when the viewer expands it. false when the session is
-// gone or has no board.
-func (src *DashboardSessionSource) ReadTopicHistory(reg wsdashboard.Registration, lang string, names []string, target string) ([]wswhiteboard.TopicFragment, bool) {
-	_, _, record, ok, err := src.lookupRecord(reg)
-	if !ok || err != nil || record.Whiteboard == nil {
-		return nil, false
-	}
-	if target != "" {
-		name, found := record.Whiteboard.TargetTopic(target)
-		if !found {
-			return nil, true
-		}
-		names = []string{name}
-	}
-	view := wswhiteboard.BuildView(record.Whiteboard, servedViewInput(record, reg.ReplyID))
-	view.Lang = lang
-	topics, err := wswhiteboard.RenderTopicFragments(view, names)
-	if err != nil {
-		appendDebugEvent("dashboard.page_render_failed", map[string]any{"error": err.Error()})
-		return nil, false
-	}
-	return topics, true
-}
-
 var _ wsdashboard.OutsideLinkSource = (*DashboardSessionSource)(nil)
 
 // ReadOutsideLinks lists the files outside the session root that the board

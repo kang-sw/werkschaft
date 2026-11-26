@@ -116,6 +116,7 @@ type sessionRecord struct {
 	Whiteboard *wswhiteboard.State `json:"whiteboard,omitempty"`
 	// Presentation metadata supplied with the snapshot.
 	boardRevision    uint64
+	boardInstance    uint64
 	boardUnavailable bool
 }
 

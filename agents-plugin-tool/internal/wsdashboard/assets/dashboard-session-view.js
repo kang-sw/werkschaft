@@ -18,8 +18,42 @@
     var n = entries.find(function (entry) { return entry.getBoundingClientRect().bottom > edge; });
     return n ? { entry: n.getAttribute("data-entry"), offset: n.getBoundingClientRect().top - edge } : null;
   }
+  // shellMemo is the top shell's named memory (shell.js memo), which
+  // outlives this frame when the shell evicts it, or this window's own when
+  // no same-origin shell frames the page; null without shell.js.
+  function shellMemo(name, maxEntries, maxSize) {
+    var host = null;
+    try { if (window.top !== window && window.top.WsShell && window.top.WsShell.memo) host = window.top.WsShell; } catch (e) { host = null; }
+    if (!host && window.WsShell && window.WsShell.memo) host = window.WsShell;
+    return host ? host.memo(name, maxEntries, maxSize) : null;
+  }
+  // The free canvas's measured card heights (dashboard-board-anchor.js
+  // freeHeightCache) live in a shell-made table per session page, so a
+  // reloaded frame lays its runway out with real heights rather than
+  // FREE_FALLBACK_H. Called while the anchor module initializes.
+  function boardHeightCache() {
+    var m = shellMemo("ws.board-heights", 32, 0), t = m ? m.table(location.pathname) : new Map();
+    if (t.size > 4096) t.clear();
+    return t;
+  }
+  // The current card's offset from the board's scroll edge, kept beside the
+  // card key (ANCHOR_STORE) for one reload: anchorSettle lands the restored
+  // card at the same reading line (boardOffsetTake).
+  function boardOffsetSave() {
+    var m = shellMemo("ws.board-offset", 32, 0), col = $("bcol");
+    if (!m || !col || anchorKey === null || !anchorLast || !freeActive || !freePos.has(anchorLast)) return;
+    m.set(location.pathname, anchorKey + "\n" + Math.round(freePos.get(anchorLast) - col.scrollTop));
+  }
+  function boardOffsetTake(key) {
+    var m = shellMemo("ws.board-offset", 32, 0), v = m ? m.get(location.pathname) : undefined;
+    if (m) m.delete(location.pathname);
+    if (typeof v !== "string") return null;
+    var at = v.lastIndexOf("\n"), offset = Number(v.slice(at + 1));
+    return at > 0 && v.slice(0, at) === key && Number.isFinite(offset) ? offset : null;
+  }
   function saveSessionView() {
     if (shell || !sessionViewReady) return;
+    boardOffsetSave();
     var panes = {};
     PANES.forEach(function (id) {
       var el = $(id), top = visible(el) ? el.scrollTop : paneScroll[id];

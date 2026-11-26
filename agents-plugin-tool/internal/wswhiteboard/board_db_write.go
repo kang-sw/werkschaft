@@ -21,6 +21,11 @@ func (b *BoardDB) Snapshot() (*State, uint64) {
 
 func (b *BoardDB) Revision() uint64 { b.mu.Lock(); defer b.mu.Unlock(); return uint64(b.generation) }
 
+// Instance identifies this open board for the process lifetime: a reopened or
+// recreated board gets a new one, so Instance with Revision names one content
+// state, which a reader can key on without cloning the state (Snapshot).
+func (b *BoardDB) Instance() uint64 { return b.instance }
+
 func (b *BoardDB) State() *State {
 	b.mu.Lock()
 	defer b.mu.Unlock()
