@@ -409,6 +409,8 @@
   "js.card.back": "返回看板 (Esc)",
   "js.card.pin": "固定",
   "js.card.raise": "移到顶部",
+  "js.panel.jump": "跳转到主题中的面板",
+  "js.panel.unavailable": "该面板已不可用",
   "js.chip.remove": "移除此回答",
   "js.chip.tnote.open": "在看板上显示此主题备注",
   "js.chip.tnote.remove": "移除此主题备注",

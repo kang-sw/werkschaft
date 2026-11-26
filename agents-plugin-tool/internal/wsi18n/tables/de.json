@@ -409,6 +409,8 @@
   "js.card.back": "Zurück zum Board (Esc)",
   "js.card.pin": "Anheften",
   "js.card.raise": "Ganz nach oben",
+  "js.panel.jump": "Zum Panel im Thema springen",
+  "js.panel.unavailable": "Panel ist nicht mehr verfügbar",
   "js.chip.remove": "diese Antwort entfernen",
   "js.chip.tnote.open": "diese Themennotiz auf dem Board zeigen",
   "js.chip.tnote.remove": "diese Themennotiz entfernen",

@@ -409,6 +409,8 @@
   "js.card.back": "Torna alla bacheca (Esc)",
   "js.card.pin": "Fissa",
   "js.card.raise": "Sposta in cima",
+  "js.panel.jump": "Vai al pannello nell'argomento",
+  "js.panel.unavailable": "Il pannello non è più disponibile",
   "js.chip.remove": "rimuovi questa risposta",
   "js.chip.tnote.open": "mostra questa nota dell'argomento sulla lavagna",
   "js.chip.tnote.remove": "rimuovi questa nota dell'argomento",

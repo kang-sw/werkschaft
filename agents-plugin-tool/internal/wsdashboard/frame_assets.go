@@ -40,7 +40,7 @@ func (a *dashboardAssets) buildFrameFiles() {
 		string(d.ViewerScript), string(d.ToastScript), string(d.HoldConfirmScript), string(d.TrackerScript),
 		string(d.MentionScript), string(d.RailScript), string(d.MemoScript),
 		string(d.UsageScript), string(d.ShellScript), string(d.CardsScript),
-		string(d.OverviewScript), string(d.PreviewScript), string(d.FilesScript),
+		string(d.OverviewScript), string(d.PreviewScript), string(d.PanelScript), string(d.FilesScript),
 	}, "\n;\n"), "js")
 	d.FrameTermFile = add(string(d.TerminalScript), "js")
 	d.FrameWebFile = add(string(d.WebScript), "js")

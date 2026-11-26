@@ -382,6 +382,7 @@
     fmtTimes(el);
     sweepOutImgs(el);
     if (window.wbBindBoard) window.wbBindBoard(el);
+    if (window.WsPanelCard && window.WsPanelCard.sync) window.WsPanelCard.sync();
     mermaid([el]);
   });
   window.addEventListener("hashchange", function () { boardJump(location.hash.slice(1)); });
@@ -618,12 +619,16 @@
   // and takes a height as its frame does.
   function frameHeights(el) {
     var h = {};
-    q(".doc-frame:not(.doc-frame-next)", el).forEach(function (f) { if (f.style.height) h[f.getAttribute("data-doc")] = f.style.height; });
+    q(".doc-frame:not(.doc-frame-next)", el).forEach(function (f) {
+      if (f.closest && f.closest('.bcard[data-kind="panel"]')) return;
+      if (f.style.height) h[f.getAttribute("data-doc")] = f.style.height;
+    });
     return h;
   }
   function setFrameHeights(el, h) {
     if (!h) return;
     q(".doc-frame", el).forEach(function (f) {
+      if (f.closest && f.closest('.bcard[data-kind="panel"]')) return;
       var k = f.getAttribute("data-doc");
       if (Object.prototype.hasOwnProperty.call(h, k)) f.style.height = h[k];
     });
