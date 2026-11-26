@@ -116,7 +116,7 @@ func TestCompanionVrmBrowser(t *testing.T) {
 	defer cancel()
 	phase := os.Getenv("WS_VRM_TEST_PHASE")
 	if phase == "" {
-		phase = "1"
+		phase = "2"
 	}
 	out, err := exec.CommandContext(ctx, "node", "testdata/companion-vrm.browser.cjs", f.base, shots, vrm0ID, vrm1ID, phase).CombinedOutput()
 	t.Log(string(out))
@@ -293,6 +293,49 @@ func buildRenderableSyntheticVRM(vrm1 bool) []byte {
 		"rightUpperArm": 10, "rightLowerArm": 11, "rightHand": 12,
 		"leftUpperLeg": 13, "leftLowerLeg": 14, "leftFoot": 15,
 		"rightUpperLeg": 16, "rightLowerLeg": 17, "rightFoot": 18,
+	}
+
+	// Include VRM humanoid finger bones on VRM 1.0 and omit them on VRM 0.x so
+	// live Chromium tests exercise both finger presets and missing-finger fallback.
+	if vrm1 {
+		addHandFingers := func(side string, handNodeIdx int, sign float32) {
+			handNode := nodes[handNodeIdx].(map[string]any)
+			var handChildren []int
+			chains := [][3]string{
+				{"ThumbMetacarpal", "ThumbProximal", "ThumbDistal"},
+				{"IndexProximal", "IndexIntermediate", "IndexDistal"},
+				{"MiddleProximal", "MiddleIntermediate", "MiddleDistal"},
+				{"RingProximal", "RingIntermediate", "RingDistal"},
+				{"LittleProximal", "LittleIntermediate", "LittleDistal"},
+			}
+			for ci, chain := range chains {
+				zOff := float32(0.015 - float32(ci)*0.008)
+				prev := -1
+				for ji, seg := range chain {
+					idx := len(nodes)
+					tx := sign * 0.025
+					tz := float32(0)
+					if ji == 0 {
+						tx = sign * 0.045
+						tz = zOff
+					}
+					nodes = append(nodes, map[string]any{
+						"name":        side + seg,
+						"translation": []float32{tx, 0, tz},
+					})
+					boneIdx[side+seg] = idx
+					if prev < 0 {
+						handChildren = append(handChildren, idx)
+					} else {
+						nodes[prev].(map[string]any)["children"] = []int{idx}
+					}
+					prev = idx
+				}
+			}
+			handNode["children"] = handChildren
+		}
+		addHandFingers("left", 9, lSign)
+		addHandFingers("right", 12, -lSign)
 	}
 
 	gltf := map[string]any{

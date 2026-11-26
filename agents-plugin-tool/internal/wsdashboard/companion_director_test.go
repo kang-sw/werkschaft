@@ -613,11 +613,13 @@ func TestCompanionPackForRendererAndPersona(t *testing.T) {
 	if !slices.Equal(allowedVRM["expression"], wantVRMExpr) {
 		t.Fatalf("vrm allowed expressions = %v, want %v", allowedVRM["expression"], wantVRMExpr)
 	}
-	if len(allowedVRM["gesture"]) != 0 {
-		t.Fatalf("vrm Phase 1 allowed gestures = %v, want empty", allowedVRM["gesture"])
+	wantVRMGestures := []string{"coffee", "cup_hands", "dangle", "headrub", "perched", "point", "wave"}
+	if !slices.Equal(allowedVRM["gesture"], wantVRMGestures) {
+		t.Fatalf("vrm allowed gestures = %v, want %v", allowedVRM["gesture"], wantVRMGestures)
 	}
-	if len(allowedVRM["prop"]) != 0 {
-		t.Fatalf("vrm Phase 1 allowed props = %v, want empty (default-pack props must not merge into VRM)", allowedVRM["prop"])
+	wantVRMProps := []string{"coffee", "drone", "mail", "smartphone"}
+	if !slices.Equal(allowedVRM["prop"], wantVRMProps) {
+		t.Fatalf("vrm allowed props = %v, want %v (default-pack props must not merge into VRM)", allowedVRM["prop"], wantVRMProps)
 	}
 	if !slices.Contains(allowedVRM["scenario"], "celebrate_done") || !slices.Contains(allowedVRM["fx"], "sparkle") {
 		t.Fatalf("vrm built-in scenarios/fx missing: %+v", allowedVRM)

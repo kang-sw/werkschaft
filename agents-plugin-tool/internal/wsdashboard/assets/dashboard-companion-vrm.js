@@ -317,7 +317,7 @@
     let mounted = false, disposed = false, paused = false, contextLost = false;
     let container = null, canvasWrap = null, canvas = null, dissolveGrid = null, overlay = null;
     let runtime = null, renderer = null, scene = null, camera = null, vrm = null;
-    let isVrm0 = false, lookTarget = null, mixer = null, activeVrmaAction = null, activeVrmaKey = "";
+    let isVrm0 = false, lookTarget = null, mixer = null, activeVrmaAction = null, activeVrmaKey = "", vrmaFadeTimer = 0;
     let propsCtrl = null, vrmaClips = new Map(), vrmaLoading = new Set();
     let width = LOGICAL_W, height = LOGICAL_H, dpr = 1;
     let cachedModel = null; // { key, buffer } retained across WebGL context loss
@@ -349,6 +349,7 @@
         activeVrmaAction = null;
         activeVrmaKey = "";
       }
+      vrmaFadeTimer = 0;
       if (mixer) {
         mixer.stopAllAction();
         mixer = null;
@@ -475,7 +476,8 @@
       if (typeof C.vrmProps?.createController === "function") {
         propsCtrl = C.vrmProps.createController(runtime, loaded, scene, camera, {
           isVrm0,
-          framing: cameraFraming
+          framing: cameraFraming,
+          getSize: () => ({ width, height })
         });
       }
       setOverlay("");
@@ -518,6 +520,7 @@
           activeVrmaAction.fadeOut(0.18);
           activeVrmaAction = null;
           activeVrmaKey = "";
+          vrmaFadeTimer = 0.20;
         }
         return;
       }
@@ -540,6 +543,16 @@
       }
       activeVrmaAction = nextAction;
       activeVrmaKey = wanted;
+      vrmaFadeTimer = 0;
+    }
+
+    function syncBoneCacheFromRig() {
+      if (!vrm) return;
+      for (const boneName of BASE_BONES) {
+        const node = vrm.humanoid?.getNormalizedBoneNode(boneName);
+        if (node) boneRotations.set(boneName, [node.rotation.x, node.rotation.y, node.rotation.z]);
+      }
+      propsCtrl?.resetIK?.();
     }
 
     function updatePoseAndLook(dt, currentGaze, physics, extra) {
@@ -555,7 +568,13 @@
 
       if (activeVrmaAction && mixer) {
         mixer.update(dt);
+        syncBoneCacheFromRig();
       } else {
+        if (vrmaFadeTimer > 0 && mixer) {
+          mixer.update(dt);
+          vrmaFadeTimer = Math.max(0, vrmaFadeTimer - dt);
+          if (vrmaFadeTimer === 0) syncBoneCacheFromRig();
+        }
         let headPitchCue = 0;
         if (activeExpression === "idle_doze") headPitchCue = 0.14 + Math.sin(elapsed * 0.9) * 0.05;
         else if (activeExpression === "cry") headPitchCue = 0.14;
@@ -594,6 +613,11 @@
             physics,
             extra
           });
+          // Sync arm Euler cache when IK drives the arms so returning to stand lerps smoothly.
+          for (const armBone of ["leftUpperArm", "leftLowerArm", "rightUpperArm", "rightLowerArm", "leftHand", "rightHand"]) {
+            const node = vrm.humanoid?.getNormalizedBoneNode(armBone);
+            if (node) boneRotations.set(armBone, [node.rotation.x, node.rotation.y, node.rotation.z]);
+          }
         }
       }
 
@@ -793,7 +817,9 @@
           gesture: activeGesture,
           expression: activeExpression,
           prop: activeProp,
+          activeVrmaKey,
           surprisedStrategy: exprCtrl.surprisedStrategy,
+          hasLookAtOverride: !!propsCtrl?.getLookAtWorldTarget?.(),
           contextLost,
           paused,
           disposed,

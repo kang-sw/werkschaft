@@ -15,7 +15,7 @@ function loadCompanion(globals = {}) {
     ...globals
   });
   context.window = context.window || {};
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "sources", "settings", "vrm", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "sources", "settings", "vrm", "vrm-ik", "vrm-props", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return { C: context.window.WsCompanion, context };
@@ -300,12 +300,12 @@ test("all 12 built-in scenarios resolve cleanly against the VRM adapter without 
     const beats = Array.isArray(def.steps) && def.steps.length ? def.steps : [def];
     for (const beat of beats) {
       const resolved = C.resolveVrmScenario(id, beat);
-      assert.ok(["full", "expression", "fallback"].includes(resolved.mode), `scenario ${id} resolved to unknown mode ${resolved.mode}`);
+      assert.equal(resolved.mode, "full", `Phase 2 scenario ${id} must resolve to full mapping (got ${resolved.mode})`);
       assert.ok(validExpressions.has(resolved.expression), `scenario ${id} resolved to unknown expression ${resolved.expression}`);
       const propId = typeof beat.prop === "string" ? beat.prop : beat.prop?.id;
       const view = rig.view(beat.pose || "stand", beat.gesture || null, beat.expression || "idle", propId ? [propId] : []);
       assert.ok(validExpressions.has(view.expression));
-      assert.doesNotThrow(() => view.render(0.5, { x: 0.2, y: -0.1 }, null, { progress: 0.5 }));
+      assert.doesNotThrow(() => view.render(0.5, { x: 0.2, y: -0.1 }, null, { progress: 0.5, beat }));
     }
   }
   rig.dispose();
@@ -648,7 +648,7 @@ test("VRM adapter recovers from webglcontextlost during initial .vrm fetch and g
   let lostCount = 0, restoredCount = 0, readyCount = 0;
   const pack = {
     id: "vrm-midload", rev: "r1", renderer: "vrm", modelFile: "avatar.vrm",
-    manifest: {}, expressionMap: {}, animations: { stand: "stand.vrma" }
+    manifest: {}, expressionMap: {}, animations: { wave: "wave.vrma" }
   };
   const rig = C.makeVrmRig(pack, {
     onContextLost: () => { lostCount++; },
@@ -682,10 +682,244 @@ test("VRM adapter recovers from webglcontextlost during initial .vrm fetch and g
   assert.equal(readyCount, 1, "single parse should fire onReady once without duplicate mounts");
   assert.ok(fakeThree.stats.renders >= 1);
 
-  // Phase 1 gates optional .vrma playback (animations.stand must not trigger a .vrma fetch).
-  const v = rig.view("stand", null, "idle", []);
-  v.render(0.5, { x: 0, y: 0 }, null, {});
+  // stand does not fetch wave.vrma.
+  const vStand = rig.view("stand", null, "idle", []);
+  vStand.render(0.5, { x: 0, y: 0 }, null, {});
   for (let i = 0; i < 4; i++) await new Promise(r => setImmediate(r));
-  assert.equal(fetchCalls.some(u => u.includes("stand.vrma")), false, "Phase 1 must not hijack stand pose with .vrma");
+  assert.equal(fetchCalls.some(u => u.includes("wave.vrma")), false);
+  rig.dispose();
+});
+
+test("Phase 2 2-bone analytical arm IK hits targets identically on VRM 0.x and VRM 1.0 and applies 5 finger presets with graceful fallback", async () => {
+  const { pathToFileURL } = require("node:url");
+  const rt = await import(pathToFileURL(path.join(__dirname, "assets", "companion-vrm-runtime.mjs")).href);
+  const { THREE } = rt;
+  const { C } = loadCompanion();
+
+  const L1 = 0.24, L2 = 0.22;
+  const shoulder = new THREE.Vector3(0.16, 1.32, 0.0);
+  const target = new THREE.Vector3(0.06, 1.24, 0.22);
+  const pole = new THREE.Vector3(0.38, 1.12, -0.18);
+
+  const qVrm1Parent = new THREE.Quaternion();
+  const qVrm0Parent = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+
+  const solved1 = C.vrmIK.solveTwoBoneArmIK(THREE, {
+    shoulderPos: shoulder,
+    targetPos: target,
+    polePos: pole,
+    upperLen: L1,
+    lowerLen: L2,
+    parentWorldQuat: qVrm1Parent,
+    restUpperDir: new THREE.Vector3(1, 0, 0),
+    restLowerDir: new THREE.Vector3(1, 0, 0),
+    restElbowDir: new THREE.Vector3(0, 0, -1)
+  });
+
+  const solved0 = C.vrmIK.solveTwoBoneArmIK(THREE, {
+    shoulderPos: shoulder,
+    targetPos: target,
+    polePos: pole,
+    upperLen: L1,
+    lowerLen: L2,
+    parentWorldQuat: qVrm0Parent,
+    restUpperDir: new THREE.Vector3(-1, 0, 0),
+    restLowerDir: new THREE.Vector3(-1, 0, 0),
+    restElbowDir: new THREE.Vector3(0, 0, 1)
+  });
+
+  // Forward-kinematics verification on both VRM 1.0 and VRM 0.x.
+  const fk = (parentQ, upperQ, lowerQ, restDir) => {
+    const upperW = parentQ.clone().multiply(upperQ);
+    const elbow = shoulder.clone().add(restDir.clone().multiplyScalar(L1).applyQuaternion(upperW));
+    const lowerW = upperW.clone().multiply(lowerQ);
+    const hand = elbow.clone().add(restDir.clone().multiplyScalar(L2).applyQuaternion(lowerW));
+    return { elbow, hand };
+  };
+  const fk1 = fk(qVrm1Parent, solved1.upperQuat, solved1.lowerQuat, new THREE.Vector3(1, 0, 0));
+  const fk0 = fk(qVrm0Parent, solved0.upperQuat, solved0.lowerQuat, new THREE.Vector3(-1, 0, 0));
+
+  assert.ok(fk1.hand.distanceTo(target) < 1e-3, `VRM 1.0 hand missed target by ${fk1.hand.distanceTo(target)}`);
+  assert.ok(fk0.hand.distanceTo(target) < 1e-3, `VRM 0.x hand missed target by ${fk0.hand.distanceTo(target)}`);
+  assert.ok(fk1.elbow.distanceTo(fk0.elbow) < 1e-3, "VRM 0.x and VRM 1.0 elbows must match in world space");
+  assert.ok(fk1.hand.distanceTo(fk0.hand) < 1e-3, "VRM 0.x and VRM 1.0 hands must match in world space");
+
+  // Out-of-reach & too-close targets clamp cleanly without NaN.
+  const farSolved = C.vrmIK.solveTwoBoneArmIK(THREE, {
+    shoulderPos: shoulder,
+    targetPos: new THREE.Vector3(0.16, 1.32, 3.0),
+    polePos: pole,
+    upperLen: L1,
+    lowerLen: L2,
+    parentWorldQuat: qVrm1Parent,
+    restUpperDir: new THREE.Vector3(1, 0, 0),
+    restLowerDir: new THREE.Vector3(1, 0, 0),
+    restElbowDir: new THREE.Vector3(0, 0, -1)
+  });
+  assert.ok(Number.isFinite(farSolved.upperQuat.w) && Math.abs(farSolved.clampedDistance - (L1 + L2) * 0.995) < 1e-4);
+
+  // 5 finger presets on a humanoid with finger bones vs graceful fallback without finger bones.
+  function makeRigVrm(isVrm0, withFingers) {
+    const root = new THREE.Group();
+    if (isVrm0) root.rotation.y = Math.PI;
+    const lSign = isVrm0 ? -1 : 1;
+    const bones = new Map();
+    const addBone = (name, parent, x, y, z) => {
+      const n = new THREE.Object3D();
+      n.name = name;
+      n.position.set(x, y, z);
+      parent.add(n);
+      bones.set(name, n);
+      return n;
+    };
+    const chest = addBone("chest", root, 0, 1.15, 0);
+    const upperChest = addBone("upperChest", chest, 0, 0.12, 0);
+    addBone("head", upperChest, 0, 0.22, 0);
+    const lU = addBone("leftUpperArm", upperChest, lSign * 0.16, 0.04, 0);
+    const lL = addBone("leftLowerArm", lU, lSign * 0.18, 0, 0);
+    const lH = addBone("leftHand", lL, lSign * 0.16, 0, 0);
+    const rU = addBone("rightUpperArm", upperChest, -lSign * 0.16, 0.04, 0);
+    const rL = addBone("rightLowerArm", rU, -lSign * 0.18, 0, 0);
+    const rH = addBone("rightHand", rL, -lSign * 0.16, 0, 0);
+    if (withFingers) {
+      for (const [side, hand] of [["left", lH], ["right", rH]]) {
+        for (const f of ["ThumbMetacarpal", "ThumbProximal", "ThumbDistal", "IndexProximal", "IndexIntermediate", "IndexDistal", "MiddleProximal", "MiddleIntermediate", "MiddleDistal", "RingProximal", "RingIntermediate", "RingDistal", "LittleProximal", "LittleIntermediate", "LittleDistal"]) {
+          addBone(side + f, hand, 0.02, 0, 0);
+        }
+      }
+    }
+    root.updateMatrixWorld(true);
+    return { scene: root, bones, humanoid: { getNormalizedBoneNode: name => bones.get(name) || null } };
+  }
+
+  const vrmWithFingers = makeRigVrm(false, true);
+  const solverF = C.vrmIK.createArmIKSolver(THREE, vrmWithFingers, false);
+  const presetCurlSums = new Map();
+  for (const preset of ["relaxed", "open", "hold_phone", "point", "cup"]) {
+    let applied = 0;
+    for (let i = 0; i < 20; i++) applied = solverF.applyFingerPreset("right", preset, 0.05);
+    assert.equal(applied, 15, `expected 15 right finger bones updated for preset ${preset}`);
+    const idxCurl = Math.abs(vrmWithFingers.bones.get("rightIndexProximal").rotation.z);
+    const midCurl = Math.abs(vrmWithFingers.bones.get("rightMiddleProximal").rotation.z);
+    presetCurlSums.set(preset, { idxCurl, midCurl });
+  }
+  assert.ok(presetCurlSums.get("point").idxCurl < 0.05 && presetCurlSums.get("point").midCurl > 0.7, "point preset extends index and curls middle finger");
+  assert.ok(presetCurlSums.get("hold_phone").idxCurl > 0.5 && presetCurlSums.get("open").idxCurl < 0.1);
+
+  const vrmNoFingers = makeRigVrm(true, false);
+  const solverNoF = C.vrmIK.createArmIKSolver(THREE, vrmNoFingers, true);
+  assert.equal(solverNoF.applyFingerPreset("right", "hold_phone", 0.05), 0, "missing finger bones must degrade gracefully");
+
+  // 3D Toon Props controller: verify all props, lookAt tracking, inset bounds, and clean disposal.
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(26, 240 / 280, 0.08, 25);
+  camera.position.set(0, 1.38, 1.72);
+  camera.lookAt(0, 1.35, 0);
+  camera.updateProjectionMatrix();
+  camera.updateMatrixWorld(true);
+
+  const propsCtrl = C.vrmProps.createController(rt, vrmWithFingers, scene, camera, {
+    isVrm0: false,
+    framing: { headY: 1.49, chestY: 1.15, bustSpan: 0.34, targetY: 1.38 },
+    getSize: () => ({ width: 240, height: 280 })
+  });
+
+  // typing -> smartphone visible + screen bounce light active + inset bounds ok.
+  for (let i = 0; i < 12; i++) propsCtrl.update({ dt: 0.05, elapsed: i * 0.05, pose: "typing", gesture: null, prop: null, expression: "focused", physics: null, extra: { progress: 0.5 } });
+  const bTyping = propsCtrl.getProjectedBounds();
+  assert.ok(bTyping.props.smartphone, "typing must show smartphone 3D prop");
+  assert.equal(bTyping.allWithinInset4, true, `typing bounds exceeded 4px inset: ${JSON.stringify(bTyping)}`);
+
+  // subagent_dispatch -> drone visible + lookAt tracks drone + inset bounds ok.
+  for (let i = 0; i < 12; i++) {
+    propsCtrl.update({
+      dt: 0.05, elapsed: i * 0.05, pose: "stand", gesture: "cup_hands", prop: "drone", expression: "oo", physics: null,
+      extra: { progress: 0.55, beat: { prop: { id: "drone", action: "launch" } } }
+    });
+  }
+  assert.ok(propsCtrl.getLookAtWorldTarget(), "drone launch must drive vrm.lookAt world target");
+  const bDrone = propsCtrl.getProjectedBounds();
+  assert.ok(bDrone.props.drone, "subagent_dispatch must show drone 3D prop");
+  assert.equal(bDrone.allWithinInset4, true, `drone bounds exceeded 4px inset: ${JSON.stringify(bDrone)}`);
+
+  // coffee & mail_send & mailbox_bonk & wave & point & oo.
+  for (const [label, state] of [
+    ["coffee", { pose: "stand", gesture: "coffee", prop: null, expression: "half_lid", extra: { progress: 0.4 } }],
+    ["mail_send", { pose: "stand", gesture: "cup_hands", prop: "mail", expression: "oo", extra: { progress: 0.5, beat: { prop: { id: "mail", motion: "hand-liftoff" } } } }],
+    ["mailbox_bonk", { pose: "stand", gesture: null, prop: "mail", expression: "oo", extra: { progress: 0.42, beat: { prop: { id: "mail", motion: "bonk-from-edge" } } } }],
+    ["wave", { pose: "stand", gesture: "wave", prop: null, expression: "happy", extra: { progress: 0.5 } }],
+    ["point", { pose: "stand", gesture: "point", prop: null, expression: "oo", extra: { progress: 0.5 } }],
+    ["oo", { pose: "stand", gesture: null, prop: null, expression: "oo", extra: { progress: 0.5 } }]
+  ]) {
+    for (let i = 0; i < 12; i++) propsCtrl.update({ dt: 0.05, elapsed: i * 0.05, physics: null, ...state });
+    const b = propsCtrl.getProjectedBounds();
+    assert.equal(b.allWithinInset4, true, `${label} bounds exceeded 4px inset: ${JSON.stringify(b)}`);
+  }
+
+  propsCtrl.dispose();
+  assert.equal(scene.children.length, 0, "propsCtrl.dispose() must remove all 3D prop groups from scene");
+});
+
+test("Phase 2 optional .vrma clip playback cross-fades on matching gesture and hands back cleanly to procedural pose", async () => {
+  const doc = { createElement: tag => makeFakeElement(tag, doc), addEventListener() {} };
+  const fakeThree = makeFakeVrmRuntime("1");
+  let clipLoads = 0, fadeIns = 0, fadeOuts = 0, mixerUpdates = 0;
+  fakeThree.runtime.createVRMAnimationClip = () => { clipLoads++; return { name: "wave-clip" }; };
+  fakeThree.runtime.THREE.AnimationMixer = class {
+    update() { mixerUpdates++; }
+    stopAllAction() {}
+    clipAction() {
+      return {
+        reset() {},
+        fadeIn() { fadeIns++; },
+        fadeOut() { fadeOuts++; },
+        play() {},
+        stop() {},
+        crossFadeTo() {}
+      };
+    }
+  };
+  const origParse = fakeThree.runtime.GLTFLoader.prototype.parseAsync;
+  fakeThree.runtime.GLTFLoader.prototype.parseAsync = async function (buf) {
+    if (buf.byteLength === 2) return { userData: { vrmAnimations: [{ mock: true }] } };
+    return origParse.call(this, buf);
+  };
+
+  const fetched = [];
+  const { C } = loadCompanion({
+    document: doc,
+    window: { innerWidth: 1200, innerHeight: 800, devicePixelRatio: 1, addEventListener() {} },
+    fetch: async url => {
+      fetched.push(url);
+      if (url.includes("wave.vrma")) return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array([9, 9]).buffer };
+      return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer };
+    }
+  });
+  C.vrmRuntimeLoader = async () => fakeThree.runtime;
+
+  const pack = {
+    id: "vrm-vrma", rev: "r1", renderer: "vrm", modelFile: "avatar.vrm",
+    manifest: {}, expressionMap: {}, animations: { wave: "wave.vrma" }
+  };
+  const rig = C.makeVrmRig(pack);
+  await rig.mount(makeFakeElement("div", doc), { width: 240, height: 280, dpr: 1 });
+
+  // Trigger wave -> fetches wave.vrma and cross-fades in.
+  const vWave = rig.view("stand", "wave", "happy", []);
+  vWave.render(0.1, { x: 0, y: 0 }, null, {});
+  for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r));
+  vWave.render(0.2, { x: 0, y: 0 }, null, {});
+  assert.equal(fetched.some(u => u.includes("wave.vrma")), true, "matching animations.wave must fetch wave.vrma");
+  assert.equal(clipLoads, 1);
+  assert.equal(fadeIns, 1);
+  assert.equal(rig.debugState().activeVrmaKey, "wave");
+  assert.ok(mixerUpdates >= 1);
+
+  // Return to stand -> fades out .vrma cleanly and resumes procedural pose.
+  const vStand = rig.view("stand", null, "idle", []);
+  vStand.render(0.3, { x: 0, y: 0 }, null, {});
+  vStand.render(0.55, { x: 0, y: 0 }, null, {});
+  assert.equal(fadeOuts, 1);
+  assert.equal(rig.debugState().activeVrmaKey, "");
   rig.dispose();
 });

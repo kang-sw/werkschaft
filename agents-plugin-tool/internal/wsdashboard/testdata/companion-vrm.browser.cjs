@@ -221,6 +221,43 @@ async function saveDockShot(page, name) {
       }
       await saveDockShot(page, `${pack.label}-happy`);
 
+      // Phase 2: exercise IK gestures, 3D toon props, drone lookAt, and 4px inset framing on both VRM 1.0 and 0.x.
+      if (phase === '2') {
+        const phase2Cases = [
+          { name: 'typing', cmd: { scenario: 'working_tatata', ttl_ms: 4000 }, wantProp: 'smartphone' },
+          { name: 'subagent_dispatch', cmd: { scenario: 'subagent_dispatch', ttl_ms: 4000 }, wantProp: 'drone', wantLookAt: true },
+          { name: 'subagent_return', cmd: { scenario: 'subagent_return', ttl_ms: 4000 }, wantProp: 'drone', wantLookAt: true },
+          { name: 'thinking', cmd: { gesture: 'coffee', expression: 'half_lid', ttl_ms: 4000 }, wantProp: 'coffee' },
+          { name: 'mail_send', cmd: { scenario: 'mail_send', ttl_ms: 4000 }, wantProp: 'mail', wantLookAt: true },
+          { name: 'wave', cmd: { gesture: 'wave', expression: 'happy', ttl_ms: 4000 } },
+          { name: 'point', cmd: { gesture: 'point', expression: 'oo', ttl_ms: 4000 } },
+          { name: 'oo', cmd: { expression: 'oo', ttl_ms: 4000 } }
+        ];
+        for (const tc of phase2Cases) {
+          await sendCommand({ sessionId: 'livesession', ...tc.cmd });
+          await page.waitForTimeout(420);
+          const check = await page.evaluate(() => {
+            const st = window.WsCompanion.debugStage();
+            return { vrm: st?.vrm || null, bounds: st?.projectedBounds || null };
+          });
+          assert.ok(check.vrm && check.vrm.loaded, `${pack.label}/${tc.name}: VRM not loaded`);
+          assert.ok(check.bounds, `${pack.label}/${tc.name}: projectedBounds unavailable`);
+          if (tc.wantProp) {
+            assert.ok(check.bounds.props && check.bounds.props[tc.wantProp],
+              `${pack.label}/${tc.name}: expected 3D prop ${tc.wantProp}, got ${JSON.stringify(check.bounds.props)}`);
+          }
+          if (tc.wantLookAt) {
+            assert.equal(check.vrm.hasLookAtOverride, true,
+              `${pack.label}/${tc.name}: expected vrm.lookAt to track live 3D prop`);
+          }
+          assert.equal(check.bounds.allWithinInset4, true,
+            `${pack.label}/${tc.name}: hands/props exceeded 4px canvas inset: ${JSON.stringify(check.bounds)}`);
+          await saveDockShot(page, `${pack.label}-${tc.name}`);
+        }
+        // Reset back to a short idle command so subsequent idle FPS test starts cleanly.
+        await sendCommand({ sessionId: 'livesession', expression: 'idle', ttl_ms: 1000 });
+      }
+
       // Verify 2D paper-doll wardrobe controls are hidden in settings modal.
       await page.locator('.ws-companion-gear').click({ force: true });
       await page.locator('dialog.ws-companion-settings[open]').waitFor();
@@ -343,7 +380,20 @@ async function saveDockShot(page, name) {
     assert.ok(idleFps >= 4.8 && idleFps <= 7.2, `idleFps=${idleFps.toFixed(2)} outside 6 ±20% (4.8..7.2)`);
     assert.ok(activeFps >= 24 && activeFps <= 36, `activeFps=${activeFps.toFixed(2)} outside 30 ±20% (24..36)`);
 
-    // 7. Switch back to 2D pack and verify clean disposal + no errors.
+    // 7. Switch back to 2D pack and (in Phase 2) run 10x VRM <-> 2D switch soak check.
+    let switchCycles = 1;
+    if (phase === '2') {
+      switchCycles = 10;
+      for (let cycle = 0; cycle < switchCycles; cycle++) {
+        await applyConfig({ enabled: true, director: 'rules', pack: 'default', preset: 'werkschaft-d1' });
+        await page.waitForFunction(() => window.WsCompanion.debugStage()?.renderer === '2d', null, { timeout: 5000 });
+        await applyConfig({ enabled: true, director: 'rules', pack: vrm1ID, preset: '' });
+        await page.waitForFunction(() => {
+          const st = window.WsCompanion.debugStage();
+          return st && st.renderer === 'vrm' && st.vrm && st.vrm.loaded && st.vrm.framesRendered >= 2;
+        }, null, { timeout: 15000 });
+      }
+    }
     await applyConfig({ enabled: true, director: 'rules', pack: 'default', preset: 'werkschaft-d1' });
     await page.waitForFunction(() => window.WsCompanion.debugStage()?.renderer === '2d', null, { timeout: 5000 });
 
@@ -353,6 +403,7 @@ async function saveDockShot(page, name) {
     console.log('companion vrm browser: ok', JSON.stringify({
       phase,
       packsTested: vrmPacks.map(p => p.label),
+      switchCycles,
       activeFps: Number(activeFps.toFixed(2)),
       idleFps: Number(idleFps.toFixed(2)),
       hiddenFrames,

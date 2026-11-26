@@ -580,8 +580,8 @@ func (d *Daemon) companionRing(sessionID string) []wslive.RingRecord {
 // without 2D pack.json raster dictionaries.
 var (
 	companionVrmExpressions = []string{"idle", "idle_doze", "focused", "half_lid", "oo", "cry", "happy"}
-	companionVrmGestures    = []string{}
-	companionVrmProps       = []string{}
+	companionVrmGestures    = []string{"wave", "point", "headrub", "cup_hands", "coffee", "perched", "dangle"}
+	companionVrmProps       = []string{"smartphone", "drone", "coffee", "mail"}
 )
 
 // companionPackData is what the prompt needs from the active pack.
