@@ -482,6 +482,11 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 	if c.replaying {
 		return
 	}
+	if c.rec.Lead {
+		// Track hosted lead activity in memory only; persists when agent.json
+		// is already written (never adds a per-turn disk write).
+		c.setStatus(func() { c.rec.LastActiveAt = c.r.opts.Now().UTC().Format(time.RFC3339) })
+	}
 	c.wrapHold = false
 	// A child's report steered into the turn that the turn did not take
 	// goes as the next one (children.go).

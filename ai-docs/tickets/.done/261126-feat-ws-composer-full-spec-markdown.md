@@ -6,6 +6,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 1b220b39af3d003f
 sage-review-completeness-reviewed: 1b220b39af3d003f
+completed: 2026-11-26
 ---
 
 # Composer Full-Spec Live Markdown Rendering
@@ -111,3 +112,38 @@ Implement live full-spec CommonMark/GFM typography inside `.wsc-editor`. Done cr
   - Suggested new test files: `composer-md-render.test.cjs` (constructs, round-trip, bang) and `composer-md-ime-undo.test.cjs` (IME guard, undo) under `agents-plugin-tool/internal/wsdashboard/testdata/`.
 - Go verification (host-neutral): `GOOS=windows go vet ./...` and targeted `go test -race ./internal/wsdashboard/...` for asset embedding/tests, plus the Node DOM harness (`node` over `agents-plugin-tool/internal/wsdashboard/testdata/composer-*.test.cjs`) run on whichever host the worker uses.
 - Live dashboard check in both dark and light themes. Expected: Korean IME typing loses no jamo and the caret does not jump; H1–H6 scale down in size and are bold; code blocks and inline code use the monospace face; inline capsules survive inside headings and lists; `Ctrl+Z` / `Ctrl+Y` round-trip works after styling has applied; the composer still auto-grows and scrolls to the caret; `!` mode shows no Markdown styling. Capture a result screenshot per theme.
+
+### Result (8345b07a) - 2026-11-26
+
+Replaced the paint-only `::highlight(ws-md-*)` renderer in `.wsc-editor` with a structured DOM live hybrid WYSIWYG full-spec CommonMark/GFM renderer, while keeping `ctext.value` plain-text wire serialization, `WsCapsules` atomic spans, Korean/CJK IME composition, managed undo/redo, auto-grow/scroll-to-caret, and `!` shell execution mode intact (T0 compatible).
+
+**Renderer Interface Contract (for `261126-feat-ws-unified-composer-input-component`):**
+- Global symbol: `window.WsMdEditor.attach(editorEl, opts)` (bundled via `pages.go` `MentionScript` alongside `mention.js`, `capsules.js`, and `md-parser.js`; element-scoped with zero document-level singleton state).
+- `opts`:
+  - `getMentions?: () => Array<{ path?: string, token?: string, name?: string }>` — returns active mention list for `@` mention styling outside code blocks.
+  - `isBang?: () => boolean` — suppresses Markdown formatting and flattens to plain text while `!` shell mode is active.
+  - `isComposing?: () => boolean` — additional external IME composition predicate combined with internal `compositionstart`/`compositionend` tracking.
+  - `onReconciled?: () => void` — post-reconcile hook (used by `#ctext` to re-run `bangPaint(true)` when bang mode is active so `::highlight(ws-bang)` stays attached to live text nodes).
+- Returned handle: `{ reconcile: () => void, schedule: () => void, detach: () => void }`.
+
+**What Landed (`2ad08d1a..8345b07a`):**
+- `agents-plugin-tool/internal/wsdashboard/assets/md-parser.js` (`window.WsMdParser.parse`): pure, side-effect-free full-spec CommonMark/GFM parser returning exact UTF-16 line/token spans (ATX H1–H6, Setext headings, fenced & 4-space/tab indented code blocks, inline code with seamless pill markers, bold/italic/bold+italic/strikethrough with `snake_case` safety, nested blockquotes with per-level `wsmd-qbar-1..4` bars, unordered/ordered/task lists, horizontal rules, GFM tables, inline/angle/bare autolinks/reference links, images excluding `[Image #N]`/`[Text #N]`, backslash escapes, atomic capsule intervals, and `@` mentions outside code).
+- `agents-plugin-tool/internal/wsdashboard/assets/md-editor.js` (`window.WsMdEditor.attach`): element-scoped live DOM reconciler emitting strictly `<span>` wrappers (never `DIV`/`P`/`HR`/`TABLE`, zero `innerHTML`) + real `\n` text nodes + trailing `<br>` on trailing `\n`, preserving existing `[data-wsc-kind]` `.wsc-capsule` DOM nodes, zero synchronous layout reads during `input`/`reconcile()`, IME composition guard, `!` bang-mode suppression, and per-instance managed Undo/Redo stack (`Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z`, `Ctrl+Y`, `beforeinput` `historyUndo`/`historyRedo`) with 600ms word/newline burst coalescing and atomic capsule snapshot restoration.
+- `agents-plugin-tool/internal/wsdashboard/assets/dashboard-composer-md.css`: token-backed (`--wb-*`, `wsmd-` prefix) dark & light parity styles for H1–H6 bold/scaled hierarchy, `var(--wb-mono)` tonal code pills & blocks, nested blockquote accent bars, task checkboxes, HR, tables, links, mentions, and `.wsc-capsule` typography reset (`12px`) inside styled lines.
+- `agents-plugin-tool/internal/wsdashboard/assets/capsules.js`: added `_wsmdRenderHook()`, `compositionend` state sync, atomic `api.applyState()`, collapsed-range `api.anchor(at)` fallbacks across styled lines, and single-snapshot `spliceText()` for rich paste/capsule insertion.
+- `agents-plugin-tool/internal/wsdashboard/assets/dashboard-composer-highlight.js` & `dashboard-conversation.css`: wired `#ctext` to `window.WsMdEditor.attach(...)`, removed legacy `::highlight(ws-md-*)` rules, and retained `::highlight(ws-bang)`.
+- `agents-plugin-tool/internal/wsdashboard/pages.go` & `asset_source_test.go`: embedded `md-parser.js`, `md-editor.js` in `MentionScript` and registered `dashboard-composer-md.css` in `dashboardStyleFiles`.
+- Tests: added `composer-md-render.test.cjs` and `composer-md-ime-undo.test.cjs`, and updated `composer-indent-highlight.test.cjs`.
+
+**Verification:**
+- Node harness (`node --test agents-plugin-tool/internal/wsdashboard/testdata/composer-{md-render,md-ime-undo,indent-highlight,autosize,scroll-follow,bang,inline,multiline}.test.cjs`): 31 pass, 0 fail (15 Playwright tests in `composer-bang.test.cjs` skipped without `WS_PLAYWRIGHT_MODULE`).
+- Capsules suite (`node agents-plugin-tool/internal/wsdashboard/testdata/capsules.test.cjs`): PASS.
+- Go vet (`GOOS=windows go vet ./...` in `agents-plugin-tool`): PASS (0 warnings/errors).
+- Targeted Go race suite (`go test -race -v -run 'TestDashboard|TestAsset|TestCSS|TestSelection|TestCapsule|TestComposer|TestMention|TestPage|TestStyle|TestScript' ./internal/wsdashboard/...`): PASS (`ok github.com/kang-sw/devenv/internal/wsdashboard 179.323s`, covering `TestDashboardAssetSourceAssembly`, `TestAssetIDFollowsAssetContent`, `TestCSSClassesDoNotCollideAcrossModules`, `TestComposer*`, `TestSelection*`, `TestPage*`).
+- Live Chromium Playwright check in both dark and light themes (`verify-composer-md.browser.cjs`): PASS — H1 (`19.17px`, weight 700) > H2 (`17.01px`) > H3 (`15.39px`), capsule inside H1 reset to `12px`, inline & fenced code rendered in monospace, zero forbidden tags (`SPAN`/`BR` only), picker `anchor(at)` geometry verified across headings/tables/code, Korean IME composition performed 0 DOM mutations and reconciled cleanly on commit, `Ctrl+Z`/`Ctrl+Y` round-trip passed, auto-grow & scroll-to-caret passed, `!` bang mode suppressed markdown with `0px` height delta. Screenshots inspected: `composer-md-dark.png`, `composer-md-light.png`.
+- Lite code review (`code-review-lite`, `88e37970-01-findings.md`): `clean` (0 Critical, 0 Important; 1 non-blocking Minor note that mention-list changes reconcile on the next `schedule()`/`input`, which `dashboard-composer-mention.js` already triggers via `scheduleComposerHighlights()`).
+
+
+## Resolution (2026-11-26)
+
+Completed Phase 1 in commit 8345b07a: replaced legacy ::highlight(ws-md-*) in .wsc-editor with element-scoped window.WsMdEditor.attach(editorEl, opts) -> {reconcile(), schedule(), detach()} structured DOM full-spec CommonMark/GFM renderer, IME composition guard, managed undo/redo stack with atomic WsCapsules support, dark/light token-backed CSS, Node DOM harness + Go vet/race + live Playwright dark/light verification, and clean code-review-lite pass.

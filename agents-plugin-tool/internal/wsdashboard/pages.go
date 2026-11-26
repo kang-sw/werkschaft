@@ -26,7 +26,7 @@ import (
 // (wswhiteboard.RenderRegions); the rest render from the view model
 // (pageview.go).
 
-//go:embed assets/dashboard.tmpl assets/dashboard-settings-catalog.json assets/dashboard.css assets/dashboard-*.css assets/dashboard.js assets/dashboard-*.js assets/sprite.svg assets/tracker.css assets/tracker.js assets/tracker-*.js assets/mention.js assets/capsules.js assets/ws-input.js assets/toast.js assets/confirm.js assets/hold-confirm.js assets/rail.js assets/memo.js assets/memo.css assets/usage.js assets/usage.css assets/gallery.js assets/gal-rail-preview.js assets/cards.js assets/preview.js assets/files.js assets/terminal.js assets/shell.js assets/webcard.js assets/webframe.js assets/webinject.js assets/overview.js assets/brand/werkschaft-dark.svg assets/brand/werkschaft-light.svg
+//go:embed assets/dashboard.tmpl assets/dashboard-settings-catalog.json assets/dashboard.css assets/dashboard-*.css assets/dashboard.js assets/dashboard-*.js assets/sprite.svg assets/tracker.css assets/tracker.js assets/tracker-*.js assets/mention.js assets/capsules.js assets/md-parser.js assets/md-editor.js assets/ws-input.js assets/toast.js assets/confirm.js assets/hold-confirm.js assets/rail.js assets/memo.js assets/memo.css assets/usage.js assets/usage.css assets/gallery.js assets/gal-rail-preview.js assets/cards.js assets/preview.js assets/panelcard.js assets/files.js assets/terminal.js assets/shell.js assets/webcard.js assets/webframe.js assets/webinject.js assets/overview.js assets/brand/werkschaft-dark.svg assets/brand/werkschaft-light.svg
 var dashboardFS embed.FS
 
 // These are ordered source fragments, not independently loaded scripts or
@@ -101,6 +101,7 @@ var companionScriptFiles = []string{
 var dashboardStyleFiles = []string{
 	"dashboard.css",
 	"dashboard-conversation.css",
+	"dashboard-composer-md.css",
 	"dashboard-board.css",
 	"dashboard-layout.css",
 	"dashboard-drawer.css",
@@ -294,6 +295,7 @@ type pageAssetsData struct {
 	OverviewScript template.JS
 	CardsScript    template.JS
 	PreviewScript  template.JS
+	PanelScript    template.JS
 	FilesScript    template.JS
 	// TerminalScript is the terminal card kind (terminal.js,
 	// window.WsTerm), which only a page that offers terminals carries
@@ -393,7 +395,7 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 		Sprite:            template.HTML(strings.TrimSpace(get("sprite.svg"))),
 		TrackerCSS:        template.CSS(get("tracker.css")),
 		TrackerScript:     template.JS(get("tracker.js")),
-		MentionScript:     template.JS(get("mention.js") + "\n" + get("capsules.js") + "\n" + get("ws-input.js")),
+		MentionScript:     template.JS(get("mention.js") + "\n" + get("capsules.js") + "\n" + get("md-parser.js") + "\n" + get("md-editor.js") + "\n" + get("ws-input.js")),
 		ToastScript:       template.JS(get("toast.js")),
 		ConfirmScript:     template.JS(get("confirm.js")),
 		HoldConfirmScript: template.JS(get("hold-confirm.js")),
@@ -409,6 +411,7 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 		OverviewScript:    template.JS(get("overview.js")),
 		CardsScript:       template.JS(get("gallery.js") + "\n;\n" + get("gal-rail-preview.js") + "\n;\n" + get("cards.js")),
 		PreviewScript:     template.JS(get("preview.js")),
+		PanelScript:       template.JS(get("panelcard.js")),
 		FilesScript:       template.JS(get("files.js")),
 		TerminalScript:    template.JS(get("terminal.js")),
 		WebScript:         template.JS(get("webcard.js")),

@@ -22,11 +22,21 @@ func TestWsInputInMentionScript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadDashboardAssets: %v", err)
 	}
-	if !strings.Contains(string(a.data.MentionScript), "window.WsInput =") {
+	ms := string(a.data.MentionScript)
+	mdParserIdx := strings.Index(ms, "window.WsMdParser =")
+	mdEditorIdx := strings.Index(ms, "window.WsMdEditor =")
+	wsInputIdx := strings.Index(ms, "window.WsInput =")
+	if mdParserIdx < 0 {
+		t.Fatalf("MentionScript missing window.WsMdParser export")
+	}
+	if mdEditorIdx < 0 {
+		t.Fatalf("MentionScript missing window.WsMdEditor export")
+	}
+	if wsInputIdx < 0 {
 		t.Fatalf("MentionScript missing window.WsInput export")
 	}
-	if !strings.Contains(string(a.data.MentionScript), "window.WsMdEditor =") {
-		t.Fatalf("MentionScript missing window.WsMdEditor fallback export")
+	if !(mdParserIdx < mdEditorIdx && mdEditorIdx < wsInputIdx) {
+		t.Fatalf("MentionScript load order must be WsMdParser < WsMdEditor < WsInput (got %d, %d, %d)", mdParserIdx, mdEditorIdx, wsInputIdx)
 	}
 }
 

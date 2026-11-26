@@ -8,6 +8,8 @@ const vm = require("node:vm");
 const assetsDir = path.join(__dirname, "..", "assets");
 const mentionSrc = fs.readFileSync(path.join(assetsDir, "mention.js"), "utf8");
 const capsulesSrc = fs.readFileSync(path.join(assetsDir, "capsules.js"), "utf8");
+const mdParserSrc = fs.readFileSync(path.join(assetsDir, "md-parser.js"), "utf8");
+const mdEditorSrc = fs.readFileSync(path.join(assetsDir, "md-editor.js"), "utf8");
 const wsInputSrc = fs.readFileSync(path.join(assetsDir, "ws-input.js"), "utf8");
 
 function makeHarness(extraOpts) {
@@ -60,6 +62,13 @@ function makeHarness(extraOpts) {
       const i = this.parentNode.childNodes.indexOf(this);
       return i >= 0 && i + 1 < this.parentNode.childNodes.length ? this.parentNode.childNodes[i + 1] : null;
     }
+    get firstChild() { return this.childNodes[0] || null; }
+    get lastChild() { return this.childNodes[this.childNodes.length - 1] || null; }
+    get nextElementSibling() {
+      let s = this.nextSibling;
+      while (s && s.nodeType !== 1) s = s.nextSibling;
+      return s;
+    }
     get isConnected() {
       let cur = this;
       while (cur) {
@@ -85,6 +94,28 @@ function makeHarness(extraOpts) {
     }
     get textContent() { return this.nodeValue; }
     set textContent(v) { this.nodeValue = String(v); }
+  }
+
+  class FakeFragment extends FakeNode {
+    constructor(ownerDocument) {
+      super(11, "#document-fragment", ownerDocument);
+    }
+    appendChild(child) {
+      if (child.nodeType === 11) {
+        const items = child.childNodes.slice();
+        for (const item of items) this.appendChild(item);
+        return child;
+      }
+      if (child.parentNode) child.parentNode.removeChild(child);
+      child.parentNode = this;
+      this.childNodes.push(child);
+      return child;
+    }
+    removeChild(child) {
+      const i = this.childNodes.indexOf(child);
+      if (i >= 0) { this.childNodes.splice(i, 1); child.parentNode = null; }
+      return child;
+    }
   }
 
   class FakeElement extends FakeNode {
@@ -147,6 +178,11 @@ function makeHarness(extraOpts) {
     }
     setSelectionRange(a, b) { this._selStart = a; this._selEnd = b; }
     appendChild(child) {
+      if (child.nodeType === 11) {
+        const items = child.childNodes.slice();
+        for (const item of items) this.appendChild(item);
+        return child;
+      }
       if (child.parentNode) child.parentNode.removeChild(child);
       child.parentNode = this;
       this.childNodes.push(child);
@@ -178,6 +214,11 @@ function makeHarness(extraOpts) {
       if (sel === ".wsc-capsule") return this._classList.has("wsc-capsule");
       if (sel === ".wsm-opt.on") return this._classList.has("wsm-opt") && this._classList.has("on");
       if (sel === "[data-i]") return this.hasAttribute("data-i");
+      if (sel === "[data-wsc-kind]") return this.hasAttribute("data-wsc-kind");
+      if (sel.startsWith(".")) {
+        const parts = sel.slice(1).split(".");
+        return parts.every((c) => this._classList.has(c));
+      }
       return false;
     }
     closest(sel) {
@@ -202,16 +243,23 @@ function makeHarness(extraOpts) {
       return out;
     }
     querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
-    addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); }
-    removeEventListener(type, fn) {
+    addEventListener(type, fn, capture) {
+      (this.listeners[type] = this.listeners[type] || []).push({ fn, capture: !!capture });
+    }
+    removeEventListener(type, fn, capture) {
       if (!this.listeners[type]) return;
-      this.listeners[type] = this.listeners[type].filter((f) => f !== fn);
+      const cap = !!capture;
+      this.listeners[type] = this.listeners[type].filter((l) => !(l.fn === fn && l.capture === cap));
     }
     dispatchEvent(ev) {
       ev.target = ev.target || this;
-      const list = (this.listeners[ev.type] || []).slice();
-      for (const fn of list) {
-        fn.call(this, ev);
+      const all = (this.listeners[ev.type] || []).slice();
+      for (const l of all.filter((x) => x.capture)) {
+        l.fn.call(this, ev);
+        if (ev._stoppedImmediate) return !ev.defaultPrevented;
+      }
+      for (const l of all.filter((x) => !x.capture)) {
+        l.fn.call(this, ev);
         if (ev._stoppedImmediate) break;
       }
       return !ev.defaultPrevented;
@@ -234,6 +282,7 @@ function makeHarness(extraOpts) {
     defaultView: null,
     createElement(tag) { return new FakeElement(tag, doc); },
     createTextNode(v) { return new FakeText(v, doc); },
+    createDocumentFragment() { return new FakeFragment(doc); },
     createRange() { return new FakeRange(); },
     execCommand() { return false; }
   };
@@ -248,6 +297,7 @@ function makeHarness(extraOpts) {
     Highlight: FakeHighlight,
     Event: FakeEvent,
     CustomEvent: FakeEvent,
+    KeyboardEvent: FakeEvent,
     innerWidth: 1200,
     innerHeight: 800,
     MutationObserver: class { observe() {} disconnect() {} },
@@ -255,7 +305,9 @@ function makeHarness(extraOpts) {
       return {
         rangeCount: selRanges.length,
         anchorNode: selRanges[0] ? selRanges[0].startContainer : null,
+        anchorOffset: selRanges[0] ? selRanges[0].startOffset : 0,
         focusNode: selRanges[0] ? selRanges[0].endContainer : null,
+        focusOffset: selRanges[0] ? selRanges[0].endOffset : 0,
         getRangeAt(i) { return selRanges[i]; },
         removeAllRanges() { selRanges.length = 0; },
         addRange(r) { selRanges.push(r); }
@@ -268,6 +320,10 @@ function makeHarness(extraOpts) {
       const id = timers.length + 1;
       timers.push({ id, fn, cleared: false });
       return id;
+    },
+    cancelAnimationFrame(id) {
+      const t = timers.find((x) => x.id === id);
+      if (t) t.cleared = true;
     },
     setTimeout(fn) {
       const id = timers.length + 1;
@@ -287,6 +343,10 @@ function makeHarness(extraOpts) {
   const ctx = vm.createContext(windowObj);
   vm.runInContext(mentionSrc, ctx, { filename: "mention.js" });
   vm.runInContext(capsulesSrc, ctx, { filename: "capsules.js" });
+  if (!extraOpts.preWsMdEditor && !extraOpts.noMdEditor) {
+    vm.runInContext(mdParserSrc, ctx, { filename: "md-parser.js" });
+    vm.runInContext(mdEditorSrc, ctx, { filename: "md-editor.js" });
+  }
   vm.runInContext(wsInputSrc, ctx, { filename: "ws-input.js" });
 
   function flushTimers() {
@@ -301,17 +361,19 @@ function makeHarness(extraOpts) {
   return { window: windowObj, doc, highlights, FakeEvent, flushTimers };
 }
 
-test("two simultaneous WsInput instances coexist with isolated state and aggregated CSS highlights", () => {
-  const { window, doc, highlights, FakeEvent, flushTimers } = makeHarness();
+test("two simultaneous WsInput instances coexist with isolated state and structured WsMdEditor DOM", () => {
+  const { window, doc, flushTimers } = makeHarness();
   const aField = doc.createElement("textarea");
   const bField = doc.createElement("textarea");
   doc.body.appendChild(aField);
   doc.body.appendChild(bField);
 
   const drafts = { a: "", b: "" };
+  let aReconciled = 0;
   const aInst = window.WsInput.attach(aField, {
     draftAdapter: { get: () => drafts.a, set: (v) => { drafts.a = v; } },
     features: { bangMode: true },
+    onMarkdownReconciled: () => { aReconciled++; },
     providers: { files: (q, done) => done([{ path: "src/a.go", dir: false }]) }
   });
   const bInst = window.WsInput.attach(bField, {
@@ -327,32 +389,38 @@ test("two simultaneous WsInput instances coexist with isolated state and aggrega
   assert.equal(drafts.a, "**alpha** and `codeA`");
   assert.equal(drafts.b, "**beta** and *emB*");
 
-  // Both instances' ws-md-strong ranges must coexist in CSS.highlights!
-  const strongHL = highlights.get("ws-md-strong");
-  assert.ok(strongHL, "ws-md-strong highlight exists");
-  assert.equal(strongHL.ranges.length, 2, "two strong ranges across both editors");
-  assert.ok(aInst.editor.contains(strongHL.ranges[0].startContainer) || aInst.editor.contains(strongHL.ranges[1].startContainer));
-  assert.ok(bInst.editor.contains(strongHL.ranges[0].startContainer) || bInst.editor.contains(strongHL.ranges[1].startContainer));
+  // Both instances render structured live markdown DOM independently
+  assert.ok(aInst.editor.querySelector(".wsmd-strong"), "instance A renders .wsmd-strong");
+  assert.ok(aInst.editor.querySelector(".wsmd-code"), "instance A renders .wsmd-code");
+  assert.ok(bInst.editor.querySelector(".wsmd-strong"), "instance B renders .wsmd-strong");
+  assert.ok(bInst.editor.querySelector(".wsmd-em"), "instance B renders .wsmd-em");
+  assert.ok(aReconciled >= 1, "onMarkdownReconciled callback fired for instance A");
 
-  // Clearing instance A (e.g., entering !bang mode) must NOT wipe instance B's highlights!
+  // Entering !bang mode on instance A flattens ONLY A; B's structured markdown survives intact
   aInst.setValue("!ls -la");
   flushTimers();
-  const strongAfterBang = highlights.get("ws-md-strong");
-  assert.ok(strongAfterBang, "instance B strong highlight survives A entering bang mode");
-  assert.equal(strongAfterBang.ranges.length, 1);
-  assert.ok(bInst.editor.contains(strongAfterBang.ranges[0].startContainer));
+  assert.equal(aInst.editor.querySelector(".wsmd-strong"), null, "instance A flattened in bang mode");
+  assert.equal(aInst.editor.querySelector(".wsmd-line"), null, "instance A has no .wsmd-line in bang mode");
+  assert.ok(bInst.editor.querySelector(".wsmd-strong"), "instance B structured markdown survives A entering bang mode");
 
-  // Mentions are isolated per instance
+  // Mentions are isolated per instance and render .wsmd-mention spans
   aInst.setValue("@src/a.go hi");
   aInst.setMentions([{ start: 0, end: 9, text: "@src/a.go" }]);
+  aInst.reconcileMarkdown();
+  assert.ok(aInst.editor.querySelector(".wsmd-mention"), "instance A renders .wsmd-mention");
   assert.equal(aInst.sendText(), "src/a.go hi");
   assert.equal(bInst.getMentions().length, 0);
+  assert.equal(bInst.editor.querySelector(".wsmd-mention"), null);
 
-  // Detaching A leaves B's highlights intact; detaching B clears them completely.
+  // Detaching A cleans up A's _wsmdRenderHook without disturbing B
+  assert.equal(typeof aInst.editor._wsmdRenderHook, "function");
+  assert.equal(typeof bInst.editor._wsmdRenderHook, "function");
   aInst.destroy();
-  assert.equal(highlights.get("ws-md-strong").ranges.length, 1);
+  assert.equal(aInst.editor._wsmdRenderHook, undefined, "instance A WsMdEditor detached");
+  assert.equal(typeof bInst.editor._wsmdRenderHook, "function", "instance B WsMdEditor stays attached");
+  assert.ok(bInst.editor.querySelector(".wsmd-strong"), "instance B DOM intact after A destroy");
   bInst.destroy();
-  assert.equal(highlights.has("ws-md-strong"), false);
+  assert.equal(bInst.editor._wsmdRenderHook, undefined, "instance B WsMdEditor detached");
 });
 
 test("feature flags gate slash, mentions, topics, bangMode, imagePaste, longPaste, and listContinuation", () => {
@@ -503,6 +571,19 @@ test("WsInput can mount on a plain host element and honors keymaps (enter-save, 
   inst.destroy();
   assert.equal(customDetached, 1);
   assert.equal(inst.field.parentNode, null);
+
+  // Graceful degradation when WsMdEditor is absent (e.g. standalone wswhiteboard)
+  const noMd = makeHarness({ noMdEditor: true });
+  const plainField = noMd.doc.createElement("textarea");
+  noMd.doc.body.appendChild(plainField);
+  const plainInst = noMd.window.WsInput.attach(plainField, { keymap: "newline-only" });
+  plainInst.setValue("**plain**");
+  plainInst.syncMarkdown();
+  plainInst.reconcileMarkdown();
+  plainInst.clearMarkdown();
+  noMd.flushTimers();
+  assert.equal(plainField.value, "**plain**");
+  plainInst.destroy();
 });
 
 test("multi-surface coexistence: bangMode, dynamic keymap, Escape-popup priority, and container sweep", () => {
@@ -553,13 +634,19 @@ test("multi-surface coexistence: bangMode, dynamic keymap, Escape-popup priority
   reasonInst.setValue("**reason**");
   supInst.setValue("**sup**");
   flushTimers();
-  assert.equal(highlights.get("ws-md-strong").ranges.length, 4, "all four surfaces register strong highlights");
+  assert.ok(mainInst.editor.querySelector(".wsmd-strong"), "main composer renders .wsmd-strong");
+  assert.ok(noteInst.editor.querySelector(".wsmd-strong"), "board note renders .wsmd-strong");
+  assert.ok(reasonInst.editor.querySelector(".wsmd-strong"), "close-request reason renders .wsmd-strong");
+  assert.ok(supInst.editor.querySelector(".wsmd-strong"), "support chat renders .wsmd-strong");
 
-  // Bang mode only applies to main composer; !cmd in boardNote/supArea still highlights markdown
+  // Bang mode only applies to main composer; !cmd in boardNote/supArea still renders markdown
   mainInst.setValue("!echo **hi**");
   noteInst.setValue("!echo **still-bold**");
   flushTimers();
-  assert.equal(highlights.get("ws-md-strong").ranges.length, 3, "bangMode suppresses markdown only on main composer");
+  assert.equal(mainInst.editor.querySelector(".wsmd-strong"), null, "bangMode flattens markdown on main composer");
+  assert.ok(noteInst.editor.querySelector(".wsmd-strong"), "board note keeps markdown even with leading !");
+  assert.ok(reasonInst.editor.querySelector(".wsmd-strong"), "close-request reason keeps markdown");
+  assert.ok(supInst.editor.querySelector(".wsmd-strong"), "support chat keeps markdown");
 
   // Image paste gated per surface
   const mkImgPaste = () => {
@@ -612,16 +699,19 @@ test("multi-surface coexistence: bangMode, dynamic keymap, Escape-popup priority
   assert.equal(supCancels, 1, "second Escape invokes onCancel");
 
   // Sweeping chipWrap destroys closeReason without touching other instances
-  // (supArea currently holds "@su", so boardNote's strong range stays).
   const reasonPop = reasonInst.getPopups().mention.pop;
   window.WsInput.sweep(chipWrap);
   assert.equal(reasonPop.parentNode, null, "swept popup detached");
-  assert.equal(highlights.get("ws-md-strong").ranges.length, 1, "only swept editor highlights removed");
+  assert.equal(reasonInst.editor._wsmdRenderHook, undefined, "swept editor WsMdEditor detached");
+  assert.ok(noteInst.editor.querySelector(".wsmd-strong"), "unswept boardNote markdown survives");
+  assert.equal(typeof supInst.editor._wsmdRenderHook, "function", "unswept supcomp WsMdEditor survives");
 
   mainInst.destroy();
   noteInst.destroy();
   supInst.destroy();
-  assert.equal(highlights.has("ws-md-strong"), false);
+  assert.equal(mainInst.editor._wsmdRenderHook, undefined);
+  assert.equal(noteInst.editor._wsmdRenderHook, undefined);
+  assert.equal(supInst.editor._wsmdRenderHook, undefined);
 });
 
 test("memo.js with real WsInput: cross-frame providers, stale-session drop, list continuation, and sweep", async () => {
@@ -730,7 +820,7 @@ test("memo.js with real WsInput: cross-frame providers, stale-session drop, list
   input.setSelectionRange(input.value.length, input.value.length);
   input.dispatchEvent(new FakeEvent("input", { bubbles: true }));
   flushTimers();
-  assert.ok(highlights.get("ws-md-strong"), "memo-input renders markdown highlights");
+  assert.ok(input.wsc.editor.querySelector(".wsmd-strong"), "memo-input renders structured markdown DOM");
 
   const shiftEnter = new FakeEvent("keydown", { bubbles: true, cancelable: true });
   shiftEnter.key = "Enter";

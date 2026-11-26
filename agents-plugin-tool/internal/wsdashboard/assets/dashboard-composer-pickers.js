@@ -298,6 +298,9 @@
         autoGrow: true
       },
       isBang: function () { return typeof bangMode === "function" && bangMode(); },
+      onMarkdownReconciled: function () {
+        if (typeof bangMode === "function" && bangMode() && typeof bangPaint === "function") bangPaint(true);
+      },
       providers: {
         files: rid ? fileCandidates : null,
         topics: capsuleTopics,

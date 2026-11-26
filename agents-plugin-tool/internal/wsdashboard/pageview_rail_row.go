@@ -77,6 +77,9 @@ type RailRow struct {
 	// LastTool is the time of the lead's last tool call (epoch ms; 0 when
 	// unknown). An ended session's stale snapshot still supplies it.
 	LastTool int64
+	// LastActive is an archived session's last activity time (epoch ms; 0 when
+	// unknown), derived without heartbeat-polluted LastSeen().
+	LastActive int64
 	// Message is the session's last user message or lead reply, one line;
 	// User marks a user message.
 	Message string
@@ -303,7 +306,42 @@ func railRow(in railInput, live bool, now time.Time) RailRow {
 			row.SafeStop = false
 		}
 	}
+	if archived {
+		row.LastActive = railArchivedLastActive(reg, row.LastTool, in.Message.LastAt, in.AgentMeta)
+	}
 	return row
+}
+
+// railArchivedLastActive computes an archived row's last-active timestamp
+// (epoch ms) without using heartbeat-polluted Registration.LastSeen():
+//  1. max(LastTool, ring LastAt, AgentSessionMeta.LastActiveAt)
+//  2. Registration.HostStoppedAt
+//  3. Registration.RegisteredAt
+func railArchivedLastActive(reg Registration, lastTool, ringLastAt int64, agentMeta AgentSessionMetaHost) int64 {
+	var metaAt int64
+	if agentMeta != nil {
+		if meta, found := agentMeta.SessionMeta(reg.ReplyID); found {
+			metaAt = parseRailTimeMs(meta.LastActiveAt)
+		}
+	}
+	if activity := max(lastTool, ringLastAt, metaAt); activity > 0 {
+		return activity
+	}
+	if stopped := parseRailTimeMs(reg.HostStoppedAt); stopped > 0 {
+		return stopped
+	}
+	return parseRailTimeMs(reg.RegisteredAt)
+}
+
+func parseRailTimeMs(s string) int64 {
+	if s == "" {
+		return 0
+	}
+	at, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return 0
+	}
+	return at.UnixMilli()
 }
 
 // MailboxRef is the tag the row's copy button copies: for a session in a
