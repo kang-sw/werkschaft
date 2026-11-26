@@ -89,7 +89,7 @@ var whiteboardProviders = []whiteboardSectionProvider{
 	},
 	{
 		id:        "agenda",
-		dirtiedBy: []string{"agenda.set", "agenda.clear", "route.resolve_implement"},
+		dirtiedBy: []string{"agenda.set", "agenda.clear", "route.resolve_implement", "compact"},
 		panel:     agendaPanel,
 	},
 	{

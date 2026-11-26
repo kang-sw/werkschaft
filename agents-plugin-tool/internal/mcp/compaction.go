@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
@@ -130,17 +131,83 @@ func (s *Server) compactAdvertisesLeadSummary() bool {
 // compactTool is discoverable before use; an older daemon refuses the unknown
 // tool. It never falls back to sending a slash prompt from a caller.
 func compactTool() map[string]any {
-	return map[string]any{"name": "compact", "description": "Queue compaction for the next hosted idle boundary. Save your agenda first. Discover support before calling. Queued means pending.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{
-		"session_key":  map[string]any{"type": "string", "description": "Your ws session key."},
-		"lead_summary": wscompact.LeadSummarySchema(),
-		"target":       map[string]any{"type": "string", "description": "Optional self key or owned descendant key / spawn address id:<id>; defaults to self."},
-		"resume":       map[string]any{"type": "boolean", "description": "Start one continue turn after confirmed compaction and restoration. Defaults true for self, false for a descendant."},
-		"format":       map[string]any{"type": "string", "enum": []string{"text", "json"}},
+	return map[string]any{"name": "compact", "description": "Queue compaction for the next hosted idle boundary, with optional agenda_updates. Queued means pending.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+		"session_key":    map[string]any{"type": "string", "description": "Your ws session key."},
+		"lead_summary":   wscompact.LeadSummarySchema(),
+		"agenda_updates": map[string]any{"type": "object", "description": "Self-only map: key -> null (clear) or {value, merge?} (replace/RFC 7396 merge)."},
+		"target":         map[string]any{"type": "string", "description": "Self key or owned descendant key/id:<id>; default self."},
+		"resume":         map[string]any{"type": "boolean", "description": "Continue turn after compaction; defaults true for self, false for descendant."},
+		"format":         map[string]any{"type": "string", "enum": []string{"text", "json"}},
 	}, "required": []string{"session_key"}}}
 }
 
 type compactRunner interface {
 	Compact(string, string, *bool) wsagent.CompactResult
+}
+
+func parseCompactAgendaUpdates(sessionKey, target string, raw any) ([]agendaUpdateOp, error) {
+	if target != "" && target != sessionKey {
+		return nil, fmt.Errorf("compact: agenda_updates is only allowed when compacting self")
+	}
+	updatesMap, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("compact: agenda_updates must be a JSON object")
+	}
+	rawKeys := make([]string, 0, len(updatesMap))
+	for k := range updatesMap {
+		rawKeys = append(rawKeys, k)
+	}
+	sort.Strings(rawKeys)
+
+	seen := make(map[string]bool, len(rawKeys))
+	ops := make([]agendaUpdateOp, 0, len(rawKeys))
+	for _, rawKey := range rawKeys {
+		trimmed := strings.TrimSpace(rawKey)
+		if trimmed == "" {
+			return nil, fmt.Errorf("compact: agenda_updates key must be non-empty")
+		}
+		if seen[trimmed] {
+			return nil, fmt.Errorf("compact: agenda_updates contains duplicate key %q", trimmed)
+		}
+		seen[trimmed] = true
+
+		entry := updatesMap[rawKey]
+		if entry == nil {
+			ops = append(ops, agendaUpdateOp{key: trimmed, clear: true})
+			continue
+		}
+		obj, ok := entry.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("compact: agenda_updates[%q] must be null or {value, merge?}", trimmed)
+		}
+		for field := range obj {
+			if field != "value" && field != "merge" {
+				return nil, fmt.Errorf("compact: agenda_updates[%q] has unknown field %q (allowed: value, merge)", trimmed, field)
+			}
+		}
+		value, hasValue := obj["value"]
+		if !hasValue {
+			return nil, fmt.Errorf("compact: agenda_updates[%q].value is required", trimmed)
+		}
+		merge := false
+		if rawMerge, present := obj["merge"]; present && rawMerge != nil {
+			b, isBool := rawMerge.(bool)
+			if !isBool {
+				return nil, fmt.Errorf("compact: agenda_updates[%q].merge must be a boolean", trimmed)
+			}
+			merge = b
+		}
+		if _, isObj := value.(map[string]any); merge && !isObj {
+			return nil, fmt.Errorf("compact: agenda_updates[%q].value must be a JSON object when merge is true", trimmed)
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("compact: agenda_updates[%q].value is not JSON-encodable: %w", trimmed, err)
+		}
+		ops = append(ops, agendaUpdateOp{key: trimmed, value: encoded, merge: merge})
+	}
+	sort.Slice(ops, func(i, j int) bool { return ops[i].key < ops[j].key })
+	return ops, nil
 }
 
 func (s *Server) handleCompact(ctx context.Context, id json.RawMessage, args map[string]any) response {
@@ -150,20 +217,36 @@ func (s *Server) handleCompact(ctx context.Context, id json.RawMessage, args map
 		return toolTextResponse(id, "", fmt.Errorf("compact: unknown_session"))
 	}
 	target, _ := args["target"].(string)
+	target = strings.TrimSpace(target)
 	var resume *bool
 	if b, ok := args["resume"].(bool); ok {
 		resume = &b
 	}
-	out := wsagent.CompactResult{Status: "unsupported", Reason: "native compaction requires a hosted session"}
+	var (
+		hasLeadSummary bool
+		prose          *wscompact.LeadSummary
+	)
 	if value, present := args["lead_summary"]; present {
+		hasLeadSummary = true
 		raw, err := json.Marshal(value)
 		if err != nil {
 			return toolTextResponse(id, "", fmt.Errorf("invalid lead_summary: %w", err))
 		}
-		prose, err := wscompact.ParseLeadSummary(raw)
+		prose, err = wscompact.ParseLeadSummary(raw)
 		if err != nil {
 			return toolTextResponse(id, "", err)
 		}
+	}
+	var agendaOps []agendaUpdateOp
+	if rawUpdates, present := args["agenda_updates"]; present && rawUpdates != nil {
+		var err error
+		agendaOps, err = parseCompactAgendaUpdates(key, target, rawUpdates)
+		if err != nil {
+			return toolTextResponse(id, "", err)
+		}
+	}
+	out := wsagent.CompactResult{Status: "unsupported", Reason: "native compaction requires a hosted session"}
+	if hasLeadSummary {
 		if runner, ok := s.agents.(interface {
 			CompactWithSummary(string, string, *bool, *wscompact.LeadSummary) wsagent.CompactResult
 		}); ok {
@@ -179,8 +262,20 @@ func (s *Server) handleCompact(ctx context.Context, id json.RawMessage, args map
 			out = wsagent.CompactResult{Status: "error", Reason: err.Error()}
 		}
 	}
+	var agendaNote string
+	if (out.Status == "queued" || out.Status == "pending") && len(agendaOps) > 0 {
+		var err error
+		agendaNote, err = s.sessions.applyAgendaUpdates(key, agendaOps)
+		if err != nil {
+			return toolTextResponse(id, "", fmt.Errorf("compact: agenda_updates: %w", err))
+		}
+	}
 	if wantsJSON(args) {
 		return toolJSONResponse(id, out, nil)
 	}
-	return toolTextResponse(id, fmt.Sprintf("%s: %s", out.Status, out.Reason), nil)
+	text := fmt.Sprintf("%s: %s", out.Status, out.Reason)
+	if agendaNote != "" {
+		text += "\n" + agendaNote
+	}
+	return toolTextResponse(id, text, nil)
 }

@@ -571,7 +571,7 @@ func TestCompactionAdvisoryTurnAtIdle(t *testing.T) {
 	h.holders.out(holder, turnLines("sess-1", "u1", "first")...)
 	eventually(t, "idle advisory", func() bool { return len(h.userInputs(holder)) == 2 })
 	got := h.userInputs(holder)
-	const advisory = "Context usage is 55000 tokens (55%); advisory point 50000 tokens (50%). Write durable state to your agenda, then call ws/compact at a safe boundary before continuing. No summary prose is requested."
+	const advisory = "Context usage is 55000 tokens (55%); advisory point 50000 tokens (50%). Call ws/compact directly at a safe boundary before continuing (include agenda_updates if your agenda needs updating). No summary prose is requested."
 	if got[1] != advisory {
 		t.Fatalf("advisory turn = %q", got[1])
 	}

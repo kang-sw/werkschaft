@@ -21,7 +21,7 @@ func TestCompactionHardSteersAtParallelBoundariesUntilRequest(t *testing.T) {
 		}
 	})
 	got := h.userInputs(holder)
-	if len(got) != 2 || !strings.Contains(got[1], "Save the state needed to resume in your agenda") || !strings.Contains(got[1], "Wrap up the current step and end your turn") {
+	if len(got) != 2 || !strings.Contains(got[1], "agenda_updates when calling ws/compact") || !strings.Contains(got[1], "Wrap up the current step and end your turn") {
 		t.Fatalf("initial hard steer = %q", got)
 	}
 
