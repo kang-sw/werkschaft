@@ -460,6 +460,9 @@
     "261126-feat-ws-lead-mockup-and-multifile-panel": {
       "registered_at": "2026-11-26T07:19:03Z"
     },
+    "261126-feat-ws-worker-quota-exhaustion-hop-and-oneshot-cron": {
+      "registered_at": "2026-11-26T07:19:19Z"
+    },
     "261126-refactor-oversized-multi-responsibility-files": {
       "registered_at": "2026-11-26T05:40:46Z"
     },
