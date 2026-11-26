@@ -2,9 +2,11 @@ package wsagent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 )
 
 // Reattaching to a process that kept running under its holder: rejoin, replay end, and recovery probes.
@@ -393,5 +395,26 @@ func (c *conv) persistSeq() {
 		return
 	}
 	c.seqDirty, c.live.ringDirty = false, false
+	if c.r.meta != nil && !c.r.durableProcess(c.rec.Backend) {
+		c.wmu.Lock()
+		defer c.wmu.Unlock()
+		c.mu.Lock()
+		c.rec.HolderSeq = c.seq
+		id, holderID, seq := c.rec.ReplyID, c.rec.HolderID, c.seq
+		c.mu.Unlock()
+		if holderID != "" && !c.recordDirty {
+			err := c.r.persistSQLiteHolderSeq(id, holderID, seq)
+			if err == nil || errors.Is(err, wsmeta.ErrStaleHolder) {
+				return
+			}
+			if !errors.Is(err, wsmeta.ErrNoRecord) {
+				c.seqDirty = true
+				fmt.Fprintf(c.r.opts.Log, "agent %s: holder cursor write: %v\n", id, err)
+				return
+			}
+		}
+		c.persistRecord()
+		return
+	}
 	c.update(func(rec *Record) { rec.HolderSeq = c.seq })
 }

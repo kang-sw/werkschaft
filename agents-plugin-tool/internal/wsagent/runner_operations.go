@@ -27,7 +27,7 @@ func (r *Runner) Get(id string) (State, error) {
 	case open:
 		c.refreshHeld() // explicit API reads retain authoritative held counts
 		if c.record().Lead {
-			revalidatePermissionSelection(c.dir)
+			r.revalidatePermissionSelection(id, c.dir)
 		}
 		return c.state(), nil
 	case closed:

@@ -15,13 +15,13 @@ func (r *Runner) Close() {
 	r.once.Do(func() { close(r.quit) })
 	r.wg.Wait()
 	r.piPurgeMu.Lock()
-	if r.piPurgeStore != nil && r.piPurgeStore != r.durableRecords {
+	if r.piPurgeStore != nil && r.piPurgeStore != r.durableRecords && r.piPurgeStore != r.meta {
 		if err := r.piPurgeStore.Close(); err != nil {
 			fmt.Fprintf(r.opts.Log, "agent: close retired Pi purge store: %v\n", err)
 		}
 	}
 	r.piPurgeMu.Unlock()
-	if r.durableRecords != nil {
+	if r.durableRecords != nil && r.durableRecords != r.meta {
 		if err := r.durableRecords.Close(); err != nil {
 			fmt.Fprintf(r.opts.Log, "agent: close durable records: %v\n", err)
 		}
@@ -166,7 +166,7 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 	c.live.coverage = c.snapshotCoverage
 	if rec.Lead {
 		c.leadCompactionMode(rec)
-		_, _, _ = refreshPermissionSelection(dir)
+		_, _, _ = r.refreshPermissionSelection(rec.ReplyID, dir)
 		r.setSummaryOwner(rec.ReplyID, c)
 		c.live.owner = c.lockSummaryWriter
 		c.live.ownerRAM = c.lockSummaryWriterRAM

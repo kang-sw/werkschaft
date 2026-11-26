@@ -163,7 +163,18 @@ func (r *Runner) TakeOver(id string) (State, error) {
 		PermissionMode: rp.Definition.PermissionMode,
 		CreatedAt:      row.RegisteredAt,
 	}
-	if old, err := readRecord(dir); err == nil && old.Lead && old.WSKey == ls.Key && old.Backend == rp.Definition.Backend {
+	var old Record
+	var oldErr error
+	if r.meta != nil {
+		if existing, ok := r.recordOf(id); ok {
+			old = existing
+		} else {
+			oldErr = os.ErrNotExist
+		}
+	} else {
+		old, oldErr = readRecord(dir)
+	}
+	if oldErr == nil && old.Lead && old.WSKey == ls.Key && old.Backend == rp.Definition.Backend {
 		// A session the daemon hosted before: its settings, what it still
 		// holds for the session (undelivered mail), and a holder it could
 		// not end carry over.

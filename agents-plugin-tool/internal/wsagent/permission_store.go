@@ -1,6 +1,8 @@
 package wsagent
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
@@ -26,7 +29,9 @@ type permissionSelection struct {
 	// delegatedSet distinguishes a new generic worker's explicit false from
 	// a pre-provenance sidecar, whose missing member must retain old behavior.
 	delegatedSet bool
-	err          error
+	// rawBody preserves unknown JSON members across SQLite permission updates.
+	rawBody []byte
+	err     error
 	// info is permission.json's stat taken before the last read, infoAt the
 	// clock before that stat, and absent that neither the file nor a link
 	// existed then; revalidatePermissionSelection compares them.
@@ -237,5 +242,131 @@ func writePermissionSelectionAs(dir string, level PermissionLevel, delegated, se
 	slot.delegatedSet = storedDelegatedSet
 	slot.level, slot.explicit, slot.err, slot.loaded = level, true, nil, true
 	slot.info, slot.absent = nil, false // the next revalidation re-reads once
+	return nil
+}
+
+func (r *Runner) permissionSlot(id, dir string) *permissionSelection {
+	if r == nil || r.meta == nil {
+		return permissionSlot(dir)
+	}
+	v, _ := r.perms.LoadOrStore(id, &permissionSelection{loaded: true})
+	return v.(*permissionSelection)
+}
+
+func (r *Runner) cachedPermissionSelection(id, dir string) (PermissionLevel, bool, error) {
+	if r == nil || r.meta == nil {
+		return cachedPermissionSelection(dir)
+	}
+	slot := r.permissionSlot(id, dir)
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	return slot.level, slot.explicit, slot.err
+}
+
+func (r *Runner) refreshPermissionSelection(id, dir string) (PermissionLevel, bool, error) {
+	if r == nil || r.meta == nil {
+		return refreshPermissionSelection(dir)
+	}
+	// Under SQLite authority, this daemon is the sole writer and keeps r.perms
+	// synchronized with SQLite without reading permission.json on disk.
+	return r.cachedPermissionSelection(id, dir)
+}
+
+func (r *Runner) revalidatePermissionSelection(id, dir string) {
+	if r == nil || r.meta == nil {
+		revalidatePermissionSelection(dir)
+	}
+}
+
+func (r *Runner) delegatedPermissionState(id, dir string) (delegated, set bool) {
+	if r == nil || r.meta == nil {
+		return delegatedPermissionState(dir)
+	}
+	slot := r.permissionSlot(id, dir)
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	if slot.err != nil || !slot.explicit {
+		return false, false
+	}
+	return slot.delegated, slot.delegatedSet
+}
+
+func (r *Runner) detachedWorkerFallback(id, dir, source string) bool {
+	if source == "legacy-derived" {
+		return true
+	}
+	delegated, set := r.delegatedPermissionState(id, dir)
+	return delegated || !set
+}
+
+func (r *Runner) childLevel(id, dir string) PermissionLevel {
+	level, explicit, err := r.cachedPermissionSelection(id, dir)
+	if err != nil || !explicit {
+		return ""
+	}
+	return level
+}
+
+func (r *Runner) writePermissionSelection(id, dir string, level PermissionLevel) error {
+	return r.writePermissionSelectionAs(id, dir, level, false, false)
+}
+
+func (r *Runner) writeDelegatedPermissionSelection(id, dir string, level PermissionLevel) error {
+	return r.writePermissionSelectionAs(id, dir, level, true, true)
+}
+
+func (r *Runner) writeGenericPermissionSelection(id, dir string, level PermissionLevel) error {
+	return r.writePermissionSelectionAs(id, dir, level, false, true)
+}
+
+func (r *Runner) writePermissionSelectionAs(id, dir string, level PermissionLevel, delegated, setDelegated bool) error {
+	if r == nil || r.meta == nil {
+		return writePermissionSelectionAs(dir, level, delegated, setDelegated)
+	}
+	slot := r.permissionSlot(id, dir)
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	if level.rank() == 0 {
+		return fmt.Errorf("invalid permission level %q", level)
+	}
+	if slot.err != nil {
+		return slot.err
+	}
+	var members map[string]json.RawMessage
+	if len(slot.rawBody) > 0 {
+		if err := json.Unmarshal(slot.rawBody, &members); err != nil {
+			return fmt.Errorf("parse permission selection: %w", err)
+		}
+	}
+	if members == nil {
+		members = make(map[string]json.RawMessage)
+	}
+	members["permission_level"], _ = json.Marshal(level)
+	storedDelegated, storedDelegatedSet := slot.delegated, slot.delegatedSet
+	if setDelegated {
+		members["delegated_authority"], _ = json.Marshal(delegated)
+		storedDelegated, storedDelegatedSet = delegated, true
+	} else if storedDelegatedSet {
+		if _, ok := members["delegated_authority"]; !ok {
+			members["delegated_authority"], _ = json.Marshal(storedDelegated)
+		}
+	}
+	raw, err := json.Marshal(members)
+	if err != nil {
+		return err
+	}
+	if err := r.meta.PutPermission(context.Background(), id, wsmeta.Permission{
+		State:        "valid",
+		Level:        string(level),
+		DelegatedSet: storedDelegatedSet,
+		Delegated:    storedDelegated,
+		Body:         raw,
+	}); err != nil {
+		return err
+	}
+	slot.delegated = storedDelegated
+	slot.delegatedSet = storedDelegatedSet
+	slot.rawBody = bytes.Clone(raw)
+	slot.level, slot.explicit, slot.err, slot.loaded = level, true, nil, true
 	return nil
 }
