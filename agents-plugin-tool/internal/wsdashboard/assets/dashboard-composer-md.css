@@ -1,0 +1,190 @@
+/* Structured live hybrid WYSIWYG Markdown styling inside .wsc-editor.
+   Uses canonical --wb-* tokens for dark and light theme parity and borderless tonal surfaces.
+   class prefix: wsmd */
+
+.wsmd-line { display: inline; }
+
+/* Syntax markers remain editable in the text stream with softened visual weight. */
+.wsmd-marker {
+  color: color-mix(in srgb, var(--wb-muted-fg) 68%, transparent);
+  font-weight: 400;
+  font-style: normal;
+  text-decoration: none;
+}
+
+/* Headings (ATX #..###### and Setext ===/---): bold with scaled font-size hierarchy. */
+.wsmd-head {
+  font-weight: 700;
+  line-height: 1.32;
+  letter-spacing: -0.01em;
+  color: var(--wb-fg);
+}
+.wsmd-h1 { font-size: 1.42em; }
+.wsmd-h2 { font-size: 1.26em; }
+.wsmd-h3 { font-size: 1.14em; }
+.wsmd-h4 { font-size: 1.06em; }
+.wsmd-h5 { font-size: 1.01em; }
+.wsmd-h6 { font-size: 0.96em; color: var(--wb-muted-fg); }
+.wsmd-head .wsmd-marker { font-size: 0.82em; }
+.wsmd-setext-line { letter-spacing: 0.06em; }
+
+/* Inline emphasis and strikethrough. */
+.wsmd-strong { font-weight: 700; color: var(--wb-fg); }
+.wsmd-em { font-style: italic; }
+.wsmd-strike { text-decoration: line-through; color: var(--wb-muted-fg); }
+
+/* Inline code and fenced/indented code blocks: monospace + borderless tonal surface. */
+.wsmd-code {
+  font-family: var(--wb-mono);
+  font-size: 0.9em;
+  background: color-mix(in srgb, var(--wb-fg) 8%, transparent);
+  padding: 0.5px 0;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.wsmd-code-marker { opacity: 0.65; }
+.wsmd-code-open { padding-left: 3px; border-radius: 4px 0 0 4px; }
+.wsmd-code-close { padding-right: 3px; border-radius: 0 4px 4px 0; }
+.wsmd-fence-open,
+.wsmd-fence-close,
+.wsmd-fence-body,
+.wsmd-code-block {
+  font-family: var(--wb-mono);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.wsmd-fence-body,
+.wsmd-code-block {
+  background: color-mix(in srgb, var(--wb-fg) 7%, transparent);
+  border-radius: 3px;
+  padding: 0.5px 4px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.wsmd-code-lang {
+  font-family: var(--wb-mono);
+  font-size: 11.5px;
+  color: var(--wb-primary);
+  opacity: 0.85;
+}
+
+/* Blockquotes (> and nested > >) with tonal left accent bars. */
+.wsmd-quote { color: var(--wb-muted-fg); }
+.wsmd-qbar {
+  color: color-mix(in srgb, var(--wb-primary) 72%, var(--wb-muted-fg));
+  border-left: 2.5px solid color-mix(in srgb, var(--wb-primary) 52%, transparent);
+  padding-left: 6px;
+  margin-right: 2px;
+}
+
+/* Unordered, ordered, and task lists. */
+.wsmd-list-marker {
+  color: var(--wb-primary);
+  font-weight: 600;
+}
+.wsmd-task {
+  font-family: var(--wb-mono);
+  font-size: 0.9em;
+  border-radius: 4px;
+  padding: 0 2px;
+}
+.wsmd-task-open {
+  color: var(--wb-muted-fg);
+  background: color-mix(in srgb, var(--wb-fg) 6%, transparent);
+}
+.wsmd-task-done {
+  color: var(--wb-ok);
+  font-weight: 700;
+  background: color-mix(in srgb, var(--wb-ok) 14%, transparent);
+}
+.wsmd-task-checked { color: var(--wb-muted-fg); }
+
+/* Horizontal rules (styled text, never <hr>). */
+.wsmd-hr-text {
+  color: var(--wb-muted-fg);
+  letter-spacing: 0.14em;
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--wb-muted-fg) 50%, transparent);
+}
+
+/* Links, autolinks, reference links, and image syntax. */
+.wsmd-link {
+  color: var(--wb-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, var(--wb-primary) 52%, transparent);
+}
+.wsmd-autolink { font-family: var(--wb-mono); font-size: 0.92em; }
+.wsmd-link-url {
+  font-family: var(--wb-mono);
+  font-size: 0.88em;
+  color: color-mix(in srgb, var(--wb-muted-fg) 78%, transparent);
+}
+.wsmd-img-alt {
+  color: color-mix(in srgb, var(--wb-fg) 72%, var(--wb-primary));
+  font-style: italic;
+}
+.wsmd-ref-label {
+  color: var(--wb-primary);
+  font-weight: 600;
+}
+.wsmd-ref-title {
+  color: var(--wb-muted-fg);
+  font-style: italic;
+}
+
+/* Backslash escapes. */
+.wsmd-escape-slash { opacity: 0.45; }
+
+/* GFM tables (styled text, never <table>). */
+.wsmd-table-head {
+  font-family: var(--wb-mono);
+  font-size: 12.5px;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--wb-fg) 7%, transparent);
+  border-radius: 3px;
+  padding: 0.5px 3px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.wsmd-table-delim {
+  font-family: var(--wb-mono);
+  font-size: 12.5px;
+  color: color-mix(in srgb, var(--wb-muted-fg) 62%, transparent);
+}
+.wsmd-table-row {
+  font-family: var(--wb-mono);
+  font-size: 12.5px;
+}
+.wsmd-table-pipe {
+  color: color-mix(in srgb, var(--wb-primary) 55%, var(--wb-muted-fg));
+  font-weight: 400;
+}
+
+/* @ file mentions outside code blocks and inline code. */
+.wsmd-mention {
+  color: var(--wb-primary);
+  background: color-mix(in srgb, var(--wb-primary) 14%, transparent);
+  border-radius: 4px;
+  padding: 0 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* Preserve canonical capsule typography when a capsule sits inside headings, quotes, or code. */
+.wsc-editor .wsmd-line .wsc-capsule {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  font-style: normal;
+  text-decoration: none;
+  letter-spacing: normal;
+  vertical-align: baseline;
+}
+.wsc-editor .wsmd-line .wsc-capsule.wsc-skill {
+  font-family: var(--wb-mono);
+  font-size: 11.5px;
+}
+.wsc-editor .wsmd-line .wsc-capsule.wsc-mailbox {
+  font-weight: 600;
+}

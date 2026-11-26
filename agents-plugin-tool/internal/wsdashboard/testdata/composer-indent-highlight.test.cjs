@@ -14,7 +14,7 @@ function slice(src, from, to) {
 }
 
 const indentBlock = slice(dashboardJS, '  function indentLines(out) {', '    // The form script\'s own listeners');
-const highlightBlock = slice(dashboardJS, '  var MD_HIGHLIGHT_GROUPS = [', '// Composer board selection mentions.');
+const highlightBlock = slice(dashboardJS, '  var mdComposing = false, mdEditor = null;', '// Composer board selection mentions.');
 const inlineSendBlock = slice(dashboardJS, '  function inlineSend() {', '  // --- outbox');
 
 function makeField() {
@@ -291,199 +291,82 @@ test('inlineSend and sendMessage fallback preserve line-1 leading indent while s
   assert.equal(h.ctx.inlineSend().text, '');
 });
 
-function createHighlightHarness({ hasCSSHighlights = true, bang = false } = {}) {
+function createHighlightHarness({ hasMdEditor = true, bang = false } = {}) {
   const ctext = makeField();
-  const registry = new Map();
-  let rafQueue = [];
-  let rafSeq = 0;
   let bangActive = bang;
+  let attachCalls = 0;
+  let reconcileCalls = 0;
+  let scheduleCalls = 0;
+  let bangPaintCalls = 0;
+  let lastOpts = null;
 
-  class MockHighlight {
-    constructor() { this.ranges = []; this.priority = 0; }
-    add(r) { this.ranges.push(r); }
-  }
-  const doc = {
-    createRange() {
-      return {
-        startContainer: null, startOffset: 0, endContainer: null, endOffset: 0,
-        setStart(n, o) { this.startContainer = n; this.startOffset = o; },
-        setEnd(n, o) { this.endContainer = n; this.endOffset = o; },
-      };
+  const editor = { nodeType: 1, nodeName: 'DIV', childNodes: [] };
+  ctext.wsc = { editor };
+
+  const win = hasMdEditor ? {
+    WsMdEditor: {
+      attach(el, opts) {
+        attachCalls++;
+        assert.equal(el, editor);
+        lastOpts = opts;
+        return {
+          reconcile() { reconcileCalls++; if (opts.onReconciled) opts.onReconciled(); },
+          schedule() { scheduleCalls++; },
+          detach() {},
+        };
+      },
     },
-  };
-  const win = hasCSSHighlights ? { CSS: { highlights: registry }, Highlight: MockHighlight } : { CSS: {} };
+  } : {};
+
   const ctx = {
     window: win,
-    CSS: win.CSS,
-    Highlight: win.Highlight,
-    doc,
     ctext,
     mentions: [],
     bangMode: () => bangActive,
-    requestAnimationFrame(fn) { const id = ++rafSeq; rafQueue.push({ id, fn }); return id; },
+    bangPaint: () => { bangPaintCalls++; },
   };
   vm.createContext(ctx);
   vm.runInContext(highlightBlock, ctx);
 
-  function flushRaf() {
-    const q = rafQueue.slice();
-    rafQueue = [];
-    q.forEach(item => item.fn());
-  }
-  return { ctx, ctext, doc, registry, flushRaf, rafCount: () => rafQueue.length, setBang(v) { bangActive = v; } };
-}
-
-function makeTextNode(value, parentNode = null) {
-  return { nodeType: 3, nodeValue: value, parentNode, previousSibling: null, nextSibling: null };
-}
-function makeEl(tag, attrs = {}, children = []) {
-  const el = {
-    nodeType: 1,
-    nodeName: tag.toUpperCase(),
-    childNodes: [],
-    parentNode: null,
-    previousSibling: null,
-    nextSibling: null,
-    hasAttribute(k) { return Object.prototype.hasOwnProperty.call(attrs, k); },
-    getAttribute(k) { return Object.prototype.hasOwnProperty.call(attrs, k) ? attrs[k] : null; },
+  return {
+    ctx,
+    ctext,
+    getCounts: () => ({ attachCalls, reconcileCalls, scheduleCalls, bangPaintCalls }),
+    getOpts: () => lastOpts,
+    setBang(v) { bangActive = v; },
   };
-  children.forEach((ch, idx) => {
-    ch.parentNode = el;
-    if (idx > 0) {
-      ch.previousSibling = children[idx - 1];
-      children[idx - 1].nextSibling = ch;
-    }
-    el.childNodes.push(ch);
-  });
-  return el;
 }
 
-test('scanComposerMarkdown tokenizes headings, emphasis, strike, inline/fenced code, links, quotes, lists, mentions, and excludes attachment markers', () => {
-  const h = createHighlightHarness();
-  const scan = (text, mentions = []) => JSON.parse(JSON.stringify(h.ctx.scanComposerMarkdown(text, mentions)));
-  const slices = (text, spans) => spans.map(([s, e]) => text.slice(s, e));
+test('composer highlight bridge wires #ctext to WsMdEditor, pauses during IME composition, passes bang/mention getters, and no-ops without WsMdEditor', () => {
+  const h = createHighlightHarness({ hasMdEditor: true });
+  assert.equal(h.getCounts().attachCalls, 1);
 
-  // Headings, bold, italic, strike, link
-  const s1 = '# Title **bold** *em* ~~del~~ [docs](https://example.test)';
-  const g1 = scan(s1);
-  assert.deepEqual(slices(s1, g1['ws-md-head']), [' Title **bold** *em* ~~del~~ [docs](https://example.test)']);
-  assert.deepEqual(slices(s1, g1['ws-md-strong']), ['bold']);
-  assert.deepEqual(slices(s1, g1['ws-md-em']), ['em']);
-  assert.deepEqual(slices(s1, g1['ws-md-strike']), ['del']);
-  assert.deepEqual(slices(s1, g1['ws-md-link']), ['docs']);
-  assert.ok(slices(s1, g1['ws-md-marker']).includes('#'));
-  assert.ok(slices(s1, g1['ws-md-marker']).includes('**'));
-  assert.ok(slices(s1, g1['ws-md-marker']).includes('*'));
-  assert.ok(slices(s1, g1['ws-md-marker']).includes('~~'));
-  assert.ok(slices(s1, g1['ws-md-marker']).includes('['));
-  assert.ok(slices(s1, g1['ws-md-marker']).includes('](https://example.test)'));
+  h.ctx.mentions = [{ start: 0, end: 5, text: '@a.js' }];
+  assert.deepEqual(h.getOpts().getMentions(), [{ start: 0, end: 5, text: '@a.js' }]);
+  assert.equal(h.getOpts().isBang(), false);
+  assert.equal(h.getOpts().isComposing(), false);
 
-  // Inline code suppresses inner markdown
-  const s2 = 'Run `**not bold** *not em* [a](b)` now';
-  const g2 = scan(s2);
-  assert.deepEqual(slices(s2, g2['ws-md-code']), ['`**not bold** *not em* [a](b)`']);
-  assert.deepEqual(g2['ws-md-strong'], []);
-  assert.deepEqual(g2['ws-md-em'], []);
-  assert.deepEqual(g2['ws-md-link'], []);
-
-  // Fenced code blocks suppress inner markdown and mentions
-  const s3 = '```js\n# not heading\n**not bold** @foo.js\n```\nAfter';
-  const mAt = s3.indexOf('@foo.js');
-  const g3 = scan(s3, [{ start: mAt, end: mAt + 7, text: '@foo.js' }]);
-  assert.deepEqual(slices(s3, g3['ws-md-marker']), ['```js', '```']);
-  assert.deepEqual(slices(s3, g3['ws-md-code']), ['# not heading', '**not bold** @foo.js']);
-  assert.deepEqual(g3['ws-md-head'], []);
-  assert.deepEqual(g3['ws-md-strong'], []);
-  assert.deepEqual(g3['ws-md-mention'], []);
-
-  // Blockquotes, list markers, task lists, snake_case safety
-  const s4 = '> quote\n- [x] task_name_here\n1. ordered';
-  const g4 = scan(s4);
-  assert.deepEqual(slices(s4, g4['ws-md-quote']), ['quote']);
-  assert.deepEqual(slices(s4, g4['ws-md-marker']), ['> ', '- [x]', '1.']);
-  assert.deepEqual(g4['ws-md-em'], [], 'snake_case underscores must not trigger italic');
-
-  // Attachment markers [Image #1] and [Text #1] are excluded even when followed by (...)
-  const s5 = 'See [Image #1](caption) and [Text #2](note) and [real](https://a.test)';
-  const g5 = scan(s5);
-  assert.deepEqual(slices(s5, g5['ws-md-link']), ['real']);
-
-  // @ file mentions outside fenced blocks
-  const s6 = 'Check @src/app.js please';
-  const g6 = scan(s6, [{ start: 6, end: 17, text: '@src/app.js' }]);
-  assert.deepEqual(slices(s6, g6['ws-md-mention']), ['@src/app.js']);
-});
-
-test('buildEditorTextMap skips .wsc-capsule subtrees and maps canonical offsets accurately across capsules and line breaks', () => {
-  const h = createHighlightHarness();
-  const t1 = makeTextNode('See ');
-  const cap = makeEl('span', {
-    'data-wsc-kind': 'topic',
-    'data-wsc-id': 'auth',
-    'data-wsc-label': 'auth',
-  }, [makeTextNode('#auth')]);
-  const t2 = makeTextNode(' **bold**');
-  const br = makeEl('br');
-  const t3 = makeTextNode('> quoted');
-  const editor = makeEl('div', {}, [t1, cap, t2, br, t3]);
-
-  // Canonical value: "See [auth] **bold**\n> quoted"
-  // "See " = 0..4, "[auth]" = 4..10 (capsule skipped), " **bold**" = 10..19, "\n" = 19..20, "> quoted" = 20..28
-  const segs = h.ctx.buildEditorTextMap(editor);
-  assert.equal(segs.length, 3);
-  assert.equal(segs[0].node, t1); assert.equal(segs[0].start, 0); assert.equal(segs[0].end, 4);
-  assert.equal(segs[1].node, t2); assert.equal(segs[1].start, 10); assert.equal(segs[1].end, 19);
-  assert.equal(segs[2].node, t3); assert.equal(segs[2].start, 20); assert.equal(segs[2].end, 28);
-
-  // Mapping "bold" (13..17) lands strictly inside t2 [3..7]
-  const ranges = h.ctx.valueSpanToDomRanges(h.doc, segs, 13, 17);
-  assert.equal(ranges.length, 1);
-  assert.equal(ranges[0].startContainer, t2);
-  assert.equal(ranges[0].startOffset, 3);
-  assert.equal(ranges[0].endOffset, 7);
-
-  // Mapping a span that crosses the capsule (0..19) splits into t1 and t2, never entering cap
-  const split = h.ctx.valueSpanToDomRanges(h.doc, segs, 0, 19);
-  assert.equal(split.length, 2);
-  assert.equal(split[0].startContainer, t1);
-  assert.equal(split[1].startContainer, t2);
-});
-
-test('highlight scheduling coalesces via rAF, pauses during IME composition, clears in bang mode, and no-ops without CSS.highlights', () => {
-  const h = createHighlightHarness({ hasCSSHighlights: true });
-  const t1 = makeTextNode('**hi** @a.js');
-  const editor = makeEl('div', {}, [t1]);
-  h.ctext.value = '**hi** @a.js';
-  h.ctext.wsc = { editor };
-  h.ctx.mentions = [{ start: 7, end: 12, text: '@a.js' }];
-
-  // Multiple schedule calls coalesce into one rAF
   h.ctx.scheduleComposerHighlights();
-  h.ctx.scheduleComposerHighlights();
-  assert.equal(h.rafCount(), 1);
-  h.flushRaf();
-  assert.equal(h.registry.has('ws-md-strong'), true);
-  assert.equal(h.registry.has('ws-md-mention'), true);
-  assert.ok(h.registry.get('ws-md-code') === undefined);
+  assert.equal(h.getCounts().scheduleCalls, 1);
 
   // IME composition pauses scheduling until compositionend
   h.ctext.dispatch('compositionstart');
+  assert.equal(h.getOpts().isComposing(), true);
   h.ctx.scheduleComposerHighlights();
-  assert.equal(h.rafCount(), 0, 'no rAF scheduled while composing');
+  assert.equal(h.getCounts().scheduleCalls, 1, 'no schedule while composing');
   h.ctext.dispatch('compositionend');
-  assert.equal(h.rafCount(), 1, 'compositionend schedules refresh');
-  h.flushRaf();
+  assert.equal(h.getOpts().isComposing(), false);
+  assert.equal(h.getCounts().scheduleCalls, 2, 'compositionend schedules refresh');
 
-  // Bang mode clears all ws-md-* highlights
+  // Bang mode triggers bangPaint on reconcile
   h.setBang(true);
-  h.ctx.scheduleComposerHighlights();
-  h.flushRaf();
-  assert.equal(h.registry.size, 0, 'bang mode clears all ws-md-* groups');
+  assert.equal(h.getOpts().isBang(), true);
+  h.ctx.applyComposerHighlights();
+  assert.equal(h.getCounts().reconcileCalls, 1);
+  assert.equal(h.getCounts().bangPaintCalls, 1);
 
-  // Missing CSS.highlights / Highlight gracefully no-ops
-  const noApi = createHighlightHarness({ hasCSSHighlights: false });
-  noApi.ctext.value = '**hi**';
-  noApi.ctext.wsc = { editor };
+  // Missing WsMdEditor gracefully no-ops
+  const noApi = createHighlightHarness({ hasMdEditor: false });
   assert.doesNotThrow(() => {
     noApi.ctx.scheduleComposerHighlights();
     noApi.ctx.applyComposerHighlights();
@@ -491,8 +374,10 @@ test('highlight scheduling coalesces via rAF, pauses during IME composition, cle
   });
 });
 
-test('dashboard CSS defines ::highlight(ws-md-*) rules using canonical --wb-* tokens', () => {
-  for (const name of ['ws-md-marker', 'ws-md-code', 'ws-md-head', 'ws-md-quote', 'ws-md-em', 'ws-md-strong', 'ws-md-strike', 'ws-md-link', 'ws-md-mention']) {
-    assert.match(dashboardCSS, new RegExp(`::highlight\\(${name}\\)\\s*\\{[^}]*--wb-`), `missing token-backed ::highlight(${name})`);
+test('dashboard CSS replaces ::highlight(ws-md-*) with structured .wsmd-* token-backed rules while keeping ::highlight(ws-bang)', () => {
+  assert.match(dashboardCSS, /::highlight\(ws-bang\)/, 'shell-mode bang highlight preserved');
+  assert.doesNotMatch(dashboardCSS, /::highlight\(ws-md-/, 'retired CSS.highlights ws-md-* rules removed');
+  for (const cls of ['wsmd-h1', 'wsmd-h6', 'wsmd-code', 'wsmd-fence-body', 'wsmd-quote', 'wsmd-task-done', 'wsmd-table-head', 'wsmd-mention']) {
+    assert.match(dashboardCSS, new RegExp(`\\.${cls}\\b`), `missing structured markdown rule .${cls}`);
   }
 });
