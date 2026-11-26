@@ -63,9 +63,10 @@ const (
 // advisory at 160k and the hard point at 200k, both as configured, and
 // Claude compacts at 186k. On a 200k model, w = 200k: advisory 100k, hard
 // 160k, Claude at about 112k. The cost of not knowing n at launch is that
-// a model smaller than W compacts early, never late. The defaults ("50%",
-// "80%") set only q = 80, and rawMaxTokens stays the model's window.
-// Changing either key takes effect from the worker's next process start.
+// a model smaller than W compacts early, never late. Percentage-only strings
+// ("50%", "80%") set only q = 80 and rawMaxTokens stays the model's window;
+// the builtin defaults ("60%|180k", "80%|230k") resolve to W = 300000 and
+// q = 76. Changing either key takes effect from the worker's next process start.
 func claudeAutoCompactEnv(advisory, hard wsconfig.Threshold) map[string]string {
 	if hard.Percent <= 0 && hard.Tokens <= 0 {
 		return nil

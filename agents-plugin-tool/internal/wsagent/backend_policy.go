@@ -257,10 +257,13 @@ func EffectiveLeadCompactionMode(harness, raw string, registries ...map[string]B
 	if LeadCompactionWSOnly(harness, registries...) {
 		return wsconfig.CompactionModeWS
 	}
+	if raw == wsconfig.CompactionModeNative {
+		return wsconfig.CompactionModeNative
+	}
 	if raw == wsconfig.CompactionModeWS {
 		return wsconfig.CompactionModeWS
 	}
-	return wsconfig.CompactionModeNative
+	return wsconfig.CompactionDefaults[wsconfig.ItemCompactionLeadMode]
 }
 
 // terminalSessionOf is the registered backend's terminal support, nil when it

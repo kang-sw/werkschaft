@@ -182,7 +182,7 @@ func TestWerkCompactionUsesCachedModelWindow(t *testing.T) {
 		name   string
 		window int
 	}{
-		{name: "advisory", window: 370},
+		{name: "advisory", window: 320},
 		{name: "hard", window: 240},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
