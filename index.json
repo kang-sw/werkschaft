@@ -480,7 +480,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-26T13:47:18Z"
+        "touched_at": "2026-11-26T13:54:37Z",
+        "impl": {
+          "branch": "impl/develop/ogle-uncut-sushi"
+        }
       }
     },
     "261126-feat-ws-companion-vrm-engine": {
