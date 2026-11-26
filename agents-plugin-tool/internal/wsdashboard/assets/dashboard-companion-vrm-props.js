@@ -102,13 +102,13 @@
 
   // Clamp a world point into the camera's visible frustum inset by insetPx,
   // preserving its depth along the camera's forward axis.
-  function clampWorldToInset(THREE, worldPos, camera, width, height, insetPx) {
+  function clampWorldToInset(THREE, worldPos, camera, width, height, insetPx, scratchNdc) {
     if (!camera || typeof worldPos.project !== "function" || typeof worldPos.unproject !== "function") {
       return worldPos;
     }
     const maxNdcX = Math.max(0.15, 1 - (2 * insetPx) / Math.max(64, width));
     const maxNdcY = Math.max(0.15, 1 - (2 * insetPx) / Math.max(64, height));
-    const ndc = worldPos.clone().project(camera);
+    const ndc = scratchNdc ? scratchNdc.copy(worldPos).project(camera) : worldPos.clone().project(camera);
     const clampedX = Math.max(-maxNdcX, Math.min(maxNdcX, ndc.x));
     const clampedY = Math.max(-maxNdcY, Math.min(maxNdcY, ndc.y));
     if (clampedX === ndc.x && clampedY === ndc.y) return worldPos;
@@ -305,8 +305,10 @@
     const tmpP0 = new THREE.Vector3(), tmpP1 = new THREE.Vector3(), tmpP2 = new THREE.Vector3(), tmpP3 = new THREE.Vector3();
     const tmpBezier = new THREE.Vector3();
     const tmpProj = new THREE.Vector3();
+    const tmpClampNdc = new THREE.Vector3();
 
     function hideAllProps() {
+      lookAtTarget = null;
       if (!props) return;
       for (const item of Object.values(props)) {
         item.group.visible = false;
@@ -337,12 +339,12 @@
 
     function setHandTarget(out, x, y, z, width, height, insetPx = 22) {
       out.set(x, y, z);
-      return clampWorldToInset(THREE, out, camera, width, height, insetPx);
+      return clampWorldToInset(THREE, out, camera, width, height, insetPx, tmpClampNdc);
     }
 
     function setPropWorldPos(group, x, y, z, width, height, insetPx = 30) {
       tmpBezier.set(x, y, z);
-      clampWorldToInset(THREE, tmpBezier, camera, width, height, insetPx);
+      clampWorldToInset(THREE, tmpBezier, camera, width, height, insetPx, tmpClampNdc);
       group.position.copy(tmpBezier);
     }
 
@@ -433,10 +435,10 @@
           tmpP1.set(head.x + dirSign * span * 0.14, head.y + span * 0.12, palmZ + span * 0.08);
           tmpP2.set(head.x + dirSign * span * 0.42, head.y + span * 0.34, palmZ + span * 0.04);
           tmpP3.set(head.x + dirSign * span * 0.52, head.y + span * 0.24, chest.z + span * 0.45);
-          clampWorldToInset(THREE, tmpP0, camera, width, height, 34);
-          clampWorldToInset(THREE, tmpP1, camera, width, height, 34);
-          clampWorldToInset(THREE, tmpP2, camera, width, height, 34);
-          clampWorldToInset(THREE, tmpP3, camera, width, height, 34);
+          clampWorldToInset(THREE, tmpP0, camera, width, height, 34, tmpClampNdc);
+          clampWorldToInset(THREE, tmpP1, camera, width, height, 34, tmpClampNdc);
+          clampWorldToInset(THREE, tmpP2, camera, width, height, 34, tmpClampNdc);
+          clampWorldToInset(THREE, tmpP3, camera, width, height, 34, tmpClampNdc);
 
           const u = isReturn
             ? Math.max(0, Math.min(1, 1 - Math.min(1, progress / 0.82)))
@@ -524,10 +526,10 @@
             tmpP1.set(head.x + dirSign * span * 0.16, head.y + span * 0.08, palmZ + span * 0.06);
             tmpP2.set(head.x + dirSign * span * 0.40, head.y + span * 0.28, palmZ + span * 0.02);
             tmpP3.set(head.x + dirSign * span * 0.48, head.y + span * 0.20, chest.z + span * 0.46);
-            clampWorldToInset(THREE, tmpP0, camera, width, height, 34);
-            clampWorldToInset(THREE, tmpP1, camera, width, height, 34);
-            clampWorldToInset(THREE, tmpP2, camera, width, height, 34);
-            clampWorldToInset(THREE, tmpP3, camera, width, height, 34);
+            clampWorldToInset(THREE, tmpP0, camera, width, height, 34, tmpClampNdc);
+            clampWorldToInset(THREE, tmpP1, camera, width, height, 34, tmpClampNdc);
+            clampWorldToInset(THREE, tmpP2, camera, width, height, 34, tmpClampNdc);
+            clampWorldToInset(THREE, tmpP3, camera, width, height, 34, tmpClampNdc);
             cubicBezier3(THREE, tmpP0, tmpP1, tmpP2, tmpP3, Math.max(0, Math.min(1, progress)), tmpBezier);
             setPropWorldPos(m.group, tmpBezier.x, tmpBezier.y, tmpBezier.z, width, height, 34);
             m.group.rotation.set(-0.2, 0.25 * Math.sin(elapsed * 4), dirSign * 0.22);
@@ -594,9 +596,13 @@
 
       if (solveLeft) {
         ik.solveArm("left", tmpLeftTarget, tmpLeftPole, { dt, handEuler: leftHandEuler });
+      } else {
+        ik.syncArmFromCurrentBones("left");
       }
       if (solveRight) {
         ik.solveArm("right", tmpRightTarget, tmpRightPole, { dt, handEuler: rightHandEuler });
+      } else {
+        ik.syncArmFromCurrentBones("right");
       }
       ik.applyFingerPreset("left", leftPreset, dt);
       ik.applyFingerPreset("right", rightPreset, dt);
@@ -703,6 +709,7 @@
 
     return {
       update,
+      hideAllProps,
       getLookAtWorldTarget,
       getProjectedBounds,
       resetIK,

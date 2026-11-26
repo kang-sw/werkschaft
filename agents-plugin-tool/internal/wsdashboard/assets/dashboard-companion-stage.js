@@ -331,6 +331,7 @@
       if (!directed) return false;
       runner.direct(directed.beats, now, directed.ttl, directed.id);
       viewBeat = null;
+      if (isVrm()) markVrmActivity();
       schedule();
       return true;
     }

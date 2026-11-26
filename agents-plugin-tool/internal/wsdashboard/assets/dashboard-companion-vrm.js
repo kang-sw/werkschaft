@@ -267,6 +267,11 @@
     "leftUpperArm", "leftLowerArm", "rightUpperArm", "rightLowerArm",
     "leftHand", "rightHand"
   ];
+  const EXTRA_VRMA_BONES = [
+    "hips", "upperChest", "leftShoulder", "rightShoulder",
+    "leftUpperLeg", "rightUpperLeg", "leftLowerLeg", "rightLowerLeg",
+    "leftFoot", "rightFoot", "leftToes", "rightToes"
+  ];
 
   function computeStandTargets(t, headPitchCue, swayScale) {
     const breath = Math.sin(t * 1.7);
@@ -317,8 +322,8 @@
     let mounted = false, disposed = false, paused = false, contextLost = false;
     let container = null, canvasWrap = null, canvas = null, dissolveGrid = null, overlay = null;
     let runtime = null, renderer = null, scene = null, camera = null, vrm = null;
-    let isVrm0 = false, lookTarget = null, mixer = null, activeVrmaAction = null, activeVrmaKey = "", vrmaFadeTimer = 0;
-    let propsCtrl = null, vrmaClips = new Map(), vrmaLoading = new Set();
+    let isVrm0 = false, lookTarget = null, headPosVec = null, mixer = null, activeVrmaAction = null, activeVrmaKey = "";
+    let propsCtrl = null, vrmaClips = new Map(), vrmaLoading = new Set(), vrmaFailed = new Set();
     let width = LOGICAL_W, height = LOGICAL_H, dpr = 1;
     let cachedModel = null; // { key, buffer } retained across WebGL context loss
     let modelFetchPromise = null, loadEpoch = 0;
@@ -349,13 +354,13 @@
         activeVrmaAction = null;
         activeVrmaKey = "";
       }
-      vrmaFadeTimer = 0;
       if (mixer) {
         mixer.stopAllAction();
         mixer = null;
       }
       vrmaClips.clear();
       vrmaLoading.clear();
+      vrmaFailed.clear();
       if (vrm && scene && runtime) {
         scene.remove(vrm.scene);
         try { runtime.VRMUtils.deepDispose(vrm.scene); } catch (_) { /* ignore */ }
@@ -376,6 +381,7 @@
       scene = null;
       camera = null;
       lookTarget = null;
+      headPosVec = null;
     }
 
     function initSceneAndRenderer(rt) {
@@ -384,6 +390,7 @@
       camera = new THREE.PerspectiveCamera(26, width / Math.max(1, height), 0.08, 25);
       camera.position.set(0, 1.38, 1.45);
       lookTarget = new THREE.Object3D();
+      headPosVec = new THREE.Vector3();
       scene.add(lookTarget);
 
       renderer = new THREE.WebGLRenderer({
@@ -488,7 +495,7 @@
     async function ensureVrmaClip(key) {
       if (!vrm || !runtime || !pack?.animations || !Object.hasOwn(pack.animations, key)) return null;
       if (vrmaClips.has(key)) return vrmaClips.get(key);
-      if (vrmaLoading.has(key)) return null;
+      if (vrmaLoading.has(key) || vrmaFailed.has(key)) return null;
       vrmaLoading.add(key);
       try {
         const file = pack.animations[key];
@@ -498,29 +505,42 @@
         const loader = new GLTFLoader();
         loader.register(parser => new VRMAnimationLoaderPlugin(parser));
         const gltf = await loader.parseAsync(fetched.buffer.slice(0), "");
+        if (disposed || !vrm || !runtime) return null;
         const anims = gltf.userData?.vrmAnimations;
         if (anims && anims.length) {
           const clip = createVRMAnimationClip(anims[0], vrm);
           vrmaClips.set(key, clip);
           return clip;
         }
+        vrmaFailed.add(key);
       } catch (_) {
-        // Optional .vrma failure degrades cleanly to procedural pose.
+        // Optional .vrma failure degrades once to procedural pose without refetch storms.
+        if (!disposed && !loadCancel.signal.aborted) vrmaFailed.add(key);
       } finally {
         vrmaLoading.delete(key);
       }
       return null;
     }
 
+    function resetExtraVrmaBones() {
+      if (!vrm?.humanoid) return;
+      for (const boneName of EXTRA_VRMA_BONES) {
+        const node = vrm.humanoid.getNormalizedBoneNode(boneName);
+        if (node) node.rotation.set(0, 0, 0, "XYZ");
+      }
+    }
+
     function syncVrma(key) {
       if (!mixer || !vrm) return;
-      const wanted = key && pack?.animations && Object.hasOwn(pack.animations, key) ? key : "";
+      const wanted = key && pack?.animations && Object.hasOwn(pack.animations, key) && !vrmaFailed.has(key) ? key : "";
       if (!wanted) {
         if (activeVrmaAction) {
+          syncBoneCacheFromRig();
           activeVrmaAction.fadeOut(0.18);
+          activeVrmaAction.stop();
           activeVrmaAction = null;
           activeVrmaKey = "";
-          vrmaFadeTimer = 0.20;
+          resetExtraVrmaBones();
         }
         return;
       }
@@ -543,7 +563,7 @@
       }
       activeVrmaAction = nextAction;
       activeVrmaKey = wanted;
-      vrmaFadeTimer = 0;
+      propsCtrl?.hideAllProps?.();
     }
 
     function syncBoneCacheFromRig() {
@@ -567,14 +587,10 @@
       if (vrmaKey || activeVrmaAction) syncVrma(vrmaKey);
 
       if (activeVrmaAction && mixer) {
+        propsCtrl?.hideAllProps?.();
         mixer.update(dt);
         syncBoneCacheFromRig();
       } else {
-        if (vrmaFadeTimer > 0 && mixer) {
-          mixer.update(dt);
-          vrmaFadeTimer = Math.max(0, vrmaFadeTimer - dt);
-          if (vrmaFadeTimer === 0) syncBoneCacheFromRig();
-        }
         let headPitchCue = 0;
         if (activeExpression === "idle_doze") headPitchCue = 0.14 + Math.sin(elapsed * 0.9) * 0.05;
         else if (activeExpression === "cry") headPitchCue = 0.14;
@@ -624,7 +640,8 @@
       // Clamped LookAt wired to normalized gaze.{x, y} (or live 3D prop world position).
       if (vrm.lookAt && lookTarget) {
         const headNode = vrm.humanoid?.getNormalizedBoneNode("head");
-        const headPos = new THREE.Vector3(0, cameraFraming.headY, 0);
+        const headPos = headPosVec || (headPosVec = new THREE.Vector3());
+        headPos.set(0, cameraFraming.headY, 0);
         if (headNode) headNode.getWorldPosition(headPos);
         const overrideTarget = propsCtrl?.getLookAtWorldTarget?.();
         if (overrideTarget) {

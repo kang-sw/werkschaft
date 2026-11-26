@@ -64,9 +64,46 @@
     return isVrm0 ? [-x, y, -z] : [x, y, z];
   }
 
+  function createIKScratch(THREE) {
+    return {
+      toTarget: new THREE.Vector3(),
+      dir: new THREE.Vector3(),
+      clampedTarget: new THREE.Vector3(),
+      toPole: new THREE.Vector3(),
+      bendDir: new THREE.Vector3(),
+      ref: new THREE.Vector3(),
+      elbowPos: new THREE.Vector3(),
+      uDirW: new THREE.Vector3(),
+      fDirW: new THREE.Vector3(),
+      invParent: new THREE.Quaternion(),
+      uDirP: new THREE.Vector3(),
+      bendDirP: new THREE.Vector3(),
+      curElbow: new THREE.Vector3(),
+      e1: new THREE.Vector3(),
+      e2: new THREE.Vector3(),
+      cross: new THREE.Vector3(),
+      qSwing: new THREE.Quaternion(),
+      qTwist: new THREE.Quaternion(),
+      upperQuat: new THREE.Quaternion(),
+      upperWorldQuat: new THREE.Quaternion(),
+      invUpperWorld: new THREE.Quaternion(),
+      fDirUpper: new THREE.Vector3(),
+      lowerQuat: new THREE.Quaternion(),
+      out: {
+        upperQuat: null,
+        lowerQuat: null,
+        elbowPos: null,
+        handPos: null,
+        clampedDistance: 0
+      }
+    };
+  }
+
   // Pure analytical 2-bone IK solver. Computes exact local quaternions for
   // upperArm and lowerArm given world-space shoulder/target/pole positions,
   // bone segment lengths, parent world orientation, and local rest directions.
+  // When params.scratch is supplied (as in the hot render loop), zero Three.js
+  // vectors or quaternions are allocated.
   function solveTwoBoneArmIK(THREE, params) {
     const {
       shoulderPos,
@@ -77,76 +114,81 @@
       parentWorldQuat,
       restUpperDir,
       restLowerDir,
-      restElbowDir
+      restElbowDir,
+      scratch
     } = params;
 
+    const s = scratch || createIKScratch(THREE);
     const L1 = Math.max(0.02, upperLen);
     const L2 = Math.max(0.02, lowerLen);
-    const toTarget = new THREE.Vector3().subVectors(targetPos, shoulderPos);
-    const rawDist = toTarget.length();
-    const dir = rawDist > 1e-5
-      ? toTarget.clone().divideScalar(rawDist)
-      : new THREE.Vector3(0, -1, 0);
+    s.toTarget.subVectors(targetPos, shoulderPos);
+    const rawDist = s.toTarget.length();
+    if (rawDist > 1e-5) {
+      s.dir.copy(s.toTarget).divideScalar(rawDist);
+    } else {
+      s.dir.set(0, -1, 0);
+    }
 
     const minDist = Math.abs(L1 - L2) + 1e-4;
     const maxDist = (L1 + L2) * 0.995;
     const dist = Math.min(maxDist, Math.max(minDist, rawDist));
-    const clampedTarget = shoulderPos.clone().addScaledVector(dir, dist);
+    s.clampedTarget.copy(shoulderPos).addScaledVector(s.dir, dist);
 
     const cosA = Math.min(1, Math.max(-1, (L1 * L1 + dist * dist - L2 * L2) / (2 * L1 * dist)));
     const sinA = Math.sqrt(Math.max(0, 1 - cosA * cosA));
 
     // Project pole direction perpendicular to shoulder->target line.
-    const toPole = new THREE.Vector3().subVectors(polePos, shoulderPos);
-    const bendDir = toPole.addScaledVector(dir, -toPole.dot(dir));
-    if (bendDir.lengthSq() < 1e-8) {
-      const ref = Math.abs(dir.z) < 0.9 ? new THREE.Vector3(0, 0, -1) : new THREE.Vector3(0, 1, 0);
-      bendDir.crossVectors(dir, ref);
+    s.toPole.subVectors(polePos, shoulderPos);
+    s.bendDir.copy(s.toPole).addScaledVector(s.dir, -s.toPole.dot(s.dir));
+    if (s.bendDir.lengthSq() < 1e-8) {
+      if (Math.abs(s.dir.z) < 0.9) s.ref.set(0, 0, -1);
+      else s.ref.set(0, 1, 0);
+      s.bendDir.crossVectors(s.dir, s.ref);
     }
-    bendDir.normalize();
+    s.bendDir.normalize();
 
-    const elbowPos = shoulderPos.clone()
-      .addScaledVector(dir, L1 * cosA)
-      .addScaledVector(bendDir, L1 * sinA);
+    s.elbowPos.copy(shoulderPos)
+      .addScaledVector(s.dir, L1 * cosA)
+      .addScaledVector(s.bendDir, L1 * sinA);
 
-    const uDirW = new THREE.Vector3().subVectors(elbowPos, shoulderPos).normalize();
-    const fDirW = new THREE.Vector3().subVectors(clampedTarget, elbowPos).normalize();
+    s.uDirW.subVectors(s.elbowPos, shoulderPos).normalize();
+    s.fDirW.subVectors(s.clampedTarget, s.elbowPos).normalize();
 
-    const invParent = parentWorldQuat.clone().invert();
-    const uDirP = uDirW.clone().applyQuaternion(invParent).normalize();
-    const bendDirP = bendDir.clone().applyQuaternion(invParent).normalize();
+    s.invParent.copy(parentWorldQuat).invert();
+    s.uDirP.copy(s.uDirW).applyQuaternion(s.invParent).normalize();
+    s.bendDirP.copy(s.bendDir).applyQuaternion(s.invParent).normalize();
 
-    const qSwing = new THREE.Quaternion().setFromUnitVectors(restUpperDir, uDirP);
-    let upperQuat = qSwing;
+    s.qSwing.setFromUnitVectors(restUpperDir, s.uDirP);
+    s.upperQuat.copy(s.qSwing);
 
     // Align upper-arm roll so the elbow hinges cleanly along the pole plane.
     if (restElbowDir) {
-      const curElbow = restElbowDir.clone().applyQuaternion(qSwing);
-      const e1 = curElbow.addScaledVector(uDirP, -curElbow.dot(uDirP));
-      const e2 = bendDirP.clone().addScaledVector(uDirP, -bendDirP.dot(uDirP));
-      if (e1.lengthSq() > 1e-6 && e2.lengthSq() > 1e-6) {
-        e1.normalize();
-        e2.normalize();
-        const cosT = Math.min(1, Math.max(-1, e1.dot(e2)));
-        const cross = new THREE.Vector3().crossVectors(e1, e2);
-        const sinT = uDirP.dot(cross);
+      s.curElbow.copy(restElbowDir).applyQuaternion(s.qSwing);
+      s.e1.copy(s.curElbow).addScaledVector(s.uDirP, -s.curElbow.dot(s.uDirP));
+      s.e2.copy(s.bendDirP).addScaledVector(s.uDirP, -s.bendDirP.dot(s.uDirP));
+      if (s.e1.lengthSq() > 1e-6 && s.e2.lengthSq() > 1e-6) {
+        s.e1.normalize();
+        s.e2.normalize();
+        const cosT = Math.min(1, Math.max(-1, s.e1.dot(s.e2)));
+        s.cross.crossVectors(s.e1, s.e2);
+        const sinT = s.uDirP.dot(s.cross);
         const twistAngle = Math.atan2(sinT, cosT);
-        const qTwist = new THREE.Quaternion().setFromAxisAngle(uDirP, twistAngle);
-        upperQuat = qTwist.multiply(qSwing);
+        s.qTwist.setFromAxisAngle(s.uDirP, twistAngle);
+        s.upperQuat.copy(s.qTwist).multiply(s.qSwing);
       }
     }
 
-    const upperWorldQuat = parentWorldQuat.clone().multiply(upperQuat);
-    const fDirUpper = fDirW.clone().applyQuaternion(upperWorldQuat.clone().invert()).normalize();
-    const lowerQuat = new THREE.Quaternion().setFromUnitVectors(restLowerDir, fDirUpper);
+    s.upperWorldQuat.copy(parentWorldQuat).multiply(s.upperQuat);
+    s.invUpperWorld.copy(s.upperWorldQuat).invert();
+    s.fDirUpper.copy(s.fDirW).applyQuaternion(s.invUpperWorld).normalize();
+    s.lowerQuat.setFromUnitVectors(restLowerDir, s.fDirUpper);
 
-    return {
-      upperQuat,
-      lowerQuat,
-      elbowPos,
-      handPos: clampedTarget,
-      clampedDistance: dist
-    };
+    s.out.upperQuat = s.upperQuat;
+    s.out.lowerQuat = s.lowerQuat;
+    s.out.elbowPos = s.elbowPos;
+    s.out.handPos = s.clampedTarget;
+    s.out.clampedDistance = dist;
+    return s.out;
   }
 
   function createArmIKSolver(THREE, vrm, isVrm0) {
@@ -194,11 +236,13 @@
     sides.right = inspectSide("right");
 
     const tmpShoulder = new THREE.Vector3();
+    const tmpFallbackPole = new THREE.Vector3();
     const tmpParentQ = new THREE.Quaternion();
     const tmpEuler = new THREE.Euler(0, 0, 0, "XYZ");
     const tmpHandQ = new THREE.Quaternion();
     const fallbackVrm0Q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
     const identityQ = new THREE.Quaternion();
+    const ikScratch = createIKScratch(THREE);
 
     function slerpBone(key, node, targetQuat, alpha) {
       let cur = armQuatCache.get(key);
@@ -225,7 +269,7 @@
         tmpParentQ.copy(isVrm0 ? fallbackVrm0Q : identityQ);
       }
 
-      const pole = worldPole || new THREE.Vector3(
+      const pole = worldPole || tmpFallbackPole.set(
         tmpShoulder.x + (side === "left" ? 0.18 : -0.18),
         tmpShoulder.y - 0.14,
         tmpShoulder.z - 0.22
@@ -240,7 +284,8 @@
         parentWorldQuat: tmpParentQ,
         restUpperDir: rigSide.restUpperDir,
         restLowerDir: rigSide.restLowerDir,
-        restElbowDir: rigSide.restElbowDir
+        restElbowDir: rigSide.restElbowDir,
+        scratch: ikScratch
       });
 
       slerpBone(rigSide.upperName, rigSide.upper, solved.upperQuat, alpha);
@@ -296,14 +341,56 @@
       return applied;
     }
 
+    function syncArmFromCurrentBones(side) {
+      const targets = side ? [sides[side]] : [sides.left, sides.right];
+      for (const rigSide of targets) {
+        if (!rigSide) continue;
+        for (const [key, node] of [
+          [rigSide.upperName, rigSide.upper],
+          [rigSide.lowerName, rigSide.lower],
+          [rigSide.handName, rigSide.hand]
+        ]) {
+          let cur = armQuatCache.get(key);
+          if (!cur) {
+            cur = node.quaternion.clone();
+            armQuatCache.set(key, cur);
+          } else {
+            cur.copy(node.quaternion);
+          }
+        }
+      }
+    }
+
+    function syncFingersFromCurrentBones() {
+      for (const side of ["left", "right"]) {
+        for (const [, b0, b1, b2] of FINGER_BONES) {
+          for (const suffix of [b0, b1, b2]) {
+            const boneName = side + suffix;
+            const node = vrm.humanoid?.getNormalizedBoneNode(boneName);
+            if (!node) continue;
+            let cur = fingerState.get(boneName);
+            if (!cur) {
+              fingerState.set(boneName, [node.rotation.x, node.rotation.y, node.rotation.z]);
+            } else {
+              cur[0] = node.rotation.x;
+              cur[1] = node.rotation.y;
+              cur[2] = node.rotation.z;
+            }
+          }
+        }
+      }
+    }
+
     function syncFromCurrentBones() {
-      armQuatCache.clear();
-      fingerState.clear();
+      syncArmFromCurrentBones();
+      syncFingersFromCurrentBones();
     }
 
     return {
       solveArm,
       applyFingerPreset,
+      syncArmFromCurrentBones,
+      syncFingersFromCurrentBones,
       syncFromCurrentBones,
       getSideMetrics(side) {
         const s = sides[side];

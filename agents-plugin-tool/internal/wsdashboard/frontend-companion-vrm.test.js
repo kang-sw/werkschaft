@@ -842,13 +842,17 @@ test("Phase 2 2-bone analytical arm IK hits targets identically on VRM 0.x and V
   assert.ok(bDrone.props.drone, "subagent_dispatch must show drone 3D prop");
   assert.equal(bDrone.allWithinInset4, true, `drone bounds exceeded 4px inset: ${JSON.stringify(bDrone)}`);
 
-  // coffee & mail_send & mailbox_bonk & wave & point & oo.
+  // coffee, mail_send, mailbox_bonk, wave, point, headrub, cup_hands, perched, dangle, and oo.
   for (const [label, state] of [
     ["coffee", { pose: "stand", gesture: "coffee", prop: null, expression: "half_lid", extra: { progress: 0.4 } }],
     ["mail_send", { pose: "stand", gesture: "cup_hands", prop: "mail", expression: "oo", extra: { progress: 0.5, beat: { prop: { id: "mail", motion: "hand-liftoff" } } } }],
     ["mailbox_bonk", { pose: "stand", gesture: null, prop: "mail", expression: "oo", extra: { progress: 0.42, beat: { prop: { id: "mail", motion: "bonk-from-edge" } } } }],
     ["wave", { pose: "stand", gesture: "wave", prop: null, expression: "happy", extra: { progress: 0.5 } }],
     ["point", { pose: "stand", gesture: "point", prop: null, expression: "oo", extra: { progress: 0.5 } }],
+    ["headrub", { pose: "stand", gesture: "headrub", prop: null, expression: "happy", extra: { progress: 0.5 } }],
+    ["cup_hands", { pose: "stand", gesture: "cup_hands", prop: null, expression: "idle", extra: { progress: 0.5 } }],
+    ["perched", { pose: "perched", gesture: "perched", prop: null, expression: "idle", extra: { progress: 0.5 } }],
+    ["dangle", { pose: "dangle", gesture: "dangle", prop: null, expression: "oo", physics: { swing: 0.22 }, extra: { progress: 0.5 } }],
     ["oo", { pose: "stand", gesture: null, prop: null, expression: "oo", extra: { progress: 0.5 } }]
   ]) {
     for (let i = 0; i < 12; i++) propsCtrl.update({ dt: 0.05, elapsed: i * 0.05, physics: null, ...state });
@@ -856,15 +860,30 @@ test("Phase 2 2-bone analytical arm IK hits targets identically on VRM 0.x and V
     assert.equal(b.allWithinInset4, true, `${label} bounds exceeded 4px inset: ${JSON.stringify(b)}`);
   }
 
+  // IK -> stand -> IK must sync armQuatCache from current stand bones instead of snapping back to stale raised pose.
+  for (let i = 0; i < 12; i++) propsCtrl.update({ dt: 0.05, elapsed: i * 0.05, pose: "stand", gesture: "wave", prop: null, expression: "happy", physics: null, extra: {} });
+  const rightUpper = vrmWithFingers.humanoid.getNormalizedBoneNode("rightUpperArm");
+  const raisedQuat = rightUpper.quaternion.clone();
+  // Simulate stand lowering rightUpperArm directly via Euler rotation.
+  rightUpper.rotation.set(0.05, -0.04, 1.24, "XYZ");
+  const standQuat = rightUpper.quaternion.clone();
+  propsCtrl.update({ dt: 0.016, elapsed: 1.0, pose: "stand", gesture: null, prop: null, expression: "idle", physics: null, extra: {} });
+  // First tiny step of next IK gesture must stay close to standQuat, not snap back to raisedQuat.
+  propsCtrl.update({ dt: 0.016, elapsed: 1.02, pose: "stand", gesture: "point", prop: null, expression: "oo", physics: null, extra: {} });
+  const angleFromStand = rightUpper.quaternion.angleTo(standQuat);
+  const angleFromRaised = rightUpper.quaternion.angleTo(raisedQuat);
+  assert.ok(angleFromStand < angleFromRaised,
+    `IK -> stand -> IK snapped toward stale raised pose (fromStand=${angleFromStand.toFixed(3)}, fromRaised=${angleFromRaised.toFixed(3)})`);
+
   propsCtrl.dispose();
   assert.equal(scene.children.length, 0, "propsCtrl.dispose() must remove all 3D prop groups from scene");
 });
 
-test("Phase 2 optional .vrma clip playback cross-fades on matching gesture and hands back cleanly to procedural pose", async () => {
+test("Phase 2 optional .vrma clip playback cross-fades on matching gesture, hides 3D props, and caches failed loads", async () => {
   const doc = { createElement: tag => makeFakeElement(tag, doc), addEventListener() {} };
   const fakeThree = makeFakeVrmRuntime("1");
-  let clipLoads = 0, fadeIns = 0, fadeOuts = 0, mixerUpdates = 0;
-  fakeThree.runtime.createVRMAnimationClip = () => { clipLoads++; return { name: "wave-clip" }; };
+  let clipLoads = 0, fadeIns = 0, fadeOuts = 0, mixerUpdates = 0, hideCalls = 0;
+  fakeThree.runtime.createVRMAnimationClip = () => { clipLoads++; return { name: "typing-clip" }; };
   fakeThree.runtime.THREE.AnimationMixer = class {
     update() { mixerUpdates++; }
     stopAllAction() {}
@@ -882,6 +901,7 @@ test("Phase 2 optional .vrma clip playback cross-fades on matching gesture and h
   const origParse = fakeThree.runtime.GLTFLoader.prototype.parseAsync;
   fakeThree.runtime.GLTFLoader.prototype.parseAsync = async function (buf) {
     if (buf.byteLength === 2) return { userData: { vrmAnimations: [{ mock: true }] } };
+    if (buf.byteLength === 3) return { userData: { vrmAnimations: [] } };
     return origParse.call(this, buf);
   };
 
@@ -891,29 +911,40 @@ test("Phase 2 optional .vrma clip playback cross-fades on matching gesture and h
     window: { innerWidth: 1200, innerHeight: 800, devicePixelRatio: 1, addEventListener() {} },
     fetch: async url => {
       fetched.push(url);
-      if (url.includes("wave.vrma")) return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array([9, 9]).buffer };
+      if (url.includes("typing.vrma")) return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array([9, 9]).buffer };
+      if (url.includes("broken.vrma")) return { ok: false, status: 404, arrayBuffer: async () => new Uint8Array(0).buffer };
+      if (url.includes("empty.vrma")) return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer };
       return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer };
     }
   });
+  const origCreateProps = C.vrmProps.createController;
+  C.vrmProps.createController = (...args) => {
+    const ctrl = origCreateProps(...args);
+    const origHide = ctrl.hideAllProps;
+    ctrl.hideAllProps = () => { hideCalls++; origHide(); };
+    return ctrl;
+  };
   C.vrmRuntimeLoader = async () => fakeThree.runtime;
 
   const pack = {
     id: "vrm-vrma", rev: "r1", renderer: "vrm", modelFile: "avatar.vrm",
-    manifest: {}, expressionMap: {}, animations: { wave: "wave.vrma" }
+    manifest: {}, expressionMap: {},
+    animations: { typing: "typing.vrma", wave: "broken.vrma", point: "empty.vrma" }
   };
   const rig = C.makeVrmRig(pack);
   await rig.mount(makeFakeElement("div", doc), { width: 240, height: 280, dpr: 1 });
 
-  // Trigger wave -> fetches wave.vrma and cross-fades in.
-  const vWave = rig.view("stand", "wave", "happy", []);
-  vWave.render(0.1, { x: 0, y: 0 }, null, {});
+  // Trigger typing -> fetches typing.vrma, activates mixer, and calls propsCtrl.hideAllProps().
+  const vTyping = rig.view("typing", null, "focused", ["smartphone"]);
+  vTyping.render(0.1, { x: 0, y: 0 }, null, {});
   for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r));
-  vWave.render(0.2, { x: 0, y: 0 }, null, {});
-  assert.equal(fetched.some(u => u.includes("wave.vrma")), true, "matching animations.wave must fetch wave.vrma");
+  vTyping.render(0.2, { x: 0, y: 0 }, null, {});
+  assert.equal(fetched.some(u => u.includes("typing.vrma")), true, "matching animations.typing must fetch typing.vrma");
   assert.equal(clipLoads, 1);
   assert.equal(fadeIns, 1);
-  assert.equal(rig.debugState().activeVrmaKey, "wave");
+  assert.equal(rig.debugState().activeVrmaKey, "typing");
   assert.ok(mixerUpdates >= 1);
+  assert.ok(hideCalls >= 1, "active .vrma must hide 3D props instead of leaving them frozen");
 
   // Return to stand -> fades out .vrma cleanly and resumes procedural pose.
   const vStand = rig.view("stand", null, "idle", []);
@@ -921,5 +952,21 @@ test("Phase 2 optional .vrma clip playback cross-fades on matching gesture and h
   vStand.render(0.55, { x: 0, y: 0 }, null, {});
   assert.equal(fadeOuts, 1);
   assert.equal(rig.debugState().activeVrmaKey, "");
+
+  // Failed (404) and empty .vrma loads must be negatively cached (1 fetch total across many frames).
+  const vWave = rig.view("stand", "wave", "happy", []);
+  for (let i = 0; i < 8; i++) {
+    vWave.render(0.6 + i * 0.05, { x: 0, y: 0 }, null, {});
+    await new Promise(r => setImmediate(r));
+  }
+  assert.equal(fetched.filter(u => u.includes("broken.vrma")).length, 1, "failed .vrma must be negatively cached");
+
+  const vPoint = rig.view("stand", "point", "oo", []);
+  for (let i = 0; i < 8; i++) {
+    vPoint.render(1.1 + i * 0.05, { x: 0, y: 0 }, null, {});
+    await new Promise(r => setImmediate(r));
+  }
+  assert.equal(fetched.filter(u => u.includes("empty.vrma")).length, 1, "empty .vrma must be negatively cached");
+
   rig.dispose();
 });

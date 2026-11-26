@@ -234,8 +234,13 @@ async function saveDockShot(page, name) {
           { name: 'oo', cmd: { expression: 'oo', ttl_ms: 4000 } }
         ];
         for (const tc of phase2Cases) {
+          const beforeFrames = await page.evaluate(() => window.WsCompanion.debugStage()?.vrm?.framesRendered || 0);
           await sendCommand({ sessionId: 'livesession', ...tc.cmd });
-          await page.waitForTimeout(420);
+          await page.waitForFunction(
+            minFrames => (window.WsCompanion.debugStage()?.vrm?.framesRendered || 0) >= minFrames,
+            beforeFrames + 10,
+            { timeout: 4000 }
+          );
           const check = await page.evaluate(() => {
             const st = window.WsCompanion.debugStage();
             return { vrm: st?.vrm || null, bounds: st?.projectedBounds || null };
