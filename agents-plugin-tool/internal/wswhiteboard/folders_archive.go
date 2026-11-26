@@ -163,36 +163,89 @@ func (f FolderStore) LoadArchive(path string, now time.Time) (backup string, top
 // would land outside it, an archive past the caps, and one without the two
 // root authority files.
 func extractArchive(zipPath, dir string) error {
+	_, err := extractArchiveWithMockups(zipPath, dir, true)
+	return err
+}
+
+// extractArchiveWithMockups extracts the legacy folder files into dir. When
+// extractMockups is false, _mockups/<entryID>.zip entries are read directly
+// from the zip into memory (without touching the temp filesystem) and returned
+// keyed by entry ID while still counting against archiveMaxBytes.
+func extractArchiveWithMockups(zipPath, dir string, extractMockups bool) (map[string][]byte, error) {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer r.Close()
 	if len(r.File) > archiveMaxEntries {
-		return fmt.Errorf("the archive has %d entries, over the %d limit", len(r.File), archiveMaxEntries)
+		return nil, fmt.Errorf("the archive has %d entries, over the %d limit", len(r.File), archiveMaxEntries)
 	}
 	var total int64
 	seen := map[string]bool{}
+	var mockups map[string][]byte
 	for _, zf := range r.File {
 		name := strings.TrimSuffix(zf.Name, "/")
 		if name == "" || strings.ContainsAny(name, `\:`) || path.IsAbs(name) || path.Clean(name) != name || !filepath.IsLocal(filepath.FromSlash(name)) {
-			return fmt.Errorf("the archive entry %q is not a relative path inside the board folder", zf.Name)
+			return nil, fmt.Errorf("the archive entry %q is not a relative path inside the board folder", zf.Name)
 		}
 		if zf.FileInfo().IsDir() || name == ".lock" {
 			continue
 		}
 		if !zf.Mode().IsRegular() {
-			return fmt.Errorf("the archive entry %q is not a regular file", zf.Name)
+			return nil, fmt.Errorf("the archive entry %q is not a regular file", zf.Name)
+		}
+		if !extractMockups && strings.HasPrefix(name, mockupArchivePrefix) {
+			if seen[name] {
+				return nil, fmt.Errorf("the archive entry %q is duplicated", zf.Name)
+			}
+			rest := strings.TrimPrefix(name, mockupArchivePrefix)
+			if strings.Contains(rest, "/") || !strings.HasSuffix(rest, ".zip") {
+				return nil, fmt.Errorf("the archive entry %q is not a valid mockup bundle filename", zf.Name)
+			}
+			id := strings.TrimSuffix(rest, ".zip")
+			if folderNumber(id, "e") <= 0 {
+				return nil, fmt.Errorf("the archive entry %q is not a valid mockup bundle entry id", zf.Name)
+			}
+			data, err := readZipEntryBytes(zf, archiveMaxBytes-total, &total)
+			if err != nil {
+				return nil, err
+			}
+			if int64(len(data)) > MockupMaxBundleBytes+(64<<10) {
+				return nil, fmt.Errorf("the archive entry %q exceeds the maximum mockup bundle size", zf.Name)
+			}
+			if mockups == nil {
+				mockups = map[string][]byte{}
+			}
+			mockups[id] = data
+			seen[name] = true
+			continue
 		}
 		if err := extractEntry(zf, filepath.Join(dir, filepath.FromSlash(name)), archiveMaxBytes-total, &total); err != nil {
-			return err
+			return nil, err
 		}
 		seen[name] = true
 	}
 	if !seen["meta.json"] || !seen["committed.json"] {
-		return fmt.Errorf("the archive is not a board: meta.json and committed.json must be at its root")
+		return nil, fmt.Errorf("the archive is not a board: meta.json and committed.json must be at its root")
 	}
-	return nil
+	return mockups, nil
+}
+
+func readZipEntryBytes(zf *zip.File, budget int64, total *int64) ([]byte, error) {
+	in, err := zf.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer in.Close()
+	data, err := io.ReadAll(io.LimitReader(in, budget+1))
+	*total += int64(len(data))
+	if err != nil {
+		return nil, fmt.Errorf("the archive entry %q: %w", zf.Name, err)
+	}
+	if int64(len(data)) > budget {
+		return nil, fmt.Errorf("the archive inflates past the %d-byte limit", archiveMaxBytes)
+	}
+	return data, nil
 }
 
 // extractEntry copies one entry, counting the bytes actually inflated rather

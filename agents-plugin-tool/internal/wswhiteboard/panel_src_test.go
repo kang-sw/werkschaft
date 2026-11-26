@@ -116,8 +116,8 @@ func TestPanelSrcRefusals(t *testing.T) {
 	}
 	b.write(t, "mock/ok.html", "<p>ok</p>")
 	b.write(t, "mock/notes.txt", "text")
-	b.write(t, "mock/page.html", "<!DOCTYPE html>\n<html><body>x</body></html>")
-	b.write(t, "mock/page2.html", "  <html>\n<body>x</body></html>")
+	b.write(t, "mock/page.md", "<!DOCTYPE html>\n<html><body>x</body></html>")
+	b.write(t, "mock/page2.svg", "  <html>\n<body>x</body></html>")
 	b.write(t, "mock/binary.html", string([]byte{0xff, 0xfe, 'x'}))
 	b.write(t, "mock/big.html", strings.Repeat("a", MaxPanelBytes+1))
 	if err := os.Mkdir(filepath.Join(b.root, "dir.html"), 0o755); err != nil {
@@ -134,8 +134,8 @@ func TestPanelSrcRefusals(t *testing.T) {
 		{"directory", `src="dir.html"`, "not a regular file"},
 		{"over cap", `src="mock/big.html"`, "exceeds 2 MiB"},
 		{"not UTF-8", `src="mock/binary.html"`, "valid UTF-8"},
-		{"full document doctype", `src="mock/page.html"`, "full HTML document"},
-		{"full document html tag", `src="mock/page2.html"`, "full HTML document"},
+		{"full document doctype in md", `src="mock/page.md"`, "full HTML document"},
+		{"full document html tag in svg", `src="mock/page2.svg"`, "full HTML document"},
 		{"empty", `src=""`, "path is empty"},
 		{"blank", `src="  "`, "path is empty"},
 	} {

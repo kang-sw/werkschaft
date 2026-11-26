@@ -56,8 +56,9 @@ func (e EntryView) VersionLabel() string {
 	return VersionRef{ID: e.ID, Clock: e.Clock, Version: e.Version}.Label()
 }
 
-// HasBody keeps a deletion-only comparison available for an emptied panel.
-func (e EntryView) HasBody() bool { return e.Text != "" || e.Diff != nil }
+// HasBody keeps a deletion-only comparison available for an emptied panel
+// and ensures mockup snapshot panels always render their body slot.
+func (e EntryView) HasBody() bool { return e.Text != "" || e.Diff != nil || e.Mockup != nil }
 
 // panelEventPattern matches the system event every panel post appends. The
 // panel row itself shows that post, so the history leaves the event out; the
@@ -251,6 +252,7 @@ func streamView(doc TopicDoc, closed bool, loc *time.Location, items []ItemView)
 	var all []EntryView
 	prior := map[string]VersionRef{}
 	priorText := map[string]string{}
+	priorMockup := map[string]bool{}
 	for i, e := range doc.Entries {
 		if panelEvent(e) || staleReceipt(e) || internalRevisionMarker(e) {
 			continue
@@ -260,10 +262,11 @@ func streamView(doc TopicDoc, closed bool, loc *time.Location, items []ItemView)
 			v.Historical = last[e.PanelID] != i
 			v.Of, v.BoundName, v.Prior = counts[e.PanelID], names[e.PanelID], prior[e.PanelID]
 			v.Version = v.Prior.Version + 1
-			if !v.Historical && v.Prior.ID != "" {
+			if !v.Historical && v.Prior.ID != "" && e.Mockup == nil && !priorMockup[e.PanelID] {
 				v.Diff = diffPanel(priorText[e.PanelID], e.Text)
 			}
 			priorText[e.PanelID] = e.Text
+			priorMockup[e.PanelID] = e.Mockup != nil
 			prior[e.PanelID] = VersionRef{ID: e.ID, Clock: v.Clock, Version: v.Version}
 			if !v.Historical {
 				latest = append(latest, v)

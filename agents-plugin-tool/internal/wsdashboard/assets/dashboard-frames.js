@@ -39,16 +39,21 @@
   function mountFrame(p) {
     if (shHidden || (typeof shStaged !== "undefined" && shStaged)) return p;
     var f = doc.createElement("iframe");
+    var isMockup = p.hasAttribute("data-mockup-src");
     Array.prototype.forEach.call(p.attributes, function (a) { if (a.name !== "data-sandbox") f.setAttribute(a.name, a.value); });
     f.setAttribute("sandbox", p.getAttribute("data-sandbox") || "");
-    f.setAttribute("srcdoc", p.getAttribute("data-srcdoc") || "");
-    // A frame never laid out (no height yet) grows its topic when its first
-    // height lands, and a frame mounted again (unmountFrame) may land at
-    // another height than the one its placeholder kept (a narrower column,
-    // a diagram drawn again): topicResized keeps the view through either
-    // (wbFirst). The marks a board swap left for a frame's first height
-    // (wbKeep, wbGrow) stay on a frame unmounted before that height.
-    if (!p.style.height || p.wbUnmounted) f.wbFirst = true;
+    if (isMockup) {
+      f.setAttribute("src", p.getAttribute("data-mockup-src") || "");
+    } else {
+      f.setAttribute("srcdoc", p.getAttribute("data-srcdoc") || "");
+      // A frame never laid out (no height yet) grows its topic when its first
+      // height lands, and a frame mounted again (unmountFrame) may land at
+      // another height than the one its placeholder kept (a narrower column,
+      // a diagram drawn again): topicResized keeps the view through either
+      // (wbFirst). The marks a board swap left for a frame's first height
+      // (wbKeep, wbGrow) stay on a frame unmounted before that height.
+      if (!p.style.height || p.wbUnmounted) f.wbFirst = true;
+    }
     if (p.wbKeep) f.wbKeep = true;
     if (p.wbGrow) f.wbGrow = true;
     if (p.parentNode) p.parentNode.replaceChild(f, p);
@@ -60,7 +65,7 @@
   }
   function mountFrames(el) {
     if (shHidden || (typeof shStaged !== "undefined" && shStaged)) return;
-    q("div.doc-frame[data-srcdoc]", el).forEach(function (p) {
+    q("div.doc-frame[data-srcdoc], div.doc-frame[data-mockup-src]", el).forEach(function (p) {
       if (frameShown(p) && frameNear(p)) mountFrame(p);
     });
   }
@@ -73,7 +78,7 @@
   // meanwhile is skipped (frameShown checks it is still connected).
   function mountFramesPaced(el) {
     if (shHidden || (typeof shStaged !== "undefined" && shStaged)) return;
-    mountList = mountList.concat(q("div.doc-frame[data-srcdoc]", el));
+    mountList = mountList.concat(q("div.doc-frame[data-srcdoc], div.doc-frame[data-mockup-src]", el));
     if (!mountTask) mountSlice();
   }
   function mountSlice() {
@@ -189,7 +194,7 @@
   // frame, one holding the user's selection (wbHoldSelection), and the one
   // a mention button stands over (mpend).
   function unmountFrames(t) {
-    q("iframe.doc-frame[data-srcdoc]", t).forEach(function (f) {
+    q("iframe.doc-frame[data-srcdoc], iframe.doc-frame[data-mockup-src]", t).forEach(function (f) {
       if (f.wbNext || f.wbOut || f.wbHoldSelection || f === doc.activeElement || (mpend && mpend.frame === f)) return;
       unmountFrame(f);
     });
@@ -216,7 +221,7 @@
     p.wbUnmounted = true;
     if (f.wbKeep) p.wbKeep = true;
     if (f.wbGrow) p.wbGrow = true;
-    Array.prototype.forEach.call(f.attributes, function (a) { if (a.name !== "srcdoc" && a.name !== "sandbox") p.setAttribute(a.name, a.value); });
+    Array.prototype.forEach.call(f.attributes, function (a) { if (a.name !== "srcdoc" && a.name !== "src" && a.name !== "sandbox") p.setAttribute(a.name, a.value); });
     p.setAttribute("data-sandbox", f.getAttribute("sandbox") || "");
     if (frameSizes.has(f)) { p.style.height = Math.ceil(frameSizes.get(f)) + "px"; frameSizes.delete(f); }
     if (f.contentWindow) frameWins.delete(f.contentWindow);

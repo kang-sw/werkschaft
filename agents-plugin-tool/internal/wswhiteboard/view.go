@@ -100,6 +100,10 @@ type View struct {
 	// Href, for the frame to ask its host page for the image (framedDoc). A
 	// zero FileAction leaves the target to ImageSrc and FileActions alone.
 	OutsideImage func(path string) FileAction
+	// MockupSrc returns the stable redirect URL for a stored mockup snapshot
+	// panel (never an expiring capability URL), or "" when the snapshot bundle
+	// is unavailable and the panel should fall back to its Markdown text.
+	MockupSrc func(entryID, sha256 string) string
 	// Lang is the language of the text the page itself draws (a wsi18n
 	// code; empty renders English). The served dashboard page sets it, after
 	// BuildView, per viewer.
@@ -540,6 +544,7 @@ type ViewInput struct {
 	DocImageSrc  func(path string) string
 	FileActions  func(path string) FileAction
 	OutsideImage func(path string) FileAction
+	MockupSrc    func(entryID, sha256 string) string
 	// Tickets resolves each topic's linked ticket stems to their status;
 	// nil shows every linked ticket as unknown.
 	Tickets TicketResolver
@@ -573,6 +578,7 @@ func BuildView(state *State, in ViewInput) View {
 		DocImageSrc:  in.DocImageSrc,
 		FileActions:  in.FileActions,
 		OutsideImage: in.OutsideImage,
+		MockupSrc:    in.MockupSrc,
 		LazyHistory:  in.LazyHistory,
 	}
 	for _, doc := range state.Topics {

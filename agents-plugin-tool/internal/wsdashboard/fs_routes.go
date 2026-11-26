@@ -493,6 +493,8 @@ func (d *Daemon) handleFSRoutes(w http.ResponseWriter, r *http.Request, replyID,
 		d.handleFSOutsideCapability(w, r, replyID, strings.TrimPrefix(sub, "ocap/"), false)
 	case strings.HasPrefix(sub, "oview/"):
 		d.handleFSOutsideCapability(w, r, replyID, strings.TrimPrefix(sub, "oview/"), true)
+	case strings.HasPrefix(sub, "mock/"):
+		d.handleFSMockup(w, r, replyID, strings.TrimPrefix(sub, "mock/"))
 	default:
 		http.NotFound(w, r)
 	}
