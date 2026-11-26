@@ -76,11 +76,12 @@ type RingEntry struct {
 	// Truncated qualifies retained text; on a summary-bearing natural turn
 	// it carries aggregate clipping, separately from provider terminal facts.
 	Truncated bool `json:"truncated,omitempty"`
-	// Done, Failed, and DurationMs summarize a turn: its tool calls and its
-	// length.
-	Done       int   `json:"done,omitempty"`
-	Failed     int   `json:"failed,omitempty"`
-	DurationMs int64 `json:"durationMs,omitempty"`
+	// Done, Failed, DurationMs, and AddedTokens summarize a turn: its tool
+	// calls, its length, and its context-token increase (T0 additive field).
+	Done        int   `json:"done,omitempty"`
+	Failed      int   `json:"failed,omitempty"`
+	DurationMs  int64 `json:"durationMs,omitempty"`
+	AddedTokens int64 `json:"added_tokens,omitempty"`
 	// Reason is a turn's end reason (Event.Reason), absent when its
 	// turn_end named none.
 	Reason         string          `json:"reason,omitempty"`

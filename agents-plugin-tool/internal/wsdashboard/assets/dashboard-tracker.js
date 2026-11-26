@@ -587,6 +587,9 @@
   function paletteBodyText(body) {
     var frame = body && body.querySelector(".doc-frame");
     if (!frame) return paletteText(body);
+    if (frame.getAttribute("data-mockup-src") !== null || frame.getAttribute("data-fallback-text") !== null) {
+      return (frame.getAttribute("data-fallback-text") || "").replace(/\s+/g, " ").trim();
+    }
     // Both mounted frames and inert placeholders retain the source document.
     // A template reads its text without executing scripts or fetching images.
     var parsed = doc.createElement("template");

@@ -123,8 +123,13 @@ button { font: inherit; color: inherit; }
 a { color: var(--wb-primary); }
 
 /* chips: filled, role-coloured */
-.chip { display: inline-flex; align-items: center; gap: 3px; height: 20px; font-size: 12px; font-weight: 700; line-height: 1; padding: 0 9px; border-radius: 999px; background: var(--wb-muted); color: var(--wb-muted-fg); white-space: nowrap; }
+.chip { display: inline-flex; align-items: center; gap: 3px; height: 20px; font-size: 12px; font-weight: 700; line-height: 1; padding: 0 8px; border-radius: 999px; background: var(--wb-muted); color: var(--wb-muted-fg); white-space: nowrap; }
+.chip[hidden] { display: none; }
+.chip .chip-lbl { font-weight: 600; }
+.chip .n { font-variant-numeric: tabular-nums; }
 .chip.policy { background: var(--wb-policy); color: var(--wb-on-policy); }
+.chip.wb-chip-ans { background: var(--wb-announced); color: var(--wb-on-announced); }
+.chip.wb-chip-held { background: color-mix(in srgb, var(--wb-accent-policy) 16%, var(--wb-card)); color: var(--wb-fg); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent-policy) 42%, transparent); font-weight: 600; }
 .chip.ok { background: var(--wb-technical); color: var(--wb-on-technical); }
 /* A topic bar's count chip on the dashboard board is a button that answers
    every item it counts (form.js bulkAnswer). */

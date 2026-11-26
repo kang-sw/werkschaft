@@ -9,6 +9,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: ced3c5ef86d4e00e
 sage-review-completeness-reviewed: ced3c5ef86d4e00e
+completed: 2026-11-27
 ---
 
 # Unified `#r-convlive` Extra Motion Engine, Bottom-Left Settings Cleanup, & Inline Hover Mute
@@ -127,3 +128,11 @@ Approved visual reference: `ai-docs/assets/mockups/261125/whiteboard-chat-view/m
   - Bidirectional sync between hover `모션 끄기` and bottom-left Settings `ws.dashboard.extraMotion` (default ON), and legacy `ws.dashboard.layout` of `tabs`/`split` in `localStorage` loading as the dynamic default; a stale busy/thinking state dropping the rAF loop to `0`; `+m` equal to the header's token increase (and no number when it did not advance).
   - Dynamic target X tracking when `[data-conv-turn-tokens]` shifts horizontally (e.g., when `[data-conv-turn-fails]` appears).
 - Headless Chromium (Playwright) visual verification in dark and light themes comparing the bottom-left Settings popover (no `레이아웃`, `Extra Motion` option rows), hover `모션 끄기` reveal, `#r-convlive` thinking/tool/flight/`+m` frames, and static fallback side-by-side against `ai-docs/assets/mockups/261125/whiteboard-chat-view/mockup.html`.
+
+### Result (43b2e38) - 2026-11-27
+
+Landed in 301fec89d + 43b2e3812: `dashboard-conv-motion.{js,css}` engine (5 tool categories, thinking bloom, pop-in, OK/FAIL flights, `+m` popups, 0-rAF budget, hover `모션 끄기` synced with Settings `Extra Motion`), `레이아웃` section removed from the bottom-left Settings popover (stale `ws.dashboard.layout` ignored), additive `#r-convlive` data attributes, locale keys in all 11 tables, Go + Node + Playwright tests.
+
+Verification: 7/7 Node unit tests (incl. new mixed OK+FAIL batch case); Playwright dark/light/reduced-motion acceptance and visual comparison vs `mockup.html` (match); `wslive`/`wsi18n` `-race`; `GOOS=windows go vet`.
+
+Decisions: lite review found one Important (FAIL flight lost in mixed OK+failed batches) — fixed with an explicit ok-then-fail flight list and a regression test. Two Minor findings left open: token growth without a same-step completion is absorbed rather than accumulated; the final completion is not animated when the swap that finishes the turn also removes `.clive`.

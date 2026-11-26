@@ -50,6 +50,7 @@ Included:
 - `lead-delegate`
 - `lead-run`
 - `lead-use-mailbox`
+- `lead-mockup`
 - `lead-revive` (inline-body exception; see below)
 - `lead-proceed` (wsflow-only backward-compat alias; see **wsflow-only
   aliases** below)

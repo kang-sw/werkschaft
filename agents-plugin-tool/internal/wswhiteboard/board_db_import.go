@@ -27,12 +27,16 @@ func (b *BoardDB) importState(state *State, meta *folderSession, legacy FolderSt
 	metaState.Items, metaState.Topics, metaState.Labels, metaState.CloseResults = nil, nil, nil, nil
 	rows.State = folderJSON(metaState)
 	rows.ItemOrder = folderJSON(meta.ItemOrder)
+	bundles, err := readLegacyMockupBundles(legacy.Dir, state)
+	if err != nil {
+		return err
+	}
 	tx, err := b.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if err := boardInsertAll(tx, rows, meta.Generation, meta.Generation); err != nil {
+	if err := boardInsertAll(tx, rows, meta.Generation, meta.Generation, bundles); err != nil {
 		return err
 	}
 	latestRevisionGeneration := 0
@@ -72,6 +76,7 @@ func (b *BoardDB) importState(state *State, meta *folderSession, legacy FolderSt
 	b.importedGeneration = meta.Generation
 	b.nextTopic = rows.NextTopic
 	b.topicDirs = rows.Dirs
+	b.setMockupIndexLocked(rows, bundles)
 	return nil
 }
 
@@ -94,7 +99,7 @@ func boardReadLoadFloors(dir string) ([]folderLoadFloor, error) {
 	return out, nil
 }
 
-func boardInsertAll(tx *sql.Tx, rows boardDBRows, generation, imported int) error {
+func boardInsertAll(tx *sql.Tx, rows boardDBRows, generation, imported int, bundles map[string]MockupBundle) error {
 	if _, err := tx.Exec(`INSERT INTO board_meta(id,schema_version,generation,imported_generation,next_topic,state_json,item_order_json) VALUES(1,?,?,?,?,?,?)`, boardDBSchemaVersion, generation, imported, rows.NextTopic, rows.State, rows.ItemOrder); err != nil {
 		return err
 	}
@@ -114,6 +119,14 @@ func boardInsertAll(tx *sql.Tx, rows boardDBRows, generation, imported int) erro
 			}
 			if entry.PanelBody != nil {
 				if _, err := tx.Exec(`INSERT INTO panels(entry_id,body) VALUES(?,?)`, entry.ID, *entry.PanelBody); err != nil {
+					return err
+				}
+			}
+			if bundle, ok := bundles[entry.ID]; ok {
+				if _, err := tx.Exec(
+					`INSERT INTO mockup_bundles(entry_id,root_file,sha256,bundle,byte_size,file_count,created_at) VALUES(?,?,?,?,?,?,?)`,
+					entry.ID, bundle.RootFile, bundle.SHA256, bundle.Zip, bundle.ByteSize, bundle.FileCount, bundle.CreatedAt,
+				); err != nil {
 					return err
 				}
 			}
@@ -255,6 +268,24 @@ func (b *BoardDB) load() error {
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
+	b.mockups = map[string]string{}
+	b.mockupRoots = map[string]string{}
+	mrows, err := b.db.Query(`SELECT entry_id, root_file, sha256 FROM mockup_bundles`)
+	if err != nil {
+		return err
+	}
+	for mrows.Next() {
+		var id, rootFile, sha string
+		if err := mrows.Scan(&id, &rootFile, &sha); err != nil {
+			mrows.Close()
+			return err
+		}
+		b.mockups[id] = sha
+		b.mockupRoots[id] = rootFile
+	}
+	if err := errors.Join(mrows.Err(), mrows.Close()); err != nil {
+		return err
+	}
 	b.state = state.clone()
-	return nil
+	return b.loadHoldsLocked()
 }

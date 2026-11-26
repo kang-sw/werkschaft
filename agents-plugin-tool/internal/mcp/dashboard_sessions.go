@@ -990,7 +990,7 @@ func (src *DashboardSessionSource) ReadSession(reg wsdashboard.Registration) (ws
 	}
 	return src.ReadLiveSession(reg, wsdashboard.SessionData{
 		HasBoard:           record.Whiteboard != nil,
-		CountPolicy:        record.Whiteboard.OpenAskCount(),
+		CountPolicy:        record.Whiteboard.OpenAskCountExcluding(record.boardHeld),
 		OpenAskIDs:         record.Whiteboard.OpenAskIDs(),
 		Resumable:          record.HarnessSession != "" && record.HarnessCwd != "",
 		NonLiveFingerprint: hex.EncodeToString(h.Sum(nil)[:16]),

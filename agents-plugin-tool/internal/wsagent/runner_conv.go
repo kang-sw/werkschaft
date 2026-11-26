@@ -831,7 +831,7 @@ func (c *conv) steer() {
 	if len(parts) == 0 {
 		return
 	}
-	text := partsText(parts)
+	text := c.steerWithDirective(partsText(parts), recs)
 	c.applyLive(liveEvents(parts))
 	if err := st.Steer(text); err != nil {
 		c.setStatus(func() { c.lastErr = "send the steered message: " + err.Error() })
@@ -2046,7 +2046,7 @@ func (c *conv) kickInput() {
 			queue = append(queue, QueuedInput{Command: &cmd, After: from, Operator: operator})
 		} else if text := strings.TrimSpace(rec.Entry.Text()); text != "" {
 			_, exec := rec.Entry.ExecNotice()
-			queue = append(queue, QueuedInput{Text: text, After: from, Operator: operator, Exec: exec})
+			queue = append(queue, QueuedInput{Text: text, After: from, Operator: operator, Exec: exec, WhiteboardFirst: rec.Entry.WhiteboardFirst})
 		}
 	}
 	if durable && len(recs) > 0 {
@@ -2069,6 +2069,7 @@ func (c *conv) kickInput() {
 	for i, input := range inputs {
 		parts[i] = input.Text
 	}
+	whiteboard := slices.ContainsFunc(inputs, func(input QueuedInput) bool { return input.WhiteboardFirst })
 	if !durable && cmd != nil && cmd.Name == "compact" {
 		c.refreshCompaction()
 		if c.wsManagedLeadCompaction() {
@@ -2135,7 +2136,7 @@ func (c *conv) kickInput() {
 			}
 			c.passiveTook = nil
 			if ordinary {
-				text = c.turnInput(text)
+				text = c.turnInput(text, whiteboard)
 			}
 			interactive := c.rec.Lead && slices.ContainsFunc(queue[:len(queue)-len(rest)], func(input QueuedInput) bool { return input.Operator })
 			committed, err = c.admitDurableTurn(text, rest, mark, startedAt, len(mail) > 0, len(reports) > 0, false, interactive)
@@ -2148,13 +2149,13 @@ func (c *conv) kickInput() {
 		c.syncAwake()
 		c.passiveTook = nil
 		if cmd == nil {
-			err = c.proc.Send(c.turnInput(strings.Join(append(append(slices.Clone(parts), sentReports...), submitted...), "\n\n")))
+			err = c.proc.Send(c.turnInput(strings.Join(append(append(slices.Clone(parts), sentReports...), submitted...), "\n\n"), whiteboard))
 		} else if text, ok := c.playbookTurn(*cmd); ok {
 			// The runner expands a playbook command itself: the harness
 			// has no such command, and the turn carries the playbook's
 			// body.
 			ordinary = true
-			err = c.proc.Send(c.turnInput(text))
+			err = c.proc.Send(c.turnInput(text, false))
 		} else {
 			err = c.runCommand(*cmd)
 		}

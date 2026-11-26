@@ -351,7 +351,7 @@ func TestRenderRegionsSettledRowExpands(t *testing.T) {
 		}
 
 		policy := row(1)
-		wantAll(t, policy, `<div class="srow wb-hitem policy" id="item-1"><details class="sx" data-key="item:1"><summary><span class="stext wb-htext">`,
+		wantAll(t, policy, `<div class="srow wb-hitem policy" data-item="1" data-class="policy" data-state="settled" id="item-1"><details class="sx" data-key="item:1"><summary><span class="stext wb-htext">`,
 			`<span class="link"><svg class="i" aria-hidden="true"><use href="#i-link"/></svg>see <a href="#item-2">(02)</a></span>`)
 		wantAll(t, policy,
 			`<div class="sbody"><div class="ctx md">context <strong>why</strong></div><div class="opts">`,
@@ -372,7 +372,7 @@ func TestRenderRegionsSettledRowExpands(t *testing.T) {
 		wantAll(t, row(3), `<details class="sx" data-key="item:3">`, `<div class="sbody"><div class="ctx md">because <code>x</code></div></div></details>`)
 
 		bare := row(4)
-		wantAll(t, bare, `<div class="srow wb-hitem announced" id="item-4">`, `<span class="stext wb-htext">`)
+		wantAll(t, bare, `<div class="srow wb-hitem announced" data-item="4" data-class="announced" data-state="settled" id="item-4">`, `<span class="stext wb-htext">`)
 		wantAll(t, bare, "only a link")
 		wantNone(t, bare, "<details", "sbody")
 	}

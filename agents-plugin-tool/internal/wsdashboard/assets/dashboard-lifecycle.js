@@ -1186,7 +1186,7 @@
     if (!shSettingsEntry && !(typeof rp !== "undefined" && rp.P)) try { ent.el.contentWindow.focus(); } catch (x) { /* unloading */ }
   }
   // Private UI state only: no daemon protocol or persistence contract changes.
-  function shSettings(ent) { shSend(ent, "settings", { layout: layoutMode, input: inputMode, stageFill: typeof stageFill !== "undefined" && !!stageFill }); }
+  function shSettings(ent) { shSend(ent, "settings", { layout: layoutMode, input: inputMode, stageFill: typeof stageFill !== "undefined" && !!stageFill, extraMotion: typeof extraMotion === "undefined" ? true : !!extraMotion }); }
   function shReload() {
     if (!shOn) return;
     shOn.loaded = false;
@@ -1424,10 +1424,16 @@
           shBroadcastTheme(root.getAttribute("data-theme") || "", ent);
           break;
         case "settings":
+          var broadcastSettings = false;
           if (typeof m.stageFill === "boolean" && typeof setStageFill === "function" && m.stageFill !== (typeof stageFill !== "undefined" && !!stageFill)) {
             setStageFill(m.stageFill);
-            shFrames.forEach(function (f) { if (f !== ent) shSettings(f); });
+            broadcastSettings = true;
           }
+          if (typeof m.extraMotion === "boolean" && typeof setExtraMotion === "function" && m.extraMotion !== (typeof extraMotion === "undefined" ? true : !!extraMotion)) {
+            setExtraMotion(m.extraMotion);
+            broadcastSettings = true;
+          }
+          if (broadcastSettings) shFrames.forEach(function (f) { if (f !== ent) shSettings(f); });
           break;
       }
     });
@@ -1623,7 +1629,7 @@
       } else if (m.wsShell === "menu") {
         var h = region("head"), chip = h && h.querySelector(".host.hbtn");
         if (chip && WsRail) railPopOpen("sess", chip);
-      } else if (m.wsShell === "settings") { setLayout(m.layout); setInput(m.input); if (typeof m.stageFill === "boolean" && typeof setStageFill === "function") setStageFill(m.stageFill); }
+      } else if (m.wsShell === "settings") { setLayout(m.layout); setInput(m.input); if (typeof m.stageFill === "boolean" && typeof setStageFill === "function") setStageFill(m.stageFill); if (typeof m.extraMotion === "boolean" && typeof setExtraMotion === "function") setExtraMotion(m.extraMotion); }
       else if (m.wsShell === "theme") setTheme(m.theme, true);
       else if (m.wsShell === "rail-open") { if (typeof tkApi !== "undefined" && tkApi && tkApi.closeStore) tkApi.closeStore(); }
       else if (m.wsShell === "sync") { sent = {}; queueHead(); shPost("title", { title: doc.title }); }
@@ -1670,8 +1676,9 @@
 
   bootingPanes = true;
   if (live || gmenu) {
-    setLayout(load(LAYOUT_KEY));
+    setLayout();
     setInput(load(INPUT_KEY));
+    setExtraMotion(load(EXTRA_MOTION_KEY));
   }
   if (live) {
     setTab("convo");
@@ -1695,6 +1702,7 @@
   if (cardBoard) mountBoardOverview();
   boardRestoreReload();
   applySent();
+  if (typeof initWbUpdateCards === "function") initWbUpdateCards();
   startDraftRecovery();
   tlCount();
   apScan(region(mode === "index" ? "sessions" : "rail"), mode === "index" ? "sessions" : "rail");

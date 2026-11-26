@@ -2,13 +2,17 @@ package wsdashboard
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -86,19 +90,87 @@ func TestBoardChatSmallUXBrowser(t *testing.T) {
 		ringRecord(6, wslive.RingEntry{Kind: wslive.RingReply, Text: "Final status summary:\n\nAll front-end asset checks are green. Ready for visual review across both light and dark themes, including before/after interaction states for chat jump, in-card find, and held ask pill counts."}),
 	}
 
+	var mu sync.Mutex
+	boards := map[string]*wswhiteboard.BoardDB{}
+	editedApplied := map[string]bool{}
+	boardFor := func(theme string, edited bool) (*wswhiteboard.BoardDB, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		b := boards[theme]
+		if b == nil {
+			st, err := buildBoard(false)
+			if err != nil {
+				return nil, err
+			}
+			b, err = wswhiteboard.CreateBoardDB(filepath.Join(t.TempDir(), "board-"+theme), st, wswhiteboard.BoardDBOptions{})
+			if err != nil {
+				return nil, err
+			}
+			t.Cleanup(func() { _ = b.Close() })
+			boards[theme] = b
+		}
+		if edited && !editedApplied[theme] {
+			if err := b.Update(func(st *wswhiteboard.State) error {
+				_, probs := wswhiteboard.Apply(st, `<wb:patch id="3"><wb:title>Pick rollout cadence for patch release (updated scope)</wb:title></wb:patch>`, wswhiteboard.Env{Now: time.Date(2026, 11, 21, 18, 5, 0, 0, time.UTC)})
+				if len(probs) != 0 {
+					return fmt.Errorf("patch: %v", probs)
+				}
+				return nil
+			}); err != nil {
+				return nil, err
+			}
+			editedApplied[theme] = true
+		}
+		return b, nil
+	}
+	var currentTheme string
 	mux := http.NewServeMux()
+	mux.HandleFunc("/s/uxdemo/board/hold", func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		id, held, err := parseBoardHoldRequest(raw)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		theme := currentTheme
+		mu.Unlock()
+		if theme == "" {
+			theme = "light"
+		}
+		b, err := boardFor(theme, false)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		ids, err := b.SetHold(id, held)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		out := make([]string, len(ids))
+		for i, v := range ids {
+			out[i] = strconv.Itoa(v)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(boardHoldResponse{Held: out})
+	})
 	mux.HandleFunc("/s/uxdemo", func(w http.ResponseWriter, r *http.Request) {
 		theme := r.URL.Query().Get("theme")
 		if theme != "dark" {
 			theme = "light"
 		}
+		mu.Lock()
+		currentTheme = theme
+		mu.Unlock()
 		edited := r.URL.Query().Get("edited") == "1"
-		st, err := buildBoard(edited)
+		b, err := boardFor(theme, edited)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		wbView := wswhiteboard.BuildView(st, wswhiteboard.ViewInput{Layout: wswhiteboard.LayoutFull, ReplyID: "uxdemo"})
+		st, _, held := b.SnapshotWithHolds()
+		wbView := wswhiteboard.BuildView(st, wswhiteboard.ViewInput{Layout: wswhiteboard.LayoutFull, ReplyID: "uxdemo", Held: held})
 		wbView.Lang = "en"
 		wbReg, err := wswhiteboard.RenderRegions(wbView)
 		if err != nil {

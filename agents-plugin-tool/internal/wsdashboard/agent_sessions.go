@@ -320,6 +320,32 @@ func (s agentSessions) BoardItems(reg Registration) (BoardItems, bool) {
 	return BoardItems{}, false
 }
 
+func (s agentSessions) LookupMockup(reg Registration, entryID string) (MockupLookup, bool, error) {
+	if reg.Agent {
+		return MockupLookup{}, false, nil
+	}
+	if ms, ok := s.inner.(BoardMockupSource); ok {
+		return ms.LookupMockup(reg, entryID)
+	}
+	return MockupLookup{}, false, nil
+}
+
+func (s agentSessions) ReadMockupBundle(reg Registration, entryID string) (wswhiteboard.MockupBundle, bool, error) {
+	if reg.Agent {
+		return wswhiteboard.MockupBundle{}, false, nil
+	}
+	if ms, ok := s.inner.(BoardMockupSource); ok {
+		return ms.ReadMockupBundle(reg, entryID)
+	}
+	return wswhiteboard.MockupBundle{}, false, nil
+}
+
+func (s agentSessions) SetMockupEvictor(fn func(boardDir string)) {
+	if ms, ok := s.inner.(BoardMockupSource); ok {
+		ms.SetMockupEvictor(fn)
+	}
+}
+
 // readsBoardItems reports whether the configured source reads board items
 // (BoardItemsSource), so the answer check skips a session it could never
 // judge before reading anything else of it.
@@ -401,6 +427,15 @@ func (s agentSessions) ReadClosedTopics(reg Registration, lang string, from, n i
 func (s agentSessions) BoardArchive(reg Registration) ([]byte, bool, error) {
 	if bs, ok := s.inner.(BoardArchiveSource); ok && !reg.Agent {
 		return bs.BoardArchive(reg)
+	}
+	return nil, false, nil
+}
+
+// SetBoardHold forwards to the configured source; an agent conversation has
+// no board.
+func (s agentSessions) SetBoardHold(reg Registration, itemID int, held bool) ([]int, bool, error) {
+	if hs, ok := s.inner.(BoardHoldSource); ok && !reg.Agent {
+		return hs.SetBoardHold(reg, itemID, held)
 	}
 	return nil, false, nil
 }

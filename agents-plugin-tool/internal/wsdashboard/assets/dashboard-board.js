@@ -125,6 +125,7 @@
         var entryNext = typeof html === "string" ? entryInputFull(html) : html;
         mergeEntriesRegion(el, entryNext || html, pin, entryRendered);
         entryRendered = entryNext;
+        if (typeof wbOnlyOn === "function" && wbOnlyOn()) wbFoldSync();
       }
       else if (name === "tree") {
         var treeNext = typeof html === "string" ? treeInputFull(html) : html;
@@ -202,7 +203,10 @@
       // source frame leaves the board during an update.
       if (mpend && !mpend.locked && mpend.frame && !doc.contains(mpend.frame)) hideMention();
     }
-    if (board || name === "convlive") applySent(board);
+    if (board || name === "convlive") {
+      applySent(board);
+      if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
+    }
     if (name === "convlive" || name === "entries") outboxSync();
     if (name === "panels") { drawerSync(); restorePanelReader(el, panelReader); }
     if (name === "git") gitSwapped();
@@ -228,6 +232,7 @@
     if (name === "tree") agSwapped();
     if (TL_REGIONS[name]) { delete tlHeld[name]; tlCount(); }
     if (name === "convlive") syncBadge();
+    if ((name === "convlive" || name === "entries") && typeof convMotionSync === "function") convMotionSync(name);
     // A list that arrives while a / waits in the box opens the picker.
     if (name === "cmds" && slash) slash.sync();
     if (name === "entries") syncChead();
@@ -408,7 +413,7 @@
   // whether the layout menu shows one column at a time.
   function galMode() {
     return { width: window.innerWidth || 0,
-      tabs: !!(live && (grid.getAttribute("data-layout") || load(LAYOUT_KEY)) === "tabs") };
+      tabs: !!(live && grid.getAttribute("data-layout") === "tabs") };
   }
   // placeGallery lays the narrow view's gallery over the board's column:
   // the column's box, cut to the window. A hidden column (another tab)
@@ -689,6 +694,8 @@
     if (window.wbForm) window.wbForm();
     mermaid([target]);
     applySent(true);
+    if (window.wbPill && window.wbPill.syncTopicBars) window.wbPill.syncTopicBars();
+    if (window.WsOverview && window.WsOverview.syncPlaceholder) window.WsOverview.syncPlaceholder(target, true);
     restorePreviewFocus(target, focusSaved);
     target.scrollTop = scrollTop;
   }
@@ -896,15 +903,22 @@
       // already-admitted rows before looking for their frame placeholders;
       // the normal post-morph restore still owns folds, mounting and layout.
       if (window.wbHistory) window.wbHistory.prepare(c.n, window.wbHistory.capture(c.old));
+      function frameKeepKey(el) {
+        if (el.hasAttribute("data-mockup-sha")) return "m\n" + el.getAttribute("data-doc-key") + "\n" + el.getAttribute("data-mockup-sha");
+        if (el.hasAttribute("data-srcdoc")) return "s\n" + el.getAttribute("data-doc-key") + "\n" + el.getAttribute("data-srcdoc");
+        return "";
+      }
       var held = c.g ? c.g.oc[0] : null, olds = {};
       q('iframe.doc-frame[data-doc-key^="entry:"]:not(.doc-frame-next)', c.old).forEach(function (f) {
-        if (f === held || !f.hasAttribute("data-srcdoc")) return;
-        var k = f.getAttribute("data-doc-key") + "\n" + f.getAttribute("data-srcdoc");
+        if (f === held) return;
+        var k = frameKeepKey(f);
+        if (!k) return;
         (olds[k] = olds[k] || []).push(f);
       });
       q('div.doc-frame[data-doc-key^="entry:"]', c.n).forEach(function (p) {
         if (c.g && p === c.g.nc[0]) return;
-        var list = olds[p.getAttribute("data-doc-key") + "\n" + p.getAttribute("data-srcdoc")];
+        var k = frameKeepKey(p);
+        var list = k ? olds[k] : null;
         if (list && list.length) pairs.push({ f: list.shift(), p: p });
       });
     });

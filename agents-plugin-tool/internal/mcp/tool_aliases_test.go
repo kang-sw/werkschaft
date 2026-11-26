@@ -581,8 +581,8 @@ func TestHostedAgyConnectionTunesAndReadsOwnBuckets(t *testing.T) {
 
 // TestHostedAgyRealDirectToolsListCompact verifies against the real built-in
 // agy registration that compact is directly listed on hosted agy leads in both
-// default (native) and compaction.lead_mode=ws modes, with lead_summary
-// advertised only in ws mode and the full tool definition fitting
+// default (ws) and opt-out (compaction.lead_mode=native) modes, with
+// lead_summary advertised only in ws mode and the full tool definition fitting
 // toolSchemaByteCap.
 func TestHostedAgyRealDirectToolsListCompact(t *testing.T) {
 	for _, tc := range []struct {
@@ -590,8 +590,8 @@ func TestHostedAgyRealDirectToolsListCompact(t *testing.T) {
 		mode           string
 		wantLeadSchema bool
 	}{
-		{name: "default native", mode: wsconfig.CompactionModeNative, wantLeadSchema: false},
-		{name: "compaction.lead_mode=ws", mode: wsconfig.CompactionModeWS, wantLeadSchema: true},
+		{name: "default ws", mode: wsconfig.CompactionModeWS, wantLeadSchema: true},
+		{name: "compaction.lead_mode=native", mode: wsconfig.CompactionModeNative, wantLeadSchema: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := hostedBackendConnection(t, wsagent.BackendAgy, wsagent.BuiltinBackendRegistrations())

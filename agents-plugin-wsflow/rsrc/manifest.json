@@ -21,6 +21,7 @@
     "lead-coauthor-paged-document/lead-coauthor-paged-document.md": "45ca8a346c55663f6fb5bd59674f257324119f4640d5532d89fe31813e3147df",
     "lead-delegate/lead-delegate.md": "087e8fc203bf71dae516591127afaac1fcfa977bbea3f3ba678bc5eae7a4ce74",
     "lead-discuss/lead-discuss.md": "3cf8920dd6cfa765e67ad7be9fbfc7f51cd75c7efa880874028d9556df696f8e",
+    "lead-mockup/lead-mockup.md": "b57891aa175b35c1bc8967922848b755cf32932c505fafdc3565b699572146fe",
     "lead-review/lead-review.md": "b4283e9bcbb8f6349be5db31db70d0b8d282aa3fead1249c7ac48b38806448b6",
     "lead-run/lead-run.md": "a46a4a485e815d757716f369970aa33392902f16ca3314fe72ae25504b5fac09",
     "lead-ship/lead-ship.md": "9f35a6dd83ab43837b7812a99b7b2cdc84bf21b15ee6437315b16b8771c54095",
@@ -34,6 +35,7 @@
     "lead-workflow-manual/native-spawn-binding.claude.md": "fc7258226abd15ad2baef2ef8a361f6777d8390868a595853f61812def0cf310",
     "lead-workflow-manual/native-spawn-binding.codex.md": "ea1977984de016a95df292c3384e93982aa67b12bbd5e8850c7ed792acbdf284",
     "lead-workflow-manual/native-spawn-binding.md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "mockup-writer/mockup-writer.md": "07e4ff99a47917a9ae6bbc0285cd80673dc42b5ef0b65bc7d110892c27e13bcb",
     "reference-discovery/reference-discovery.md": "1c28d76c2a03efd2889936ee9091715f93b75553d88d9e20b15ee37de8c48b6c",
     "review-config/review-config.md": "dfbbf5be52c83cfb4f86edb862f8e7b135afcc7f5efb9433e808d08ac37ff53b",
     "review-handler/review-handler.md": "0643fdd50d7d6efef57da1cd77970c7189640ea09292c9581534c87af9d38b32",
@@ -58,7 +60,7 @@
     "tracker-assign/tracker-assign.md": "9f656310f3307bae61fd1a0cbedce9b2260eec23d61c33889e4cd7196788dbb6",
     "tracker-hooks/tracker-hooks.md": "40c8ad62f3340bf0b9935baa5f9d8f8822c0bcd49d34b15627ac947d769fcf0c",
     "tracker/tracker.md": "5860dae79f27761fb517b809e646f53262f632055580389ce52cf394f51f5150",
-    "whiteboard/whiteboard.md": "1efc28a16f936d985aea1c30c579b6ac466811460770bfb636ec2500ea7390e3",
+    "whiteboard/whiteboard.md": "ab3da648dc5b7088aa91e0f1f81a1303b32c730781726789c9646ca3c27de147",
     "worker-stop-protocol.md": "d5b404e80e04d30d5563598898751833726688d7af5a6e743cd749902828d8b8"
   }
 }

@@ -109,6 +109,7 @@
   function dropChip(id, fromEditor) {
     delete chips[id]; chipOrder = chipOrder.filter(function (x) { return x !== id; });
     var edit = inlineEditor(); if (edit && !fromEditor) { var was = syncingInline; syncingInline = true; try { edit.remove("answer", id); } finally { syncingInline = was; } }
+    if (typeof syncWbUpdateItems === "function") syncWbUpdateItems([id]);
   }
   function boardItem(id) {
     return boardQ('.card[data-id="' + id + '"], .arow[data-id="' + id + '"], .ckrow[data-id="' + id + '"], .srow[data-id="' + id + '"]')[0] || null;
@@ -151,6 +152,7 @@
     });
     if (inlineEditor()) syncInlineTopics();
     if (!updateNoteChips()) renderChips();
+    if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
   }
   // Typing changes note text, not the chip set. Keep the existing strip (and
   // focused controls) intact; replacing its children also dirties :has() ancestors.

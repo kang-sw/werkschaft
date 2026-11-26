@@ -282,8 +282,10 @@
         var key = c.getAttribute("data-entry");
         if (!key && c.classList.contains("apanswered")) key = "approval:" + c.getAttribute("data-approval-id");
         if (!key || c.hasAttribute("hidden")) continue;
-        var footer = c.classList.contains("turnline") ? c : c.querySelector(".turnline");
-        var ent = { el: c, key: key, at: c.getAttribute("data-at") || "", turn: !!footer, footer: footer };
+        var turnFooter = c.getAttribute("data-conv-turn") === "1" && c.hasAttribute("data-turn-at") ? c : null;
+        var footer = c.classList.contains("turnline") ? c : (turnFooter || c.querySelector(".turnline"));
+        var at = (turnFooter && turnFooter.getAttribute("data-turn-at")) || c.getAttribute("data-at") || "";
+        var ent = { el: c, key: key, at: at, turn: !!footer, footer: footer };
         if (!footer && c.matches(".msg, .user-batch, .mailline, .mail-block, .mail-notification, .exec-notice, .wbeffects, .boundary-badge, .apanswered, .cardref, .cmdrun, .uiline, .input-record")) ent.source = c;
         if (c.matches(".au-tools, .toolsline")) {
           var rows = Array.from(c.querySelectorAll(".au-row"));

@@ -167,3 +167,44 @@ process.stdout.write(bad.join("\n"));`
 		})
 	}
 }
+
+// TestRailRefreshUpdatesCapsuleAskCount pins that wbRail.refresh() invalidates
+// the draw key so an off-screen topic's sticky jump capsule .cp count and
+// hidden state update even when scroll position and slot membership are unchanged.
+func TestRailRefreshUpdatesCapsuleAskCount(t *testing.T) {
+	data, err := assetFS.ReadFile("assets/rail.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	script := railPrelude + `
+var tb = board.querySelectorAll("section.topic")[1].querySelector(".tbar");
+var chip = tb.appendChild(new E("button", "chip policy"));
+var num = chip.appendChild(new E("span", "n"));
+num.textContent = "3";
+board.scrollTop = 1250;
+` + string(data) + `
+frame();
+var cap = board.querySelector(".wb-rail-wrap.up .wb-cap.near .cp");
+check("initial off-screen capsule shows open count", [cap.hidden, cap.textContent], [false, "3"]);
+num.textContent = "1";
+window.wbRail.refresh();
+frame();
+check("refresh updates off-screen capsule open count without scroll", [cap.hidden, cap.textContent], [false, "1"]);
+chip.hidden = true;
+num.textContent = "0";
+window.wbRail.refresh();
+frame();
+check("refresh hides capsule open badge when chip hides", [cap.hidden, cap.textContent], [true, ""]);
+process.stdout.write(bad.join("\n"));`
+	out, err := nodeScript(node, script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("node: %v\n%s", err, out)
+	}
+	if s := strings.TrimSpace(string(out)); s != "" {
+		t.Errorf("rail refresh cases failed:\n%s", s)
+	}
+}

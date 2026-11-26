@@ -165,6 +165,33 @@ func compactionHarness(t *testing.T) *leadHarness {
 	h.opts.Backends[BackendClaude] = reg
 	return h.start()
 }
+
+func setNativeLeadCompaction(t *testing.T, h *leadHarness) {
+	t.Helper()
+	if h.opts.Config.CacheHome == "" {
+		h.opts.Config.CacheHome = t.TempDir()
+	}
+	if h.opts.Config.ConfigHome == "" {
+		h.opts.Config.ConfigHome = t.TempDir()
+	}
+	if h.opts.Config.RepoRoot == "" {
+		h.opts.Config.RepoRoot = h.root
+	}
+	resolver := wsconfig.NewResolver(h.opts.Config, nil, nil, nil)
+	if err := resolver.Set(wsconfig.ItemCompactionLeadMode, wsconfig.CompactionModeNative, wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func nativeCompactionHarness(t *testing.T) *leadHarness {
+	t.Helper()
+	h := newLeadHarness(t)
+	setNativeLeadCompaction(t, h)
+	reg := h.opts.Backends[BackendClaude]
+	reg.Catalog = ClaudeCatalog()
+	h.opts.Backends[BackendClaude] = reg
+	return h.start()
+}
 func compactBoundary(h *leadHarness, id, holder string) {
 	h.holders.out(holder, `{"type":"system","subtype":"status","status":"compacting"}`, `{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual"}}`, resultLine(), stateLine(HarnessIdle))
 	h.sync(id, holder)
@@ -352,7 +379,7 @@ func TestCompactionRestoreBundleLeadAndChildFreshExactlyOnce(t *testing.T) {
 }
 
 func TestCompactionThresholdLatchAndStaleUsage(t *testing.T) {
-	h := compactionHarness(t)
+	h := nativeCompactionHarness(t)
 	id, holder := h.runLead("one")
 	c := h.runner.conv(id)
 	observe := func(tokens *int64) {
@@ -522,7 +549,7 @@ func TestCompactionUnsupportedAdvisoryIsConsumedWithOrdinaryInput(t *testing.T) 
 	h := newLeadHarness(t).start()
 	id, holder := h.runLead("one")
 	c := h.runner.conv(id)
-	c.do(func() { c.handle(compactionUsage(55000)) })
+	c.do(func() { c.handle(compactionUsage(65000)) })
 	h.holders.out(holder, turnLines("sess-1", "u1", "first")...)
 	h.idle(id)
 	if got := h.userInputs(holder); len(got) != 1 {
@@ -530,7 +557,7 @@ func TestCompactionUnsupportedAdvisoryIsConsumedWithOrdinaryInput(t *testing.T) 
 	}
 	h.send(id, "ordinary input")
 	got := h.userInputs(holder)
-	if len(got) != 2 || !strings.HasPrefix(got[1], "Context usage is 55000 tokens") ||
+	if len(got) != 2 || !strings.HasPrefix(got[1], "Context usage is 65000 tokens") ||
 		!strings.HasSuffix(got[1], "\n\n"+h.envelope("ordinary input")) {
 		t.Fatalf("ordinary input with unsupported advisory = %q", got)
 	}
@@ -564,21 +591,21 @@ func TestCompactionAdvisoryTurnAtIdle(t *testing.T) {
 	h := compactionHarness(t)
 	id, holder := h.runLead("one")
 	c := h.runner.conv(id)
-	c.do(func() { c.handle(compactionUsage(55000)) })
+	c.do(func() { c.handle(compactionUsage(65000)) })
 	if got := h.userInputs(holder); len(got) != 1 {
 		t.Fatalf("advisory sent mid-turn: %q", got)
 	}
 	h.holders.out(holder, turnLines("sess-1", "u1", "first")...)
 	eventually(t, "idle advisory", func() bool { return len(h.userInputs(holder)) == 2 })
 	got := h.userInputs(holder)
-	const advisory = "Context usage is 55000 tokens (55%); advisory point 50000 tokens (50%). Call ws/compact directly at a safe boundary before continuing (include agenda_updates if your agenda needs updating). No summary prose is requested."
+	const advisory = "Context usage is 65000 tokens (65%); advisory point 60000 tokens (60%). Call ws/compact directly at a safe boundary with the carry-forward fields in lead_summary (and agenda_updates if your agenda needs updating)."
 	if got[1] != advisory {
 		t.Fatalf("advisory turn = %q", got[1])
 	}
 	h.holders.out(holder, turnLines("sess-1", "u2", "advisory handled")...)
 	h.idle(id)
 	c.doT(t, func(failf func(string, ...any)) {
-		c.handle(compactionUsage(56000))
+		c.handle(compactionUsage(66000))
 		if !c.compactAdvised || c.compactResume {
 			failf("advisory not consumed: advised=%v resume=%v", c.compactAdvised, c.compactResume)
 			return
@@ -595,6 +622,18 @@ func TestCompactionAdvisoryTurnAtIdle(t *testing.T) {
 	if got := h.userInputs(holder); len(got) != 3 {
 		t.Fatalf("crossed milestone repeated: %q", got)
 	}
+
+	t.Run("native opt-out wording", func(t *testing.T) {
+		nh := nativeCompactionHarness(t)
+		nid, nholder := nh.runLead("one")
+		nh.runner.conv(nid).do(func() { nh.runner.conv(nid).handle(compactionUsage(65000)) })
+		nh.holders.out(nholder, turnLines("sess-1", "u1", "first")...)
+		eventually(t, "native idle advisory", func() bool { return len(nh.userInputs(nholder)) == 2 })
+		const nativeAdvisory = "Context usage is 65000 tokens (65%); advisory point 60000 tokens (60%). Call ws/compact directly at a safe boundary before continuing (include agenda_updates if your agenda needs updating). No summary prose is requested."
+		if got := nh.userInputs(nholder)[1]; got != nativeAdvisory {
+			t.Fatalf("native advisory turn = %q", got)
+		}
+	})
 }
 
 func TestCompactionAdvisoryPrecedesHeldInputAndReports(t *testing.T) {
@@ -602,13 +641,13 @@ func TestCompactionAdvisoryPrecedesHeldInputAndReports(t *testing.T) {
 	id, holder := h.runLead("one")
 	c := h.runner.conv(id)
 	c.do(func() {
-		c.handle(compactionUsage(55000))
+		c.handle(compactionUsage(65000))
 		c.takeReport("queued report")
 	})
 	h.send(id, "queued ordinary input")
 	h.holders.out(holder, turnLines("sess-1", "u1", "first")...)
 	eventually(t, "standalone advisory before ordinary input", func() bool { return len(h.userInputs(holder)) == 2 })
-	if got := h.userInputs(holder)[1]; !strings.HasPrefix(got, "Context usage is 55000 tokens") || strings.Contains(got, "queued ") {
+	if got := h.userInputs(holder)[1]; !strings.HasPrefix(got, "Context usage is 65000 tokens") || strings.Contains(got, "queued ") {
 		t.Fatalf("advisory turn = %q", got)
 	}
 	h.holders.out(holder, turnLines("sess-1", "u2", "advisory handled")...)
@@ -618,7 +657,7 @@ func TestCompactionAdvisoryPrecedesHeldInputAndReports(t *testing.T) {
 	}
 	h.holders.out(holder, turnLines("sess-1", "u3", "ordinary handled")...)
 	h.idle(id)
-	c.do(func() { c.handle(compactionUsage(56000)) })
+	c.do(func() { c.handle(compactionUsage(66000)) })
 	if got := h.userInputs(holder); len(got) != 3 {
 		t.Fatalf("advisory repeated: %q", got)
 	}
@@ -632,10 +671,10 @@ func TestCompactionLateAdvisoryPrecedesMailboxWake(t *testing.T) {
 	c := h.runner.conv(id)
 	c.do(func() {
 		h.mail.deliver(c.rec.WSKey, "mail that was already waiting")
-		c.handle(compactionUsage(55000))
+		c.handle(compactionUsage(65000))
 	})
 	got := h.userInputs(holder)
-	if len(got) != 2 || !strings.HasPrefix(got[1], "Context usage is 55000 tokens") || strings.Contains(got[1], "mail that was already waiting") {
+	if len(got) != 2 || !strings.HasPrefix(got[1], "Context usage is 65000 tokens") || strings.Contains(got[1], "mail that was already waiting") {
 		t.Fatalf("advisory turn = %q", got)
 	}
 	h.holders.out(holder, turnLines("sess-1", "u2", "advisory handled")...)
@@ -651,7 +690,7 @@ func TestCompactionAdvisoryYieldsToRestoreNote(t *testing.T) {
 	c := h.runner.conv(id)
 	c.do(func() {
 		c.compactNote = "Restore state before continuing."
-		c.handle(compactionUsage(55000))
+		c.handle(compactionUsage(65000))
 	})
 	h.send(id, "queued ordinary input")
 	h.holders.out(holder, turnLines("sess-1", "u1", "first")...)
@@ -661,8 +700,8 @@ func TestCompactionAdvisoryYieldsToRestoreNote(t *testing.T) {
 	}
 	h.holders.out(holder, turnLines("sess-1", "u2", "restore handled")...)
 	h.idle(id)
-	c.do(func() { c.handle(compactionUsage(55000)) })
-	if got := h.userInputs(holder); len(got) != 3 || !strings.HasPrefix(got[2], "Context usage is 55000 tokens") {
+	c.do(func() { c.handle(compactionUsage(65000)) })
+	if got := h.userInputs(holder); len(got) != 3 || !strings.HasPrefix(got[2], "Context usage is 65000 tokens") {
 		t.Fatalf("advisory after restore = %q", got)
 	}
 }
@@ -671,7 +710,7 @@ func TestCompactionAdvisoryYieldsToQueuedCompaction(t *testing.T) {
 	h := compactionHarness(t)
 	id, holder := h.runLead("one")
 	c := h.runner.conv(id)
-	c.do(func() { c.handle(compactionUsage(55000)) })
+	c.do(func() { c.handle(compactionUsage(65000)) })
 	resume := false
 	if out := h.runner.Compact(h.record(id).WSKey, "", &resume); out.Status != "queued" {
 		t.Fatal(out)
@@ -681,7 +720,7 @@ func TestCompactionAdvisoryYieldsToQueuedCompaction(t *testing.T) {
 	if got := h.userInputs(holder)[1]; got != "/compact" {
 		t.Fatalf("compaction sent %q", got)
 	}
-	c.do(func() { c.handle(compactionUsage(56000)) })
+	c.do(func() { c.handle(compactionUsage(66000)) })
 	compactBoundary(h, id, holder)
 	h.idle(id)
 	if got := h.userInputs(holder); len(got) != 2 {
@@ -727,7 +766,7 @@ func TestCompactionLeadAdvisoryRunsWithBackgroundWork(t *testing.T) {
 	c.do(func() {
 		tasks := 1
 		c.handle(Event{BackgroundTasks: &tasks})
-		c.handle(compactionUsage(55000))
+		c.handle(compactionUsage(65000))
 	})
 	h.holders.out(holder, turnLines("sess-1", "u1", "first")...)
 	eventually(t, "advisory during background work", func() bool { return len(h.userInputs(holder)) == 2 })
@@ -755,7 +794,7 @@ func TestCompactionAdvisoryRunsWithActiveDescendant(t *testing.T) {
 	h.holder(child.ID)
 	eventually(t, "descendant running", func() bool { return h.state(child.ID).Status == StatusRunning })
 	c := h.runner.conv(id)
-	c.do(func() { c.handle(compactionUsage(55000)) })
+	c.do(func() { c.handle(compactionUsage(65000)) })
 	h.holders.out(holder, turnLines("sess-1", "u1", "first")...)
 	eventually(t, "lead's advisory with descendant still running", func() bool {
 		return len(h.userInputs(holder)) == 2
@@ -774,7 +813,7 @@ func TestCompactionWorkerAdvisoryIsInternal(t *testing.T) {
 	c := h.runner.conv(child.ID)
 	h.holders.out(holder, recoveryWorkerReply("settled work")...)
 	eventually(t, "original report settled", func() bool { return len(got.list()) == 1 })
-	c.do(func() { c.handle(compactionUsage(55000)) })
+	c.do(func() { c.handle(compactionUsage(65000)) })
 	eventually(t, "late idle usage triggers advisory", func() bool { return len(h.userInputs(holder)) == 2 })
 	c.doT(t, func(failf func(string, ...any)) {
 		if !c.turn || c.rec.TurnOpen || c.rec.LastTurn == nil || c.rec.LastTurn.Result.Message != "settled work" {
@@ -815,9 +854,9 @@ func TestCompactionWorkerAdvisoryPreservesHeldResult(t *testing.T) {
 	worker, proc := h.agentRunning(h.holderOf(parent), AgentSpawnRequest{Prompt: "worker task", Tier: "medium", Authority: "workdir-write"})
 	child, _ := h.agentRunning(h.holderOf(worker), AgentSpawnRequest{Prompt: "child task", Tier: "small", Authority: "workdir-write"})
 	c := h.runner.conv(worker)
-	c.do(func() { c.handle(compactionUsage(55000)) })
+	c.do(func() { c.handle(compactionUsage(65000)) })
 	proc.reply("original worker result")
-	if turn := proc.nextSent(t); !strings.HasPrefix(turn, "Context usage is 55000 tokens") {
+	if turn := proc.nextSent(t); !strings.HasPrefix(turn, "Context usage is 65000 tokens") {
 		t.Fatalf("worker advisory turn = %q", turn)
 	}
 

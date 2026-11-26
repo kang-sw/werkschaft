@@ -277,6 +277,8 @@ type Daemon struct {
 	log       io.Writer
 	index     *Index
 	source    SessionSource
+	mockupMu  sync.Once
+	mockupLRU *mockupLRU
 	config    *ConfigBackend
 	audit     *auditState
 	companion companionState

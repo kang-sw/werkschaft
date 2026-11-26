@@ -124,6 +124,11 @@ func renderSessionRegions(view SessionView, cache *entryCache) (regionSet, error
 	}
 	view.Conversation.Lang = view.Lang
 	view.Conversation.MailboxCtx = view.viewingMailboxContext()
+	if view.Conversation.LiveTurnSummary != nil {
+		liveCopy := *view.Conversation.LiveTurnSummary
+		liveCopy.Lang = view.Lang
+		view.Conversation.LiveTurnSummary = &liveCopy
+	}
 	for i := range view.Conversation.Held {
 		view.Conversation.Held[i].Lang = view.Lang
 		view.Conversation.Held[i].MailboxCtx = view.Conversation.MailboxCtx
@@ -154,6 +159,16 @@ func renderEntries(a *dashboardAssets, cache *entryCache, replyID string, cv *Co
 		e := cv.Entries[i]
 		e.Lang = cv.Lang
 		e.MailboxCtx = cv.MailboxCtx
+		if e.TurnSummary != nil {
+			ts := *e.TurnSummary
+			ts.Lang = cv.Lang
+			e.TurnSummary = &ts
+		}
+		if e.TurnPlain != nil {
+			tp := *e.TurnPlain
+			tp.Lang = cv.Lang
+			e.TurnPlain = &tp
+		}
 		if len(e.UserBlocks) > 0 {
 			blocks := make([]ConvEntry, len(e.UserBlocks))
 			copy(blocks, e.UserBlocks)

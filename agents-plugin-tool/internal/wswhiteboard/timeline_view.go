@@ -93,7 +93,7 @@ func boardInputs(st *State) map[int][]inputHeader {
 // and lists its open asks in creation order (eventless items first). Open
 // asks render only as their ask-time line in the history; they never anchor
 // the history or pull rows out of its folds.
-func timelineView(t TopicView, items []Item, inputs map[int][]inputHeader, loc *time.Location) ([]timelinePart, []askGroup) {
+func timelineView(t TopicView, items []Item, inputs map[int][]inputHeader, loc *time.Location, held map[int]bool) ([]timelinePart, []askGroup) {
 	if loc == nil {
 		loc = time.Local
 	}
@@ -148,6 +148,9 @@ func timelineView(t TopicView, items []Item, inputs map[int][]inputHeader, loc *
 			continue
 		}
 		iv := itemView(item)
+		if item.Status == StatusOpen && held[item.ID] {
+			iv.Held = true
+		}
 		if item.Status == StatusOpen {
 			asks = append(asks, openAsk{Item: iv, Reasked: clock(item.ReaskedAt)})
 			continue
@@ -196,6 +199,9 @@ func timelineView(t TopicView, items []Item, inputs map[int][]inputHeader, loc *
 		for _, id := range createdAt[e.ID] {
 			if firstAsk[id] == e.ID {
 				iv := itemView(byID[id])
+				if iv.Status == StatusOpen && held[id] {
+					iv.Held = true
+				}
 				r.Created = append(r.Created, timelineRow{Item: &iv, Ask: true, AnswerTarget: lastAnswer[id], Reasked: clock(byID[id].ReaskedAt)})
 				if iv.Status == StatusOpen {
 					asks = append(asks, openAsk{Item: iv, Entry: e.ID, Clock: e.Clock, At: e.At, Stamp: e.Stamp, Ms: e.Ms, Reasked: clock(byID[id].ReaskedAt)})

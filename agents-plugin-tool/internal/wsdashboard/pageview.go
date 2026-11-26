@@ -75,6 +75,10 @@ type SessionView struct {
 	// CanEditSettings reports whether the viewer may edit model/effort from
 	// the composer footer (hosted non-child session viewed from the host).
 	CanEditSettings bool
+	// WhiteboardCapable reports a hosted lead conversation: only it receives
+	// the whiteboard-only <ws-ambient> directive, so only it offers the
+	// composer's whiteboard-only toggle.
+	WhiteboardCapable bool
 	// Model and Effort are the session's resolved display values for the
 	// composer footer strip.
 	Model, Effort string
@@ -444,6 +448,9 @@ type ConversationView struct {
 	// ToolGap is the lead's finished tool calls since its last conversation
 	// entry, shown as a live tools row until the ring takes it.
 	ToolGap *wslive.ToolSummary
+	// LiveTurnSummary is the active turn's collapsed live header in r-convlive
+	// aggregating any flushed open-span RingTools plus ToolGap and TurnAddedTokens.
+	LiveTurnSummary *TurnSummaryView
 	// Users and Mails count the user messages and mail lines.
 	Users, Mails int
 	// Subagents counts the running subagents for the composer's badge.

@@ -12,8 +12,9 @@ import (
 	"time"
 )
 
-// ExportArchive emits the legacy folder layout. Dot-named DB files and the
-// schema-3 sentinel are constructed nowhere in the archive.
+// ExportArchive emits the legacy folder layout plus any _mockups/<entryID>.zip
+// snapshots. Dot-named DB files and the schema-3 sentinel are constructed
+// nowhere in the archive.
 func (b *BoardDB) ExportArchive() ([]byte, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -30,7 +31,11 @@ func (b *BoardDB) ExportArchive() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return boardLegacyArchive(intent)
+	mockups, err := b.readAllMockupZipsLocked()
+	if err != nil {
+		return nil, err
+	}
+	return boardLegacyArchive(intent, mockups)
 }
 
 // BackupLegacy writes the current board as a legacy-layout folder at dir.
@@ -49,18 +54,23 @@ func (b *BoardDB) BackupLegacy(dir string) error {
 // conversion, and all folder consistency checks are the same as first open.
 // The previous board is backed up as a legacy-layout folder.
 func (b *BoardDB) LoadArchive(zipPath string, now time.Time) (backup string, topics int, err error) {
-	next, err := readBoardArchive(zipPath)
+	next, bundles, err := readBoardArchive(zipPath)
 	if err != nil {
 		return "", 0, err
 	}
 	finish := (FolderStore{Dir: b.dir}).beginIncarnationLoad()
 	b.mu.Lock()
 	oldToken := b.state.LoadedAt
+	onLoad := b.opts.OnLoadArchive
+	evictDir := b.dir
 	b.mu.Unlock()
 	committed := false
 	defer func() {
 		if committed {
 			finish(next.LoadedAt, nil)
+			if onLoad != nil && evictDir != "" {
+				onLoad(evictDir)
+			}
 		} else {
 			finish(oldToken, nil)
 		}
@@ -107,12 +117,12 @@ func (b *BoardDB) LoadArchive(zipPath string, now time.Time) (backup string, top
 		return backup, 0, err
 	}
 	defer tx.Rollback()
-	for _, table := range []string{"panels", "entries", "topics", "revision_receipts", "load_floors", "board_meta"} {
+	for _, table := range []string{"item_holds", "mockup_bundles", "panels", "entries", "topics", "revision_receipts", "load_floors", "board_meta"} {
 		if _, err := tx.Exec(`DELETE FROM ` + table); err != nil {
 			return backup, 0, err
 		}
 	}
-	if err := boardInsertAll(tx, rows, b.generation+1, b.importedGeneration); err != nil {
+	if err := boardInsertAll(tx, rows, b.generation+1, b.importedGeneration, bundles); err != nil {
 		return backup, 0, err
 	}
 	if next.MetadataRevision != 0 || next.StaleNudgeRevision != "" {
@@ -138,50 +148,61 @@ func (b *BoardDB) LoadArchive(zipPath string, now time.Time) (backup string, top
 	b.nextTopic = rows.NextTopic
 	b.topicDirs = rows.Dirs
 	b.state = next.clone()
+	b.holds = map[int]boardItemHold{}
+	b.setMockupIndexLocked(rows, bundles)
 	b.armCheckpointLocked()
 	return backup, len(next.Topics), nil
 }
 
-func readBoardArchive(zipPath string) (*State, error) {
+func readBoardArchive(zipPath string) (*State, map[string]MockupBundle, error) {
 	tmp, err := os.MkdirTemp("", "ws-whiteboard-db-load-*")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer os.RemoveAll(tmp)
-	if err := extractArchive(zipPath, tmp); err != nil {
-		return nil, err
+	rawMockups, err := extractArchiveWithMockups(zipPath, tmp, false)
+	if err != nil {
+		return nil, nil, err
 	}
 	// Archive authority is always the legacy layout. A supplied recovery DB
 	// (or its sidecars) must not bypass the folder's replay and schema checks.
 	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
 		if _, err := os.Lstat(filepath.Join(tmp, boardDBName+suffix)); err == nil {
-			return nil, fmt.Errorf("the archive contains SQLite recovery files; export a legacy-layout board archive")
+			return nil, nil, fmt.Errorf("the archive contains SQLite recovery files; export a legacy-layout board archive")
 		} else if !errors.Is(err, os.ErrNotExist) {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	loaded, err := OpenBoardDB(tmp, nil, BoardDBOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("the archive is not a valid board: %w", err)
+		return nil, nil, fmt.Errorf("the archive is not a valid board: %w", err)
 	}
 	next := loaded.State()
 	if err := loaded.Close(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if next == nil {
-		return nil, fmt.Errorf("the archive holds no board")
+		return nil, nil, fmt.Errorf("the archive holds no board")
 	}
-	return next, nil
+	bundles, err := matchMockupBundles(rawMockups, next)
+	if err != nil {
+		return nil, nil, err
+	}
+	return next, bundles, nil
 }
 
 // LoadNewBoardDB validates a legacy archive and installs it without a backup.
 func LoadNewBoardDB(dir, zipPath string, opts BoardDBOptions) (*BoardDB, int, error) {
-	next, err := readBoardArchive(zipPath)
+	next, bundles, err := readBoardArchive(zipPath)
 	if err != nil {
 		return nil, 0, err
 	}
 	next.LoadedAt = time.UnixMilli(archiveLoadNow().UnixMilli() + 1).UTC().Format(reaskLayout)
-	b, err := CreateBoardDB(dir, next, opts)
+	var list []MockupBundle
+	for _, b := range bundles {
+		list = append(list, b)
+	}
+	b, err := CreateBoardDBWithBundles(dir, next, list, opts)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -205,6 +226,13 @@ func (b *BoardDB) backupLegacyLocked(dir string) (err error) {
 	if err != nil {
 		return err
 	}
+	mockups, err := b.readAllMockupZipsLocked()
+	if err != nil {
+		return err
+	}
+	for id, data := range mockups {
+		files[mockupArchivePrefix+id+".zip"] = data
+	}
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		return err
 	}
@@ -225,10 +253,44 @@ func (b *BoardDB) backupLegacyLocked(dir string) (err error) {
 	return nil
 }
 
-func boardLegacyArchive(intent *folderIntent) ([]byte, error) {
+func (b *BoardDB) readAllMockupZipsLocked() (map[string][]byte, error) {
+	if len(b.mockups) == 0 {
+		return nil, nil
+	}
+	rows, err := b.db.Query(`SELECT entry_id, bundle FROM mockup_bundles ORDER BY entry_id`)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]byte, len(b.mockups))
+	for rows.Next() {
+		var id string
+		var data []byte
+		if err := rows.Scan(&id, &data); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out[id] = append([]byte(nil), data...)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func boardLegacyArchive(intent *folderIntent, mockups map[string][]byte) ([]byte, error) {
 	files, err := boardLegacyFiles(intent)
 	if err != nil {
 		return nil, err
+	}
+	for id, data := range mockups {
+		files[mockupArchivePrefix+id+".zip"] = data
+	}
+	var total int64
+	for _, data := range files {
+		total += int64(len(data))
+		if total > archiveMaxBytes {
+			return nil, fmt.Errorf("whiteboard archive exceeds the %d-byte limit; remove or shrink mockup snapshots before exporting", archiveMaxBytes)
+		}
 	}
 	var out bytes.Buffer
 	zw := zip.NewWriter(&out)

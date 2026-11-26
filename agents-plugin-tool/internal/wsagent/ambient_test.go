@@ -53,17 +53,17 @@ func TestTurnInputAmbientOrderingAndRoles(t *testing.T) {
 	for _, backend := range []string{BackendClaude, BackendCodex, BackendAgy, BackendPi} {
 		t.Run(backend+" lead", func(t *testing.T) {
 			c := &conv{rec: Record{Lead: true, Backend: backend}, ambient: wantBlock, compactNote: "restore once"}
-			got := c.turnInput("ordinary")
+			got := c.turnInput("ordinary", false)
 			if got != "restore once\n\nordinary\n\n"+wantBlock {
 				t.Fatalf("turn input = %q", got)
 			}
-			if got := c.turnInput("playbook body"); got != "restore once\n\nplaybook body\n\n"+wantBlock {
+			if got := c.turnInput("playbook body", false); got != "restore once\n\nplaybook body\n\n"+wantBlock {
 				t.Fatalf("composition must not consume the note itself: %q", got)
 			}
 		})
 	}
 	worker := &conv{rec: Record{Backend: BackendCodex}, compactNote: "restore once"}
-	if got := worker.turnInput("ordinary"); got != "restore once\n\nordinary" {
+	if got := worker.turnInput("ordinary", false); got != "restore once\n\nordinary" {
 		t.Fatalf("worker input = %q", got)
 	}
 }
@@ -132,7 +132,7 @@ func TestAmbientCacheReadsOnlyOnRefresh(t *testing.T) {
 		t.Fatalf("initial config reads = %d, want 1", got)
 	}
 	for range 5 {
-		got := c.turnInput("hello")
+		got := c.turnInput("hello", false)
 		if strings.Count(got, "<"+ambientBlockName+">") != 1 {
 			t.Fatalf("ambient count = %d in %q", strings.Count(got, "<"+ambientBlockName+">"), got)
 		}
@@ -145,7 +145,7 @@ func TestAmbientCacheReadsOnlyOnRefresh(t *testing.T) {
 	if got := store.reads.Load(); got != 2 {
 		t.Fatalf("refresh config reads = %d, want 2", got)
 	}
-	if got := c.turnInput("hello"); !strings.Contains(got, "Respond to the user in Japanese.") || strings.Count(got, "<"+ambientBlockName+">") != 1 {
+	if got := c.turnInput("hello", false); !strings.Contains(got, "Respond to the user in Japanese.") || strings.Count(got, "<"+ambientBlockName+">") != 1 {
 		t.Fatalf("refreshed input = %q", got)
 	}
 }

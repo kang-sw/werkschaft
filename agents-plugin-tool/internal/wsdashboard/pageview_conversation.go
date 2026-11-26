@@ -104,6 +104,7 @@ func conversation(lead wslive.Lead, ring []wslive.RingRecord, bodies map[string]
 	}
 	linkMailWakes(cv.Entries, self.ReplyID)
 	collapseBoardNudges(cv.Entries)
+	cv.LiveTurnSummary = groupTurnSummaries(lead, cv.Entries)
 	return cv
 }
 

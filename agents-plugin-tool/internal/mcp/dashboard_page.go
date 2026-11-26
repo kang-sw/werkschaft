@@ -229,6 +229,10 @@ func boardMemoBase(key string, record sessionRecord, lang string, reasked map[in
 	fmt.Fprintf(h, "seq\x00%d\x00", record.Whiteboard.Seq)
 	// Board writes can change content without advancing the render sequence.
 	fmt.Fprintf(h, "board\x00%d\x00", record.boardRevision)
+	// Hold writes do not bump generation/boardRevision; fold sorted held IDs
+	// here (not in boardMemoSharedBase) so the board memo and NonLiveFingerprint
+	// invalidate while untouched topics reuse their per-topic memo units.
+	fmt.Fprintf(h, "held\x00%v\x00", record.boardHeld)
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -388,6 +392,98 @@ func (src *DashboardSessionSource) BoardArchive(reg wsdashboard.Registration) ([
 	return data, data != nil && err == nil, err
 }
 
+var _ wsdashboard.BoardHoldSource = (*DashboardSessionSource)(nil)
+
+// SetBoardHold sets or clears the user-side hold on one open item of reg's
+// board without advancing the board's generation or poking nudges.
+func (src *DashboardSessionSource) SetBoardHold(reg wsdashboard.Registration, itemID int, held bool) ([]int, bool, error) {
+	if src.store.boards == nil {
+		return nil, false, errWhiteboardOwner
+	}
+	dir := filepath.Join(reg.Project, filepath.FromSlash(whiteboardDirRel), reg.ReplyID)
+	run := func() ([]int, bool, error) {
+		var ids []int
+		var hasBoard bool
+		err := src.store.boards.useDirectory(dir, reg.Project, "", nil, true, func(slot *whiteboardSlot) error {
+			if slot.board == nil {
+				return nil
+			}
+			hasBoard = true
+			var err error
+			ids, err = slot.board.SetHold(itemID, held)
+			return err
+		})
+		return ids, hasBoard, err
+	}
+	ids, hasBoard, err := run()
+	if err != nil || hasBoard {
+		return ids, hasBoard, err
+	}
+	// If the session's board still lives only in a legacy record, import it
+	// once before reporting no board.
+	if _, _, record, ok, lerr := src.lookupRecord(reg); !ok || lerr != nil || record.Whiteboard == nil {
+		return nil, false, lerr
+	}
+	return run()
+}
+
+var _ wsdashboard.BoardMockupSource = (*DashboardSessionSource)(nil)
+
+// LookupMockup returns a mockup bundle's root filename and sha256 from the
+// board's in-memory index without querying SQLite.
+func (src *DashboardSessionSource) LookupMockup(reg wsdashboard.Registration, entryID string) (wsdashboard.MockupLookup, bool, error) {
+	if src.store.boards == nil {
+		return wsdashboard.MockupLookup{}, false, errWhiteboardOwner
+	}
+	dir := filepath.Join(reg.Project, filepath.FromSlash(whiteboardDirRel), reg.ReplyID)
+	var out wsdashboard.MockupLookup
+	found := false
+	err := src.store.boards.useDirectory(dir, reg.Project, "", nil, true, func(slot *whiteboardSlot) error {
+		if slot.board == nil {
+			return nil
+		}
+		rootFile, sha, ok := slot.board.LookupMockupMeta(entryID)
+		if !ok {
+			return nil
+		}
+		out = wsdashboard.MockupLookup{
+			BoardDir: slot.board.Dir(),
+			Instance: slot.board.Instance(),
+			EntryID:  entryID,
+			RootFile: rootFile,
+			SHA256:   sha,
+		}
+		found = true
+		return nil
+	})
+	return out, found && err == nil, err
+}
+
+// ReadMockupBundle loads one mockup snapshot zip from SQLite on cache miss.
+func (src *DashboardSessionSource) ReadMockupBundle(reg wsdashboard.Registration, entryID string) (wswhiteboard.MockupBundle, bool, error) {
+	if src.store.boards == nil {
+		return wswhiteboard.MockupBundle{}, false, errWhiteboardOwner
+	}
+	dir := filepath.Join(reg.Project, filepath.FromSlash(whiteboardDirRel), reg.ReplyID)
+	var out wswhiteboard.MockupBundle
+	found := false
+	err := src.store.boards.useDirectory(dir, reg.Project, "", nil, true, func(slot *whiteboardSlot) error {
+		if slot.board == nil {
+			return nil
+		}
+		var err error
+		out, found, err = slot.board.ReadMockupBundle(entryID)
+		return err
+	})
+	return out, found && err == nil, err
+}
+
+// SetMockupEvictor connects LoadArchive replacement to the dashboard's mockup LRU.
+func (src *DashboardSessionSource) SetMockupEvictor(fn func(boardDir string)) {
+	if src.store != nil && src.store.boards != nil {
+		src.store.boards.SetOnLoadArchive(fn)
+	}
+}
 var _ wsdashboard.OutsideLinkSource = (*DashboardSessionSource)(nil)
 
 // ReadOutsideLinks lists the files outside the session root that the board
@@ -426,6 +522,7 @@ func servedViewInput(record sessionRecord, replyID string) wswhiteboard.ViewInpu
 	return wswhiteboard.ViewInput{
 		Layout:   wswhiteboard.LayoutFull,
 		ReplyID:  replyID,
+		Held:     record.boardHeld,
 		FileText: servedFileText(record.Root),
 		// The image's version (&v=, which the route ignores) changes the
 		// rendered page when the file changes, so an edited image reaches a
@@ -450,7 +547,13 @@ func servedViewInput(record sessionRecord, replyID string) wswhiteboard.ViewInpu
 		// loopback viewer, through the image route; a topic body's frame asks
 		// the page to fetch it there (wswhiteboard.View OutsideImage).
 		OutsideImage: wsdashboard.OutsideImage(record.Root, replyID),
-		Tickets:      &whiteboardTickets{root: record.Root},
+		MockupSrc: func(entryID, sha string) string {
+			if sha == "" || record.boardMockups[entryID] != sha {
+				return ""
+			}
+			return wsdashboard.BoardMockupSrc(replyID, entryID)
+		},
+		Tickets: &whiteboardTickets{root: record.Root},
 		// The served board fetches history on demand (ReadTopicHistory).
 		LazyHistory: true,
 	}

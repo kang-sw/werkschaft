@@ -571,3 +571,47 @@ func TestCompanionDirectorNoOneShotChargesNothing(t *testing.T) {
 		t.Fatalf("drops %v calls %d last %v digests %d spawns %d running %v spawned %d", dropped, calls, last, digests, spawns, running, spawned.Load())
 	}
 }
+
+func TestCompanionPackForRendererAndPersona(t *testing.T) {
+	home := t.TempDir()
+	companionTestPack(t, home, "local-2d", companionTestManifest("local-2d", "stand.webp",
+		`,"persona":{"name":"Buddy","voice":"Cheerful.","quipLanguage":"en"},"expressions":{"happy":{}},"gestures":{"wave":{"layers":[{"file":"stand.webp"}]}}`))
+	companionTestVRMPack(t, home, "local-vrm",
+		companionTestVRMManifest("local-vrm", "model.vrm",
+			`,"persona":{"name":"Echo","voice":"Dry wit.","quipLanguage":"ko"}`),
+		syntheticVRM1GLB(), nil)
+
+	d := authFixture(t)
+	d.config = &ConfigBackend{Options: wsconfig.Options{ConfigHome: home}}
+
+	def := d.companionPackFor("default")
+	if def.renderer != companionPackRenderer2D {
+		t.Fatalf("default renderer = %q, want %q", def.renderer, companionPackRenderer2D)
+	}
+
+	p2d := d.companionPackFor("local-2d")
+	if p2d.renderer != companionPackRenderer2D {
+		t.Fatalf("2d renderer = %q, want %q", p2d.renderer, companionPackRenderer2D)
+	}
+	if p2d.persona == nil || p2d.persona.Name != "Buddy" || p2d.persona.QuipLanguage != "en" {
+		t.Fatalf("2d persona = %+v", p2d.persona)
+	}
+	allowed2D := companionAllowedIDs(p2d)
+	if !slices.Contains(allowed2D["expression"], "happy") || !slices.Contains(allowed2D["gesture"], "wave") {
+		t.Fatalf("2d allowed IDs changed: %+v", allowed2D)
+	}
+
+	pvrm := d.companionPackFor("local-vrm")
+	if pvrm.renderer != companionPackRendererVRM {
+		t.Fatalf("vrm renderer = %q, want %q", pvrm.renderer, companionPackRendererVRM)
+	}
+	if pvrm.persona == nil || pvrm.persona.Name != "Echo" || pvrm.persona.Voice != "Dry wit." || pvrm.persona.QuipLanguage != "ko" {
+		t.Fatalf("vrm persona = %+v", pvrm.persona)
+	}
+
+	// Unknown pack falls back to default 2D.
+	fallback := d.companionPackFor("missing-pack")
+	if fallback.renderer != companionPackRenderer2D {
+		t.Fatalf("fallback renderer = %q, want %q", fallback.renderer, companionPackRenderer2D)
+	}
+}

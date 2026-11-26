@@ -39,7 +39,12 @@ func catalogTurn(uuid, version string, commands []string) []string {
 // it and the offered list drops it; a daemon that rejoins the process
 // rebuilds the capabilities from the held stream.
 func TestLeadCapabilitiesFromItsInit(t *testing.T) {
-	h := newCatalogLeadHarness(t, ClaudeCatalog())
+	h := newLeadHarness(t)
+	setNativeLeadCompaction(t, h)
+	reg := h.opts.Backends[BackendClaude]
+	reg.Catalog = ClaudeCatalog()
+	h.opts.Backends[BackendClaude] = reg
+	h.start()
 	h.holders.setControl("initialize", "", `{"commands":[{"name":"compact","description":"Free up context"},{"name":"review"}]}`)
 	id, holder := h.runLead("one")
 	eventually(t, "the launch's command list", func() bool {

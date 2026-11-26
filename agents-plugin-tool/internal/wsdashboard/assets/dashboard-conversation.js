@@ -40,7 +40,12 @@
       if (!k) return;
       var old = have[k];
       if (old) {
-        if (!(changed && changed[k]) && old.getAttribute("data-mail-wake") === n.getAttribute("data-mail-wake")) return;
+        if (!(changed && changed[k]) &&
+            old.getAttribute("data-mail-wake") === n.getAttribute("data-mail-wake") &&
+            old.getAttribute("data-turn-absorbed") === n.getAttribute("data-turn-absorbed") &&
+            old.getAttribute("data-turn-live-absorbed") === n.getAttribute("data-turn-live-absorbed") &&
+            old.getAttribute("data-conv-turn") === n.getAttribute("data-conv-turn") &&
+            old.getAttribute("data-turn-rev") === n.getAttribute("data-turn-rev")) return;
         box.replaceChild(n, old);
       } else {
         // New entries are usually the newest (live) or the oldest (history),
@@ -58,6 +63,7 @@
       added.push(n);
       restoreOpen(n);
       fmtTimes(n);
+      if (typeof hydrateWbUpdateItems === "function") hydrateWbUpdateItems(n);
     });
     return added;
   }
@@ -151,7 +157,7 @@
     var src = frag(html), head = el.querySelector(".thead"), nhead = src.querySelector(".thead");
     var nbox = src.querySelector(".centries");
     if (!box || !nbox) {
-      el.innerHTML = html; restoreOpen(el); fmtTimes(el); sweepOutImgs(el); mermaid(el); histReset();
+      el.innerHTML = html; restoreOpen(el); fmtTimes(el); sweepOutImgs(el); mermaid(el); if (typeof hydrateWbUpdateItems === "function") hydrateWbUpdateItems(el); histReset();
       var freshBox = entriesBox(), freshOld = firstEntryEl(freshBox);
       emitAuditEvent("ws-entries-merged", { oldestAt: freshOld ? (freshOld.getAttribute("data-at") || "") : "", empty: !freshOld });
       return;
@@ -652,6 +658,7 @@
       if (kept) kept.h.apply();
       if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
       if (typeof boardDialSync === "function") boardDialSync();
+      if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
       return true;
     }, function () { btn.disabled = false; return false; });
   }
@@ -795,4 +802,394 @@
     if (icapsulePop && !icapsulePop.hidden && e.target && icapsulePop.contains(e.target)) return;
     icapsulePlace();
   }, true);
+
+  // --- chat-stream question link capsules -----------------------------------
+  // Hydrates .wbupdate-items chips inside .wbupdate-topic cards from the live
+  // #r-board DOM as the single source of truth, keeping them synced across
+  // picks, notes, holds (via pill.js), in-flight sends, and settlements.
+  var WB_QCAP_CLASSES = { policy: "js.wbupdate.cls.policy", technical: "js.wbupdate.cls.technical", announced: "js.wbupdate.cls.announced", check: "js.wbupdate.cls.check" };
+  var wbUpdateObserver = null, wbUpdateObservedBoard = null, wbUpdatePendingAll = false, wbUpdatePendingIds = null, wbUpdateQueued = false;
+
+  function wbUpdateNormID(raw) {
+    var s = String(raw || "").trim();
+    if (!/^\d+$/.test(s)) return "";
+    return String(parseInt(s, 10));
+  }
+
+  function wbUpdateItemID(el) {
+    if (!el) return "";
+    var id = wbUpdateNormID(el.getAttribute("data-wb-item-id"));
+    if (id) return id;
+    var jump = el.getAttribute("data-wb-jump") || "";
+    var m = /^item-(\d+)$/.exec(jump);
+    if (m) return wbUpdateNormID(m[1]);
+    m = /^\((\d+)\)$/.exec((el.textContent || "").trim());
+    return m ? wbUpdateNormID(m[1]) : "";
+  }
+
+  function wbUpdateFlattenMemo(raw) {
+    if (!raw) return "";
+    var s = String(raw)
+      .replace(/<mailbox\b[^>]*>([\s\S]*?)<\/mailbox>/gi, " $1 ")
+      .replace(/<mailbox\b[^>]*\/?>/gi, " ")
+      .replace(/<textref\b[^>]*>([\s\S]*?)<\/textref>/gi, " $1 ")
+      .replace(/<textref\b[^>]*\/?>/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (s.length > 60) s = s.slice(0, 59).trimEnd() + "…";
+    return s;
+  }
+
+  function wbUpdateIsHeld(el) {
+    if (!el) return false;
+    if (window.wbPill && typeof window.wbPill.isHeld === "function") return !!window.wbPill.isHeld(el);
+    return el.classList.contains("wb-held") || !!el.querySelector('.wb-hold-toggle[aria-pressed="true"]');
+  }
+
+  function wbUpdateClassFromEl(el) {
+    if (!el) return "";
+    var attr = el.getAttribute("data-class");
+    if (attr && WB_QCAP_CLASSES[attr]) return attr;
+    if (el.classList.contains("policy")) return "policy";
+    if (el.classList.contains("ckrow")) return "check";
+    if (el.classList.contains("arow")) {
+      var tag = el.querySelector(".tag");
+      if (tag) {
+        if (tag.classList.contains("technical")) return "technical";
+        if (tag.classList.contains("announced")) return "announced";
+        if (tag.classList.contains("policy")) return "policy";
+      }
+      return "announced";
+    }
+    if (el.classList.contains("technical")) return "technical";
+    if (el.classList.contains("announced")) return "announced";
+    if (el.classList.contains("check")) return "check";
+    return "";
+  }
+
+  function wbUpdateTitleFromEl(openEl, settledCk, settledHist, askEl) {
+    var n = openEl && openEl.querySelector(".head .title");
+    if (n && n.textContent.trim()) return n.textContent.trim();
+    n = settledCk && settledCk.querySelector(".head .title");
+    if (n && n.textContent.trim()) return n.textContent.trim();
+    n = settledHist && settledHist.querySelector(".wb-hmain b");
+    if (n && n.textContent.trim()) return n.textContent.trim();
+    n = askEl && askEl.querySelector(".wb-hmain a, .wb-hmain b");
+    if (n && n.textContent.trim()) return n.textContent.trim();
+    return "";
+  }
+
+  function wbUpdateSettledSummary(settledHist, settledCk) {
+    var text = "";
+    if (settledHist) {
+      var st = settledHist.querySelector(".wb-hstatus");
+      if (st) {
+        var pick = st.querySelector(".pick");
+        if (pick) {
+          var k = pick.querySelector(".k"), pt = pick.querySelector(".pt");
+          var kTxt = k ? k.textContent.trim() : "", ptTxt = pt ? pt.textContent.trim() : "";
+          var pickText = kTxt && ptTxt ? kTxt + " · " + ptTxt : (kTxt || ptTxt);
+          var prefix = "";
+          for (var c = st.firstChild; c && c !== pick; c = c.nextSibling) {
+            if (c.nodeType === 3) prefix += c.nodeValue;
+          }
+          prefix = prefix.replace(/\s+/g, " ").trim();
+          text = prefix ? prefix + " " + pickText : pickText;
+        } else {
+          text = (st.textContent || "").replace(/\s+/g, " ").trim();
+        }
+      }
+      if (settledHist.classList.contains("commented")) {
+        var qEl = settledHist.querySelector(".cmquote");
+        var qTxt = qEl ? qEl.textContent.replace(/\s+/g, " ").trim() : "";
+        if (qTxt) text = text ? text + " " + qTxt : qTxt;
+      }
+    } else if (settledCk) {
+      var parts = [];
+      [".amark", ".stamp", ".ans", ".said"].forEach(function (sel) {
+        var n = settledCk.querySelector(sel);
+        var v = n ? n.textContent.replace(/\s+/g, " ").trim() : "";
+        if (v) parts.push(v);
+      });
+      text = parts.join(" · ");
+    }
+    text = text.replace(/\s+/g, " ").trim();
+    if (!text) text = wsT("js.wbupdate.settled");
+    if (text.length > 60) text = text.slice(0, 59).trimEnd() + "…";
+    return text;
+  }
+
+  function wbUpdateQueryBoard(b, sel) {
+    var el = b.querySelector(sel);
+    if (el) return el;
+    if (typeof virtualStore === "undefined" || !virtualStore || !virtualStore.size) return null;
+    var found = null;
+    virtualStore.forEach(function (rec) {
+      if (found || !rec) return;
+      if (rec.stashed && rec.stashed.nodeType === 1) {
+        if (rec.stashed.matches && rec.stashed.matches(sel)) { found = rec.stashed; return; }
+        if (rec.stashed.querySelector) found = rec.stashed.querySelector(sel);
+        return;
+      }
+      if (rec.children && rec.children.length) {
+        for (var i = 0; i < rec.children.length; i++) {
+          var c = rec.children[i];
+          if (!c || c.nodeType !== 1) continue;
+          if (c.matches && c.matches(sel)) { found = c; return; }
+          if (c.querySelector) {
+            var hit = c.querySelector(sel);
+            if (hit) { found = hit; return; }
+          }
+        }
+      }
+    });
+    return found;
+  }
+
+  function readBoardQuestionState(rawId) {
+    var b = region("board");
+    var id = wbUpdateNormID(rawId);
+    if (!b || !id) return null;
+    var pad = id.length < 2 ? "0" + id : id;
+    var openSel = '.card.policy[data-id="' + pad + '"], .arow[data-id="' + pad + '"], .ckrow[data-id="' + pad + '"]:not([data-assumed])';
+    if (pad !== id) openSel += ', .card.policy[data-id="' + id + '"], .arow[data-id="' + id + '"], .ckrow[data-id="' + id + '"]:not([data-assumed])';
+    var openEl = wbUpdateQueryBoard(b, openSel);
+    var askEl = wbUpdateQueryBoard(b, '.wb-hitem.original-question[data-item="' + id + '"], .wb-hitem[data-item="' + id + '"][data-state="ask"]');
+
+    // An actively open item on the board always takes precedence over historical
+    // rows (e.g. an earlier .commented entry before the item was re-asked).
+    if (openEl) {
+      var openCls = wbUpdateClassFromEl(openEl) || wbUpdateClassFromEl(askEl) || "check";
+      var openTitle = wbUpdateTitleFromEl(openEl, null, null, askEl);
+      if (openEl.classList.contains("sent-held")) {
+        return { cls: openCls, title: openTitle, state: "sent", clsName: "st-sent", text: wsT("js.wbupdate.sent_held") };
+      }
+      if (openEl.classList.contains("sent-sent")) {
+        return { cls: openCls, title: openTitle, state: "sent", clsName: "st-sent", text: wsT("js.wbupdate.sent_waiting") };
+      }
+      var pickBtn = openEl.querySelector('.opt[data-opt][aria-pressed="true"], .btn[data-v][aria-pressed="true"]');
+      var pick = pickBtn ? (pickBtn.getAttribute("data-opt") || pickBtn.getAttribute("data-v") || "") : "";
+      var box = openEl.querySelector("label.ack > input, label.ck > input");
+      if (!pick && openEl.hasAttribute("data-no")) pick = "no";
+      else if (!pick && box && box.checked) pick = "ok";
+      var note = openEl.querySelector("textarea.note, .wsc-backing");
+      var memo = note ? wbUpdateFlattenMemo(note.value) : "";
+      if (pick || memo) {
+        var stCls = pick === "ok" ? "st-staged-ok" : pick === "no" ? "st-staged-no" : "st-staged";
+        var stText = pick && memo ? wsT("js.wbupdate.staged_pick", pick) + " · " + memo
+          : pick ? wsT("js.wbupdate.staged_pick", pick)
+          : wsT("js.wbupdate.staged_memo", memo);
+        return { cls: openCls, title: openTitle, state: "staged", clsName: stCls, text: stText };
+      }
+      if (wbUpdateIsHeld(openEl)) {
+        return { cls: openCls, title: openTitle, state: "held", clsName: "st-held", text: wsT("js.pill.held") };
+      }
+      return { cls: openCls, title: openTitle, state: "open", clsName: "st-open", text: wsT("js.wbupdate.unanswered") };
+    }
+
+    var settledHist = wbUpdateQueryBoard(b, '.wb-hitem[data-item="' + id + '"][data-state="settled"]');
+    var settledCk = wbUpdateQueryBoard(b, '.ckrow[data-item="' + id + '"]');
+    if (!settledHist && !settledCk) return null;
+    var cls = wbUpdateClassFromEl(settledHist) || wbUpdateClassFromEl(settledCk) || wbUpdateClassFromEl(askEl) || "check";
+    var title = wbUpdateTitleFromEl(null, settledCk, settledHist, askEl);
+    return { cls: cls, title: title, state: "settled", clsName: "st-settled", text: "✓ " + wbUpdateSettledSummary(settledHist, settledCk) };
+  }
+
+  function hydrateWbUpdateChip(chip, id, state) {
+    if (!state) {
+      if (chip.classList.contains("wbupdate-cap")) {
+        var wrap = chip.parentNode;
+        chip.className = "wbupdate-item-id";
+        chip.removeAttribute("title");
+        chip.textContent = "(" + id + ")";
+        if (wrap && wrap.classList && wrap.classList.contains("wbupdate-qitem") && wrap.parentNode) {
+          wrap.parentNode.insertBefore(chip, wrap);
+          wrap.parentNode.removeChild(wrap);
+        }
+      }
+      return false;
+    }
+    chip.setAttribute("data-wb-item-id", id);
+    var wrap = chip.parentNode;
+    if (!wrap || !wrap.classList || !wrap.classList.contains("wbupdate-qitem")) {
+      wrap = doc.createElement("div");
+      wrap.className = "wbupdate-qitem";
+      wrap.setAttribute("data-wb-qitem", id);
+      if (chip.parentNode) chip.parentNode.insertBefore(wrap, chip);
+      wrap.appendChild(chip);
+    }
+    if (wrap.getAttribute("data-wb-state") !== state.state) wrap.setAttribute("data-wb-state", state.state);
+
+    var wantClass = "wbupdate-item-id wbupdate-cap wbupdate-cls-" + state.cls;
+    if (chip.className !== wantClass) chip.className = wantClass;
+    var tip = "(" + id + ")" + (state.title ? " " + state.title : "");
+    if (chip.getAttribute("title") !== tip) chip.setAttribute("title", tip);
+
+    var idEl = chip.querySelector(".wbupdate-cap-id");
+    var clsEl = chip.querySelector(".wbupdate-cap-cls");
+    var ttlEl = chip.querySelector(".wbupdate-cap-ttl");
+    var arrEl = chip.querySelector(".wbupdate-cap-arr");
+    if (!idEl || !clsEl || !ttlEl) {
+      chip.textContent = "";
+      idEl = doc.createElement("span"); idEl.className = "wbupdate-cap-id";
+      clsEl = doc.createElement("span"); clsEl.className = "wbupdate-cap-cls";
+      ttlEl = doc.createElement("span"); ttlEl.className = "wbupdate-cap-ttl";
+      chip.appendChild(idEl);
+      chip.appendChild(clsEl);
+      chip.appendChild(ttlEl);
+      if (chip.tagName === "A") {
+        arrEl = doc.createElement("span");
+        arrEl.className = "wbupdate-cap-arr";
+        arrEl.setAttribute("aria-hidden", "true");
+        arrEl.textContent = "↗";
+        chip.appendChild(arrEl);
+      }
+    }
+    var idText = "(" + id + ")";
+    if (idEl.textContent !== idText) idEl.textContent = idText;
+    var clsLabel = wsT(WB_QCAP_CLASSES[state.cls] || "js.wbupdate.cls.check");
+    if (clsEl.textContent !== clsLabel) clsEl.textContent = clsLabel;
+    if (ttlEl.textContent !== state.title) ttlEl.textContent = state.title;
+
+    var ans = wrap.querySelector(".wbupdate-ans");
+    if (!ans) {
+      ans = doc.createElement("span");
+      ans.className = "wbupdate-ans";
+      wrap.appendChild(ans);
+    }
+    var ansClass = "wbupdate-ans " + state.clsName;
+    if (ans.className !== ansClass) ans.className = ansClass;
+    if (ans.textContent !== state.text) ans.textContent = state.text;
+    return true;
+  }
+
+  function hydrateWbUpdateGroup(group) {
+    if (!group) return;
+    var chips = q(".wbupdate-item-id", group), any = false;
+    for (var i = 0; i < chips.length; i++) {
+      var chip = chips[i], id = wbUpdateItemID(chip);
+      if (!id) continue;
+      if (hydrateWbUpdateChip(chip, id, readBoardQuestionState(id))) any = true;
+    }
+    group.classList.toggle("wbupdate-hydrated", any);
+  }
+
+  function hydrateWbUpdateItems(scope) {
+    var rootEl = scope || entriesBox() || doc;
+    if (!rootEl || !rootEl.querySelectorAll) return;
+    if (rootEl.matches && rootEl.matches(".wbupdate-items")) {
+      hydrateWbUpdateGroup(rootEl);
+      return;
+    }
+    q(".wbupdate-items", rootEl).forEach(hydrateWbUpdateGroup);
+  }
+
+  function syncWbUpdateItems(ids) {
+    var box = entriesBox() || doc;
+    if (!box || !box.querySelectorAll) return;
+    if (!ids || !ids.length) {
+      hydrateWbUpdateItems(box);
+      return;
+    }
+    var seen = Object.create(null);
+    for (var i = 0; i < ids.length; i++) {
+      var id = wbUpdateNormID(ids[i]);
+      if (!id || seen[id]) continue;
+      seen[id] = true;
+      var state = readBoardQuestionState(id);
+      var pad = id.length < 2 ? "0" + id : id;
+      var sel = '.wbupdate-item-id[data-wb-item-id="' + id + '"], .wbupdate-item-id[data-wb-jump="item-' + id + '"]';
+      if (pad !== id) sel += ', .wbupdate-item-id[data-wb-jump="item-' + pad + '"]';
+      var targets = q(sel, box);
+      for (var j = 0; j < targets.length; j++) {
+        hydrateWbUpdateChip(targets[j], id, state);
+        var grp = targets[j].closest(".wbupdate-items");
+        if (grp) grp.classList.toggle("wbupdate-hydrated", !!grp.querySelector(".wbupdate-cap"));
+      }
+    }
+  }
+
+  function wbUpdateQueueSync(id) {
+    if (!id || id === "*") wbUpdatePendingAll = true;
+    else {
+      if (!wbUpdatePendingIds) wbUpdatePendingIds = Object.create(null);
+      wbUpdatePendingIds[id] = true;
+    }
+    if (wbUpdateQueued) return;
+    wbUpdateQueued = true;
+    Promise.resolve().then(function () {
+      wbUpdateQueued = false;
+      var all = wbUpdatePendingAll, ids = wbUpdatePendingIds;
+      wbUpdatePendingAll = false;
+      wbUpdatePendingIds = null;
+      if (all) syncWbUpdateItems();
+      else if (ids) syncWbUpdateItems(Object.keys(ids));
+    });
+  }
+
+  function wbUpdateNodeItemID(node) {
+    if (!node || node.nodeType !== 1) return "";
+    var host = node.closest ? node.closest("[data-id], [data-item]") : null;
+    if (!host) return "";
+    return wbUpdateNormID(host.getAttribute("data-id") || host.getAttribute("data-item") || "");
+  }
+
+  function watchWbUpdateBoard() {
+    var b = region("board");
+    if (!b || typeof MutationObserver !== "function") return;
+    if (wbUpdateObserver && wbUpdateObservedBoard === b) return;
+    if (wbUpdateObserver) wbUpdateObserver.disconnect();
+    wbUpdateObservedBoard = b;
+    wbUpdateObserver = new MutationObserver(function (list) {
+      for (var i = 0; i < list.length; i++) {
+        var m = list[i];
+        if (m.type === "attributes") {
+          var aid = wbUpdateNodeItemID(m.target);
+          if (aid) wbUpdateQueueSync(aid);
+          continue;
+        }
+        if (m.type === "childList") {
+          var tid = wbUpdateNodeItemID(m.target);
+          if (tid) { wbUpdateQueueSync(tid); continue; }
+          var scan = function (nodes) {
+            for (var k = 0; k < nodes.length; k++) {
+              var n = nodes[k];
+              if (!n || n.nodeType !== 1) continue;
+              if (n.matches && n.matches(".card[data-id], .arow[data-id], .ckrow[data-id], .ckrow[data-item], .wb-hitem[data-item], .sentmark")) {
+                var nid = n.getAttribute("data-id") || n.getAttribute("data-item") || wbUpdateNodeItemID(n);
+                wbUpdateQueueSync(nid || "*");
+              } else if (n.querySelector && n.querySelector(".card[data-id], .arow[data-id], .ckrow[data-id], .ckrow[data-item], .wb-hitem[data-item], .sentmark")) {
+                wbUpdateQueueSync("*");
+                return true;
+              }
+            }
+            return false;
+          };
+          if (scan(m.addedNodes) || scan(m.removedNodes)) return;
+        }
+      }
+    });
+    wbUpdateObserver.observe(b, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["class", "aria-pressed", "data-no", "data-state", "data-item"]
+    });
+  }
+
+  ["input", "change"].forEach(function (type) {
+    doc.addEventListener(type, function (e) {
+      var t = e.target;
+      if (!t || !inBoard(t)) return;
+      if (t.id === "ack-all") { wbUpdateQueueSync("*"); return; }
+      var id = wbUpdateNodeItemID(t);
+      if (id) wbUpdateQueueSync(id);
+    });
+  });
+
+  function initWbUpdateCards() {
+    watchWbUpdateBoard();
+    hydrateWbUpdateItems(entriesBox() || doc);
+  }
+  window.WsWbUpdateCards = { hydrate: hydrateWbUpdateItems, sync: syncWbUpdateItems, init: initWbUpdateCards };
 

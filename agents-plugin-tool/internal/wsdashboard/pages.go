@@ -39,6 +39,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-board-anchor.js",
 	"dashboard-board-dial.js",
 	"dashboard-conversation.js",
+	"dashboard-conv-motion.js",
 	"dashboard-bundles.js",
 	"dashboard-hud.js",
 	"dashboard-composer.js",
@@ -50,6 +51,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-composer-highlight.js",
 	"dashboard-composer-selections.js",
 	"dashboard-composer-delivery.js",
+	"dashboard-whiteboard-only.js",
 	"dashboard-composer-exec.js",
 	"dashboard-composer-ucmd-editor.js",
 	"dashboard-composer-ucmd-card.js",
@@ -101,6 +103,7 @@ var companionScriptFiles = []string{
 var dashboardStyleFiles = []string{
 	"dashboard.css",
 	"dashboard-conversation.css",
+	"dashboard-conv-motion.css",
 	"dashboard-composer-md.css",
 	"dashboard-board.css",
 	"dashboard-layout.css",

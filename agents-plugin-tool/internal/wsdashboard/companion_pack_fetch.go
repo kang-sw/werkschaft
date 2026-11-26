@@ -30,7 +30,7 @@ import (
 var (
 	companionRefsCap    int64 = 1 << 20  // one ref advertisement
 	companionSourceCap  int64 = 64 << 20 // one source zip
-	companionPackZipCap int64 = 16 << 20 // one external pack zip
+	companionPackZipCap int64 = 40 << 20 // one external pack zip
 )
 
 const (

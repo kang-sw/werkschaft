@@ -9,6 +9,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 554ea4827fc34d66
 sage-review-completeness-reviewed: 554ea4827fc34d66
+completed: 2026-11-27
 ---
 
 # Bottom-Right Composer "Whiteboard-Only" Mode Toggle (Prompt Injection & Plain-Text Folding)
@@ -124,3 +125,7 @@ Approved visual reference: `ai-docs/assets/mockups/261125/whiteboard-chat-view/m
 - Go tests (from `agents-plugin-tool/`): `go test -race ./internal/wsdashboard/... ./internal/wsi18n/...` (plus affected runner/inbox package tests) and `GOOS=windows go vet ./...`, verifying `whiteboard_first: true` injects the directive into `<ws-ambient>`, leaves visible user message text clean, and `whiteboard_first: false`/omitted preserves existing payload byte-for-byte (T0); a turn composed from mixed flagged/unflagged queued entries carries the directive exactly once (also across retry), a flagged mid-turn steer (state-direct and durable-inbox paths) carries it exactly once while an unflagged steer is unchanged, and a steer rewrite keeps the flag; the session capability attribute is true only for sessions with an ambient path.
 - Node DOM harness tests covering: toggle absent (and `whiteboard_first` never sent, nothing folded despite a stored `"on"`) on a session without an ambient path, default OFF state, per-session toggle persistence, sending `whiteboard_first: true` in the message payload when ON, folding `.msg.fromlead` into `[data-conv-turn-drawer]` (both with tool calls and with 0 tool calls), expanding the drawer to read folded plain text, preserving `.wbupdate-topic` visibility, and toggling OFF to restore unfolded `.msg.fromlead` without scroll-lock drift.
 - Headless Chromium (Playwright) visual verification in dark and light themes comparing composer `.cfoot` toggle alignment below `.csend` and folded/expanded `.msg.fromlead` states side-by-side against `ai-docs/assets/mockups/261125/whiteboard-chat-view/mockup.html`.
+
+### Result (cba1fec01) - 2026-11-27
+
+Implemented the `화이트보드 전용` toggle (per-session, default OFF, hidden without an ambient), the `whiteboard_first` flag through `wsinbox.Entry` to a model-only directive inside `<ws-ambient>` (union, once, both steer paths; requeue drops it), and the client fold of lead replies into Child 1 turn drawers (0-tool turns via the plain summary). Replies stay immutable and hidden; drawers hold clones. Not honored: `steerWorker`, `/command` and playbook turns. Running-turn replies fold after the turn completes. i18n keys added to all 11 tables. Known base failures (syncTurnAria in panel-shut/board-close harnesses, search-palette fake DOM) are from Child 1 and untouched here.

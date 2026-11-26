@@ -88,7 +88,7 @@
 
   // --- browser storage: guarded, since a locked-down browser throws on access
   var store = null;
-  try { store = window.localStorage; store.getItem("ws.dashboard.layout"); } catch (e) { store = null; }
+  try { store = window.localStorage; store.getItem("ws.dashboard.input"); } catch (e) { store = null; }
   function load(k) { try { return store ? store.getItem(k) : null; } catch (e) { return null; } }
   function save(k, v) {
     try {
@@ -101,6 +101,10 @@
   function parseStageFill(v) { return v === true || v === "1" || v === "true"; }
   var stageFill = parseStageFill(load(STAGE_FILL_KEY));
   if (stageFill) root.setAttribute("data-stage-fill", "");
+  var EXTRA_MOTION_KEY = "ws.dashboard.extraMotion";
+  function parseExtraMotion(v) { return !(v === false || v === "off" || v === "0" || v === "false"); }
+  var extraMotion = parseExtraMotion(load(EXTRA_MOTION_KEY));
+  root.setAttribute("data-extra-motion", extraMotion ? "on" : "off");
 
   // --- times: the server writes epoch ms; the page shows local or relative time
   function two(n) { return (n < 10 ? "0" : "") + n; }
@@ -298,9 +302,17 @@
     if (d.classList.contains("panel") && d.id) return "p:" + d.id;
     return null;
   }
+  function syncTurnAria(d) {
+    if (!d || d.tagName !== "DETAILS") return;
+    var sum = d.firstElementChild;
+    if (sum && sum.hasAttribute("data-conv-turn-summary")) {
+      sum.setAttribute("aria-expanded", d.open ? "true" : "false");
+    }
+  }
   doc.addEventListener("toggle", function (e) {
     var d = e.target;
     if (!d || d.tagName !== "DETAILS") return;
+    if (typeof syncTurnAria === "function") syncTurnAria(d);
     if (isPeer(d)) { save(PEER_KEY + d.getAttribute("data-peer"), d.open ? "1" : null); return; }
     if (d.classList.contains("rended") && d.hasAttribute("data-key") && railSets) { railSets.ended.put(d.getAttribute("data-key"), d.open); return; }
     // A graft's temporary open attribute is not an actual reader open.
@@ -312,16 +324,18 @@
     if (isPanel(d)) shutPut(shutId(d), !d.open);
   }, true);
   function restoreOpenOne(d) {
-    if (isPeer(d)) { d.open = load(PEER_KEY + d.getAttribute("data-peer")) === "1"; return; }
-    if (d.classList.contains("entry-panel") && typeof window !== "undefined" && window.wbHistory && window.wbHistory.restorePanel && window.wbHistory.restorePanel(d)) return;
+    if (isPeer(d)) { d.open = load(PEER_KEY + d.getAttribute("data-peer")) === "1"; if (typeof syncTurnAria === "function") syncTurnAria(d); return; }
+    if (d.classList.contains("entry-panel") && typeof window !== "undefined" && window.wbHistory && window.wbHistory.restorePanel && window.wbHistory.restorePanel(d)) { if (typeof syncTurnAria === "function") syncTurnAria(d); return; }
     var k = openKey(d);
     if (k && Object.prototype.hasOwnProperty.call(openState, k)) d.open = openState[k];
     else if (isPanel(d) && shutHas(shutId(d))) d.open = false;
+    if (typeof syncTurnAria === "function") syncTurnAria(d);
   }
   function restoreOpen(el) {
     if (el.tagName === "DETAILS") restoreOpenOne(el);
     q("details", el).forEach(restoreOpenOne);
   }
+  q('details[data-conv-turn="1"]').forEach(syncTurnAria);
   // forgetOpen drops what the user chose for the keyed details inside el,
   // so the next restoreOpen leaves the server's markup as it arrived.
   function forgetOpen(el) {
@@ -616,7 +630,7 @@
       }
     });
     pinConvo();
-    queueSyncConvoBottom();
+    if (typeof queueSyncConvoBottom === "function") queueSyncConvoBottom();
     nearTop(); // a conversation shown too short to scroll still loads older entries
     Object.keys(PANE).forEach(function (t) { var d = tabDot(t); if (d && tabShown(t)) d.classList.remove("on"); });
     var cv = typeof convoVisible === "function" ? convoVisible() : (typeof paneVisible.convo === "boolean" ? paneVisible.convo : visible(convo));
@@ -630,17 +644,16 @@
     }
     filesSeen = fs;
     if (window.WsTerm && window.WsTerm.syncCtab) window.WsTerm.syncCtab(!!(grid && grid.getAttribute("data-ctab") === "term"), visible($("cterm-panes")));
+    if (typeof convMotionRelayout === "function") convMotionRelayout();
   }
-  function setLayout(v) {
-    if (v !== "split" && v !== "tabs") v = "auto";
-    layoutMode = v;
+  function setLayout() {
+    layoutMode = "auto";
     if (grid) {
-      grid.setAttribute("data-layout", v);
+      grid.setAttribute("data-layout", "auto");
       // Mirror layout state for rules outside the grid rather than a body
       // :has() that invalidates the document on chip mutations.
-      doc.body.setAttribute("data-dashboard-layout", v);
+      doc.body.setAttribute("data-dashboard-layout", "auto");
     }
-    q(".gmenu [data-layout]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-layout") === v)); });
     if (live || worktree) revealPanes();
     if (cardBoard) window.WsCards.relayout();
   }
@@ -727,9 +740,24 @@
     if (!changed && !user) return;
     doc.dispatchEvent(new CustomEvent("ws-stage-fill", { detail: { fill: next } }));
     if (typeof galNarrow !== "undefined" && galNarrow && typeof queueGallery === "function") queueGallery();
-    if (user && framed) shPost("settings", { layout: layoutMode, input: inputMode, stageFill: stageFill });
+    if (user && framed) shPost("settings", { layout: layoutMode, input: inputMode, stageFill: stageFill, extraMotion: extraMotion });
   }
   function toggleStageFill() { setStageFill(!stageFill, true); }
+  function setExtraMotion(v, user) {
+    var next = parseExtraMotion(v);
+    var attr = next ? "on" : "off";
+    var changed = next !== extraMotion || root.getAttribute("data-extra-motion") !== attr;
+    extraMotion = next;
+    if (root.getAttribute("data-extra-motion") !== attr) root.setAttribute("data-extra-motion", attr);
+    q(".gmenu [data-extra-motion]").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.getAttribute("data-extra-motion") === attr));
+    });
+    if (user) save(EXTRA_MOTION_KEY, attr);
+    if (!changed && !user) return;
+    doc.dispatchEvent(new CustomEvent("ws-extra-motion", { detail: { enabled: next } }));
+    if (user && framed) shPost("settings", { layout: layoutMode, input: inputMode, stageFill: stageFill, extraMotion: extraMotion });
+    if (user && shell) shFrames.forEach(shSettings);
+  }
   function setTab(t) {
     grid.setAttribute("data-tab", t);
     q("#tabbar [data-tab]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-tab") === t)); });
@@ -754,10 +782,13 @@
   // Storage synchronizes other tabs. The shell also sends its in-memory
   // choice to frames, so denied/full storage never prevents immediate use.
   window.addEventListener("storage", function (e) {
-    if (e.key === LAYOUT_KEY) setLayout(e.newValue);
     if (e.key === INPUT_KEY) setInput(e.newValue);
     if (e.key === STAGE_FILL_KEY || e.key === null) {
       setStageFill(parseStageFill(e.key === null ? load(STAGE_FILL_KEY) : e.newValue));
+      if (shell) shFrames.forEach(shSettings);
+    }
+    if (e.key === EXTRA_MOTION_KEY || e.key === null) {
+      setExtraMotion(e.key === null ? load(EXTRA_MOTION_KEY) : e.newValue);
       if (shell) shFrames.forEach(shSettings);
     }
   });
@@ -890,6 +921,7 @@
         if (s.capsules && window.WsCapsules) window.WsCapsules.attach(note).restore(s.capsules);
       }
     });
+    if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
   }
   // A board swap waits while the user is typing in the answer form, and
   // lands when the focus leaves it.

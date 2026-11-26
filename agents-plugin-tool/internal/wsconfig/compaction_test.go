@@ -118,7 +118,7 @@ func TestCompactionLayerMajorAndLegacyRoundTrip(t *testing.T) {
 	}
 	// Lead legacy values are not consulted for worker keys.
 	got, _, err := r.Compaction("session", "compaction.worker_advisory", "pi", "")
-	if err != nil || got.Value != "50%" {
+	if err != nil || got.Value != "60%|180k" {
 		t.Fatalf("worker inherited lead legacy: %+v %v", got, err)
 	}
 }
