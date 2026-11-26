@@ -125,7 +125,8 @@ async function saveDockShot(page, name) {
       }
     });
     page.on('response', res => {
-      if (res.status() >= 400) badResponses.push(`${res.status()} ${new URL(res.url()).pathname}`);
+      const p = new URL(res.url()).pathname;
+      if (res.status() >= 400 && p !== '/favicon.ico' && p !== '/tracker/stores') badResponses.push(`${res.status()} ${p}`);
     });
     page.on('request', req => {
       const p = new URL(req.url()).pathname;
@@ -159,15 +160,10 @@ async function saveDockShot(page, name) {
       vrm1ID ? { id: vrm1ID, label: 'vrm1', expectVrm0: false } : null,
       vrm0ID ? { id: vrm0ID, label: 'vrm0', expectVrm0: true } : null
     ].filter(Boolean);
+    assert.equal(vrmPacks.length, 2, 'both VRM 1.0 and VRM 0.x fixtures must be staged');
 
-    if (vrmPacks.length === 0) {
-      assert.deepEqual(pageErrors, []);
-      assert.deepEqual(consoleErrors, []);
-      console.log('companion vrm browser (zero-cost gate only): ok');
-      return;
-    }
-
-    // 3. Load each available VRM pack (1.0 and 0.x), verify render, 7 expressions, and visual captures.
+    // 3. Load both VRM packs (1.0 and 0.x), verify borderless Digital Dissolve CSS,
+    //    rendered pixels, 7 unified expressions, and settings modal 2D-wardrobe hiding.
     for (const pack of vrmPacks) {
       await applyConfig({ enabled: true, director: 'rules', pack: pack.id, preset: '' });
       try {
@@ -184,11 +180,30 @@ async function saveDockShot(page, name) {
         throw new Error(`wait for ${pack.id} failed: ${err.message}\ndbg=${JSON.stringify(dbg)}\npageErrors=${JSON.stringify(pageErrors)}\nconsoleErrors=${JSON.stringify(consoleErrors)}\nbadResponses=${JSON.stringify(badResponses)}\nvrmRuntimeRequests=${JSON.stringify(vrmRuntimeRequests)}`);
       }
 
-      const st = await page.evaluate(() => window.WsCompanion.debugStage());
+      const visuals = await page.evaluate(() => {
+        const wrap = document.querySelector('.ws-companion-vrm-wrap');
+        const cwrap = document.querySelector('.ws-companion-vrm-canvas-wrap');
+        const grid = document.querySelector('.ws-dissolve-grid');
+        const wStyle = getComputedStyle(wrap);
+        const cwStyle = getComputedStyle(cwrap);
+        return {
+          wrapBg: wStyle.backgroundColor,
+          wrapContain: wStyle.contain,
+          maskImage: cwStyle.maskImage || cwStyle.webkitMaskImage || '',
+          hasDissolveGrid: !!grid,
+          stage: window.WsCompanion.debugStage()
+        };
+      });
+      const st = visuals.stage;
       assert.equal(st.vrm.isVrm0, pack.expectVrm0, `${pack.label} metaVersion mismatch: ${JSON.stringify(st.vrm)}`);
+      assert.equal(st.vrm.pose, 'stand');
       assert.equal(st.size, 240);
       assert.equal(st.vrmHeight, 280);
-      assert.ok(vrmRuntimeRequests.length >= 1, 'VRM runtime must be lazy-loaded on VRM pack');
+      assert.equal(visuals.wrapBg, 'rgba(0, 0, 0, 0)', 'VRM wrap must have transparent borderless background');
+      assert.match(visuals.wrapContain, /layout/, 'VRM wrap must declare contain: layout style');
+      assert.match(visuals.maskImage, /linear-gradient/, 'VRM canvas wrap must apply bottom Digital Dissolve mask');
+      assert.equal(visuals.hasDissolveGrid, true, 'Digital Dissolve pixel scatter element must exist');
+      assert.equal(vrmRuntimeRequests.length, 1, 'VRM runtime must lazy-load once and stay cached');
 
       // Check non-transparent pixels actually rendered into the composited WebGL canvas.
       const canvasPng = await page.locator('.ws-companion-vrm-canvas').screenshot({ omitBackground: true });
@@ -200,7 +215,7 @@ async function saveDockShot(page, name) {
       // Cycle all 7 unified expressions via directed commands.
       for (const expr of EXPRESSIONS) {
         await sendCommand({ sessionId: 'livesession', expression: expr, ttl_ms: 1500 });
-        await page.waitForTimeout(260);
+        await page.waitForTimeout(180);
         const cur = await page.evaluate(() => window.WsCompanion.debugStage()?.vrm?.expression);
         assert.equal(cur, expr, `${pack.label} failed to apply expression ${expr} (got ${cur})`);
       }
@@ -229,7 +244,7 @@ async function saveDockShot(page, name) {
     const homeDockBefore = await page.locator('.ws-companion-hit').boundingBox();
     await page.mouse.move(rcBox.x + rcBox.width / 2, rcBox.y + Math.min(200, rcBox.height / 2));
     await page.waitForFunction(() => window.WsCompanion.debugStage()?.avoiding === true, null, { timeout: 5000 });
-    await page.waitForTimeout(550); // wait for smooth slide animation to settle
+    await page.waitForTimeout(550);
     const dockAvoiding = await page.locator('.ws-companion-hit').boundingBox();
     const intersects = dockAvoiding.x + dockAvoiding.width > rcBox.x + 1 && dockAvoiding.x < rcBox.x + rcBox.width - 1;
     assert.equal(intersects, false, `avoiding dock ${JSON.stringify(dockAvoiding)} still intersects right-col ${JSON.stringify(rcBox)}`);
@@ -254,7 +269,11 @@ async function saveDockShot(page, name) {
       return true;
     });
     assert.ok(lostOk, 'WEBGL_lose_context extension unavailable');
-    await page.waitForFunction(() => window.WsCompanion.debugStage()?.vrm?.contextLost === true, null, { timeout: 5000 });
+    await page.waitForFunction(() => {
+      const st = window.WsCompanion.debugStage()?.vrm;
+      const ov = document.querySelector('.ws-companion-vrm-overlay');
+      return st && st.contextLost === true && ov && !ov.hidden;
+    }, null, { timeout: 5000 });
     const framesWhileLostA = await page.evaluate(() => window.WsCompanion.debugStage().vrm.framesRendered);
     await page.waitForTimeout(250);
     const framesWhileLostB = await page.evaluate(() => window.WsCompanion.debugStage().vrm.framesRendered);
@@ -263,28 +282,45 @@ async function saveDockShot(page, name) {
     await page.evaluate(() => window.__loseExt.restoreContext());
     await page.waitForFunction(prev => {
       const st = window.WsCompanion.debugStage()?.vrm;
-      return st && !st.contextLost && st.loaded && st.framesRendered > prev + 2;
+      const ov = document.querySelector('.ws-companion-vrm-overlay');
+      return st && !st.contextLost && st.loaded && (!ov || ov.hidden) && st.framesRendered > prev + 2;
     }, framesWhileLostB, { timeout: 15000 });
     assert.equal(vrmModelRequests.length, fetchesBeforeLoss, 'context restore must not refetch .vrm over network');
+    assert.equal(await page.evaluate(() => window.WsCompanion.debugStage().vrm.modelFetchCount), 1, 'adapter modelFetchCount must stay 1');
 
     // 6. Adaptive FPS measurement: active (~30 fps), idle after 5s (~6 fps), hidden (0 fps over 2s).
-    // Keep cursor moving gently to stay active for 1.5s.
-    const activeStart = await page.evaluate(() => window.WsCompanion.debugStage().vrm.framesRendered);
+    await page.waitForTimeout(1600); // let prior directed command TTL expire
+    const activeStart = await page.evaluate(() => ({
+      t: performance.now(),
+      frames: window.WsCompanion.debugStage().vrm.framesRendered
+    }));
     for (let i = 0; i < 15; i++) {
       await page.mouse.move(140 + i * 8, 220 + (i % 3) * 10);
       await page.waitForTimeout(100);
     }
-    const activeEnd = await page.evaluate(() => window.WsCompanion.debugStage().vrm.framesRendered);
-    const activeFps = (activeEnd - activeStart) / 1.5;
+    const activeEnd = await page.evaluate(() => ({
+      t: performance.now(),
+      frames: window.WsCompanion.debugStage().vrm.framesRendered,
+      idleMode: window.WsCompanion.debugStage().vrmIdleMode
+    }));
+    const activeFps = (activeEnd.frames - activeStart.frames) / ((activeEnd.t - activeStart.t) / 1000);
+    assert.equal(activeEnd.idleMode, false, 'active motion must not enter idle mode');
 
-    // Wait 5.6s completely still (no pointer moves, no commands) so idle throttle kicks in.
-    await page.waitForTimeout(5600);
-    const idleFlag = await page.evaluate(() => window.WsCompanion.debugStage().vrmIdleMode);
-    assert.equal(idleFlag, true, 'expected vrmIdleMode === true after >5s stillness');
-    const idleStart = await page.evaluate(() => window.WsCompanion.debugStage().vrm.framesRendered);
+    // Wait >5s completely still so idle throttle kicks in.
+    await page.waitForFunction(() => window.WsCompanion.debugStage()?.vrmIdleMode === true, null, { timeout: 8000 });
+    await page.waitForTimeout(300);
+    const idleStart = await page.evaluate(() => ({
+      t: performance.now(),
+      frames: window.WsCompanion.debugStage().vrm.framesRendered
+    }));
     await page.waitForTimeout(2000);
-    const idleEnd = await page.evaluate(() => window.WsCompanion.debugStage().vrm.framesRendered);
-    const idleFps = (idleEnd - idleStart) / 2.0;
+    const idleEnd = await page.evaluate(() => ({
+      t: performance.now(),
+      frames: window.WsCompanion.debugStage().vrm.framesRendered,
+      idleMode: window.WsCompanion.debugStage().vrmIdleMode
+    }));
+    const idleFps = (idleEnd.frames - idleStart.frames) / ((idleEnd.t - idleStart.t) / 1000);
+    assert.equal(idleEnd.idleMode, true, 'must stay in idle mode while still');
 
     // Simulate document.hidden === true via visibilitychange and verify 0 frames over 2s.
     await page.evaluate(() => {
@@ -292,7 +328,7 @@ async function saveDockShot(page, name) {
       Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
       document.dispatchEvent(new Event('visibilitychange'));
     });
-    await page.waitForTimeout(100);
+    await page.waitForTimeout(150);
     const hiddenStart = await page.evaluate(() => window.WsCompanion.debugStage().vrm.framesRendered);
     await page.waitForTimeout(2000);
     const hiddenEnd = await page.evaluate(() => window.WsCompanion.debugStage().vrm.framesRendered);
@@ -304,15 +340,14 @@ async function saveDockShot(page, name) {
     });
 
     assert.equal(hiddenFrames, 0, `expected 0 frames while hidden, got ${hiddenFrames}`);
-    // SwiftShader software rendering can cap slightly below 30 on heavy avatars,
-    // so check active is <= 36 fps and meaningfully faster than idle, and idle is within 20% of 6 fps (4.8..7.2).
-    assert.ok(idleFps >= 4.5 && idleFps <= 7.5, `idleFps=${idleFps.toFixed(2)} outside expected ~6 fps band`);
-    assert.ok(activeFps >= 12 && activeFps <= 36, `activeFps=${activeFps.toFixed(2)} outside expected <=30 fps band`);
+    assert.ok(idleFps >= 4.8 && idleFps <= 7.2, `idleFps=${idleFps.toFixed(2)} outside 6 ±20% (4.8..7.2)`);
+    assert.ok(activeFps >= 24 && activeFps <= 36, `activeFps=${activeFps.toFixed(2)} outside 30 ±20% (24..36)`);
 
     // 7. Switch back to 2D pack and verify clean disposal + no errors.
     await applyConfig({ enabled: true, director: 'rules', pack: 'default', preset: 'werkschaft-d1' });
     await page.waitForFunction(() => window.WsCompanion.debugStage()?.renderer === '2d', null, { timeout: 5000 });
 
+    assert.deepEqual(badResponses, [], `unexpected 4xx/5xx responses: ${badResponses}`);
     assert.deepEqual(pageErrors, [], 'unexpected page errors');
     assert.deepEqual(consoleErrors, [], 'unexpected console errors');
     console.log('companion vrm browser: ok', JSON.stringify({
