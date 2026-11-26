@@ -917,7 +917,27 @@
     if (!window.WsShell.cacheLimit || !ent || !ent.loaded || !ent.f.rid) return false;
     try { return !!(ent.el.contentWindow.wsCanCacheSession && ent.el.contentWindow.wsCanCacheSession()); } catch (e) { return false; }
   }
+  var shShowGen = 0, shHandoff = null, SH_HIDE_ACK_MS = 80;
+  function shClearHandoff() {
+    if (!shHandoff) return;
+    clearTimeout(shHandoff.timer);
+    shHandoff = null;
+  }
+  function shFinishHandoff(token) {
+    if (!shHandoff || shHandoff.token !== token) return;
+    var h = shHandoff;
+    shClearHandoff();
+    if (h.ent !== shOn || shFrames.indexOf(h.ent) < 0) return;
+    if (!h.ent.shownSent) {
+      h.ent.shownSent = true;
+      shSend(h.ent, "shown", { shown: true });
+    }
+  }
   function shDrop(ent, leaving) {
+    if (shHandoff) {
+      if (shHandoff.ent === ent) shClearHandoff();
+      else if (shHandoff.from === ent) shFinishHandoff(shHandoff.token);
+    }
     clearTimeout(ent.headTimer); ent.headTimer = null;
     try {
       if (leaving && ent.el.contentWindow.wsFinishSessionLeave) ent.el.contentWindow.wsFinishSessionLeave();
@@ -948,7 +968,7 @@
       }
       if (!ent.settingsSent) { ent.settingsSent = true; shSettings(ent); }
       if (shWant === ent) shShow(ent);
-      else if (!ent.shownSent) {
+      else if (!ent.shownSent && !(shHandoff && shHandoff.ent === ent)) {
         ent.shownSent = true;
         shSend(ent, "shown", { shown: ent === shOn });
         if (!shWant && ent === shOn) shCompanionTarget(ent, true);
@@ -1123,17 +1143,40 @@
       if (ent.cached) shSend(ent, "theme", { theme: root.getAttribute("data-theme") || "" });
       ent.cached = false;
     }
+    var gen = ++shShowGen;
+    shClearHandoff();
     ent.el.inert = false;
     ent.el.classList.add("on");
+    var wantAck = false;
     if (was) {
+      var hasSyncHide = false;
+      try {
+        if (was.el && was.el.contentWindow && typeof was.el.contentWindow.wsHideFrame === "function") {
+          was.el.contentWindow.wsHideFrame();
+          hasSyncHide = true;
+        }
+      } catch (e) { /* unloading or inaccessible */ }
+      wantAck = !!(was.hideAck || hasSyncHide);
       was.cached = true;
       was.el.classList.remove("on");
       was.shownSent = true;
-      shSend(was, "shown", { shown: false });
+      shSend(was, "shown", wantAck ? { shown: false, token: gen } : { shown: false });
     }
     shPrune();
-    ent.shownSent = true;
-    shSend(ent, "shown", { shown: true });
+    var wasAlive = !!(was && shFrames.indexOf(was) >= 0);
+    if (was && wantAck && wasAlive) {
+      // Sequence WS handoff: let the outgoing frame acknowledge hide (having
+      // closed its WS and suspended doc frames) before activating the incoming
+      // frame, with a bounded fallback timer so switches never stall.
+      ent.shownSent = false;
+      shHandoff = {
+        token: gen, ent: ent, from: was,
+        timer: setTimeout(function () { shFinishHandoff(gen); }, SH_HIDE_ACK_MS)
+      };
+    } else {
+      ent.shownSent = true;
+      shSend(ent, "shown", { shown: true });
+    }
     shCompanionTarget(ent, false, !!was && !!ent.f.rid && was.f.rid !== ent.f.rid);
     shRid(ent.f.rid);
     shHead(ent);
@@ -1328,16 +1371,20 @@
       switch (m.wsShell) {
         case "ready":
           ent.ready = true;
+          if (m.hideAck) ent.hideAck = true;
           if (ent.lateHash !== undefined) {
             try { ent.el.contentWindow.location.hash = ent.lateHash; } catch (x) { /* unloading */ }
             delete ent.lateHash;
           }
           if (!ent.settingsSent) { ent.settingsSent = true; shSettings(ent); }
-          if (on && !ent.shownSent) {
+          if (on && !ent.shownSent && !(shHandoff && shHandoff.ent === ent)) {
             ent.shownSent = true;
             shSend(ent, "shown", { shown: true });
             if (!shWant) shCompanionTarget(ent, true);
           } else if (ent === shWant) shShow(ent);
+          break;
+        case "hidden-ack":
+          if (shHandoff && shHandoff.from === ent && m.token === shHandoff.token) shFinishHandoff(m.token);
           break;
         case "head":
           ent.head = m;
@@ -1526,21 +1573,31 @@
     // A press in the page reaches the shell, whose rail popovers and row
     // menu close on one (capture: the page's own handlers may stop it).
     doc.addEventListener("pointerdown", function () { shPost("press"); }, true);
+    // Same-origin synchronous hide hook invoked by the shell before sending
+    // shown:true to an incoming frame so outgoing WS closes first.
+    function hideFrameNow() {
+      shHidden = true;
+      if (queued) { cancelAnimationFrame(queued); queued = null; }
+      syncPageVisibility();
+      // Opaque author scripts have no safe general pause API. Retain
+      // their placeholder heights, not their running child documents.
+      suspendDocFrames();
+      return true;
+    }
+    window.wsHideFrame = hideFrameNow;
     window.addEventListener("message", function (e) {
       if (e.source !== window.parent || e.origin !== location.origin) return;
       var m = window.WsShell.message(e.data);
       if (!m) return;
       if (m.wsShell === "shown") {
-        shHidden = !m.shown;
-        if (shHidden && queued) { cancelAnimationFrame(queued); queued = null; }
-        syncPageVisibility();
-        if (m.shown) shUnstage();
-        if (shHidden) {
-          // Opaque author scripts have no safe general pause API. Retain
-          // their placeholder heights, not their running child documents.
-          suspendDocFrames();
+        if (!m.shown) {
+          hideFrameNow();
+          if (typeof m.token === "number") shPost("hidden-ack", { token: m.token });
           return;
         }
+        shHidden = false;
+        syncPageVisibility();
+        shUnstage();
         showRegions();
         mountFramesPaced(doc);
         tickTimes();
@@ -1563,7 +1620,7 @@
       else if (m.wsShell === "sync") { sent = {}; queueHead(); shPost("title", { title: doc.title }); }
     });
     queue();
-    shPost("ready");
+    shPost("ready", { hideAck: true });
     shPost("title", { title: doc.title });
     if (window.scrollY) send("scroll", { y: Math.round(window.scrollY) });
   }

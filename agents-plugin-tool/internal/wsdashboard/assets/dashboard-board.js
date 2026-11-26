@@ -184,7 +184,7 @@
       if (!boardRelease) boardReturnApply();
       boardApplied();
     }
-    if (pin) pinConvo();
+    if (pin) (typeof queuePinConvo === "function" ? queuePinConvo() : pinConvo());
     if (live && TAB[name] && !tabShown(TAB[name])) {
       var dot = tabDot(TAB[name]);
       if (dot) dot.classList.add("on");
@@ -498,7 +498,13 @@
       keep: window.wbHistory.place, place: window.WsCards.overview, toast: toast, rail: railKey,
       reveal: function () { if (live && !tabShown("board")) setTab("board"); },
       frames: function () { return boardRead(frameHeights); },
-      restoreFrames: function (h) { var kept = boardKeep(); boardBoxes().forEach(function (b) { setFrameHeights(b, h); }); if (kept) kept.h.apply(); },
+      keepFrames: function () { return boardKeep(); },
+      restoreFrames: function (h, kept) {
+        if (!h || !Object.keys(h).length) { if (kept) kept.h.end(); return; }
+        var k = kept || boardKeep();
+        boardBoxes().forEach(function (b) { setFrameHeights(b, h); });
+        if (k) k.h.apply();
+      },
       changed: function () { doc.dispatchEvent(new Event("ws-overview")); },
       onPreview: function (node) {
         if (!node) return;
@@ -1040,9 +1046,11 @@
     var w = window.wbHistory, handles = [], scrollers = new Set(), resolved = new Map(), firsts = [];
     if (!w || !w.keep) return null;
     var cur = anchorCurrent(), main = region("board");
+    var inOverview = !nodes && typeof root !== "undefined" && root && root.hasAttribute && root.hasAttribute("data-overview");
+    var mainItems = inOverview ? [] : (cur ? [cur.firstElementChild || cur] : main && !nodes && main.firstElementChild ? [main.firstElementChild] : []);
     var list = nodes || boardBoxes().filter(function (b) { return b !== main; }).map(function (b) { return b.firstElementChild || b; })
-      .concat(cur ? [cur.firstElementChild || cur] : main && !nodes && main.firstElementChild ? [main.firstElementChild] : []);
-    var fallback = !cur && main && !nodes ? main.firstElementChild || null : null;
+      .concat(mainItems);
+    var fallback = !inOverview && !cur && main && !nodes ? main.firstElementChild || null : null;
     var lookup = w.snapshot && w.snapshot();
     list.forEach(function (n) {
       if (main && main.contains(n) && n !== fallback && anchorOwner(n) !== cur) return;

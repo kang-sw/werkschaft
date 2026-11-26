@@ -89,6 +89,7 @@
       events: "array", landmarks: "record"
     },
     shown: { shown: "boolean" },
+    "hidden-ack": { token: "number" },
     search: {},
     overview: {},
     git: {},

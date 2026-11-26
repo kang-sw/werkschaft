@@ -135,8 +135,10 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
 @media (prefers-reduced-motion: reduce) { .bcard.flash .bc-in { animation: none; } }
 
 /* ===== overview picker (overview.js) =====
-   Only the view folds: no card record or disclosure is changed. Keeping
-   off-screen items renderable avoids remembered unfolded intrinsic sizes. */
+   Only the view folds: no card record or disclosure is changed. Off-screen
+   tiles keep content-visibility: auto with an explicit intrinsic block size so
+   entering Overview skips layout/paint for far tiles without remembering
+   unfolded heights. */
 :root[data-overview] body { background: color-mix(in srgb, var(--wb-bg) 28%, #000); }
 /* A framed page's canvas is transparent (dashboard-shell.css), so the body
    color above is not seen; this viewport scrim, under the page's content,
@@ -144,8 +146,9 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
    same amount the page reports as its dim (lifecycle dim()). */
 :root[data-frame][data-overview] body::before { content: ""; position: fixed; inset: 0; z-index: -1; background: rgba(0, 0, 0, .72); pointer-events: none; }
 :root[data-overview] :is(.dwrap > .top, #rail, .composer, .convo, .fpane, .chead, .tabbar, .dr-handle) { filter: brightness(.28) saturate(.4); }
-:root[data-overview] .r-board :is(section.topic, .bcard) { content-visibility: visible !important; cursor: pointer; }
-:root[data-overview] .r-board :is(section.topic > :not(.tophead), .bcard .bc-body) { content-visibility: visible !important; }
+:root[data-overview] .r-board :is(section.topic, .bcard) { cursor: pointer; }
+:root[data-overview] .r-board section.topic[data-topic]:not([data-overview-motion]):not([data-overview-live]):not([data-max]),
+:root[data-overview] .r-board .bcard[data-card]:not([data-overview-motion]):not([data-overview-live]):not([data-max]) { content-visibility: auto; contain-intrinsic-block-size: auto 76px; }
 :root[data-overview] .r-board section.topic:not([data-overview-motion]) > :not(.tophead),
 :root[data-overview] .r-board .tophead > .tnote,
 :root[data-overview] .r-board .bcard:not([data-overview-motion]) :is(.bc-body, .bc-folded),
@@ -447,7 +450,8 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
 :root:not([data-overview]) .dgrid:is(.live, .history, .worktree) > #bcol[data-board-free] .r-board button[data-closed-next] { position: absolute; left: 0; right: 0; }
 :root:not([data-overview]) .dgrid:is(.live, .history, .worktree) > #bcol[data-board-free] .r-board button[data-closed-next][data-wb-offwindow="hidden"] { display: none; }
 :root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board { min-height: 0 !important; }
-:root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board :is(section.topic[data-topic], .bcard[data-card]) { position: relative; top: auto !important; left: auto; right: auto; visibility: visible; pointer-events: auto; contain: none; margin-bottom: 6px; }
+:root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board :is(section.topic[data-topic], .bcard[data-card]) { position: relative; top: auto !important; left: auto; right: auto; visibility: visible; pointer-events: auto; contain: layout style; margin-bottom: 6px; }
+:root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board :is(section.topic[data-topic], .bcard[data-card]):is([data-overview-motion], [data-overview-live], [data-max]) { contain: none; content-visibility: visible; }
 :root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board section.topic[data-topic] { height: auto; max-height: none; overflow-y: clip; }
 :root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard > .bc-in { height: auto; max-height: none; contain: none; }
 :root[data-overview] .dgrid:is(.live, .history, .worktree) > #bcol .r-board .bcard > .bc-in > .bc-body { flex: 0 1 auto; }

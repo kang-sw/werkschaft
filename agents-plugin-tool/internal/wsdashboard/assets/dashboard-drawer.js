@@ -301,8 +301,14 @@
     var so = w && sw ? w + 6 : 0, afterS = sw ? so + sw : w;
     var to = tw && afterS ? afterS + 6 : 0, beforeGit = tw ? to + tw : afterS;
     var off = beforeGit && gw ? beforeGit + 6 : 0, all = gw ? off + gw : beforeGit;
-    doc.documentElement.style.setProperty("--shr", so + "px");
-    doc.documentElement.style.setProperty("--thr", to + "px");
+    if (so !== drRoom._shr) {
+      drRoom._shr = so;
+      doc.documentElement.style.setProperty("--shr", so + "px");
+    }
+    if (to !== drRoom._thr) {
+      drRoom._thr = to;
+      doc.documentElement.style.setProperty("--thr", to + "px");
+    }
     if (all !== drRoomW || off !== drGhOff) {
       drRoomW = all;
       drGhOff = off;

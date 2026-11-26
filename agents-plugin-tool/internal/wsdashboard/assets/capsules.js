@@ -233,22 +233,29 @@
     // Board snapshots clone DOM, not expando properties or event handlers.
     if (field.nextElementSibling && field.nextElementSibling.classList.contains("wsc-editor")) field.nextElementSibling.remove();
     function cache() { if (nativeValue && nativeValue.set) nativeValue.set.call(field, text); }
-    editor.className = "wsc-editor";
-    editor.setAttribute("contenteditable", "true");
-    editor.setAttribute("role", "textbox"); editor.setAttribute("aria-multiline", "true");
-    editor.wscField = field;
-    field.classList.add("wsc-backing"); field.insertAdjacentElement("afterend", editor);
+    function setAttrIf(el, key, value) {
+      if (value === null) { if (el.hasAttribute(key)) el.removeAttribute(key); }
+      else if (el.getAttribute(key) !== value) el.setAttribute(key, value);
+    }
     function attrs() {
       ["aria-label", "aria-description", "aria-controls", "aria-expanded", "aria-activedescendant", "aria-autocomplete"].forEach(function (key) {
-        var value = field.getAttribute(key);
-        if (value === null) editor.removeAttribute(key); else editor.setAttribute(key, value);
+        setAttrIf(editor, key, field.getAttribute(key));
       });
-      editor.setAttribute("data-placeholder", field.getAttribute("placeholder") || "");
-      editor.setAttribute("contenteditable", field.disabled ? "false" : "true");
-      editor.setAttribute("aria-disabled", String(!!field.disabled));
-      editor.hidden = field.hidden;
+      setAttrIf(editor, "data-placeholder", field.getAttribute("placeholder") || "");
+      setAttrIf(editor, "contenteditable", field.disabled ? "false" : "true");
+      setAttrIf(editor, "aria-disabled", String(!!field.disabled));
+      var hide = !!field.hidden;
+      if (editor.hidden !== hide) editor.hidden = hide;
     }
-    new MutationObserver(attrs).observe(field, { attributes: true }); attrs();
+    editor.className = "wsc-editor";
+    editor.setAttribute("role", "textbox"); editor.setAttribute("aria-multiline", "true");
+    editor.wscField = field;
+    // Populate ARIA and contenteditable on the detached editor BEFORE
+    // attaching to the live DOM so initial mount does not trigger a
+    // connected-node style invalidation cascade.
+    attrs();
+    field.classList.add("wsc-backing"); field.insertAdjacentElement("afterend", editor);
+    new MutationObserver(attrs).observe(field, { attributes: true });
     // Reading the editable DOM emits canonical text, never the displayed label.
     // Block boundaries also handle native IME/undo mutations without rewriting them.
     function isMeaningful(node) { return node.nodeType === 1 || (node.nodeType === 3 && node.nodeValue.length > 0); }

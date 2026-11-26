@@ -1498,7 +1498,7 @@
       act.hidden = on;
       deny.setAttribute("aria-expanded", String(on));
       (on ? msg : deny).focus();
-      if (pin) pinConvo();
+      if (pin) (typeof queuePinConvo === "function" ? queuePinConvo() : pinConvo());
     }
     function answer(behavior) {
       if (C.busy) return;
@@ -1576,7 +1576,7 @@
     if (convo) convo.classList.toggle("ap-on", !box.hidden);
     fmtTimes(box);
     if (changed) apChanged();
-    if (pin) pinConvo();
+    if (pin) (typeof queuePinConvo === "function" ? queuePinConvo() : pinConvo());
   }
   // handedDraw shows, while st says the session was handed to a terminal,
   // the notice that says so under the banner, with the command that resumes
@@ -1738,7 +1738,7 @@
     box.appendChild(card);
     box.hidden = false;
     fmtTimes(box);
-    if (pin) pinConvo();
+    if (pin) (typeof queuePinConvo === "function" ? queuePinConvo() : pinConvo());
   }
   // leadKey is the conversation's live host/permission state as the state
   // follows it: permission slot, quota state, and turn activity while a
