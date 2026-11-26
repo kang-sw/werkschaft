@@ -792,9 +792,9 @@ func stage1CompactionPrompt() string {
 	for _, f := range wscompact.ProseFields() {
 		fields = append(fields, f.Key)
 	}
-	return "Compaction is requested. Save any durable state to your agenda, then call ws/compact with lead_summary containing all seven string fields (" +
+	return "Compaction is requested. Call ws/compact directly with lead_summary containing all seven string fields (" +
 		strings.Join(fields, ", ") +
-		"; use empty strings for sections with nothing to carry forward) and optional reread (up to 12 worktree text file paths) so ws can rotate the session with your checkpoint. End your turn after calling ws/compact."
+		"; use empty strings for sections with nothing to carry forward), optional reread (up to 12 worktree text file paths), and optional agenda_updates if your agenda needs updating so ws can rotate the session with your checkpoint. End your turn after calling ws/compact."
 }
 
 // rotateExternalLead executes ws-managed compaction for an external hosted lead:
@@ -917,6 +917,9 @@ func (c *conv) compactionStateInstruction() string {
 	if !c.rec.Lead && c.workerPermissionLevel == PermissionReadOnly {
 		return "Put the state needed to resume in your report."
 	}
+	if c.r != nil && c.compactUnsupported() == "" {
+		return "If your agenda needs updating, pass agenda_updates when calling ws/compact."
+	}
 	return "Save the state needed to resume in your agenda."
 }
 
@@ -1026,9 +1029,9 @@ func (c *conv) stageCompactionNudge(hard float64) {
 	action := "Write durable state to your agenda before compacting. No summary prose is requested."
 	switch {
 	case supported && c.rec.Lead && (c.r.durableProcess(c.rec.Backend) || c.wsManagedLeadCompaction()):
-		action = "Write durable state to your agenda, then call ws/compact with the carry-forward fields in lead_summary at a safe boundary."
+		action = "Call ws/compact directly at a safe boundary with the carry-forward fields in lead_summary (and agenda_updates if your agenda needs updating)."
 	case supported:
-		action = "Write durable state to your agenda, then call ws/compact at a safe boundary before continuing. No summary prose is requested."
+		action = "Call ws/compact directly at a safe boundary before continuing (include agenda_updates if your agenda needs updating). No summary prose is requested."
 	}
 	c.compactNudge = compactionNudge{usage + action, level, standalone}
 }

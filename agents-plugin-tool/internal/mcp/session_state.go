@@ -831,6 +831,63 @@ func (s *sessionStore) clearAllAgenda(sessionKey string) error {
 	})
 }
 
+type agendaUpdateOp struct {
+	key   string
+	value json.RawMessage
+	merge bool
+	clear bool
+}
+
+// applyAgendaUpdates applies a validated batch of agenda clears, replacements,
+// and RFC 7396 merges inside one mutateRecord write (a single agenda.json touch
+// per call) and returns the resulting agenda size note.
+func (s *sessionStore) applyAgendaUpdates(sessionKey string, ops []agendaUpdateOp) (string, error) {
+	if len(ops) == 0 {
+		return "", nil
+	}
+	var note string
+	err := s.mutateRecord(sessionKey, partAgenda, func(r *sessionRecord) error {
+		for _, op := range ops {
+			switch {
+			case op.clear:
+				delete(r.Agenda, op.key)
+				if len(r.Agenda) == 0 {
+					r.Agenda = nil
+				}
+			case op.merge:
+				var target any
+				if stored, ok := r.Agenda[op.key]; ok {
+					decoded, err := decodeJSONNumber(stored)
+					if err != nil {
+						return fmt.Errorf("stored agenda blob %q is not valid JSON: %w", op.key, err)
+					}
+					target = decoded
+				}
+				decodedPatch, err := decodeJSONNumber(op.value)
+				if err != nil {
+					return fmt.Errorf("merge patch for %q is not valid JSON: %w", op.key, err)
+				}
+				merged, err := json.Marshal(jsonMergePatch(target, decodedPatch))
+				if err != nil {
+					return fmt.Errorf("merged agenda blob %q is not JSON-encodable: %w", op.key, err)
+				}
+				if r.Agenda == nil {
+					r.Agenda = map[string]json.RawMessage{}
+				}
+				r.Agenda[op.key] = merged
+			default:
+				if r.Agenda == nil {
+					r.Agenda = map[string]json.RawMessage{}
+				}
+				r.Agenda[op.key] = op.value
+			}
+		}
+		note = agendaSizeNote(r.Agenda)
+		return nil
+	})
+	return note, err
+}
+
 // enterMode stores the typed payload as an agenda blob under agendaKey and
 // replaces the entire todo list with todos. This is the single write behind
 // every ws.route.resolve_* tool: agenda update and todo replacement land in
