@@ -611,51 +611,109 @@ test("official VRM CTA shows not-yet-published state when absent and install act
   assert.ok(cls(liveOfficial.root, "ws-companion-vrm-badge").length >= 1, "installed VRM card shows VRM badge");
 });
 
-test("companion disabled runs zero WebGL contexts and zero extra fetches", () => {
+test("companion disabled runs zero WebGL contexts and zero extra fetches", async () => {
   let webglCalls = 0;
-  let fetches = 0;
-  const listeners = {};
+  const fetches = [];
+  let mountCalls = 0;
+  let disposeCalls = 0;
+  function stubEl(tag) {
+    const children = [];
+    const node = {
+      tagName: String(tag || "div").toUpperCase(),
+      className: "", textContent: "", title: "", type: "", value: "",
+      style: { setProperty() {} }, dataset: {}, hidden: false, open: false,
+      children,
+      classList: { toggle() {}, add() {}, remove() {}, contains: () => false },
+      getContext(kind) {
+        if (String(kind).includes("webgl")) { webglCalls++; return null; }
+        return {
+          clearRect() {}, save() {}, restore() {}, scale() {}, translate() {}, rotate() {},
+          setTransform() {}, drawImage() {}, fillRect() {}, beginPath() {}, closePath() {},
+          arc() {}, fill() {}, stroke() {}
+        };
+      },
+      setAttribute() {}, removeAttribute() {}, getAttribute: () => null, hasAttribute: () => false,
+      addEventListener() {}, removeEventListener() {}, contains: () => false,
+      append(...items) { children.push(...items); }, replaceChildren(...items) { children.length = 0; children.push(...items); },
+      remove() {}, close() {}, show() { node.open = true; },
+      querySelector: () => null, querySelectorAll: () => [],
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 120, bottom: 160, width: 120, height: 160 })
+    };
+    return node;
+  }
   const stageDoc = {
-    documentElement: { hasAttribute: () => true },
-    body: { append() {}, querySelector: () => null },
-    createElement(tag) {
-      return {
-        tagName: tag.toUpperCase(), className: "", style: {}, dataset: {},
-        getContext(kind) { if (String(kind).includes("webgl")) webglCalls++; return null; },
-        setAttribute() {}, addEventListener() {}, append() {}, remove() {},
-        querySelector: () => null, querySelectorAll: () => []
-      };
-    },
+    documentElement: { hasAttribute: () => true, dataset: {} },
+    body: stubEl("body"),
+    hidden: false,
+    visibilityState: "visible",
+    activeElement: null,
+    createElement: stubEl,
+    createElementNS: (_ns, tag) => stubEl(tag),
     getElementById: () => null,
     querySelector: () => null,
-    addEventListener(type, fn) { (listeners[type] ||= []).push(fn); }
+    querySelectorAll: () => [],
+    addEventListener() {},
+    removeEventListener() {}
   };
   const win = {
     innerWidth: 1200, innerHeight: 800, devicePixelRatio: 1,
-    matchMedia: () => ({ matches: false, addEventListener() {} }),
+    location: { origin: "http://127.0.0.1" },
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
     addEventListener() {}, removeEventListener() {},
+    WsShell: { companionContext: () => ({ routeKind: "home", hasComposer: false }) },
     wsCompanionModalRows: []
   };
   const context = vm.createContext({
     window: win, document: stageDoc, URLSearchParams, AbortController,
+    performance: { now: () => 0 },
     ResizeObserver: class { observe() {} disconnect() {} },
+    MutationObserver: class { observe() {} disconnect() {} },
     requestAnimationFrame: () => 0,
     cancelAnimationFrame() {},
-    fetch: async () => { fetches++; return { ok: true, json: async () => ({}) }; },
+    setTimeout: () => 1, clearTimeout() {},
+    fetch: async url => {
+      fetches.push(String(url));
+      return { ok: true, json: async () => ({ defaultPack: "default", packs: [] }) };
+    },
     wsT: k => k
   });
-  for (const name of ["packs", "sources", "settings"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "sources", "settings", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
-  const C = context.window.WsCompanion;
-  const node = stageDoc.createElement("div"), gear = stageDoc.createElement("button");
-  // Construct modal with companion_enabled=false (never opened) and verify zero fetches and zero WebGL calls.
-  C.settingsModal(node, gear, { signal: new AbortController().signal }, {
-    rows: () => [], config: () => ({ enabled: false, pack: "default" }),
-    persona: () => null, presets: () => ({ available: [] }),
-    anchor: () => ({ left: 0, right: 0, top: 0, bottom: 0 }),
-    resetSize() {}, applyPreset() {}, notice() {}, packsChanged() {}
-  });
-  assert.equal(fetches, 0, "zero fetches when companion_enabled is false");
-  assert.equal(webglCalls, 0, "zero WebGL contexts created");
+  const origMount = context.window.WsCompanion.mount;
+  context.window.WsCompanion.mount = function (...args) {
+    mountCalls++;
+    const handle = origMount.apply(this, args);
+    const origDispose = handle.dispose;
+    handle.dispose = function () { disposeCalls++; return origDispose.apply(this, arguments); };
+    return handle;
+  };
+  const lifecycleSrc = fs.readFileSync(path.join(__dirname, "assets", "dashboard-lifecycle.js"), "utf8");
+  const start = lifecycleSrc.indexOf("  var shCompanion = null");
+  const end = lifecycleSrc.indexOf("  function shHistoryIndex()");
+  assert.ok(start > 0 && end > start, "dashboard-lifecycle.js companion gate block found");
+  const gateBlock = lifecycleSrc.slice(start, end);
+  vm.runInContext(`var shWant = null, shOn = null; function shSend() {}\n${gateBlock}\nwindow.__testConfigure = shCompanionConfigure;`, context);
+
+  // Disabled config: real shCompanionConfigure must not mount, fetch, or create WebGL contexts.
+  context.window.__testConfigure({ enabled: false, pack: "default" });
+  await tick();
+  assert.equal(mountCalls, 0, "companion_enabled=false must not mount WsCompanion");
+  assert.equal(fetches.length, 0, "companion_enabled=false must perform zero fetches");
+  assert.equal(webglCalls, 0, "companion_enabled=false must create zero WebGL contexts");
+
+  // Positive control: enabling through the same gate mounts and fetches the pack catalog, still with zero WebGL.
+  context.window.__testConfigure({ enabled: true, pack: "default" });
+  await tick();
+  assert.equal(mountCalls, 1, "companion_enabled=true mounts WsCompanion through the same gate");
+  assert.ok(fetches.some(url => url.includes("/api/companion/packs")), "enabled companion fetches pack catalog");
+  assert.equal(webglCalls, 0, "2D default companion creates zero WebGL contexts");
+
+  // Toggling back to disabled disposes the mounted stage.
+  const fetchesBeforeDisable = fetches.length;
+  context.window.__testConfigure({ enabled: false, pack: "default" });
+  await tick();
+  assert.equal(disposeCalls, 1, "toggling companion_enabled=false disposes mounted stage");
+  assert.equal(fetches.length, fetchesBeforeDisable, "disabling triggers no extra fetches");
 });

@@ -277,11 +277,12 @@
         // HTTP 200 only means the request ran; the pack's own result says whether it was written.
         const outcome = outcomeFor(listing?.packs, panel.listing.packs, pack);
         if (outcome?.installed === true && !record(outcome.error)) {
+          const displayName = text(pack.name) || pack.id;
           if (text(pack.format) === "vrm") {
-            await deps.selectPack?.(pack.id);
-            done(t("js.companion.sources.done_import_vrm", text(pack.name) || pack.id));
+            const selected = await deps.selectPack?.(pack.id);
+            done(t(selected === false ? "js.companion.sources.done_install" : "js.companion.sources.done_import_vrm", displayName));
           } else {
-            done(t("js.companion.sources.done_install", text(pack.name) || pack.id));
+            done(t("js.companion.sources.done_install", displayName));
           }
         } else {
           fail(packFailure(outcome, res));
@@ -304,18 +305,21 @@
         if (vrmPack) {
           state.officialVrmStatus = "available";
           state.officialVrmPack = vrmPack;
+          state.officialVrmListing = listing;
           state.panel = { mode: "listing", source: official, listing };
         } else {
           state.officialVrmStatus = "unavailable";
           state.officialVrmPack = null;
+          state.officialVrmListing = null;
           done(t("js.companion.sources.official_vrm_unavailable"));
         }
       });
     }
 
     function installOfficialVrm() {
-      if (state.officialVrmPack && state.panel?.source === official) {
-        install(state.panel, state.officialVrmPack);
+      if (state.officialVrmPack && state.officialVrmListing) {
+        const panel = state.panel?.source === official ? state.panel : { mode: "listing", source: official, listing: state.officialVrmListing };
+        install(panel, state.officialVrmPack);
         return;
       }
       checkOfficialVrm();
@@ -386,8 +390,8 @@
         if (!res.ok) { fail(failure(res)); return; }
         const packId = text(res.body.id);
         const packName = text(res.body.name) || packId;
-        if (packId) await deps.selectPack?.(packId);
-        done(t("js.companion.sources.done_import_vrm", packName));
+        const selected = packId ? await deps.selectPack?.(packId) : false;
+        done(t(selected === false ? "js.companion.sources.done_install" : "js.companion.sources.done_import_vrm", packName));
         applyCatalog(null);
       });
     }

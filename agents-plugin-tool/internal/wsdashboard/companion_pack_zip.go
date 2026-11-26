@@ -301,29 +301,36 @@ func (a *companionArchive) pack(id, prefix string) (companionPackFiles, error) {
 	count := 0
 	self := strings.TrimSuffix(prefix, "/")
 	vrmChecked, isVRM := false, false
-	checkVRM := func() bool {
+	var vrmCheckErr error
+	checkVRM := func() (bool, error) {
 		if vrmChecked {
-			return isVRM
+			return isVRM, vrmCheckErr
 		}
 		vrmChecked = true
 		mf, ok := a.files[prefix+companionManifestName]
 		if !ok {
-			return false
+			return false, nil
 		}
 		mode := mf.Mode()
-		if mode&fs.ModeSymlink != 0 || !mode.IsRegular() {
-			return false
+		if mode&fs.ModeSymlink != 0 {
+			vrmCheckErr = companionFail(id, companionManifestName, "symbolic links are not allowed")
+			return false, vrmCheckErr
+		}
+		if !mode.IsRegular() {
+			vrmCheckErr = companionFail(id, companionManifestName, "only regular files are allowed")
+			return false, vrmCheckErr
 		}
 		raw, err := a.read(mf, companionManifestCap)
 		if err != nil {
-			return false
+			vrmCheckErr = companionFail(id, companionManifestName, "%s", err.Error())
+			return false, vrmCheckErr
 		}
 		if a.cached == nil {
 			a.cached = make(map[*zip.File][]byte)
 		}
 		a.cached[mf] = raw
 		isVRM = peekCompanionManifestSchema(raw) == companionPackVRMSchema
-		return isVRM
+		return isVRM, nil
 	}
 	for _, name := range a.names {
 		if prefix != "" && (name == self || !strings.HasPrefix(name, prefix)) {
@@ -353,7 +360,15 @@ func (a *companionArchive) pack(id, prefix string) (companionPackFiles, error) {
 		}
 		folded[lower] = struct{}{}
 		if rel != companionManifestName && !validCompanionRaster(rel) {
-			if !(validCompanionVRMFile(rel) || validCompanionVRMAFile(rel)) || !checkVRM() {
+			if validCompanionVRMFile(rel) || validCompanionVRMAFile(rel) {
+				allowed, err := checkVRM()
+				if err != nil {
+					return nil, err
+				}
+				if !allowed {
+					return nil, companionFail(id, rel, "only pack.json and .png or .webp files are allowed")
+				}
+			} else {
 				return nil, companionFail(id, rel, "only pack.json and .png or .webp files are allowed")
 			}
 		}

@@ -267,7 +267,7 @@
     }
 
     async function write(key, next) {
-      if (next === undefined || !canWrite()) { refresh(null); return; }
+      if (next === undefined || !canWrite()) { refresh(null); return false; }
       if (key === "dashboard.companion_preset") hooks.applyPreset(next);
       try {
         const response = await fetch("/api/config/set", {
@@ -276,11 +276,13 @@
           body: JSON.stringify({ scope: "global", key, value: next })
         });
         if (!response.ok) throw new Error("Companion setting write failed");
+        return true;
       } catch (error) {
-        if (signal.aborted) return;
+        if (signal.aborted) return false;
         hooks.notice("settings_failed");
         if (key === "dashboard.companion_preset") hooks.applyPreset(current(key));
         refresh(null);
+        return false;
       }
     }
 
