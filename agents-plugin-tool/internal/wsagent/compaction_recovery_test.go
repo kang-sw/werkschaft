@@ -113,7 +113,7 @@ func TestRejoinCompactionSpanningSwap(t *testing.T) {
 func TestRejoinQueriesClaudeUsage(t *testing.T) {
 	h := compactionHarness(t)
 	h.holders.set(func() {
-		h.holders.bodies["get_context_usage"] = `{"totalTokens":55000,"rawMaxTokens":100000}`
+		h.holders.bodies["get_context_usage"] = `{"totalTokens":65000,"rawMaxTokens":100000}`
 	})
 	id, holder := h.runLead("one")
 	h.holders.out(holder, turnLines("sess-1", "u1", "done")...)
@@ -130,7 +130,7 @@ func TestRejoinQueriesClaudeUsage(t *testing.T) {
 	})
 	eventually(t, "query usage rejudged", func() bool {
 		for _, input := range h.userInputs(holder) {
-			if strings.Contains(input, "Context usage is 55000 tokens") {
+			if strings.Contains(input, "Context usage is 65000 tokens") {
 				return true
 			}
 		}

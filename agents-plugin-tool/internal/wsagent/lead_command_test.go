@@ -212,7 +212,9 @@ func TestLeadSeedsCommandsFromLastSession(t *testing.T) {
 // a daemon restart. Mail claimed during a turn is steered into it, so it
 // never waits behind a command.
 func TestClaudeLeadCommandSplitsTheDrain(t *testing.T) {
-	h := newLeadHarness(t).start()
+	h := newLeadHarness(t)
+	setNativeLeadCompaction(t, h)
+	h.start()
 	id, holder := h.runLead("one")
 	key := h.record(id).WSKey
 	eventually(t, "the first turn", func() bool { return slices.Equal(h.userInputs(holder), h.envelopes("one")) })
@@ -300,7 +302,9 @@ func TestClaudeLeadCommandSplitsTheDrain(t *testing.T) {
 // it: the inbox shows it received, so it is sent after the interrupted
 // turn.
 func TestLeadQueuedInputDropsWithTheConversation(t *testing.T) {
-	h := newLeadHarness(t).start()
+	h := newLeadHarness(t)
+	setNativeLeadCompaction(t, h)
+	h.start()
 	id, holder := h.runLead("one")
 	eventually(t, "the first turn", func() bool { return slices.Equal(h.userInputs(holder), h.envelopes("one")) })
 	h.holders.out(holder, stateLine(HarnessRunning), initLine("sess-1", "auto"))

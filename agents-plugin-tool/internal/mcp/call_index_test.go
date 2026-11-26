@@ -180,8 +180,8 @@ func TestCallIndexMarksCompactDirectOnAgyLead(t *testing.T) {
 		name string
 		mode string
 	}{
-		{name: "default native", mode: wsconfig.CompactionModeNative},
-		{name: "compaction.lead_mode=ws", mode: wsconfig.CompactionModeWS},
+		{name: "default ws", mode: wsconfig.CompactionModeWS},
+		{name: "compaction.lead_mode=native", mode: wsconfig.CompactionModeNative},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f := hostedBackendConnection(t, wsagent.BackendAgy, regs)
