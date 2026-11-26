@@ -65,6 +65,15 @@
         "author": { "allOf": [{ "$ref": "#/$defs/text" }, { "maxLength": 64 }] },
         "license": { "allOf": [{ "$ref": "#/$defs/text" }, { "maxLength": 64 }] },
         "description": { "allOf": [{ "$ref": "#/$defs/text" }, { "maxLength": 280 }] },
+        "format": {
+          "type": "string",
+          "enum": ["2d", "vrm"],
+          "description": "Optional renderer format of the pack (2d or vrm)."
+        },
+        "vroidSourceUrl": {
+          "$ref": "#/$defs/httpsUrl",
+          "description": "Optional https URL linking to the original character model source."
+        },
         "path": {
           "type": "string",
           "minLength": 1,

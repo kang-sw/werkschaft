@@ -259,6 +259,32 @@ func (s agentSessions) BoardItems(reg Registration) (BoardItems, bool) {
 	return BoardItems{}, false
 }
 
+func (s agentSessions) LookupMockup(reg Registration, entryID string) (MockupLookup, bool, error) {
+	if reg.Agent {
+		return MockupLookup{}, false, nil
+	}
+	if ms, ok := s.inner.(BoardMockupSource); ok {
+		return ms.LookupMockup(reg, entryID)
+	}
+	return MockupLookup{}, false, nil
+}
+
+func (s agentSessions) ReadMockupBundle(reg Registration, entryID string) (wswhiteboard.MockupBundle, bool, error) {
+	if reg.Agent {
+		return wswhiteboard.MockupBundle{}, false, nil
+	}
+	if ms, ok := s.inner.(BoardMockupSource); ok {
+		return ms.ReadMockupBundle(reg, entryID)
+	}
+	return wswhiteboard.MockupBundle{}, false, nil
+}
+
+func (s agentSessions) SetMockupEvictor(fn func(boardDir string)) {
+	if ms, ok := s.inner.(BoardMockupSource); ok {
+		ms.SetMockupEvictor(fn)
+	}
+}
+
 // readsBoardItems reports whether the configured source reads board items
 // (BoardItemsSource), so the answer check skips a session it could never
 // judge before reading anything else of it.

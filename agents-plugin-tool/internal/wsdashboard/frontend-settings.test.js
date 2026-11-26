@@ -1289,3 +1289,87 @@ test("tier routing page hides agent.tier_aliases and offers a clear banner only 
   set.open("tier_routing");
   assert.equal(set.banner(), null, "the cleared value stays cleared in the patched snapshot");
 });
+
+test("tier routing frame avoids vertical scroll and drawEdges resets svg height when content shrinks", async () => {
+  const { doc, win } = createFakeDOM();
+  doc.createElementNS = (_, tag) => doc.createElement(tag);
+  let frameHeight = 320;
+  let frameWidth = 740;
+  let roCallback = null;
+  const origCreate = doc.createElement.bind(doc);
+  doc.createElement = tag => {
+    const el = origCreate(tag);
+    el.getBoundingClientRect = () => ({ left: 0, top: 0, right: 120, bottom: 60, width: 120, height: 60 });
+    return el;
+  };
+  win.window = win;
+  win.wsT = key => key;
+  win.WsSettingsCombobox = { providerOptions: () => [] };
+  const rafQueue = [];
+  const viewData = {
+    harness: "codex",
+    harnesses: ["codex"],
+    sizes: ["small", "medium", "large", "xlarge"],
+    max_hops: 4,
+    revision: "r1",
+    routing: { nodes: {}, bundles: {} },
+    bundles: [],
+    collisions: [],
+    nodes: [{
+      name: "small",
+      kind: "role",
+      size: "small",
+      depth: 1,
+      pointers: { "*": "codex.small" },
+      edges: [{ selector: "*", kind: "harness", to: "codex", depth: 0 }],
+      routes: [{ size: "small", token: "small", hops: [], harness: "codex" }]
+    }]
+  };
+  const ctx = {
+    window: win,
+    document: doc,
+    localStorage: { getItem: () => "", setItem() {} },
+    requestAnimationFrame: fn => { rafQueue.push(fn); return rafQueue.length; },
+    ResizeObserver: class {
+      constructor(cb) { roCallback = cb; }
+      observe() {}
+      disconnect() {}
+    },
+    fetch: async () => ({ ok: true, status: 200, json: async () => viewData })
+  };
+  vm.runInNewContext(read("dashboard-settings-tiers.js"), ctx);
+  const card = win.WsSettingsTierRouting.render({
+    entry: { key: "agent.tier_routing" },
+    label: "Tier routing",
+    description: "",
+    editable: true,
+    lockText: ""
+  });
+  doc.body.appendChild(card);
+  await new Promise(r => setImmediate(r));
+  await new Promise(r => setImmediate(r));
+
+  const frame = card.querySelector(".tr-frame");
+  const svg = card.querySelector("svg");
+  assert.ok(frame && svg, "tier routing graph should render frame and svg");
+  Object.defineProperty(frame, "clientWidth", { get: () => frameWidth });
+  Object.defineProperty(frame, "clientHeight", { get: () => frameHeight });
+  Object.defineProperty(frame, "scrollWidth", {
+    get: () => Math.max(frameWidth, Number(svg.getAttribute("width") || 0))
+  });
+  Object.defineProperty(frame, "scrollHeight", {
+    get: () => Math.max(frameHeight, Number(svg.getAttribute("height") || 0))
+  });
+
+  while (rafQueue.length) rafQueue.shift()();
+  assert.equal(svg.getAttribute("height"), "320");
+  assert.equal(frame.scrollHeight, frame.clientHeight);
+
+  // Simulate grid shrinking vertically (e.g., removing an exception row).
+  frameHeight = 210;
+  assert.ok(roCallback, "ResizeObserver should observe grid resize");
+  roCallback();
+  while (rafQueue.length) rafQueue.shift()();
+  assert.equal(svg.getAttribute("height"), "210", "drawEdges must reset old SVG height before measuring");
+  assert.equal(frame.scrollHeight, 210, "stale SVG height must not keep frame vertically scrollable");
+});

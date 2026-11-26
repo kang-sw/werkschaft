@@ -104,7 +104,7 @@
   function sourcesSection(deps) {
     const { doc, signal, options } = deps;
     const state = { catalog: null, panel: null, busy: false, message: "", failed: false, addError: "",
-      optimistic: null, lastConfig: undefined, signature: "" };
+      optimistic: null, lastConfig: undefined, signature: "", officialVrmStatus: "", officialVrmPack: null };
     const details = doc.createElement("details");
     details.className = "ws-companion-sources";
     const summary = doc.createElement("summary");
@@ -142,6 +142,11 @@
     }
     function warning() { return el("p", "ws-companion-sources-warn", t("js.companion.sources.warning")); }
     function badge(key) { return el("span", "ws-companion-sources-badge", t(key)); }
+    function vrmBadge() { return el("span", "ws-companion-sources-badge ws-companion-vrm-badge", t("js.companion.sources.badge_vrm")); }
+    function hasInstalledVrm() {
+      return (state.catalog?.packs || []).some(pack => record(pack) &&
+        (text(pack.renderer) === "vrm" || text(pack.schema) === "ws-companion-vrm/v1"));
+    }
 
     async function send(url, init = {}) {
       try {
@@ -271,10 +276,53 @@
         if (listing) state.panel = { mode: "listing", source: panel.source, listing };
         // HTTP 200 only means the request ran; the pack's own result says whether it was written.
         const outcome = outcomeFor(listing?.packs, panel.listing.packs, pack);
-        if (outcome?.installed === true && !record(outcome.error)) done(t("js.companion.sources.done_install", text(pack.name) || pack.id));
-        else fail(packFailure(outcome, res));
+        if (outcome?.installed === true && !record(outcome.error)) {
+          const displayName = text(pack.name) || pack.id;
+          if (text(pack.format) === "vrm") {
+            const selected = await deps.selectPack?.(pack.id);
+            done(t(selected === false ? "js.companion.sources.done_install" : "js.companion.sources.done_import_vrm", displayName));
+          } else {
+            done(t("js.companion.sources.done_install", displayName));
+          }
+        } else {
+          fail(packFailure(outcome, res));
+        }
         applyCatalog(res.body.catalog);
       });
+    }
+
+    function checkOfficialVrm() {
+      guard(async () => {
+        const res = await send(api + "/sources/fetch", json({ source: official }));
+        if (!res) return;
+        const listing = listingOf(res.body.listing);
+        if (!res.ok) {
+          if (listing) { state.panel = { mode: "listing", source: official, listing }; fail(t("js.companion.sources.fetch_failed")); }
+          else fail(failure(res));
+          return;
+        }
+        const vrmPack = (listing?.packs || []).find(pack => text(pack.format) === "vrm" && !record(pack.error)) || null;
+        if (vrmPack) {
+          state.officialVrmStatus = "available";
+          state.officialVrmPack = vrmPack;
+          state.officialVrmListing = listing;
+          state.panel = { mode: "listing", source: official, listing };
+        } else {
+          state.officialVrmStatus = "unavailable";
+          state.officialVrmPack = null;
+          state.officialVrmListing = null;
+          done(t("js.companion.sources.official_vrm_unavailable"));
+        }
+      });
+    }
+
+    function installOfficialVrm() {
+      if (state.officialVrmPack && state.officialVrmListing) {
+        const panel = state.panel?.source === official ? state.panel : { mode: "listing", source: official, listing: state.officialVrmListing };
+        install(panel, state.officialVrmPack);
+        return;
+      }
+      checkOfficialVrm();
     }
 
     // A marketplace may carry an invalid and a valid row under one ID. The result lists rows in the
@@ -310,6 +358,43 @@
       if (!file) return;
       validate(file);
     }, options);
+
+    const vrmFileInput = el("input");
+    vrmFileInput.type = "file";
+    vrmFileInput.accept = ".vrm,model/gltf-binary";
+    vrmFileInput.setAttribute("aria-label", t("js.companion.sources.import_vrm_label"));
+    vrmFileInput.addEventListener("change", () => {
+      const file = vrmFileInput.files?.[0];
+      if (!file) return;
+      importVrmFile(file);
+    }, options);
+
+    function importVrmFile(file) {
+      if (!file) return;
+      const rawName = text(file.name);
+      if (rawName && !/\.vrm$/i.test(rawName)) {
+        fail(t("js.companion.sources.vrm_ext_error"));
+        render();
+        return;
+      }
+      guard(async () => {
+        const stem = rawName.replace(/\.vrm$/i, "");
+        const params = new URLSearchParams();
+        if (stem) params.set("name", stem);
+        if (rawName) params.set("filename", rawName);
+        const query = params.toString();
+        const url = api + "/packs/import-vrm" + (query ? "?" + query : "");
+        const res = await send(url, { headers: { "Content-Type": "model/gltf-binary" }, body: file });
+        vrmFileInput.value = "";
+        if (!res) return;
+        if (!res.ok) { fail(failure(res)); return; }
+        const packId = text(res.body.id);
+        const packName = text(res.body.name) || packId;
+        const selected = packId ? await deps.selectPack?.(packId) : false;
+        done(t(selected === false ? "js.companion.sources.done_install" : "js.companion.sources.done_import_vrm", packName));
+        applyCatalog(null);
+      });
+    }
 
     function importURL(action, file, ids = []) {
       return api + "/packs/" + action + "?name=" + encodeURIComponent(file.name) +
@@ -443,12 +528,14 @@
         head.append(el("strong", "", name));
       }
       if (text(pack.version)) head.append(el("span", "ws-companion-settings-muted", "v" + text(pack.version)));
+      if (text(pack.format) === "vrm") head.append(vrmBadge());
       if (statusBadges[pack.status]) head.append(badge(statusBadges[pack.status]));
       card.append(head);
       const meta = [text(pack.author), text(pack.license)].filter(Boolean).join(" · ");
       card.append(el("p", "ws-companion-settings-muted", pack.id + (meta ? " · " + meta : "")));
       if (text(pack.description)) card.append(el("p", "ws-companion-sources-description", text(pack.description)));
       if (text(pack.url)) card.append(link(text(pack.url)));
+      if (text(pack.vroidSourceUrl)) card.append(link(text(pack.vroidSourceUrl)));
       const installed = catalogPack(pack.id);
       if (record(installed?.origin)) {
         card.append(el("p", "ws-companion-sources-origin", t("js.companion.sources.installed_from", installedOrigin(installed.origin))));
@@ -525,6 +612,7 @@
         const head = el("div", "ws-companion-sources-card-head");
         head.append(el("strong", "", name));
         if (text(origin.version)) head.append(el("span", "ws-companion-settings-muted", "v" + text(origin.version)));
+        if (text(pack.renderer) === "vrm" || text(pack.schema) === "ws-companion-vrm/v1") head.append(vrmBadge());
         if (origin.official === true) head.append(badge("js.companion.sources.badge_official"));
         card.append(head, el("p", "ws-companion-sources-origin", t("js.companion.sources.installed_from", installedOrigin(origin))));
         const actions = el("div", "ws-companion-sources-actions");
@@ -540,11 +628,59 @@
       return group;
     }
 
+    function officialVrmBlock() {
+      if (hasInstalledVrm()) return null;
+      const group = el("section", "ws-companion-sources-group ws-companion-sources-vrm-cta");
+      const head = el("div", "ws-companion-sources-card-head");
+      head.append(el("h3", "", t("js.companion.sources.official_vrm_title")), vrmBadge());
+      if (state.officialVrmStatus === "unavailable") head.append(badge("js.companion.sources.badge_coming_soon"));
+      group.append(head, el("p", "ws-companion-settings-muted", t("js.companion.sources.official_vrm_hint")));
+      const actions = el("div", "ws-companion-sources-actions");
+      if (state.officialVrmStatus === "available" && state.officialVrmPack) {
+        const label = t("js.companion.sources.official_vrm_install", text(state.officialVrmPack.name) || state.officialVrmPack.id);
+        actions.append(button(label, "official-vrm-install", installOfficialVrm));
+      } else {
+        actions.append(button(t("js.companion.sources.official_vrm_button"), "official-vrm-check", checkOfficialVrm));
+      }
+      group.append(actions);
+      if (state.officialVrmStatus === "unavailable") {
+        group.append(el("p", "ws-companion-settings-muted ws-companion-sources-vrm-status", t("js.companion.sources.official_vrm_unavailable")));
+      }
+      return group;
+    }
+
     function importBlock() {
       const group = el("section", "ws-companion-sources-group");
       group.append(el("h3", "", t("js.companion.sources.import_title")), el("p", "ws-companion-settings-muted", t("js.companion.sources.import_hint")));
       fileInput.disabled = state.busy || !canWrite();
       group.append(fileInput);
+      return group;
+    }
+
+    function importVrmBlock() {
+      const group = el("section", "ws-companion-sources-group ws-companion-sources-vrm-import");
+      const head = el("div", "ws-companion-sources-card-head");
+      head.append(el("h3", "", t("js.companion.sources.import_vrm_title")), vrmBadge());
+      group.append(head, el("p", "ws-companion-settings-muted", t("js.companion.sources.import_vrm_hint")));
+      const dropzone = el("div", "ws-companion-sources-dropzone");
+      dropzone.append(el("p", "ws-companion-settings-muted", t("js.companion.sources.import_vrm_drop")));
+      vrmFileInput.disabled = state.busy || !canWrite();
+      dropzone.append(vrmFileInput);
+      dropzone.addEventListener("dragover", event => {
+        event.preventDefault();
+        if (!state.busy && canWrite()) dropzone.setAttribute("data-drag", "over");
+      }, options);
+      dropzone.addEventListener("dragleave", () => {
+        dropzone.setAttribute("data-drag", "");
+      }, options);
+      dropzone.addEventListener("drop", event => {
+        event.preventDefault();
+        dropzone.setAttribute("data-drag", "");
+        if (state.busy || !canWrite()) return;
+        const file = event.dataTransfer?.files?.[0];
+        if (file) importVrmFile(file);
+      }, options);
+      group.append(dropzone);
       return group;
     }
 
@@ -571,10 +707,12 @@
         line.setAttribute("role", state.failed ? "alert" : "status");
         body.append(line);
       }
+      const vrmCta = officialVrmBlock();
+      if (vrmCta) body.append(vrmCta);
       body.append(sourceList(), addForm());
       const panel = panelBlock();
       if (panel) body.append(panel);
-      body.append(installedBlock(), importBlock(), authoringBlock());
+      body.append(installedBlock(), importBlock(), importVrmBlock(), authoringBlock());
       details.replaceChildren(summary, body);
     }
 
@@ -601,7 +739,7 @@
 
     // Nothing is drawn until the modal builds: redraw runs on every build.
     return {
-      node: details, setCatalog, refresh,
+      node: details, setCatalog, refresh, importVrmFile,
       redraw() { state.signature = signatureOf(); render(); }
     };
   }

@@ -64,6 +64,32 @@ func TestSettingsModalFlexHeightChainAndNonShrinkingCards(t *testing.T) {
 	}
 }
 
+func TestTierRoutingFrameHasNoVerticalScrollbar(t *testing.T) {
+	css := mustAsset(t, "dashboard-settings-tiers.css")
+	start := strings.Index(css, ".tr-frame {")
+	if start < 0 {
+		t.Fatal("dashboard-settings-tiers.css missing .tr-frame rule")
+	}
+	end := strings.Index(css[start:], "}")
+	if end < 0 {
+		t.Fatal("dashboard-settings-tiers.css has unterminated .tr-frame rule")
+	}
+	rule := css[start : start+end+1]
+	for _, want := range []string{"overflow-x: auto;", "overflow-y: hidden;"} {
+		if !strings.Contains(rule, want) {
+			t.Errorf(".tr-frame rule %q lacks %q", rule, want)
+		}
+	}
+	for _, forbid := range []string{"overflow: auto", "overflow-y: auto", "overflow-y: scroll", "max-height"} {
+		if strings.Contains(rule, forbid) {
+			t.Errorf(".tr-frame rule %q must not contain %q", rule, forbid)
+		}
+	}
+	if !strings.Contains(css, ".tr-modal-body { display: flex; flex-direction: column; gap: 10px; padding: 13px 15px; max-height: 64vh; overflow: auto; }") {
+		t.Errorf("dashboard-settings-tiers.css unexpectedly modified .tr-modal-body scroll rule")
+	}
+}
+
 // The footer link, launcher download destinations, and plugin manifest links
 // name one repository: the daemon restates runtime.json's release_repository
 // (see releaseRepository).

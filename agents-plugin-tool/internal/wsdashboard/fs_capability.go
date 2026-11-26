@@ -131,6 +131,7 @@ const (
 	fsCapabilityTTL = 15 * time.Minute
 	fsCapRoutePart  = "/fs/cap/"
 	fsViewRoutePart = "/fs/view/"
+	fsMockRoutePart = "/fs/mock/"
 	// fsViewAssetMax bounds a file other than HTML the page route serves.
 	fsViewAssetMax = 64 << 20
 )
@@ -283,7 +284,7 @@ func previewCapability(r *http.Request) bool {
 	if !ok || !ValidReplyID(replyID) {
 		return false
 	}
-	for _, part := range []string{fsCapRoutePart, fsViewRoutePart, fsOutCapRoutePart, fsOutViewRoutePart} {
+	for _, part := range []string{fsCapRoutePart, fsViewRoutePart, fsOutCapRoutePart, fsOutViewRoutePart, fsMockRoutePart} {
 		if strings.HasPrefix(sub, strings.TrimPrefix(part, "/")) {
 			return true
 		}

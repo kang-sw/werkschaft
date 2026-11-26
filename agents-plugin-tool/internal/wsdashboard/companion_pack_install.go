@@ -1,6 +1,8 @@
 package wsdashboard
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,8 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
@@ -129,17 +133,19 @@ type companionListing struct {
 }
 
 type companionListingPack struct {
-	ID          string              `json:"id"`
-	Name        string              `json:"name"`
-	Version     string              `json:"version"`
-	Author      string              `json:"author,omitempty"`
-	License     string              `json:"license,omitempty"`
-	Description string              `json:"description,omitempty"`
-	URL         string              `json:"url,omitempty"`
-	Rev         string              `json:"rev,omitempty"`
-	Status      string              `json:"status"`
-	Installed   bool                `json:"installed,omitempty"` // set by an install that wrote this pack
-	Error       *companionPackError `json:"error,omitempty"`
+	ID             string              `json:"id"`
+	Name           string              `json:"name"`
+	Version        string              `json:"version"`
+	Author         string              `json:"author,omitempty"`
+	License        string              `json:"license,omitempty"`
+	Description    string              `json:"description,omitempty"`
+	Format         string              `json:"format,omitempty"`
+	VroidSourceURL string              `json:"vroidSourceUrl,omitempty"`
+	URL            string              `json:"url,omitempty"`
+	Rev            string              `json:"rev,omitempty"`
+	Status         string              `json:"status"`
+	Installed      bool                `json:"installed,omitempty"` // set by an install that wrote this pack
+	Error          *companionPackError `json:"error,omitempty"`
 }
 
 // companionInstallResult is the outcome of an install operation: the
@@ -445,7 +451,8 @@ func (s *CompanionPackStore) install(opts wsconfig.Options, plan companionInstal
 	var ready []staged
 	for _, entry := range plan.market.Packs {
 		item := companionListingPack{ID: entry.ID, Name: entry.Name, Version: entry.Version, Author: entry.Author,
-			License: entry.License, Description: entry.Description, URL: entry.URL, Status: companionStatusAvailable}
+			License: entry.License, Description: entry.Description, Format: entry.Format,
+			VroidSourceURL: entry.VroidSourceURL, URL: entry.URL, Status: companionStatusAvailable}
 		if entry.Err != nil {
 			fail := companionAsPackError(entry.Err, entry.ID)
 			item.Error = &fail
@@ -764,4 +771,302 @@ func (s *CompanionPackStore) uninstall(opts wsconfig.Options, id string) (*compa
 		return snapshot, companionRefuse(http.StatusInternalServerError, "cannot remove the pack directory")
 	}
 	return snapshot, nil
+}
+
+const (
+	companionVRMUploadFallback = "upload.vrm"
+	companionVRMModelName      = "model.vrm"
+	companionVRMDefaultDisplay = "VRM Avatar"
+	companionVRMDefaultSlug    = "vrm-avatar"
+)
+
+func companionStripVRMExt(name string) string {
+	if len(name) >= 4 && strings.EqualFold(name[len(name)-4:], ".vrm") {
+		return name[:len(name)-4]
+	}
+	return name
+}
+
+func companionUploadVRMName(raw string) string {
+	if i := strings.LastIndexAny(raw, `/\`); i >= 0 {
+		raw = raw[i+1:]
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" || !utf8.ValidString(raw) {
+		return companionVRMUploadFallback
+	}
+	for _, r := range raw {
+		if unicode.IsControl(r) {
+			return companionVRMUploadFallback
+		}
+	}
+	if utf8.RuneCountInString(raw) > companionUploadNameMax {
+		raw = string([]rune(raw)[:companionUploadNameMax])
+	}
+	return raw
+}
+
+func companionVRMDisplayName(displayName, filename string) (string, error) {
+	if displayName != "" {
+		trimmed := strings.TrimSpace(displayName)
+		if err := companionText("name", trimmed, 64, true); err != nil {
+			return "", err
+		}
+		return trimmed, nil
+	}
+	base := companionStripVRMExt(companionUploadVRMName(filename))
+	var b strings.Builder
+	for _, r := range base {
+		if !unicode.IsControl(r) {
+			b.WriteRune(r)
+		}
+	}
+	cleaned := strings.TrimSpace(b.String())
+	if utf8.RuneCountInString(cleaned) > 64 {
+		cleaned = strings.TrimSpace(string([]rune(cleaned)[:64]))
+	}
+	if cleaned == "" {
+		return companionVRMDefaultDisplay, nil
+	}
+	return cleaned, nil
+}
+
+func companionVRMSlug(raw string) string {
+	raw = companionStripVRMExt(strings.TrimSpace(raw))
+	var b strings.Builder
+	prevDash := false
+	for _, r := range raw {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevDash = false
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r + ('a' - 'A'))
+			prevDash = false
+		case r == '_':
+			b.WriteByte('_')
+			prevDash = false
+		default:
+			if !prevDash && b.Len() > 0 {
+				b.WriteByte('-')
+				prevDash = true
+			}
+		}
+	}
+	slug := strings.Trim(b.String(), "-_")
+	if len(slug) > 64 {
+		slug = strings.TrimRight(slug[:64], "-_")
+	}
+	if slug == "" || !companionPackID.MatchString(slug) {
+		slug = companionVRMDefaultSlug
+	}
+	if slug == companionDefaultID || slug == "auto" || companionReservedName(slug) {
+		slug = "vrm-" + slug
+		if len(slug) > 64 {
+			slug = strings.TrimRight(slug[:64], "-_")
+		}
+	}
+	return slug
+}
+
+// importVRM validates a single uploaded .vrm file, synthesizes a minimal
+// ws-companion-vrm/v1 pack with an install sidecar, stages and atomically
+// installs it, and reloads the in-memory snapshot.
+func (s *CompanionPackStore) importVRM(opts wsconfig.Options, data []byte, explicitID, displayName, filename string) (companionPackInfo, error) {
+	if len(data) == 0 {
+		return companionPackInfo{}, companionRefuse(http.StatusBadRequest, "the uploaded VRM file is empty")
+	}
+	if len(data) > companionVrmAssetCap {
+		return companionPackInfo{}, companionRefuse(http.StatusRequestEntityTooLarge, "the uploaded VRM file exceeds the %s limit", companionByteSize(companionVrmAssetCap))
+	}
+	if _, err := inspectCompanionVRM(data); err != nil {
+		return companionPackInfo{}, companionRefuse(http.StatusBadRequest, "invalid VRM file: %s", err.Error())
+	}
+	explicitID = strings.TrimSpace(explicitID)
+	if explicitID != "" {
+		switch {
+		case !companionPackID.MatchString(explicitID):
+			return companionPackInfo{}, companionRefuse(http.StatusBadRequest, "id must be 1-64 lowercase letters, digits, - or _")
+		case explicitID == companionDefaultID || explicitID == "auto":
+			return companionPackInfo{}, companionRefuse(http.StatusBadRequest, "pack ID is reserved")
+		case companionReservedName(explicitID):
+			return companionPackInfo{}, companionRefuse(http.StatusBadRequest, "pack ID is a reserved device name")
+		}
+	}
+	name, err := companionVRMDisplayName(displayName, filename)
+	if err != nil {
+		return companionPackInfo{}, companionRefuse(http.StatusBadRequest, "%s", err.Error())
+	}
+
+	s.installMu.Lock()
+	defer s.installMu.Unlock()
+
+	paths, err := companionPaths(opts)
+	if err != nil {
+		return companionPackInfo{}, err
+	}
+	if err := s.checkPacksRoot(paths); err != nil {
+		return companionPackInfo{}, err
+	}
+	if err := s.recoverStaging(opts, paths); err != nil {
+		return companionPackInfo{}, err
+	}
+	snapshot := s.snapshot(opts)
+	dirs, err := s.localDirs(paths)
+	if err != nil {
+		return companionPackInfo{}, err
+	}
+
+	occupied := func(candidate string) bool {
+		if candidate == companionDefaultID || candidate == "auto" || companionReservedName(candidate) {
+			return true
+		}
+		if _, exists := snapshot.byID[candidate]; exists {
+			return true
+		}
+		if _, exists := dirs.plain[candidate]; exists {
+			return true
+		}
+		if _, clash := dirs.folded[strings.ToLower(candidate)]; clash {
+			return true
+		}
+		return companionHasError(snapshot, candidate)
+	}
+
+	var id string
+	if explicitID != "" {
+		if occupied(explicitID) {
+			return companionPackInfo{}, companionRefuse(http.StatusConflict, "pack ID %q is already installed; uninstall it first to replace it", explicitID)
+		}
+		id = explicitID
+	} else {
+		slugSource := displayName
+		if strings.TrimSpace(slugSource) == "" {
+			slugSource = companionUploadVRMName(filename)
+		}
+		base := companionVRMSlug(slugSource)
+		if !occupied(base) {
+			id = base
+		} else {
+			for n := 2; n <= 1000; n++ {
+				suffix := "-" + strconv.Itoa(n)
+				prefix := base
+				if len(prefix)+len(suffix) > 64 {
+					prefix = strings.TrimRight(prefix[:64-len(suffix)], "-_")
+					if prefix == "" {
+						prefix = "vrm"
+					}
+				}
+				candidate := prefix + suffix
+				if !occupied(candidate) {
+					id = candidate
+					break
+				}
+			}
+			if id == "" {
+				return companionPackInfo{}, companionRefuse(http.StatusConflict, "could not allocate a free pack ID")
+			}
+		}
+	}
+
+	if dirs.visited >= companionMaxPacks {
+		return companionPackInfo{}, companionRefuse(http.StatusConflict, "the local pack limit of %d is reached", companionMaxPacks)
+	}
+	budget := companionCacheCap
+	for _, pack := range snapshot.byID {
+		if pack.info.Source == "local" {
+			budget -= pack.size
+		}
+	}
+	if budget <= 0 {
+		return companionPackInfo{}, companionRefuse(http.StatusConflict, "total local pack cache byte limit exceeded")
+	}
+
+	manifestObj := struct {
+		Schema string `json:"schema"`
+		ID     string `json:"id"`
+		Name   string `json:"name"`
+		Model  string `json:"model"`
+	}{
+		Schema: companionPackVRMSchema,
+		ID:     id,
+		Name:   name,
+		Model:  companionVRMModelName,
+	}
+	manifestBytes, err := json.MarshalIndent(manifestObj, "", "  ")
+	if err != nil {
+		return companionPackInfo{}, companionRefuse(http.StatusInternalServerError, "cannot build the VRM pack manifest")
+	}
+	manifestBytes = append(manifestBytes, '\n')
+
+	pack, _, err := loadCompanionPack(id, "local", budget, func(file string, limit int) ([]byte, error) {
+		switch file {
+		case companionManifestName:
+			if len(manifestBytes) > limit {
+				return nil, errCompanionFileLimit
+			}
+			return manifestBytes, nil
+		case companionVRMModelName:
+			if len(data) > limit {
+				return nil, errCompanionFileLimit
+			}
+			return data, nil
+		default:
+			return nil, errors.New("file is missing")
+		}
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "total local pack cache byte limit") {
+			return companionPackInfo{}, companionRefuse(http.StatusConflict, "%s", err.Error())
+		}
+		return companionPackInfo{}, companionRefuse(http.StatusBadRequest, "%s", err.Error())
+	}
+
+	sum := sha256.Sum256(data)
+	sourceName := companionUploadVRMName(filename)
+	if filename == "" && displayName != "" {
+		sourceName = companionUploadVRMName(displayName)
+	}
+	sidecar := companionSidecar{
+		Source:        sourceName,
+		Kind:          "local",
+		ArchiveSHA256: hex.EncodeToString(sum[:]),
+		PackSHA256:    pack.info.Rev,
+		Version:       "1.0.0",
+		InstalledAt:   time.Now().UTC().Format(time.RFC3339),
+		Official:      false,
+	}
+
+	run, err := s.prepareStaging(paths)
+	if err != nil {
+		return companionPackInfo{}, err
+	}
+	stranded := false
+	defer func() {
+		if stranded {
+			return
+		}
+		_ = s.removeTree(run)
+	}()
+	if err := s.writeStaged(filepath.Join(run, id), pack, sidecar); err != nil {
+		return companionPackInfo{}, companionRefuse(http.StatusInternalServerError, "%s", err.Error())
+	}
+	s.fsop("mkdir")
+	if err := os.MkdirAll(paths.packs, 0o755); err != nil {
+		return companionPackInfo{}, companionRefuse(http.StatusInternalServerError, "cannot create the companion pack directory")
+	}
+	var swapErr error
+	snapshot = s.swapAndLoad(opts, func() {
+		swapErr = s.swapIn(paths, run, id)
+		var lost *companionStrandedError
+		stranded = errors.As(swapErr, &lost)
+	})
+	if swapErr != nil {
+		return companionPackInfo{}, companionRefuse(http.StatusInternalServerError, "%s", swapErr.Error())
+	}
+	loaded := snapshot.byID[id]
+	if loaded == nil || loaded.info.Rev != pack.info.Rev {
+		return companionPackInfo{}, companionRefuse(http.StatusInternalServerError, "the installed VRM pack did not load")
+	}
+	return loaded.info, nil
 }

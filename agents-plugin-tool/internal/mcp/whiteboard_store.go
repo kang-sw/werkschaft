@@ -55,9 +55,11 @@ func (s *sessionStore) snapshotWhiteboard(record *sessionRecord, key string, raw
 	}
 	err := s.boards.useLegacy(record.Root, key, whiteboardLegacyImport(record.Root, key, legacy), activity, func(slot *whiteboardSlot) error {
 		record.Whiteboard = nil
+		record.boardMockups = nil
 		if slot.board != nil {
 			record.Whiteboard, record.boardRevision = slot.board.Snapshot()
 			record.boardInstance = slot.board.Instance()
+			record.boardMockups = slot.board.MockupIndex()
 		}
 		return nil
 	})
@@ -84,28 +86,33 @@ func (s *sessionStore) mutateWhiteboard(record *sessionRecord, key string, legac
 	root := record.Root
 	return s.boards.useLegacy(root, key, whiteboardLegacyImport(root, key, legacy), true, func(slot *whiteboardSlot) error {
 		s.retireWhiteboardPages(root)
-		mutate := func(board *wswhiteboard.State) error {
+		mutate := func(board *wswhiteboard.State) ([]wswhiteboard.MockupBundle, error) {
 			record.Whiteboard = board
+			record.pendingMockupBundles = nil
 			if err := fn(record); err != nil {
-				return err
+				record.pendingMockupBundles = nil
+				return nil, err
 			}
 			if record.Whiteboard != nil && record.Whiteboard != board {
 				*board = *record.Whiteboard
 			}
-			return nil
+			bundles := record.pendingMockupBundles
+			record.pendingMockupBundles = nil
+			return bundles, nil
 		}
 		if slot.board != nil {
-			return slot.board.Update(mutate)
+			return slot.board.UpdateWithBundles(mutate)
 		}
 		initial := new(wswhiteboard.State)
-		if err := mutate(initial); err != nil {
+		bundles, err := mutate(initial)
+		if err != nil {
 			return err
 		}
 		dir := whiteboardBoardDir(root, key)
 		if err := registerWhiteboardExclude(wsgit.ExecRunner{}, root, filepath.Dir(dir)); err != nil {
 			return err
 		}
-		board, err := wswhiteboard.CreateBoardDB(dir, initial, s.boards.options)
+		board, err := wswhiteboard.CreateBoardDBWithBundles(dir, initial, bundles, s.boards.options)
 		if err == nil {
 			slot.board = board
 		}

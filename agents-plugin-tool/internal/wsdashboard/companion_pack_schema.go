@@ -204,6 +204,32 @@ func validateCompanionManifest(raw []byte, id string) (companionManifest, []stri
 	if err != nil {
 		return m, nil, err
 	}
+	var schema string
+	if err := obj.field("schema", &schema); err != nil {
+		return m, nil, err
+	}
+	if schema == companionPackVRMSchema {
+		return validateCompanionVRMManifest(obj, id)
+	}
+	return validateCompanion2DManifest(obj, id)
+}
+
+// validateCompanionManifestV1 validates strictly against ws-companion/v1,
+// matching the behavior of daemons predating ws-companion-vrm/v1.
+func validateCompanionManifestV1(raw []byte, id string) (companionManifest, []string, error) {
+	var m companionManifest
+	if !utf8.Valid(raw) {
+		return m, nil, fmt.Errorf("manifest must be UTF-8")
+	}
+	obj, err := parseCompanionObject(raw)
+	if err != nil {
+		return m, nil, err
+	}
+	return validateCompanion2DManifest(obj, id)
+}
+
+func validateCompanion2DManifest(obj companionObject, id string) (companionManifest, []string, error) {
+	var m companionManifest
 	// persona is optional voice data: a malformed or oversize entry drops the
 	// field, never the pack, so it is read apart from the strict fields.
 	m.Persona = companionPersonaField(obj)
@@ -232,18 +258,8 @@ func validateCompanionManifest(raw []byte, id string) (companionManifest, []stri
 	if len(m.Poses["stand"].Layers) == 0 {
 		return m, nil, fmt.Errorf("poses.stand requires at least one layer")
 	}
-	if err := auto.fields(map[string]any{"harnesses": &m.AutoMatch.Harnesses, "models": &m.AutoMatch.Models}); err != nil {
+	if err := parseCompanionAutoMatch(auto, &m.AutoMatch); err != nil {
 		return m, nil, err
-	}
-	for _, tags := range [][]string{m.AutoMatch.Harnesses, m.AutoMatch.Models} {
-		if len(tags) > 32 {
-			return m, nil, fmt.Errorf("autoMatch supports at most 32 tags per field")
-		}
-		for _, tag := range tags {
-			if !companionMatchTag.MatchString(tag) || strings.TrimSpace(tag) == "" {
-				return m, nil, fmt.Errorf("autoMatch tags must contain 1 to 128 printable ASCII characters")
-			}
-		}
 	}
 
 	check := companionManifestCheck{files: make(map[string]struct{}), motions: m.Motions, hasHead: m.Head != nil}
@@ -251,6 +267,23 @@ func validateCompanionManifest(raw []byte, id string) (companionManifest, []stri
 		return m, nil, err
 	}
 	return m, sortedCompanionKeys(check.files), nil
+}
+
+func parseCompanionAutoMatch(auto companionObject, dst *companionAutoMatch) error {
+	if err := auto.fields(map[string]any{"harnesses": &dst.Harnesses, "models": &dst.Models}); err != nil {
+		return err
+	}
+	for _, tags := range [][]string{dst.Harnesses, dst.Models} {
+		if len(tags) > 32 {
+			return fmt.Errorf("autoMatch supports at most 32 tags per field")
+		}
+		for _, tag := range tags {
+			if !companionMatchTag.MatchString(tag) || strings.TrimSpace(tag) == "" {
+				return fmt.Errorf("autoMatch tags must contain 1 to 128 printable ASCII characters")
+			}
+		}
+	}
+	return nil
 }
 
 type companionManifestCheck struct {

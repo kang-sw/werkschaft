@@ -226,6 +226,7 @@ func (s *Server) handleWhiteboardUpdate(id json.RawMessage, args map[string]any,
 		if len(problems) > 0 && (outcome.Accepted == 0 || outcome.Unpartitioned) {
 			return errWhiteboardRefused
 		}
+		rec.pendingMockupBundles = outcome.MockupBundles
 		if sublead == nil {
 			s.stampBoardInputs(key, rec.Whiteboard, beforeEntry)
 		}

@@ -22,9 +22,10 @@ type WhiteboardStores struct {
 	once   sync.Once
 	err    error
 
-	idle    time.Duration
-	options wswhiteboard.BoardDBOptions
-	changed func(root, key string)
+	idle          time.Duration
+	options       wswhiteboard.BoardDBOptions
+	changed       func(root, key string)
+	onLoadArchive func(dir string)
 }
 
 type whiteboardSlot struct {
@@ -44,12 +45,28 @@ func NewWhiteboardStores(log io.Writer) *WhiteboardStores {
 			fmt.Fprintf(log, format+"\n", args...)
 		}
 	}
+	s.options.OnLoadArchive = func(dir string) {
+		s.mu.Lock()
+		fn := s.onLoadArchive
+		s.mu.Unlock()
+		if fn != nil {
+			fn(dir)
+		}
+	}
 	return s
 }
 
 // SetChanged installs the daemon's in-process notification before it starts
 // serving. The callback runs outside the board lock.
 func (s *WhiteboardStores) SetChanged(fn func(root, key string)) { s.changed = fn }
+
+// SetOnLoadArchive installs a callback invoked after any board's LoadArchive
+// commits, used by the dashboard to evict cached mockup bundles for that board.
+func (s *WhiteboardStores) SetOnLoadArchive(fn func(dir string)) {
+	s.mu.Lock()
+	s.onLoadArchive = fn
+	s.mu.Unlock()
+}
 
 // peekHeld runs fn on the board root/key already holds, renewing its idle
 // lease as an active use does, and never opens, imports, or creates one:

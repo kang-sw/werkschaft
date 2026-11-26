@@ -16,7 +16,7 @@ func (e *Entry) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
-	for _, key := range []string{"id", "kind", "panel_id", "panel_name", "legacy_content", "item_id", "recap", "text", "at", "imported", "topic_state", "board_notice", "waiting_on", "unblocked_receipt", "inputs", "inputs_floor", "seq", "answer_sent_at"} {
+	for _, key := range []string{"id", "kind", "panel_id", "panel_name", "legacy_content", "item_id", "recap", "text", "at", "imported", "topic_state", "board_notice", "waiting_on", "unblocked_receipt", "inputs", "inputs_floor", "seq", "answer_sent_at", "mockup"} {
 		delete(fields, key)
 	}
 	*e = Entry(known)
@@ -49,6 +49,10 @@ func (e Entry) clone() Entry {
 	e.BoardNotice = append(json.RawMessage(nil), e.BoardNotice...)
 	e.WaitingOn = append(json.RawMessage(nil), e.WaitingOn...)
 	e.UnblockedReceipt = append(json.RawMessage(nil), e.UnblockedReceipt...)
+	if e.Mockup != nil {
+		cp := *e.Mockup
+		e.Mockup = &cp
+	}
 	if e.unknown != nil {
 		copy := make(map[string]json.RawMessage, len(e.unknown))
 		for key, value := range e.unknown {

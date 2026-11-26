@@ -3,6 +3,7 @@ package wswhiteboard
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -53,6 +54,7 @@ type Entry struct {
 	InputsFloor  string          `json:"inputs_floor,omitempty"`
 	Seq          int             `json:"seq,omitempty"`
 	AnswerSentAt int64           `json:"answer_sent_at,omitempty"`
+	Mockup       *MockupMeta     `json:"mockup,omitempty"`
 	unknown      map[string]json.RawMessage
 }
 
@@ -139,7 +141,7 @@ func (s *State) reopenWithEvent(topic string, now time.Time) {
 
 var panelIDPattern = regexp.MustCompile(`^p[1-9][0-9]*$`)
 
-func applyPanel(p *problems, work *State, origins bodyOrigins, cmd command, topicOf topicResolver, mark int, now time.Time, sourceRoot string) {
+func applyPanel(p *problems, work *State, origins bodyOrigins, cmd command, topicOf topicResolver, mark int, now time.Time, sourceRoot string, pending *[]MockupBundle) {
 	before := len(p.List)
 	topic, topicOK := topicOf(cmd)
 	patch := len(cmd.Children) > 0
@@ -232,37 +234,41 @@ func applyPanel(p *problems, work *State, origins bodyOrigins, cmd command, topi
 	if patch {
 		if latest.ID == "" {
 			p.Add("%s: panel name %q does not exist; post a full payload first", cmd.At("name"), name)
+		} else if latest.Mockup != nil {
+			p.Add("%s: panel %s is a mockup snapshot and cannot be patched with wb:change; re-post <wb:panel src=\"...\"> instead", cmd.Label(), id)
 		}
 		if strings.TrimSpace(body) != "" {
 			p.Add("%s: patches take only change wrappers, not text or a full payload outside them", cmd.Label())
 		}
 		body = latest.Text
-		for _, change := range cmd.Children {
-			old, hasOld := change.Single(p, "wb:old")
-			repl, hasNew := change.Single(p, "wb:new")
-			if !hasOld {
-				p.Add("%s: <wb:old> required", change.Label())
-			} else if old == "" {
-				p.Add("%s: <wb:old> must be non-empty", change.Label())
-			}
-			if !hasNew {
-				p.Add("%s: <wb:new> required (empty deletes the match)", change.Label())
-			}
-			if !hasOld || old == "" || !hasNew {
-				continue
-			}
-			if change.LiteralAmbiguous("wb:old", body) {
-				p.Add("%s: <wb:old> is ambiguous: its entities decode, and its text as written also occurs in panel %s; wrap the operand in <wb:raw>...</wb:raw> to match that literal text, or write the decoded characters directly", change.Label(), id)
-				continue
-			}
-			match := strings.Index(body, old)
-			switch {
-			case match < 0:
-				p.Add("%s: <wb:old> matches nothing in panel %s", change.Label(), id)
-			case strings.Contains(body[match+1:], old):
-				p.Add("%s: <wb:old> matches multiple places in panel %s; widen it to one", change.Label(), id)
-			default:
-				body = body[:match] + repl + body[match+len(old):]
+		if latest.Mockup == nil {
+			for _, change := range cmd.Children {
+				old, hasOld := change.Single(p, "wb:old")
+				repl, hasNew := change.Single(p, "wb:new")
+				if !hasOld {
+					p.Add("%s: <wb:old> required", change.Label())
+				} else if old == "" {
+					p.Add("%s: <wb:old> must be non-empty", change.Label())
+				}
+				if !hasNew {
+					p.Add("%s: <wb:new> required (empty deletes the match)", change.Label())
+				}
+				if !hasOld || old == "" || !hasNew {
+					continue
+				}
+				if change.LiteralAmbiguous("wb:old", body) {
+					p.Add("%s: <wb:old> is ambiguous: its entities decode, and its text as written also occurs in panel %s; wrap the operand in <wb:raw>...</wb:raw> to match that literal text, or write the decoded characters directly", change.Label(), id)
+					continue
+				}
+				match := strings.Index(body, old)
+				switch {
+				case match < 0:
+					p.Add("%s: <wb:old> matches nothing in panel %s", change.Label(), id)
+				case strings.Contains(body[match+1:], old):
+					p.Add("%s: <wb:old> matches multiple places in panel %s; widen it to one", change.Label(), id)
+				default:
+					body = body[:match] + repl + body[match+len(old):]
+				}
 			}
 		}
 	}
@@ -272,8 +278,19 @@ func applyPanel(p *problems, work *State, origins bodyOrigins, cmd command, topi
 	if len(body) > MaxPanelBytes {
 		p.Add("%s: panel payload exceeds 2 MiB of UTF-8; split it into panels or link an external file", cmd.Label())
 	}
+	var mockupMeta *MockupMeta
+	var pendingBundle *MockupBundle
 	if fullDocument(body) {
-		if sourced {
+		if sourced && isHTMLSourceExt(src) {
+			bundle, err := CollectMockupBundle(sourceRoot, src)
+			if err != nil {
+				p.Add("%s: %q: %v", cmd.At("src"), src, err)
+			} else {
+				mockupMeta = &MockupMeta{Root: bundle.RootFile, SHA256: bundle.SHA256}
+				pendingBundle = &bundle
+				body = fmt.Sprintf("Interactive HTML mockup snapshot from `%s` (`%s`).\n", filepath.ToSlash(strings.TrimSpace(src)), bundle.RootFile)
+			}
+		} else if sourced {
 			p.Add("%s: %q is a full HTML document (found <!DOCTYPE or <html); a panel source is a fragment, so save the body content with any <style> and no <html>, <head> or <body> wrapper", cmd.At("src"), src)
 		} else {
 			p.Add("%s: a panel takes markdown with inline HTML, not a full document (found <!DOCTYPE or <html)", cmd.Label())
@@ -293,7 +310,12 @@ func applyPanel(p *problems, work *State, origins bodyOrigins, cmd command, topi
 		fixed, exists := doc.legacyContentPanel()
 		legacy = exists && fixed.PanelID == id
 	}
-	work.appendEntry(topic, Entry{Kind: EntryPanel, PanelID: id, PanelName: name, LegacyContent: legacy, Recap: recap, Text: body}, now)
+	work.appendEntry(topic, Entry{Kind: EntryPanel, PanelID: id, PanelName: name, LegacyContent: legacy, Recap: recap, Text: body, Mockup: mockupMeta}, now)
+	if pendingBundle != nil && pending != nil {
+		pendingBundle.EntryID = fmt.Sprintf("e%d", work.EntrySeq)
+		pendingBundle.CreatedAt = now.UTC().Format(time.RFC3339Nano)
+		*pending = append(*pending, *pendingBundle)
+	}
 	if legacy {
 		if body == "" {
 			work.clearTopicBody(topic)

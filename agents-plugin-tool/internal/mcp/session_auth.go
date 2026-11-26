@@ -115,9 +115,11 @@ type sessionRecord struct {
 	// legacy import.
 	Whiteboard *wswhiteboard.State `json:"whiteboard,omitempty"`
 	// Presentation metadata supplied with the snapshot.
-	boardRevision    uint64
-	boardInstance    uint64
-	boardUnavailable bool
+	boardRevision        uint64
+	boardInstance        uint64
+	boardUnavailable     bool
+	boardMockups         map[string]string
+	pendingMockupBundles []wswhiteboard.MockupBundle
 }
 
 // sessionRecordSchemaVersion is key.json's schema version. Version 1 was the

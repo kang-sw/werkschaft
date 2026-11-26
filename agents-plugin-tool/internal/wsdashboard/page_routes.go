@@ -173,6 +173,8 @@ func (d *Daemon) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 		d.handleTopicHistory(w, r, replyID)
 	case sub == "board.zip":
 		d.handleBoardArchive(w, r, replyID)
+	case sub == "board/mockup":
+		d.handleBoardMockup(w, r, replyID)
 	case sub == "tickets/idea":
 		d.handleTicketIdeas(w, r, replyID)
 	case sub == "tickets/graph":

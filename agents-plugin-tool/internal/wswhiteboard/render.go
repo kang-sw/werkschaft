@@ -567,6 +567,28 @@ func (p *pageData) DocHTML(topic string) template.HTML { return p.docs[topic] }
 func (p *pageData) EntryHTML(id string) template.HTML { return p.entries[id] }
 
 func (p *pageData) panelHTML(topic string, e EntryView, a *pageAssets) template.HTML {
+	if e.Mockup != nil {
+		if p.MockupSrc != nil {
+			if src := p.MockupSrc(e.ID, e.Mockup.SHA256); src != "" {
+				title, key := topic+"/"+e.ID, "entry:"+e.ID
+				return template.HTML(`<div class="mockup-wrap"><div class="doc-frame mockup-frame" title="` +
+					template.HTMLEscapeString(title) + `" data-doc="` + template.HTMLEscapeString(key) +
+					`" data-doc-key="` + template.HTMLEscapeString(key) + `" data-topic="` + template.HTMLEscapeString(topic) +
+					`" data-entry="` + template.HTMLEscapeString(e.ID) + `" data-sandbox="` + frameSandbox +
+					`" data-mockup-src="` + template.HTMLEscapeString(src) + `" data-mockup-sha="` + template.HTMLEscapeString(e.Mockup.SHA256) +
+					`" data-fallback-text="` + template.HTMLEscapeString(e.Text) + `"></div></div>`)
+			}
+		}
+		pageMermaid := p.Mermaid
+		p.Mermaid = false
+		p.framing, p.inDoc, p.relays = true, true, nil
+		out := template.HTML(`<p class="mockup-missing">Mockup snapshot unavailable.</p>`) + p.renderPanel(e)
+		p.framing, p.inDoc = false, false
+		out = p.framedDoc(topic, e.ID, out, false, p.Mermaid, p.relays, a, "")
+		p.Mermaid = false
+		p.Mermaid = p.Mermaid || pageMermaid
+		return out
+	}
 	pageMermaid := p.Mermaid
 	p.Mermaid = false
 	p.framing, p.inDoc, p.relays = true, true, nil

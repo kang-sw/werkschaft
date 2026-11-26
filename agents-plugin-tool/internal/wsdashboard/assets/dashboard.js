@@ -900,6 +900,7 @@
         if (s.capsules && window.WsCapsules) window.WsCapsules.attach(note).restore(s.capsules);
       }
     });
+    if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
   }
   // A board swap waits while the user is typing in the answer form, and
   // lands when the focus leaves it.

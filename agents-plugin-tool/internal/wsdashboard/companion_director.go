@@ -578,15 +578,16 @@ func (d *Daemon) companionRing(sessionID string) []wslive.RingRecord {
 
 // companionPackData is what the prompt needs from the active pack.
 type companionPackData struct {
-	persona *CompanionPersona
-	dicts   map[string][]string // expressions, gestures, props, fx, scenarios
+	renderer string // "2d" or "vrm"
+	persona  *CompanionPersona
+	dicts    map[string][]string // expressions, gestures, props, fx, scenarios
 }
 
 // companionPackFor reads the reported pack (else the default) and the
 // default pack's shared props and fx from the in-memory pack snapshot.
 func (d *Daemon) companionPackFor(id string) companionPackData {
 	snap := d.companionPacks.snapshot(d.companionOptions())
-	out := companionPackData{dicts: map[string][]string{}}
+	out := companionPackData{renderer: companionPackRenderer2D, dicts: map[string][]string{}}
 	pack := snap.byID[id]
 	if pack == nil {
 		pack = snap.byID[companionDefaultID]
@@ -610,6 +611,9 @@ func (d *Daemon) companionPackFor(id string) companionPackData {
 		}
 	}
 	if pack != nil {
+		if pack.info.Renderer != "" {
+			out.renderer = pack.info.Renderer
+		}
 		out.persona = pack.info.Persona
 		add(pack, "expressions", "gestures", "props", "fx", "scenarios")
 	}
