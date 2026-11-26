@@ -238,7 +238,7 @@
       if (stillCurrent) delete holdPending[nid];
       if (resp && resp.ok) {
         return resp.json().then(function (data) {
-          if (st._holdRid !== reqRid) return;
+          if (st._holdRid !== reqRid || st._holdSeq !== seq) return;
           if (data && Array.isArray(data.held) && st._applyServerHeld) st._applyServerHeld(data.held);
         }, function () {});
       }

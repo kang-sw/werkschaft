@@ -354,6 +354,35 @@ test('toggleHold reverts optimistic state when hold route fails', async () => {
   assert.equal(h.titleCounts.at(-1), 1);
 });
 
+test('out-of-order hold response does not overwrite newer settled server state', async () => {
+  const resolvers = [];
+  const h = makePillHarness([
+    { id: 40, dataId: '40', top: -200, title: 'First ask' },
+    { id: 41, dataId: '41', top: -100, title: 'Second ask' }
+  ], {
+    rid: 'board-ooo',
+    fetch: () => new Promise(resolve => { resolvers.push(resolve); })
+  });
+  // Click item 40 (seq 1) then item 41 (seq 2).
+  h.clickHold(h.items[0]);
+  h.clickHold(h.items[1]);
+  assert.equal(resolvers.length, 2);
+
+  // Newer response (seq 2) settles first with both held.
+  resolvers[1]({ ok: true, status: 200, json: async () => ({ held: ['40', '41'] }) });
+  await drainMicrotasks();
+  h.flush();
+  assert.equal(h.items[0].classList.contains('wb-held'), true);
+  assert.equal(h.items[1].classList.contains('wb-held'), true);
+
+  // Older response (seq 1) arrives late with stale snapshot ['40'] only -> must NOT unhold 41.
+  resolvers[0]({ ok: true, status: 200, json: async () => ({ held: ['40'] }) });
+  await drainMicrotasks();
+  h.flush();
+  assert.equal(h.items[0].classList.contains('wb-held'), true);
+  assert.equal(h.items[1].classList.contains('wb-held'), true, 'stale response must not overwrite newer hold');
+});
+
 test('in-card find resolves cards only when focus or pointer is inside a non-terminal card and wraps step index', () => {
   const listeners = {};
   const card = {
