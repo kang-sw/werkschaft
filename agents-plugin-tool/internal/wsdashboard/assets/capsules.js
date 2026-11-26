@@ -718,7 +718,7 @@
     function onKeyDown(e) { if (!e.defaultPrevented && !e.isComposing && e.keyCode !== 229 && popup.key(e)) e.stopImmediatePropagation(); }
     var origDestroy = popup.destroy;
     popup.destroy = function () {
-      field.removeEventListener("keydown", onKeyDown);
+      if (typeof field.removeEventListener === "function") field.removeEventListener("keydown", onKeyDown);
       if (field.wsc && field.wsc.topicPop === popup) field.wsc.topicPop = null;
       topicPickers = topicPickers.filter(function (entry) { return entry.popup !== popup; });
       if (origDestroy) origDestroy();

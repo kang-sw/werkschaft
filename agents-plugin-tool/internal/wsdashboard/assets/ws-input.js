@@ -1026,15 +1026,17 @@
       destroy: function () {
         if (destroyed) return;
         destroyed = true;
-        field.removeEventListener("input", onInput);
-        field.removeEventListener("compositionstart", onCompStart);
-        field.removeEventListener("compositionend", onCompEnd);
-        if (!opts.managedKeydown) {
-          field.removeEventListener("beforeinput", onBeforeInput);
-          field.removeEventListener("keydown", onKeyDown);
+        if (typeof field.removeEventListener === "function") {
+          field.removeEventListener("input", onInput);
+          field.removeEventListener("compositionstart", onCompStart);
+          field.removeEventListener("compositionend", onCompEnd);
+          if (!opts.managedKeydown) {
+            field.removeEventListener("beforeinput", onBeforeInput);
+            field.removeEventListener("keydown", onKeyDown);
+          }
+          field.removeEventListener("paste", onPaste);
+          field.removeEventListener("blur", onBlur);
         }
-        field.removeEventListener("paste", onPaste);
-        field.removeEventListener("blur", onBlur);
         if (mdEditor) { mdEditor.detach(); mdEditor = null; }
         if (mentionPop) { mentionPop.destroy(); mentionPop = null; }
         if (topicPop && ownsTopicPop) { topicPop.destroy(); topicPop = null; ownsTopicPop = false; }

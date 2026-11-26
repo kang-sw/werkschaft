@@ -309,15 +309,17 @@
     });
     return { key: key, close: close, sync: sync, pop: pop, destroy: function () {
       close();
-      input.removeEventListener("input", sync);
-      input.removeEventListener("compositionstart", onCompStart);
-      input.removeEventListener("compositionupdate", onCompUpdate);
-      input.removeEventListener("compositionend", onCompEnd);
-      input.removeEventListener("blur", close);
-      input.removeEventListener("click", follow);
-      input.removeEventListener("keyup", onKeyUp);
-      input.removeEventListener("scroll", place);
-      window.removeEventListener("resize", place);
+      if (typeof input.removeEventListener === "function") {
+        input.removeEventListener("input", sync);
+        input.removeEventListener("compositionstart", onCompStart);
+        input.removeEventListener("compositionupdate", onCompUpdate);
+        input.removeEventListener("compositionend", onCompEnd);
+        input.removeEventListener("blur", close);
+        input.removeEventListener("click", follow);
+        input.removeEventListener("keyup", onKeyUp);
+        input.removeEventListener("scroll", place);
+      }
+      if (typeof window.removeEventListener === "function") window.removeEventListener("resize", place);
       if (pop.parentNode) pop.parentNode.removeChild(pop);
     } };
   }
