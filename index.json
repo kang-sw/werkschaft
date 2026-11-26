@@ -483,7 +483,17 @@
       "registered_at": "2026-11-26T08:34:43Z"
     },
     "261127-bug-ws-daemon-swap-child-env-and-detached-misreport": {
-      "registered_at": "2026-11-26T21:03:35Z"
+      "registered_at": "2026-11-26T21:03:35Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-26T21:09:50Z",
+        "impl": {
+          "branch": "impl/develop/fix-daemon-swap-child-env"
+        }
+      }
     }
   }
 }
