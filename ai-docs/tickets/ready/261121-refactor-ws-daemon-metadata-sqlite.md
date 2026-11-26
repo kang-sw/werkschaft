@@ -1426,6 +1426,113 @@ Verification (macOS arm64):
   prune residual and the other same-root downgrade residuals in user-facing
   upgrade guidance under (2125).
 
+### Result (2fac4e31b) - 2026-11-27
+
+Phase 2 landed across seven commits (`645c62d87`..`2fac4e31b`) on
+`impl/develop/tweak-canon-owl` (base `b118102ab`). Ticket stays in `ready/`
+with Phase 3 (Windows heavy-AV baseline/after measurement) remaining.
+
+What landed:
+
+- **SQLite live CRUD and cutover orchestrator (`645c62d87`, `internal/wsmeta`):**
+  added live CRUD APIs for permissions, support mappings/selection, rail
+  layout, workspace memos, labels, guarded answer checks, hiring metadata,
+  latest/delta plan usage history, tracker hook state, and session deletion,
+  plus the `(2125)`/`(2135)`/`(2136)` `Cutover` orchestrator applying all four
+  fences in order (`tracker-hooks.json` removal to `tracker-hooks-v2.json`
+  first, invalid `permission.json` selector on every session including absent,
+  hiring `Enabled=false` preserving `Hired` and `RequestID`, support
+  `closed_at` on parentless non-lead records, and `!cutover-fenced` profile on
+  open non-lead child records) with retry/backoff, `BeforeMarker` fence
+  re-verification, and `ErrCutoverUnsupported` vs `ErrCutoverInterrupted`
+  classification.
+- **Daemon `/meta/*` routing for direct Go callers (`2702dad66`, `internal/mcp`,
+  `internal/wsdashboard`):** added loopback-only, bearer-authenticated
+  `POST /meta/*` routes with `Origin`/`Sec-Fetch-Site` and body-size guards,
+  routed direct Go readers (tracker support admission, playbook terminology,
+  tool aliases, hosted lineage, Pi live rows, whiteboard nudges, unregister
+  checks, and registration pruning) through the daemon, and implemented
+  `(1986)`/`(2121)` daemon-unavailable handling (raw `ws-mcp call` fails fast
+  naming `ws-mcp daemon-start`; `serve --stdio` returns a recoverable
+  unavailable error).
+- **`wsagent` SQLite authority and cursor delta (`ce66e6ef4`, `internal/wsagent`):**
+  switched conversation records (`PatchRecord` deltas against `recordBase`),
+  holder sequence updates (`SetHolderCursor` only for ring-writing final lines
+  and dirty heartbeats, removing whole-record `agent.json` rewrites under
+  `(1992)`), fail-closed permissions, handoff/hire lookup, session deletion,
+  and deferred Support loading (`DeferLoad`, keyed mappings/selection under
+  `(1994)`) onto `wsmeta`.
+- **Dashboard stores and tracker hooks v2 (`3b7892924`, `internal/wsdashboard`,
+  `internal/wstrackerhook`):** wired SQLite-backed store modes for rail layout
+  (in-memory generation + `ImportIssues`), workspace memos, latest plan usage
+  and delta history (`MutateUsageHistory` + `ImportIssues`), labels, guarded
+  answer checks (`ack_check` CAS), hiring (keeping `hire-proposals.json`
+  separate), and `wstrackerhook` (`tracker-hooks-v2.json` reload + nonce-scoped
+  `UpdateTrackerHook`).
+- **Cutover activation and `(2122)` lock/drain barrier (`afa051209`,
+  `internal/wsdashboard`, `internal/wsagent`, `cmd/ws-mcp`):** opened the
+  single shared `wsmeta.Store`, ran `Cutover`, and completed deferred Support
+  loading strictly under `dashboard.lock`; graceful shutdown stops `/meta/*`
+  admission, drains in-flight requests, poll loop, and `BeforeUnlock` hooks,
+  and closes SQLite before removing the endpoint and unlocking.
+  `ErrCutoverUnsupported` stays on legacy; `ErrCutoverInterrupted` refuses
+  startup.
+- **Docs, mirrored resources, and fixture (`11c02cc41`):** updated both
+  `agents-plugin/rsrc/tracker-hooks/tracker-hooks.md` and
+  `agents-plugin-wsflow/rsrc/tracker-hooks/tracker-hooks.md` (with regenerated
+  `rsrc/manifest.json` mirrors) to `tracker-hooks-v2.json`, updated
+  `scripts/rail-headless.mjs` for dashboard/SQLite-backed labels and rail
+  layout, and documented offline SQLite recovery `(1985)` plus `(2125)`/`(2136)`/`(2137)`
+  same-root downgrade residuals (including mixed-version prune) in
+  `ai-docs/manuals/ws-mcp.md` and `ai-docs/manuals/release-compatibility.md`.
+- **Pinned pre-cutover integration suite (`2fac4e31b`,
+  `cmd/ws-mcp/meta_cutover_integration_test.go`):** builds the pinned
+  `b118102ab` binary via `git archive` alongside the current binary and proves
+  interrupted cutover with an intervening old daemon lowering permissions and
+  pruning sessions `(2135)`, fenced old-binary launch/hiring/hooks/all five
+  `(2136)` tracker-write refusals/post-rejoin fenced child/prune retention and
+  re-upgrade reload, zero post-cutover legacy writes and re-upgrade from SQLite
+  alone, direct `ws-mcp call` and `serve --stdio` daemon-unavailable errors
+  `(2121)`, `(2122)` `dashboard.lock` + Support drain barrier and `SIGKILL`
+  hard-kill/rejoin cursor advancement, `(1985)` `schema_version` refusal and
+  offline SQLite recovery, and mixed-version prune reproduction.
+
+Decisions:
+
+- Used separate leaf mutexes `d.hiringMu` and `d.labelMu` (lock order
+  `hireMu -> hiringMu` and `hireMu -> labelMu`) so `approveHireLocked` ->
+  `CreateHireLead` -> `OnHired` -> `RecordHired` cannot deadlock.
+- Kept `pi-probes-v1` import-only in `wsmeta` because no live writer exists in
+  the codebase.
+- Kept excluded/shared contracts outside SQLite (`workspaces.json`,
+  `ui-seen.json`, `workspace-admission.json`, `hire-proposals.json`,
+  `visibility.json`, `registration.json`, holder files, `wslive`, `wsinbox`,
+  `wsmailbox`, `wswhiteboard`, `wscred`).
+
+Verification (macOS arm64):
+
+- `cd agents-plugin-tool && go test -race -count=1 ./internal/wsmeta/... ./internal/wsagent/... ./internal/wstrackerhook/... ./internal/wsrsrc/... ./cmd/ws-mcp/...`:
+  PASS (`wsmeta` 19.57s, `wsagent` 161.91s, `wstrackerhook` 7.18s, `wsrsrc`
+  5.56s, `cmd/ws-mcp` 280.59s; all 6 `TestMetaCutover*` tests PASS under `-race`).
+- `cd agents-plugin-tool && go test -race -count=1 -timeout 25m -skip "TestExecJobsChangedReachesTheRailStream|TestWideExplorerRouting" ./internal/wsdashboard/...`:
+  PASS (922.38s). `TestExecJobsChangedReachesTheRailStream` was skipped per
+  lead guidance; `TestWideExplorerRouting` is a pre-existing failure on base
+  `b118102ab`.
+- `cd agents-plugin-tool && go test -count=1 -timeout 45m ./internal/mcp/...`:
+  PASS (698.81s).
+- `cd agents-plugin-tool && go vet ./... && GOOS=windows go vet ./... && GOOS=windows go build ./...`:
+  PASS.
+- `python3 -m unittest discover -v agents-plugin-wsflow/tests`: PASS (22
+  tests, 2 Windows-only skipped).
+- `scripts/rail-headless.mjs`: `parent-adjacent-up` and `worktree-up` PASS;
+  `.star` scenarios fail identically on base `b118102ab`.
+- Independent `code-review-lite` over `b118102ab..2fac4e31b`: clean (0
+  Critical, 0 Important, 3 Minor remaining — `persistSQLiteHolderSeq` monotonic
+  guard/comment on `recordBase`, `ErrStaleHolder` silent swallow without log in
+  `persistSeq`, and `handleMetaPrune` accepting caller-supplied `retention_ns > 0`
+  below `RegistryRetention` to preserve `PruneRegistrations` caller/test
+  contract).
+
 ### Phase 3: Record the measured result
 
 - Depends on Phase 2. Compare the same actions and dataset on the Windows
