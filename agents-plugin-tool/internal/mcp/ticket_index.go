@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -59,14 +60,21 @@ func (s *Server) openTicketIndex(root string) *wsindex.Client {
 // filled by the submission's Prepare hook, so an index-absent project never
 // gets a clone id written.
 type indexCaller struct {
-	owner  wsindex.Owner
-	branch string // "" on a detached HEAD
+	owner     wsindex.Owner
+	branch    string // "" on a detached HEAD or when symbolic-ref failed
+	branchErr error  // non-nil only for non-exit-1 symbolic-ref failures
 }
 
 func resolveIndexCaller(ctx context.Context, runner wsgit.Runner, root, explicitTrack string) indexCaller {
 	c := indexCaller{owner: wsindex.Owner{Email: wsgit.CurrentUserEmail(ctx, runner, root)}}
-	if out, err := runner.RunGit(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil {
+	out, err := runner.RunGit(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err == nil {
 		c.branch = strings.TrimSpace(string(out))
+	} else {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+			c.branchErr = err
+		}
 	}
 	if track := strings.TrimSpace(explicitTrack); track != "" {
 		c.owner.Track = track
@@ -89,6 +97,9 @@ func (c indexCaller) implBranch() string {
 
 // acquireTrackError refuses an acquire whose track cannot be resolved.
 func (c indexCaller) acquireTrackError(explicitTrack string) error {
+	if c.branchErr != nil {
+		return fmt.Errorf("tickets.acquire: resolve current branch: %w", c.branchErr)
+	}
 	if c.branch == "" {
 		return fmt.Errorf("tickets.acquire: HEAD is detached; acquire from a branch (the lease records the branch's work line as its track)")
 	}

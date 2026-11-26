@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 )
 
@@ -77,7 +78,10 @@ func (c Client) Commit(ctx context.Context, root string, opts CommitOptions) (Co
 	// expected_branch field — a commit that lands on the wrong branch because a
 	// parallel session switched the shared worktree is silent and hard to undo,
 	// so it must be caught before the commit, not after.
-	actualBranch := currentBranch(ctx, runner, root)
+	actualBranch, err := currentBranch(ctx, runner, root)
+	if err != nil {
+		return CommitResult{}, fmt.Errorf("git.commit: resolve current branch: %w", err)
+	}
 	if actualBranch == "" {
 		return CommitResult{}, fmt.Errorf("git.commit refused: HEAD is detached, so there is no current branch to confirm against believed branch %q; a commit under a detached HEAD in a shared worktree is exactly the state this guard exists to stop — verify whether you should be committing here", opts.ExpectedBranch)
 	}
@@ -190,15 +194,19 @@ func (c Client) Commit(ctx context.Context, root string, opts CommitOptions) (Co
 
 // currentBranch resolves the short name of the branch HEAD points at, mirroring
 // git.merge's resolution (`git symbolic-ref --quiet --short HEAD`). --quiet makes
-// a detached HEAD exit non-zero with empty output rather than an error message,
-// so any resolution failure is reported as an empty name: the caller then
-// refuses (fail-closed) instead of committing unguarded.
-func currentBranch(ctx context.Context, runner Runner, root string) string {
+// a detached HEAD exit with status 1 and empty output, which returns "", nil;
+// any other execution error is returned directly so callers do not misreport
+// git binary or runtime failures as a detached HEAD.
+func currentBranch(ctx context.Context, runner Runner, root string) (string, error) {
 	out, err := runner.RunGit(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD")
 	if err != nil {
-		return ""
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return "", nil
+		}
+		return "", err
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(string(out)), nil
 }
 
 // implBranchParent returns the parent (merge root) segment of an

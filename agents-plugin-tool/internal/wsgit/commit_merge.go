@@ -172,7 +172,11 @@ func readCommitMergePins(ctx context.Context, runner Runner, root string) (*comm
 }
 
 func (pins *commitMergePins) recheck(ctx context.Context, runner Runner, root, branch string) error {
-	if currentBranch(ctx, runner, root) != branch {
+	actualBranch, err := currentBranch(ctx, runner, root)
+	if err != nil {
+		return fmt.Errorf("git.commit refused: branch changed during merge admission: %w", err)
+	}
+	if actualBranch != branch {
 		return fmt.Errorf("git.commit refused: branch changed during merge admission; verify whether you should be committing here")
 	}
 	raw, err := os.ReadFile(pins.mergeFile)

@@ -342,7 +342,11 @@ type conv struct {
 	// this daemon does not serve; it restarts at the first idle point.
 	mcpStale bool
 	// Backend-filtered hello environment captured at attach, before token restore.
-	workerMCPEnv   []string
+	workerMCPEnv []string
+	// workerRejoined marks that checkReattach already ran the once-per-attached-process
+	// worker rejoin setup (restoreToken, restoreWorkerMCP, events wiring, allowHolderReplay)
+	// so a Holders.Status retry only re-issues Status without voiding the restored MCP token.
+	workerRejoined bool
 	workerRetiring bool // validated downgrade retirement retries before replay
 	// crossHarnessRejoin is a held worker admitWorkerRecord refuses (a
 	// cross-harness worker) that reattach attached for the ownership match only. checkReattach ends a matching

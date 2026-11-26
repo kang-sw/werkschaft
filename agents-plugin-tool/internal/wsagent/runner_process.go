@@ -148,6 +148,7 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 	}
 	defer releaseAdmission()
 	c.mcpStale = false
+	c.clearWorkerRejoin()
 	// A cross-harness rejoin attaches only to match ownership and end the
 	// holder: no compaction, agy watchdog, or permission config is read.
 	refused := attach && c.crossHarnessRejoin
@@ -326,6 +327,7 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 	}
 	proc, err := c.startBackend(spec)
 	if err != nil {
+		c.clearWorkerRejoin()
 		c.r.revokeToken(rec.ReplyID)
 		return err
 	}
