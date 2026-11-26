@@ -798,7 +798,7 @@ var wsSettingsChoiceLabels = {
 
   function renderRow(entry, spec) {
     var canEdit = editable(entry, spec);
-    var row = el("article", "srow krow" + rowClass(entry, canEdit));
+    var row = el("article", "srow krow" + (spec.control === "textarea" ? " srow-multiline" : "") + rowClass(entry, canEdit));
     row.dataset.configKey = entry.key;
     var ctlWrap = el("div", "kctl-wrap");
     var form = el("form", "kctl");
