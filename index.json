@@ -473,19 +473,6 @@
     "261126-feat-ws-chat-stream-interactive-question-cards": {
       "registered_at": "2026-11-26T08:39:11Z"
     },
-    "261126-feat-ws-composer-full-spec-markdown": {
-      "registered_at": "2026-11-26T08:38:49Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-26T12:41:52Z",
-        "impl": {
-          "branch": "impl/develop/silly-sleet-muck"
-        }
-      }
-    },
     "261126-feat-ws-lead-mockup-and-multifile-panel": {
       "registered_at": "2026-11-26T07:19:03Z",
       "lease": {
