@@ -302,12 +302,17 @@ func (r *Runner) AgentInterrupt(caller AgentCaller, address string) (AgentInterr
 // awake idle process, or a holder whose process may still run); acquisition
 // keeps a worktree busy while a pre-release conversation is live. Both
 // fields are additive: an older reader ignores them and counts every child.
+// Holder and PID name the session holder and the harness process the
+// runner knows the conversation by, when it knows them (occupant
+// diagnostics, e.g. worktree.remove's refusal); additive like the rest.
 type BoundWorktreeChild struct {
 	Address            string `json:"address"`
 	State              string `json:"state"`
 	Cwd                string `json:"cwd,omitempty"`
 	BoundBeforeRelease bool   `json:"bound_before_release,omitempty"`
 	Live               bool   `json:"live,omitempty"`
+	Holder             string `json:"holder,omitempty"`
+	PID                int    `json:"pid,omitempty"`
 }
 
 type retiredPiBinding struct {
@@ -324,7 +329,7 @@ func (r *Runner) rememberRetiredPiBinding(rec Record) {
 	r.retiredPiBindings[rec.HolderID] = retiredPiBinding{
 		root: root, cwd: cwd, createdAt: rec.CreatedAt,
 		// Occupancy describes the process. The historical record stays ended.
-		child: BoundWorktreeChild{Address: AgentAddress(rec.ReplyID), State: AgentRunning, Cwd: rec.Cwd, Live: true},
+		child: BoundWorktreeChild{Address: AgentAddress(rec.ReplyID), State: AgentRunning, Cwd: rec.Cwd, Live: true, Holder: rec.HolderID, PID: rec.HostPID},
 	}
 	r.mu.Unlock()
 }
@@ -358,7 +363,7 @@ func (r *Runner) boundRetiredPiHolders(target string) (matches []retiredPiBindin
 		r.retiredPiBindings[info.ID] = retiredPiBinding{
 			cwd:       canonicalWorktreePath(meta.Cwd),
 			createdAt: time.UnixMilli(info.StartedAt).UTC().Format(time.RFC3339),
-			child:     BoundWorktreeChild{Address: AgentAddress(meta.ReplyID), State: AgentRunning, Cwd: meta.Cwd, Live: true},
+			child:     BoundWorktreeChild{Address: AgentAddress(meta.ReplyID), State: AgentRunning, Cwd: meta.Cwd, Live: true, Holder: info.ID},
 		}
 	}
 	for id, binding := range r.retiredPiBindings {
@@ -428,6 +433,8 @@ func (r *Runner) ActiveChildrenInWorktree(worktree string) []BoundWorktreeChild 
 				Cwd:                st.Cwd,
 				BoundBeforeRelease: before,
 				Live:               live,
+				Holder:             rec.HolderID,
+				PID:                rec.HostPID,
 			},
 		})
 	}

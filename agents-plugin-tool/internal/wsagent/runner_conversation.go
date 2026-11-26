@@ -126,7 +126,7 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 		binding = r.resolveAgentBinding(rec)
 	}
 	c.canonRoot, c.canonCwd = binding.root, binding.cwd
-	c.checkouts, c.releasedCheckout = binding.checkouts, binding.released
+	c.checkouts, c.releasedCheckout = binding.checkouts, binding.ended()
 	// Derived from the record's immutable backend on every load, with no
 	// stored field, and before any profile or config read.
 	refusal := r.admitWorkerRecord(rec)

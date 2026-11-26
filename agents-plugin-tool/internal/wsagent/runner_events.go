@@ -1043,15 +1043,25 @@ func (c *conv) stopProcess(reason string) {
 	}
 }
 
-// letGo is the daemon's shutdown: a lead's process runs on under its
-// holder, with the sequence applied so far in the record for the next
-// daemon's rejoin; any other process ends.
+// letGo is the daemon's shutdown: a held process (a lead's, or a spawned
+// worker's still at work) runs on under its holder, with the sequence
+// applied so far in the record for the next daemon's rejoin; any other
+// process ends. A finished-idle spawned child (finishedIdleChild) is put to
+// sleep instead: its holder and child end, so no idle worker outlives the
+// daemon holding its working directory, and the next daemon neither
+// restarts it nor sends it a standalone restore turn. A later wake gets the
+// restore bundle with its input. The check runs here, after finishLine and
+// persistSeq, where the turn state is the loop's own.
 func (c *conv) letGo() {
 	c.quitting = true
 	c.drainCompaction()
 	c.finishLine()
 	c.persistSeq()
 	if hp, ok := c.proc.(holderProcess); ok {
+		if _, _, held := hp.HolderInfo(); held && !c.r.opts.detachFinishedAtShutdown && c.finishedIdleChild() && c.sleepAtShutdown(hp) {
+			c.flushRecord()
+			return
+		}
 		if hp.Detach() {
 			c.flushRecord()
 			return // loop's closeSlot flushes the snapshot before dropping RAM
@@ -1059,6 +1069,75 @@ func (c *conv) letGo() {
 	}
 	c.stopProcess("")
 	c.flushRecord()
+}
+
+// finishedIdleChild reports a spawned non-lead conversation whose held
+// process merely waits for its idle stop: no turn or wrap hold, replay,
+// background task, compaction or its continuation, quota continuation,
+// model-wait backoff, approval, live exec job, awake child, held retirement,
+// and no input, mail, report, held turn or inbox message waiting for it. Such
+// a process is put to sleep across a daemon restart rather than kept alive
+// or restarted. It runs in the loop.
+func (c *conv) finishedIdleChild() bool {
+	if c.rec.Lead || c.rec.Parent == nil || c.closed || c.proc == nil {
+		return false
+	}
+	if c.wrapHold || c.retiringHolder() || c.crossHarnessRejoin || len(c.approvals) != 0 || !c.idleNow() {
+		return false
+	}
+	if c.compactPending != nil || c.compactResume || c.compactStage1Active || c.hasQuotaContinuation() || c.modelWaitBackoffC != nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	rec := c.rec
+	if rec.TurnOpen || rec.HeldTurn != nil || len(rec.Queued) != 0 || len(rec.Mail) != 0 || len(rec.Reports) != 0 {
+		return false
+	}
+	return c.held == 0 && !c.keepsAwakeLocked()
+}
+
+// sleepFinishedChild stops a finishedIdleChild's process the way its idle
+// timer would: stopProcess ends the holder and its child and forgets the
+// holder in the record, leaving a wakeable sleeping conversation. A
+// restore marker it holds stays in memory, so a wake prepends the bundle
+// to its input (compactInput) instead of a standalone restore turn.
+func (c *conv) sleepFinishedChild(why string) {
+	fmt.Fprintf(c.r.opts.Log, "agent %s: finished child sleeps (%s)\n", c.rec.ReplyID, why)
+	c.stopProcess("")
+	c.live.writeSnapshot()
+	c.r.notify(c.rec.ReplyID, c.rec.Root)
+}
+
+// sleepAtShutdown is sleepFinishedChild for the daemon's shutdown (letGo),
+// where waiting out each child's exit would spend the successor's lock
+// budget (and the holder manager serializes its waiting stops): the stream
+// is detached, the holder is asked to stop (it ends its child itself, by
+// TERM and then KILL), and the record forgets the holder, its credentials
+// and its handed-off fence, leaving a sleeping conversation for the next
+// daemon. A refused stop request keeps the plain detach: the record still
+// names the holder, so the next daemon rejoins it and puts it to sleep
+// after replay (replayDone). It reports whether the process was let go.
+func (c *conv) sleepAtShutdown(hp holderProcess) bool {
+	id := c.rec.HolderID
+	if id == "" || !hp.Detach() {
+		return false
+	}
+	c.events = nil
+	if err := c.r.requestHolderStop(id); err != nil {
+		fmt.Fprintf(c.r.opts.Log, "agent %s: finished child left to its holder %s: %v\n", c.rec.ReplyID, id, err)
+		return true
+	}
+	fmt.Fprintf(c.r.opts.Log, "agent %s: finished child sleeps (daemon shutdown)\n", c.rec.ReplyID)
+	c.setStatus(func() { c.proc = nil })
+	c.seqDirty, c.live.ringDirty = false, false
+	c.update(func(rec *Record) {
+		rec.HolderID, rec.HostPID, rec.HolderSeq = "", 0, 0
+		rec.HandedOffAt = ""
+	})
+	c.processEnded()
+	c.writeRegistration()
+	return true
 }
 
 // finishLine applies the rest of a holder line the loop stands in the

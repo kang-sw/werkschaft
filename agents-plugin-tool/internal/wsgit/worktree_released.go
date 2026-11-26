@@ -145,6 +145,32 @@ func BoundBeforeRelease(createdAt string, createdUnixNano int64, releasedAt time
 	return created.Truncate(time.Second).Before(releasedAt.Truncate(time.Second))
 }
 
+// CheckoutRegistrationGone reports whether checkout, a directory that held a
+// .git entry when a conversation bound to it, no longer exists as a checkout:
+// the directory or its .git entry is gone, or its gitfile names an admin
+// directory that no longer exists (a linked worktree Git unregistered). It
+// starts no Git. An error other than absence (a permission refusal, say)
+// reads as present, so only positive evidence of removal counts.
+func CheckoutRegistrationGone(checkout string) bool {
+	checkout = strings.TrimSpace(checkout)
+	if checkout == "" {
+		return false
+	}
+	info, err := os.Lstat(filepath.Join(checkout, ".git"))
+	if err != nil {
+		return errors.Is(err, os.ErrNotExist)
+	}
+	if info.IsDir() {
+		return false
+	}
+	dir := worktreeAdminDirNoSpawn(checkout)
+	if dir == "" {
+		return false
+	}
+	_, err = os.Stat(dir)
+	return errors.Is(err, os.ErrNotExist)
+}
+
 // ContainingCheckouts lists every checkout at or above path, nearest first:
 // each directory holding a .git entry, found without starting Git. It is the
 // durable side of live occupancy's containment rule (a conversation is bound

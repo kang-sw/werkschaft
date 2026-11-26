@@ -1930,7 +1930,7 @@ func (c *conv) kickInput() {
 		// Its checkout's release ended the binding: a live process that
 		// outlived it takes no new turn. The release notice handles its
 		// cancellation. A processless binding can be closed here too.
-		refused := checkoutReleasedRefusal(released)
+		refused := deadCheckoutRefusal(released)
 		c.refuseStart(refused)
 		if c.proc == nil && !c.replaying {
 			c.closeDeadAfterRefusal(refused)

@@ -244,6 +244,16 @@ func (c *conv) replayDone(lost bool) {
 	c.r.notify(c.rec.ReplyID, c.rec.Root)
 	// A message steered during the rejoin goes to the turn that still runs.
 	c.steer()
+	// A spawned child the replay shows finished and idle (one the last
+	// daemon did not put to sleep, as after a crash, or whose turn ended
+	// while no daemon ran) sleeps now, holder and child ended, rather than
+	// restarting for a stale ws-mcp route or taking a standalone restore
+	// turn: a later wake prepends the restore bundle to its input. Only
+	// after the replay can the record show a turn that ended meanwhile.
+	if c.finishedIdleChild() {
+		c.sleepFinishedChild("rejoined after its turn ended")
+		return
+	}
 	// A process whose ws-mcp route this daemon does not serve restarts
 	// before it takes input; any other restart waits for its usual idle
 	// point, as before a rejoin. A failed restart leaves no process: what

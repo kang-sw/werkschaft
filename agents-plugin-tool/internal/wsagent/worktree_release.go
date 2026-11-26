@@ -6,6 +6,7 @@ package wsagent
 import (
 	"errors"
 	"fmt"
+	"os"
 	"runtime"
 	"slices"
 	"strings"
@@ -160,7 +161,10 @@ func (r *Runner) releasedBy(rec Record, checkouts []string, of func(string) chec
 
 type resolvedAgentBinding struct {
 	root, cwd, released string
-	checkouts           []string
+	// gone is the binding path that no longer exists (goneBinding), when
+	// no release ended the binding first.
+	gone      string
+	checkouts []string
 }
 
 // resolveAgentBinding loads the paths and release evidence once per lifetime.
@@ -168,7 +172,72 @@ type resolvedAgentBinding struct {
 func (r *Runner) resolveAgentBinding(rec Record) resolvedAgentBinding {
 	root, cwd := canonicalBinding(rec)
 	checkouts := resolveCheckouts(rec, root, cwd)
-	return resolvedAgentBinding{root: root, cwd: cwd, checkouts: checkouts, released: r.releasedOnDisk(rec, checkouts)}
+	binding := resolvedAgentBinding{root: root, cwd: cwd, checkouts: checkouts, released: r.releasedOnDisk(rec, checkouts)}
+	if binding.released == "" {
+		binding.gone = goneBinding(rec, cwd, checkouts)
+	}
+	return binding
+}
+
+// ended is the checkout whose release or removal ended the binding: the
+// released one first, else the gone one; "" when neither.
+func (b resolvedAgentBinding) ended() string {
+	if b.released != "" {
+		return b.released
+	}
+	return b.gone
+}
+
+// goneBinding is the first path of a release-bound conversation's binding
+// that no longer exists: its effective working directory cwd, or one of its
+// checkouts whose directory, .git entry, or registered admin directory is
+// gone (wsgit.CheckoutRegistrationGone). A checkout removed after a release
+// can take its release marker with it (the marker lives in the admin
+// directory), so this is the cold paths' evidence that a binding must not
+// launch there again. "" when every path still exists or rec is not
+// release-bound. It costs an Lstat per path and a gitfile read per checkout.
+//
+// A checkout emptied in place, with its .git entry deleted but its
+// directory kept (a removal a process's working directory blocked on
+// Windows), leaves no checkout above cwd to compare: it is not detected
+// here; the persisted release closure and the finished-child sleep keep
+// such a conversation from launching there.
+func goneBinding(rec Record, cwd string, checkouts []string) string {
+	if !releaseBound(rec) {
+		return ""
+	}
+	if cwd != "" {
+		if _, err := os.Lstat(cwd); errors.Is(err, os.ErrNotExist) {
+			return cwd
+		}
+	}
+	for _, checkout := range checkouts {
+		if wsgit.CheckoutRegistrationGone(checkout) {
+			return checkout
+		}
+	}
+	return ""
+}
+
+// deadCheckoutRefusal is the refusal of a binding checkout ended: removed
+// (checkoutGoneRefusal) when it no longer exists as a checkout, else
+// released (checkoutReleasedRefusal).
+func deadCheckoutRefusal(checkout string) *admissionRefusal {
+	if _, err := os.Lstat(checkout); errors.Is(err, os.ErrNotExist) || wsgit.CheckoutRegistrationGone(checkout) {
+		return checkoutGoneRefusal(checkout)
+	}
+	return checkoutReleasedRefusal(checkout)
+}
+
+// checkoutGoneRefusal is the start refusal of a conversation whose working
+// directory or checkout no longer exists: the checkout was removed (or
+// unregistered) after the conversation was bound there. Like a release, it
+// ends the binding for good.
+func checkoutGoneRefusal(path string) *admissionRefusal {
+	return &admissionRefusal{
+		reason:   fmt.Sprintf("its worktree %s no longer exists as a checkout (removed or unregistered after it was bound there), so it no longer launches, wakes or resumes there. Spawn a new agent (into a re-acquired worktree if needed) to continue", path),
+		checkout: path,
+	}
 }
 
 // checkoutReleasedRefusal is the start refusal of a conversation whose
@@ -262,7 +331,8 @@ func releasedInput(err error) (string, bool) {
 }
 
 // dropReleasedInput logs an automatic input a release refused; the process
-// is left running, as a release never stops it.
+// is not stopped here: the release's own close (closeDeadBinding) ends a
+// held one.
 func (c *conv) dropReleasedInput(what, checkout string) {
 	fmt.Fprintf(c.r.opts.Log, "agent %s: no %s: its worktree %s was released\n", c.rec.ReplyID, what, checkout)
 }
@@ -270,8 +340,9 @@ func (c *conv) dropReleasedInput(what, checkout string) {
 // ReleasedConversation is one spawned conversation whose binding a release
 // ended (Runner.CheckoutReleased): its address and state, and, for a forced
 // release, whether its running turn was asked to stop and the backend's
-// interrupt error when that failed. A failed interrupt leaves the process
-// running; the release never stops it.
+// interrupt error when that failed. The close that follows ends a process
+// held under a session holder whether or not the interrupt succeeded
+// (closeDeadBinding).
 type ReleasedConversation struct {
 	Address   string `json:"address"`
 	State     string `json:"state"`
@@ -283,11 +354,11 @@ type ReleasedConversation struct {
 // release marker at releasedAt (zero: read the marker, for a notice that does
 // not carry it). The runner keeps that release in memory, and every
 // non-closed spawned conversation bound to worktree before it is closed,
-// so it takes no further input there even while its process lives. With
-// cancelTurns (a forced release by a root lead) each such
-// conversation's running turn is interrupted through the turn-cancellation
-// path; an interrupt error is reported, never answered by stopping the
-// process.
+// so it takes no further input there; a process it holds under a session
+// holder is ended with the close, so none keeps its working directory in
+// the released checkout. With cancelTurns (a forced release by a root lead)
+// each such conversation's running turn is interrupted through the
+// turn-cancellation path first; an interrupt error is reported.
 func (r *Runner) CheckoutReleased(worktree string, releasedAt time.Time, cancelTurns bool) []ReleasedConversation {
 	target := canonicalWorktreePath(worktree)
 	if target == "" {

@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -16,7 +17,7 @@ import (
 // and the immutable agy spawner rule cannot be repaired by a later wake.
 func (r *Runner) deadBindingRefusal(rec Record, checkout string) *admissionRefusal {
 	if checkout != "" {
-		return checkoutReleasedRefusal(checkout)
+		return deadCheckoutRefusal(checkout)
 	}
 	// Record admission only checks the immutable, registered spawner rule.
 	// Retryable permission and profile admission happen separately.
@@ -62,23 +63,52 @@ func (c *conv) closeDeadAfterRefusal(refusal *admissionRefusal) {
 	}
 }
 
-// closeDeadBinding closes the record in the loop without ending its process
-// or its owned jobs. A release caller does its existing turn cancellation
-// before this step. wmu excludes sends until the closed record is installed.
+// closeDeadBinding closes the record in the loop and ends a process held
+// under a session holder (holder and child), so no idle process keeps its
+// working directory inside the ended checkout. A release caller does its
+// existing turn cancellation before this step. wmu excludes sends until the
+// closed record is installed in memory.
+//
+// Order: the closed record is installed in memory first (sends refused,
+// occupancy still lists the holder as live through rec.HolderID), then the
+// holder is stopped (the stream's Close: input EOF, closeGrace, then the
+// holder's terminate-and-kill), and only then is the closure persisted
+// through persistAgentRecord, with the holder forgotten. The disk record no
+// longer stays open to keep a predecessor daemon's orphan sweep protecting
+// the holder: the holder is gone before the record closes, and a later
+// removal of the checkout's admin directory (which takes the release marker
+// with it) cannot reopen the conversation at the next start. A holder whose
+// stop fails stays in the persisted closure and in the dead-binding
+// occupancy, fenced from this daemon's orphan sweep; the next start's
+// complete holder inventory stops it (finalizeDeadHolders).
+//
+// A conversation with no holder process persists before anything changes in
+// memory, so a failed write leaves it open, as before. A direct (legacy
+// daemon-child) process is left to finish its event stream normally.
 func (c *conv) closeDeadBinding(refusal *admissionRefusal) error {
 	c.wmu.Lock()
 	rec := c.record()
 	closeDeadRecord(&rec, c.r.opts.Now(), refusal)
-	if rec.HolderID == "" {
+	// The refusal is known before the record closes in memory, so mail
+	// claimed while the holder stops is answered with it.
+	c.r.mu.Lock()
+	c.r.rememberDeadRefusalLocked(rec.ReplyID, refusal)
+	c.r.mu.Unlock()
+	c.mu.Lock()
+	hp, _ := c.proc.(holderProcess)
+	c.mu.Unlock()
+	// A direct stream has the holderProcess methods too; only one under a
+	// session holder reports one.
+	held := false
+	if hp != nil {
+		_, _, held = hp.HolderInfo()
+	}
+	if !held && rec.HolderID == "" {
 		if err := c.r.persistAgentRecord(c.dir, rec); err != nil {
 			c.wmu.Unlock()
 			return fmt.Errorf("close dead binding: %w", err)
 		}
 	}
-	// A predecessor daemon's orphan sweep protects open records only. Keep
-	// the old disk record while it can still protect the holder. Startup can
-	// re-derive the close until checkout deletion removes the release marker.
-	c.r.rememberDeadBinding(rec, c.canonRoot, c.canonCwd, refusal, c.proc != nil)
 	c.mu.Lock()
 	proc, events, turn := c.proc, c.events, c.turn
 	c.rec, c.closed, c.lastErr = rec, true, refusal.Error()
@@ -91,13 +121,30 @@ func (c *conv) closeDeadBinding(refusal *admissionRefusal) error {
 	if turn {
 		c.live.apply(wslive.Event{Kind: wslive.KindTurnEnd})
 	}
-	if hp, ok := proc.(holderProcess); ok && hp.Detach() {
-		// The holder owns the process and keeps its output.
-	} else if events != nil {
+	persisted := !held && rec.HolderID == ""
+	switch {
+	case held:
+		rec, persisted = c.stopDeadHolder(proc, hp, rec)
+	case rec.HolderID != "":
+		// A holder the record names with no attached stream: end it through
+		// the manager, then persist the closure. One that cannot be ended
+		// stays in the closure, fenced, for the next start's inventory.
+		rec = c.stopUnattachedDeadHolder(rec)
+		if err := c.r.persistAgentRecord(c.dir, rec); err != nil {
+			fmt.Fprintf(c.r.opts.Log, "agent %s: close dead binding: %v\n", rec.ReplyID, err)
+		} else {
+			persisted = true
+		}
+	case events != nil:
 		// A direct process can still publish events even after the runner
 		// closes its conversation. Let its event producer finish normally.
 		go c.drainClosedProcess(events)
 	}
+	c.r.rememberDeadBinding(rec, c.canonRoot, c.canonCwd, refusal, rec.HolderID != "" || (!held && events != nil))
+	if persisted && rec.HolderID != "" {
+		c.r.markDeadClosurePersisted(rec.ReplyID)
+	}
+	// The idle timer of a closed conversation has nothing left to stop.
 	c.stopIdle()
 	c.r.revokeToken(rec.ReplyID)
 	c.tellHeldSenders(refusal.checkout, refusal.Error())
@@ -127,6 +174,69 @@ func (c *conv) closeDeadBinding(refusal *admissionRefusal) error {
 	c.r.mu.Unlock()
 	c.watched()
 	return nil
+}
+
+// stopDeadHolder ends a closed dead binding's held process: the stream's
+// Close closes the child's input, waits closeGrace, then has the holder
+// terminate and finally kill the child, so it is bounded. A holder that
+// ended is forgotten in the record (and in memory); one whose stop failed
+// is kept. Either way the closure is then persisted. It returns the record
+// as written and whether the write succeeded.
+func (c *conv) stopDeadHolder(proc Process, hp holderProcess, rec Record) (Record, bool) {
+	_ = proc.Close()
+	if err := hp.StopError(); err != nil {
+		fmt.Fprintf(c.r.opts.Log, "agent %s: end released holder %s: %v\n", rec.ReplyID, rec.HolderID, err)
+	} else {
+		rec = c.forgetDeadHolder(rec)
+	}
+	if err := c.r.persistAgentRecord(c.dir, rec); err != nil {
+		fmt.Fprintf(c.r.opts.Log, "agent %s: close dead binding: %v\n", rec.ReplyID, err)
+		return rec, false
+	}
+	return rec, true
+}
+
+// stopUnattachedDeadHolder ends the holder a closed dead binding's record
+// names when no stream of it is attached. Before this daemon's first
+// complete holder scan an unknown holder is no proof that it is gone, so it
+// is kept.
+func (c *conv) stopUnattachedDeadHolder(rec Record) Record {
+	hosts := c.r.opts.Holders
+	if hosts == nil {
+		return rec
+	}
+	err := hosts.Stop(rec.HolderID)
+	gone := errors.Is(err, wsholder.ErrUnknownHolder) && !errors.Is(err, wsholder.ErrUnknownHolderIncomplete) && c.r.scanDone()
+	if err != nil && !gone {
+		fmt.Fprintf(c.r.opts.Log, "agent %s: end released holder %s: %v\n", rec.ReplyID, rec.HolderID, err)
+		return rec
+	}
+	return c.forgetDeadHolder(rec)
+}
+
+// forgetDeadHolder clears an ended holder from a closed record and from the
+// conversation's copy, as releaseHolder does for a stopped process.
+func (c *conv) forgetDeadHolder(rec Record) Record {
+	forget := func(rec *Record) {
+		rec.HolderID, rec.HostPID, rec.HolderSeq = "", 0, 0
+		if !rec.Lead {
+			rec.HandedOffAt = ""
+		}
+	}
+	forget(&rec)
+	c.setStatus(func() { forget(&c.rec) })
+	return rec
+}
+
+// markDeadClosurePersisted notes that a holder-retaining dead binding's
+// closure is on disk, so persistRetainedReleaseClosures need not write it.
+func (r *Runner) markDeadClosurePersisted(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if binding, ok := r.deadBindings[id]; ok {
+		binding.closurePersisted = true
+		r.deadBindings[id] = binding
+	}
 }
 
 func (c *conv) drainClosedProcess(events <-chan Event) {
@@ -263,6 +373,7 @@ func (r *Runner) boundDeadProcesses(target string, release checkoutRelease) []re
 			release.ok && wsgit.BoundBeforeRelease(rec.CreatedAt, rec.CreatedUnixNano, release.at))
 		out = append(out, retiredPiBinding{createdAt: rec.CreatedAt, child: BoundWorktreeChild{
 			Address: AgentAddress(id), State: AgentClosed, Cwd: rec.Cwd, BoundBeforeRelease: before, Live: true,
+			Holder: rec.HolderID, PID: rec.HostPID,
 		}})
 	}
 	return out
@@ -363,8 +474,8 @@ func (r *Runner) persistRetainedReleaseClosures(worktree string, ended map[strin
 	return nil
 }
 
-// finalizeDeadHolders runs on a complete startup inventory. An attached or
-// incomplete inventory leaves the predecessor's open record recoverable.
+// deadHolderRecords lists the dead bindings whose record still names a
+// holder, for finalizeDeadHolders.
 func (r *Runner) deadHolderRecords() []Record {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -377,6 +488,13 @@ func (r *Runner) deadHolderRecords() []Record {
 	return records
 }
 
+// finalizeDeadHolders runs on a complete startup inventory. An attached or
+// incomplete inventory leaves the predecessor's open record recoverable.
+//
+// A holder still present is ended first: its conversation is closed, so the
+// holder and child only keep a working directory inside an ended checkout
+// (an older daemon's release detached them and never stopped them). One
+// whose stop fails stays fenced in the closure for the next start.
 func (r *Runner) finalizeDeadHolders(records []Record, listed []wsholder.Info) {
 	r.deadClosureMu.Lock()
 	defer r.deadClosureMu.Unlock()
@@ -386,7 +504,11 @@ func (r *Runner) finalizeDeadHolders(records []Record, listed []wsholder.Info) {
 	}
 	for _, rec := range records {
 		if present[rec.HolderID] {
-			continue
+			if err := r.opts.Holders.Stop(rec.HolderID); err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
+				fmt.Fprintf(r.opts.Log, "agent %s: end closed conversation's holder %s: %v\n", rec.ReplyID, rec.HolderID, err)
+				continue
+			}
+			fmt.Fprintf(r.opts.Log, "agent %s: ended closed conversation's holder %s\n", rec.ReplyID, rec.HolderID)
 		}
 		rec.HolderID, rec.HostPID, rec.HolderSeq = "", 0, 0
 		if err := r.persistAgentRecord(wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID), rec); err != nil {
