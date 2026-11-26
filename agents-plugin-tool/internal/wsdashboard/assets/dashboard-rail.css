@@ -20,7 +20,7 @@
   .dwrap:not(.narrow) { max-width: none; }
   .dbody { --rail-stage-gap: 8px; display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 0 var(--rail-stage-gap); align-items: start; }
   .dlanding { --dl-r: var(--dl-x); margin-left: calc(0px - var(--rail-stage-gap)); }
-  .dash.live .dbody, .dash.history .dbody { flex: 1 1 0; min-height: 0; align-items: stretch; }
+  .dash.live .dbody, .dash.history .dbody { flex: 1 1 0; min-height: 0; grid-template-rows: minmax(0, 1fr); align-items: stretch; }
   .dash.live .dbody > .dgrid.live, .dash.history .dbody > .dgrid.history { min-height: 0; }
   body.tk-paged .dbody { flex: 1 1 0; min-height: 0; align-items: stretch; }
   .dbody > .tk-spage { grid-column: 2; grid-row: 1; }

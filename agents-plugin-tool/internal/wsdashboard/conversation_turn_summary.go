@@ -29,6 +29,7 @@ type TurnSummaryView struct {
 	Replies    string
 	Calls      int
 	Failed     int
+	MailCount  int
 	DurationMs int64
 	// StartMs is the running turn's start (live header only); the page ticks
 	// elapsed time from it instead of showing summed tool time.
@@ -46,13 +47,14 @@ type TurnSummaryView struct {
 	Plain bool
 }
 
-// TurnGapItem is one RingTools or live ToolGap slice rendered inside
-// [data-conv-turn-drawer] in chronological order.
+// TurnGapItem is one RingTools, live ToolGap, or folded mail/wake slice
+// rendered inside [data-conv-turn-drawer] in chronological order.
 type TurnGapItem struct {
 	EntryKey string
 	At       int64
 	AtRFC    string
 	Tools    *wslive.ToolSummary
+	Mail     *ConvEntry
 	Live     bool
 }
 
@@ -83,6 +85,15 @@ func NewFoldedPlainTurnSummary(key, entryKey string, turn wslive.RingEntry, at i
 	return v
 }
 
+// MailCountText returns the localized folded mail count label when mails are
+// folded into the turn summary.
+func (v *TurnSummaryView) MailCountText() string {
+	if v == nil || v.MailCount <= 0 {
+		return ""
+	}
+	return wsi18n.Plural(v.Lang, "conv.turn.mails", v.MailCount)
+}
+
 // CountText returns the primary count label (or CustomLabel when set).
 func (v *TurnSummaryView) CountText() string {
 	if v == nil {
@@ -93,6 +104,9 @@ func (v *TurnSummaryView) CountText() string {
 	}
 	if v.CustomLabel != "" {
 		return v.CustomLabel
+	}
+	if v.Calls == 0 && v.MailCount > 0 {
+		return v.MailCountText()
 	}
 	return wsi18n.Plural(v.Lang, "conv.turn.tools", v.Calls)
 }
@@ -155,6 +169,8 @@ func (v *TurnSummaryView) CacheFingerprint() string {
 	b.WriteByte('|')
 	b.WriteString(strconv.Itoa(v.Failed))
 	b.WriteByte('|')
+	b.WriteString(strconv.Itoa(v.MailCount))
+	b.WriteByte('|')
 	b.WriteString(strconv.FormatInt(v.DurationMs, 10))
 	b.WriteByte('|')
 	b.WriteString(strconv.FormatInt(v.AddedTokens, 10))
@@ -181,6 +197,29 @@ func (v *TurnSummaryView) CacheFingerprint() string {
 			b.WriteByte('/')
 			b.WriteString(strconv.FormatInt(g.Tools.DurationMs, 10))
 		}
+		if g.Mail != nil {
+			m := g.Mail
+			b.WriteString(":m:")
+			b.WriteString(string(m.Kind))
+			b.WriteByte('/')
+			b.WriteString(string(m.Direction))
+			b.WriteByte('/')
+			b.WriteString(strconv.FormatBool(m.HasBody))
+			b.WriteByte('/')
+			b.WriteString(strconv.FormatBool(m.PeerLinked))
+			b.WriteByte('/')
+			b.WriteString(m.PeerReplyID)
+			b.WriteByte('/')
+			b.WriteString(m.PeerLabel)
+			b.WriteByte('/')
+			b.WriteString(strconv.FormatBool(m.suppressPeerLeadBadge))
+			b.WriteByte('/')
+			b.WriteString(strconv.FormatBool(m.MatchedMailWake()))
+			b.WriteByte('/')
+			b.WriteString(m.BoardNudgeState())
+			b.WriteByte('/')
+			b.WriteString(strconv.Itoa(m.MailBytes()))
+		}
 	}
 	return b.String()
 }
@@ -202,6 +241,8 @@ func (v *TurnSummaryView) TurnRev() string {
 	b.WriteString(strconv.Itoa(v.Calls))
 	b.WriteByte(':')
 	b.WriteString(strconv.Itoa(v.Failed))
+	b.WriteByte(':')
+	b.WriteString(strconv.Itoa(v.MailCount))
 	b.WriteByte(':')
 	b.WriteString(strconv.FormatInt(v.DurationMs, 10))
 	b.WriteByte(':')
@@ -265,48 +306,80 @@ func groupTurnSummaries(lead wslive.Lead, entries []ConvEntry) *TurnSummaryView 
 	return collapseOpenTurnSpan(lead, entries, spanStart)
 }
 
+// isFoldableMailEntry reports whether e is a visible mail send/receive or
+// mail-kind wake row eligible to fold inside a collapsed turn summary.
+// Suppressed mail/board-nudge rows stay as hidden top-level markers so
+// linkMailWakes and collapseBoardNudges semantics are preserved.
+func isFoldableMailEntry(e ConvEntry) bool {
+	if e.MailWakeSuppressed {
+		return false
+	}
+	return e.Kind == wslive.RingMail || (e.Kind == wslive.RingWake && e.MailWake())
+}
+
+func foldedMailCopy(e ConvEntry) *ConvEntry {
+	cp := e
+	cp.TurnSummary = nil
+	cp.TurnPlain = nil
+	cp.TurnAbsorbed = false
+	cp.TurnLiveAbsorbed = false
+	cp.TurnReasoningOnly = false
+	return &cp
+}
+
 func collapseCompletedTurnSpan(entries []ConvEntry, spanStart, turnIdx int) {
-	var toolIdxs, replyIdxs []int
+	var foldedIdxs, replyIdxs []int
+	var mailCount int
 	var replyBytes int64
 	for j := spanStart; j < turnIdx; j++ {
-		switch entries[j].Kind {
-		case wslive.RingTools:
-			if entries[j].Tools != nil {
-				toolIdxs = append(toolIdxs, j)
-			}
-		case wslive.RingReply:
+		switch {
+		case entries[j].Kind == wslive.RingTools && entries[j].Tools != nil:
+			foldedIdxs = append(foldedIdxs, j)
+		case isFoldableMailEntry(entries[j]):
+			foldedIdxs = append(foldedIdxs, j)
+			mailCount++
+		case entries[j].Kind == wslive.RingReply:
 			replyIdxs = append(replyIdxs, j)
 			replyBytes += int64(len(entries[j].Text))
 		}
 	}
-	if len(toolIdxs) == 0 {
+	if len(foldedIdxs) == 0 {
 		foldPlainTurn(entries, replyIdxs, turnIdx, replyBytes)
 		return
 	}
 	turn := entries[turnIdx]
-	anchorIdx := toolIdxs[0]
+	anchorIdx := foldedIdxs[0]
 	anchor := entries[anchorIdx]
 
 	var gaps []TurnGapItem
 	var gapCalls, gapFailed int
 	var gapDurMs, toolBytes int64
-	for _, idx := range toolIdxs {
+	for _, idx := range foldedIdxs {
 		e := entries[idx]
-		gaps = append(gaps, TurnGapItem{
-			EntryKey: e.Key,
-			At:       e.At,
-			AtRFC:    e.AtRFC,
-			Tools:    e.Tools,
-		})
-		gapCalls += e.Tools.Calls
-		gapFailed += e.Tools.Failed
-		gapDurMs += e.Tools.DurationMs
-		toolBytes += int64(max(e.Tools.InBytes, 0)) + int64(max(e.Tools.OutBytes, 0))
+		if e.Kind == wslive.RingTools && e.Tools != nil {
+			gaps = append(gaps, TurnGapItem{
+				EntryKey: e.Key,
+				At:       e.At,
+				AtRFC:    e.AtRFC,
+				Tools:    e.Tools,
+			})
+			gapCalls += e.Tools.Calls
+			gapFailed += e.Tools.Failed
+			gapDurMs += e.Tools.DurationMs
+			toolBytes += int64(max(e.Tools.InBytes, 0)) + int64(max(e.Tools.OutBytes, 0))
+		} else {
+			gaps = append(gaps, TurnGapItem{
+				EntryKey: e.Key,
+				At:       e.At,
+				AtRFC:    e.AtRFC,
+				Mail:     foldedMailCopy(e),
+			})
+		}
 	}
 
 	calls := turn.Done + turn.Failed
 	failed := turn.Failed
-	if calls == 0 {
+	if calls == 0 && gapCalls > 0 {
 		calls = gapCalls
 		failed = gapFailed
 	}
@@ -328,6 +401,7 @@ func collapseCompletedTurnSpan(entries []ConvEntry, spanStart, turnIdx int) {
 		Completed:   true,
 		Calls:       calls,
 		Failed:      failed,
+		MailCount:   mailCount,
 		DurationMs:  durMs,
 		AddedTokens: turn.AddedTokens,
 		Origin:      turn.Origin,
@@ -341,7 +415,7 @@ func collapseCompletedTurnSpan(entries []ConvEntry, spanStart, turnIdx int) {
 	}
 
 	entries[anchorIdx].TurnSummary = summary
-	for _, idx := range toolIdxs[1:] {
+	for _, idx := range foldedIdxs[1:] {
 		entries[idx].TurnAbsorbed = true
 	}
 	if entries[turnIdx].Summary() != nil {
@@ -385,40 +459,57 @@ func replyKeys(entries []ConvEntry, idxs []int) string {
 }
 
 func collapseOpenTurnSpan(lead wslive.Lead, entries []ConvEntry, spanStart int) *TurnSummaryView {
-	var toolIdxs []int
+	var foldedIdxs, replyIdxs []int
+	var toolCount, mailCount int
+	var hasMailWake bool
 	var replyBytes int64
 	for j := spanStart; j < len(entries); j++ {
-		switch entries[j].Kind {
-		case wslive.RingTools:
-			if entries[j].Tools != nil {
-				toolIdxs = append(toolIdxs, j)
+		switch {
+		case entries[j].Kind == wslive.RingTools && entries[j].Tools != nil:
+			foldedIdxs = append(foldedIdxs, j)
+			toolCount++
+		case isFoldableMailEntry(entries[j]):
+			foldedIdxs = append(foldedIdxs, j)
+			mailCount++
+			if entries[j].Kind == wslive.RingWake && entries[j].MailWake() {
+				hasMailWake = true
 			}
-		case wslive.RingReply:
+		case entries[j].Kind == wslive.RingReply:
+			replyIdxs = append(replyIdxs, j)
 			replyBytes += int64(len(entries[j].Text))
 		}
 	}
 
 	if leadTurnRunning(lead) {
-		if len(toolIdxs) == 0 && lead.ToolGap == nil {
+		if len(foldedIdxs) == 0 && lead.ToolGap == nil {
 			return nil
 		}
 		var gaps []TurnGapItem
 		var calls, failed int
 		var durMs, toolBytes int64
 		var at int64
-		for _, idx := range toolIdxs {
+		for _, idx := range foldedIdxs {
 			e := entries[idx]
 			entries[idx].TurnLiveAbsorbed = true
-			gaps = append(gaps, TurnGapItem{
-				EntryKey: e.Key,
-				At:       e.At,
-				AtRFC:    e.AtRFC,
-				Tools:    e.Tools,
-			})
-			calls += e.Tools.Calls
-			failed += e.Tools.Failed
-			durMs += e.Tools.DurationMs
-			toolBytes += int64(max(e.Tools.InBytes, 0)) + int64(max(e.Tools.OutBytes, 0))
+			if e.Kind == wslive.RingTools && e.Tools != nil {
+				gaps = append(gaps, TurnGapItem{
+					EntryKey: e.Key,
+					At:       e.At,
+					AtRFC:    e.AtRFC,
+					Tools:    e.Tools,
+				})
+				calls += e.Tools.Calls
+				failed += e.Tools.Failed
+				durMs += e.Tools.DurationMs
+				toolBytes += int64(max(e.Tools.InBytes, 0)) + int64(max(e.Tools.OutBytes, 0))
+			} else {
+				gaps = append(gaps, TurnGapItem{
+					EntryKey: e.Key,
+					At:       e.At,
+					AtRFC:    e.AtRFC,
+					Mail:     foldedMailCopy(e),
+				})
+			}
 			if e.At > at {
 				at = e.At
 			}
@@ -442,6 +533,7 @@ func collapseOpenTurnSpan(lead wslive.Lead, entries []ConvEntry, spanStart int) 
 			Live:        true,
 			Calls:       calls,
 			Failed:      failed,
+			MailCount:   mailCount,
 			DurationMs:  durMs,
 			StartMs:     lead.TurnStartedAt,
 			AddedTokens: lead.TurnAddedTokens,
@@ -454,28 +546,39 @@ func collapseOpenTurnSpan(lead wslive.Lead, entries []ConvEntry, spanStart int) 
 	}
 
 	// Idle session or saved history without a closing RingTurn: never emit a
-	// live header; fall back to a gap-derived summary for orphan RingTools.
-	if len(toolIdxs) == 0 {
+	// live header; fall back to a gap-derived summary for orphan RingTools or
+	// trailing multi-mail bursts (>= 3 mails, or >= 2 when a mail wake is
+	// present), while leaving 1-2 plain idle RingMail rows standalone.
+	if toolCount == 0 && mailCount < 3 && !(mailCount >= 2 && hasMailWake) {
 		return nil
 	}
-	anchorIdx := toolIdxs[0]
+	anchorIdx := foldedIdxs[0]
 	anchor := entries[anchorIdx]
 	var gaps []TurnGapItem
 	var calls, failed int
 	var durMs, toolBytes int64
 	var at int64
-	for _, idx := range toolIdxs {
+	for _, idx := range foldedIdxs {
 		e := entries[idx]
-		gaps = append(gaps, TurnGapItem{
-			EntryKey: e.Key,
-			At:       e.At,
-			AtRFC:    e.AtRFC,
-			Tools:    e.Tools,
-		})
-		calls += e.Tools.Calls
-		failed += e.Tools.Failed
-		durMs += e.Tools.DurationMs
-		toolBytes += int64(max(e.Tools.InBytes, 0)) + int64(max(e.Tools.OutBytes, 0))
+		if e.Kind == wslive.RingTools && e.Tools != nil {
+			gaps = append(gaps, TurnGapItem{
+				EntryKey: e.Key,
+				At:       e.At,
+				AtRFC:    e.AtRFC,
+				Tools:    e.Tools,
+			})
+			calls += e.Tools.Calls
+			failed += e.Tools.Failed
+			durMs += e.Tools.DurationMs
+			toolBytes += int64(max(e.Tools.InBytes, 0)) + int64(max(e.Tools.OutBytes, 0))
+		} else {
+			gaps = append(gaps, TurnGapItem{
+				EntryKey: e.Key,
+				At:       e.At,
+				AtRFC:    e.AtRFC,
+				Mail:     foldedMailCopy(e),
+			})
+		}
 		if e.At > at {
 			at = e.At
 		}
@@ -487,21 +590,16 @@ func collapseOpenTurnSpan(lead wslive.Lead, entries []ConvEntry, spanStart int) 
 		AtRFC:      anchor.AtRFC,
 		Calls:      calls,
 		Failed:     failed,
+		MailCount:  mailCount,
 		DurationMs: durMs,
 		EstTokens:  estTurnTokens(toolBytes, replyBytes),
 		Gaps:       gaps,
+		Replies:    replyKeys(entries, replyIdxs),
 	}
 	entries[anchorIdx].TurnSummary = orphan
-	for _, idx := range toolIdxs[1:] {
+	for _, idx := range foldedIdxs[1:] {
 		entries[idx].TurnAbsorbed = true
 	}
-	var replyIdxs []int
-	for j := spanStart; j < len(entries); j++ {
-		if entries[j].Kind == wslive.RingReply {
-			replyIdxs = append(replyIdxs, j)
-		}
-	}
-	orphan.Replies = replyKeys(entries, replyIdxs)
 	return nil
 }
 
@@ -562,8 +660,8 @@ func turnBatchCategory(b wslive.ToolBatch) string {
 }
 
 // turnBatchNums formats trailing numbers for a legacy batch row inside
-// [data-conv-turn-drawer]: unnamed call count, duration, and failed count only.
-// Per-tool rows never fabricate per-call token deltas (Decision 2).
+// [data-conv-turn-drawer]: unnamed call count, duration, byte-estimated
+// token delta (matching batchNums), and failed count.
 func turnBatchNums(lang string, b wslive.ToolBatch) []batchNum {
 	var nums []batchNum
 	add := func(sep, text, title, class string) {
@@ -581,6 +679,9 @@ func turnBatchNums(lang string, b wslive.ToolBatch) []batchNum {
 	}
 	if b.DurationMs > 0 {
 		add(" · ", batchSpanText(b.DurationMs), wsi18n.T(lang, "batch.duration", commafy(b.DurationMs)), "")
+	}
+	if tok := estContextText(b.InBytes, b.OutBytes); tok != "" {
+		add(" · ", tok, estContextTitle(b.InBytes, b.OutBytes), "btok")
 	}
 	if b.Failed > 0 {
 		add(" · ", "✗"+strconv.Itoa(b.Failed), wsi18n.T(lang, "count.failed", b.Failed), "bf")

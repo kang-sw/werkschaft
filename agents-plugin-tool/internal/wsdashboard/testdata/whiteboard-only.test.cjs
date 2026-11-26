@@ -64,8 +64,7 @@ function summary(key, replies, plain) {
 function load({ capable = true, stored = null } = {}) {
   const box = new El("div", { class: "centries" });
   const btn = capable ? new El("button", { id: "wbonly", "aria-pressed": "false" }) : null;
-  const hint = capable ? new El("span", { id: "wbonly-hint", hidden: "" }) : null;
-  const byId = { wbonly: btn, "wbonly-hint": hint };
+  const byId = { wbonly: btn };
   const store = new Map(stored ? [["ws.dashboard.whiteboardFirst.r1", stored]] : []);
   const calls = [];
   const ctx = {
@@ -85,7 +84,7 @@ function load({ capable = true, stored = null } = {}) {
   };
   vm.createContext(ctx);
   vm.runInContext(src + "\nthis.api = { wbOnlyOn, wbFoldSync };", ctx);
-  return { ctx, box, btn, hint, store, calls };
+  return { ctx, box, btn, store, calls };
 }
 
 function populate(box) {
@@ -119,12 +118,11 @@ test("a session with no toggle is OFF even with a stored on", () => {
 });
 
 test("a stored on session starts ON and folds replies into drawers", () => {
-  const { ctx, box, btn, hint } = load({ stored: "on" });
+  const { ctx, box, btn } = load({ stored: "on" });
   const n = populate(box);
   ctx.api.wbFoldSync();
   assert.equal(ctx.api.wbOnlyOn(), true);
   assert.equal(btn.getAttribute("aria-pressed"), "true");
-  assert.equal(hint.hidden, false);
   for (const [reply, turn, text] of [[n.r1, n.tool, "tool reply"], [n.r2, n.plain, "plain reply"]]) {
     assert.equal(reply.hasAttribute("data-wb-folded"), true, "original stays in place, hidden");
     assert.ok(box.querySelectorAll(".msg").includes(reply));

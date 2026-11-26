@@ -94,10 +94,12 @@ func TestTurnSummaryMultiGapCompletedTurnAndCrossTrackIsolation(t *testing.T) {
 		`data-turn-failed="1"`,
 		`<summary class="conv-row d-turn-sum" data-conv-turn-summary aria-expanded="false">`,
 		`<span class="d-turn-count" data-conv-turn-count>7 tool calls</span>`,
+		`<span class="d-turn-mails" data-conv-turn-mails>1 mail</span>`,
 		`<span class="d-turn-dur" data-span="11400">11s</span>`,
 		`<span class="d-turn-fails" data-conv-turn-fails><span class="d-turn-dot" aria-hidden="true">·</span><b>1 failed</b></span>`,
 		`<span class="d-turn-reason">completed</span>`,
 		`data-conv-turn-tokens title="+2,800 context tokens added in this turn">+2.8k tok</span>`,
+		`data-entry="` + ring[4].Name + `" data-turn-absorbed="1"`,
 		`data-entry="` + ring[5].Name + `" data-turn-absorbed="1"`,
 		`data-entry="` + ring[7].Name + `" data-turn-absorbed="1"`,
 		`data-call="c1"`,
@@ -105,6 +107,7 @@ func TestTurnSummaryMultiGapCompletedTurnAndCrossTrackIsolation(t *testing.T) {
 		`data-call="c3"`,
 		`data-call="c4"`,
 		`data-call="c5"`,
+		`class="au-tok"`,
 		`data-cat="file"`,
 		`data-cat="tickets"`,
 		`data-cat="git"`,
@@ -120,17 +123,19 @@ func TestTurnSummaryMultiGapCompletedTurnAndCrossTrackIsolation(t *testing.T) {
 		t.Errorf("exact AddedTokens must not be marked estimated:\n%s", entries)
 	}
 
-	// User bubble precedes summary; interim reply, whiteboard update, mail, and final reply stay outside the drawer.
+	// User bubble precedes summary; mail is folded inside the drawer in chronological
+	// order between c3 and c4, while interim reply, whiteboard update, and final
+	// reply stay outside the drawer.
 	userPos := strings.Index(entries, `data-entry="`+ring[0].Name)
 	summaryPos := strings.Index(entries, `data-conv-turn="1"`)
-	summaryEnd := strings.Index(entries[summaryPos:], `</details>`)
-	// Walk past nested au-call-details to the outer turn summary close (before First interim reply).
+	c3Pos := strings.Index(entries, `data-call="c3"`)
+	mailPos := strings.Index(entries, `class="d-turn-gap d-turn-mail-gap"`)
+	c4Pos := strings.Index(entries, `data-call="c4"`)
 	reply1Pos := strings.Index(entries, `First interim reply`)
 	wbPos := strings.Index(entries, `class="wbeffects wbupdate"`)
-	mailPos := strings.Index(entries, `class="mailline`)
 	reply2Pos := strings.Index(entries, `Final answer`)
-	if !(userPos >= 0 && userPos < summaryPos && summaryEnd > 0 && summaryPos < reply1Pos && reply1Pos < wbPos && wbPos < mailPos && mailPos < reply2Pos) {
-		t.Errorf("unexpected cross-track order: user=%d summary=%d reply1=%d wb=%d mail=%d reply2=%d", userPos, summaryPos, reply1Pos, wbPos, mailPos, reply2Pos)
+	if !(userPos >= 0 && userPos < summaryPos && summaryPos < c3Pos && c3Pos < mailPos && mailPos < c4Pos && c4Pos < reply1Pos && reply1Pos < wbPos && wbPos < reply2Pos) {
+		t.Errorf("unexpected cross-track/drawer order: user=%d summary=%d c3=%d mail=%d c4=%d reply1=%d wb=%d reply2=%d", userPos, summaryPos, c3Pos, mailPos, c4Pos, reply1Pos, wbPos, reply2Pos)
 	}
 }
 
@@ -377,5 +382,94 @@ func TestTurnSummaryEntryCacheInvalidatesAcrossLifecycleAndFrameRender(t *testin
 	}
 	if !strings.Contains(body, `data-frame="1"`) || !strings.Contains(body, `data-conv-turn="1"`) {
 		t.Fatalf("?frame=1 page missing expected turn summary markup")
+	}
+}
+
+func TestTurnSummaryFoldedMailOnlyOpenBurstUnlinkedWakeAndBatchTokens(t *testing.T) {
+	// 1. Completed mail-only turn (0 tools + 2 mails) in KO: renders "메일 2건"
+	// and keeps exact AddedTokens without double-counting MailBytes().
+	mailOnlyRing := []wslive.RingRecord{
+		ringRecord(1, wslive.RingEntry{Kind: wslive.RingMail, Direction: wslive.MailRecv, Peer: "worker-1", Title: "first report", BodyBytes: 2_000}),
+		ringRecord(2, wslive.RingEntry{Kind: wslive.RingMail, Direction: wslive.MailSent, Peer: "worker-1", Title: "ack", BodyBytes: 1_200}),
+		ringRecord(3, wslive.RingEntry{Kind: wslive.RingReply, Text: "All synced."}),
+		ringRecord(4, wslive.RingEntry{Kind: wslive.RingTurn, WakeTurn: true, Done: 0, DurationMs: 1_800, AddedTokens: 900, Reason: "mail"}),
+	}
+	koEntries := stdhtml.UnescapeString(string(renderIdleHistory(t, mailOnlyRing, "ko")[regionEntries].HTML))
+	for _, want := range []string{
+		`data-entry="` + mailOnlyRing[0].Name + `" data-key="turn-` + mailOnlyRing[0].Name + `"`,
+		`<span class="d-turn-count" data-conv-turn-count>메일 2건</span>`,
+		`data-conv-turn-tokens title="이 턴에서 추가된 컨텍스트 토큰 +900">+900 tok</span>`,
+		`data-entry="` + mailOnlyRing[1].Name + `" data-turn-absorbed="1"`,
+		`data-entry="` + mailOnlyRing[3].Name + `" data-turn-absorbed="1"`,
+		`class="d-turn-gap d-turn-mail-gap"`,
+	} {
+		if !strings.Contains(koEntries, want) {
+			t.Errorf("mail-only KO turn missing %q:\n%s", want, koEntries)
+		}
+	}
+	if strings.Contains(koEntries, `data-conv-turn-mails`) {
+		t.Errorf("mail-only turn should render mail count in d-turn-count, not duplicate d-turn-mails:\n%s", koEntries)
+	}
+	if got := strings.Count(koEntries, `data-entry="`); got != len(mailOnlyRing) {
+		t.Errorf("folded mail rows must not duplicate data-entry; got %d want %d:\n%s", got, len(mailOnlyRing), koEntries)
+	}
+
+	// 2. Trailing idle open-span multi-mail burst (RingMail + unlinked RingWake(mail))
+	// folds into a collapsed .d-turn with "2 mails" in EN.
+	burstRing := []wslive.RingRecord{
+		ringRecord(1, wslive.RingEntry{Kind: wslive.RingMail, Direction: wslive.MailSent, Peer: "worker-2", Title: "ping"}),
+		ringRecord(2, wslive.RingEntry{Kind: wslive.RingWake, Cause: "mail", Text: "[ws mailbox] 1 message(s) arrived"}),
+	}
+	burstEntries := stdhtml.UnescapeString(string(renderIdleHistory(t, burstRing, "en")[regionEntries].HTML))
+	for _, want := range []string{
+		`data-conv-turn="1"`,
+		`<span class="d-turn-count" data-conv-turn-count>2 mails</span>`,
+		`class="mail-notification turn-trigger"`,
+		`class="mailline turn-trigger sent nobody"`,
+		`data-entry="` + burstRing[1].Name + `" data-turn-absorbed="1"`,
+	} {
+		if !strings.Contains(burstEntries, want) {
+			t.Errorf("trailing mail burst missing %q:\n%s", want, burstEntries)
+		}
+	}
+	if got := strings.Count(burstEntries, `data-entry="`); got != len(burstRing) {
+		t.Errorf("burst drawer must keep exact top-level data-entry count; got %d want %d", got, len(burstRing))
+	}
+
+	// 3. Active live turn with flushed mail + tools folds both into r-convlive.
+	now := testNow
+	activeRing := []wslive.RingRecord{
+		ringRecord(1, wslive.RingEntry{Kind: wslive.RingMail, Direction: wslive.MailRecv, Peer: "peer-a", Title: "status"}),
+		ringRecord(2, wslive.RingEntry{Kind: wslive.RingTools, Tools: &wslive.ToolSummary{
+			Calls: 1, DurationMs: 500, InBytes: 400, OutBytes: 800,
+			Batches: []wslive.ToolBatch{{Names: []string{"Read"}, Calls: 1, DurationMs: 500, InBytes: 400, OutBytes: 800}},
+		}}),
+	}
+	activeView := buildSessionView(pageInputs{
+		Session:  liveSession("self", "/proj", now),
+		Snapshot: liveSnap(now, wslive.Lead{Activity: wslive.Activity{Phase: wslive.PhaseTool}, TurnStartedAt: now.UnixMilli() - 1_000}),
+		Ring:     activeRing,
+		Now:      now,
+	})
+	liveSet, err := renderSessionRegions(activeView, newEntryCache())
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveEntries := stdhtml.UnescapeString(string(liveSet[regionEntries].HTML))
+	liveHTML := stdhtml.UnescapeString(string(liveSet[regionConvLive].HTML))
+	if !strings.Contains(liveEntries, `data-entry="`+activeRing[0].Name+`" data-turn-live-absorbed="1"`) ||
+		!strings.Contains(liveEntries, `data-entry="`+activeRing[1].Name+`" data-turn-live-absorbed="1"`) {
+		t.Errorf("active turn should live-absorb both flushed mail and tools:\n%s", liveEntries)
+	}
+	for _, want := range []string{
+		`<span class="d-turn-count" data-conv-turn-count>1 tool call</span>`,
+		`<span class="d-turn-mails" data-conv-turn-mails>1 mail</span>`,
+		`class="d-turn-gap d-turn-mail-gap"`,
+		// Legacy batch row inside drawer restores byte-estimated token delta (btok).
+		`<span class="btok"`,
+	} {
+		if !strings.Contains(liveHTML, want) {
+			t.Errorf("active live turn with mail missing %q:\n%s", want, liveHTML)
+		}
 	}
 }

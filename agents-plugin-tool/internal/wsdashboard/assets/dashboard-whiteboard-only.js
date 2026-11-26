@@ -52,8 +52,6 @@
     if (!b) return;
     var s = live ? scrollState() : null;
     b.setAttribute("aria-pressed", on ? "true" : "false");
-    var hint = $("wbonly-hint");
-    if (hint) hint.hidden = !on;
     root.toggleAttribute("data-wb-only", on);
     wbFoldSync();
     if (s) { restoreScroll(s); queuePinConvo(); }

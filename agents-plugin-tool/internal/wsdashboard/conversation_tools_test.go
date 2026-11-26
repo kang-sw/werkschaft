@@ -335,8 +335,8 @@ func TestActivityRowPolishIconsAndContextTokens(t *testing.T) {
 	}
 
 	// Single call rows with partial batch failure + collapsed batch summary:
-	// drawer rows keep calm category dots and per-tool duration only (no
-	// per-call .au-tok), while the single turn header shows #i-x and ~+Nk tok.
+	// drawer rows keep calm category dots, per-tool duration, and per-call
+	// estimated token deltas (.au-tok), while the single turn header shows #i-x and ~+Nk tok.
 	summary := &wslive.ToolSummary{
 		Calls:      5,
 		Failed:     2,
@@ -382,9 +382,6 @@ func TestActivityRowPolishIconsAndContextTokens(t *testing.T) {
 	if strings.Contains(html, "#i-hammer") {
 		t.Errorf("turn summary must not render hammer icon:\n%s", html)
 	}
-	if strings.Contains(html, `class="au-tok"`) || strings.Contains(html, `class="btok"`) {
-		t.Errorf("per-tool drawer rows must not fabricate per-call token deltas:\n%s", html)
-	}
 	for _, want := range []string{
 		`<span class="row-icon d-turn-ico" aria-hidden="true"><svg class="i" aria-hidden="true"><use href="#i-x"/></svg></span>`,
 		`data-conv-turn-tokens data-estimated="1"`,
@@ -393,6 +390,9 @@ func TestActivityRowPolishIconsAndContextTokens(t *testing.T) {
 		`class="conv-row au-row au-fail" data-call="c2"><span class="row-icon au-mk"><span class="d-turn-cat" data-cat="exec" aria-hidden="true"></span></span>`,
 		`class="conv-row au-row au-fail au-static"><span class="row-icon au-mk"><span class="d-turn-cat" data-cat="file" aria-hidden="true"></span></span>`,
 		`<span class="au-dur" title="duration 420 ms">0.4s</span>`,
+		`<span class="au-tok" title="~1.8k tok (in 2.0 KB + out 5.2 KB)">+1.8k</span>`,
+		`<span class="au-tok" title="~250 tok (in 200 B + out 800 B)">+250</span>`,
+		`<span class="au-tok" title="~700 tok (in 800 B + out 2.0 KB)">+700</span>`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("rendered turn summary missing %q:\n%s", want, html)
