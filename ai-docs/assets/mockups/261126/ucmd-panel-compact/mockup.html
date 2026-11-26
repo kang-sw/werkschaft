@@ -1,0 +1,1612 @@
+<div id="ucmd-compact-mockup" class="ucm3-root">
+<style>
+#ucmd-compact-mockup {
+  --bg: #141518;
+  --tray: #16181c;
+  --card: #1e2024;
+  --card-hi: #23262c;
+  --card-band: #262930;
+  --well: #25272c;
+  --muted: #2b2d32;
+  --input: #16181c;
+  --fg: #e7e7e4;
+  --muted-fg: #a2a6ad;
+  --dim: #6f747d;
+  --line: color-mix(in srgb, #e7e7e4 10%, transparent);
+  --line-soft: color-mix(in srgb, #e7e7e4 6%, transparent);
+  --wash: color-mix(in srgb, #e7e7e4 6%, transparent);
+  --primary: #7aa2ff;
+  --primary-ink: #b7cdff;
+  --ask: #8b88f8;
+  --ask-ink: #c8c6ff;
+  --agent-bg: color-mix(in srgb, #b89cff 14%, transparent);
+  --agent-fg: #c4b5e6;
+  --agent-rail: #9687e8;
+  --proj-bg: color-mix(in srgb, #7aa2ff 14%, transparent);
+  --proj-fg: #a9c4ff;
+  --proj-rail: #6e99f2;
+  --ok: #6cc39a;
+  --ok-ink: #9ad8ba;
+  --warn: #e0a36c;
+  --fail: #f0797e;
+  --cmd-fg: #c8cbd2;
+  --prompt-fg: #d5d7dc;
+  --hold-ink: #141518;
+  --shadow: 0 1px 2px rgb(0 0 0 / .48), 0 2px 8px rgb(0 0 0 / .28);
+  --shadow-hi: 0 2px 4px rgb(0 0 0 / .55), 0 8px 22px rgb(0 0 0 / .4);
+  --radius: 12px;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg);
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 16px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+#ucmd-compact-mockup *, #ucmd-compact-mockup *::before, #ucmd-compact-mockup *::after {
+  box-sizing: border-box;
+}
+#ucmd-compact-mockup button, #ucmd-compact-mockup input, #ucmd-compact-mockup textarea {
+  font-family: inherit;
+}
+
+/* Custom subtle dark scrollbars */
+#ucmd-compact-mockup *::-webkit-scrollbar { width: 6px; height: 6px; }
+#ucmd-compact-mockup *::-webkit-scrollbar-track { background: transparent; }
+#ucmd-compact-mockup *::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--fg) 18%, transparent);
+  border-radius: 999px;
+}
+#ucmd-compact-mockup *::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--fg) 30%, transparent);
+}
+
+/* Top toolbar + view selector */
+.ucm3-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.ucm3-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ucm3-h1 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--fg);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.ucm3-h1-pill {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 15%, transparent);
+  color: var(--primary-ink);
+}
+.ucm3-hsub {
+  font-size: 11.5px;
+  color: var(--muted-fg);
+}
+
+.ucm3-tabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--well);
+}
+.ucm3-tab {
+  border: 0;
+  background: transparent;
+  color: var(--muted-fg);
+  border-radius: 999px;
+  padding: 4px 11px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color .14s, color .14s;
+}
+.ucm3-tab:hover {
+  color: var(--fg);
+  background: var(--wash);
+}
+.ucm3-tab.is-on {
+  background: #30343d;
+  color: var(--fg);
+  box-shadow: var(--shadow);
+}
+.ucm3-reset-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted-fg);
+  border-radius: 7px;
+  padding: 4px 9px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color .12s, color .12s;
+}
+.ucm3-reset-btn:hover {
+  background: var(--wash);
+  color: var(--fg);
+}
+
+/* Metrics legend strip */
+.ucm3-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  background: var(--card);
+  font-size: 11.5px;
+  color: var(--muted-fg);
+}
+.ucm3-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+}
+.ucm3-metric strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+.ucm3-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+.ucm3-dot.is-before { background: var(--dim); }
+.ucm3-dot.is-coll { background: var(--ok); }
+.ucm3-dot.is-exp { background: var(--primary); }
+.ucm3-metric-hint {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* Stage grid */
+.ucm3-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 1080px) {
+  .ucm3-grid { grid-template-columns: minmax(0, 1fr); }
+}
+.ucm3-grid.is-single {
+  grid-template-columns: minmax(0, 640px);
+  justify-content: center;
+}
+
+.ucm3-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.ucm3-col[hidden] { display: none; }
+
+.ucm3-col-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px;
+}
+.ucm3-col-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--fg);
+}
+.ucm3-tag {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 5px;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+.ucm3-tag.before { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--muted-fg); }
+.ucm3-tag.opt-a { background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--primary-ink); }
+.ucm3-tag.opt-b { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok-ink); }
+.ucm3-tag.opt-c { background: color-mix(in srgb, var(--ask) 16%, transparent); color: var(--ask-ink); }
+.ucm3-col-stat {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted-fg);
+  font-variant-numeric: tabular-nums;
+}
+.ucm3-col-desc {
+  font-size: 11.5px;
+  color: var(--muted-fg);
+  padding: 0 2px;
+  margin-top: -4px;
+}
+
+/* =========================================================
+   Shared Popover Shell (630px class floating popover)
+   ========================================================= */
+.ucm3-pop {
+  width: 100%;
+  max-width: 630px;
+  display: flex;
+  flex-direction: column;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--fg);
+  box-shadow: var(--shadow-hi), inset 0 0 0 1px color-mix(in srgb, var(--fg) 6%, transparent);
+  overflow: hidden;
+}
+.ucm3-pop-hd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--fg) 3%, var(--card));
+  border-bottom: 1px solid var(--line);
+  user-select: none;
+}
+.ucm3-pop-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--fg);
+  flex: none;
+}
+.ucm3-pop-ico {
+  color: var(--primary);
+  display: inline-flex;
+  align-items: center;
+}
+.ucm3-count {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--wash);
+  color: var(--muted-fg);
+  font-variant-numeric: tabular-nums;
+}
+.ucm3-pop-sub {
+  font-size: 11px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+  transition: color .14s;
+}
+.ucm3-pop-sub.is-run { color: var(--primary-ink); font-weight: 600; }
+.ucm3-pop-sub.is-ask { color: var(--ask-ink); font-weight: 600; }
+.ucm3-pop-sub.is-del { color: var(--fail); font-weight: 600; }
+.ucm3-add-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  color: var(--primary-ink);
+  border-radius: 7px;
+  padding: 4px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  flex: none;
+  transition: background-color .12s;
+}
+.ucm3-add-btn:hover { background: color-mix(in srgb, var(--primary) 22%, transparent); }
+.ucm3-close-btn {
+  cursor: pointer;
+  border: 0;
+  border-radius: 6px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--dim);
+  font-size: 15px;
+  line-height: 1;
+  flex: none;
+}
+.ucm3-close-btn:hover { background: var(--wash); color: var(--fg); }
+
+.ucm3-pop-body {
+  display: flex;
+  flex-direction: column;
+  max-height: 418px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Shared header pieces */
+.ucm3-head-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  min-width: 0;
+}
+.ucm3-head-l {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.ucm3-src {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 5px;
+  flex: none;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.ucm3-src.agent { background: var(--agent-bg); color: var(--agent-fg); }
+.ucm3-src.project { background: var(--proj-bg); color: var(--proj-fg); }
+.ucm3-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ucm3-dirty-dot {
+  display: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+  flex: none;
+}
+.is-dirty > .ucm3-head-row .ucm3-dirty-dot,
+.is-dirty .ucm3-dirty-dot {
+  display: inline-block;
+}
+
+/* Action buttons (24-26px borderless tonal icon actions with 1s hold fill) */
+.ucm3-acts {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 4px;
+  flex: none;
+}
+.ucm3-ibtn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  flex: none;
+  overflow: hidden;
+  user-select: none;
+  transition: background-color .12s, color .12s, transform .08s, box-shadow .12s;
+}
+.ucm3-ibtn svg { display: block; position: relative; z-index: 1; pointer-events: none; }
+.ucm3-ibtn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  transform: scale(0);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform .12s ease-out, opacity .12s ease-out;
+}
+.ucm3-ibtn.is-holding { color: var(--hold-ink) !important; }
+.ucm3-ibtn.is-holding::before {
+  transform: scale(1.6);
+  opacity: .96;
+  transition: transform 1000ms linear, opacity 100ms ease-out;
+}
+.ucm3-ibtn-run {
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+  color: var(--primary-ink);
+}
+.ucm3-ibtn-run::before { background: #5b9bf0; }
+.ucm3-ibtn-run:hover { background: color-mix(in srgb, var(--primary) 26%, transparent); }
+
+.ucm3-ibtn-ask {
+  background: color-mix(in srgb, var(--ask) 14%, transparent);
+  color: var(--ask-ink);
+}
+.ucm3-ibtn-ask::before { background: var(--ask); }
+.ucm3-ibtn-ask:hover { background: color-mix(in srgb, var(--ask) 24%, transparent); }
+
+.ucm3-ibtn-save {
+  display: none;
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+  color: var(--ok);
+}
+.is-dirty .ucm3-ibtn-save { display: inline-flex; }
+.ucm3-ibtn-save:hover { background: color-mix(in srgb, var(--ok) 26%, transparent); color: var(--ok-ink); }
+
+.ucm3-ibtn-del {
+  background: transparent;
+  color: var(--dim);
+}
+.ucm3-ibtn-del::before { background: var(--fail); }
+.ucm3-ibtn-del:hover {
+  background: color-mix(in srgb, var(--fail) 14%, transparent);
+  color: var(--fail);
+}
+
+/* Revert button */
+.ucm3-rev {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  flex: none;
+  background: transparent;
+  color: var(--dim);
+  opacity: 0;
+  pointer-events: none;
+  cursor: default;
+  transition: background-color .12s, color .12s, opacity .12s;
+}
+.ucm3-rev.is-dirty {
+  opacity: 1;
+  pointer-events: auto;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+.ucm3-rev.is-dirty:hover {
+  background: color-mix(in srgb, var(--warn) 26%, transparent);
+}
+.ucm3-rev.is-always {
+  opacity: .22;
+}
+.ucm3-rev.is-always.is-dirty {
+  opacity: 1;
+}
+
+/* =========================================================
+   BEFORE (Faithful reproduction of current dashboard CSS)
+   ========================================================= */
+.ucm3-before-body {
+  padding: 6px;
+  gap: 4px;
+  background: var(--card);
+}
+.ucm3-before-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px 9px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--fg) 2%, transparent);
+  transition: background-color .14s;
+}
+.ucm3-before-card:hover { background: var(--well); }
+.ucm3-before-card .ucm3-ibtn { width: 26px; height: 26px; border-radius: 7px; }
+.ucm3-before-card .ucm3-title { font-size: 13px; }
+.ucm3-before-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--input);
+  border-radius: 7px;
+  padding: 3px 5px 3px 9px;
+  min-width: 0;
+}
+.ucm3-before-bar:focus-within {
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--primary) 55%, transparent);
+}
+.ucm3-glyph {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--dim);
+  user-select: none;
+}
+.ucm3-glyph.is-prompt {
+  color: color-mix(in srgb, var(--primary) 70%, var(--dim));
+}
+.ucm3-before-ta {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  outline: none;
+  padding: 2px 0;
+  line-height: 1.4;
+  resize: none;
+}
+.ucm3-before-ta.is-cmd {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--cmd-fg);
+  white-space: pre;
+  overflow: auto;
+  height: 68px; /* Exact 4 rows * 16.1px + 4px padding */
+}
+.ucm3-before-ta.is-prompt {
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--prompt-fg);
+  height: 21px;
+  overflow: hidden;
+}
+.ucm3-before-ta::placeholder { color: var(--dim); }
+
+/* =========================================================
+   Shared Expandable Command Body (Options A, B, C)
+   Collapsed: 1-line ellipsis (26px)
+   Expanded: multiline editable textarea up to 140px (~2.05x current 68px), then scroll
+   ========================================================= */
+.ucm3-cmd-box {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-radius: 7px;
+  transition: background-color .14s, box-shadow .14s;
+}
+.ucm3-cmd-collapsed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 3px 6px 3px 8px;
+  cursor: text;
+  min-width: 0;
+}
+.ucm3-cmd-box.is-expanded .ucm3-cmd-collapsed {
+  display: none;
+}
+.ucm3-cmd-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--cmd-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ucm3-lines-pill {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+  color: var(--muted-fg);
+  font-variant-numeric: tabular-nums;
+  transition: background-color .12s, color .12s;
+}
+.ucm3-cmd-collapsed:hover .ucm3-lines-pill {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  color: var(--primary-ink);
+}
+.ucm3-chev {
+  display: inline-flex;
+  opacity: .65;
+  transition: transform .14s, opacity .14s;
+}
+.ucm3-cmd-collapsed:hover .ucm3-chev { opacity: 1; }
+
+.ucm3-cmd-editor {
+  display: none;
+  flex-direction: column;
+  padding: 6px 7px 5px 8px;
+  gap: 4px;
+  min-width: 0;
+}
+.ucm3-cmd-box.is-expanded .ucm3-cmd-editor {
+  display: flex;
+}
+.ucm3-cmd-ed-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+.ucm3-cmd-ed-row .ucm3-glyph {
+  margin-top: 2px;
+}
+.ucm3-cmd-ta {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  outline: none;
+  padding: 1px 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--cmd-fg);
+  white-space: pre;
+  overflow-x: auto;
+  overflow-y: auto;
+  resize: none;
+  min-height: 36px;
+  max-height: 140px; /* ~2.05x current 68px (4 rows * 16.1 + 4px) -> ~8.5 lines before scrolling */
+}
+.ucm3-cmd-ed-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 3px;
+  border-top: 1px solid var(--line-soft);
+}
+.ucm3-ed-meta {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.ucm3-ed-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ucm3-collapse-btn {
+  border: 0;
+  border-radius: 5px;
+  padding: 2px 7px;
+  background: var(--wash);
+  color: var(--muted-fg);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  transition: background-color .12s, color .12s;
+}
+.ucm3-collapse-btn:hover {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  color: var(--primary-ink);
+}
+
+/* =========================================================
+   OPTION A: Unified Tonal Card + Inset Command Strip
+   - Darker tray (#16181c), 8px gap, elevated #22252b card
+   - Single recessed $ strip, quiet borderless footer note
+   ========================================================= */
+.ucm3-opt-a-body {
+  padding: 8px;
+  gap: 8px;
+  background: var(--tray);
+}
+.ucm3-a-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px 7px;
+  border-radius: 10px;
+  background: var(--card-hi);
+  box-shadow: var(--shadow);
+  transition: background-color .14s, box-shadow .14s;
+}
+.ucm3-a-card:hover {
+  background: #262a31;
+}
+.ucm3-a-card.is-dirty {
+  box-shadow: var(--shadow), inset 2px 0 0 color-mix(in srgb, var(--warn) 80%, transparent);
+}
+.ucm3-a-card .ucm3-cmd-box {
+  background: #17191e;
+}
+.ucm3-a-card .ucm3-cmd-box:hover {
+  background: #14161b;
+}
+.ucm3-a-card .ucm3-cmd-box.is-expanded {
+  background: #14161b;
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--primary) 55%, transparent);
+}
+.ucm3-a-card .ucm3-cmd-box.is-dirty-field {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--warn) 80%, transparent);
+}
+.ucm3-a-card .ucm3-cmd-box.is-expanded.is-dirty-field {
+  box-shadow: inset 2px 0 0 var(--warn), inset 0 0 0 1.5px color-mix(in srgb, var(--primary) 55%, transparent);
+}
+
+/* Option A quiet borderless footer note (NO second capsule!) */
+.ucm3-a-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 1px 6px;
+  border-radius: 6px;
+  background: transparent;
+  transition: background-color .12s;
+  min-width: 0;
+}
+.ucm3-a-note:hover,
+.ucm3-a-note:focus-within {
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+}
+.ucm3-a-note.has-val {
+  padding-top: 4px;
+  margin-top: 1px;
+  border-top: 1px solid var(--line-soft);
+  border-radius: 0 0 6px 6px;
+}
+.ucm3-a-note-in {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--prompt-fg);
+  padding: 1px 0;
+}
+.ucm3-a-note-in::placeholder {
+  color: var(--dim);
+  opacity: .78;
+}
+
+/* =========================================================
+   OPTION B: Scoped Left Accent Rail + Collapsible Note Chip
+   - Ultra-compact when note is empty: "+ 지시문" inline chip
+   - Filled note renders as a soft-tinted attached bottom ribbon
+   ========================================================= */
+.ucm3-opt-b-body {
+  padding: 9px;
+  gap: 9px;
+  background: var(--bg);
+}
+.ucm3-b-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  background: #1f2228;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  transition: background-color .14s;
+}
+.ucm3-b-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--agent-rail);
+  opacity: .72;
+}
+.ucm3-b-card[data-scope="project"]::before {
+  background: var(--proj-rail);
+}
+.ucm3-b-card:hover { background: #23272f; }
+.ucm3-b-main {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 10px 8px 13px;
+  min-width: 0;
+}
+.ucm3-b-card .ucm3-cmd-box {
+  background: #15171b;
+}
+.ucm3-b-card .ucm3-cmd-box.is-expanded {
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--primary) 55%, transparent);
+}
+.ucm3-b-card .ucm3-cmd-box.is-dirty-field {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--warn) 80%, transparent);
+}
+.ucm3-b-note-chip {
+  flex: none;
+  border: 0;
+  border-radius: 5px;
+  padding: 2px 6px;
+  background: transparent;
+  color: var(--dim);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+  transition: background-color .12s, color .12s;
+}
+.ucm3-b-note-chip:hover {
+  background: color-mix(in srgb, var(--ask) 16%, transparent);
+  color: var(--ask-ink);
+}
+.ucm3-b-card.has-note .ucm3-b-note-chip { display: none; }
+
+/* Attached footer ribbon for Option B when note is open/populated */
+.ucm3-b-ribbon {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px 6px 13px;
+  background: color-mix(in srgb, var(--ask) 8%, #1a1c22);
+  border-top: 1px solid color-mix(in srgb, var(--ask) 12%, transparent);
+}
+.ucm3-b-card.has-note .ucm3-b-ribbon {
+  display: flex;
+}
+.ucm3-b-ribbon-in {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--prompt-fg);
+  padding: 1px 0;
+}
+.ucm3-b-ribbon-in::placeholder { color: var(--dim); }
+
+/* =========================================================
+   OPTION C: Two-Zone Monolithic Command Tile
+   - Distinct tinted header band (#262930) + flush monolithic body well (#191b20)
+   - Both $ command & note share ONE continuous body well (zero inner capsules)
+   ========================================================= */
+.ucm3-opt-c-body {
+  padding: 10px;
+  gap: 10px;
+  background: var(--bg);
+}
+.ucm3-c-tile {
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  background: #191b20;
+  transition: box-shadow .14s;
+}
+.ucm3-c-tile:hover {
+  box-shadow: var(--shadow-hi);
+}
+.ucm3-c-tile.is-dirty {
+  box-shadow: var(--shadow), inset 0 0 0 1px color-mix(in srgb, var(--warn) 40%, transparent);
+}
+.ucm3-c-band {
+  padding: 6px 9px 6px 10px;
+  background: var(--card-band);
+  transition: background-color .14s;
+}
+.ucm3-c-tile:hover .ucm3-c-band {
+  background: #2a2e36;
+}
+.ucm3-c-well {
+  display: flex;
+  flex-direction: column;
+  background: #181a1f;
+  padding: 4px 6px 5px;
+  gap: 2px;
+}
+.ucm3-c-tile .ucm3-cmd-box {
+  background: transparent;
+  border-radius: 6px;
+}
+.ucm3-c-tile .ucm3-cmd-box:hover {
+  background: color-mix(in srgb, var(--fg) 3.5%, transparent);
+}
+.ucm3-c-tile .ucm3-cmd-box.is-expanded {
+  background: #131519;
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--primary) 55%, transparent);
+}
+.ucm3-c-tile .ucm3-cmd-box.is-dirty-field {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--warn) 80%, transparent);
+}
+.ucm3-c-divider {
+  height: 1px;
+  margin: 1px 6px;
+  background: var(--line-soft);
+}
+.ucm3-c-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px 2px 8px;
+  border-radius: 6px;
+  min-width: 0;
+  transition: background-color .12s;
+}
+.ucm3-c-note:hover,
+.ucm3-c-note:focus-within {
+  background: color-mix(in srgb, var(--fg) 3.5%, transparent);
+}
+.ucm3-c-note-in {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--prompt-fg);
+  padding: 1px 0;
+}
+.ucm3-c-note-in::placeholder { color: var(--dim); opacity: .75; }
+.ucm3-c-note.has-val .ucm3-glyph.is-prompt { color: var(--ask-ink); }
+
+/* Toast feedback inside mockup */
+.ucm3-toast {
+  position: sticky;
+  bottom: 0;
+  display: none;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  background: #272c36;
+  color: var(--fg);
+  font-size: 11.5px;
+  box-shadow: var(--shadow-hi);
+}
+.ucm3-toast.is-show { display: flex; }
+.ucm3-toast-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  flex: none;
+}
+</style>
+
+<!-- Header & View Selector -->
+<div class="ucm3-top">
+  <div class="ucm3-heading">
+    <div class="ucm3-h1">
+      유저 커맨드 팝오버 컴팩트 리디자인 비교
+      <span class="ucm3-h1-pill">1-line collapse · 2x expand</span>
+    </div>
+    <div class="ucm3-hsub">
+      A / B / C안의 <code>$</code> 커맨드 줄을 클릭하면 1줄 말줄임 → 멀티라인 편집(최대 140px, 초과 시 스크롤)으로 펼쳐집니다. 바깥 클릭·Esc로 접기.
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+    <div class="ucm3-tabs" role="tablist" aria-label="비교 보기 전환">
+      <button type="button" class="ucm3-tab is-on" data-view="all">전체 비교</button>
+      <button type="button" class="ucm3-tab" data-view="before">현재 (Before)</button>
+      <button type="button" class="ucm3-tab" data-view="a">A안</button>
+      <button type="button" class="ucm3-tab" data-view="b">B안</button>
+      <button type="button" class="ucm3-tab" data-view="c">C안</button>
+    </div>
+    <button type="button" class="ucm3-reset-btn" data-reset>초기화</button>
+  </div>
+</div>
+
+<!-- Measured Height Legend -->
+<div class="ucm3-legend">
+  <span class="ucm3-metric"><span class="ucm3-dot is-before"></span>현재 <code>$</code>: <strong>4행 68px</strong> (바 ~80px · 카드 ~158px)</span>
+  <span class="ucm3-metric"><span class="ucm3-dot is-coll"></span>접힘(기본): <strong>1줄 26px</strong> (카드 68–88px · <strong>44–57% 절감</strong>)</span>
+  <span class="ucm3-metric"><span class="ucm3-dot is-exp"></span>펼침(포커스): <strong>최대 140px</strong> (~8.5행, 현재의 <strong>2.05배</strong> 후 스크롤)</span>
+  <span class="ucm3-metric-hint">▶ / ↗ / × 1초 길게 누르기 체험 가능</span>
+</div>
+
+<!-- Comparison Grid -->
+<div class="ucm3-grid" data-grid>
+  <!-- BEFORE -->
+  <section class="ucm3-col" data-col="before">
+    <div class="ucm3-col-meta">
+      <span class="ucm3-col-title"><span class="ucm3-tag before">Before</span>현재 UI (캡슐 일렬 나열)</span>
+      <span class="ucm3-col-stat">카드 ~158px · 3개 시 455px 초과</span>
+    </div>
+    <div class="ucm3-col-desc">카드 배경(#222428)과 팝오버(#1e2024) 대비가 약하고, 커맨드+지시문이 별도 짙은 캡슐 2개로 분리돼 경계가 모호함</div>
+    <div class="ucm3-pop" data-pop="before"></div>
+  </section>
+
+  <!-- OPTION A -->
+  <section class="ucm3-col" data-col="a">
+    <div class="ucm3-col-meta">
+      <span class="ucm3-col-title"><span class="ucm3-tag opt-a">Option A</span>단일 톤 카드 + 조용한 푸터 지시문</span>
+      <span class="ucm3-col-stat">접힘 ~86px (-46%) · 펼침 max 140px</span>
+    </div>
+    <div class="ucm3-col-desc">짙은 트레이(#16181c) 위에 떠 있는 카드(#23262c, 8px 간격). 커맨드 웰만 1개 두고 지시문은 캡슐 없이 카드 하단에 밀착</div>
+    <div class="ucm3-pop" data-pop="a"></div>
+  </section>
+
+  <!-- OPTION B -->
+  <section class="ucm3-col" data-col="b">
+    <div class="ucm3-col-meta">
+      <span class="ucm3-col-title"><span class="ucm3-tag opt-b">Option B</span>좌측 스코프 레일 + 접이식 지시문 칩</span>
+      <span class="ucm3-col-stat">빈 지시문 ~68px (-57%) · 입력 시 ~94px</span>
+    </div>
+    <div class="ucm3-col-desc">스코프 색 레일로 커맨드 단위를 묶고, 빈 지시문은 <code>+ 지시문</code> 인라인 칩으로 접어 최고 밀도 달성 (내용 있으면 하단 리본 표시)</div>
+    <div class="ucm3-pop" data-pop="b"></div>
+  </section>
+
+  <!-- OPTION C -->
+  <section class="ucm3-col" data-col="c">
+    <div class="ucm3-col-meta">
+      <span class="ucm3-col-title"><span class="ucm3-tag opt-c">Option C</span>투존(Two-Zone) 분할 타일</span>
+      <span class="ucm3-col-stat">접힘 ~88px (-44%) · 펼침 max 140px</span>
+    </div>
+    <div class="ucm3-col-desc">상단 틴트 헤더 밴드(#262930) + 하단 일체형 본문 웰(#181a1f)로 중첩 캡슐을 완전 제거하고 타일 간 10px 여백으로 명확히 분리</div>
+    <div class="ucm3-pop" data-pop="c"></div>
+  </section>
+</div>
+
+<div class="ucm3-toast" data-toast role="status" aria-live="polite">
+  <span class="ucm3-toast-dot"></span>
+  <span data-toast-msg></span>
+</div>
+
+<script>
+(function () {
+  var root = document.getElementById("ucmd-compact-mockup");
+  if (!root || root.dataset.ucm3Init) return;
+  root.dataset.ucm3Init = "1";
+
+  var BASE_CMDS = [
+    {
+      id: "strata-vs",
+      scope: "agent",
+      scopeLabel: "에이전트",
+      title: "strata demo (Release + VS 디버거)",
+      line: [
+        "set -e",
+        'ROOT="$(pwd -W 2>/dev/null || pwd)"',
+        "MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$ROOT/scripts/launch-vs-demo.ps1\" -Config Release",
+        "CFG=configs/demo.station.json",
+        "export STRATA_LOG_LEVEL=debug",
+        'export STRATA_STATION_CFG="$ROOT/$CFG"',
+        'if [ ! -f "$STRATA_STATION_CFG" ]; then echo "missing config: $STRATA_STATION_CFG" >&2; exit 1; fi',
+        'echo "[strata] launching Release binary with VS debugger attached..."',
+        '"$ROOT/build/Release/strata-demo.exe" --config "$STRATA_STATION_CFG" --wait-debugger',
+        'echo "[strata] session exited ($?)"'
+      ].join("\n"),
+      prompt: ""
+    },
+    {
+      id: "strata-lock",
+      scope: "agent",
+      scopeLabel: "에이전트",
+      title: "strata demo: Release 빌드(sys_lock) + 실행 (디버그 심볼 포함)",
+      line: [
+        "set -e",
+        'export ROOT="$(pwd -W 2>/dev/null || pwd)"',
+        "bash D:/sys_lock.sh run strata-release-build 75 -- bash -c 'bash scripts/build-release.sh --with-pdb'",
+        "CFG=configs/demo.station.json",
+        'if [ -f "$ROOT/build/Release/strata-demo.pdb" ]; then echo "[ok] PDB verified"; fi',
+        "export STRATA_DEMO_MODE=interactive",
+        "export STRATA_METRICS_PORT=9182",
+        '"$ROOT/build/Release/strata-demo.exe" --config "$ROOT/$CFG" --metrics-port "$STRATA_METRICS_PORT"',
+        'echo "[strata] demo finished"'
+      ].join("\n"),
+      prompt: ""
+    },
+    {
+      id: "w5090-test",
+      scope: "project",
+      scopeLabel: "프로젝트",
+      title: "w5090 원격 전체 테스트",
+      line: [
+        "set -e",
+        "ssh w5090 'cd ~/src/strata && git fetch --all && git status -sb'",
+        "ssh w5090 'cd ~/src/strata && go test -race -count=1 ./internal/... ./cmd/...'",
+        'echo "[w5090] remote test suite done"'
+      ].join("\n"),
+      prompt: "실패한 패키지만 요약하고 원인 파일:라인을 보고해줘"
+    }
+  ];
+
+  var ICONS = {
+    term: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 5l3 3-3 3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 11h5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+    play: '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4.5 3.3l8.5 4.7-8.5 4.7V3.3z" fill="currentColor"/></svg>',
+    ask: '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 12L12 4M6 4h6v6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    save: '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.2 2.5h7.8l2.5 2.5v8.5a.8.8 0 0 1-.8.8H3.2a.8.8 0 0 1-.8-.8V3.3a.8.8 0 0 1 .8-.8z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5 2.5v3.6h5V2.5M5 13.5V9.2h6v4.3" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+    del: '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+    prompt: '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 3.5h11a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H6.5l-3 2.5v-2.5h-1a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+    revert: '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6.5A4.8 4.8 0 1 1 4.2 10.5M4 3v3.8h3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    chevDown: '<svg width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    chevUp: '<svg width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 10l4-4 4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+  };
+
+  var toastEl = root.querySelector("[data-toast]");
+  var toastMsg = root.querySelector("[data-toast-msg]");
+  var toastTimer = null;
+  function showToast(msg) {
+    toastMsg.textContent = msg;
+    toastEl.classList.add("is-show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastEl.classList.remove("is-show"); }, 2600);
+  }
+
+  function esc(s) {
+    return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  function summarizeLine(text) {
+    var lines = String(text || "").split("\n").map(function (l) { return l.trim(); }).filter(Boolean);
+    if (!lines.length) return "(비어 있음)";
+    if (lines.length === 1) return lines[0];
+    return lines.join("  ↵  ");
+  }
+
+  function lineCount(text) {
+    return String(text || "").split("\n").length;
+  }
+
+  function autoHeight(ta) {
+    ta.style.height = "auto";
+    var h = Math.min(140, Math.max(40, ta.scrollHeight + 2));
+    ta.style.height = h + "px";
+  }
+
+  function buildPopHeader(variant) {
+    return (
+      '<div class="ucm3-pop-hd">' +
+        '<span class="ucm3-pop-title">' +
+          '<span class="ucm3-pop-ico">' + ICONS.term + '</span>' +
+          '<span>유저 커맨드</span>' +
+          '<span class="ucm3-count">' + BASE_CMDS.length + '개</span>' +
+        '</span>' +
+        '<span class="ucm3-pop-sub" data-sub="' + variant + '">인라인 편집 · ▶ / ↗ / × 1초 꾹 눌러 실행</span>' +
+        '<button type="button" class="ucm3-add-btn" data-demo-add>+ 새 커맨드</button>' +
+        '<button type="button" class="ucm3-close-btn" title="닫기">×</button>' +
+      '</div>'
+    );
+  }
+
+  function buildActions(cmd, variant) {
+    return (
+      '<div class="ucm3-acts">' +
+        '<button type="button" class="ucm3-ibtn ucm3-ibtn-run" data-hold="run" data-variant="' + variant + '" data-cmd="' + cmd.id + '" title="1초 꾹 눌러 바로 실행">' + ICONS.play + '</button>' +
+        '<button type="button" class="ucm3-ibtn ucm3-ibtn-ask" data-hold="ask" data-variant="' + variant + '" data-cmd="' + cmd.id + '" title="1초 꾹 눌러 에이전트에게 요청">' + ICONS.ask + '</button>' +
+        '<button type="button" class="ucm3-ibtn ucm3-ibtn-save" data-save="' + cmd.id + '" title="수정 내용 저장">' + ICONS.save + '</button>' +
+        '<button type="button" class="ucm3-ibtn ucm3-ibtn-del" data-hold="del" data-variant="' + variant + '" data-cmd="' + cmd.id + '" title="1초 꾹 눌러 삭제">' + ICONS.del + '</button>' +
+      '</div>'
+    );
+  }
+
+  function buildExpandableCmd(cmd, variant, extraRightHtml) {
+    var cnt = lineCount(cmd.line);
+    var extra = cnt > 1 ? ('+' + (cnt - 1) + '줄') : '1줄';
+    return (
+      '<div class="ucm3-cmd-box" data-cmd-box="' + variant + ':' + cmd.id + '">' +
+        '<div class="ucm3-cmd-collapsed" data-expand-trigger title="클릭하여 멀티라인 편집 (최대 140px 확장)">' +
+          '<span class="ucm3-glyph">$</span>' +
+          '<span class="ucm3-cmd-preview" data-preview>' + esc(summarizeLine(cmd.line)) + '</span>' +
+          '<span class="ucm3-lines-pill" data-lines-pill>' + extra + '<span class="ucm3-chev">' + ICONS.chevDown + '</span></span>' +
+          (extraRightHtml || '') +
+          '<button type="button" class="ucm3-rev" data-rev-cmd title="명령어 원복">' + ICONS.revert + '</button>' +
+        '</div>' +
+        '<div class="ucm3-cmd-editor">' +
+          '<div class="ucm3-cmd-ed-row">' +
+            '<span class="ucm3-glyph">$</span>' +
+            '<textarea class="ucm3-cmd-ta" data-cmd-ta spellcheck="false" autocomplete="off">' + esc(cmd.line) + '</textarea>' +
+          '</div>' +
+          '<div class="ucm3-cmd-ed-foot">' +
+            '<span class="ucm3-ed-meta" data-ed-meta>' + cnt + '줄 · 최대 140px 스크롤</span>' +
+            '<div class="ucm3-ed-acts">' +
+              '<button type="button" class="ucm3-rev" data-rev-cmd-ed title="명령어 원복">' + ICONS.revert + '</button>' +
+              '<button type="button" class="ucm3-collapse-btn" data-collapse-btn>' + ICONS.chevUp + ' 접기</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function renderBefore() {
+    var cards = BASE_CMDS.map(function (c) {
+      return (
+        '<div class="ucm3-before-card" data-card="before:' + c.id + '">' +
+          '<div class="ucm3-head-row">' +
+            '<div class="ucm3-head-l">' +
+              '<span class="ucm3-src ' + c.scope + '">' + c.scopeLabel + '</span>' +
+              '<span class="ucm3-title" title="' + esc(c.title) + '">' + esc(c.title) + '</span>' +
+              '<span class="ucm3-dirty-dot"></span>' +
+            '</div>' +
+            buildActions(c, "before") +
+          '</div>' +
+          '<div class="ucm3-before-bar">' +
+            '<span class="ucm3-glyph">$</span>' +
+            '<textarea class="ucm3-before-ta is-cmd" spellcheck="false">' + esc(c.line) + '</textarea>' +
+            '<button type="button" class="ucm3-rev is-always" title="명령어 원복">' + ICONS.revert + '</button>' +
+          '</div>' +
+          '<div class="ucm3-before-bar">' +
+            '<span class="ucm3-glyph is-prompt">' + ICONS.prompt + '</span>' +
+            '<textarea class="ucm3-before-ta is-prompt" rows="1" placeholder="에이전트에게 보낼 지시문 추가 (선택)">' + esc(c.prompt) + '</textarea>' +
+            '<button type="button" class="ucm3-rev is-always" title="지시문 원복">' + ICONS.revert + '</button>' +
+          '</div>' +
+        '</div>'
+      );
+    }).join("");
+    return buildPopHeader("before") + '<div class="ucm3-pop-body ucm3-before-body">' + cards + '</div>';
+  }
+
+  function renderOptA() {
+    var cards = BASE_CMDS.map(function (c) {
+      var hasNote = !!c.prompt.trim();
+      return (
+        '<div class="ucm3-a-card" data-card="a:' + c.id + '" data-cmd-id="' + c.id + '">' +
+          '<div class="ucm3-head-row">' +
+            '<div class="ucm3-head-l">' +
+              '<span class="ucm3-src ' + c.scope + '">' + c.scopeLabel + '</span>' +
+              '<span class="ucm3-title" title="' + esc(c.title) + '">' + esc(c.title) + '</span>' +
+              '<span class="ucm3-dirty-dot"></span>' +
+            '</div>' +
+            buildActions(c, "a") +
+          '</div>' +
+          buildExpandableCmd(c, "a") +
+          '<div class="ucm3-a-note' + (hasNote ? ' has-val' : '') + '" data-note-wrap>' +
+            '<span class="ucm3-glyph is-prompt">' + ICONS.prompt + '</span>' +
+            '<input type="text" class="ucm3-a-note-in" data-note-in value="' + esc(c.prompt) + '" placeholder="에이전트에게 보낼 지시문 추가 (선택)" autocomplete="off">' +
+            '<button type="button" class="ucm3-rev" data-rev-note title="지시문 원복">' + ICONS.revert + '</button>' +
+          '</div>' +
+        '</div>'
+      );
+    }).join("");
+    return buildPopHeader("a") + '<div class="ucm3-pop-body ucm3-opt-a-body">' + cards + '</div>';
+  }
+
+  function renderOptB() {
+    var cards = BASE_CMDS.map(function (c) {
+      var hasNote = !!c.prompt.trim();
+      var noteChip = '<button type="button" class="ucm3-b-note-chip" data-open-note title="에이전트 지시문 추가">+ 지시문</button>';
+      return (
+        '<div class="ucm3-b-card' + (hasNote ? ' has-note' : '') + '" data-scope="' + c.scope + '" data-card="b:' + c.id + '" data-cmd-id="' + c.id + '">' +
+          '<div class="ucm3-b-main">' +
+            '<div class="ucm3-head-row">' +
+              '<div class="ucm3-head-l">' +
+                '<span class="ucm3-src ' + c.scope + '">' + c.scopeLabel + '</span>' +
+                '<span class="ucm3-title" title="' + esc(c.title) + '">' + esc(c.title) + '</span>' +
+                '<span class="ucm3-dirty-dot"></span>' +
+              '</div>' +
+              buildActions(c, "b") +
+            '</div>' +
+            buildExpandableCmd(c, "b", noteChip) +
+          '</div>' +
+          '<div class="ucm3-b-ribbon" data-note-wrap>' +
+            '<span class="ucm3-glyph is-prompt">' + ICONS.prompt + '</span>' +
+            '<input type="text" class="ucm3-b-ribbon-in" data-note-in value="' + esc(c.prompt) + '" placeholder="에이전트에게 보낼 지시문 입력 (비우면 다시 칩으로 접힘)" autocomplete="off">' +
+            '<button type="button" class="ucm3-rev" data-rev-note title="지시문 원복">' + ICONS.revert + '</button>' +
+          '</div>' +
+        '</div>'
+      );
+    }).join("");
+    return buildPopHeader("b") + '<div class="ucm3-pop-body ucm3-opt-b-body">' + cards + '</div>';
+  }
+
+  function renderOptC() {
+    var cards = BASE_CMDS.map(function (c) {
+      var hasNote = !!c.prompt.trim();
+      return (
+        '<div class="ucm3-c-tile" data-card="c:' + c.id + '" data-cmd-id="' + c.id + '">' +
+          '<div class="ucm3-c-band">' +
+            '<div class="ucm3-head-row">' +
+              '<div class="ucm3-head-l">' +
+                '<span class="ucm3-src ' + c.scope + '">' + c.scopeLabel + '</span>' +
+                '<span class="ucm3-title" title="' + esc(c.title) + '">' + esc(c.title) + '</span>' +
+                '<span class="ucm3-dirty-dot"></span>' +
+              '</div>' +
+              buildActions(c, "c") +
+            '</div>' +
+          '</div>' +
+          '<div class="ucm3-c-well">' +
+            buildExpandableCmd(c, "c") +
+            '<div class="ucm3-c-divider"></div>' +
+            '<div class="ucm3-c-note' + (hasNote ? ' has-val' : '') + '" data-note-wrap>' +
+              '<span class="ucm3-glyph is-prompt">' + ICONS.prompt + '</span>' +
+              '<input type="text" class="ucm3-c-note-in" data-note-in value="' + esc(c.prompt) + '" placeholder="에이전트에게 보낼 지시문 추가 (선택)" autocomplete="off">' +
+              '<button type="button" class="ucm3-rev" data-rev-note title="지시문 원복">' + ICONS.revert + '</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>'
+      );
+    }).join("");
+    return buildPopHeader("c") + '<div class="ucm3-pop-body ucm3-opt-c-body">' + cards + '</div>';
+  }
+
+  function findBase(id) {
+    for (var i = 0; i < BASE_CMDS.length; i++) if (BASE_CMDS[i].id === id) return BASE_CMDS[i];
+    return null;
+  }
+
+  function collapseAll(exceptBox) {
+    root.querySelectorAll(".ucm3-cmd-box.is-expanded").forEach(function (box) {
+      if (box === exceptBox) return;
+      box.classList.remove("is-expanded");
+    });
+  }
+
+  function syncCardDirty(card) {
+    var id = card.getAttribute("data-cmd-id");
+    var base = findBase(id);
+    if (!base) return;
+    var ta = card.querySelector("[data-cmd-ta]");
+    var noteIn = card.querySelector("[data-note-in]");
+    var cmdBox = card.querySelector(".ucm3-cmd-box");
+    var cmdDirty = ta ? ta.value !== base.line : false;
+    var noteDirty = noteIn ? noteIn.value !== base.prompt : false;
+
+    card.classList.toggle("is-dirty", cmdDirty || noteDirty);
+    if (cmdBox) cmdBox.classList.toggle("is-dirty-field", cmdDirty);
+    card.querySelectorAll("[data-rev-cmd], [data-rev-cmd-ed]").forEach(function (b) {
+      b.classList.toggle("is-dirty", cmdDirty);
+    });
+    var revNote = card.querySelector("[data-rev-note]");
+    if (revNote) revNote.classList.toggle("is-dirty", noteDirty);
+
+    if (ta) {
+      var prev = card.querySelector("[data-preview]");
+      var pill = card.querySelector("[data-lines-pill]");
+      var meta = card.querySelector("[data-ed-meta]");
+      var cnt = lineCount(ta.value);
+      if (prev) prev.textContent = summarizeLine(ta.value);
+      if (pill) pill.innerHTML = (cnt > 1 ? ("+" + (cnt - 1) + "줄") : "1줄") + '<span class="ucm3-chev">' + ICONS.chevDown + '</span>';
+      if (meta) meta.textContent = cnt + "줄 · 최대 140px 스크롤";
+    }
+    if (noteIn) {
+      var wrap = card.querySelector("[data-note-wrap]");
+      var hasVal = !!noteIn.value.trim();
+      if (wrap) wrap.classList.toggle("has-val", hasVal);
+      if (card.classList.contains("ucm3-b-card") && document.activeElement !== noteIn) {
+        card.classList.toggle("has-note", hasVal);
+      }
+    }
+  }
+
+  function mountAll() {
+    root.querySelector('[data-pop="before"]').innerHTML = renderBefore();
+    root.querySelector('[data-pop="a"]').innerHTML = renderOptA();
+    root.querySelector('[data-pop="b"]').innerHTML = renderOptB();
+    root.querySelector('[data-pop="c"]').innerHTML = renderOptC();
+  }
+
+  mountAll();
+
+  // View tab switching
+  var grid = root.querySelector("[data-grid]");
+  root.addEventListener("click", function (ev) {
+    var tab = ev.target.closest(".ucm3-tab");
+    if (tab) {
+      var v = tab.getAttribute("data-view");
+      root.querySelectorAll(".ucm3-tab").forEach(function (t) { t.classList.toggle("is-on", t === tab); });
+      grid.classList.toggle("is-single", v !== "all");
+      root.querySelectorAll("[data-col]").forEach(function (col) {
+        col.hidden = (v !== "all" && col.getAttribute("data-col") !== v);
+      });
+      return;
+    }
+
+    if (ev.target.closest("[data-reset]")) {
+      mountAll();
+      showToast("모든 비교 카드를 초기 상태로 되돌렸습니다.");
+      return;
+    }
+
+    // Option B "+ 지시문" chip
+    var openNote = ev.target.closest("[data-open-note]");
+    if (openNote) {
+      ev.stopPropagation();
+      var bCard = openNote.closest(".ucm3-b-card");
+      if (bCard) {
+        bCard.classList.add("has-note");
+        var inp = bCard.querySelector("[data-note-in]");
+        if (inp) inp.focus();
+      }
+      return;
+    }
+
+    // Revert buttons
+    var revCmd = ev.target.closest("[data-rev-cmd], [data-rev-cmd-ed]");
+    if (revCmd) {
+      ev.stopPropagation();
+      var card = revCmd.closest("[data-cmd-id]");
+      var base = card && findBase(card.getAttribute("data-cmd-id"));
+      if (base) {
+        var ta = card.querySelector("[data-cmd-ta]");
+        if (ta) { ta.value = base.line; autoHeight(ta); }
+        syncCardDirty(card);
+        showToast("명령어를 원래 내용으로 되돌렸습니다.");
+      }
+      return;
+    }
+    var revNote = ev.target.closest("[data-rev-note]");
+    if (revNote) {
+      ev.stopPropagation();
+      var cardN = revNote.closest("[data-cmd-id]");
+      var baseN = cardN && findBase(cardN.getAttribute("data-cmd-id"));
+      if (baseN) {
+        var inpN = cardN.querySelector("[data-note-in]");
+        if (inpN) inpN.value = baseN.prompt;
+        syncCardDirty(cardN);
+        showToast("지시문을 원래 내용으로 되돌렸습니다.");
+      }
+      return;
+    }
+
+    // Save button
+    var saveBtn = ev.target.closest("[data-save]");
+    if (saveBtn) {
+      var cardS = saveBtn.closest("[data-cmd-id]");
+      if (cardS) {
+        cardS.classList.remove("is-dirty");
+        var boxS = cardS.querySelector(".ucm3-cmd-box");
+        if (boxS) boxS.classList.remove("is-dirty-field");
+        cardS.querySelectorAll(".ucm3-rev").forEach(function (r) { r.classList.remove("is-dirty"); });
+        showToast("템플릿 변경사항을 저장했습니다 (목업 시뮬레이션).");
+      }
+      return;
+    }
+
+    // Collapse button
+    var colBtn = ev.target.closest("[data-collapse-btn]");
+    if (colBtn) {
+      ev.stopPropagation();
+      var boxC = colBtn.closest(".ucm3-cmd-box");
+      if (boxC) boxC.classList.remove("is-expanded");
+      return;
+    }
+
+    // Expand trigger
+    var exp = ev.target.closest("[data-expand-trigger]");
+    if (exp) {
+      var box = exp.closest(".ucm3-cmd-box");
+      if (box) {
+        collapseAll(box);
+        box.classList.add("is-expanded");
+        var taE = box.querySelector("[data-cmd-ta]");
+        if (taE) {
+          autoHeight(taE);
+          taE.focus();
+        }
+      }
+      return;
+    }
+
+    // Clicking outside any expanded cmd-box collapses it
+    if (!ev.target.closest(".ucm3-cmd-box.is-expanded")) {
+      collapseAll(null);
+    }
+  });
+
+  // Live editing sync
+  root.addEventListener("input", function (ev) {
+    var ta = ev.target.closest("[data-cmd-ta]");
+    if (ta) {
+      autoHeight(ta);
+      var card = ta.closest("[data-cmd-id]");
+      if (card) syncCardDirty(card);
+      return;
+    }
+    var noteIn = ev.target.closest("[data-note-in]");
+    if (noteIn) {
+      var card2 = noteIn.closest("[data-cmd-id]");
+      if (card2) syncCardDirty(card2);
+    }
+  });
+
+  // Option B note blur: collapse ribbon back to "+ 지시문" if still empty
+  root.addEventListener("focusout", function (ev) {
+    var noteIn = ev.target.closest(".ucm3-b-ribbon-in");
+    if (noteIn) {
+      var bCard = noteIn.closest(".ucm3-b-card");
+      if (bCard && !noteIn.value.trim()) {
+        bCard.classList.remove("has-note");
+      }
+    }
+  });
+
+  // Esc collapses any expanded command box
+  root.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") {
+      var expBox = ev.target.closest(".ucm3-cmd-box.is-expanded");
+      if (expBox) {
+        ev.preventDefault();
+        expBox.classList.remove("is-expanded");
+      }
+    }
+  });
+
+  // Simulated 1s hold-to-confirm on ▶ / ↗ / ×
+  var holdTimer = null, holdBtn = null;
+  var HOLD_LABELS = {
+    run: { ing: "계속 누르면 바로 실행… (1초)", done: "실행 시작: " },
+    ask: { ing: "계속 누르면 에이전트에게 요청… (1초)", done: "에이전트에게 요청 전송: " },
+    del: { ing: "계속 누르면 커맨드 삭제… (1초)", done: "삭제됨(시뮬레이션): " }
+  };
+  function cancelHold() {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+    if (holdBtn) {
+      var v = holdBtn.getAttribute("data-variant");
+      var sub = root.querySelector('[data-sub="' + v + '"]');
+      if (sub) {
+        sub.textContent = "인라인 편집 · ▶ / ↗ / × 1초 꾹 눌러 실행";
+        sub.className = "ucm3-pop-sub";
+      }
+      holdBtn.classList.remove("is-holding");
+      holdBtn = null;
+    }
+  }
+  root.addEventListener("pointerdown", function (ev) {
+    var btn = ev.target.closest("[data-hold]");
+    if (!btn) return;
+    cancelHold();
+    holdBtn = btn;
+    var act = btn.getAttribute("data-hold");
+    var v = btn.getAttribute("data-variant");
+    var cid = btn.getAttribute("data-cmd");
+    var base = findBase(cid);
+    btn.classList.add("is-holding");
+    var sub = root.querySelector('[data-sub="' + v + '"]');
+    if (sub && HOLD_LABELS[act]) {
+      sub.textContent = HOLD_LABELS[act].ing;
+      sub.className = "ucm3-pop-sub is-" + act;
+    }
+    holdTimer = setTimeout(function () {
+      var title = base ? base.title : cid;
+      cancelHold();
+      showToast(HOLD_LABELS[act].done + title);
+    }, 1000);
+  });
+  ["pointerup", "pointerleave", "pointercancel"].forEach(function (evName) {
+    root.addEventListener(evName, cancelHold, true);
+  });
+})();
+</script>
+</div>
