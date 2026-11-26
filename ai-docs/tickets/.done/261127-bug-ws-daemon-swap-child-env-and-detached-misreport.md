@@ -4,6 +4,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 1aab7bafe514b9ca
 sage-review-completeness-reviewed: 1aab7bafe514b9ca
+completed: 2026-11-27
 ---
 
 # Preserve child worker PATH/HOME across daemon replacement and stop misreporting git execution errors as detached HEAD
@@ -112,3 +113,18 @@ Evidence from source inspection establishes two linked defects:
      - `go test -race -count=1 ./internal/wsagent/... ./internal/wsgit/...`
      - `go test -race -count=1 ./internal/mcp -run 'Test.*(TicketIndex|TicketsAcquire|GitCommit|OccupiedRoot)'` (plus any added test names)
      - `GOOS=windows go vet ./...`
+
+### Result (9227e208) - 2026-11-27
+
+- **What landed:**
+  - `internal/wsagent` (`runner_conv.go`, `worker_rejoin.go`, `runner_reattach.go`, `runner_events.go`, `runner_process.go`, `compaction.go`): added loop-owned `workerRejoined` flag and `clearWorkerRejoin()` helper called at every site clearing `c.proc` (mismatch-reject, `processGone`, `retireDowngradedWorker`, `retireCrossHarnessWorker`, `processEnded`, `startWorker` start/error, `retireCompactionProcess`). Guarded only the per-process worker rejoin setup (`restoreToken`, `restoreWorkerMCP`, `c.events`, `allowHolderReplay`) with `!c.workerRejoined` while keeping per-beat ownership, retirement, and advisory `childAdmission` checks active. Retained `c.workerMCPEnv` across `restoreWorkerMCP` calls and refused `nil` harness env by marking `c.mcpStale = true` instead of binding a `nil`-env `ProxyHello`.
+  - `internal/wsgit` (`git_commit.go`, `commit_merge.go`): changed `currentBranch` to `(string, error)`, returning `"", nil` only for `*exec.ExitError` with `ExitCode() == 1` and propagating all other errors; `Commit` wraps non-detached errors with `git.commit: resolve current branch:` before the detached-HEAD refusal, and `commitMergePins.recheck` fails closed with `git.commit refused: branch changed during merge admission:`.
+  - `internal/mcp` (`ticket_index.go`): added unexported `branchErr` to `indexCaller`, set in `resolveIndexCaller` for non-exit-1 `symbolic-ref` errors and checked first in `acquireTrackError` (`tickets.acquire: resolve current branch:`), leaving best-effort callers (`indexPiggyback`, ownership views) unchanged.
+  - Regression tests (`internal/wsagent/worker_rejoin_test.go`, `worker_mcp_swap_test.go`; `internal/wsgit/git_commit_test.go`; `internal/mcp/ticket_index_test.go`): added `TestHeldWorkerReattachStatusRetryPreservesMCPEnv`, updated `TestWorkerMCPRestoreRequiresExactTuple` (non-nil harness env + `nil`-env staleness case) and `TestHeldClaudeWorkerMCPAcrossDashboardReplacement` (`ProxyHello.Env["PATH"]` and `["HOME"]` checks), updated `TestCommitRefusesDetachedHead` to use a real `*exec.ExitError` exit code 1, and added `TestCommitPropagatesSymbolicRefExecutionError`, `TestCommitMergePinsRecheckFailsClosedOnSymbolicRefError`, `TestResolveIndexCallerAndAcquireTrackError`, and `TestTicketsAcquirePropagatesSymbolicRefError`.
+- **Verification:**
+  - `go test -race -count=1 ./internal/wsagent/...` -> pass (`ok github.com/kang-sw/devenv/internal/wsagent 173.278s`)
+  - `go test -race -count=1 ./internal/wsgit/...` -> pass (`ok github.com/kang-sw/devenv/internal/wsgit 22.900s`)
+  - `go test -race -count=1 ./internal/mcp -run 'Test.*(TicketIndex|TicketsAcquire|GitCommit|OccupiedRoot|ResolveIndexCaller|Acquire|IndexInit|OnlineTrack)'` -> pass (`ok github.com/kang-sw/devenv/internal/mcp 156.282s`)
+  - `GOOS=windows go vet ./...` -> pass (exit 0)
+  - `code-review-lite` (`ba9085866..9227e208`, `/Users/kang-sw/.cache/ws@kang-sw-devenv/proj/17da6bdc@c28b770d/review-paths/7e1c0fc2-01-findings.md`) -> clean (`Remaining: none`)
+- **Decisions:** None beyond the ticket's `## Decisions` (T0 compatibility tier preserved; zero extra file touches or process launches).
