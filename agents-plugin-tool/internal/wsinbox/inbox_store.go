@@ -290,6 +290,95 @@ func SteerWithAdmission(dir, name string, admit func(Entry) error) (string, erro
 	return steered, nil
 }
 
+// SteerAllWithAdmission atomically promotes every un-steered user held entry
+// in dir (skipping interrupt, exec-notice, and already-steered entries) to
+// steering. If no entries qualify, it performs zero file writes and returns
+// (0, nil). admit runs after all qualifying entries are exclusively claimed
+// and before any steered entry is persisted; an error restores every claimed
+// entry with zero partial writes.
+func SteerAllWithAdmission(dir string, admit func(entries []Entry) error) (int, error) {
+	names, err := entryNames(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	eligible := func(e Entry) bool {
+		if e.Interrupt || e.Steer {
+			return false
+		}
+		_, isExec := e.ExecNotice()
+		return !isExec
+	}
+	names = filterNames(dir, names, eligible)
+	if len(names) == 0 {
+		return 0, nil
+	}
+	type claimedItem struct {
+		name    string
+		claimed string
+		entry   Entry
+	}
+	items := make([]claimedItem, 0, len(names))
+	putBack := func() {
+		for _, it := range items {
+			_ = rename(it.claimed, filepath.Join(dir, it.name))
+		}
+	}
+	for _, n := range names {
+		claimed, err := claim(dir, n, "steer")
+		if errors.Is(err, ErrGone) {
+			continue
+		}
+		if err != nil {
+			putBack()
+			return 0, err
+		}
+		entry, err := readEntry(claimed)
+		if err != nil || !eligible(entry) {
+			_ = rename(claimed, filepath.Join(dir, n))
+			continue
+		}
+		items = append(items, claimedItem{name: n, claimed: claimed, entry: entry})
+	}
+	if len(items) == 0 {
+		return 0, nil
+	}
+	if admit != nil {
+		entries := make([]Entry, len(items))
+		for i, it := range items {
+			entries[i] = it.entry
+		}
+		if err := admit(entries); err != nil {
+			putBack()
+			return 0, err
+		}
+	}
+	written := make([]string, 0, len(items))
+	for _, it := range items {
+		e := it.entry
+		e.Steer = true
+		if e.Command != nil {
+			e.Parts = []string{e.Command.Line()}
+			e.Command = nil
+		}
+		steered, err := writeEntry(dir, e)
+		if err != nil {
+			for _, w := range written {
+				_ = remove(filepath.Join(dir, w))
+			}
+			putBack()
+			return 0, err
+		}
+		written = append(written, steered)
+	}
+	for _, it := range items {
+		_ = remove(it.claimed)
+	}
+	return len(items), nil
+}
+
 // Cancel takes the held entry name out of the inbox at dir and returns it.
 // It returns ErrGone when the entry is no longer held, or is an interrupt
 // entry, which it leaves in place.

@@ -26,6 +26,7 @@
     var popover = !!$("agpop");
     subBadge(sbadge, popover ? doc.querySelector("#r-tree .ag-source") : doc.querySelector("#r-convlive .clive"), liveMode || popover, popover);
     bgBadge(doc.querySelector("#r-convlive .clive"));
+    syncSteerAll();
     if (!ibadge) return;
     var on = liveMode && leadWorking();
     if (!on || leadTurn() !== interruptedTurn) interrupting = false;
@@ -325,6 +326,50 @@
       if (!ok) { btn.disabled = false; noteWarn(wsT("js.steer.fail", res)); return; }
       noteOk(wsT("js.steer.ok"));
     });
+  }
+  var steerAllBtn = $("convo-steer-all-btn");
+  var steerAllLbl = steerAllBtn && steerAllBtn.querySelector ? steerAllBtn.querySelector(".d-convo-steer-all-lbl") : null;
+  var steeringAll = false;
+  function syncSteerAll() {
+    if (!steerAllBtn) return;
+    var count = liveMode && doc.querySelectorAll ? doc.querySelectorAll("#r-convlive [data-steer]").length : 0;
+    if (count < 1) {
+      steeringAll = false;
+      if (!steerAllBtn.hidden) steerAllBtn.hidden = true;
+      if (steerAllBtn.disabled) steerAllBtn.disabled = false;
+      return;
+    }
+    var label = count === 1 ? wsT("js.steer_all") : wsT("js.steer_all.count", String(count));
+    if (steerAllLbl) {
+      if (steerAllLbl.textContent !== label) steerAllLbl.textContent = label;
+    } else if (steerAllBtn.textContent !== label) {
+      steerAllBtn.textContent = label;
+    }
+    if (steerAllBtn.hidden) steerAllBtn.hidden = false;
+    if (steerAllBtn.disabled !== steeringAll) steerAllBtn.disabled = steeringAll;
+  }
+  function steerAllHeld(btn) {
+    if (!btn || btn.disabled || steeringAll) return;
+    steeringAll = true;
+    btn.disabled = true;
+    var heldBtns = doc.querySelectorAll ? Array.prototype.slice.call(doc.querySelectorAll("#r-convlive [data-steer]")) : [];
+    heldBtns.forEach(function (b) { b.disabled = true; });
+    post("steer-all", {}, function (ok, res) {
+      steeringAll = false;
+      if (!ok) {
+        btn.disabled = false;
+        heldBtns.forEach(function (b) { b.disabled = false; });
+        noteWarn(wsT("js.steer_all.fail", res));
+        syncSteerAll();
+        return;
+      }
+      if (res && res.count > 0) noteOk(wsT("js.steer_all.ok"));
+      syncSteerAll();
+    });
+  }
+  if (steerAllBtn && typeof MutationObserver === "function") {
+    var steerAllLive = $("r-convlive");
+    if (steerAllLive) new MutationObserver(function () { syncSteerAll(); }).observe(steerAllLive, { childList: true, subtree: true });
   }
   // applySent marks each board item the session was sent an answer for, or
   // holds one for, from the inbox records the conversation region carries,

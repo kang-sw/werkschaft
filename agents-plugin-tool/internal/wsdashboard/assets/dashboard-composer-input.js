@@ -49,7 +49,7 @@
   // transport failed before a full response. A route is the session's own
   // unless it starts with "/", a daemon-wide route.
   function post(route, body, done) {
-    if (route === "steer" && typeof boardIncarnation === "string") body.boardIncarnation = boardIncarnation;
+    if ((route === "steer" || route === "steer-all") && typeof boardIncarnation === "string") body.boardIncarnation = boardIncarnation;
     if (!window.fetch) { done(false, wsT("js.post.nobrowser")); return; }
     fetch(route.charAt(0) === "/" ? route : "/s/" + rid + "/" + route, {
       method: "POST", credentials: "same-origin", cache: "no-store",
@@ -59,7 +59,7 @@
         if (!r.ok) {
           var refusal = s.trim() || "HTTP " + r.status;
           done(false, refusal);
-          if (route === "steer" && refusal === "board-replaced") {
+          if ((route === "steer" || route === "steer-all") && refusal === "board-replaced") {
             saveDraft(); clearTimeout(draftTimer); window.location.reload();
           }
           return;

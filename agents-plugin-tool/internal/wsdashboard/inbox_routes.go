@@ -1,6 +1,7 @@
 package wsdashboard
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -283,6 +284,13 @@ func (d *Daemon) handleInboxWrite(w http.ResponseWriter, r *http.Request, replyI
 	}
 	if route == "message" && status == http.StatusOK {
 		d.scheduleAnswerReplay(s.Registration)
+	}
+	if route == "steer-all" && status == http.StatusOK {
+		if m, ok := answer.(map[string]any); ok && m["count"] == 0 {
+			w.Header().Set("Cache-Control", "no-store")
+			writeJSON(w, status, answer)
+			return
+		}
 	}
 	d.inboxAnswered(w, s, status, answer)
 }
@@ -729,6 +737,50 @@ func (d *Daemon) inboxWrite(dir, replyID, route string, raw []byte, now time.Tim
 			return http.StatusInternalServerError, "could not steer the message"
 		}
 		return http.StatusOK, map[string]any{"id": wsinbox.Record{Name: steered}.ID()}
+	case "steer-all":
+		var req struct {
+			BoardIncarnation *string `json:"boardIncarnation"`
+		}
+		if len(bytes.TrimSpace(raw)) > 0 {
+			if err := json.Unmarshal(raw, &req); err != nil {
+				return http.StatusBadRequest, "malformed steer-all"
+			}
+		}
+		var unlock func()
+		defer func() {
+			if unlock != nil {
+				unlock()
+			}
+		}()
+		count, err := wsinbox.SteerAllWithAdmission(dir, func(entries []wsinbox.Entry) error {
+			if req.BoardIncarnation == nil {
+				return nil
+			}
+			hasBoardLinks := false
+			for _, entry := range entries {
+				if len(entry.Chips)+len(entry.Topics)+len(entry.Mentions)+len(entry.CloseRequests) != 0 {
+					hasBoardLinks = true
+					break
+				}
+			}
+			if !hasBoardLinks {
+				return nil
+			}
+			var admitted bool
+			unlock, admitted = d.lockBoardIncarnation(replyID, req.BoardIncarnation)
+			if !admitted {
+				return errBoardReplaced
+			}
+			return nil
+		})
+		if errors.Is(err, errBoardReplaced) {
+			return http.StatusConflict, "board-replaced"
+		}
+		if err != nil {
+			fmt.Fprintf(d.log, "dashboard: inbox steer-all: %v\n", err)
+			return http.StatusInternalServerError, "could not steer the messages"
+		}
+		return http.StatusOK, map[string]any{"ok": true, "count": count}
 	case "interrupt":
 		records, _, err := wsinbox.Interrupt(dir, now)
 		if err != nil {

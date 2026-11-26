@@ -341,10 +341,19 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .dgrid.live > .d-convo-bottom:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: 2px; }
 .d-convo-bottom-ico { width: 15px; height: 15px; display: block; }
 .dgrid.live[data-tab="board"] > .d-convo-bottom, .dgrid.live[data-ctab="files"] > .d-convo-bottom, .dgrid.live[data-ctab="term"] > .d-convo-bottom { display: none; }
-@media (min-width: 760px) { .dgrid.live[data-layout="split"][data-tab="board"]:not([data-ctab="files"]):not([data-ctab="term"]) > .d-convo-bottom { display: inline-flex; } }
-@media (min-width: 1100px) { .dgrid.live:not([data-layout="tabs"])[data-tab="board"]:not([data-ctab="files"]):not([data-ctab="term"]) > .d-convo-bottom { display: inline-flex; } }
+/* Floating bottom-left steer-all pill overlays the conversation grid cell, clear of .cbadges and #convo-bottom-btn. */
+.dgrid.live > .d-convo-steer-all { grid-area: convo; position: relative; z-index: calc(var(--z-panels, 40) - 6); align-self: end; justify-self: start; margin: 0 0 18px 10px; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 11px; border: 0; border-radius: 999px; background: var(--wb-card); color: var(--wb-fg); box-shadow: var(--wb-shadow-hi), inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 34%, var(--wb-line)); font: 600 12px/1 var(--wb-sans); font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer; transition: background-color 140ms ease, color 140ms ease, transform 140ms ease, opacity 140ms ease; }
+.dgrid.live > .d-convo-steer-all[hidden] { display: none !important; }
+.dgrid.live > .d-convo-steer-all:hover:not(:disabled) { background: color-mix(in srgb, var(--wb-primary) 14%, var(--wb-card)); color: var(--wb-primary); }
+.dgrid.live > .d-convo-steer-all:active:not(:disabled) { transform: translateY(1px) scale(.97); }
+.dgrid.live > .d-convo-steer-all:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: 2px; }
+.dgrid.live > .d-convo-steer-all:disabled { opacity: .55; cursor: default; }
+.d-convo-steer-all .i { width: 12px; height: 12px; flex: none; color: var(--wb-primary); }
+.dgrid.live[data-tab="board"] > .d-convo-steer-all, .dgrid.live[data-ctab="files"] > .d-convo-steer-all, .dgrid.live[data-ctab="term"] > .d-convo-steer-all { display: none; }
+@media (min-width: 760px) { .dgrid.live[data-layout="split"][data-tab="board"]:not([data-ctab="files"]):not([data-ctab="term"]) > :is(.d-convo-bottom, .d-convo-steer-all) { display: inline-flex; } }
+@media (min-width: 1100px) { .dgrid.live:not([data-layout="tabs"])[data-tab="board"]:not([data-ctab="files"]):not([data-ctab="term"]) > :is(.d-convo-bottom, .d-convo-steer-all) { display: inline-flex; } }
 @media (prefers-reduced-motion: reduce) {
-  .dgrid.live > .d-convo-bottom, .dgrid.live > .d-convo-bottom.is-shown, .dgrid.live > .d-convo-bottom:active { transition: none; transform: none; }
+  .dgrid.live > .d-convo-bottom, .dgrid.live > .d-convo-bottom.is-shown, .dgrid.live > .d-convo-bottom:active, .dgrid.live > .d-convo-steer-all, .dgrid.live > .d-convo-steer-all:active { transition: none; transform: none; }
 }
 .agisland[data-mode="idle"] { width: 48px; height: 30px; border-radius: 999px; }
 .dgrid.live > .agisland[data-mode="compact"], .dgrid.live > .agisland[data-mode="idle"] { background: color-mix(in srgb, var(--wb-fg) 7%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); box-shadow: none; }

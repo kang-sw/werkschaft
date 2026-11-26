@@ -55,7 +55,7 @@ func (d *Daemon) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if replyID, sub, _ := strings.Cut(rest, "/"); sub == "message" || sub == "cancel" || sub == "steer" || sub == "interrupt" {
+	if replyID, sub, _ := strings.Cut(rest, "/"); sub == "message" || sub == "cancel" || sub == "steer" || sub == "steer-all" || sub == "interrupt" {
 		d.handleInboxWrite(w, r, replyID, sub)
 		return
 	} else if sub == "composer-exec" || strings.HasPrefix(sub, "composer-exec/") {
