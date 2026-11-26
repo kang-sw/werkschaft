@@ -639,8 +639,9 @@ func agyHeldFinalAndSuccessor(t *testing.T, viaReport bool) {
 		jsonLine(map[string]any{"jsonrpc": "2.0", "id": successor, "result": map[string]any{"stopReason": "end_turn"}}))
 	eventually(t, "the successor settled", func() bool {
 		rec := h.record(parent)
-		return !rec.TurnOpen && rec.HeldTurn == nil && rec.LastTurn != nil && rec.LastTurn.Result.Message == "successor ack"
+		return !rec.TurnOpen && rec.HeldTurn == nil && rec.LastTurn != nil && rec.LastTurn.Result.Message == "successor ack" && rec.ReportID != "" && rec.LastReportedTurn == rec.ReportID
 	})
+	h.quiesce(parent)
 	var held, acks int
 	for _, rep := range got.lead() {
 		switch {
