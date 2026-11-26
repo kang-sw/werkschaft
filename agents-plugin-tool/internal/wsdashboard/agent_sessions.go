@@ -343,6 +343,15 @@ func (s agentSessions) BoardArchive(reg Registration) ([]byte, bool, error) {
 	return nil, false, nil
 }
 
+// SetBoardHold forwards to the configured source; an agent conversation has
+// no board.
+func (s agentSessions) SetBoardHold(reg Registration, itemID int, held bool) ([]int, bool, error) {
+	if hs, ok := s.inner.(BoardHoldSource); ok && !reg.Agent {
+		return hs.SetBoardHold(reg, itemID, held)
+	}
+	return nil, false, nil
+}
+
 // ReadTopicHistory forwards to the configured source; an agent conversation
 // has no board.
 func (s agentSessions) ReadTopicHistory(reg Registration, lang string, names []string, target string) ([]wswhiteboard.TopicFragment, bool) {

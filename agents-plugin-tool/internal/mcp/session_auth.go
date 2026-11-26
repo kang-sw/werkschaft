@@ -117,6 +117,7 @@ type sessionRecord struct {
 	// Presentation metadata supplied with the snapshot.
 	boardRevision    uint64
 	boardInstance    uint64
+	boardHeld        []int
 	boardUnavailable bool
 }
 

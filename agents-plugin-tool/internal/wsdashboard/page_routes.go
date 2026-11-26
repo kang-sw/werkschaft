@@ -97,6 +97,9 @@ func (d *Daemon) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 	} else if sub == "label" {
 		d.handleSessionLabel(w, r, replyID)
 		return
+	} else if sub == "board/hold" {
+		d.handleBoardHold(w, r, replyID)
+		return
 	} else if sub == "web" || strings.HasPrefix(sub, "web/") {
 		d.handleWeb(w, r, replyID, strings.TrimPrefix(sub, "web"))
 		return

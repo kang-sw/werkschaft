@@ -229,6 +229,10 @@ func boardMemoBase(key string, record sessionRecord, lang string, reasked map[in
 	fmt.Fprintf(h, "seq\x00%d\x00", record.Whiteboard.Seq)
 	// Board writes can change content without advancing the render sequence.
 	fmt.Fprintf(h, "board\x00%d\x00", record.boardRevision)
+	// Hold writes do not bump generation/boardRevision; fold sorted held IDs
+	// here (not in boardMemoSharedBase) so the board memo and NonLiveFingerprint
+	// invalidate while untouched topics reuse their per-topic memo units.
+	fmt.Fprintf(h, "held\x00%v\x00", record.boardHeld)
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -388,6 +392,41 @@ func (src *DashboardSessionSource) BoardArchive(reg wsdashboard.Registration) ([
 	return data, data != nil && err == nil, err
 }
 
+var _ wsdashboard.BoardHoldSource = (*DashboardSessionSource)(nil)
+
+// SetBoardHold sets or clears the user-side hold on one open item of reg's
+// board without advancing the board's generation or poking nudges.
+func (src *DashboardSessionSource) SetBoardHold(reg wsdashboard.Registration, itemID int, held bool) ([]int, bool, error) {
+	if src.store.boards == nil {
+		return nil, false, errWhiteboardOwner
+	}
+	dir := filepath.Join(reg.Project, filepath.FromSlash(whiteboardDirRel), reg.ReplyID)
+	run := func() ([]int, bool, error) {
+		var ids []int
+		var hasBoard bool
+		err := src.store.boards.useDirectory(dir, reg.Project, "", nil, true, func(slot *whiteboardSlot) error {
+			if slot.board == nil {
+				return nil
+			}
+			hasBoard = true
+			var err error
+			ids, err = slot.board.SetHold(itemID, held)
+			return err
+		})
+		return ids, hasBoard, err
+	}
+	ids, hasBoard, err := run()
+	if err != nil || hasBoard {
+		return ids, hasBoard, err
+	}
+	// If the session's board still lives only in a legacy record, import it
+	// once before reporting no board.
+	if _, _, record, ok, lerr := src.lookupRecord(reg); !ok || lerr != nil || record.Whiteboard == nil {
+		return nil, false, lerr
+	}
+	return run()
+}
+
 var _ wsdashboard.OutsideLinkSource = (*DashboardSessionSource)(nil)
 
 // ReadOutsideLinks lists the files outside the session root that the board
@@ -426,6 +465,7 @@ func servedViewInput(record sessionRecord, replyID string) wswhiteboard.ViewInpu
 	return wswhiteboard.ViewInput{
 		Layout:   wswhiteboard.LayoutFull,
 		ReplyID:  replyID,
+		Held:     record.boardHeld,
 		FileText: servedFileText(record.Root),
 		// The image's version (&v=, which the route ignores) changes the
 		// rendered page when the file changes, so an edited image reaches a
