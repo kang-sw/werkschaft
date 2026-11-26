@@ -409,6 +409,8 @@
   "js.card.back": "Revenir au tableau (Échap)",
   "js.card.pin": "Épingler",
   "js.card.raise": "Déplacer tout en haut",
+  "js.panel.jump": "Aller au panneau dans le sujet",
+  "js.panel.unavailable": "Le panneau n'est plus disponible",
   "js.chip.remove": "supprimer cette réponse",
   "js.chip.tnote.open": "afficher cette note de sujet sur le tableau",
   "js.chip.tnote.remove": "supprimer cette note de sujet",

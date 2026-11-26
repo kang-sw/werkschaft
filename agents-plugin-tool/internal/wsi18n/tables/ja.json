@@ -409,6 +409,8 @@
   "js.card.back": "ボードに戻る (Esc)",
   "js.card.pin": "ピン留め",
   "js.card.raise": "最上部へ移動",
+  "js.panel.jump": "トピック内の元のパネルへ移動",
+  "js.panel.unavailable": "パネルはもう利用できません",
   "js.chip.remove": "この回答を削除",
   "js.chip.tnote.open": "このトピックメモをボードで表示",
   "js.chip.tnote.remove": "このトピックメモを削除",

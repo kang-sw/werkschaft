@@ -409,6 +409,8 @@
   "js.card.back": "Volver al tablero (Esc)",
   "js.card.pin": "Fijar",
   "js.card.raise": "Mover al principio",
+  "js.panel.jump": "Ir al panel en el tema",
+  "js.panel.unavailable": "El panel ya no está disponible",
   "js.chip.remove": "quitar esta respuesta",
   "js.chip.tnote.open": "mostrar esta nota del tema en el tablero",
   "js.chip.tnote.remove": "quitar esta nota del tema",
