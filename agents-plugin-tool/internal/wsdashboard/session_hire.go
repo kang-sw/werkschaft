@@ -123,7 +123,7 @@ func (d *Daemon) hiringEligible(replyID string) (Registration, error) {
 	if reg.Agent || reg.Unlisted {
 		return reg, errors.New("only lead sessions may request hiring")
 	}
-	meta, err := ReadHiringMetadata(d.dir, replyID)
+	meta, err := d.readHiringMetadata(replyID)
 	if err != nil {
 		return reg, err
 	}

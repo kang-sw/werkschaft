@@ -116,6 +116,9 @@ type IndexOptions struct {
 	// of each session a re-read or purge removes from the index. It must not
 	// block or call back into the index.
 	OnRemove func(replyID string, last Registration)
+	// LabelLookup returns a session's display label from memory when set
+	// (SQLite-backed daemons); nil falls back to reading label.json on disk.
+	LabelLookup func(replyID string) string
 	// Log receives one line per session added to or removed from the index;
 	// nil discards them.
 	Log io.Writer
@@ -589,7 +592,11 @@ func (x *Index) applyRead(replyID string, reg *Registration, full bool, stores L
 			fmt.Fprintf(x.opts.Log, "dashboard: read session %s: %v\n", replyID, err)
 			return false
 		}
-		label = readSessionLabel(SessionDir(x.opts.Dir, replyID))
+		if x.opts.LabelLookup != nil {
+			label = x.opts.LabelLookup(replyID)
+		} else {
+			label = readSessionLabel(SessionDir(x.opts.Dir, replyID))
+		}
 		if reg.Hosted {
 			hidden, err = ReadSessionHidden(x.opts.Dir, replyID)
 			if err != nil {

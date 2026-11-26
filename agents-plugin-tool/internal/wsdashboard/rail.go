@@ -43,10 +43,7 @@ func (d *Daemon) railOrderedView(r pageReader) RailView {
 	classifyRailAdmissions(&view, layout)
 	for i := range view.Workspaces {
 		// Optional memo state must never prevent the rail from rendering.
-		doc, err := readMemoDoc(memoFile(d.dir, view.Workspaces[i].Path))
-		if err == nil {
-			view.Workspaces[i].MemoCount = len(doc.memos())
-		}
+		view.Workspaces[i].MemoCount = d.memoCount(view.Workspaces[i].Path)
 	}
 	return view
 }

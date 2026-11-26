@@ -4,6 +4,7 @@ import (
 	"errors"
 	"github.com/gofrs/flock"
 	"github.com/kang-sw/devenv/internal/wscred"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 	"io"
 	"net"
 	"net/http"
@@ -329,8 +330,9 @@ type Daemon struct {
 	// inboxMu serializes the daemon's own inbox writes (sends and cancels,
 	// and the answer check's record and nudge).
 	inboxMu       sync.Mutex
-	answerReplay  sync.Map        // reply-id -> one active replay/retry loop
-	answerPending map[string]bool // inboxMu; absent means not yet checked at startup
+	answerReplay  sync.Map                  // reply-id -> one active replay/retry loop
+	answerPending map[string]bool           // inboxMu; absent means not yet checked at startup
+	ackChecks     map[string]ackCheckRecord // inboxMu; SQLite-backed ack-check cache when meta != nil
 	// acks runs the answer checks (ack_check.go), nil without a session
 	// index.
 	acks *ackChecker
@@ -347,7 +349,15 @@ type Daemon struct {
 	// auth holds bounded, ephemeral login codes and the exchange rate window.
 	auth      localhostAuth
 	clipboard clipboardWriter
-	memoMu    sync.Mutex // serializes daemon-local memo read/modify/write
+	memoMu    sync.Mutex                // serializes daemon-local memo read/modify/write
+	memoCache map[string]*cachedMemoDoc // memoMu; keyed by workspace hash when meta != nil
+	// labelMu and hiringMu are leaf locks ordered strictly after hireMu so
+	// approveHireLocked -> CreateHireLead -> OnHired -> RecordHired never
+	// reacquires hireMu.
+	labelMu  sync.RWMutex
+	labels   map[string]string
+	hiringMu sync.RWMutex
+	hiring   map[string]HiringMetadata
 	// beforeConfigWrite runs between a config save's layer read and its
 	// write (a test seam; nil in production).
 	beforeConfigWrite func(key string)
@@ -449,6 +459,12 @@ type Daemon struct {
 	hostedExecJobs func() map[string]int
 	// forgotten is DaemonOptions.SessionForgotten.
 	forgotten func(replyID string)
+
+	// meta is the single daemon-owned SQLite metadata store after cutover
+	// (nil in legacy fallback); metaSnap is the startup snapshot read once
+	// under dashboard.lock.
+	meta     *wsmeta.Store
+	metaSnap *wsmeta.Snapshot
 
 	// metaMu/metaClosed/metaWG gate /meta/* requests and in-process metadata
 	// pruning so Close refuses new callers (503) and drains in-flight calls

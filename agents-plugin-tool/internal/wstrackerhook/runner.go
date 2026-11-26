@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsledger"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 	"github.com/kang-sw/devenv/internal/wstracker"
 	"github.com/kang-sw/devenv/internal/wstrackerhost"
 )
@@ -57,6 +58,11 @@ type Options struct {
 	// Exec runs a command; nil runs it as RunCommand does, bounded by
 	// RunTimeout.
 	Exec Exec
+	// Meta, when non-nil, stores per-store hook progress in SQLite and reads
+	// hooks config from WitnessFileName instead of legacy FileName (2125).
+	Meta *wsmeta.Store
+	// MetaSnapshot seeds Meta-backed hook progress from startup Load.
+	MetaSnapshot *wsmeta.Snapshot
 }
 
 // Runner delivers tracker events to the hooks the hooks file names. Each
@@ -69,6 +75,11 @@ type Runner struct {
 	now  func() time.Time
 	loc  *time.Location
 	exec Exec
+	meta *wsmeta.Store
+
+	// stateMu guards the SQLite-backed per-store state cache.
+	stateMu sync.Mutex
+	states  map[wsmeta.TrackerHookKey]storeState
 
 	// mu guards the hook set and the settings the file gives.
 	mu      sync.Mutex
@@ -112,8 +123,16 @@ type worker struct {
 
 func newRunner(opts Options) *Runner {
 	r := &Runner{dir: opts.Dir, src: opts.Source, base: opts.BaseURL, log: opts.Log, now: opts.Now, loc: opts.Location,
-		exec: opts.Exec, workers: map[string]*worker{}, dueSoon: DefaultDueSoon,
+		exec: opts.Exec, meta: opts.Meta, workers: map[string]*worker{}, dueSoon: DefaultDueSoon,
 		nudge: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
+	if r.meta != nil {
+		r.states = map[wsmeta.TrackerHookKey]storeState{}
+		if opts.MetaSnapshot != nil {
+			for k, raw := range opts.MetaSnapshot.TrackerHooks {
+				r.states[k] = storeStateFromMeta(k.Nonce, raw)
+			}
+		}
+	}
 	r.ctx, r.halt = context.WithCancel(context.Background())
 	if r.log == nil {
 		r.log = io.Discard
@@ -201,6 +220,56 @@ func (r *Runner) logf(format string, args ...any) {
 	fmt.Fprintf(r.log, "tracker hooks: "+format+"\n", args...)
 }
 
+func (r *Runner) configFileName() string {
+	if r.meta != nil {
+		return WitnessFileName
+	}
+	return FileName
+}
+
+func (r *Runner) loadMetaState(storeID, nonce string) (st storeState, ok, hadOtherNonce bool) {
+	key := wsmeta.TrackerHookKey{StoreID: storeID, Nonce: nonce}
+	r.stateMu.Lock()
+	defer r.stateMu.Unlock()
+	if cur, exists := r.states[key]; exists {
+		return cur.clone(), true, false
+	}
+	for k := range r.states {
+		if k.StoreID == storeID && k.Nonce != nonce {
+			hadOtherNonce = true
+			break
+		}
+	}
+	return newEmptyStoreState(nonce), false, hadOtherNonce
+}
+
+func (r *Runner) saveMetaState(storeID, nonce string, prevExists, resetNonce bool, prev, next storeState) error {
+	delta, err := diffTrackerHookState(prevExists, resetNonce, prev, next)
+	if err != nil {
+		return err
+	}
+	key := wsmeta.TrackerHookKey{StoreID: storeID, Nonce: nonce}
+	if !delta.Empty() {
+		if err := r.meta.UpdateTrackerHook(context.Background(), key, delta); err != nil {
+			return err
+		}
+	}
+	r.stateMu.Lock()
+	if r.states == nil {
+		r.states = map[wsmeta.TrackerHookKey]storeState{}
+	}
+	if resetNonce {
+		for k := range r.states {
+			if k.StoreID == storeID && k.Nonce != nonce {
+				delete(r.states, k)
+			}
+		}
+	}
+	r.states[key] = next.clone()
+	r.stateMu.Unlock()
+	return nil
+}
+
 // reload loads the hooks file when it changed since the last load, and
 // reports whether it did. An absent file turns the runner idle; an invalid
 // one is logged and runs no hook, while the stores' cursors still advance,
@@ -208,7 +277,7 @@ func (r *Runner) logf(format string, args ...any) {
 // their queues; a removed hook's queue is dropped once its running command
 // finishes, and an added hook starts empty.
 func (r *Runner) reload() bool {
-	path := filepath.Join(r.dir, FileName)
+	path := filepath.Join(r.dir, r.configFileName())
 	info, statErr := os.Stat(path)
 	stamp := ""
 	if statErr == nil {
@@ -312,7 +381,22 @@ func (r *Runner) scanAll() {
 // ts, so a teammate's event that syncs late is not lost. An event still
 // waiting for its verdict is left for a later read.
 func (r *Runner) scan(e wstrackerhost.StoreEntry, fresh bool) {
-	st, ok := loadState(r.dir, e.ID, e.Nonce)
+	var (
+		st            storeState
+		ok            bool
+		prev          storeState
+		prevExists    bool
+		hadOtherNonce bool
+	)
+	if r.meta != nil {
+		st, ok, hadOtherNonce = r.loadMetaState(e.ID, e.Nonce)
+		prevExists = ok
+		if ok {
+			prev = st.clone()
+		}
+	} else {
+		st, ok = loadState(r.dir, e.ID, e.Nonce)
+	}
 	fresh = fresh || !ok
 	if fresh {
 		st.Cursor, st.Processed = wsledger.Cursor{}, map[string]mark{}
@@ -365,7 +449,11 @@ func (r *Runner) scan(e wstrackerhost.StoreEntry, fresh bool) {
 	r.queue(e.Member, cands)
 	st.Cursor = rd.Cursor
 	st.prune(now, r.loc)
-	if err := saveState(r.dir, e.ID, st); err != nil {
+	if r.meta != nil {
+		if err := r.saveMetaState(e.ID, st.Nonce, prevExists, hadOtherNonce, prev, st); err != nil {
+			r.logf("save the state of store %q: %v", e.ID, err)
+		}
+	} else if err := saveState(r.dir, e.ID, st); err != nil {
 		r.logf("save the state of store %q: %v", e.ID, err)
 	}
 }
