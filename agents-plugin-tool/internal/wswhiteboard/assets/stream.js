@@ -181,7 +181,7 @@
   // Clone the small control shell, never the potentially huge payload.
   function shell(gap) {
     var copy = gap.cloneNode(false);
-    copy.removeAttribute('data-lazy');
+    copy.removeAttribute('data-lazy'); copy.removeAttribute('data-loading');
     Array.from(gap.children).forEach(function (n) { copy.appendChild(n.cloneNode(!n.matches('template[data-history-gap]'))); });
     return copy;
   }
@@ -206,11 +206,14 @@
   function lazy(n) { return !!(n && n.hasAttribute && n.hasAttribute('data-lazy')); }
   function lazyIn(root) { return lazy(root) || !!(root.querySelector && root.querySelector('[data-lazy]')); }
   var fetching = new Map(), fetchFailures = 0;
-  function fetchTopics(query) {
+  // now starts the request in this task (a name batch already waited one
+  // microtask for its members); otherwise it starts on the next microtask.
+  function fetchTopics(query, now) {
     if (typeof window.wbHistoryFetch !== 'function') return Promise.resolve([]);
     if (!fetching.has(query)) {
-      var requestedImages = imageStamp;
-      fetching.set(query, Promise.resolve().then(function () { return window.wbHistoryFetch(query); }).then(function (topics) {
+      var requestedImages = imageStamp, call = function () { return window.wbHistoryFetch(query); }, started;
+      if (now) { try { started = Promise.resolve(call()); } catch (e) { started = Promise.reject(e); } } else started = Promise.resolve().then(call);
+      fetching.set(query, started.then(function (topics) {
         fetching.delete(query);
         // Any query (target=, repeated name=, or prefetch) can straddle an
         // image edit. Do not let its old response hydrate after that edit.
@@ -219,6 +222,95 @@
       }, function () { fetching.delete(query); fetchFailures++; return []; }));
     }
     return fetching.get(query);
+  }
+  // Name fetches batch: every topic asked within one task joins one request
+  // (chunked at the route's 512-name cap), a topic already in flight joins
+  // its request, and a topic the host's history cache holds at its current
+  // section hash (data-th) and image stamp answers from memory without a
+  // request. window.wbHistoryCache, when the host defines it, is
+  // {get(name, th, stamp) -> html|undefined, put(name, th, stamp, html)}.
+  var nameBatch = null, namesInFlight = new Map();
+  function historyStamp() {
+    var marker = document.querySelector('template[data-history-images]');
+    return marker ? marker.getAttribute('data-history-images') || '' : '';
+  }
+  function topicHashes() {
+    var out = new Map();
+    Array.from(document.querySelectorAll('section.topic[data-topic]')).forEach(function (s) {
+      var name = s.getAttribute('data-topic'), th = s.getAttribute('data-th');
+      if (th && !out.has(name)) out.set(name, th);
+    });
+    return out;
+  }
+  function startBatch() {
+    var batch = { names: [], hashes: new Map() }, stamp = '';
+    batch.promise = Promise.resolve().then(function () {
+      if (nameBatch === batch) nameBatch = null;
+      stamp = window.wbHistoryCache ? historyStamp() : '';
+      var queries = [];
+      for (var i = 0; i < batch.names.length; i += 256) queries.push(batch.names.slice(i, i + 256).map(function (n) { return 'name=' + encodeURIComponent(n); }).join('&'));
+      return Promise.all(queries.map(function (q) { return fetchTopics(q, true); }));
+    }).then(function (all) {
+      var topics = [].concat.apply([], all), cache = window.wbHistoryCache;
+      batch.names.forEach(function (n) { if (namesInFlight.get(n) === batch.promise) namesInFlight.delete(n); });
+      if (cache) topics.forEach(function (t) {
+        var th = t && batch.hashes.get(t.name);
+        if (th && typeof t.html === 'string') cache.put(t.name, th, stamp, t.html);
+      });
+      return topics;
+    });
+    return batch;
+  }
+  // fetchNames returns {promise, missing}: promise resolves to the named
+  // topics found (cached or fetched); missing holds the names a request
+  // serves, whose lazy parts show as loading.
+  function fetchNames(names) {
+    var list = Array.from(new Set((names || []).filter(Boolean)));
+    var cache = window.wbHistoryCache, hashes = cache && list.length ? topicHashes() : null, stamp = hashes ? historyStamp() : '';
+    var hits = [], missing = new Set(), waits = new Set();
+    list.forEach(function (name) {
+      var th = hashes && hashes.get(name), html = th ? cache.get(name, th, stamp) : undefined;
+      if (typeof html === 'string') { hits.push({ name: name, html: html }); return; }
+      missing.add(name);
+      var flight = namesInFlight.get(name);
+      if (!flight) {
+        if (!nameBatch) nameBatch = startBatch();
+        nameBatch.names.push(name);
+        if (th) nameBatch.hashes.set(name, th);
+        flight = nameBatch.promise;
+        namesInFlight.set(name, flight);
+      }
+      waits.add(flight);
+    });
+    var promise = !waits.size ? Promise.resolve(hits) : Promise.all(Array.from(waits)).then(function (all) {
+      var out = hits.slice(), seen = new Set();
+      [].concat.apply([], all).forEach(function (t) { if (t && missing.has(t.name) && !seen.has(t.name)) { seen.add(t.name); out.push(t); } });
+      return out;
+    });
+    return { promise: promise, missing: missing };
+  }
+  // A topic's lazy parts carry data-loading while its request is in flight
+  // (page-stream.css), cleared when it lands or fails. Only attributes are
+  // written; nothing is measured.
+  function loadingParts(section) {
+    return Array.from(section.querySelectorAll('.history-gap[data-lazy]')).concat(Array.from(section.querySelectorAll('.entry-body[data-lazy]')));
+  }
+  function hydrateSections(sections) {
+    sections = sections.filter(function (s) { return s && lazyIn(s); });
+    if (!sections.length) return Promise.resolve(0);
+    var nameOf = function (s) { return s.getAttribute('data-topic') || ''; };
+    var req = fetchNames(sections.map(nameOf)), marked = [];
+    sections.forEach(function (s) { if (req.missing.has(nameOf(s))) marked = marked.concat(loadingParts(s)); });
+    marked.forEach(function (n) { n.setAttribute('data-loading', '1'); });
+    function done() { marked.forEach(function (n) { n.removeAttribute('data-loading'); }); }
+    return req.promise.then(function (topics) {
+      done();
+      return sections.reduce(function (sum, s) {
+        if (s.isConnected === false) return sum;
+        var name = nameOf(s);
+        return sum + hydrateWith(s, topics.filter(function (t) { return t && t.name === name; }));
+      }, 0);
+    }, function (e) { done(); throw e; });
   }
   function named(list, attr, name) { return Array.from(list).filter(function (n) { return n.getAttribute(attr) === name; }); }
   function fillRoots(roots, full) {
@@ -285,12 +377,7 @@
     });
     return filled;
   }
-  function hydrateTopic(section) {
-    if (!section || !lazyIn(section)) return Promise.resolve(0);
-    return fetchTopics('name=' + encodeURIComponent(section.getAttribute('data-topic') || '')).then(function (topics) {
-      return section.isConnected === false ? 0 : hydrateWith(section, topics);
-    });
-  }
+  function hydrateTopic(section) { return hydrateSections([section]); }
   // targets holds the lazy loadTarget misses in flight by id, one per root
   // asked (a jump tries every board box). loading(id), asked right after
   // loadTarget returned null, is the promise of those loads (true once the
@@ -317,11 +404,8 @@
     Array.from(root.querySelectorAll('section.topic[data-topic]')).forEach(function (t) { if (lazyIn(t)) names.add(t.getAttribute('data-topic')); });
     Array.from(root.querySelectorAll('template[data-history-topic][data-lazy]')).forEach(function (t) { names.add(t.getAttribute('data-history-topic')); });
     if (!names.size) return Promise.resolve(0);
-    // The route answers at most 512 names a request.
-    var list = Array.from(names), queries = [];
-    for (var i = 0; i < list.length; i += 256) queries.push(list.slice(i, i + 256).map(function (n) { return 'name=' + encodeURIComponent(n); }).join('&'));
-    return Promise.all(queries.map(fetchTopics)).then(function (all) {
-      return hydrateWith(root, [].concat.apply([], all), getDetachedRoots);
+    return fetchNames(Array.from(names)).promise.then(function (topics) {
+      return hydrateWith(root, topics, getDetachedRoots);
     });
   }
   // hydrateDetached fetches lazy history for detached topic roots (such as
@@ -333,12 +417,8 @@
   function hydrateDetached(getRoots, names) {
     var list = Array.from(new Set((names || []).filter(Boolean)));
     if (!list.length) return Promise.resolve(0);
-    var queries = [];
-    for (var i = 0; i < list.length; i += 256) {
-      queries.push(list.slice(i, i + 256).map(function (n) { return 'name=' + encodeURIComponent(n); }).join('&'));
-    }
-    return Promise.all(queries.map(fetchTopics)).then(function (all) {
-      return hydrateWith(document, [].concat.apply([], all), getRoots);
+    return fetchNames(list).promise.then(function (topics) {
+      return hydrateWith(document, topics, getRoots);
     });
   }
   // A lazy board's deterministic file-image stamp changes even when its
@@ -426,7 +506,7 @@
   function rehydrate(root, saved) {
     var scope = root || document;
     unfilled.set(saved.key, saved);
-    fetchTopics('name=' + encodeURIComponent(saved.key)).then(function (topics) {
+    fetchNames([saved.key]).promise.then(function (topics) {
       if (unfilled.get(saved.key) === saved) unfilled.delete(saved.key);
       if (scope.isConnected === false) return;
       // The first restore already ran this snapshot's pending loads.

@@ -784,6 +784,12 @@ type DashboardSessionSource struct {
 
 	// boards memoizes each session's board render (dashboard_page.go).
 	boards boardMemo
+	// history memoizes each session's full-history topic fragments, and
+	// ticketDirs and images serve the ticket statuses and image versions
+	// those fragments show (dashboard_topic_history.go).
+	history    topicHistoryMemo
+	ticketDirs ticketDirCache
+	images     imageStatCache
 	// records and snapshots serve the unchanged files a re-read and a page
 	// read read again and again, each costing a stat (wsdashboard.FileCache):
 	// the session record's part files (with their bytes, which the
@@ -845,6 +851,10 @@ func (src *DashboardSessionSource) invalidateSession(reg wsdashboard.Registratio
 	if dir, err := src.resolveStateDir(); err == nil {
 		src.snapshots.Invalidate(dir, reg.ReplyID)
 	}
+	// A nudge may follow a ticket move or an image write: the next history
+	// read looks again instead of waiting out the validation window.
+	src.ticketDirs.invalidate(reg.Project)
+	src.images.invalidateUnder(reg.Project)
 }
 
 // ForgetSession drops what the source keeps of a session the daemon's index
@@ -857,6 +867,7 @@ func (src *DashboardSessionSource) ForgetSession(replyID string) {
 	keys := src.byReply[replyID]
 	src.mu.Unlock()
 	src.boards.forget(replyID)
+	src.history.forget(replyID)
 	if d, err := src.store.dirs(); err == nil {
 		for _, key := range keys {
 			src.records.ForgetUnder(d.keyDir(key))
@@ -914,7 +925,7 @@ func (src *DashboardSessionSource) ReadSession(reg wsdashboard.Registration) (ws
 		src.nonLiveRead("record")
 		src.nonLiveRead("board")
 	}
-	key, raw, record, ok, err := src.lookupRecordWithActivity(reg, false)
+	key, raw, record, ok, err := src.lookupRecordWithActivity(reg, false, true)
 	if !ok || err != nil {
 		return wsdashboard.SessionData{}, false, err
 	}
@@ -1023,15 +1034,20 @@ func ticketBoardPrint(h io.Writer, root string) {
 
 // lookupRecord finds the session record behind reg: the top-level lead
 // record rooted at reg.Project whose key maps to reg.ReplyID. It returns the
-// key (which never leaves this process), the raw bytes of the record's files,
-// and the decoded record with every part. readErr preserves transient
-// failures separately from a genuinely absent or mismatched identity.
+// key (which never leaves this process) and the decoded record with every
+// part; raw is always nil, since only ReadSession's fingerprint hashes the
+// record bytes and the board's JSON (lookupRecordWithActivity). readErr
+// preserves transient failures separately from a genuinely absent or
+// mismatched identity.
 func (src *DashboardSessionSource) lookupRecord(reg wsdashboard.Registration) (key string, raw []byte, record sessionRecord, ok bool, readErr error) {
-	return src.lookupRecordWithActivity(reg, true)
+	return src.lookupRecordWithActivity(reg, true, false)
 }
 
 // Index polling reads the same snapshot without renewing a board's idle lease.
-func (src *DashboardSessionSource) lookupRecordWithActivity(reg wsdashboard.Registration, activity bool) (key string, raw []byte, record sessionRecord, ok bool, readErr error) {
+// withRaw collects the record files' bytes and marshals the board snapshot
+// into raw; without it no board JSON is built (a page or history read would
+// marshal the whole board only to drop it).
+func (src *DashboardSessionSource) lookupRecordWithActivity(reg wsdashboard.Registration, activity, withRaw bool) (key string, raw []byte, record sessionRecord, ok bool, readErr error) {
 	d, err := src.store.dirs()
 	if err != nil {
 		return "", nil, sessionRecord{}, false, err
@@ -1050,7 +1066,11 @@ func (src *DashboardSessionSource) lookupRecordWithActivity(reg wsdashboard.Regi
 				return "", nil, sessionRecord{}, false, nil
 			}
 			var buf bytes.Buffer
-			record, _, err := loadRecordWithBoard(d, key, partAll, &buf, src.readRecordFile, func(rec *sessionRecord, key string, raw io.Writer, legacy legacyBoardReader) error {
+			var sink io.Writer
+			if withRaw {
+				sink = &buf
+			}
+			record, _, err := loadRecordWithBoard(d, key, partAll, sink, src.readRecordFile, func(rec *sessionRecord, key string, raw io.Writer, legacy legacyBoardReader) error {
 				return src.store.snapshotWhiteboard(rec, key, raw, legacy, activity)
 			})
 			if err != nil {
@@ -1061,6 +1081,9 @@ func (src *DashboardSessionSource) lookupRecordWithActivity(reg wsdashboard.Regi
 			}
 			if record.Root != reg.Project || record.Scope != string(roleLead) || record.Parent != "" {
 				return "", nil, sessionRecord{}, false, nil
+			}
+			if !withRaw {
+				return key, nil, record, true, nil
 			}
 			return key, buf.Bytes(), record, true, nil
 		}

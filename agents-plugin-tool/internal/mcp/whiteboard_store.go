@@ -57,6 +57,7 @@ func (s *sessionStore) snapshotWhiteboard(record *sessionRecord, key string, raw
 		record.Whiteboard = nil
 		if slot.board != nil {
 			record.Whiteboard, record.boardRevision = slot.board.Snapshot()
+			record.boardInstance = slot.board.Instance()
 		}
 		return nil
 	})

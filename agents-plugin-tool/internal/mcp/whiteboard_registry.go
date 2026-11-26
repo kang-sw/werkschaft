@@ -51,6 +51,29 @@ func NewWhiteboardStores(log io.Writer) *WhiteboardStores {
 // serving. The callback runs outside the board lock.
 func (s *WhiteboardStores) SetChanged(fn func(root, key string)) { s.changed = fn }
 
+// peekHeld runs fn on the board root/key already holds, renewing its idle
+// lease as an active use does, and never opens, imports, or creates one:
+// false when no board is held.
+func (s *WhiteboardStores) peekHeld(root, key string, fn func(*wswhiteboard.BoardDB)) bool {
+	dir := whiteboardBoardDir(root, key)
+	s.mu.Lock()
+	slot := s.slots[dir]
+	if s.closed || slot == nil {
+		s.mu.Unlock()
+		return false
+	}
+	slot.users++
+	s.mu.Unlock()
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	board := slot.board
+	if board != nil {
+		fn(board)
+	}
+	s.release(dir, slot, board != nil)
+	return board != nil
+}
+
 func (s *WhiteboardStores) use(root, key string, legacy *wswhiteboard.State, activity bool, fn func(*whiteboardSlot) error) error {
 	return s.useLegacy(root, key, func() (*wswhiteboard.State, error) { return legacy, nil }, activity, fn)
 }

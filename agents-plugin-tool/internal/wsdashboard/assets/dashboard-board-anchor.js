@@ -27,7 +27,8 @@
   var anchorProg = null, anchorProgSeq = 0, anchorUserScroll = 0;
   var freeActive = false, freeSuspended = false;
   var freeWinStart = 0, freeWinEnd = -1, freeAnchorIdx = 0;
-  var freePos = new Map(), freeHeightCache = new Map();
+  // Heights outlive an evicted frame in the shell (dashboard-session-view.js).
+  var freePos = new Map(), freeHeightCache = typeof boardHeightCache === "function" ? boardHeightCache() : new Map();
   var freeCardRO = null, freeObserved = new Set(), freeParkedByUs = new WeakSet(), freeDeferredCollapse = new Set();
   var freeScrollRaf = 0, freeIdleTimer = 0, freeJump = null, freeStagePending = false, freeTopRebasePending = false, freeScrollGen = 0, freeLastScrollTop = 0, freeLastShift = 0, freePendingScrollEnd = false;
   var freePin = null, freePinTimer = 0, freePinRaf = 0;
@@ -1423,7 +1424,9 @@
       var usableH = Math.max(120, viewH - topClear - botClear);
       var targetH = heights[aIdx];
       var targetScroll;
-      if (opts.centerJump !== false && targetH < usableH) {
+      if (typeof opts.jumpOffset === "number" && isFinite(opts.jumpOffset)) {
+        targetScroll = ys[aIdx] - opts.jumpOffset;
+      } else if (opts.centerJump !== false && targetH < usableH) {
         targetScroll = ys[aIdx] - topClear - (usableH - targetH) / 2;
       } else {
         targetScroll = ys[aIdx] - topClear;
@@ -1770,6 +1773,7 @@
         jump: !still,
         centerJump: !(opt && opt.alignTop),
         pin: !(opt && opt.pin === false),
+        jumpOffset: opt && opt.jumpOffset,
         smooth: wantSmooth,
         forceFull: !!(opt && opt.fullVirtual) || !freeActive,
         list: list
@@ -1908,7 +1912,7 @@
     if (!next && before && anchorLast) next = anchorFallback(before, anchorLast);
     // Restoring a saved jump may pin it. A missing card's automatic fallback
     // leaves the former target's pin released.
-    anchorSelect(next || list[0], { keep: true, still: anchorKey === null && !next, pin: key !== null && !!next, fullVirtual: true });
+    anchorSelect(next || list[0], { keep: true, still: anchorKey === null && !next, pin: key !== null && !!next, fullVirtual: true, jumpOffset: next && typeof boardOffsetTake === "function" ? boardOffsetTake(key) : null });
   }
   // jump resolves a board topic or card to its containing card, then lets the
   // caller scroll inside it.

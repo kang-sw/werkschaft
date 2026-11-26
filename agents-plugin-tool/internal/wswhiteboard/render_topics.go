@@ -89,12 +89,27 @@ type TopicFragment struct {
 	HTML template.HTML
 }
 
+// FragmentReuse reuses a full-history fragment by its complete render
+// revision (topicRevision under the fragment render's own page context).
+// The caller owns the cache and must also invalidate it when an external
+// input the revision does not cover changes: a file image's version
+// (ImageSrc). Ticket statuses are resolved into the view, so the revision
+// covers them.
+type FragmentReuse func(name, revision string, render func() (template.HTML, error)) (template.HTML, error)
+
 // RenderTopicFragments renders the named topics of view (shown or capped
 // closed, in the order given; unknown names are skipped) as framed sections
 // with their complete history: the inert gap payloads, earlier panel
 // versions and capped closed topics a LazyHistory render leaves out.
 // Only the named topics' bodies and panels render.
 func RenderTopicFragments(view View, names []string) ([]TopicFragment, error) {
+	return RenderTopicFragmentsReuse(view, names, nil)
+}
+
+// RenderTopicFragmentsReuse is RenderTopicFragments with source-owned
+// fragment reuse: a hit skips the topic's markdown, panel diffs, and
+// template.
+func RenderTopicFragmentsReuse(view View, names []string, reuse FragmentReuse) ([]TopicFragment, error) {
 	a, err := loadAssets()
 	if err != nil {
 		return nil, fmt.Errorf("whiteboard page assets: %w", err)
@@ -114,12 +129,24 @@ func RenderTopicFragments(view View, names []string) ([]TopicFragment, error) {
 			continue
 		}
 		seen[name] = true
-		p.prepareTopic(t, a)
-		html, err := p.renderTopicHTML(t)
+		render := func() (template.HTML, error) {
+			p.prepareTopic(t, a)
+			html, err := p.renderTopicHTML(t)
+			if err != nil {
+				return "", err
+			}
+			return template.HTML(strings.TrimRight(string(html), " \t\r\n\f")), nil
+		}
+		var html template.HTML
+		if reuse == nil {
+			html, err = render()
+		} else {
+			html, err = reuse(name, p.topicRevision(t), render)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("whiteboard topic %s: %w", name, err)
 		}
-		out = append(out, TopicFragment{Name: name, HTML: template.HTML(strings.TrimRight(string(html), " \t\r\n\f"))})
+		out = append(out, TopicFragment{Name: name, HTML: html})
 	}
 	return out, nil
 }

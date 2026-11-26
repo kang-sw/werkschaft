@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wssqlite"
@@ -39,13 +40,18 @@ type BoardDBOptions struct {
 	Fault   func(stage string) error
 }
 
+// boardDBInstances numbers every opened board (BoardDB.Instance).
+var boardDBInstances atomic.Uint64
+
 // BoardDB owns one board's held SQLite handle and complete in-memory state.
 // Call Close when the board ages out or the daemon drains.
 type BoardDB struct {
-	dir  string
-	path string
-	db   *sql.DB
-	opts BoardDBOptions
+	// instance is immutable after open (Instance).
+	instance uint64
+	dir      string
+	path     string
+	db       *sql.DB
+	opts     BoardDBOptions
 
 	mu                 sync.Mutex
 	state              *State
@@ -403,7 +409,7 @@ func openBoardDBHandle(dir string, opts BoardDBOptions) (*BoardDB, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	b := &BoardDB{dir: dir, path: path, db: db, opts: opts, topicDirs: map[string]string{}}
+	b := &BoardDB{instance: boardDBInstances.Add(1), dir: dir, path: path, db: db, opts: opts, topicDirs: map[string]string{}}
 	ctx, cancel := context.WithTimeout(context.Background(), BoardDBOpenRetryBound)
 	defer cancel()
 	// locking_mode is deliberately first: WAL never opens a shared-memory

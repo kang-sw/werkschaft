@@ -202,5 +202,45 @@
     return isFinite(v) ? Math.max(0, Math.min(1, v)) : 0;
   }
 
-  window.WsShell = { message: message, companionContext: companionContext, framed: framed, src: src, pagePath: pagePath, settingsFrame: settingsFrame, settingsHref: settingsHref, settingsScopeHref: settingsScopeHref, alpha: alpha, cacheLimit: CACHE_LIMIT };
+  // memo(name, maxEntries, maxSize) is a named in-memory LRU on this
+  // window, never persisted. A framed session page uses its top shell's
+  // (window.top.WsShell), so what it holds outlives a frame the shell
+  // evicts past CACHE_LIMIT: hydrated topic history and board card
+  // heights. Values are strings or numbers, or tables made here (table),
+  // so nothing keeps an evicted frame's realm alive. size(value) weighs an
+  // entry against maxSize (a string's length by default).
+  var memos = {};
+  function memo(name, maxEntries, maxSize) {
+    if (memos[name]) return memos[name];
+    var map = new Map(), total = 0;
+    function weigh(v) { return typeof v === "string" ? v.length : 1; }
+    function drop(k) { if (map.has(k)) { total -= map.get(k).size; map.delete(k); } }
+    var m = {
+      get: function (k) {
+        if (!map.has(k)) return undefined;
+        var e = map.get(k);
+        map.delete(k); map.set(k, e);
+        return e.value;
+      },
+      set: function (k, v) {
+        var size = weigh(v);
+        drop(k);
+        if (maxSize && size > maxSize) return;
+        map.set(k, { value: v, size: size }); total += size;
+        while (map.size > maxEntries || maxSize && total > maxSize) drop(map.keys().next().value);
+      },
+      delete: drop,
+      // table returns the Map stored under k, made in this realm when absent.
+      table: function (k) {
+        var t = m.get(k);
+        if (!(t instanceof Map)) { t = new Map(); m.set(k, t); }
+        return t;
+      },
+      size: function () { return map.size; }
+    };
+    memos[name] = m;
+    return m;
+  }
+
+  window.WsShell = { message: message, companionContext: companionContext, framed: framed, src: src, pagePath: pagePath, settingsFrame: settingsFrame, settingsHref: settingsHref, settingsScopeHref: settingsScopeHref, alpha: alpha, cacheLimit: CACHE_LIMIT, memo: memo };
 })();

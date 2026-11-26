@@ -17,12 +17,38 @@
   }
   // The board's lazy history (wswhiteboard stream.js) fetches the complete
   // sections of the topics a "name=..." or "target=..." query names.
+  // The route answers with an ETag; no-cache revalidates every request, so
+  // an unchanged answer costs a 304 and never shows a stale one.
   window.wbHistoryFetch = function (query) {
     if (!rid || !window.fetch) return Promise.resolve([]);
-    return fetch("/s/" + rid + "/topic?" + query, { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+    return fetch("/s/" + rid + "/topic?" + query, { credentials: "same-origin", cache: "no-cache" }).then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     }).then(function (res) { return res && Array.isArray(res.topics) ? res.topics : []; });
+  };
+  // Hydrated history kept in the top shell's memory (shellMemo), across
+  // frames and their eviction: one entry per topic answer, keyed by
+  // everything the answer depends on that the page can see — the session,
+  // the theme and language cookies the route renders with, the board's
+  // history image stamp, and the topic section's own hash (data-th), which
+  // moves with any change to the topic. Bounded to 128 answers and about
+  // 8 MB of HTML.
+  function historyCookie(name) {
+    var m = new RegExp("(?:^|;\\s*)" + name + "=([^;]*)").exec(doc.cookie || "");
+    return m ? m[1] : "";
+  }
+  function historyCacheKey(name, th, stamp) {
+    return [rid, historyCookie("ws_dashboard_theme"), historyCookie("ws_dashboard_lang"), stamp, th, name].join("\u0000");
+  }
+  window.wbHistoryCache = {
+    get: function (name, th, stamp) {
+      var m = rid && th ? shellMemo("ws.topic-history", 128, 4 << 20) : null;
+      return m ? m.get(historyCacheKey(name, th, stamp)) : undefined;
+    },
+    put: function (name, th, stamp, html) {
+      var m = rid && th && typeof html === "string" ? shellMemo("ws.topic-history", 128, 4 << 20) : null;
+      if (m) m.set(historyCacheKey(name, th, stamp), html);
+    }
   };
   // A deferred board swap lands still (no board motion), so the board never
   // moves under a just-blurred input.
