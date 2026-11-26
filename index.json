@@ -493,7 +493,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-26T15:24:14Z"
+        "touched_at": "2026-11-26T15:27:12Z",
+        "impl": {
+          "branch": "impl/develop/atlas-giant-suds"
+        }
       }
     },
     "261126-feat-ws-dashboard-conv-whiteboard-only-mode": {
