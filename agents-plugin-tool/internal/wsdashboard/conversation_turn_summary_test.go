@@ -3,6 +3,7 @@ package wsdashboard
 import (
 	"bytes"
 	stdhtml "html"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -179,7 +180,8 @@ func TestTurnSummaryActiveLiveHeaderAndIdleSuppression(t *testing.T) {
 	for _, want := range []string{
 		`class="toolsline d-turn live d-turn-live d-turn-has-fail" data-conv-turn="1" data-key="turn-live"`,
 		`<span class="d-turn-count" data-conv-turn-count>5 tool calls</span>`,
-		`<span class="d-turn-dur" data-span="4000">4.0s</span>`,
+		// Live duration ticks from the turn start, not the 4,000ms sum of tool durations.
+		`<time class="t d-turn-dur" data-ms="` + strconv.FormatInt(activeLead.TurnStartedAt, 10) + `" data-f="since">`,
 		`<span class="d-turn-fails" data-conv-turn-fails><span class="d-turn-dot" aria-hidden="true">·</span><b>1 failed</b></span>`,
 		`data-conv-turn-tokens title="+1,900 context tokens added in this turn">+1.9k tok</span>`,
 	} {

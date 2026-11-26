@@ -27,6 +27,9 @@ type TurnSummaryView struct {
 	Calls       int
 	Failed      int
 	DurationMs  int64
+	// StartMs is the running turn's start (live header only); the page ticks
+	// elapsed time from it instead of showing summed tool time.
+	StartMs     int64
 	AddedTokens int64
 	EstTokens   int64
 	Origin      string
@@ -208,6 +211,9 @@ func (v *TurnSummaryView) TurnRev() string {
 // render a live turn summary header, and spans with TurnStartedAt == 0 and no
 // open ToolGap keep their orphan RingTools in r-entries (Decision 5).
 func leadTurnRunning(lead wslive.Lead) bool {
+	// Invariant: wslive derives Phase from turnStartedAt>0 (at least
+	// PhaseThinking), so a running turn never reads idle in a real snapshot;
+	// an idle Phase with a stale TurnStartedAt is treated as not running.
 	if lead.Phase == "" || lead.Phase == wslive.PhaseIdle {
 		return false
 	}
@@ -391,6 +397,7 @@ func collapseOpenTurnSpan(lead wslive.Lead, entries []ConvEntry, spanStart int) 
 			Calls:       calls,
 			Failed:      failed,
 			DurationMs:  durMs,
+			StartMs:     lead.TurnStartedAt,
 			AddedTokens: lead.TurnAddedTokens,
 			Gaps:        gaps,
 		}
