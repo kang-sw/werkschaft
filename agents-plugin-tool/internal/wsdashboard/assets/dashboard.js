@@ -121,15 +121,27 @@
     if (s < 86400) return wsT("js.rel.h", Math.floor(s / 3600));
     return wsT("js.rel.d", Math.floor(s / 86400));
   }
+  // relAgo is an always-relative elapsed time (never flips to an absolute
+  // date): "just now" under a minute, then minutes, hours, days, months, years.
+  function relAgo(ms) {
+    var s = Math.max(0, Math.floor(ms / 1000));
+    if (s < 60) return wsT("js.relago.now");
+    if (s < 3600) return wsT("js.relago.m", Math.floor(s / 60));
+    if (s < 86400) return wsT("js.relago.h", Math.floor(s / 3600));
+    var d = Math.floor(s / 86400);
+    if (d < 30) return wsT("js.relago.d", d);
+    if (d < 365) return wsT("js.relago.mo", Math.floor(d / 30));
+    return wsT("js.relago.y", Math.floor(d / 365));
+  }
   // A clock or weekday time and every time's title never change while the
   // page shows them, so each element formats them once (wsFmt marks it with
   // the language it used; only a language change formats it again). The
-  // relative times ("since", "ago", "rel") follow the clock, and are
+  // relative times ("since", "ago", "rel", "relago") follow the clock, and are
   // written only when their text changed.
   function fmtTime(t, now) {
     var ms = +t.getAttribute("data-ms");
     if (!ms) return;
-    var f = t.getAttribute("data-f"), rel = f === "since" || f === "ago" || f === "rel" || f === "del";
+    var f = t.getAttribute("data-f"), rel = f === "since" || f === "ago" || f === "rel" || f === "relago" || f === "del";
     if (f === "user") {
       var at = t.getAttribute("datetime"), minutes = Math.max(0, Math.floor((now - ms) / 60000));
       // Absolute clocks and "today" use the envelope's sender offset, not
@@ -144,7 +156,7 @@
     if (rel) {
       // "del" is a pending-deletion row's prune time, ahead of now; under
       // a day it takes the warning ink.
-      var s = f === "since" ? dur(now - ms) : f === "rel" ? relAge(now - ms) : f === "del" ? (ms > now ? wsT("js.rail.deletes", relAge(ms - now)) : wsT("js.rail.deletes.due")) : wsT("js.ago", dur(now - ms));
+      var s = f === "since" ? dur(now - ms) : f === "rel" ? relAge(now - ms) : f === "relago" ? relAgo(now - ms) : f === "del" ? (ms > now ? wsT("js.rail.deletes", relAge(ms - now)) : wsT("js.rail.deletes.due")) : wsT("js.ago", dur(now - ms));
       if (t.textContent !== s) t.textContent = s;
       if (f === "del") t.classList.toggle("soon", ms - now < 86400000);
     }
@@ -198,7 +210,7 @@
     if (doc.hidden || shHidden) return;
     var now = Date.now();
     if (!tickSets || !window.MutationObserver) tickSets = {
-      times: q('time[data-ms][data-f="since"], time[data-ms][data-f="ago"], time[data-ms][data-f="rel"], time[data-ms][data-f="del"], time[data-ms][data-f="user"]'),
+      times: q('time[data-ms][data-f="since"], time[data-ms][data-f="ago"], time[data-ms][data-f="rel"], time[data-ms][data-f="relago"], time[data-ms][data-f="del"], time[data-ms][data-f="user"]'),
       paces: q("em.u-pace[data-reset]")
     };
     tickSets.times.forEach(function (t) { fmtTime(t, now); });
