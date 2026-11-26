@@ -458,7 +458,14 @@
       "registered_at": "2026-11-25T12:38:04Z"
     },
     "261126-bug-win-worktree-remove-cwd-lock-and-async-trash": {
-      "registered_at": "2026-11-26T01:34:58Z"
+      "registered_at": "2026-11-26T01:34:58Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "9091c57d68d03c76",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-26T02:26:06Z"
+      }
     },
     "261126-research-housekeeping-sparse-dirty-and-einval": {
       "registered_at": "2026-11-26T01:35:04Z"
