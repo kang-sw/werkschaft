@@ -1080,6 +1080,28 @@ this route.
   open binding, or a released one whose process still lives), naming each
   one's address, state, holder, PID and cwd; a daemon that cannot answer
   fails it closed.
+- **Worktree removal.** After its checks and `pre_remove` hooks,
+  `worktree.remove` renames the checkout into `<pool root>/.trash/` and the
+  worktree's admin directory into `<git common dir>/ws-worktree-trash/`
+  (same-volume renames, O(1) on the request path), then deletes both on one
+  background goroutine (`mcp/worktree_trash.go`). A failed checkout rename
+  (on Windows, a process outside ws with a file or working directory open
+  inside it; or a cross-volume pool) changes nothing; a failed admin rename
+  moves the checkout back, and a failed move back names both paths. A locked
+  worktree is refused before the hooks. Entries a process left behind are
+  retried by a background sweep of both trash directories on the first
+  `worktree.*` call or dashboard rail read per repository in each process,
+  then at most every 30 minutes; a sweep skips entries younger than one
+  minute (a concurrent remove's rollback window, read from the entry name)
+  and deletes at most 32 per directory. Pool scans (`worktree.list`,
+  `worktree.acquire` reuse, the stale nudge, the dashboard pool card) skip
+  `.trash/`, and release and remove refuse paths in it. A path under an
+  owned pool root that is no longer a registered worktree (git unregistered
+  it but could not delete its directory) is resolved from the calling lead's
+  repository by filesystem path and cleaned up through the same trash, under
+  the pool acquisition lock, only when it holds directories alone (no file,
+  `.git` entry, symlink or junction, and is not one itself); the pool root
+  and `.trash/` are refused.
   Waiting children expire after `agent.child_waiting_days` (default 15),
   measured from their last activity.
 - **Keep-awake.** With the global-only `agent.keep_awake_during_turns` on

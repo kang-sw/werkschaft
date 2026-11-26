@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -36,15 +38,17 @@ func (r worktreeRemoveResult) text() string {
 }
 
 // removeWorktree deletes a pooled worktree: every refusal is checked first,
-// then the marker's profile's pre_remove hooks run, then git removes the
-// worktree together with its admin directory (lease and marker included). The
-// checked-out branch is kept, so the refusals guard unmerged work: a dirty
-// tree, a branch holding commits no other branch reaches, a detached HEAD
-// holding commits no ref reaches, and a lease whose activity is newer than
-// staleAfter (a live worker's tree). It also refuses what release refuses: the
-// primary worktree and any path outside the owned pool.
+// then the marker's profile's pre_remove hooks run, then the checkout is moved
+// into its pool root's trash and the worktree unregistered together with its
+// admin directory (lease and marker included); both are deleted in the
+// background (retireRegisteredWorktree). The checked-out branch is kept, so
+// the refusals guard unmerged work: a dirty tree, a branch holding commits no
+// other branch reaches, a detached HEAD holding commits no ref reaches, and a
+// lease whose activity is newer than staleAfter (a live worker's tree). It
+// also refuses what release refuses: the primary worktree and any path
+// outside the owned pool.
 func removeWorktree(ctx context.Context, runner wsgit.Runner, env []string, wtPath, poolConfigValue string, staleAfter time.Duration, now time.Time, lookup worktreeProfileLookup) (worktreeRemoveResult, error) {
-	return removeWorktreeFenced(ctx, runner, env, wtPath, poolConfigValue, staleAfter, now, lookup, nil, nil)
+	return removeWorktreeFenced(ctx, runner, env, wtPath, poolConfigValue, staleAfter, now, lookup, nil, nil, "")
 }
 
 // removeWorktreeFenced is removeWorktree that first reserves the target
@@ -53,42 +57,35 @@ func removeWorktree(ctx context.Context, runner wsgit.Runner, env []string, wtPa
 // daemon to ask, so not occupied) which agents occupy the target and refuses
 // while any does, or when the daemon cannot answer, before any other check,
 // hook, or change.
-func removeWorktreeFenced(ctx context.Context, runner wsgit.Runner, env []string, wtPath, poolConfigValue string, staleAfter time.Duration, now time.Time, lookup worktreeProfileLookup, fenceExec func(string) (func(), error), occupancy func(context.Context, string) (worktreeOccupancy, error)) (worktreeRemoveResult, error) {
+//
+// callerRoot is the caller's repository root (empty: none known). When git
+// cannot resolve wtPath as a registered pooled worktree, a directory inside
+// that repository's owned pool that is no longer registered (left behind by
+// an interrupted removal) is cleaned up instead, under the same fence and
+// occupancy checks (removeOrphanPoolDir).
+func removeWorktreeFenced(ctx context.Context, runner wsgit.Runner, env []string, wtPath, poolConfigValue string, staleAfter time.Duration, now time.Time, lookup worktreeProfileLookup, fenceExec func(string) (func(), error), occupancy func(context.Context, string) (worktreeOccupancy, error), callerRoot string) (worktreeRemoveResult, error) {
 	var res worktreeRemoveResult
 	target, entry, mainRoot, err := ownedPoolWorktree(ctx, runner, wtPath, poolConfigValue, "worktree.remove")
 	if err != nil {
-		return res, err
-	}
-	if fenceExec != nil {
-		unfence, err := fenceExec(target)
+		orphan, ok, orphanErr := resolveOrphanPoolDir(ctx, runner, callerRoot, wtPath, poolConfigValue)
+		if orphanErr != nil {
+			return res, orphanErr
+		}
+		if !ok {
+			return res, err
+		}
+		unfence, err := removeOccupancyCheck(ctx, orphan.target, fenceExec, occupancy)
 		if err != nil {
-			return res, fmt.Errorf("worktree.remove refuses %s: %w", target, err)
+			return res, err
 		}
 		defer unfence()
+		return removeOrphanPoolDir(ctx, runner, callerRoot, orphan)
 	}
-	if occupancy != nil {
-		occ, err := occupancy(ctx, target)
-		if err != nil {
-			return res, fmt.Errorf("worktree.remove refuses %s: could not check bound agents with the daemon (%v). Nothing was changed. Retry once the daemon answers", target, err)
-		}
-		if occupants := occupyingChildren(occ.Children); len(occupants) > 0 {
-			parts := make([]string, 0, len(occupants))
-			for _, c := range occupants {
-				part := c.Address + " " + c.State
-				if c.Holder != "" {
-					part += " holder=" + c.Holder
-				}
-				if c.PID != 0 {
-					part += " pid=" + strconv.Itoa(c.PID)
-				}
-				if c.Cwd != "" {
-					part += " cwd=" + c.Cwd
-				}
-				parts = append(parts, strings.TrimSpace(part))
-			}
-			return res, fmt.Errorf("worktree.remove refuses %s: agent(s) still occupy this worktree (%s). Nothing was changed. Close or release the agents (worktree.release with force: true stops a released worktree's agents), then remove again", target, strings.Join(parts, "; "))
-		}
+	unfence, err := removeOccupancyCheck(ctx, target, fenceExec, occupancy)
+	if err != nil {
+		return res, err
 	}
+	defer unfence()
 	res.Path = target
 	if !entry.Detached {
 		res.Branch = strings.TrimPrefix(entry.Branch, "refs/heads/")
@@ -137,6 +134,25 @@ func removeWorktreeFenced(ctx context.Context, runner wsgit.Runner, env []string
 		}
 	}
 
+	// Resolve where the checkout and its admin directory retire to, and
+	// refuse a locked worktree (as git worktree remove --force does), before
+	// any hook runs.
+	poolRoot := containingPoolRoot(ownedPoolRoots(poolConfigValue, mainRoot), target)
+	if poolRoot == "" || poolRoot == target {
+		return res, fmt.Errorf("worktree.remove refuses %s: it is a worktree pool root itself, so it has no pool trash to move into. Nothing was changed", target)
+	}
+	adminDir, commonDir, err := worktreeAdminLayout(ctx, runner, target, mainRoot)
+	if err != nil {
+		return res, fmt.Errorf("worktree.remove refuses %s: %v. Nothing was changed", target, err)
+	}
+	if reason, err := os.ReadFile(filepath.Join(adminDir, "locked")); err == nil {
+		why := ""
+		if r := strings.TrimSpace(string(reason)); r != "" {
+			why = " (" + r + ")"
+		}
+		return res, fmt.Errorf("worktree.remove refuses %s: it is locked%s; unlock it with git worktree unlock, then remove again. Nothing was changed", target, why)
+	}
+
 	marker, err := readWorktreeMarker(ctx, runner, target)
 	if err != nil {
 		return res, fmt.Errorf("worktree.remove: %w", err)
@@ -164,14 +180,57 @@ func removeWorktreeFenced(ctx context.Context, runner wsgit.Runner, env []string
 		}
 	}
 
-	// --force is safe here because the refusals above already guard
-	// uncommitted and unmerged work, and git refuses a worktree with
-	// initialized submodules without it.
-	if _, err := wtRun(ctx, runner, mainRoot, "worktree", "remove", "--force", target); err != nil {
-		return res, fmt.Errorf("worktree.remove: %w", err)
+	// The refusals above guard uncommitted and unmerged work, standing in for
+	// git's own checks (which also refuse initialized submodules); their Git
+	// directories live in the admin directory and leave with it.
+	aside, err := retireRegisteredWorktree(target, poolRoot, adminDir, commonDir)
+	if err != nil {
+		return res, err
 	}
 	res.Removed = true
+	res.Notes = append(res.Notes, "its files are deleted in the background from "+aside)
 	return res, nil
+}
+
+// removeOccupancyCheck takes worktree.remove's exec fence on target and
+// refuses while agents occupy it or the daemon cannot answer; the returned
+// unfence is never nil.
+func removeOccupancyCheck(ctx context.Context, target string, fenceExec func(string) (func(), error), occupancy func(context.Context, string) (worktreeOccupancy, error)) (func(), error) {
+	unfence := func() {}
+	if fenceExec != nil {
+		u, err := fenceExec(target)
+		if err != nil {
+			return unfence, fmt.Errorf("worktree.remove refuses %s: %w", target, err)
+		}
+		unfence = u
+	}
+	if occupancy == nil {
+		return unfence, nil
+	}
+	occ, err := occupancy(ctx, target)
+	if err != nil {
+		unfence()
+		return func() {}, fmt.Errorf("worktree.remove refuses %s: could not check bound agents with the daemon (%v). Nothing was changed. Retry once the daemon answers", target, err)
+	}
+	if occupants := occupyingChildren(occ.Children); len(occupants) > 0 {
+		parts := make([]string, 0, len(occupants))
+		for _, c := range occupants {
+			part := c.Address + " " + c.State
+			if c.Holder != "" {
+				part += " holder=" + c.Holder
+			}
+			if c.PID != 0 {
+				part += " pid=" + strconv.Itoa(c.PID)
+			}
+			if c.Cwd != "" {
+				part += " cwd=" + c.Cwd
+			}
+			parts = append(parts, strings.TrimSpace(part))
+		}
+		unfence()
+		return func() {}, fmt.Errorf("worktree.remove refuses %s: agent(s) still occupy this worktree (%s). Nothing was changed. Close or release the agents (worktree.release with force: true stops a released worktree's agents), then remove again", target, strings.Join(parts, "; "))
+	}
+	return unfence, nil
 }
 
 // worktreeActivity is a worktree's last activity: the later of its lease's

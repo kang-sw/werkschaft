@@ -399,7 +399,7 @@ func TestRemoveWorktreeOccupancyPreflight(t *testing.T) {
 
 	open := provision("impl/develop/occ-open")
 	_, err := removeWorktreeFenced(ctx, runner, nil, open.Path, "", testStaleAfter, time.Now(), lookup, nil,
-		answer(wsagent.BoundWorktreeChild{Address: "id:abc", State: "running", Holder: "h-1", PID: 4242, Cwd: open.Path}))
+		answer(wsagent.BoundWorktreeChild{Address: "id:abc", State: "running", Holder: "h-1", PID: 4242, Cwd: open.Path}), "")
 	if err == nil {
 		t.Fatal("remove with an open child must be refused")
 	}
@@ -412,7 +412,7 @@ func TestRemoveWorktreeOccupancyPreflight(t *testing.T) {
 
 	live := provision("impl/develop/occ-live")
 	_, err = removeWorktreeFenced(ctx, runner, nil, live.Path, "", testStaleAfter, time.Now(), lookup, nil,
-		answer(wsagent.BoundWorktreeChild{Address: "id:def", State: "closed", BoundBeforeRelease: true, Live: true}))
+		answer(wsagent.BoundWorktreeChild{Address: "id:def", State: "closed", BoundBeforeRelease: true, Live: true}), "")
 	if err == nil || !strings.Contains(err.Error(), "id:def") {
 		t.Fatalf("remove with a live pre-release child = %v", err)
 	}
@@ -422,7 +422,7 @@ func TestRemoveWorktreeOccupancyPreflight(t *testing.T) {
 	_, err = removeWorktreeFenced(ctx, runner, nil, down.Path, "", testStaleAfter, time.Now(), lookup, nil,
 		func(context.Context, string) (worktreeOccupancy, error) {
 			return worktreeOccupancy{}, errors.New("daemon unreachable")
-		})
+		}, "")
 	if err == nil || !strings.Contains(err.Error(), "daemon unreachable") || !strings.Contains(err.Error(), "Nothing was changed") {
 		t.Fatalf("remove with a failing occupancy check = %v", err)
 	}
@@ -430,7 +430,7 @@ func TestRemoveWorktreeOccupancyPreflight(t *testing.T) {
 
 	dead := provision("impl/develop/occ-dead")
 	res, err := removeWorktreeFenced(ctx, runner, nil, dead.Path, "", testStaleAfter, time.Now(), lookup, nil,
-		answer(wsagent.BoundWorktreeChild{Address: "id:ghi", State: "closed", BoundBeforeRelease: true}))
+		answer(wsagent.BoundWorktreeChild{Address: "id:ghi", State: "closed", BoundBeforeRelease: true}), "")
 	if err != nil || !res.Removed || worktreeRegistered(t, root, dead.Path) {
 		t.Fatalf("remove with a dead pre-release child = %+v, %v", res, err)
 	}

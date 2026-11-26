@@ -556,7 +556,7 @@ func provisionWorktreeLocked(ctx context.Context, runner wsgit.Runner, env []str
 	var claim string
 	var claimMarker *worktreeMarker
 	for _, e := range entries {
-		if e.Path == mainRoot || !pathUnder(poolRoot, e.Path) || !e.Detached {
+		if e.Path == mainRoot || !pathUnder(poolRoot, e.Path) || inPoolTrash([]string{poolRoot}, e.Path) || !e.Detached {
 			continue
 		}
 		// Reserve the candidate exclusively while it is checked. A release
@@ -939,6 +939,9 @@ func ownedPoolWorktree(ctx context.Context, runner wsgit.Runner, wtPath, poolCon
 	poolRoots := ownedPoolRoots(poolConfigValue, mainRoot)
 	if !underAnyPool(poolRoots, target) {
 		return "", worktreeEntry{}, "", fmt.Errorf("%s refuses %q: not under the owned worktree pool %q", tool, target, poolRoots[0])
+	}
+	if inPoolTrash(poolRoots, target) {
+		return "", worktreeEntry{}, "", fmt.Errorf("%s refuses %q: it is in the pool's %s directory, which holds removed worktrees awaiting deletion", tool, target, poolTrashDirName)
 	}
 	for _, e := range entries {
 		if filepath.Clean(e.Path) == target {

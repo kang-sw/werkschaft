@@ -140,7 +140,7 @@ func listPoolWorktrees(ctx context.Context, runner wsgit.Runner, root, poolConfi
 	mainRoot := entries[0].Path
 	res.Pools = ownedPoolRoots(poolConfigValue, mainRoot)
 	for i, e := range entries {
-		if i == 0 || e.Path == mainRoot || e.Prunable || !underAnyPool(res.Pools, e.Path) {
+		if i == 0 || e.Path == mainRoot || e.Prunable || !underAnyPool(res.Pools, e.Path) || inPoolTrash(res.Pools, e.Path) {
 			continue
 		}
 		res.Worktrees = append(res.Worktrees, describePoolWorktree(ctx, runner, e, keyMtime))
