@@ -55,11 +55,16 @@ func (p *restoreProbe) snapshot() []restoreProbeCall {
 	return append([]restoreProbeCall(nil), p.calls...)
 }
 
+// An idle lead keeps its holder across a restart and takes one standalone
+// restore turn after the replay. An idle finished worker is put to sleep at
+// shutdown instead (holder and child ended), takes no standalone restore
+// turn, and gets the restart restore prepended to the input of its next wake.
 func TestRestartRestoreIdleLeadAndChildAfterReplay(t *testing.T) {
 	probe := &restoreProbe{state: "stale"}
 	h := newLeadHarness(t)
-	// The fixture launches workers with stdio MCP. Keep their holders attached
-	// across restart so this test exercises restore delivery after replay.
+	// The fixture launches workers with stdio MCP, whose route a restart
+	// never makes stale: the worker's sleep comes from its finished-idle
+	// state alone.
 	reg := h.opts.Backends[BackendClaude]
 	reg.WorkerHTTPMCP = false
 	h.opts.Backends[BackendClaude] = reg
@@ -93,6 +98,16 @@ func TestRestartRestoreIdleLeadAndChildAfterReplay(t *testing.T) {
 	}
 
 	h.runner.Close()
+	// The shutdown put the finished worker to sleep and let the lead go.
+	if h.holders.opCount("stop "+workerHolder) != 1 || h.holders.opCount("stop "+leadHolder) != 0 {
+		t.Fatalf("shutdown stops = %v, want the worker's holder alone", h.holders.opList())
+	}
+	if rec := h.record(worker.ID); rec.HolderID != "" || rec.HostPID != 0 || rec.ClosedAt != "" {
+		t.Fatalf("slept worker record = %+v, want open with no holder", rec)
+	}
+	if rec := h.record(leadID); rec.HolderID != leadHolder {
+		t.Fatalf("lead record = %+v, want its holder kept", rec)
+	}
 	h.holders.restart()
 	entered, release := h.gateScan()
 	defer release()
@@ -105,39 +120,53 @@ func TestRestartRestoreIdleLeadAndChildAfterReplay(t *testing.T) {
 	if got := len(h.userInputs(leadHolder)); got != 1 {
 		t.Fatalf("lead received restore before holder replay: %d inputs", got)
 	}
-	if got := len(h.userInputs(workerHolder)); got != 1 {
-		t.Fatalf("worker received restore before holder replay: %d prompts", got)
-	}
 
 	release()
-	eventually(t, "one restart restore for lead and child", func() bool {
-		return len(probe.snapshot()) == 2 && len(h.userInputs(leadHolder)) == 2 && len(h.userInputs(workerHolder)) == 2
+	eventually(t, "one restart restore for the lead", func() bool {
+		return len(probe.snapshot()) == 1 && len(h.userInputs(leadHolder)) == 2
 	})
-	leadRestore := h.userInputs(leadHolder)[1]
-	workerRestore := h.userInputs(workerHolder)[1]
-	for role, text := range map[string]string{"lead": leadRestore, "worker": workerRestore} {
-		if !strings.Contains(text, "restore[fresh-after-launch]") || !strings.Contains(text, "cause=restart") {
-			t.Fatalf("%s restart restore = %q", role, text)
-		}
-	}
-	calls := probe.snapshot()
-	byKey := map[string]restoreProbeCall{}
-	for _, call := range calls {
-		byKey[call.key] = call
+	if text := h.userInputs(leadHolder)[1]; !strings.Contains(text, "restore[fresh-after-launch]") || !strings.Contains(text, "cause=restart") {
+		t.Fatalf("lead restart restore = %q", text)
 	}
 	leadKey, workerKey := h.record(leadID).WSKey, h.record(worker.ID).WSKey
-	if len(byKey) != 2 || byKey[leadKey].cause != RestoreRestart || byKey[workerKey].cause != RestoreRestart {
+	calls := probe.snapshot()
+	if calls[0].key != leadKey || calls[0].cause != RestoreRestart {
 		t.Fatalf("restart calls = %+v", calls)
 	}
-	if children := byKey[leadKey].children; len(children) != 1 || children[0].Address != AgentAddress(worker.ID) {
+	if children := calls[0].children; len(children) != 1 || children[0].Address != AgentAddress(worker.ID) {
 		t.Fatalf("lead direct children = %+v", children)
 	}
-	if children := byKey[workerKey].children; len(children) != 0 {
-		t.Fatalf("worker direct children = %+v, want none", children)
-	}
+	// The sleeping worker takes no standalone restore turn: no process
+	// starts for it and nothing renders its bundle until a wake.
 	time.Sleep(30 * time.Millisecond)
-	if calls := probe.snapshot(); len(calls) != 2 {
-		t.Fatalf("restart restore repeated: %+v", calls)
+	if calls := probe.snapshot(); len(calls) != 1 {
+		t.Fatalf("restart restore beyond the lead's: %+v", calls)
+	}
+	if n := h.holders.opCount("launch"); n != 2 {
+		t.Fatalf("restart launched a holder for the sleeping worker: %v", h.holders.opList())
+	}
+	if st := h.state(worker.ID); st.Process || st.Status == StatusClosed {
+		t.Fatalf("worker after restart = %+v, want asleep", st)
+	}
+
+	probe.setState("fresh-at-wake")
+	if _, err := h.runner.Send(worker.ID, "follow-up work"); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "a new holder for the woken worker", func() bool {
+		rec := h.record(worker.ID)
+		return rec.HolderID != "" && rec.HolderID != workerHolder
+	})
+	wokenHolder := h.holder(worker.ID)
+	eventually(t, "the woken worker's input", func() bool { return len(h.userInputs(wokenHolder)) == 1 })
+	text := h.userInputs(wokenHolder)[0]
+	restoreAt, workAt := strings.Index(text, "restore[fresh-at-wake]"), strings.Index(text, "follow-up work")
+	if restoreAt < 0 || workAt < 0 || restoreAt > workAt || !strings.Contains(text, "cause=restart") {
+		t.Fatalf("woken worker input = %q, want the restart restore before the work", text)
+	}
+	calls = probe.snapshot()
+	if len(calls) != 2 || calls[1].key != workerKey || calls[1].cause != RestoreRestart || len(calls[1].children) != 0 {
+		t.Fatalf("restore calls after the wake = %+v", calls)
 	}
 }
 

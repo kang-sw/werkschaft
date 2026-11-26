@@ -245,88 +245,141 @@ func TestCodexAndAgyWorkerMailSteersIntoRunningTurn(t *testing.T) {
 	}
 }
 
+// A worker mid-turn at the daemon's shutdown keeps its holder across the
+// replacement. A turn that ends while no daemon runs is reported once by the
+// successor, which then puts the finished worker to sleep (holder and child
+// ended, finishedIdleChild): a later message wakes a new process in the
+// same mode. A turn that ends after the rejoin leaves the worker held under
+// the same process, MCP identity and all, until its idle stop.
 func TestHeldWorkersCompleteAcrossRunnerReplacement(t *testing.T) {
 	for _, backend := range []string{BackendClaude, BackendCodex, BackendAgy} {
 		for _, authority := range []string{"read-only", "workdir-write"} {
 			if backend != BackendCodex && authority == "read-only" {
 				continue
 			}
-			t.Run(backend+"/"+authority, func(t *testing.T) {
-				h, got := workerRecoveryHarness(t, backend, true)
-				id, holder := spawnHeldRecoveryWorker(t, h, backend, authority)
-				before := h.record(id)
-				if before.HolderID != holder || before.HostPID <= 0 || before.HandedOffAt == "" {
-					t.Fatalf("new worker is not fenced under its holder: %+v", before)
+			for _, whileDown := range []bool{true, false} {
+				name := backend + "/" + authority + "/ends-after-rejoin"
+				if whileDown {
+					name = backend + "/" + authority + "/ends-while-down"
 				}
-				if before.MCPToken == "" || before.MCPHolder != holder || before.MCPURL == "" || before.MCPEnv == nil {
-					t.Fatalf("worker MCP tuple was not persisted: %+v", before)
-				}
-				var beforeEnv map[string]string
-				if backend != BackendPi {
-					hello, _, ok := h.runner.ResolveMCPToken(before.MCPToken)
-					if !ok {
-						t.Fatal("launched worker's MCP token does not resolve")
-					}
-					beforeEnv = maps.Clone(hello.Env)
-					if beforeEnv[EnvAgentSessionKey] != before.WSKey || beforeEnv[EnvPermissionLevel] != authority || beforeEnv["WS_MCP_HARNESS_PID"] != strconv.Itoa(before.HostPID) {
-						t.Fatalf("launched worker MCP identity: key %q, level %q, pid %q", beforeEnv[EnvAgentSessionKey], beforeEnv[EnvPermissionLevel], beforeEnv["WS_MCP_HARNESS_PID"])
-					}
-				}
-				h.runner.Close()
-				if h.holders.opCount("stop") != 0 {
-					t.Fatalf("runner shutdown stopped the worker: %v, record %+v", h.holders.opList(), h.record(id))
-				}
-				h.holders.restart()
-				completeRecoveryWorker(t, h, backend, holder)
-				h.startAt("http://127.0.0.1:1")
-				eventually(t, "one terminal worker report", func() bool { return len(got.list()) == 1 })
-				if rep := got.list()[0]; rep.Result.Status != TurnDone || rep.Result.Message != "held result" || rep.Result.ID != id {
-					t.Fatalf("rejoined report: %+v", rep)
-				}
-				after := h.record(id)
-				if after.HolderID != holder || after.HostPID != before.HostPID || after.TurnOpen || after.LastTurn == nil || after.LastTurn.Result.Status != TurnDone {
-					t.Fatalf("rejoined worker lost holder or turn: before %+v, after %+v", before, after)
-				}
-				if h.holders.opCount("launch") != 1 || h.holders.opCount("spawn") != 1 || h.holders.opCount("stop") != 0 {
-					t.Fatalf("replacement changed the physical process: %v", h.holders.opList())
-				}
-				if backend != BackendPi {
-					if after.MCPToken != before.MCPToken || after.MCPURL != before.MCPURL || after.MCPHolder != before.MCPHolder {
-						t.Fatalf("MCP tuple changed: before %+v, after %+v", before, after)
-					}
-					hello, _, ok := h.runner.ResolveMCPToken(before.MCPToken)
-					if !ok {
-						t.Fatal("rejoined worker's persisted MCP token does not resolve")
-					}
-					for _, name := range []string{EnvHostedSession, EnvHostedSessionKey, EnvAgentSessionKey, EnvPermissionLevel, "WS_MCP_HARNESS_PID"} {
-						want, wasSet := beforeEnv[name]
-						got, isSet := hello.Env[name]
-						if got != want || isSet != wasSet {
-							t.Errorf("rejoined MCP env %s = %q (set %v), launched %q (set %v)", name, got, isSet, want, wasSet)
-						}
-					}
-				}
-				if backend == BackendCodex {
-					wantSandbox, wantPolicy := "workspace-write", "on-request"
-					if authority == "read-only" {
-						wantSandbox, wantPolicy = "read-only", "never"
-					}
-					turns := h.holders.acpInputs(holder, "turn/start")
-					if len(turns) != 1 || jsonAt(turns[0], "approvalPolicy") != wantPolicy || jsonAt(turns[0], "sandboxPolicy", "type") != map[string]string{"read-only": "readOnly", "workspace-write": "workspaceWrite"}[wantSandbox] {
-						t.Fatalf("first Codex turn mode: %s", turns)
-					}
-					h.send(id, "again")
-					eventually(t, "the rejoined Codex turn", func() bool { return len(h.holders.acpInputs(holder, "turn/start")) == 2 })
-					turns = h.holders.acpInputs(holder, "turn/start")
-					if jsonAt(turns[1], "approvalPolicy") != wantPolicy || jsonAt(turns[1], "sandboxPolicy", "type") != map[string]string{"read-only": "readOnly", "workspace-write": "workspaceWrite"}[wantSandbox] {
-						t.Fatalf("rejoined Codex turn mode: %s", turns[1])
-					}
-				}
-				if len(got.list()) != 1 {
-					t.Fatalf("replacement published more than one report: %+v", got.list())
-				}
-			})
+				t.Run(name, func(t *testing.T) { heldWorkerCompletesAcrossReplacement(t, backend, authority, whileDown) })
+			}
 		}
+	}
+}
+
+func heldWorkerCompletesAcrossReplacement(t *testing.T, backend, authority string, whileDown bool) {
+	h, got := workerRecoveryHarness(t, backend, true)
+	id, holder := spawnHeldRecoveryWorker(t, h, backend, authority)
+	before := h.record(id)
+	if before.HolderID != holder || before.HostPID <= 0 || before.HandedOffAt == "" {
+		t.Fatalf("new worker is not fenced under its holder: %+v", before)
+	}
+	if before.MCPToken == "" || before.MCPHolder != holder || before.MCPURL == "" || before.MCPEnv == nil {
+		t.Fatalf("worker MCP tuple was not persisted: %+v", before)
+	}
+	hello, _, ok := h.runner.ResolveMCPToken(before.MCPToken)
+	if !ok {
+		t.Fatal("launched worker's MCP token does not resolve")
+	}
+	beforeEnv := maps.Clone(hello.Env)
+	if beforeEnv[EnvAgentSessionKey] != before.WSKey || beforeEnv[EnvPermissionLevel] != authority || beforeEnv["WS_MCP_HARNESS_PID"] != strconv.Itoa(before.HostPID) {
+		t.Fatalf("launched worker MCP identity: key %q, level %q, pid %q", beforeEnv[EnvAgentSessionKey], beforeEnv[EnvPermissionLevel], beforeEnv["WS_MCP_HARNESS_PID"])
+	}
+	// The first holder's inputs go with it when it is stopped.
+	firstTurns := h.holders.acpInputs(holder, "turn/start")
+	h.runner.Close()
+	if h.holders.opCount("stop") != 0 {
+		t.Fatalf("runner shutdown stopped the mid-turn worker: %v, record %+v", h.holders.opList(), h.record(id))
+	}
+	h.holders.restart()
+	if whileDown {
+		completeRecoveryWorker(t, h, backend, holder)
+	}
+	h.startAt("http://127.0.0.1:1")
+	if !whileDown {
+		eventually(t, "the mid-turn worker rejoined", func() bool {
+			c := h.runner.conv(id)
+			if c == nil {
+				return false
+			}
+			ready := false
+			c.do(func() { ready = c.proc != nil && !c.replaying && c.turn })
+			return ready
+		})
+		rejoined := h.record(id)
+		if rejoined.MCPToken != before.MCPToken || rejoined.MCPURL != before.MCPURL || rejoined.MCPHolder != before.MCPHolder {
+			t.Fatalf("MCP tuple changed: before %+v, after %+v", before, rejoined)
+		}
+		hello, _, ok := h.runner.ResolveMCPToken(before.MCPToken)
+		if !ok {
+			t.Fatal("rejoined worker's persisted MCP token does not resolve")
+		}
+		for _, name := range []string{EnvHostedSession, EnvHostedSessionKey, EnvAgentSessionKey, EnvPermissionLevel, "WS_MCP_HARNESS_PID"} {
+			want, wasSet := beforeEnv[name]
+			got, isSet := hello.Env[name]
+			if got != want || isSet != wasSet {
+				t.Errorf("rejoined MCP env %s = %q (set %v), launched %q (set %v)", name, got, isSet, want, wasSet)
+			}
+		}
+		completeRecoveryWorker(t, h, backend, holder)
+	}
+	eventually(t, "one terminal worker report", func() bool { return len(got.list()) == 1 })
+	if rep := got.list()[0]; rep.Result.Status != TurnDone || rep.Result.Message != "held result" || rep.Result.ID != id {
+		t.Fatalf("rejoined report: %+v", rep)
+	}
+	if whileDown {
+		eventually(t, "the finished worker asleep", func() bool {
+			rec := h.record(id)
+			return rec.HolderID == "" && h.holders.opCount("stop "+holder) == 1
+		})
+	}
+	after := h.record(id)
+	if after.TurnOpen || after.LastTurn == nil || after.LastTurn.Result.Status != TurnDone {
+		t.Fatalf("rejoined worker lost its turn: before %+v, after %+v", before, after)
+	}
+	if whileDown {
+		if after.HostPID != 0 || after.HolderSeq != 0 || after.MCPToken != "" || after.ClosedAt != "" || h.state(id).Process {
+			t.Fatalf("slept worker record = %+v, want open with no holder or MCP tuple", after)
+		}
+		if h.holders.opCount("launch") != 1 || h.holders.opCount("spawn") != 1 || h.holders.opCount("stop") != 1 {
+			t.Fatalf("the sleep did more than stop the finished worker's holder: %v", h.holders.opList())
+		}
+	} else {
+		if after.HolderID != holder || after.HostPID != before.HostPID {
+			t.Fatalf("rejoined worker lost its holder: before %+v, after %+v", before, after)
+		}
+		if h.holders.opCount("launch") != 1 || h.holders.opCount("spawn") != 1 || h.holders.opCount("stop") != 0 {
+			t.Fatalf("replacement changed the physical process: %v", h.holders.opList())
+		}
+	}
+	if backend == BackendCodex {
+		wantSandbox, wantPolicy := "workspace-write", "on-request"
+		if authority == "read-only" {
+			wantSandbox, wantPolicy = "read-only", "never"
+		}
+		wantType := map[string]string{"read-only": "readOnly", "workspace-write": "workspaceWrite"}[wantSandbox]
+		if len(firstTurns) != 1 || jsonAt(firstTurns[0], "approvalPolicy") != wantPolicy || jsonAt(firstTurns[0], "sandboxPolicy", "type") != wantType {
+			t.Fatalf("first Codex turn mode: %s", firstTurns)
+		}
+		h.send(id, "again")
+		next, wantTurns := holder, 2
+		if whileDown {
+			// The slept worker wakes under a new holder.
+			eventually(t, "a new holder for the woken worker", func() bool {
+				rec := h.record(id)
+				return rec.HolderID != "" && rec.HolderID != holder
+			})
+			next, wantTurns = h.holder(id), 1
+		}
+		eventually(t, "the next Codex turn", func() bool { return len(h.holders.acpInputs(next, "turn/start")) == wantTurns })
+		turns := h.holders.acpInputs(next, "turn/start")
+		if last := turns[len(turns)-1]; jsonAt(last, "approvalPolicy") != wantPolicy || jsonAt(last, "sandboxPolicy", "type") != wantType {
+			t.Fatalf("next Codex turn mode: %s", last)
+		}
+	}
+	if len(got.list()) != 1 {
+		t.Fatalf("replacement published more than one report: %+v", got.list())
 	}
 }
 
@@ -407,9 +460,20 @@ func TestHeldWorkerAttachUsesChildAuthorityWithAbsentParent(t *testing.T) {
 	}
 	h.runner.Close()
 	h.holders.restart()
-	completeRecoveryWorker(t, h, BackendCodex, holder)
 	h.startAt("http://127.0.0.1:1")
-	eventually(t, "the child rejoins without a loaded parent", func() bool { return len(got.list()) == 1 })
+	// The turn ends after the rejoin: one that ended while no daemon ran
+	// would put the finished worker to sleep, holder ended, after its report.
+	eventually(t, "the child rejoins without a loaded parent", func() bool {
+		c := h.runner.conv(id)
+		if c == nil {
+			return false
+		}
+		ready := false
+		c.do(func() { ready = c.proc != nil && !c.replaying && c.turn })
+		return ready
+	})
+	completeRecoveryWorker(t, h, BackendCodex, holder)
+	eventually(t, "the rejoined child's report", func() bool { return len(got.list()) == 1 })
 	if after := h.record(id); after.HolderID != holder || after.HostPID != before.HostPID {
 		t.Fatalf("child attach was gated on its absent parent: %+v", after)
 	}

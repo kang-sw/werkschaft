@@ -830,6 +830,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		if err != nil {
 			return toolTextResponse(req.ID, "", fmt.Errorf("worktree.acquire: %w", err))
 		}
+		worktreeTrash.maybeSweep(s.gitRunner(), entry.root, poolRV.Value)
 		result, err := acquireWorktreeWith(ctx, s.gitRunner(), s.environ(), entry.root, base, targetBranch, profile, poolRV.Value, key, func(mintPath string) (string, error) {
 			resolved, err := s.resolveSession(sessionAccess{mode: sessionAccessMintIdentity, root: mintPath, scope: roleLead, parent: key})
 			return resolved.key, err
@@ -883,6 +884,9 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 				return toolTextResponse(req.ID, "", fmt.Errorf("worktree.release refuses force: only a root lead session (a lead key with no parent) may force a release; this key is a worker's or a child's. Nothing was changed. Release by identity, or ask the root lead"))
 			}
 		}
+		if lead, ok := s.lookupSession(key); ok {
+			worktreeTrash.maybeSweep(s.gitRunner(), lead.root, poolRV.Value)
+		}
 		caller := &worktreeReleaseCaller{LeadKey: key, WorkerKey: workerKey, Force: force, CheckChildren: s.checkWorktreeBoundChildren, CheckExecJobs: s.checkWorktreeLiveExecJobs, FenceExec: s.worktreeExecFence, CheckNotice: s.checkWorktreeReleaseNotice, Released: s.notifyWorktreeReleased}
 		result, err := releaseWorktreeAs(context.Background(), s.gitRunner(), s.environ(), path, poolRV.Value, lookup, caller)
 		if err != nil {
@@ -921,7 +925,14 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			return staticProfileLookup(profiles, err)(name)
 		}
 		staleAfter, _ := worktreeNudgeThresholds(&resolver, key)
-		result, err := removeWorktreeFenced(context.Background(), s.gitRunner(), s.environ(), path, poolRV.Value, staleAfter, time.Now(), lookup, s.worktreeExecFence)
+		// The caller's repository resolves an unregistered pool directory,
+		// which git cannot resolve from the directory itself.
+		callerRoot := ""
+		if lead, ok := s.lookupSession(key); ok {
+			callerRoot = lead.root
+			worktreeTrash.maybeSweep(s.gitRunner(), callerRoot, poolRV.Value)
+		}
+		result, err := removeWorktreeFenced(context.Background(), s.gitRunner(), s.environ(), path, poolRV.Value, staleAfter, time.Now(), lookup, s.worktreeExecFence, s.worktreeOccupancy, callerRoot)
 		if err != nil {
 			return toolTextResponse(req.ID, "", err)
 		}
@@ -940,6 +951,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		if err != nil {
 			return toolTextResponse(req.ID, "", fmt.Errorf("worktree.list: %w", err))
 		}
+		worktreeTrash.maybeSweep(s.gitRunner(), entry.root, poolRV.Value)
 		result, err := listPoolWorktrees(context.Background(), s.gitRunner(), entry.root, poolRV.Value, s.sessions.recordMtime)
 		if wantsJSON(params.Arguments) {
 			return toolJSONResponse(req.ID, result, err)

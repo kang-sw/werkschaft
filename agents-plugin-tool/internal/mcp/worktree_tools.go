@@ -556,7 +556,7 @@ func provisionWorktreeLocked(ctx context.Context, runner wsgit.Runner, env []str
 	var claim string
 	var claimMarker *worktreeMarker
 	for _, e := range entries {
-		if e.Path == mainRoot || !pathUnder(poolRoot, e.Path) || !e.Detached {
+		if e.Path == mainRoot || !pathUnder(poolRoot, e.Path) || inPoolTrash([]string{poolRoot}, e.Path) || !e.Detached {
 			continue
 		}
 		// Reserve the candidate exclusively while it is checked. A release
@@ -940,6 +940,9 @@ func ownedPoolWorktree(ctx context.Context, runner wsgit.Runner, wtPath, poolCon
 	if !underAnyPool(poolRoots, target) {
 		return "", worktreeEntry{}, "", fmt.Errorf("%s refuses %q: not under the owned worktree pool %q", tool, target, poolRoots[0])
 	}
+	if inPoolTrash(poolRoots, target) {
+		return "", worktreeEntry{}, "", fmt.Errorf("%s refuses %q: it is in the pool's %s directory, which holds removed worktrees awaiting deletion", tool, target, poolTrashDirName)
+	}
 	for _, e := range entries {
 		if filepath.Clean(e.Path) == target {
 			return target, e, mainRoot, nil
@@ -1180,12 +1183,20 @@ func (s *Server) worktreeBusy(ctx context.Context, target string) bool {
 	if err != nil {
 		return true
 	}
-	for _, child := range occ.Children {
+	return len(occupyingChildren(occ.Children)) > 0
+}
+
+// occupyingChildren are the children that occupy a worktree: bound since its
+// last completed release (or with none recorded), or bound before it but
+// still live. The one definition of "occupied" for acquisition and removal.
+func occupyingChildren(children []wsagent.BoundWorktreeChild) []wsagent.BoundWorktreeChild {
+	var out []wsagent.BoundWorktreeChild
+	for _, child := range children {
 		if !child.BoundBeforeRelease || child.Live {
-			return true
+			out = append(out, child)
 		}
 	}
-	return false
+	return out
 }
 
 // checkWorktreeReleaseNotice reports, before a release changes anything, what

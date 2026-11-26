@@ -94,7 +94,7 @@ func poolNudge(ctx context.Context, runner wsgit.Runner, root, poolRoot string, 
 	}
 	var lines []string
 	for i, e := range entries {
-		if i == 0 || e.Prunable || !pathUnder(poolRoot, e.Path) {
+		if i == 0 || e.Prunable || !pathUnder(poolRoot, e.Path) || inPoolTrash([]string{poolRoot}, e.Path) {
 			continue
 		}
 		if !e.Detached {

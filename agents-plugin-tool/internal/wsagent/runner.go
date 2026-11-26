@@ -278,6 +278,11 @@ type Options struct {
 	spawnListed func(string)
 	// stateInboxRead observes state-held inbox scans in tests.
 	stateInboxRead func(string)
+	// detachFinishedAtShutdown makes a test runner's shutdown (letGo)
+	// detach a finished-idle child's holder instead of putting it to sleep,
+	// as a crash or a predecessor daemon without that sleep leaves it, so
+	// a test can exercise the successor's rejoin of an idle held worker.
+	detachFinishedAtShutdown bool
 	// closedSnapshotRead observes closed/handed-off snapshot reads in tests.
 	closedSnapshotRead func(string)
 	// sendAdmitting observes the revival admission fence in tests.

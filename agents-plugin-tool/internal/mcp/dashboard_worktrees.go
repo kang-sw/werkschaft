@@ -62,6 +62,9 @@ func (src *DashboardSessionSource) ReadRepoWorktrees(repo string, regs []wsdashb
 			break
 		}
 	}
+	// A daemon's first rail read of a repository also retries the removed
+	// worktrees an earlier process left in its trash (in the background).
+	worktreeTrash.maybeSweep(wsgit.ExecRunner{}, repo, poolValue)
 	ctx, cancel := context.WithTimeout(context.Background(), dashboardPoolTimeout)
 	defer cancel()
 	return readRepoWorktrees(ctx, wsgit.ExecRunner{}, repo, poolValue)
@@ -105,7 +108,7 @@ func readDashboardPool(ctx context.Context, runner wsgit.Runner, root, poolConfi
 	roots := ownedPoolRoots(poolConfigValue, mainRoot)
 	pool.Pool = roots[0]
 	for i, e := range entries {
-		if i == 0 || e.Path == mainRoot || e.Prunable || !underAnyPool(roots, e.Path) {
+		if i == 0 || e.Path == mainRoot || e.Prunable || !underAnyPool(roots, e.Path) || inPoolTrash(roots, e.Path) {
 			continue
 		}
 		wt := wsdashboard.PooledWorktree{Name: filepath.Base(e.Path), Path: e.Path, Detached: e.Detached || e.Branch == ""}

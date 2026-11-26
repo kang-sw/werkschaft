@@ -154,7 +154,9 @@ func (r *Runner) startWithServing(notify func(replyID, project string), serving 
 			open = append(open, rec)
 			binding := r.resolveAgentBinding(rec)
 			bindings[rec.ReplyID] = binding
-			if refusal := r.deadBindingRefusal(rec, binding.released); refusal != nil {
+			// A checkout removed with its release marker still ends the
+			// binding: the gone path refuses it like a recorded release.
+			if refusal := r.deadBindingRefusal(rec, binding.ended()); refusal != nil {
 				dead[rec.ReplyID] = refusal
 			}
 		}
@@ -329,8 +331,10 @@ func (r *Runner) loadClosed(rec Record) {
 	closure := rec.DeadBindingClosure
 	dead := rec.ClosedAt != "" && closure != nil && closure.Reason != ""
 	if dead && rec.HolderID != "" {
-		// A retained release closure can reach disk while its detached
-		// holder still owns the running process. Leave it to the holder.
+		// A retained release closure can reach disk while its holder still
+		// owns the running process (an older daemon detached it, or its stop
+		// failed). Keep the generic orphan sweep off it: the complete startup
+		// inventory ends it through finalizeDeadHolders.
 		r.holders.reject(rec.HolderID)
 	}
 	r.mu.Lock()

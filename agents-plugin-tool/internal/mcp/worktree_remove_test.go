@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsgit"
 )
@@ -355,4 +357,100 @@ func TestRemoveWorktreeWithInitializedSubmodule(t *testing.T) {
 
 func remove(ctx context.Context, runner wsgit.Runner, path string, lookup worktreeProfileLookup) (worktreeRemoveResult, error) {
 	return removeWorktree(ctx, runner, nil, path, "", testStaleAfter, time.Now(), lookup)
+}
+
+// TestRemoveWorktreeOccupancyPreflight: agents occupying the target (open, or
+// bound before the last release but still live) or a daemon that cannot answer
+// refuse the removal before any hook or change; a dead pre-release binding does
+// not occupy.
+func TestRemoveWorktreeOccupancyPreflight(t *testing.T) {
+	root := profileWorktreeFixture(t)
+	ctx := context.Background()
+	runner := wsgit.ExecRunner{}
+	profile := hookProfile(t, "build", nil, map[string][]map[string]any{
+		worktreeHookPreRemove: {hook(hookArgv(t, "env", "out/pre_remove.txt"))},
+	})
+	lookup := lookupOf(profile)
+	provision := func(branch string) worktreeAcquireResult {
+		t.Helper()
+		wt, err := provisionWorktree(ctx, runner, nil, root, "develop", branch, profile, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return wt
+	}
+	answer := func(children ...wsagent.BoundWorktreeChild) func(context.Context, string) (worktreeOccupancy, error) {
+		return func(context.Context, string) (worktreeOccupancy, error) {
+			return worktreeOccupancy{Children: children}, nil
+		}
+	}
+	untouched := func(path string) {
+		t.Helper()
+		if _, err := os.Stat(filepath.Join(path, ".git")); err != nil {
+			t.Fatalf("a refused remove changed the worktree: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(path, "out", "pre_remove.txt")); err == nil {
+			t.Fatalf("a refused remove ran pre_remove in %s", path)
+		}
+		if !worktreeRegistered(t, root, path) {
+			t.Fatalf("a refused remove unregistered %s", path)
+		}
+	}
+
+	open := provision("impl/develop/occ-open")
+	_, err := removeWorktreeFenced(ctx, runner, nil, open.Path, "", testStaleAfter, time.Now(), lookup, nil,
+		answer(wsagent.BoundWorktreeChild{Address: "id:abc", State: "running", Holder: "h-1", PID: 4242, Cwd: open.Path}), "")
+	if err == nil {
+		t.Fatal("remove with an open child must be refused")
+	}
+	for _, want := range []string{"worktree.remove refuses", "id:abc", "running", "holder=h-1", "pid=4242", "cwd=" + open.Path, "Nothing was changed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal %q lacks %q", err, want)
+		}
+	}
+	untouched(open.Path)
+
+	live := provision("impl/develop/occ-live")
+	_, err = removeWorktreeFenced(ctx, runner, nil, live.Path, "", testStaleAfter, time.Now(), lookup, nil,
+		answer(wsagent.BoundWorktreeChild{Address: "id:def", State: "closed", BoundBeforeRelease: true, Live: true}), "")
+	if err == nil || !strings.Contains(err.Error(), "id:def") {
+		t.Fatalf("remove with a live pre-release child = %v", err)
+	}
+	untouched(live.Path)
+
+	down := provision("impl/develop/occ-down")
+	_, err = removeWorktreeFenced(ctx, runner, nil, down.Path, "", testStaleAfter, time.Now(), lookup, nil,
+		func(context.Context, string) (worktreeOccupancy, error) {
+			return worktreeOccupancy{}, errors.New("daemon unreachable")
+		}, "")
+	if err == nil || !strings.Contains(err.Error(), "daemon unreachable") || !strings.Contains(err.Error(), "Nothing was changed") {
+		t.Fatalf("remove with a failing occupancy check = %v", err)
+	}
+	untouched(down.Path)
+
+	dead := provision("impl/develop/occ-dead")
+	res, err := removeWorktreeFenced(ctx, runner, nil, dead.Path, "", testStaleAfter, time.Now(), lookup, nil,
+		answer(wsagent.BoundWorktreeChild{Address: "id:ghi", State: "closed", BoundBeforeRelease: true}), "")
+	if err != nil || !res.Removed || worktreeRegistered(t, root, dead.Path) {
+		t.Fatalf("remove with a dead pre-release child = %+v, %v", res, err)
+	}
+}
+
+func TestOccupyingChildren(t *testing.T) {
+	children := []wsagent.BoundWorktreeChild{
+		{Address: "a"},
+		{Address: "b", BoundBeforeRelease: true},
+		{Address: "c", BoundBeforeRelease: true, Live: true},
+		{Address: "d", Live: true},
+	}
+	var got []string
+	for _, c := range occupyingChildren(children) {
+		got = append(got, c.Address)
+	}
+	if strings.Join(got, ",") != "a,c,d" {
+		t.Fatalf("occupyingChildren = %v, want a,c,d", got)
+	}
+	if len(occupyingChildren(nil)) != 0 {
+		t.Fatal("no children occupy nothing")
+	}
 }

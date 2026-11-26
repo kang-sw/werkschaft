@@ -1150,18 +1150,42 @@ func TestAgyWorkerReattachDoesNotArmCompletedTurn(t *testing.T) {
 	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
 	completeRecoveryWorker(t, h, BackendAgy, holder)
 	eventually(t, "completed worker result", func() bool { return len(got.list()) == 1 && !h.record(id).TurnOpen })
+	if n := len(agyPromptIDs(h, holder)); n != 1 {
+		t.Fatalf("prompts before the restart = %d, want 1", n)
+	}
+	// A crash leaves the idle worker held, so the next daemon rejoins it.
+	detachFinishedAtShutdown(h)
 	h.runner.Close()
 	h.holders.restart()
+	// The rejoin puts the finished worker to sleep, which ends its holder
+	// (and its recorded inputs with it): count prompts and watchdog timers
+	// from here on.
+	var prompted atomic.Int32
+	h.holders.set(func() {
+		h.holders.onInput = func(to string, data []byte, _ bool) {
+			if to == holder && strings.Contains(string(data), `"session/prompt"`) {
+				prompted.Add(1)
+			}
+		}
+	})
+	timers := &leverTimers{}
+	h.opts.Timer = timers.start
 	h.startAt("http://127.0.0.1:1")
 	c := h.runner.conv(id)
-	var armed, active bool
-	eventually(t, "completed worker rejoined", func() bool {
+	var armed, active, process bool
+	eventually(t, "completed worker rejoined and asleep", func() bool {
 		var ready bool
-		c.do(func() { ready, armed, active = c.proc != nil && !c.replaying, c.modelWaitArmed, c.turn })
+		c.do(func() {
+			ready = !c.replaying && h.holders.opCount("stop "+holder) == 1
+			armed, active, process = c.modelWaitArmed, c.turn, c.proc != nil
+		})
 		return ready
 	})
-	if armed || active || len(got.list()) != 1 || len(agyPromptIDs(h, holder)) != 1 {
-		t.Fatalf("completed worker rejoined with active=%v, armed=%v, reports=%d, prompts=%d", active, armed, len(got.list()), len(agyPromptIDs(h, holder)))
+	if started, _ := timers.counts(); armed || active || process || started != 0 || len(got.list()) != 1 || prompted.Load() != 0 {
+		t.Fatalf("completed worker rejoined with active=%v, armed=%v, process=%v, watchdog timers=%d, reports=%d, prompts=%d", active, armed, process, started, len(got.list()), prompted.Load())
+	}
+	if n := h.holders.opCount("launch"); n != 1 {
+		t.Fatalf("the rejoin launched a process: %v", h.holders.opList())
 	}
 }
 

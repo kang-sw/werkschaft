@@ -66,6 +66,38 @@ func (h ManagerHost) Status(id string) (wsholder.AttachInfo, error) {
 	return c.Status()
 }
 
+// HolderStopRequester is the optional HolderHost operation that asks holder
+// id to end its child and exit, returning once the holder took the request
+// rather than once both are gone (ManagerHost; wsholder.Client.Stop). The
+// holder then ends its child on its own (TERM, its stop grace, KILL). A
+// daemon shutdown uses it so it does not wait out each child's exit; a host
+// without it is asked through Stop.
+type HolderStopRequester interface {
+	RequestStop(id string) error
+}
+
+// RequestStop asks an attached holder to stop without waiting for it to go.
+func (h ManagerHost) RequestStop(id string) error {
+	c := h.Client(id)
+	if c == nil {
+		return wsholder.ErrDetached
+	}
+	return c.Stop()
+}
+
+// requestHolderStop asks holder id to stop, without waiting when the host
+// can (HolderStopRequester).
+func (r *Runner) requestHolderStop(id string) error {
+	hosts := r.opts.Holders
+	if hosts == nil {
+		return errors.New("no session holder host")
+	}
+	if q, ok := hosts.(HolderStopRequester); ok {
+		return q.RequestStop(id)
+	}
+	return hosts.Stop(id)
+}
+
 // holderKindLead is the kind a lead conversation's holder records in its
 // descriptor.
 const holderKindLead = "lead"

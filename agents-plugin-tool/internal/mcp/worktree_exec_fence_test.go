@@ -38,7 +38,7 @@ func TestWorktreeReleaseAndRemoveRefuseWhileAnExecJobRuns(t *testing.T) {
 	if _, err := os.Stat(wt.Path); err != nil {
 		t.Fatalf("a refused release changed the worktree: %v", err)
 	}
-	if _, err := removeWorktreeFenced(ctx, runner, nil, wt.Path, "", testStaleAfter, time.Now(), lookup, live); err == nil || !strings.Contains(err.Error(), "worktree.remove refuses") {
+	if _, err := removeWorktreeFenced(ctx, runner, nil, wt.Path, "", testStaleAfter, time.Now(), lookup, live, nil, ""); err == nil || !strings.Contains(err.Error(), "worktree.remove refuses") {
 		t.Fatalf("remove with a live job = %v", err)
 	}
 	if _, err := os.Stat(wt.Path); err != nil {
@@ -58,7 +58,7 @@ func TestWorktreeReleaseAndRemoveRefuseWhileAnExecJobRuns(t *testing.T) {
 	if held != 1 || lifted != 1 {
 		t.Fatalf("release reservation held %d lifted %d", held, lifted)
 	}
-	if _, err := removeWorktreeFenced(ctx, runner, nil, wt.Path, "", testStaleAfter, time.Now(), lookup, fence); err != nil {
+	if _, err := removeWorktreeFenced(ctx, runner, nil, wt.Path, "", testStaleAfter, time.Now(), lookup, fence, nil, ""); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 	if held != 2 || lifted != 2 {

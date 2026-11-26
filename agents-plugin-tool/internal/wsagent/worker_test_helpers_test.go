@@ -88,6 +88,16 @@ func spawnRecoveryWorker(t *testing.T, h *leadHarness) (State, string) {
 	return worker, holder
 }
 
+// detachFinishedAtShutdown makes the running runner's shutdown, and every
+// later one, detach a finished-idle worker's holder instead of putting it to
+// sleep, as a crash or a predecessor daemon without that sleep leaves it
+// (Options.detachFinishedAtShutdown), so the next daemon rejoins an idle
+// held worker. Call it before Close; letGo reads it after Close.
+func detachFinishedAtShutdown(h *leadHarness) {
+	h.runner.opts.detachFinishedAtShutdown = true
+	h.opts.detachFinishedAtShutdown = true
+}
+
 func recoveryWorkerReply(text string) []string {
 	return []string{replyLine("worker-turn", text), resultLine(), stateLine(HarnessIdle)}
 }

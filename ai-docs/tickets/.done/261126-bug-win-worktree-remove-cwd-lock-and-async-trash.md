@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 8b0d1206d51638db
 sage-review-completeness-reviewed: 8b0d1206d51638db
+completed: 2026-11-26
 ---
 
 # Fix Windows `worktree.remove` CWD locking, daemon-restore respawns, and synchronous large-tree deletion timeouts
@@ -106,6 +107,27 @@ Dogfooding pooled worktree cleanup on Windows (`InspectTGV_AIDriven`, 20 idle po
   - `worktree.remove` refuses occupied worktrees with occupant identity and leaves files + Git registration intact.
 - `GOOS=windows GOARCH=amd64 go vet` passes across modified packages.
 
+### Result (5312f50bc) - 2026-11-26
+
+Landed on `impl/develop/cleft-shell-think` (`4252a4f37..5312f50bc`: f22379c01, 89e685c0, edf0d7412, 6e2ee09b5, 5b1e1560b, 5312f50bc).
+
+- **Release stop + durable closure (`wsagent/dead_binding.go`).** `closeDeadBinding` installs the closed state in memory first (occupancy keeps listing the conversation as live while it stops), then ends a held process through `proc.Close()` (input EOF, `closeGrace`, then holder stop with its existing graceful-then-kill timeout), forgets `HolderID`/`HostPID`/`HolderSeq` on success, and persists `ClosedAt` + the dead-binding closure through `persistAgentRecord`. A failed stop keeps the closure *with* its holder (still Live occupancy, sweep-fenced), and `finalizeDeadHolders` now stops such holders on the next complete holder inventory. A record naming a holder with no attached stream is stopped through `Holders.Stop`. Direct legacy processes keep the drain path.
+- **No resurrection into removed checkouts (`wsagent/worktree_release.go`, `wsgit.CheckoutRegistrationGone`).** At load and at every process start, a spawned non-lead binding with evidence of removal (bound checkout's directory, `.git` entry or admin dir gone; or root/cwd gone from an existing parent and inside no live bound checkout) is closed/refused with a new "no longer exists as a checkout" refusal. A missing subdirectory of a live checkout or an unreachable volume is not evidence (retryable start, as before).
+- **Finished-idle workers sleep across replacement (`runner_events.go`, `runner_reattach.go`, `holder.go`).** `finishedIdleChild` (non-lead child, idle, no open/held turn, queue, mail, reports, approvals, compaction/quota/model-wait continuation, held children or unsettled sends) gates two paths: `letGo` detaches and sends a non-waiting holder stop request (`ManagerHost.RequestStop`, bypassing `Manager.opMu` so the successor's lock budget is not spent) and clears the holder fields; `replayDone` puts a rejoined finished-idle child to sleep instead of `restartIfDue` (covers a stale `WorkerHTTPMCP` route). No standalone restart-restore turn runs; the bundle is prepended on the next wake. Leads and mid-turn children keep detach + restore. Codex's unknown background count (-1) no longer keeps a finished Codex worker awake here (it did not for the idle timer either).
+- **`worktree.remove` occupancy pre-flight (`mcp/worktree_remove.go`).** After the exec fence and before dirty/unmerged/lease checks, hooks and `git worktree remove`, it refuses while any child has `!BoundBeforeRelease || Live` (shared `occupyingChildren` predicate, also used by `worktreeBusy`), naming address, state, holder, pid and cwd, with "Nothing was changed"; a daemon that cannot answer fails closed. `BoundWorktreeChild` gained optional `holder`/`pid` (`omitempty`, T0). Schema description lists the new refusal.
+- **Docs:** `ai-docs/manuals/ws-mcp.md` (agent Close bullet, daemon replacement table/prose, holder paragraph).
+
+**Verification (remote w5090):**
+- `go test -race -count=1 ./internal/wsagent/ ./internal/wsgit/` → ok / ok at 5b1e1560b (after the review fix); `./internal/wsholder/` → ok (full run at 6e2ee09b5).
+- `go test -race ./internal/mcp/`: new `TestRemoveWorktreeOccupancyPreflight`, `TestOccupyingChildren` and the worktree/remove/schema tests pass; the package run fails only in tests that fail identically on base `4252a4f37` with the same environment (`TestDashboardTierRoutingView*`, `TestDashboardSettings*`, `TestDashboardCatalogTierRoutingMutation`, `TestLegacyWerkTierResolutionRequiresItsProvider`, and race-flagged `TestMailboxRecvConcurrentCallsNeverDoubleDeliver`, `TestServeStdioDoesNotBlockToolsListBehindLongCall`, `TestSessionKeyResolvesRoot`, `TestWhiteboardRetirementFirstOpenIsAsyncAndShared`) — pre-existing, outside this diff.
+- `GOOS=windows GOARCH=amd64 go vet ./internal/wsagent ./internal/wsgit ./internal/mcp ./internal/wsholder` → ok; `go build ./...` → ok; `gofmt -l` clean on touched files.
+- New wsagent tests: `TestForcedReleaseStopsHeldWorkerAndPersistsClosure`, `TestRestartKeepsReleasedChildClosedAfterAdminDirRemoved`, `TestStartupClosesSleepingChildWhoseCheckoutIsGone`, `TestStartupKeepsSleepingChildWhoseCwdSubdirectoryIsMissing`, `TestGoneBindingNeedsEvidenceOfRemoval`, `TestFinishedHTTPMCPWorkerSleepsAcrossRestart` {shutdown, rejoin}; wsgit `TestCheckoutRegistrationGoneNeedsEvidenceOfRemoval`; `TestRestartRestoreIdleLeadAndChildAfterReplay` updated to the new contract.
+
+**Decisions / known gaps:**
+- Shutdown sleep sends a stop request without waiting (a blocking stop would serialize on `Manager.opMu` and eat the successor's ~5s lock budget); a refused request falls back to the plain detach and `replayDone` sleeps the worker on rejoin.
+- Not detected as removed: a checkout emptied in place (directory kept, `.git` deleted) and a worktree of an in-repository pool removed while no daemon ran. The persisted release closure, the finished-idle sleep and the `worktree.remove` pre-flight keep these from arising through ws tools.
+- Lite review minors left open: a persist failure after a successful held stop is only logged (not retried); a forced release stops bound children serially (a slow multi-child release can outlast the forwarded 60s budget); `ManagerHost.RequestStop` and the refused-request fallback, `stopUnattachedDeadHolder` branches, and the `finalizeDeadHolders` stop-failure path have no direct test; the occupied refusal's advice cannot clear a retained dead-binding holder whose stop failed (only the next daemon start does).
+
 ### Phase 2: O(1) `.trash/` Rename-Aside, Async Deletion, and Orphan Directory Recovery
 
 **Goal:** Prevent interactive MCP timeouts on multi-GB Windows worktrees, avoid destructive partial-cleanup states under external CWD locks, and allow recovering already-unregistered orphan directories inside the pool.
@@ -131,3 +153,33 @@ Dogfooding pooled worktree cleanup on Windows (`InspectTGV_AIDriven`, 20 idle po
   - `worktree.remove(path)` cleans an already-unregistered orphan empty pool directory while rejecting paths outside the managed pool, and refuses a directory holding a leftover regular file, a dangling `.git` file, or a symlink/junction.
   - Rename-aside failure and unregister-after-rename failure (rollback) are simulated through an injectable rename/unregister seam, since the real Windows CWD lock cannot be asserted on Linux.
   - `T0` compatibility check: existing `worktree.remove` call signatures and JSON/text fields remain backwards-compatible.
+
+### Result (df6fce150) - 2026-11-26
+
+Landed on `impl/develop/cleft-shell-think` (`0834eb209..df6fce150`: c284fa1e4, df6fce150).
+
+- **Rename-aside + unregister (`mcp/worktree_trash.go` `retireRegisteredWorktree`, `mcp/worktree_remove.go`).** After the checks and `pre_remove` hooks, the checkout is renamed into `<pool root>/.trash/<base>.<UTC stamp>.<8 hex>`. The worktree is then unregistered by renaming only its admin dir `<common>/worktrees/<id>` into `<common>/ws-worktree-trash/<same name>`. That is one same-volume rename, git ignores it there, and there is no repo-wide prune. A failed checkout rename changes nothing and returns an actionable error with a CWD-lock hint. A failed admin rename moves the checkout back. If that rollback also fails, a loud error names both paths and says "Move X back to Y". `git worktree remove --force` is gone from the request path. Before any hook runs, remove now also refuses a locked worktree (`<adminDir>/locked`), a target that is a pool root, and an admin dir outside `<common>/worktrees`, each with "Nothing was changed". Success adds the note "its files are deleted in the background from <aside>".
+- **Background deletion and sweeps (`trashBin`).** Deletion runs as one background goroutine that `submit` starts and that exits when its queue drains, so there is no polling. `maybeSweep` runs at most once per repository per process every 30 minutes. It is called from `worktree.acquire/release/remove/list` dispatch and from the dashboard rail (`ReadRepoWorktrees`); the first such call in a process is the daemon-startup sweep. Each sweep handles both trash dirs, skips entries younger than 1 minute (age read from the entry name), deletes at most 32 per dir, and bounds its git reads at 10s. A sweep keeps a pool trash entry whose `.git` names a still-present admin dir whose registered path has no checkout (`strandedCheckout`, the failed-rollback state), until the checkout is moved back or the registration is pruned.
+- **`.trash` exclusion.** `worktree.list`, the acquire reuse scan, the stale nudge and the dashboard pool card skip `.trash`. `ownedPoolWorktree` refuses paths in it, which covers release and remove.
+- **Orphan recovery (`resolveOrphanPoolDir`, `removeOrphanPoolDir`).** This runs only when `ownedPoolWorktree` fails. The target is resolved by filesystem path against the calling session's repository root, which the dispatch passes as `callerRoot`. It must be a strict descendant of an owned pool root, outside `.trash`, not itself a symlink or junction, and not at or under a registered non-primary worktree. A target inside the primary checkout is refused unless its pool root is in-tree (legacy). The path goes through the same exec fence and occupancy pre-flight. Under the pool acquisition lock (`lockWorktreePool`) it re-checks registration, then accepts only a tree of directories. Any `.git` entry, regular file, symlink or junction is refused, with the offending entry named. Profile `orphan`.
+- **Docs:** `ai-docs/manuals/ws-mcp.md` ("Worktree removal." bullet). The `worktree.remove` schema description is updated and stays within the 1450-byte cap.
+
+**Verification (remote w5090):**
+- `go test -race -count=1 -v -run "TestListedToolSchemasFitByteCap|Worktree|Trash|Orphan|PoolNudge|ReleaseRecords|OccupyingChildren|Dashboard.*Pool|RepoWorktrees" ./internal/mcp/` → ok, 137 PASS at df6fce150.
+- New tests: `TestRemoveWorktreeRetiresIntoTrashAndDeletesInBackground`, `TestRemoveWorktreeRenameAsideFailureLeavesItIntact`, `TestRemoveWorktreeUnregisterFailureRollsBack`, `TestRemoveWorktreeFailedRollbackIsLoud` (also checks that the sweep keeps the stranded checkout and deletes it once the registration is pruned), `TestRemoveWorktreeRefusesLockedWorktree`, `TestPoolTrashSweep`, `TestTrashEntryTime`, `TestPoolTrashExcludedFromPoolScans`, `TestRemoveOrphanPoolDirectory`, `TestRemoveOrphanWaitsForPoolLock`, `TestWorktreeRemoveDispatchCompat`.
+- Full `go test -race -count=1 ./internal/mcp/` at c284fa1e4 fails only in the tests Phase 1 recorded as failing identically on base `4252a4f37`: `TestDashboardTierRoutingView*`, `TestDashboardSettings*`, `TestDashboardCatalogTierRoutingMutation`, `TestLegacyWerkTierResolutionRequiresItsProvider`, and the race-flagged `TestMailboxRecvConcurrentCallsNeverDoubleDeliver`, `TestServeStdioDoesNotBlockToolsListBehindLongCall`, `TestSessionKeyResolvesRoot`. None of the DATA RACE frames are in the trash, remove or seam code.
+- `go build ./...`, `go vet ./internal/mcp/` (plus wsagent, wsgit and wsholder at c284fa1e4), `GOOS=windows GOARCH=amd64 go vet ./internal/mcp/` and `GOOS=windows GOARCH=amd64 go build ./...` → ok. `gofmt -l` is clean on the touched files; the pre-existing `tool_schema_size_test.go` is untouched.
+
+**T0 compatibility verdict:** T0.
+- The `worktree.remove` arguments `path`, `key` and `format` are unchanged (`server_dispatch.go` worktree.remove case; `server_schemas.go`).
+- The output fields `path`, `removed`, `profile`, `branch`, `hooks` and `notes` (`worktreeRemoveResult`) are unchanged. The only new output is one extra `notes` line and the profile value `orphan` for orphan cleanup. `TestWorktreeRemoveDispatchCompat` covers this.
+- New refusals (locked, pool root, `.trash`) happen before any write.
+- There is no store or schema change. The `.trash` and `ws-worktree-trash` dirs are new plain directories. An older binary never reads them, and git ignores `ws-worktree-trash` because it is outside `worktrees/`. This matches the Tools row in `release-compatibility.md`.
+
+**Decisions / known gaps:**
+- Unregister is an admin-dir rename rather than `git worktree prune` or `git worktree remove`: it is O(1), touches only this worktree, and can be rolled back.
+- "Daemon startup sweep" means the first worktree or dashboard-rail call per repository per process, the same per-process-once pattern as whiteboard retirement. A one-shot CLI process may exit mid-deletion; its leftovers wait for the next sweep.
+- The orphan acceptance walk is an O(N) read-only listing (no unlinks) on the request path, under the pool lock with a 2s acquisition timeout.
+- A pool root that is itself a registered worktree is refused rather than retired.
+- Lite review minors not taken: failed deletions count toward the 32-entry sweep bound (undeletable entries can delay newer ones to a later sweep), and there is no junction-specific orphan test (Linux CI cannot create junctions; `orphanOffender`'s non-directory branch refuses them).
+- No measured Windows file-operation counts or timings: the Windows CWD lock is exercised only through the rename and unregister seams.

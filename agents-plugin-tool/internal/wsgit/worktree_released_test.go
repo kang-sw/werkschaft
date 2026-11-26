@@ -137,6 +137,54 @@ func TestBoundBeforeReleaseFallsBackToWholeSecondsForOldRecords(t *testing.T) {
 	}
 }
 
+// TestCheckoutRegistrationGoneNeedsEvidenceOfRemoval: only a missing
+// directory, a missing .git entry, or a gitfile naming a missing admin
+// directory reads as a removed checkout; a main checkout's .git directory and
+// a gitfile naming an existing admin directory are present.
+func TestCheckoutRegistrationGoneNeedsEvidenceOfRemoval(t *testing.T) {
+	linked, admin := linkedCheckout(t)
+	mainCheckout := t.TempDir()
+	if err := os.Mkdir(filepath.Join(mainCheckout, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	noGit := t.TempDir()
+	unregistered, unregisteredAdmin := linkedCheckout(t)
+	if err := os.RemoveAll(unregisteredAdmin); err != nil {
+		t.Fatal(err)
+	}
+	relative := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(relative, "admin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	relativeCheckout := filepath.Join(relative, "wt")
+	if err := os.Mkdir(relativeCheckout, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(relativeCheckout, ".git"), []byte("gitdir: ../admin\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		checkout string
+		want     bool
+	}{
+		{"missing directory", filepath.Join(t.TempDir(), "gone"), true},
+		{"missing .git entry", noGit, true},
+		{".git directory", mainCheckout, false},
+		{"gitfile to an existing admin directory", linked, false},
+		{"relative gitfile to an existing admin directory", relativeCheckout, false},
+		{"gitfile to a missing admin directory", unregistered, true},
+		{"empty path", "", false},
+	} {
+		if got := CheckoutRegistrationGone(tc.checkout); got != tc.want {
+			t.Errorf("%s: CheckoutRegistrationGone(%q) = %v, want %v", tc.name, tc.checkout, got, tc.want)
+		}
+	}
+	if _, err := os.Stat(admin); err != nil {
+		t.Fatalf("the check touched the admin directory: %v", err)
+	}
+}
+
 // TestContainingCheckoutsListsEveryEnclosingCheckout maps a working directory
 // to every checkout that contains it, nearest first, so a directory inside a
 // submodule of a checkout still reaches that checkout.

@@ -91,14 +91,22 @@ func (c *conv) startProcess() error {
 	// refuses it. The check and the starting mark share one mu hold with the
 	// release notice and the occupancy read: a notice either lands first
 	// (this start is refused) or finds the start live.
+	// A checkout removed since the conversation was loaded (its release
+	// marker can go with its admin directory) refuses the start the same
+	// way: nothing launches into a deleted or unregistered directory. Its
+	// file checks run before mu is taken.
+	gone := goneBinding(rec, c.canonRoot, c.canonCwd, c.checkouts)
 	c.mu.Lock()
 	checkout := c.releasedOnDiskLocked()
+	if checkout == "" && gone != "" {
+		c.releasedCheckout, checkout = gone, gone
+	}
 	if checkout == "" {
 		c.starting = true
 	}
 	c.mu.Unlock()
 	if checkout != "" {
-		return checkoutReleasedRefusal(checkout)
+		return deadCheckoutRefusal(checkout)
 	}
 	defer c.setStatus(func() { c.starting = false })
 	// Before the profile is read: a removed or edited profile must not mask

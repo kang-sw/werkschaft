@@ -638,9 +638,12 @@ func TestAgyWorkerRejoinWaitsForCompleteHolderAbsence(t *testing.T) {
 // crossHarnessAgyNextDaemon ends the daemon, its held processes running on,
 // and makes agy worker id a cross-harness one for the next daemon: its
 // record now names a Claude spawner, as a Claude lead's spawn under an older
-// daemon would. The registration keeps the shipped cross-harness refusal.
+// daemon would. That older daemon also detached a finished-idle worker at
+// shutdown rather than putting it to sleep. The registration keeps the
+// shipped cross-harness refusal.
 func crossHarnessAgyNextDaemon(t *testing.T, h *leadHarness, id string) {
 	t.Helper()
+	detachFinishedAtShutdown(h)
 	h.runner.Close()
 	if h.holders.opCount("stop") != 0 {
 		t.Fatalf("runner shutdown stopped a worker: %v", h.holders.opList())
@@ -659,6 +662,9 @@ func TestAgyWorkerUnstampedRejoinsFromItsAgyParentRecord(t *testing.T) {
 	h, _ := workerRecoveryHarness(t, BackendAgy)
 	parent, _ := idleHeldAgyWorker(t, h)
 	child, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	// The idle parent's holder survives the shutdown, as a crash leaves it;
+	// rejoined, it waits for its child's running turn instead of sleeping.
+	detachFinishedAtShutdown(h)
 	h.runner.Close()
 	if h.holders.opCount("stop") != 0 {
 		t.Fatalf("runner shutdown stopped a worker: %v", h.holders.opList())
