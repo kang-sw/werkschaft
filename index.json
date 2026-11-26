@@ -459,6 +459,9 @@
     },
     "261126-bug-win-worktree-remove-cwd-lock-and-async-trash": {
       "registered_at": "2026-11-26T01:34:58Z"
+    },
+    "261126-research-housekeeping-sparse-dirty-and-einval": {
+      "registered_at": "2026-11-26T01:35:04Z"
     }
   }
 }
