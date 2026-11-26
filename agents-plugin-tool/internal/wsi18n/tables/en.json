@@ -2859,6 +2859,7 @@
   "js.pill.unhold": "Release hold",
   "js.convo.jump.up": "Jump to your latest message above",
   "js.convo.jump.down": "Jump to your latest message below",
+  "js.convo.jump.bottom": "Jump to bottom",
   "js.find.label": "Find in card",
   "js.find.placeholder": "Find in card…",
   "js.find.prev": "Previous match (Shift+Enter)",

@@ -2859,6 +2859,7 @@
   "js.pill.unhold": "보류 해제",
   "js.convo.jump.up": "위의 내 최근 메시지로 이동",
   "js.convo.jump.down": "아래의 내 최근 메시지로 이동",
+  "js.convo.jump.bottom": "맨 아래로 이동",
   "js.find.label": "카드 안에서 찾기",
   "js.find.placeholder": "카드 안에서 찾기…",
   "js.find.prev": "이전 일치 항목 (Shift+Enter)",

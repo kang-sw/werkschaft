@@ -2859,6 +2859,7 @@
   "js.pill.unhold": "Rimuovi sospensione",
   "js.convo.jump.up": "Vai al tuo ultimo messaggio sopra",
   "js.convo.jump.down": "Vai al tuo ultimo messaggio sotto",
+  "js.convo.jump.bottom": "Vai in fondo",
   "js.find.label": "Cerca nella scheda",
   "js.find.placeholder": "Cerca nella scheda…",
   "js.find.prev": "Risultato precedente (Shift+Enter)",

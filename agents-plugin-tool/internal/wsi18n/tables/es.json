@@ -2859,6 +2859,7 @@
   "js.pill.unhold": "Quitar de espera",
   "js.convo.jump.up": "Ir a tu último mensaje arriba",
   "js.convo.jump.down": "Ir a tu último mensaje abajo",
+  "js.convo.jump.bottom": "Ir al final",
   "js.find.label": "Buscar en la tarjeta",
   "js.find.placeholder": "Buscar en la tarjeta…",
   "js.find.prev": "Coincidencia anterior (Shift+Enter)",

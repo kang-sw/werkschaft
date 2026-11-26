@@ -1,6 +1,7 @@
 package wsdashboard
 
 import (
+	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
@@ -33,7 +34,7 @@ func TestConversationSendRearmsBottomFollow(t *testing.T) {
 		composerFunc(t, src, "convoVisible"),
 		oneLineDashboardFunc(t, src, "atBottom"),
 		oneLineDashboardFunc(t, src, "pinned"),
-		oneLineDashboardFunc(t, src, "pinConvo"),
+		composerFunc(t, src, "pinConvo"),
 		oneLineDashboardFunc(t, src, "followConvo"),
 		composerFunc(t, src, "submitCommand"),
 		composerFunc(t, src, "sendCommand"),
@@ -80,4 +81,16 @@ userScroll(600); cmdSel = { name: "compact", args: null }; imgs = [{ ref: "", da
 check("command image guard does not re-arm", state(), [600, false]);
 process.stdout.write(bad.join("\n"));
 `)
+}
+
+func TestConversationScrollLockClient(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; run testdata/convo-scroll-lock.test.cjs locally")
+	}
+	out, err := exec.Command(node, "--test", "testdata/convo-scroll-lock.test.cjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("convo scroll-lock cases: %v\n%s", err, out)
+	}
+	t.Log(string(out))
 }

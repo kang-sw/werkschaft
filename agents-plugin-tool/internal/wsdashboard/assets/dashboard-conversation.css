@@ -333,6 +333,19 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .dgrid.live[data-tab="board"] > .agisland, .dgrid.live[data-ctab="files"] > .agisland, .dgrid.live[data-ctab="term"] > .agisland { display: none; }
 @media (min-width: 760px) { .dgrid.live[data-layout="split"][data-tab="board"]:not([data-ctab="files"]):not([data-ctab="term"]) > .agisland { display: block; } }
 @media (min-width: 1100px) { .dgrid.live:not([data-layout="tabs"])[data-tab="board"]:not([data-ctab="files"]):not([data-ctab="term"]) > .agisland { display: block; } }
+/* Floating bottom-center jump-to-bottom capsule overlays the conversation grid cell, outside #convo's scroll flow. */
+.dgrid.live > .d-convo-bottom { grid-area: convo; position: relative; z-index: calc(var(--z-panels, 40) - 6); align-self: end; justify-self: center; margin-bottom: 18px; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 30px; padding: 0; border: 0; border-radius: 999px; background: var(--wb-card); color: var(--wb-fg); box-shadow: var(--wb-shadow-hi), inset 0 0 0 1px var(--wb-line); cursor: pointer; opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(10px) scale(.86); transition: opacity 160ms ease, transform 180ms cubic-bezier(.4, 0, 1, 1), visibility 0s linear 180ms, background-color 140ms ease, color 140ms ease; }
+.dgrid.live > .d-convo-bottom.is-shown { opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0) scale(1); transition: opacity 180ms ease, transform 220ms cubic-bezier(.34, 1.56, .64, 1), visibility 0s, background-color 140ms ease, color 140ms ease; }
+.dgrid.live > .d-convo-bottom:hover { background: color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card)); color: var(--wb-primary); }
+.dgrid.live > .d-convo-bottom:active { transform: translateY(1px) scale(.95); }
+.dgrid.live > .d-convo-bottom:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: 2px; }
+.d-convo-bottom-ico { width: 15px; height: 15px; display: block; }
+.dgrid.live[data-tab="board"] > .d-convo-bottom, .dgrid.live[data-ctab="files"] > .d-convo-bottom, .dgrid.live[data-ctab="term"] > .d-convo-bottom { display: none; }
+@media (min-width: 760px) { .dgrid.live[data-layout="split"][data-tab="board"]:not([data-ctab="files"]):not([data-ctab="term"]) > .d-convo-bottom { display: inline-flex; } }
+@media (min-width: 1100px) { .dgrid.live:not([data-layout="tabs"])[data-tab="board"]:not([data-ctab="files"]):not([data-ctab="term"]) > .d-convo-bottom { display: inline-flex; } }
+@media (prefers-reduced-motion: reduce) {
+  .dgrid.live > .d-convo-bottom, .dgrid.live > .d-convo-bottom.is-shown, .dgrid.live > .d-convo-bottom:active { transition: none; transform: none; }
+}
 .agisland[data-mode="idle"] { width: 48px; height: 30px; border-radius: 999px; }
 .dgrid.live > .agisland[data-mode="compact"], .dgrid.live > .agisland[data-mode="idle"] { background: color-mix(in srgb, var(--wb-fg) 7%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); box-shadow: none; }
 .dgrid.live > .agisland[data-mode="compact"] { border-radius: 12px; transition: width 160ms cubic-bezier(0.2, 0.8, 0.2, 1), height 160ms cubic-bezier(0.2, 0.8, 0.2, 1), border-radius .2s ease; }

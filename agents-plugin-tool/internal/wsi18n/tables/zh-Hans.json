@@ -2859,6 +2859,7 @@
   "js.pill.unhold": "取消暂缓",
   "js.convo.jump.up": "跳转到上方我最近的消息",
   "js.convo.jump.down": "跳转到下方我最近的消息",
+  "js.convo.jump.bottom": "跳转到底部",
   "js.find.label": "在卡片内查找",
   "js.find.placeholder": "在卡片内查找…",
   "js.find.prev": "上一个匹配项 (Shift+Enter)",
