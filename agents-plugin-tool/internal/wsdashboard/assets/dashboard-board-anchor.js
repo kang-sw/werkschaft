@@ -2048,7 +2048,7 @@
     if (insetChanged && anchorProg) anchorRealign(false);
   }
   function anchorCancelProg(e) {
-    if (e && e.defaultPrevented) return;
+    if (e && e.defaultPrevented && !(e.target && e.target.closest && e.target.closest(".bc-grip"))) return;
     anchorUserScroll++;
     freeReleasePin();
     var col = $("bcol"), sc = null;

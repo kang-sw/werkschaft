@@ -162,6 +162,7 @@
 .gal-pane > .bcard > .bc-in { flex: 1 1 auto; min-height: 0; }
 .gal-pane > .bcard > .bc-in > .bc-hd { flex: none; }
 .gal-pane > .bcard:not([data-max]) > .bc-in > .bc-body { flex: 1 1 auto; height: auto !important; }
+.gal-pane > .bcard > .bc-in > .bc-grip { display: none; }
 .gal-plus { box-sizing: border-box; align-items: center; justify-content: center; padding: 16px; border: 2px dashed color-mix(in srgb, var(--wb-muted-fg) 40%, transparent); border-radius: var(--wb-radius); background: color-mix(in srgb, var(--wb-bg) 94%, transparent); color: var(--wb-muted-fg); font-weight: 700; font-size: 13px; text-align: center; -webkit-user-select: none; user-select: none; transition: border-color .15s, color .15s, background-color .15s; }
 :root[data-gal="empty"]:not([data-bdrag]) .gal-plus { border-color: color-mix(in srgb, var(--wb-muted-fg) 26%, transparent); color: color-mix(in srgb, var(--wb-muted-fg) 72%, transparent); background: transparent; }
 :root[data-bdrag] .gal-plus, .gal-plus.drop { border-color: var(--wb-primary); color: var(--wb-primary); background: color-mix(in srgb, var(--wb-primary) 8%, var(--wb-bg)); }
