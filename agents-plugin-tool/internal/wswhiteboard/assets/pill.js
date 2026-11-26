@@ -123,10 +123,39 @@
     return responded(el) || el.classList.contains("sent-sent") || el.classList.contains("sent-held");
   }
 
-  var holds = loadHolds();
+  var holds = {};
+  function sessionReplyId() {
+    var html = d.documentElement;
+    if (!html || !html.getAttribute) return "";
+    return html.getAttribute("data-rid") || html.getAttribute("data-wb-reply") || "";
+  }
+  function holdRouteURL() {
+    var rid = sessionReplyId();
+    return rid ? "/s/" + encodeURIComponent(rid) + "/board/hold" : "";
+  }
+  function normItemId(k) {
+    var s = String(k || "").trim();
+    if (/^[0-9]+$/.test(s)) return String(parseInt(s, 10));
+    return s;
+  }
+  var currentRid = sessionReplyId();
+  if (st._holdRid !== currentRid) {
+    st._holdRid = currentRid;
+    st._holdPending = {};
+    st._holdDraftCleared = {};
+    st._holdSeq = 0;
+  }
+  var holdPending = st._holdPending || (st._holdPending = {});
+  var holdDraftCleared = st._holdDraftCleared || (st._holdDraftCleared = {});
   function holdButton(el) {
     var b = el && el.querySelector ? el.querySelector(".wb-hold-toggle") : null;
     return b && b.hasAttribute && b.hasAttribute("data-wb-hold") ? b : null;
+  }
+  function domHeld(el) {
+    if (!el || !el.classList) return false;
+    if (el.classList.contains("wb-held")) return true;
+    var b = holdButton(el);
+    return !!(b && b.getAttribute("aria-pressed") === "true");
   }
   function syncHoldDOM(el, on) {
     if (el.classList && el.classList.contains("wb-held") !== on) el.classList.toggle("wb-held", on);
@@ -138,11 +167,7 @@
     if (b.title !== tip) b.title = tip;
     if (b.getAttribute("aria-label") !== tip) b.setAttribute("aria-label", tip);
   }
-  // Reconcile stored holds against current items:
-  // - drop any hold whose item is now answered
-  // - clear any hold whose content fingerprint changed (patched or re-asked)
-  // - when pruneAbsent is true, drop any stored ID no longer among open items
-  //   (answered on server or withdrawn)
+  // Retained unused until Phase 2 browser-local hold cleanup.
   function reconcileHolds(pruneAbsent) {
     var openIds = {}, changed = false;
     items.forEach(function (el) {
@@ -165,42 +190,125 @@
     }
     if (changed) saveHolds(holds);
   }
+  function applyServerHeld(list) {
+    if (!Array.isArray(list)) return;
+    var set = {};
+    list.forEach(function (id) {
+      var nid = normItemId(id);
+      if (nid) set[nid] = true;
+    });
+    items.forEach(function (el) {
+      var nid = normItemId(itemKey(el));
+      if (!nid || holdPending[nid]) return;
+      syncHoldDOM(el, !!set[nid] && !answered(el));
+    });
+    retitle();
+    redrawSoon();
+  }
+  function revertHold(nid, prevHeld) {
+    items.forEach(function (el) {
+      if (normItemId(itemKey(el)) !== nid) return;
+      if (holdPending[nid]) return;
+      syncHoldDOM(el, !!prevHeld && !answered(el));
+    });
+    retitle();
+    redrawSoon();
+  }
+  st._applyServerHeld = applyServerHeld;
+  st._revertHold = revertHold;
+  function postHold(rawId, next, prevHeld, acceptGone) {
+    var nid = normItemId(rawId);
+    if (!nid) return;
+    var seq = ++st._holdSeq;
+    var reqRid = currentRid;
+    holdPending[nid] = { seq: seq, held: !!next };
+    var url = holdRouteURL();
+    if (!url || typeof window.fetch !== "function") {
+      delete holdPending[nid];
+      return;
+    }
+    window.fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: String(rawId), held: !!next })
+    }).then(function (resp) {
+      if (st._holdRid !== reqRid) return;
+      var stillCurrent = holdPending[nid] && holdPending[nid].seq === seq;
+      if (stillCurrent) delete holdPending[nid];
+      if (resp && resp.ok) {
+        return resp.json().then(function (data) {
+          if (st._holdRid !== reqRid) return;
+          if (data && Array.isArray(data.held) && st._applyServerHeld) st._applyServerHeld(data.held);
+        }, function () {});
+      }
+      if (acceptGone && resp && (resp.status === 404 || resp.status === 409)) return;
+      if (stillCurrent && !acceptGone && st._revertHold) st._revertHold(nid, prevHeld);
+    }, function () {
+      if (st._holdRid !== reqRid) return;
+      var stillCurrent = holdPending[nid] && holdPending[nid].seq === seq;
+      if (stillCurrent) {
+        delete holdPending[nid];
+        if (!acceptGone && st._revertHold) st._revertHold(nid, prevHeld);
+      }
+    });
+  }
+  // Sync DOM to server-rendered held state (plus any in-flight optimistic
+  // toggle); when a draft or sent mark lands on a held item, clear the hold
+  // once through the daemon route (404/409 treated as already cleared).
   function applyHoldDOM() {
     items.forEach(function (el) {
-      var k = itemKey(el);
-      syncHoldDOM(el, !!(k && (k in holds) && !answered(el)));
+      var rawId = itemKey(el);
+      var nid = normItemId(rawId);
+      if (!nid) return;
+      var pend = holdPending[nid];
+      var currentlyHeld = pend ? !!pend.held : domHeld(el);
+      if (answered(el)) {
+        if (currentlyHeld || domHeld(el)) {
+          syncHoldDOM(el, false);
+          if (!holdDraftCleared[nid]) {
+            holdDraftCleared[nid] = true;
+            postHold(rawId, false, false, true);
+          }
+        }
+        return;
+      }
+      if (pend) {
+        syncHoldDOM(el, !!pend.held);
+      } else {
+        var on = domHeld(el);
+        if (on) delete holdDraftCleared[nid];
+        syncHoldDOM(el, on);
+      }
     });
   }
   function held(el) {
-    var k = itemKey(el);
-    return !!(k && (k in holds) && !answered(el));
+    if (!el || answered(el)) return false;
+    var nid = normItemId(itemKey(el));
+    if (nid && holdPending[nid]) return !!holdPending[nid].held;
+    return domHeld(el);
   }
   function isHeldExternal(el) {
-    var k = itemKey(el);
-    if (!k || !(k in holds)) return false;
-    return holds[k] === itemFingerprint(el);
+    if (!el) return false;
+    var nid = normItemId(itemKey(el));
+    if (nid && holdPending[nid]) return !!holdPending[nid].held;
+    return domHeld(el);
   }
   function toggleHold(el) {
-    var k = itemKey(el);
-    if (!k) return false;
-    if (k in holds) {
-      delete holds[k];
-      saveHolds(holds);
-      syncHoldDOM(el, false);
-      retitle();
-      redrawSoon();
-      return false;
-    }
-    if (answered(el)) return false;
-    holds[k] = itemFingerprint(el);
-    saveHolds(holds);
-    syncHoldDOM(el, true);
+    var rawId = itemKey(el);
+    var nid = normItemId(rawId);
+    if (!nid) return false;
+    var wasHeld = holdPending[nid] ? !!holdPending[nid].held : domHeld(el);
+    if (!wasHeld && answered(el)) return false;
+    var next = !wasHeld;
+    if (next) delete holdDraftCleared[nid];
+    syncHoldDOM(el, next);
+    postHold(rawId, next, wasHeld, !next);
     retitle();
     redrawSoon();
-    return true;
+    return next;
   }
 
-  reconcileHolds(true);
   applyHoldDOM();
 
   // The dashboard owns the document title; report the still-open total to
@@ -424,8 +532,7 @@
     var topWidth = pills.top.offsetWidth, botWidth = pills.bot.offsetWidth, home = atTop();
     var topGoal = pills.top.wbMeasure ? pills.top.wbMeasure.offsetWidth : 0;
     var botGoal = pills.bot.wbMeasure ? pills.bot.wbMeasure.offsetWidth : 0;
-    // Write phase: reconcile holds that became answered, then update pills.
-    reconcileHolds(false);
+    // Write phase: sync server-rendered holds (and clear any newly answered), then update pills.
     applyHoldDOM();
     show("top", above, topWidth, home, topGoal);
     show("bot", below, botWidth, home, botGoal);
@@ -485,7 +592,6 @@
   host.addEventListener("click", onHostClick);
   host.addEventListener("input", redrawSoon);
   host.addEventListener("change", redraw);
-  window.addEventListener("storage", onStorage);
   // The dashboard's sent marks land after its region swaps, including a
   // conversation-only swap that does not re-run this script, so watch the
   // items' class attributes rather than wait for a board swap.
@@ -552,7 +658,6 @@
     });
     scroller.removeEventListener("scroll", later);
     window.removeEventListener("resize", later);
-    window.removeEventListener("storage", onStorage);
     host.removeEventListener("click", onHostClick);
     host.removeEventListener("input", redrawSoon);
     host.removeEventListener("change", redraw);

@@ -279,3 +279,78 @@ func TestBoardHoldRouteContractAndRailDot(t *testing.T) {
 		t.Fatalf("unheld sessone rail row lacks data-asks or qdot:\n%s", row1)
 	}
 }
+
+// TestBoardHoldLiveMultiTabSSEPropagation verifies live multi-tab propagation:
+// holding an ask via HTTP updates both the active session's board SSE stream
+// (.wb-held) and a second tab's rail SSE stream (inactive session's .qdot
+// hides and rail header total decrements) while preserving data-asks.
+func TestBoardHoldLiveMultiTabSSEPropagation(t *testing.T) {
+	b1 := newTestBoardDB(t, `
+<wb:topic name="design">
+  <wb:add class="policy"><wb:title>Pick cache</wb:title><wb:option>a</wb:option><wb:option>b</wb:option></wb:add>
+</wb:topic>
+`)
+	b2 := newTestBoardDB(t, `
+<wb:topic name="ops">
+  <wb:add class="policy"><wb:title>Second session ask</wb:title><wb:option>a</wb:option><wb:option>b</wb:option></wb:add>
+</wb:topic>
+`)
+	_, base, _ := startHoldDaemonFixture(t, map[string]*wswhiteboard.BoardDB{
+		"sessone": b1,
+		"sesstwo": b2,
+	})
+
+	boardStream := openSSE(t, base+"/s/sessone/events?frame=1")
+	railStream := openSSE(t, base+"/rail/events")
+
+	// Drain initial frames on both streams.
+	waitRegion := func(ch <-chan sseEvent, wantName string, pred func(string) bool, desc string) string {
+		t.Helper()
+		deadline := time.After(8 * time.Second)
+		for {
+			select {
+			case ev, ok := <-ch:
+				if !ok {
+					t.Fatalf("stream closed waiting for %s", desc)
+				}
+				if ev.name != "region" {
+					continue
+				}
+				var r regionEvent
+				if json.Unmarshal([]byte(ev.data), &r) != nil || r.Name != wantName {
+					continue
+				}
+				html := string(r.HTML)
+				if pred(html) {
+					return html
+				}
+			case <-deadline:
+				t.Fatalf("timed out waiting for %s", desc)
+			}
+		}
+	}
+
+	waitRegion(boardStream, regionBoard, func(h string) bool {
+		return strings.Contains(h, `id="item-1"`) && !strings.Contains(h, `wb-held`)
+	}, "initial unheld board frame")
+	waitRegion(railStream, regionRail, func(h string) bool {
+		return strings.Contains(h, `data-rid="sessone"`) && strings.Contains(h, `class="qdot"`)
+	}, "initial rail frame with qdot")
+
+	// Hold item 1 of sessone from a second tab via POST /s/sessone/board/hold.
+	if code, _, raw := postJSON(t, base+"/s/sessone/board/hold", base, `{"id":"1","held":true}`); code != http.StatusOK {
+		t.Fatalf("POST hold = %d %q", code, raw)
+	}
+
+	// Tab 1's active board SSE stream receives the held markup.
+	waitRegion(boardStream, regionBoard, func(h string) bool {
+		return strings.Contains(h, `class="card policy wb-held" id="item-1"`)
+	}, "board SSE update with wb-held")
+
+	// Tab 2's rail SSE stream hides sessone's .qdot while keeping data-asks="1".
+	railRowRe := regexp.MustCompile(`(?s)<div class="rs[^"]*" data-rid="sessone"[^>]*>.*?<template class="shp-source"`)
+	waitRegion(railStream, regionRail, func(h string) bool {
+		row := railRowRe.FindString(h)
+		return row != "" && strings.Contains(row, `data-asks="1"`) && !strings.Contains(row, `class="qdot"`)
+	}, "rail SSE update hiding sessone .qdot")
+}
