@@ -9,6 +9,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 3ae47d045ded44f8
 sage-review-completeness-reviewed: 3ae47d045ded44f8
+completed: 2026-11-26
 ---
 
 # Companion VRM Pack Store, Single-File `.vrm` Drop-In & Official Opt-In Registry
@@ -155,3 +156,19 @@ Implement `"schema": "ws-companion-vrm/v1"` support end to end in the Go compani
      - the guide-size-table test follows the new constants.
    - (g) Frontend tests (extend `frontend-companion-sources.test.js`): file picker/drop calls `import-vrm` and selects the new pack; the official CTA shows the not-yet-published state when no `format: "vrm"` entry exists and the install action when one does; the VRM badge renders; no WebGL and no extra asset fetches when `companion_enabled` is false.
    - `GOOS=windows go vet ./...` and existing `agents-plugin-tool` test suite pass.
+
+### Result (467d96d) - 2026-11-26
+
+Implemented `"schema": "ws-companion-vrm/v1"` across the Go companion pack store, archive/import/source routes, director exposure, authoring docs, dashboard companion settings/sources UI, and all 11 `wsi18n` locale tables across commits `49e9231`, `1b34e08`, `4e9d6a9`, and `467d96d`:
+
+- **Schema & GLB/VRM inspection (`companion_pack_vrm.go`, `companion_pack_schema.go`):** Added `"ws-companion-vrm/v1"` manifest parsing/validation (`id`, `name`, `model`, optional `thumbnail`, `vroidSourceUrl`, `persona`, bounded `expressionMap`/`animations`) and pure-Go GLB v2 header + JSON chunk inspection for VRM 0.x (`extensions.VRM`), VRM 1.0 (`extensions.VRMC_vrm`), and VRMA (`extensions.VRMC_vrm_animation`).
+- **Store, routes & director (`companion_pack_store.go`, `companion_pack_routes.go`, `companion_director.go`):** Added per-schema caps (`32 MiB` `.vrm`, `4 MiB` `.vrma`, `40 MiB` VRM pack, `128 MiB` cache; 2D caps unchanged at `2 MiB` / `16 MiB`), `renderer`/`schema` catalog summaries, `model/gltf-binary` asset serving with `nosniff` + sandbox CSP + `ETag`/`304`, and `renderer`/`persona` exposure via `companionPackFor`.
+- **Single-file `.vrm` & `.zip` install (`companion_pack_zip.go`, `companion_pack_install.go`, `companion_pack_install_routes.go`, `companion_pack_fetch.go`, `assets/companion/authoring/guide.md`, `marketplace.schema.json`):** Added per-schema archive validation, `POST /api/companion/packs/import-vrm` (raw + streamed multipart, `TrustedWrite`, atomic staging swap, `.ws-install.json` sidecar, `409` explicit-id vs `-2`/`-3` derived-slug collision), and marketplace `format`/`vroidSourceUrl` passthrough.
+- **Dashboard UI & i18n (`dashboard-companion-settings.js`, `dashboard-companion-sources.js`, `dashboard-companion.css`, `internal/wsi18n/tables/*.json`):** Added local `.vrm` file picker + drag-and-drop dropzone, opt-in Official VRM CTA (not-yet-published vs live install), VRM format badges, safe `https:` `vroidSourceUrl` links, and 13 localized keys across all 11 locale tables.
+- **Verification:** `node --test agents-plugin-tool/internal/wsdashboard/frontend-companion*.test.js` (90/90 pass), `go -C agents-plugin-tool test -count=1 ./internal/wsdashboard -run '^TestCompanion'` (pass), `GOOS=windows go -C agents-plugin-tool vet ./...` (pass), and `wsi18n` parity tests on all 13 new keys (pass; unrelated pre-existing `develop` failure in `ws-input.js` `js.composer.commands`/`js.composer.files` left untouched).
+- **Code Review (lite):** 0 Critical, 1 Important (test-integrity gap in disabled zero-WebGL/zero-fetch test), 3 Minor — all resolved in `467d96d`.
+
+
+## Resolution (2026-11-26)
+
+Implemented ws-companion-vrm/v1 pack schema, pure-Go GLB/VRM/VRMA header inspection, memory-first per-schema store caps, model/gltf-binary asset serving, director renderer exposure, single-file .vrm drop-in and .zip VRM import, marketplace format/vroidSourceUrl passthrough, and dashboard VRM import/official CTA/badge UI across commits 49e9231..467d96d on impl/develop/gift-acorn-heat. Lite code review findings resolved; companion Go tests, 90/90 frontend JS tests, and GOOS=windows go vet ./... pass.

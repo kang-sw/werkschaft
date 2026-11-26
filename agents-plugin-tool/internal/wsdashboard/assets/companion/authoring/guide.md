@@ -536,7 +536,7 @@ declares.
 | `pack.json` size | 512 KiB |
 | One raster file | 2 MiB |
 | One pack directory, total | 16 MiB |
-| All installed local packs, total | 64 MiB |
+| All installed local packs, total | 128 MiB |
 | Raster width or height | 4096 px |
 | Canvas width or height | 64 to 2048 px |
 | Tags per `autoMatch` field | 32 |
@@ -553,7 +553,7 @@ declares.
 | Persona name | 40 characters |
 | Persona voice | 800 characters |
 | Source zip download | 64 MiB |
-| External pack zip download | 16 MiB |
+| External pack zip download | 40 MiB |
 | Download time | 60 s |
 | Redirects followed (https only) | 5 |
 

@@ -58,6 +58,7 @@ type companionArchive struct {
 	dirs    map[string]struct{}
 	names   []string // every entry name (directories without the slash), sorted
 	inflate *companionInflate
+	cached  map[*zip.File][]byte // entries already read (e.g. manifest peek during pack listing)
 }
 
 var errCompanionNotZip = errors.New("not a zip archive")
@@ -241,6 +242,12 @@ func (a *companionArchive) root(marker string) (string, bool) {
 // at most limit, at most companionZipRatioMax times its compressed size, and
 // at most what is left of the operation's total.
 func (a *companionArchive) read(f *zip.File, limit int) ([]byte, error) {
+	if data, ok := a.cached[f]; ok {
+		if len(data) > limit {
+			return nil, errCompanionFileLimit
+		}
+		return data, nil
+	}
 	if a.inflate.left <= 0 {
 		return nil, errors.New("install operation byte limit exceeded") // nothing is read or opened
 	}
@@ -285,13 +292,46 @@ type companionPackFiles map[string]*zip.File
 // pack applies the pack-level rules to the entries under prefix: at most
 // companionPackEntryMax entries, regular files only, no files in nested
 // directories (directory entries are tolerated and skipped), no names that
-// differ only by case, only pack.json and raster names, and no Windows
-// reserved device names.
+// differ only by case, only pack.json and allowed asset names (.png/.webp for
+// 2D packs, plus .vrm/.vrma when pack.json declares ws-companion-vrm/v1), and
+// no Windows reserved device names.
 func (a *companionArchive) pack(id, prefix string) (companionPackFiles, error) {
 	files := make(companionPackFiles)
 	folded := make(map[string]struct{})
 	count := 0
 	self := strings.TrimSuffix(prefix, "/")
+	vrmChecked, isVRM := false, false
+	var vrmCheckErr error
+	checkVRM := func() (bool, error) {
+		if vrmChecked {
+			return isVRM, vrmCheckErr
+		}
+		vrmChecked = true
+		mf, ok := a.files[prefix+companionManifestName]
+		if !ok {
+			return false, nil
+		}
+		mode := mf.Mode()
+		if mode&fs.ModeSymlink != 0 {
+			vrmCheckErr = companionFail(id, companionManifestName, "symbolic links are not allowed")
+			return false, vrmCheckErr
+		}
+		if !mode.IsRegular() {
+			vrmCheckErr = companionFail(id, companionManifestName, "only regular files are allowed")
+			return false, vrmCheckErr
+		}
+		raw, err := a.read(mf, companionManifestCap)
+		if err != nil {
+			vrmCheckErr = companionFail(id, companionManifestName, "%s", err.Error())
+			return false, vrmCheckErr
+		}
+		if a.cached == nil {
+			a.cached = make(map[*zip.File][]byte)
+		}
+		a.cached[mf] = raw
+		isVRM = peekCompanionManifestSchema(raw) == companionPackVRMSchema
+		return isVRM, nil
+	}
 	for _, name := range a.names {
 		if prefix != "" && (name == self || !strings.HasPrefix(name, prefix)) {
 			continue
@@ -320,7 +360,17 @@ func (a *companionArchive) pack(id, prefix string) (companionPackFiles, error) {
 		}
 		folded[lower] = struct{}{}
 		if rel != companionManifestName && !validCompanionRaster(rel) {
-			return nil, companionFail(id, rel, "only pack.json and .png or .webp files are allowed")
+			if validCompanionVRMFile(rel) || validCompanionVRMAFile(rel) {
+				allowed, err := checkVRM()
+				if err != nil {
+					return nil, err
+				}
+				if !allowed {
+					return nil, companionFail(id, rel, "only pack.json and .png or .webp files are allowed")
+				}
+			} else {
+				return nil, companionFail(id, rel, "only pack.json and .png or .webp files are allowed")
+			}
 		}
 		if companionReservedName(rel) {
 			return nil, companionFail(id, rel, "file name is a reserved device name")
@@ -366,8 +416,21 @@ func (a *companionArchive) prepare(id string, files companionPackFiles, budget i
 		}
 	}
 	for _, name := range sortedCompanionKeys(pack.assets) {
-		if err := companionCheckRaster(name, pack.assets[name]); err != nil {
-			return nil, companionFail(id, name, "%s", err.Error())
+		switch {
+		case validCompanionRaster(name):
+			if err := companionCheckRaster(name, pack.assets[name]); err != nil {
+				return nil, companionFail(id, name, "%s", err.Error())
+			}
+		case validCompanionVRMFile(name):
+			if _, err := inspectCompanionVRM(pack.assets[name]); err != nil {
+				return nil, companionFail(id, name, "%s", err.Error())
+			}
+		case validCompanionVRMAFile(name):
+			if err := validateCompanionVRMA(pack.assets[name]); err != nil {
+				return nil, companionFail(id, name, "%s", err.Error())
+			}
+		default:
+			return nil, companionFail(id, name, "unsupported asset file type")
 		}
 	}
 	return pack, nil
@@ -443,16 +506,18 @@ type companionMarketplaceOwner struct {
 // directory in the same zip) and URL with SHA256 (an external pack zip) is
 // set. Err holds an entry-level failure; the rest of the listing stays usable.
 type companionMarketplaceEntry struct {
-	ID          string
-	Name        string
-	Version     string
-	Author      string
-	License     string
-	Description string
-	Path        string
-	URL         string
-	SHA256      string
-	Err         error
+	ID             string
+	Name           string
+	Version        string
+	Author         string
+	License        string
+	Description    string
+	Format         string
+	VroidSourceURL string
+	Path           string
+	URL            string
+	SHA256         string
+	Err            error
 }
 
 // marketplace reads and validates marketplace.json from the archive root or
@@ -544,9 +609,22 @@ func parseCompanionMarketplaceEntry(raw json.RawMessage) companionMarketplaceEnt
 	}
 	if e.Err = obj.fields(map[string]any{
 		"id": &e.ID, "name": &e.Name, "version": &e.Version, "author": &e.Author, "license": &e.License,
-		"description": &e.Description, "path": &e.Path, "url": &e.URL, "sha256": &e.SHA256,
+		"description": &e.Description, "format": &e.Format, "vroidSourceUrl": &e.VroidSourceURL,
+		"path": &e.Path, "url": &e.URL, "sha256": &e.SHA256,
 	}); e.Err != nil {
 		return e
+	}
+	if _, present := obj["format"]; present {
+		if e.Format != companionPackRenderer2D && e.Format != companionPackRendererVRM {
+			e.Err = errors.New("format must be 2d or vrm")
+			return e
+		}
+	}
+	if _, present := obj["vroidSourceUrl"]; present {
+		if err := companionHTTPSURL(e.VroidSourceURL); err != nil {
+			e.Err = fmt.Errorf("vroidSourceUrl: %w", err)
+			return e
+		}
 	}
 	if !companionPackID.MatchString(e.ID) {
 		e.Err = errors.New("id must be 1-64 lowercase letters, digits, - or _")

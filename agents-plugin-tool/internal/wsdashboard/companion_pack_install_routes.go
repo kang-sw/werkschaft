@@ -5,24 +5,32 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 )
 
-// companionUploadCap bounds one uploaded zip body. It is a variable so a
-// test can lower it.
-var companionUploadCap int64 = 64 << 20
+// companionUploadCap bounds one uploaded zip body, and companionVrmImportCap
+// bounds one uploaded .vrm file. Both are variables so tests can lower them.
+var (
+	companionUploadCap    int64 = 64 << 20
+	companionVrmImportCap int64 = companionVrmAssetCap
+)
 
 const (
 	companionUploadNameMax      = 128
 	companionUploadNameFallback = "upload.zip"
+	companionMultipartOverhead  = 64 << 10
+	companionMultipartFieldCap  = 1 << 10
 )
 
 func (d *Daemon) registerCompanionInstallRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(companionPacksRoute+"/validate", d.handleCompanionValidate)
 	mux.HandleFunc(companionPacksRoute+"/import", d.handleCompanionImport)
+	mux.HandleFunc(companionPacksRoute+"/import-vrm", d.handleCompanionImportVRM)
 	mux.HandleFunc(companionPacksRoute+"/{id}/uninstall", d.handleCompanionUninstall)
 	d.registerCompanionSourceRoutes(mux)
 }
@@ -190,6 +198,135 @@ func (d *Daemon) handleCompanionImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (d *Daemon) handleCompanionImportVRM(w http.ResponseWriter, r *http.Request) {
+	if !companionTrustedPost(w, r) {
+		return
+	}
+	mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil {
+		companionWriteError(w, http.StatusUnsupportedMediaType, "content type must be model/gltf-binary, application/octet-stream, or multipart/form-data")
+		return
+	}
+	var (
+		data        []byte
+		explicitID  string
+		displayName string
+		filename    string
+	)
+	switch mediaType {
+	case "model/gltf-binary", "application/octet-stream":
+		raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, companionVrmImportCap))
+		if err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				companionWriteError(w, http.StatusRequestEntityTooLarge, "the uploaded VRM file is too large")
+				return
+			}
+			companionWriteError(w, http.StatusBadRequest, "the uploaded VRM file could not be read")
+			return
+		}
+		data = raw
+		explicitID = r.URL.Query().Get("id")
+		displayName = r.URL.Query().Get("name")
+		filename = r.URL.Query().Get("filename")
+	case "multipart/form-data":
+		boundary := params["boundary"]
+		if boundary == "" {
+			companionWriteError(w, http.StatusBadRequest, "multipart boundary is missing")
+			return
+		}
+		body := http.MaxBytesReader(w, r.Body, companionVrmImportCap+companionMultipartOverhead)
+		mr := multipart.NewReader(body, boundary)
+		hasFile := false
+		for {
+			part, err := mr.NextPart()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				var tooLarge *http.MaxBytesError
+				if errors.As(err, &tooLarge) {
+					companionWriteError(w, http.StatusRequestEntityTooLarge, "the uploaded VRM file is too large")
+					return
+				}
+				companionWriteError(w, http.StatusBadRequest, "the multipart upload could not be read")
+				return
+			}
+			field := part.FormName()
+			switch field {
+			case "file":
+				if hasFile {
+					part.Close()
+					companionWriteError(w, http.StatusBadRequest, "only one file part is allowed")
+					return
+				}
+				raw, readErr := io.ReadAll(io.LimitReader(part, companionVrmImportCap+1))
+				part.Close()
+				if readErr != nil {
+					var tooLarge *http.MaxBytesError
+					if errors.As(readErr, &tooLarge) {
+						companionWriteError(w, http.StatusRequestEntityTooLarge, "the uploaded VRM file is too large")
+						return
+					}
+					companionWriteError(w, http.StatusBadRequest, "the uploaded VRM file could not be read")
+					return
+				}
+				if int64(len(raw)) > companionVrmImportCap {
+					companionWriteError(w, http.StatusRequestEntityTooLarge, "the uploaded VRM file is too large")
+					return
+				}
+				hasFile = true
+				data = raw
+				filename = part.FileName()
+			case "id", "name":
+				raw, readErr := io.ReadAll(io.LimitReader(part, companionMultipartFieldCap+1))
+				part.Close()
+				if readErr != nil {
+					var tooLarge *http.MaxBytesError
+					if errors.As(readErr, &tooLarge) {
+						companionWriteError(w, http.StatusRequestEntityTooLarge, "the uploaded VRM file is too large")
+						return
+					}
+					companionWriteError(w, http.StatusBadRequest, "the multipart field could not be read")
+					return
+				}
+				if len(raw) > companionMultipartFieldCap {
+					companionWriteError(w, http.StatusBadRequest, "multipart field is too large")
+					return
+				}
+				if field == "id" {
+					explicitID = string(raw)
+				} else {
+					displayName = string(raw)
+				}
+			default:
+				_, _ = io.CopyN(io.Discard, part, companionMultipartFieldCap)
+				part.Close()
+			}
+		}
+		if !hasFile {
+			companionWriteError(w, http.StatusBadRequest, "file part is required")
+			return
+		}
+		if explicitID == "" {
+			explicitID = r.URL.Query().Get("id")
+		}
+		if displayName == "" {
+			displayName = r.URL.Query().Get("name")
+		}
+	default:
+		companionWriteError(w, http.StatusUnsupportedMediaType, "content type must be model/gltf-binary, application/octet-stream, or multipart/form-data")
+		return
+	}
+
+	info, err := d.companionPacks.importVRM(d.companionOptions(), data, explicitID, displayName, filename)
+	if err != nil {
+		companionOperationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
 }
 
 func (d *Daemon) handleCompanionUninstall(w http.ResponseWriter, r *http.Request) {
