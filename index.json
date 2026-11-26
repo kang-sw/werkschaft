@@ -493,7 +493,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-26T12:40:35Z"
+        "touched_at": "2026-11-26T12:41:51Z",
+        "impl": {
+          "branch": "impl/develop/froth-late-slam"
+        }
       }
     },
     "261126-refactor-oversized-multi-responsibility-files": {
