@@ -1187,7 +1187,14 @@
   }
   // Private UI state only: no daemon protocol or persistence contract changes.
   function shSettings(ent) { shSend(ent, "settings", { layout: layoutMode, input: inputMode, stageFill: typeof stageFill !== "undefined" && !!stageFill }); }
-  function shReload() { if (shOn) try { shOn.el.contentWindow.location.reload(); } catch (x) { /* unloading */ } }
+  function shReload() {
+    if (!shOn) return;
+    shOn.loaded = false;
+    shOn.ready = false;
+    shOn.settingsSent = false;
+    shOn.shownSent = false;
+    try { shOn.el.contentWindow.location.reload(); } catch (x) { /* unloading */ }
+  }
   // shHead shows the shown frame's header: its head region (none while the
   // frame has not named one) and search button, or with the head null the
   // frame's own header (sh-own) beside the shell's rail button.
@@ -1371,6 +1378,8 @@
       switch (m.wsShell) {
         case "ready":
           ent.ready = true;
+          ent.settingsSent = false;
+          ent.shownSent = false;
           if (m.hideAck) ent.hideAck = true;
           if (ent.lateHash !== undefined) {
             try { ent.el.contentWindow.location.hash = ent.lateHash; } catch (x) { /* unloading */ }
@@ -1642,7 +1651,11 @@
     // A hash lands as a fragment-only src change, which loads nothing again
     // when the document already finished: the readiness below still stands.
     if (f.hash) el.src = window.WsShell.src(f);
-    try { ent.loaded = el.contentDocument.readyState === "complete"; } catch (x) { /* not yet */ }
+    try {
+      var cd = el.contentDocument;
+      var blank = (cd && cd.URL === "about:blank") || (el.contentWindow && el.contentWindow.location && el.contentWindow.location.href === "about:blank");
+      ent.loaded = !!(cd && cd.readyState === "complete" && !blank);
+    } catch (x) { /* not yet */ }
     if (ent.loaded) ent.ready = true;
     shSend(ent, "sync");
     if (ent.loaded) {
