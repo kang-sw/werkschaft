@@ -303,6 +303,10 @@
   }
 
   function clearComposerHighlights() {
+    if (ctext && ctext.wsInput && typeof ctext.wsInput.clearMarkdown === "function") {
+      ctext.wsInput.clearMarkdown();
+      return;
+    }
     if (!(window.CSS && CSS.highlights)) return;
     for (var i = 0; i < MD_HIGHLIGHT_GROUPS.length; i++) {
       CSS.highlights.delete(MD_HIGHLIGHT_GROUPS[i]);
@@ -310,6 +314,10 @@
   }
 
   function applyComposerHighlights() {
+    if (ctext && ctext.wsInput && typeof ctext.wsInput.reconcileMarkdown === "function") {
+      ctext.wsInput.reconcileMarkdown();
+      return;
+    }
     if (!(window.CSS && CSS.highlights && typeof window.Highlight === "function")) return;
     var editor = ctext && ctext.wsc && ctext.wsc.editor;
     if (!editor || !ctext.value || (typeof bangMode === "function" && bangMode())) {
@@ -337,6 +345,10 @@
   }
 
   function scheduleComposerHighlights() {
+    if (ctext && ctext.wsInput && typeof ctext.wsInput.syncMarkdown === "function") {
+      ctext.wsInput.syncMarkdown();
+      return;
+    }
     if (!(window.CSS && CSS.highlights && typeof window.Highlight === "function")) return;
     if (mdComposing || mdRaf) return;
     var raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : function (fn) { return setTimeout(fn, 0); };
