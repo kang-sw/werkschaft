@@ -1578,11 +1578,20 @@
       if (scope.matches && scope.matches("section.topic[data-topic]")) {
         decorateTopic(scope, inGal);
         if (maxed && !maxed.files && !(maxed instanceof Card) && maxed.el === scope) follow(maxed);
-      } else if (scope.querySelectorAll) {
-        Array.prototype.forEach.call(scope.querySelectorAll("section.topic[data-topic]"), function (sec) {
-          decorateTopic(sec, inGal);
-        });
-        if (maxed && !maxed.files && !(maxed instanceof Card)) follow(maxed);
+      } else {
+        var secs = scope.querySelectorAll ? scope.querySelectorAll("section.topic[data-topic]") : [];
+        if (secs.length) {
+          Array.prototype.forEach.call(secs, function (sec) {
+            decorateTopic(sec, inGal);
+          });
+          if (maxed && !maxed.files && !(maxed instanceof Card)) follow(maxed);
+        } else {
+          var owner = scope.closest && scope.closest("section.topic[data-topic]");
+          if (owner) {
+            decorateTopic(owner, inGal);
+            if (maxed && !maxed.files && !(maxed instanceof Card) && maxed.el === owner) follow(maxed);
+          }
+        }
       }
       return;
     }

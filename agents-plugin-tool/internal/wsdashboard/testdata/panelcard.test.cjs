@@ -9,6 +9,7 @@ const gallerySrc = fs.readFileSync(path.join(__dirname, '../assets/gallery.js'),
 const cardsSrc = fs.readFileSync(path.join(__dirname, '../assets/cards.js'), 'utf8');
 const panelSrc = fs.readFileSync(path.join(__dirname, '../assets/panelcard.js'), 'utf8');
 const framesSrc = fs.readFileSync(path.join(__dirname, '../assets/dashboard-frames.js'), 'utf8');
+const boardSrc = fs.readFileSync(path.join(__dirname, '../assets/dashboard-board.js'), 'utf8');
 const boardCssSrc = fs.readFileSync(path.join(__dirname, '../assets/dashboard-board.css'), 'utf8');
 
 function makeClassList(el) {
@@ -804,4 +805,161 @@ test('dashboard-board.css sizes pinned and maximized .mockup-wrap panels cleanly
   assert.match(boardCssSrc, /\.bcard\[data-kind="panel"\] .panel-card-doc:has\(> \.mockup-wrap\) \{[^}]*flex:\s*1 1 0;[^}]*min-height:\s*240px;[^}]*padding:\s*0;[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*overflow:\s*hidden;[^}]*\}/);
   assert.match(boardCssSrc, /\.bcard\[data-kind="panel"\] \.panel-card-doc > \.mockup-wrap \{[^}]*flex:\s*1 1 0;[^}]*height:\s*100%;[^}]*min-height:\s*240px;[^}]*resize:\s*none;[^}]*border:\s*0;[^}]*\}/);
   assert.match(boardCssSrc, /\.bcard\[data-kind="panel"\] \.panel-card-doc \{\s*padding:\s*8px 12px 10px;\s*\}/);
+});
+
+test('WsCards.decorate(wbHistoryEl) resolves enclosing topic via closest(), injects .ppin idempotently, and skips .historical/.msg', () => {
+  const { makeEl } = createDOM();
+  const topic = makeTopicEl(makeEl, 'alpha', 'Alpha Topic', [
+    `<div class="wb-history"></div>`,
+    makePanelHTML({ panelId: 'p_live', entryId: 'e_live', hasBody: true, historical: false }),
+  ].join(''));
+  const { ctx, board } = boot({ initialHTML: [topic] });
+
+  const livePpin = board.querySelector('#e_live .ppin');
+  assert.ok(livePpin, 'live panel starts with .ppin');
+  const tbar = board.querySelector('section.topic[data-topic="alpha"] > .tophead > .tbar');
+  assert.equal(tbar.querySelectorAll('.tpin').length, 1);
+
+  // Lazy history admission populates .wb-history with a current HasBody panel, a historical panel, and a .msg panel.
+  const wbHistoryEl = board.querySelector('.wb-history');
+  wbHistoryEl.innerHTML = [
+    makePanelHTML({ panelId: 'p_hist_cur', entryId: 'e_hist_cur', hasBody: true, historical: false }),
+    makePanelHTML({ panelId: 'p_hist_cur', entryId: 'e_hist_old', hasBody: true, historical: true }),
+    makePanelHTML({ panelId: 'p_hist_msg', entryId: 'e_hist_msg', hasBody: false, historical: false }),
+  ].join('');
+  assert.equal(wbHistoryEl.querySelector('#e_hist_cur .ppin'), null, 'admitted panel has no .ppin before decorate(wbHistoryEl)');
+
+  // Decorate scoped to .wb-history (descendant of section.topic[data-topic], containing no section.topic)
+  ctx.WsCards.decorate(wbHistoryEl);
+
+  const histPpin = wbHistoryEl.querySelector('#e_hist_cur .ppin');
+  assert.ok(histPpin, 'current HasBody panel inside .wb-history receives .ppin');
+  const histSummary = wbHistoryEl.querySelector('#e_hist_cur details.entry-panel > summary');
+  const histDmax = histSummary.querySelector('.d-max');
+  assert.equal(histSummary.children.indexOf(histPpin) + 1, histSummary.children.indexOf(histDmax), '.ppin placed right before .d-max');
+  assert.equal(histPpin.getAttribute('aria-pressed'), 'false');
+  assert.equal(wbHistoryEl.querySelector('#e_hist_old .ppin'), null, 'historical panel inside .wb-history does NOT get .ppin');
+  assert.equal(wbHistoryEl.querySelector('#e_hist_msg .ppin'), null, 'recap-only (.msg) panel inside .wb-history does NOT get .ppin');
+
+  // Re-running decorate(wbHistoryEl) and decorate(topic) is completely idempotent: no duplicate buttons
+  ctx.WsCards.decorate(wbHistoryEl);
+  ctx.WsCards.decorate(topic);
+  assert.equal(wbHistoryEl.querySelectorAll('#e_hist_cur .ppin').length, 1, 'no duplicate .ppin on admitted panel');
+  assert.equal(wbHistoryEl.querySelector('#e_hist_cur .ppin'), histPpin, 'same .ppin node retained');
+  assert.equal(board.querySelectorAll('#e_live .ppin').length, 1, 'no duplicate .ppin on live panel');
+  assert.equal(board.querySelector('#e_live .ppin'), livePpin, 'same live .ppin node retained');
+  assert.equal(tbar.querySelectorAll('.tpin').length, 1, 'no duplicate .tpin in topic bar');
+  assert.equal(tbar.querySelectorAll('.t-fold').length, 1, 'no duplicate .t-fold in topic bar');
+  assert.equal(tbar.querySelectorAll('.t-raise').length, 1, 'no duplicate .t-raise in topic bar');
+  assert.equal(tbar.querySelectorAll('.d-max').length, 1, 'no duplicate .d-max in topic bar');
+  assert.equal(tbar.querySelectorAll('.d-min').length, 1, 'no duplicate .d-min in topic bar');
+
+  // Clicking the newly admitted .ppin pins the panel in gallery
+  histPpin.dispatchEvent({ type: 'click', target: histPpin });
+  assert.equal(ctx.WsCards.list('panel').length, 1);
+  assert.equal(ctx.WsCards.list('panel')[0].data.panel, 'p_hist_cur');
+  assert.equal(histPpin.getAttribute('aria-pressed'), 'true');
+});
+
+test('wbhistoryload in dashboard-frames.js and adopted(n)/swap in dashboard-board.js invoke WsCards.decorate before WsPanelCard.sync()', () => {
+  // 1. Test shipped wbhistoryload listener from dashboard-frames.js
+  const listenerMatch = framesSrc.match(/doc\.addEventListener\("wbhistoryload", function \(e\) \{[\s\S]*?\n  \}\);/);
+  assert.ok(listenerMatch, 'wbhistoryload listener found in dashboard-frames.js');
+
+  const { makeEl } = createDOM();
+  const topic = makeTopicEl(makeEl, 'alpha', 'Alpha Topic', `<div class="wb-history"></div>`);
+  const stored = {
+    v: 3,
+    cards: [{ id: 'c_pinned', kind: 'panel', data: { panel: 'p_admit', topic: 'alpha' }, pinned: 1, h: 0, fold: false, at: 1 }],
+    gallery: { v: 1, pages: [{ id: 'g1', root: { card: 'c_pinned' } }], active: 0, rev: 1 },
+    topics: [],
+  };
+  const { ctx, board } = boot({ initialHTML: [topic], stored });
+
+  const wbHistoryEl = board.querySelector('.wb-history');
+  wbHistoryEl.innerHTML = [
+    makePanelHTML({ panelId: 'p_admit', entryId: 'e_admit', recap: 'Admitted Pinned', ver: 'v2', srcdoc: '<p>admitted</p>', hasBody: true, historical: false }),
+    makePanelHTML({ panelId: 'p_admit', entryId: 'e_admit_old', hasBody: true, historical: true }),
+    makePanelHTML({ panelId: 'p_admit_msg', entryId: 'e_admit_msg', hasBody: false, historical: false }),
+  ].join('');
+
+  const callOrder = [];
+  const origDecorate = ctx.WsCards.decorate;
+  const origSync = ctx.WsPanelCard.sync;
+  let capturedHandler = null;
+  const frameCtx = {
+    doc: {
+      addEventListener(type, fn) { if (type === 'wbhistoryload') capturedHandler = fn; },
+    },
+    inBoard: el => board.contains(el),
+    watchBoard: () => {},
+    restoreOpen: () => {},
+    mountFrames: () => {},
+    fmtTimes: () => {},
+    sweepOutImgs: () => {},
+    mermaid: () => {},
+    window: {
+      WsCards: {
+        decorate: el => { callOrder.push('decorate'); return origDecorate(el); },
+      },
+      WsPanelCard: {
+        sync: () => { callOrder.push('sync'); return origSync(); },
+      },
+    },
+  };
+  vm.createContext(frameCtx);
+  vm.runInContext(listenerMatch[0], frameCtx);
+  assert.ok(capturedHandler, 'wbhistoryload handler registered');
+
+  capturedHandler({ detail: { root: wbHistoryEl } });
+  assert.deepEqual(callOrder, ['decorate', 'sync'], 'wbhistoryload runs WsCards.decorate(el) before WsPanelCard.sync()');
+  const admitPpin = wbHistoryEl.querySelector('#e_admit .ppin');
+  assert.ok(admitPpin, 'wbhistoryload injects .ppin on admitted current HasBody panel');
+  assert.equal(admitPpin.getAttribute('aria-pressed'), 'true', 'pre-pinned admitted panel gets synced aria-pressed="true"');
+  assert.equal(wbHistoryEl.querySelector('#e_admit_old .ppin'), null, 'wbhistoryload skips .historical');
+  assert.equal(wbHistoryEl.querySelector('#e_admit_msg .ppin'), null, 'wbhistoryload skips .msg');
+
+  // 2. Test shipped adopted(n) handler from dashboard-board.js
+  const adoptedMatch = boardSrc.match(/adopted: function \(n\) \{[\s\S]*?\n      \},/);
+  assert.ok(adoptedMatch, 'adopted(n) handler found in dashboard-board.js');
+
+  const closedTopic = makeTopicEl(makeEl, 'closed-t', 'Closed Topic', [
+    makePanelHTML({ panelId: 'p_admit', entryId: 'e_closed_cur', hasBody: true, historical: false }),
+    makePanelHTML({ panelId: 'p_closed_msg', entryId: 'e_closed_msg', hasBody: false, historical: false }),
+  ].join(''));
+  closedTopic.classList.add('closed');
+  board.appendChild(closedTopic);
+
+  const adoptedOrder = [];
+  const adoptedCtx = {
+    watchBoard: () => {},
+    bandBoard: () => {},
+    restoreOpen: () => {},
+    mountFrames: () => {},
+    mermaid: () => {},
+    window: {
+      wbHistory: { init: () => {} },
+      WsCards: {
+        decorate: n => { adoptedOrder.push('decorate'); return origDecorate(n); },
+      },
+      WsPanelCard: {
+        sync: () => { adoptedOrder.push('sync'); return origSync(); },
+      },
+    },
+  };
+  vm.createContext(adoptedCtx);
+  const { adopted } = vm.runInContext('({' + adoptedMatch[0].slice(0, -1) + '})', adoptedCtx);
+  adopted(closedTopic);
+  assert.deepEqual(adoptedOrder, ['decorate', 'sync'], 'adopted(n) runs WsCards.decorate(n) before WsPanelCard.sync()');
+  const closedPpin = closedTopic.querySelector('#e_closed_cur .ppin');
+  assert.ok(closedPpin, 'adopted(n) injects .ppin on adopted closed-topic HasBody panel');
+  assert.equal(closedPpin.getAttribute('aria-pressed'), 'true', 'adopted pre-pinned panel gets synced aria-pressed="true"');
+  assert.equal(closedTopic.querySelector('#e_closed_msg .ppin'), null, 'adopted(n) skips .msg');
+
+  // 3. Verify swap("board") decorates inserted/restored nodes before WsPanelCard.sync()
+  const restoreIdx = boardSrc.indexOf('window.wbHistory.restore(n, history)');
+  const swapDecorateIdx = boardSrc.indexOf('window.WsCards.decorate(n)', restoreIdx);
+  const swapSyncIdx = boardSrc.indexOf('window.WsPanelCard.sync()', restoreIdx);
+  assert.ok(restoreIdx >= 0 && swapDecorateIdx > restoreIdx && swapSyncIdx > swapDecorateIdx,
+    'swap("board") calls WsCards.decorate(n) after wbHistory.restore and before WsPanelCard.sync()');
 });

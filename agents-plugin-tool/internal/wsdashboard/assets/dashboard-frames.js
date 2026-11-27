@@ -387,6 +387,7 @@
     fmtTimes(el);
     sweepOutImgs(el);
     if (window.wbBindBoard) window.wbBindBoard(el);
+    if (window.WsCards && window.WsCards.decorate) window.WsCards.decorate(el);
     if (window.WsPanelCard && window.WsPanelCard.sync) window.WsPanelCard.sync();
     mermaid([el]);
   });
