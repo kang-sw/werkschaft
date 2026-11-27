@@ -973,9 +973,145 @@
     d.item = n;
     if (d.on) {
       n.classList.add("rdrag");
+      if (d.lifeEligible && n.classList.contains("rs")) {
+        var dm = WsRail.rowMeta(n);
+        if (dm && dm.box) dm.box.classList.add("d-rlife-src");
+      }
       try { n.setPointerCapture(d.id); } catch (x) { /* no capture: the moves still land on the document */ }
     }
     return true;
+  }
+  var rdLifeEl = null, rdLifeCls = "", lifeBusy = {};
+  function rdLifeMark(el, sec, kind) {
+    var cls = !el ? "" : (kind === "rfh" ? (sec === "del" ? "d-rdrop-del" : "d-rdrop-arch") : "d-rdrop-list");
+    if (rdLifeEl === el && rdLifeCls === cls) return;
+    if (rdLifeEl && rdLifeCls) rdLifeEl.classList.remove(rdLifeCls);
+    rdLifeEl = el || null;
+    rdLifeCls = cls;
+    if (rdLifeEl && rdLifeCls) rdLifeEl.classList.add(rdLifeCls);
+  }
+  function rdClearLifeUI() {
+    rdLifeMark(null);
+    root.classList.remove("rdragging-life");
+    q(".rsessions.d-rlife-src", railEl).forEach(function (b) { b.classList.remove("d-rlife-src"); });
+  }
+  function rdLifeHit(x, y, over, dm) {
+    var i, els, r;
+    els = railEl.querySelectorAll(".rfh");
+    for (i = 0; i < els.length; i++) {
+      r = els[i].getBoundingClientRect();
+      if (r.width > 0 && r.height > 0 && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+        return { section: els[i].getAttribute("data-k") === "del" ? "del" : "arch", groupKey: WsRail.groupKey(els[i]), targetEl: els[i], kind: "rfh" };
+      }
+    }
+    var ed = over && over.closest ? over.closest(".rended.on") : null;
+    if (!ed) {
+      els = railEl.querySelectorAll(".rended.on");
+      for (i = 0; i < els.length; i++) {
+        r = els[i].getBoundingClientRect();
+        if (r.width > 0 && r.height > 0 && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+          ed = els[i]; break;
+        }
+      }
+    }
+    if (ed && railEl.contains(ed)) {
+      return { section: ed.getAttribute("data-k") === "del" ? "del" : "arch", groupKey: WsRail.groupKey(ed), targetEl: ed, kind: "rended" };
+    }
+    if (dm && (dm.section === "arch" || dm.section === "del")) {
+      var row = over && over.closest ? over.closest(".rs") : null;
+      if (!row && railEl.contains(over)) {
+        var lr = railEl.getBoundingClientRect();
+        if (x >= lr.left && x <= lr.right) {
+          var mid = doc.elementFromPoint(lr.left + lr.width / 2, y);
+          row = mid && mid.closest ? mid.closest(".rs") : null;
+        }
+      }
+      if (row && railEl.contains(row) && WsRail.rowSection(row) === "active") {
+        var rr = row.getBoundingClientRect();
+        return {
+          section: "active",
+          groupKey: WsRail.groupKey(row),
+          targetRow: row,
+          frac: rr.height > 0 ? Math.max(0, Math.min(1, (y - rr.top) / rr.height)) : 0.5,
+          box: WsRail.activeRowsBox(row)
+        };
+      }
+      var grp = over && over.closest ? over.closest(".rwt, .rws") : null;
+      if (grp && railEl.contains(grp)) {
+        var box = WsRail.activeRowsBox(grp);
+        if (box) {
+          var fold = box.querySelector(":scope > .rfold");
+          var fr = fold ? fold.getBoundingClientRect() : null;
+          if (!fr || !fr.height || y < fr.top) {
+            var topRows = WsRail.activeTopRows(box);
+            var frac = 0;
+            if (topRows.length) {
+              var firstR = topRows[0].getBoundingClientRect();
+              frac = y < firstR.top ? 0 : 1;
+            }
+            return { section: "active", groupKey: WsRail.groupKey(grp), targetRow: null, frac: frac, box: box };
+          }
+        } else if (grp.classList.contains("rws") && (grp.getAttribute("data-ws") || "") !== dm.ws) {
+          return { section: "active", groupKey: (grp.getAttribute("data-ws") || "") + "\0ws", targetRow: null, frac: 0, box: null };
+        }
+      }
+    }
+    return null;
+  }
+  function rdRestoreLine(rp, box, lr) {
+    if (!rp || (!rp.ref && !rp.boxTop)) { rdLine(null); return; }
+    var left, width, top;
+    if (rp.ref) {
+      var rr = rp.ref.getBoundingClientRect();
+      left = rr.left; width = rr.width;
+      top = Math.round((rp.after ? rdBottom(rp.ref) : rr.top) - 1);
+    } else if (box) {
+      var br = box.getBoundingClientRect();
+      left = br.left; width = br.width;
+      var fold = box.querySelector(":scope > .rfold");
+      var fr = fold ? fold.getBoundingClientRect() : null;
+      top = Math.round(((fr && fr.height) ? fr.top : br.top) - 1);
+    } else {
+      rdLine(null);
+      return;
+    }
+    if (lr) top = Math.max(Math.round(lr.top), Math.min(Math.round(lr.bottom) - 2, top));
+    rdLine({ left: left, width: width, top: top });
+  }
+  function rdRowOrLife(d, over, x, y, lr) {
+    var dm = WsRail.rowMeta(d.item), canCtrl = root.hasAttribute("data-can-control");
+    var hit = dm ? rdLifeHit(x, y, over, dm) : null;
+    if (dm && dm.section === "active" && (!hit || hit.section === "active")) {
+      rdLifeMark(null);
+      d.life = null;
+      rdRow(d, over, x, y, lr);
+      return;
+    }
+    var activeRows = hit && hit.box ? WsRail.activeTopRows(hit.box) : (dm && dm.box ? WsRail.activeTopRows(dm.box) : []);
+    var res = WsRail.lifecycleDrop(dm, hit, { canControl: canCtrl, activeRows: activeRows });
+    if (!res) {
+      rdLifeMark(null); rdLine(null); rdHint(""); d.life = null; d.noop = true;
+      return;
+    }
+    if (res.refusal) {
+      rdLifeMark(null); rdLine(null); d.life = null; d.noop = true;
+      rdHint(res.refusal, x, y);
+      return;
+    }
+    if (res.noop) {
+      rdLifeMark(null); rdLine(null); rdHint(""); d.life = null; d.noop = true;
+      return;
+    }
+    rdHint("");
+    d.life = res;
+    d.noop = false;
+    if (res.targetSection === "active") {
+      rdLifeMark(null);
+      rdRestoreLine(res.restore, hit && hit.box ? hit.box : (dm ? dm.box : null), lr);
+    } else {
+      rdLine(null);
+      rdLifeMark(hit.targetEl, res.targetSection, hit.kind);
+    }
   }
   // rdOver places the drop at the pointer (x, y): a session row's by
   // rdRow, a workspace's before the first section whose middle is below y,
@@ -993,9 +1129,10 @@
     if (d.edge && !rdRaf) rdRaf = requestAnimationFrame(rdScroll);
     d.noop = true;
     d.z = null;
+    d.life = null;
     rdKid(null);
-    if (!rdItem(d)) { rdHint(""); rdLine(null); return; }
-    if (d.item.classList.contains("rs")) { rdRow(d, doc.elementFromPoint(x, y), x, y, lr); return; }
+    if (!rdItem(d)) { rdHint(""); rdLine(null); rdLifeMark(null); return; }
+    if (d.item.classList.contains("rs")) { rdRowOrLife(d, doc.elementFromPoint(x, y), x, y, lr); return; }
     var wt = d.item.classList.contains("rwt");
     var why = wt ? WsRail.dropRefusal(d.item, doc.elementFromPoint(x, y)) : "";
     rdHint(why, x, y);
@@ -1036,7 +1173,12 @@
     if (t.closest("[data-scope-entry]")) return;
     if (grip || body) {
       item = (grip || body).closest(".rs");
-      if (!item || !railEl.contains(item) || item.classList.contains("ended") || item.parentNode.closest(".rended")) return;
+      if (!item || !railEl.contains(item)) return;
+      var folded = item.classList.contains("ended") || item.classList.contains("archived") || !!item.parentNode.closest(".rended");
+      if (folded) {
+        var gEl = item.querySelector(".drgrip");
+        if (e.pointerType === "touch" && !(gEl && gEl.getAttribute("data-drag") === "1" && root.hasAttribute("data-can-control"))) return;
+      }
     } else {
       var b = t.closest("button"), hd = t.closest(".wthd"), bar = hd || t.closest(".wsbar");
       if ((b && (hd || !b.classList.contains("wstog"))) || !bar || !railEl.contains(bar)) return;
@@ -1044,7 +1186,7 @@
       if (!item || rdPeers(item).length < 2) return;
     }
     var touch = e.pointerType === "touch";
-    rdrag = { item: item, key: WsRail.itemKey(item), id: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, on: false, touch: touch, hold: touch && !grip, timer: 0, ref: null, after: false, z: null, noop: true, edge: 0, dwell: "", dwellTimer: 0, nest: "" };
+    rdrag = { item: item, key: WsRail.itemKey(item), id: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, on: false, touch: touch, hold: touch && !grip, timer: 0, ref: null, after: false, z: null, life: null, lifeEligible: false, noop: true, edge: 0, dwell: "", dwellTimer: 0, nest: "" };
     if (rdrag.hold) rdrag.timer = setTimeout(function () { if (rdrag && !rdrag.on) rdBegin(); }, RD_HOLD);
   }
   function rdBegin() {
@@ -1054,6 +1196,14 @@
     try { d.item.setPointerCapture(d.id); } catch (x) { /* no capture: the moves still land on the document */ }
     d.item.classList.add("rdrag");
     root.classList.add("rdragging");
+    if (d.item.classList.contains("rs")) {
+      var dm = WsRail.rowMeta(d.item), elig = WsRail.lifecycleEligibility(dm, root.hasAttribute("data-can-control"));
+      d.lifeEligible = elig.eligible;
+      if (elig.eligible && dm && dm.box) {
+        root.classList.add("rdragging-life");
+        dm.box.classList.add("d-rlife-src");
+      }
+    }
     var sel = window.getSelection && window.getSelection();
     if (sel && sel.removeAllRanges) sel.removeAllRanges();
     rdOver(d.x, d.y);
@@ -1099,18 +1249,66 @@
     if (d.on) {
       d.item.classList.remove("rdrag");
       root.classList.remove("rdragging");
+      if (typeof rdClearLifeUI === "function") rdClearLifeUI();
       rdLine(null);
       rdHint("");
       rdKid(null);
       rdragged = true;
       setTimeout(function () { rdragged = false; }, 0);
       if (e && e.type === "pointerup" && !d.noop && d.item.isConnected) {
-        if (d.z) rdDrop(d.item, d.z); else rdSave(d.item, d.ref, d.after);
+        if (d.life) rdDropLife(d.item, d.life); else if (d.z) rdDrop(d.item, d.z); else rdSave(d.item, d.ref, d.after);
       }
       railMarks();
     }
     // The press's click lands first, on the nodes it pressed.
     setTimeout(railRelease, 0);
+  }
+  var LIFE_RISKS = { proc: "js.rail.confirm.risk.proc", kids: "js.rail.confirm.risk.kids", bg: "js.rail.confirm.risk.bg" };
+  function lifeErr(act, status, text) {
+    if (act === "archive") return archErr("hide", status, text);
+    if (act === "unarchive") return archErr("unhide", status, text);
+    return leadErr(status, text);
+  }
+  function railExecLife(plan) {
+    if (!plan || !plan.rid || lifeBusy[plan.rid]) return;
+    lifeBusy[plan.rid] = plan.action;
+    var heldSwap = plan.targetSection === "active";
+    if (heldSwap) railSaving++;
+    railPost(plan.url, plan.body || {}, function (status, v, s) {
+      delete lifeBusy[plan.rid];
+      if (status < 200 || status >= 300) {
+        if (heldSwap) railSaving--;
+        toast(lifeErr(plan.action, status, s));
+        if (heldSwap) railRelease();
+        return;
+      }
+      if (heldSwap) {
+        var moveOp = plan.restore && plan.restore.op;
+        if (moveOp) {
+          layoutSave(moveOp, function () {});
+        }
+        railSaving--;
+        if (!moveOp) railRelease();
+      }
+    });
+  }
+  function rdDropLife(item, plan) {
+    if (plan.risks && plan.risks.length) {
+      var del = plan.targetSection === "del";
+      var nm = item.querySelector(".rid");
+      railConfirmOpen({
+        rid: plan.rid,
+        label: nm ? nm.textContent : plan.rid,
+        targetSection: plan.targetSection,
+        title: wsT(del ? "js.rail.confirm.del.title" : "js.rail.confirm.arch.title"),
+        note: wsT(del ? "js.lead.close.note" : "js.lead.archive.note"),
+        acceptLabel: wsT(del ? "js.lead.close" : "js.lead.archive"),
+        risks: plan.risks.map(function (k) { return LIFE_RISKS[k]; }).filter(Boolean),
+        onConfirm: function () { railExecLife(plan); }
+      }, item.querySelector(".rl") || item);
+      return;
+    }
+    railExecLife(plan);
   }
   // rdDrop shows a session row's drop (z, from WsRail.dropZone) at once
   // (WsRail.moveRow) and posts its op, with an undo that puts the rows back.

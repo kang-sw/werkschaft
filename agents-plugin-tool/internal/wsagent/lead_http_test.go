@@ -347,3 +347,60 @@ func TestSettingsGuardChildCardBoundAndNonLocal(t *testing.T) {
 		t.Fatalf("in-process SetSettings failed: %+v %v", st, err)
 	}
 }
+
+func TestReopenHiddenCompatibilityAndTrustedGate(t *testing.T) {
+	h := newLeadHarness(t).start()
+	id := h.lead(BackendClaude, LeadOptions{}).ID
+	if r := h.route(localBrowser, http.MethodPost, "/agents/"+id+"/close", nil); r.status != http.StatusOK {
+		t.Fatalf("close = %d %s", r.status, r.body)
+	}
+
+	// Non-trusted viewers cannot call POST /reopen even with hidden:true.
+	for _, v := range []viewer{lanBrowser, reboundBrowser, localClient} {
+		r := h.route(v, http.MethodPost, "/agents/"+id+"/reopen", map[string]any{"hidden": true})
+		if r.status != http.StatusNotFound && r.status != http.StatusForbidden {
+			t.Fatalf("untrusted reopen from %+v = %d %s", v, r.status, r.body)
+		}
+	}
+
+	// Invalid JSON shape is rejected with 400.
+	if r := h.route(localBrowser, http.MethodPost, "/agents/"+id+"/reopen", map[string]any{"hidden": "yes"}); r.status != http.StatusBadRequest {
+		t.Fatalf("invalid hidden type = %d %s, want 400", r.status, r.body)
+	}
+
+	// Plain Reopen (empty body, T0 legacy shape) clears hidden -> false.
+	if _, err := h.runner.SetHidden(id, false); err == nil {
+		t.Fatal("expected SetHidden on closed conversation to fail")
+	}
+	r := h.route(localBrowser, http.MethodPost, "/agents/"+id+"/reopen", nil)
+	if st := decodeState(t, r); r.status != http.StatusOK || st.Hidden || st.Status == StatusClosed {
+		t.Fatalf("plain reopen (empty body) = %d %+v (%s)", r.status, st, r.body)
+	}
+
+	// Explicit {"hidden": false} resets stale hidden:true from Archived -> Deleted -> Active.
+	if r := h.route(localBrowser, http.MethodPost, "/agents/"+id+"/hide", nil); r.status != http.StatusOK {
+		t.Fatalf("hide = %d %s", r.status, r.body)
+	}
+	if r := h.route(localBrowser, http.MethodPost, "/agents/"+id+"/close", nil); r.status != http.StatusOK {
+		t.Fatalf("close after hide = %d %s", r.status, r.body)
+	}
+	r = h.route(localBrowser, http.MethodPost, "/agents/"+id+"/reopen", map[string]any{"hidden": false})
+	if st := decodeState(t, r); r.status != http.StatusOK || st.Hidden || st.Process {
+		t.Fatalf("explicit hidden:false reopen = %d %+v (%s)", r.status, st, r.body)
+	}
+
+	// Atomic reopen directly into Archived keeps queued mail asleep.
+	if r := h.route(localBrowser, http.MethodPost, "/agents/"+id+"/close", nil); r.status != http.StatusOK {
+		t.Fatalf("re-close = %d %s", r.status, r.body)
+	}
+	startsBefore := h.holders.opCount("launch")
+	h.mail.deliver(h.record(id).WSKey, "queued while deleted")
+	r = h.route(localBrowser, http.MethodPost, "/agents/"+id+"/reopen", map[string]any{"hidden": true})
+	if st := decodeState(t, r); r.status != http.StatusOK || !st.Hidden || st.Process || st.Status == StatusClosed {
+		t.Fatalf("reopen hidden:true = %d %+v (%s)", r.status, st, r.body)
+	}
+	h.runner.conv(id).do(func() {})
+	if st := h.state(id); !st.Hidden || st.Process || h.holders.opCount("launch") != startsBefore {
+		t.Fatalf("reopen hidden:true started process on queued mail: %+v launches=%d want=%d", st, h.holders.opCount("launch"), startsBefore)
+	}
+}

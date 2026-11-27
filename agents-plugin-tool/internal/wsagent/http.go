@@ -352,7 +352,13 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 		st, err := r.TakeOver(id)
 		writeAnswer(w, http.StatusOK, view(st), err)
 	case action == "reopen":
-		st, err := r.Reopen(id)
+		var body struct {
+			Hidden bool `json:"hidden"`
+		}
+		if !decode(w, req, &body) {
+			return
+		}
+		st, err := r.ReopenHidden(id, body.Hidden)
 		writeAnswer(w, http.StatusOK, view(st), err)
 	case action == "quota-continuation":
 		st, err := r.ScheduleQuotaContinuation(id)

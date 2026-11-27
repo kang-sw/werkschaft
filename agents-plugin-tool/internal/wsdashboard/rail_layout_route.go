@@ -103,6 +103,17 @@ func (d *Daemon) handleRailLayout(w http.ResponseWriter, r *http.Request) {
 	}
 	loaded := d.index != nil && d.index.Loaded()
 	answer, err := d.layout.apply(req, railFactsOf(d.railBaseView(d.pages())), loaded)
+	if (answer.Reason == layoutUnknown || answer.Reason == layoutEnded || answer.Reason == layoutLevel) && d.index != nil && (req.Op == "move" || req.Op == "attach" || req.Op == "detach") {
+		// Lifecycle actions (unhide/reopen) can land just inside Index.drain's 1s
+		// cooldown; reread the involved rows synchronously before failing 409.
+		for _, id := range []string{req.RID, req.Parent, req.Before, req.After} {
+			if ValidReplyID(id) {
+				d.index.reread(id)
+			}
+		}
+		loaded = d.index.Loaded()
+		answer, err = d.layout.apply(req, railFactsOf(d.railBaseView(d.pages())), loaded)
+	}
 	if err != nil {
 		fmt.Fprintf(d.log, "dashboard: rail layout %s: %v\n", req.Op, err)
 	}

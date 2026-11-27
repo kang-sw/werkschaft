@@ -165,3 +165,119 @@ func TestRailLifecycle(t *testing.T) {
 		t.Errorf("an empty archived half must be disabled and the deleted half enabled:\n%s", html)
 	}
 }
+
+func TestRailLifecycleDragMarkup(t *testing.T) {
+	repo := filepath.Clean("/w/repo")
+	emptyFold := RailView{
+		Workspaces: []RailWorkspace{{
+			Name: "repo",
+			Path: repo,
+			Repo: true,
+			Worktrees: []RailWorktree{{
+				Path:   repo,
+				Branch: "main",
+				Sessions: []RailRow{
+					{
+						ReplyID:         "act",
+						Live:            true,
+						Lifecycle:       SessionActiveOn,
+						Hosted:          true,
+						HasProcess:      true,
+						BackgroundTasks: 1,
+						Starred:         true,
+					},
+					{
+						ReplyID:     "execown",
+						Live:        true,
+						Lifecycle:   SessionActiveOn,
+						Hosted:      true,
+						OwnExecJobs: 2,
+					},
+				},
+			}},
+		}},
+	}
+	emptyReg, err := renderRailRegion(emptyFold, "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyHTML := string(emptyReg.HTML)
+	if !strings.Contains(emptyHTML, `<div class="rfold" role="group" aria-label="Folded sessions" data-key="`+repo+`" data-empty="1">`) {
+		t.Fatalf("expected 0/0 fold to include data-empty=1:\n%s", emptyHTML)
+	}
+	actSlice, _, _ := strings.Cut(strings.SplitN(emptyHTML, `<div class="rs hosted-row" data-rid="act" data-asks="" data-star="1">`, 2)[1], `data-rid="execown"`)
+	for _, want := range []string{`data-drag="1"`, `data-host="1"`, `data-star-was="1"`, `data-proc="1"`, `data-bg="1"`} {
+		if !strings.Contains(actSlice, want) {
+			t.Errorf("act .drgrip missing %s:\n%s", want, actSlice)
+		}
+	}
+	execSlice := strings.SplitN(emptyHTML, `data-rid="execown"`, 2)[1]
+	if !strings.Contains(execSlice, `data-bg="1"`) || strings.Contains(execSlice, `data-proc="1"`) || strings.Contains(execSlice, `data-star-was="1"`) {
+		t.Errorf("execown .drgrip mismatch:\n%s", execSlice)
+	}
+
+	full := RailView{
+		Workspaces: []RailWorkspace{{
+			Name: "repo",
+			Path: repo,
+			Repo: true,
+			Worktrees: []RailWorktree{{
+				Path:   repo,
+				Branch: "main",
+				Sessions: []RailRow{{
+					ReplyID:   "parent",
+					Live:      true,
+					Lifecycle: SessionActiveOn,
+					Hosted:    true,
+					Children: []RailRow{{
+						ReplyID:   "child",
+						Live:      true,
+						Lifecycle: SessionActiveOn,
+						Child:     true,
+						Group:     repo,
+						Hosted:    true,
+					}},
+				}},
+				Archived: []RailRow{{
+					ReplyID:   "archstar",
+					Lifecycle: SessionArchived,
+					Archived:  true,
+					Hosted:    true,
+					Starred:   true,
+				}},
+				Ended: []RailRow{
+					{
+						ReplyID:   "delopen",
+						Lifecycle: SessionPendingDeletion,
+						Hosted:    true,
+						Revive:    ReviveReopen,
+					},
+					{
+						ReplyID:       "delblocked",
+						Lifecycle:     SessionPendingDeletion,
+						Revive:        ReviveTakeover,
+						ReviveBlocked: ReviveNoSession,
+					},
+				},
+			}},
+		}},
+	}
+	fullReg, err := renderRailRegion(full, "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fullHTML := string(fullReg.HTML)
+	if !strings.Contains(fullHTML, `<div class="rfold" role="group" aria-label="Folded sessions" data-key="`+repo+`">`) {
+		t.Errorf("non-empty fold must omit data-empty:\n%s", fullHTML)
+	}
+	if !strings.Contains(fullHTML, `<div class="rs ended stopped archived hosted-row" data-rid="archstar" data-asks=""><span class="drgrip" aria-hidden="true" data-drag="1" data-host="1" data-star-was="1">`) {
+		t.Errorf("archstar div.rs + .drgrip markup mismatch:\n%s", fullHTML)
+	}
+	if !strings.Contains(fullHTML, `<div class="rs ended" data-rid="delopen" data-asks="" data-star="0"><span class="drgrip" aria-hidden="true" data-drag="1" data-host="1" data-revive="reopen">`) {
+		t.Errorf("delopen div.rs + .drgrip markup mismatch:\n%s", fullHTML)
+	}
+	blockedSlice := strings.SplitN(fullHTML, `data-rid="delblocked"`, 2)[1]
+	if !strings.Contains(blockedSlice, `data-revive="takeover" data-revive-blocked="nosession"`) || strings.Contains(strings.SplitN(blockedSlice, `<div class="drbody"`, 2)[0], `data-drag="1"`) {
+		t.Errorf("delblocked .drgrip mismatch:\n%s", blockedSlice)
+	}
+}

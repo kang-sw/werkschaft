@@ -848,3 +848,62 @@ func TestRailLayoutRoute(t *testing.T) {
 		}
 	}
 }
+
+// TestRailLayoutRouteRereadsAfterUnhideCooldown verifies that a restore+move
+// immediately after /unhide or /reopen succeeds even when Index.RereadLive is
+// throttled inside Index.drain's 1s cooldown window.
+func TestRailLayoutRouteRereadsAfterUnhideCooldown(t *testing.T) {
+	f := startPageFixture(t, withWorkspaces(t))
+	if _, err := f.d.workspaces.add(f.project, false); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the index to load", f.d.Index().Loaded)
+
+	reg, err := ReadRegistration(f.dir, "boardsession")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.Hosted = true
+	if err := WriteRegistration(f.dir, reg); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteSessionHidden(f.dir, "boardsession", true); err != nil {
+		t.Fatal(err)
+	}
+	// First RereadLive runs immediately and starts the 1s per-session cooldown.
+	f.d.Index().RereadLive("boardsession")
+	waitFor(t, "boardsession to become archived in index", func() bool {
+		row, ok := railFactsOf(f.d.railBaseView(f.d.pages())).rows["boardsession"]
+		return ok && !row.Live
+	})
+
+	if err := WriteSessionHidden(f.dir, "boardsession", false); err != nil {
+		t.Fatal(err)
+	}
+	// Second RereadLive inside the 1s window is throttled by Index.drain.
+	f.d.Index().RereadLive("boardsession")
+	if row := railFactsOf(f.d.railBaseView(f.d.pages())).rows["boardsession"]; row.Live {
+		t.Fatalf("expected boardsession to still look archived during cooldown before synchronous reread")
+	}
+
+	code, _, raw := postJSON(t, f.base+railLayoutRoute, f.base, `{"op":"move","rid":"boardsession","before":"livesession"}`)
+	var reply railLayoutReply
+	if err := json.Unmarshal([]byte(raw), &reply); err != nil {
+		t.Fatalf("decode reply = %q: %v", raw, err)
+	}
+	if code != http.StatusOK || !reply.Applied {
+		t.Fatalf("POST move right after unhide = %d %+v, want 200 applied:true", code, reply)
+	}
+	view := f.d.railView(f.d.pages())
+	sess := view.Workspaces[0].Sessions
+	if len(sess) == 0 && len(view.Workspaces[0].Worktrees) > 0 {
+		sess = view.Workspaces[0].Worktrees[0].Sessions
+	}
+	var ids []string
+	for _, r := range sess {
+		ids = append(ids, r.ReplyID)
+	}
+	if strings.Join(ids, ",") != "boardsession,livesession" {
+		t.Fatalf("sessions after restore+move = %v, want [boardsession livesession]", ids)
+	}
+}

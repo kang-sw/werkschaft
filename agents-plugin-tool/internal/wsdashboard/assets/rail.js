@@ -184,7 +184,9 @@
     depth: "js.rail.layout.depth", workspace: "js.rail.layout.workspace", group: "js.rail.layout.group",
     level: "js.rail.layout.level", stars: "js.rail.layout.stars", child: "js.rail.layout.child",
     toplevel: "js.rail.layout.toplevel", invalid: "js.rail.layout.invalid", retry: "js.rail.layout.retry",
-    store: "js.rail.layout.store", hiring: "js.rail.layout.hiring"
+    store: "js.rail.layout.store", hiring: "js.rail.layout.hiring",
+    control: "js.rail.drag.control", child_life: "js.rail.drag.child",
+    hosted: "js.rail.drag.hosted", blocked: "js.rail.drag.blocked"
   };
   function layoutRefusal(reason) {
     return LAYOUT_REFUSALS.hasOwnProperty(reason) ? LAYOUT_REFUSALS[reason] : LAYOUT_REFUSALS.invalid;
@@ -386,6 +388,175 @@
     if (!box || !hasClass(box, "rkids")) return box;
     var home = homeWt(item) || find(up(item, "rws"), function (n) { return hasClass(n, "wsbody"); });
     return home ? find(home, function (n) { return hasClass(n, "rsessions"); }, true) : null;
+  }
+
+  function gripEl(row) {
+    return row ? find(row, function (n) { return hasClass(n, "drgrip"); }) : null;
+  }
+  function homeGroup(row) {
+    var wt = homeWt(row);
+    if (wt) return wt;
+    var ws = up(row, "rws");
+    return (ws && find(ws, function (n) { return hasClass(n, "wsbody"); })) || ws;
+  }
+  function nodeGroup(node) {
+    if (!node) return null;
+    if (hasClass(node, "rwt")) return node;
+    var wt = up(node, "rwt");
+    if (wt) return wt;
+    if (hasClass(node, "rs")) return homeGroup(node);
+    if (hasClass(node, "wsbody")) return node;
+    var ws = hasClass(node, "rws") ? node : up(node, "rws");
+    return (ws && find(ws, function (n) { return hasClass(n, "wsbody"); })) || ws;
+  }
+  function activeRowsBox(node) {
+    var g = nodeGroup(node);
+    if (!g) return null;
+    return find(g, function (n) {
+      return hasClass(n, "rsessions") && !up(n, "rended") && (hasClass(g, "rwt") || !up(n, "rwt"));
+    }, true);
+  }
+  function groupKey(node) {
+    var g = nodeGroup(node);
+    if (!g) return "";
+    var rws = hasClass(g, "rws") ? g : up(g, "rws");
+    var ws = attr(rws, "data-ws") || "";
+    return hasClass(g, "rwt") ? ws + "\0wt:" + (attr(g, "data-g") || "") : ws + "\0ws";
+  }
+  function rowSection(row) {
+    if (!row) return "";
+    var ed = up(row, "rended");
+    if (ed) return attr(ed, "data-k") === "arch" ? "arch" : "del";
+    if (hasClass(row, "archived")) return "arch";
+    if (hasClass(row, "ended")) return "del";
+    return "active";
+  }
+  function rowMeta(row) {
+    if (!row) return null;
+    var sec = rowSection(row), grip = gripEl(row), box = activeRowsBox(row);
+    var starRaw = attr(row, "data-star"), rws = up(row, "rws");
+    var starHidden = sec === "del" && starRaw === null;
+    return {
+      rid: attr(row, "data-rid") || "",
+      section: sec,
+      groupKey: groupKey(row),
+      ws: attr(rws, "data-ws") || "",
+      box: box,
+      child: !!(row.parentNode && hasClass(row.parentNode, "rkids")) || attr(row, "data-g") !== null,
+      hosted: !!(grip && attr(grip, "data-host") === "1"),
+      hasProcess: !!(grip && attr(grip, "data-proc") === "1"),
+      hasKids: attr(row, "data-kids") === "1",
+      hasBg: !!(grip && attr(grip, "data-bg") === "1"),
+      revive: grip ? (attr(grip, "data-revive") || "") : "",
+      reviveBlocked: grip ? (attr(grip, "data-revive-blocked") || "") : "",
+      star: starHidden ? false : (starRaw === "1" || !!(grip && attr(grip, "data-star-was") === "1")),
+      starHidden: starHidden
+    };
+  }
+  function rowRisks(dm) {
+    var out = [];
+    if (!dm) return out;
+    if (dm.hasProcess) out.push("proc");
+    if (dm.hasKids) out.push("kids");
+    if (dm.hasBg) out.push("bg");
+    return out;
+  }
+  function lifecycleEligibility(dm, canControl) {
+    if (!dm) return { eligible: false, refusal: "unknown" };
+    if (dm.child) return { eligible: false, refusal: "child_life" };
+    if (!canControl) return { eligible: false, refusal: "control" };
+    if (!dm.hosted) return { eligible: false, refusal: "hosted" };
+    if (dm.section === "del") {
+      if (dm.reviveBlocked) return { eligible: false, refusal: "blocked" };
+      if (dm.revive !== "reopen") return { eligible: false, refusal: "hosted" };
+    }
+    return { eligible: true, refusal: "" };
+  }
+  function activeTopRows(box) {
+    var out = [], kids = (box && box.children) || [];
+    for (var i = 0; i < kids.length; i++) {
+      var c = kids[i];
+      if (hasClass(c, "rs") && !hasClass(c, "ended") && !hasClass(c, "archived")) out.push(c);
+    }
+    return out;
+  }
+  function restoreOp(dm, targetRow, frac, activeRows) {
+    var topRows = activeRows || [], tgt = targetRow || null;
+    var f = typeof frac === "number" ? frac : 1;
+    if (tgt && tgt.parentNode && hasClass(tgt.parentNode, "rkids")) {
+      var pid = attr(tgt.parentNode, "data-parent") || "";
+      tgt = null;
+      for (var i = 0; i < topRows.length; i++) {
+        if ((attr(topRows[i], "data-rid") || "") === pid) { tgt = topRows[i]; f = 1; break; }
+      }
+    }
+    var wantStar = !!dm.star;
+    var peers = topRows.filter(function (r) { return (attr(r, "data-star") === "1") === wantStar; });
+    if (!peers.length) {
+      var fallbackOp = dm.starHidden ? { op: "detach", rid: dm.rid } : null;
+      if (!topRows.length) return { op: fallbackOp, ref: null, after: false, boxTop: true };
+      return wantStar
+        ? { op: fallbackOp, ref: topRows[0], after: false, boxTop: false }
+        : { op: fallbackOp, ref: topRows[topRows.length - 1], after: true, boxTop: false };
+    }
+    var ref = null, after = false;
+    for (var j = 0; j < peers.length; j++) {
+      if (peers[j] === tgt) { ref = tgt; after = f >= 0.5; break; }
+    }
+    if (!ref) {
+      if (tgt) {
+        if (wantStar) { ref = peers[peers.length - 1]; after = true; }
+        else { ref = peers[0]; after = false; }
+      } else {
+        if (f <= 0) { ref = peers[0]; after = false; }
+        else { ref = peers[peers.length - 1]; after = true; }
+      }
+    }
+    var refId = attr(ref, "data-rid") || "";
+    var op = { op: dm.starHidden ? "detach" : "move", rid: dm.rid };
+    if (after) op.after = refId; else op.before = refId;
+    return { op: op, ref: ref, after: after, boxTop: false };
+  }
+  function lifecycleDrop(dm, target, opts) {
+    opts = opts || {};
+    var canControl = !!opts.canControl;
+    var elig = lifecycleEligibility(dm, canControl);
+    if (!target) {
+      if (dm && dm.section !== "active" && !elig.eligible) return { refusal: elig.refusal };
+      return null;
+    }
+    if (dm.section === "active" && target.section === "active") return null;
+    if (dm.section !== "active" && !elig.eligible) {
+      if (target.groupKey && dm.groupKey !== target.groupKey) {
+        var tWs0 = target.groupKey.split("\0")[0];
+        return { refusal: dm.ws !== tWs0 ? "workspace" : "group" };
+      }
+      return { refusal: elig.refusal };
+    }
+    if (target.groupKey && dm.groupKey !== target.groupKey) {
+      var tWs = target.groupKey.split("\0")[0];
+      return { refusal: dm.ws !== tWs ? "workspace" : "group" };
+    }
+    if (dm.section === target.section) return { noop: true, refusal: "" };
+    if (!elig.eligible) return { refusal: elig.refusal };
+    var enc = encodeURIComponent(dm.rid);
+    if (target.section === "arch") {
+      if (dm.section === "del") {
+        return { action: "reopen-archive", rid: dm.rid, url: "/agents/" + enc + "/reopen", body: { hidden: true }, targetSection: "arch", risks: [] };
+      }
+      return { action: "archive", rid: dm.rid, url: "/agents/" + enc + "/hide", body: {}, targetSection: "arch", risks: rowRisks(dm) };
+    }
+    if (target.section === "del") {
+      return { action: "delete", rid: dm.rid, url: "/agents/" + enc + "/close", body: {}, targetSection: "del", risks: rowRisks(dm) };
+    }
+    if (target.section === "active") {
+      var rp = restoreOp(dm, target.targetRow, target.frac, opts.activeRows);
+      if (dm.section === "arch") {
+        return { action: "unarchive", rid: dm.rid, url: "/agents/" + enc + "/unhide", body: {}, targetSection: "active", risks: [], restore: rp };
+      }
+      return { action: "reopen-active", rid: dm.rid, url: "/agents/" + enc + "/reopen", body: { hidden: false }, targetSection: "active", risks: [], restore: rp };
+    }
+    return { refusal: "unknown" };
   }
   // find is the first node under root that test passes, depth first; with
   // top, only root's own children are tried.
@@ -1099,6 +1270,16 @@
     fit();
   }
   window.WsRail = {
+    homeGroup: homeGroup,
+    groupKey: groupKey,
+    activeRowsBox: activeRowsBox,
+    activeTopRows: activeTopRows,
+    rowSection: rowSection,
+    rowMeta: rowMeta,
+    rowRisks: rowRisks,
+    lifecycleEligibility: lifecycleEligibility,
+    restoreOp: restoreOp,
+    lifecycleDrop: lifecycleDrop,
     admissionDrafts: admissionDrafts,
     hoverUpdates: hoverUpdates,
     rowInputFull: rowInputFull,
