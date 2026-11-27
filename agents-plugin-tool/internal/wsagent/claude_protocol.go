@@ -150,6 +150,7 @@ func (m *claudeMapper) lead() bool { return m.spec.Lead != nil }
 func (m *claudeMapper) sessionState() bool { return m.lead() || m.spec.SessionState }
 
 type claudeLine struct {
+	LocalCommand       string          `json:"local_command"`
 	LocalCommandSource json.RawMessage `json:"local_command_source"`
 	IsSynthetic        bool            `json:"isSynthetic"`
 	Type               string          `json:"type"`

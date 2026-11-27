@@ -3,8 +3,10 @@
 package wsagent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"time"
 )
@@ -25,6 +27,8 @@ type claudeProcess struct {
 	*streamProcess
 	// lead marks a lead conversation's process.
 	lead bool
+	// ephemeral marks an EphemeralPool slot that can reset via in-stream /clear.
+	ephemeral bool
 }
 
 func (p claudeProcess) processControls() processControls {
@@ -34,7 +38,47 @@ func (p claudeProcess) processControls() processControls {
 	if p.lead {
 		c.approval, c.mode, c.mcp = p, p, p
 	}
+	if p.ephemeral {
+		c.reset = p
+	}
 	return c
+}
+
+// Reset clears conversation context in-stream via Claude's local /clear slash
+// command (zero API round-trip) and drains its result boundary so the next
+// turn reads a clean event stream. Must be called between turns.
+func (p claudeProcess) Reset(ctx context.Context) error {
+	if !p.ephemeral {
+		return ErrUnsupported
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := p.Send("/clear"); err != nil {
+		return err
+	}
+	for {
+		select {
+		case ev, ok := <-p.events:
+			if !ok {
+				return io.ErrClosedPipe
+			}
+			if ev.Fatal != nil {
+				return ev.Fatal
+			}
+			if ev.TurnEnd {
+				if ev.TurnError != "" {
+					return errors.New(ev.TurnError)
+				}
+				return nil
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 func (p claudeProcess) Interrupt() error {

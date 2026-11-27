@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -99,6 +101,7 @@ func (b AgyBackend) registration() (string, BackendRegistration) {
 			InternalTurns:             true,
 			WorkerLog:                 true,
 			SingleHardCompactionSteer: true,
+			EphemeralIsolatedStateDir: true,
 		},
 		// Native default mode asks before each run_command, and the daemon
 		// refuses it (agy 1.5.14 live probe: native auto and
@@ -263,20 +266,39 @@ func withGODEBUG(env []string, setting string) []string {
 // session/resume with the ws MCP server, then the conversation's model,
 // effort and mode.
 func (b AgyBackend) Start(ctx context.Context, spec StartSpec) (Process, error) {
+	if spec.Ephemeral {
+		spec.Lead = nil
+		spec.Holder = nil
+		spec.MCPSession = nil
+		spec.audit = nil
+		spec.ExecCutover = false
+	}
 	if spec.Lead != nil && spec.Holder == nil {
 		return nil, errors.New("agy backend: a hosted lead requires a session holder")
 	}
 	attach := spec.Holder != nil && spec.Holder.id != ""
-	if !attach && spec.MCPSession == nil {
+	if !attach && !spec.Ephemeral && spec.MCPSession == nil {
 		return nil, errors.New("agy backend: agy reaches ws tools only over the daemon's HTTP MCP route, and none is available; no process was started without ws tools")
 	}
 	command, pre, err := harnessCommand(b.Command, "agy")
 	if err != nil {
 		return nil, fmt.Errorf("agy backend: %w", err)
 	}
+	// Ephemeral slots run one shared `agy acp` process per slot (without
+	// --process-per-session, which is only needed for client-configured HTTP
+	// MCP servers) under an isolated --gemini-dir so Reset can reuse the
+	// resident process via session/new.
+	args := append(slices.Clone(pre), "acp")
+	if spec.Ephemeral {
+		if spec.ephemeralStateDir != "" {
+			args = append(args, "--gemini-dir", spec.ephemeralStateDir)
+		}
+	} else {
+		args = append(args, "--process-per-session")
+	}
 	// Both roles use the user's agy home and default agent. A rejoin
 	// attaches to the running process; startChild ignores cmd.
-	cmd := exec.Command(command, append(pre, "acp", "--process-per-session")...)
+	cmd := exec.Command(command, args...)
 	cmd.Dir = spec.workDir()
 	cmd.Env = agyEnv(spec)
 	if spec.Holder != nil {
@@ -290,6 +312,7 @@ func (b AgyBackend) Start(ctx context.Context, spec StartSpec) (Process, error) 
 	m := newAgyMapper(spec.SessionID)
 	// Set before startChild: a rejoin's holder replay maps through m too.
 	m.lead = spec.Lead != nil
+	m.ephemeral = spec.Ephemeral
 	m.cutover = spec.ExecCutover
 	m.warnNativeSubagent = spec.ExecCutover && (spec.Lead == nil || !spec.Lead.PreferNativeSubagent)
 	m.recoveredSteers = slices.Clone(spec.RecoveredSteers)
@@ -298,7 +321,11 @@ func (b AgyBackend) Start(ctx context.Context, spec StartSpec) (Process, error) 
 	if err != nil {
 		return nil, err
 	}
-	p := &agyProcess{streamProcess: sp, m: m, worker: spec.Lead == nil, epoch: strconv.FormatInt(time.Now().UnixNano(), 36)}
+	p := &agyProcess{
+		streamProcess: sp, m: m, worker: spec.Lead == nil,
+		ephemeral: spec.Ephemeral, ephemeralSpec: spec,
+		epoch: strconv.FormatInt(time.Now().UnixNano(), 36),
+	}
 	m.setWakeClose(p.closeUnsolicitedTurn)
 	holder, pid, _ := sp.HolderInfo()
 	if cmd.Process != nil {
@@ -337,6 +364,7 @@ const (
 	agyKindInit    = "init"
 	agyKindNew     = "new"
 	agyKindResume  = "resume"
+	agyKindClose   = "close"
 	agyKindConfig  = "cfg"
 	agyKindMode    = "mode"
 	agyKindPrompt  = "p"
@@ -376,9 +404,11 @@ type agyProcess struct {
 	epoch string
 	seq   atomic.Int64
 	// effort is the thought level the conversation asked for last.
-	effort atomic.Pointer[string]
-	model  atomic.Pointer[string]
-	worker bool
+	effort        atomic.Pointer[string]
+	model         atomic.Pointer[string]
+	worker        bool
+	ephemeral     bool
+	ephemeralSpec StartSpec
 }
 
 func (p *agyProcess) processControls() processControls {
@@ -386,6 +416,9 @@ func (p *agyProcess) processControls() processControls {
 	controls := processControls{Process: p, approval: p, mode: p, steer: p, replacesTurn: true}
 	if p.worker {
 		controls.reports = p
+	}
+	if p.ephemeral {
+		controls.reset = p
 	}
 	return controls
 }
@@ -414,7 +447,11 @@ func (p *agyProcess) newID(kind string) string {
 
 // call sends one request and waits for its result.
 func (p *agyProcess) call(kind, method string, params map[string]any, timeout time.Duration) (json.RawMessage, error) {
-	return p.requestBodyID(p.newID(kind), method, map[string]any{"method": method, "params": params}, timeout)
+	return p.callContext(context.Background(), kind, method, params, timeout)
+}
+
+func (p *agyProcess) callContext(ctx context.Context, kind, method string, params map[string]any, timeout time.Duration) (json.RawMessage, error) {
+	return p.requestBodyIDContext(ctx, p.newID(kind), method, map[string]any{"method": method, "params": params}, timeout)
 }
 
 // open runs a new process's handshake.
@@ -438,7 +475,15 @@ func (p *agyProcess) open(spec StartSpec) error {
 	if json.Unmarshal(init, &reply) != nil || reply.ProtocolVersion != 1 {
 		return fmt.Errorf("agy answered initialize with ACP protocol version %d; ws speaks version 1", reply.ProtocolVersion)
 	}
-	params := map[string]any{"cwd": spec.workDir(), "mcpServers": []any{agyHTTPServer(spec.MCPSession)}}
+	return p.openSession(context.Background(), spec)
+}
+
+func (p *agyProcess) openSession(ctx context.Context, spec StartSpec) error {
+	mcpServers := []any{}
+	if !spec.Ephemeral && spec.MCPSession != nil {
+		mcpServers = []any{agyHTTPServer(spec.MCPSession)}
+	}
+	params := map[string]any{"cwd": spec.workDir(), "mcpServers": mcpServers}
 	var appendText string
 	if spec.Instructions != "" {
 		text, err := os.ReadFile(spec.Instructions)
@@ -447,53 +492,77 @@ func (p *agyProcess) open(spec StartSpec) error {
 		}
 		appendText = string(text)
 	}
-	// A cutover session runs commands through the ws exec tools, whose
-	// completions come as messages; one outside it keeps run_command and
-	// the rule that keeps its turn open while a background one runs.
-	rule := agyBgShellRule
-	if spec.ExecCutover {
-		rule = agyExecCutoverInstruction
-	}
-	if trimmed := strings.TrimRight(appendText, "\n"); trimmed != "" {
-		appendText = trimmed + "\n\n" + rule + "\n"
+	if spec.Ephemeral {
+		if sp := strings.TrimSpace(spec.SystemPrompt); sp != "" {
+			if trimmed := strings.TrimRight(appendText, "\n"); trimmed != "" {
+				appendText = trimmed + "\n\n" + sp + "\n"
+			} else {
+				appendText = sp + "\n"
+			}
+		}
 	} else {
-		appendText = rule + "\n"
+		// A cutover session runs commands through the ws exec tools, whose
+		// completions come as messages; one outside it keeps run_command and
+		// the rule that keeps its turn open while a background one runs.
+		rule := agyBgShellRule
+		if spec.ExecCutover {
+			rule = agyExecCutoverInstruction
+		}
+		if trimmed := strings.TrimRight(appendText, "\n"); trimmed != "" {
+			appendText = trimmed + "\n\n" + rule + "\n"
+		} else {
+			appendText = rule + "\n"
+		}
 	}
 	if appendText != "" {
 		params["_meta"] = map[string]any{"antigravity": map[string]any{"systemPrompt": map[string]any{"append": appendText}}}
 	}
 	kind, method := agyKindNew, "session/new"
-	if spec.SessionID != "" {
+	if !spec.Ephemeral && spec.SessionID != "" {
 		kind, method = agyKindResume, "session/resume"
 		params["sessionId"] = spec.SessionID
 	}
-	if _, err := p.call(kind, method, params, agySessionTimeout); err != nil {
+	if _, err := p.callContext(ctx, kind, method, params, agySessionTimeout); err != nil {
 		return fmt.Errorf("%s: %w", method, err)
 	}
-	if c := spec.MCPSession.Connected; c != nil {
-		select {
-		case <-c:
-		case <-p.exited:
-			return errors.New("agy exited while it opened its session")
-		case <-time.After(agyMCPConnectWait):
-			return fmt.Errorf("agy did not reach the ws MCP route within %s of opening its session (a refused token only hides the ws tools), so the process was not started without them", agyMCPConnectWait)
+	if !spec.Ephemeral && spec.MCPSession != nil {
+		if c := spec.MCPSession.Connected; c != nil {
+			select {
+			case <-c:
+			case <-p.exited:
+				return errors.New("agy exited while it opened its session")
+			case <-time.After(agyMCPConnectWait):
+				return fmt.Errorf("agy did not reach the ws MCP route within %s of opening its session (a refused token only hides the ws tools), so the process was not started without them", agyMCPConnectWait)
+			}
 		}
 	}
-	if spec.Effort != "" {
-		p.effort.Store(&spec.Effort)
+	effort := spec.Effort
+	if stored := p.effort.Load(); stored != nil && *stored != "" {
+		effort = *stored
 	}
-	if spec.Model != "" {
-		if err := p.SetModel(spec.Model); err != nil {
+	if effort != "" {
+		p.effort.Store(&effort)
+	}
+	model := spec.Model
+	if stored := p.model.Load(); stored != nil && *stored != "" {
+		model = *stored
+	}
+	if model != "" {
+		if err := p.SetModel(model); err != nil {
 			return fmt.Errorf("model: %w", err)
 		}
 	}
-	if spec.Model == "" && spec.Effort != "" {
-		if err := p.SetEffort(spec.Effort); err != nil {
+	if model == "" && effort != "" {
+		if err := p.SetEffort(effort); err != nil {
 			return fmt.Errorf("effort: %w", err)
 		}
 	}
 	mode := ""
-	if spec.Lead != nil {
+	if spec.Ephemeral {
+		// Most restrictive non-plan native mode: asks permission on tool calls
+		// so agyMapper's ephemeral auto-deny can reject them without stalling.
+		mode = agyCutoverMode
+	} else if spec.Lead != nil {
 		mode = spec.Lead.PermissionMode
 	}
 	if spec.ExecCutover {
@@ -507,6 +576,27 @@ func (p *agyProcess) open(spec StartSpec) error {
 		}
 	}
 	return nil
+}
+
+// Reset closes the prior ACP session on the resident `agy acp` process and
+// opens a fresh session via session/new, rebinding the mapper to the new id.
+func (p *agyProcess) Reset(ctx context.Context) error {
+	if !p.ephemeral {
+		return ErrUnsupported
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if prev := p.m.session(); prev != "" {
+		_, _ = p.callContext(ctx, agyKindClose, "session/close", map[string]any{"sessionId": prev}, agyControlTimeout)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	return p.openSession(ctx, p.ephemeralSpec)
 }
 
 // agyHTTPServer is the ws MCP server entry of a session request: the
@@ -808,6 +898,7 @@ type agyMapper struct {
 	// holds the invoke_subagent calls whose launch has not reported a final
 	// status yet, so a failed launch can end its row.
 	lead         bool
+	ephemeral    bool
 	nativeLaunch map[string]bool
 
 	// lastContext retains the latest usage_update context so KindStatus rate
@@ -1164,6 +1255,30 @@ func (m *agyMapper) request(msg agyMessage, replies lineReplies, now int64) []Ev
 		id = "rpc:" + string(raw)
 	}
 	_, replaying := replies.(silentReplies)
+	if m.ephemeral {
+		// Ephemeral sessions have no interactive approver: deny immediately so
+		// ACP permission requests never stall until caller Timeout.
+		outcome := map[string]any{"outcome": "cancelled"}
+		for _, kind := range []string{"reject_once", "reject_always"} {
+			found := false
+			for _, o := range p.Options {
+				if o.Kind == kind {
+					outcome = map[string]any{"outcome": "selected", "optionId": o.OptionID}
+					found = true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+		replies.send(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      raw,
+			"result":  map[string]any{"outcome": outcome},
+		})
+		return []Event{{Notice: "agy ephemeral session auto-denied permission request for " + cmp.Or(p.ToolCall.Name, p.ToolCall.Title)}}
+	}
 	m.rate.breakRun(replaying)
 	out := m.startTurn(nil, replaying)
 	m.wakeSawUsage = false
@@ -1350,6 +1465,28 @@ func (m *agyMapper) opened(result json.RawMessage) []Event {
 	}
 	var out []Event
 	if r.SessionID != "" {
+		if m.sessionID != "" && m.sessionID != r.SessionID {
+			// Rebinding the mapper to a fresh session after Reset: drop prior
+			// session turn, reply, and approval state.
+			m.inTurn = false
+			m.unsolicitedTurn = false
+			m.wakeStepHadText = false
+			m.wakeSawUsage = false
+			m.stopWakeTimerLocked()
+			m.reply.Reset()
+			m.replyAt = 0
+			m.modelFailure = ""
+			m.lastContext = nil
+			clear(m.outstanding)
+			clear(m.steerText)
+			m.steerOrder = nil
+			clear(m.openCalls)
+			clear(m.pendingTools)
+			clear(m.openBg)
+			clear(m.bgCalls)
+			clear(m.approvals)
+			clear(m.approvalOf)
+		}
 		m.sessionID = r.SessionID
 		out = append(out, Event{SessionID: r.SessionID})
 	}
@@ -1416,7 +1553,7 @@ func (m *agyMapper) configOptions(body json.RawMessage) {
 			}
 		}
 	}
-	if len(models) == 0 && len(efforts) == 0 {
+	if len(models) == 0 && len(efforts) == 0 || m.ephemeral {
 		return
 	}
 	agyChoices.mu.Lock()
@@ -1675,9 +1812,13 @@ type agyUpdate struct {
 // update maps a session/update notification.
 func (m *agyMapper) update(params json.RawMessage, replies lineReplies, now int64) []Event {
 	var p struct {
-		Update agyUpdate `json:"update"`
+		SessionID string    `json:"sessionId"`
+		Update    agyUpdate `json:"update"`
 	}
 	if json.Unmarshal(params, &p) != nil {
+		return nil
+	}
+	if m.ephemeral && p.SessionID != "" && m.sessionID != "" && p.SessionID != m.sessionID {
 		return nil
 	}
 	u := p.Update
@@ -1951,4 +2092,79 @@ func (m *agyMapper) commands(raw []json.RawMessage) []Event {
 		out = append([]Event{m.harnessReport()}, out...)
 	}
 	return out
+}
+
+func (AgyBackend) pruneEphemeralStateDir(dir, keepSession string, maxKeep int) {
+	pruneAgyGeminiDir(dir, keepSession, maxKeep)
+}
+
+// pruneAgyGeminiDir bounds growth inside an isolated agy --gemini-dir by
+// removing the oldest brain/ session directories and .db session files beyond
+// maxKeep, never touching the active keepSession or anything outside geminiDir.
+func pruneAgyGeminiDir(geminiDir, keepSession string, maxKeep int) {
+	if geminiDir == "" || maxKeep <= 0 {
+		return
+	}
+	type agedPath struct {
+		path    string
+		modTime time.Time
+	}
+
+	// Prune brain/<session-id> subdirectories under <geminiDir>/antigravity-cli/brain
+	// and <geminiDir>/brain.
+	for _, brainDir := range []string{
+		filepath.Join(geminiDir, "antigravity-cli", "brain"),
+		filepath.Join(geminiDir, "brain"),
+	} {
+		entries, err := os.ReadDir(brainDir)
+		if err != nil {
+			continue
+		}
+		var dirs []agedPath
+		for _, e := range entries {
+			if !e.IsDir() || (keepSession != "" && e.Name() == keepSession) {
+				continue
+			}
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+			dirs = append(dirs, agedPath{path: filepath.Join(brainDir, e.Name()), modTime: info.ModTime()})
+		}
+		if len(dirs) <= maxKeep {
+			continue
+		}
+		sort.Slice(dirs, func(i, j int) bool { return dirs[i].modTime.Before(dirs[j].modTime) })
+		for _, victim := range dirs[:len(dirs)-maxKeep] {
+			_ = os.RemoveAll(victim.path)
+		}
+	}
+
+	// Prune excess .db files (and matching -wal/-shm sidecars) inside geminiDir.
+	var dbs []agedPath
+	_ = filepath.WalkDir(geminiDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(strings.ToLower(d.Name()), ".db") {
+			return nil
+		}
+		if keepSession != "" && strings.Contains(d.Name(), keepSession) {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		dbs = append(dbs, agedPath{path: path, modTime: info.ModTime()})
+		return nil
+	})
+	if len(dbs) > maxKeep {
+		sort.Slice(dbs, func(i, j int) bool { return dbs[i].modTime.Before(dbs[j].modTime) })
+		for _, victim := range dbs[:len(dbs)-maxKeep] {
+			_ = os.Remove(victim.path)
+			_ = os.Remove(victim.path + "-wal")
+			_ = os.Remove(victim.path + "-shm")
+		}
+	}
 }

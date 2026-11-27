@@ -33,6 +33,7 @@ type werkLoop struct {
 	events          chan Event
 	mapper          *werkMapper
 	lead            bool
+	ephemeral       bool
 	approvalMu      sync.Mutex
 	pendingApproval *werkApproval
 	secrets         []string
@@ -108,8 +109,10 @@ func validateWerkStart(spec StartSpec) error {
 	default:
 		return errors.New("werk backend: a permission level is required")
 	}
-	if s := spec.MCPSession; s == nil || s.URL == "" || s.Token == "" {
-		return errors.New("werk backend: an authenticated MCP session is required")
+	if !spec.Ephemeral {
+		if s := spec.MCPSession; s == nil || s.URL == "" || s.Token == "" {
+			return errors.New("werk backend: an authenticated MCP session is required")
+		}
 	}
 	return nil
 }
@@ -118,56 +121,79 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 	if err := validateWerkStart(spec); err != nil {
 		return nil, err
 	}
-	var instructions []byte
+	var instructions string
 	if spec.Instructions != "" {
-		var err error
-		instructions, err = os.ReadFile(spec.Instructions)
+		raw, err := os.ReadFile(spec.Instructions)
 		if err != nil {
 			return nil, fmt.Errorf("read the werk instruction file: %w", err)
 		}
+		instructions = string(raw)
 	}
-	session := spec.MCPSession
+	if sp := strings.TrimSpace(spec.SystemPrompt); sp != "" {
+		if strings.TrimSpace(instructions) != "" {
+			instructions = strings.TrimRight(instructions, "\n") + "\n\n" + sp
+		} else {
+			instructions = sp
+		}
+	}
+	var secrets []string
+	if spec.sessionSecret != "" {
+		secrets = append(secrets, spec.sessionSecret)
+	}
+	if !spec.Ephemeral && spec.MCPSession != nil && spec.MCPSession.Token != "" {
+		secrets = append(secrets, spec.MCPSession.Token)
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	p := &werkLoop{
 		ctx: ctx, cancel: cancel, done: make(chan struct{}),
 		cmds: make(chan werk.Command, 32), events: make(chan Event, 256),
-		mapper: newWerkMapper(spec.SessionID), lead: spec.Lead != nil,
-		secrets: []string{spec.sessionSecret, session.Token},
+		mapper: newWerkMapper(spec.SessionID), lead: !spec.Ephemeral && spec.Lead != nil,
+		ephemeral: spec.Ephemeral,
+		secrets:   secrets,
 	}
 	p.mapper.restoreUsage(spec.restoredUsage)
-	if spec.Lead != nil {
+	if !spec.Ephemeral && spec.Lead != nil {
 		p.mapper.provider = spec.Provider
 		if p.mapper.provider == "" {
 			p.mapper.provider = string(wscred.ProviderOpenRouter)
 		}
 	}
 	cfg := werk.Config{
-		Dir: spec.Dir, Root: spec.Root, Cwd: spec.workDir(),
-		Authority: werk.Authority(spec.PermissionLevel), Session: spec.SessionID,
-		Lead:         spec.Lead != nil,
-		ClosedTurnID: spec.closedTurnID,
-		Model:        spec.Model, Effort: spec.Effort, Instructions: string(instructions),
-		Skills:   discoverWerkSkills(spec),
-		Endpoint: endpoint, RecoverExec: spec.recoverExec,
-		WS:             &werk.MCP{URL: session.URL, Token: session.Token, Version: werk.ProtocolVersion},
+		Ephemeral:    spec.Ephemeral,
+		Root:         spec.Root,
+		Cwd:          spec.workDir(),
+		Authority:    werk.Authority(spec.PermissionLevel),
+		Session:      spec.SessionID,
+		Model:        spec.Model,
+		Effort:       spec.Effort,
+		Instructions: instructions,
+		Endpoint:     endpoint,
 		SummarySecrets: p.secrets,
-		Emit:           p.emit,
+		Emit:         p.emit,
 	}
-	if spec.compactState != nil {
-		cfg.CompactionState = func(since time.Time) werk.CompactionState { return werk.CompactionState(spec.compactState(since)) }
-	}
-	if cfg.Lead {
-		cfg.Approve = p.requestApproval
-		cfg.RereadFiles = func(paths []string, maxBytes int64) map[string]string {
-			return wsdashboard.ReadWorktreeTextFiles(spec.Root, paths, maxBytes)
+	if !spec.Ephemeral {
+		cfg.Dir = spec.Dir
+		cfg.Lead = spec.Lead != nil
+		cfg.ClosedTurnID = spec.closedTurnID
+		cfg.Skills = discoverWerkSkills(spec)
+		cfg.RecoverExec = spec.recoverExec
+		cfg.WS = &werk.MCP{URL: spec.MCPSession.URL, Token: spec.MCPSession.Token, Version: werk.ProtocolVersion}
+		if spec.compactState != nil {
+			cfg.CompactionState = func(since time.Time) werk.CompactionState { return werk.CompactionState(spec.compactState(since)) }
+		}
+		if cfg.Lead {
+			cfg.Approve = p.requestApproval
+			cfg.RereadFiles = func(paths []string, maxBytes int64) map[string]string {
+				return wsdashboard.ReadWorktreeTextFiles(spec.Root, paths, maxBytes)
+			}
 		}
 	}
 	cfg.ContextWindow = spec.modelContextWindow
-	if spec.sessionConfig != nil {
+	if !spec.Ephemeral && spec.sessionConfig != nil {
 		cfg.WebSearch = resolveWerkWebSearchPolicy(spec.sessionConfig)
 	} else {
-		// Private fixed-profile runners (and specs without layered session
-		// config) never attach provider server-side web search.
+		// Ephemeral sessions and private fixed-profile runners never attach
+		// provider server-side web search.
 		cfg.WebSearch = func() werk.WebSearchPolicy { return werk.WebSearchPolicy{Enabled: false} }
 	}
 	if spec.Provider != "" {
@@ -183,7 +209,7 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 		cancel()
 		return nil, err
 	}
-	if spec.audit != nil {
+	if !spec.Ephemeral && spec.audit != nil {
 		harness, adapter := p.mapper.newAudit(spec.audit.Session.ID)
 		// Capture sequences are local to this loop. Give each opening a
 		// distinct source even when it resumes an existing conversation.
@@ -372,6 +398,30 @@ func (p *werkLoop) SetEffort(effort string) error {
 	return p.command(werk.Command{Type: werk.CmdSet, Effort: &effort})
 }
 
+func (p *werkLoop) Reset(ctx context.Context) error {
+	if !p.ephemeral {
+		return ErrUnsupported
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	ack := make(chan error, 1)
+	if err := p.command(werk.Command{Type: werk.CmdReset, Ack: ack}); err != nil {
+		return err
+	}
+	select {
+	case err := <-ack:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-p.done:
+		return io.ErrClosedPipe
+	}
+}
+
 func (p *werkLoop) Close() error {
 	p.cancel()
 	<-p.done
@@ -382,6 +432,9 @@ func (p *werkLoop) processControls() processControls {
 	ctl := processControls{Process: p, steer: p, reports: p, commands: p}
 	if p.lead {
 		ctl.approval, ctl.mode = p, p
+	}
+	if p.ephemeral {
+		ctl.reset = p
 	}
 	return ctl
 }

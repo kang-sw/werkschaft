@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -113,11 +114,18 @@ func codexEnv(spec StartSpec) []string {
 // reattach sends nothing: replay rebuilds the mapper, and the runner alone
 // decides when to deliver input or reconcile a gap.
 func (b CodexBackend) Start(_ context.Context, spec StartSpec) (Process, error) {
+	if spec.Ephemeral {
+		spec.PermissionLevel = PermissionReadOnly
+		spec.Lead = nil
+		spec.Holder = nil
+		spec.MCPSession = nil
+		spec.audit = nil
+	}
 	if spec.Lead != nil && spec.Holder == nil {
 		return nil, errors.New("codex backend: a hosted lead requires a session holder")
 	}
 	attach := spec.Holder != nil && spec.Holder.id != ""
-	if !attach && spec.MCPSession == nil {
+	if !attach && !spec.Ephemeral && spec.MCPSession == nil {
 		return nil, errors.New("codex backend: the daemon's HTTP MCP route is required; no session was started without ws tools")
 	}
 	mode, policy, err := codexStartMode(spec)
@@ -155,6 +163,7 @@ func (b CodexBackend) Start(_ context.Context, spec StartSpec) (Process, error) 
 	p := &codexProcess{
 		streamProcess: stream, m: mapper, epoch: newMCPToken(),
 		model: spec.Model, effort: spec.Effort, mode: mode, policy: policy, worker: spec.Lead == nil,
+		ephemeral: spec.Ephemeral, ephemeralSpec: spec,
 	}
 	holder, pid, _ := stream.HolderInfo()
 	if p.worker && cmd.Process != nil {
@@ -204,6 +213,9 @@ type codexProcess struct {
 	policy string
 	// worker marks a spawned child, whose sandbox follows its authority.
 	worker bool
+	// ephemeral marks an EphemeralPool slot that can reset via warm thread/start.
+	ephemeral     bool
+	ephemeralSpec StartSpec
 }
 
 func (p *codexProcess) processControls() processControls {
@@ -211,12 +223,58 @@ func (p *codexProcess) processControls() processControls {
 	if p.worker {
 		controls.reports = p
 	}
+	if p.ephemeral {
+		controls.reset = p
+	}
 	return controls
 }
 
 func (p *codexProcess) call(kind, method string, params map[string]any) (json.RawMessage, error) {
+	return p.callContext(context.Background(), kind, method, params)
+}
+
+func (p *codexProcess) callContext(ctx context.Context, kind, method string, params map[string]any) (json.RawMessage, error) {
 	id := "wsc/" + kind + "/" + p.epoch + "/" + strconv.FormatUint(p.seq.Add(1), 10)
-	return p.requestBodyID(id, method, map[string]any{"method": method, "params": params}, codexRequestTimeout)
+	return p.requestBodyIDContext(ctx, id, method, map[string]any{"method": method, "params": params}, codexRequestTimeout)
+}
+
+func (p *codexProcess) threadParams(spec StartSpec) (map[string]any, error) {
+	params := map[string]any{
+		"cwd":    spec.workDir(),
+		"config": codexThreadConfig(spec),
+	}
+	if spec.Ephemeral {
+		params["ephemeral"] = true
+	}
+	var devInstructions string
+	if spec.Instructions != "" {
+		text, err := os.ReadFile(spec.Instructions)
+		if err != nil {
+			return nil, fmt.Errorf("read instruction file: %w", err)
+		}
+		devInstructions = string(text)
+	}
+	if sp := strings.TrimSpace(spec.SystemPrompt); sp != "" {
+		if strings.TrimSpace(devInstructions) != "" {
+			devInstructions = strings.TrimRight(devInstructions, "\n") + "\n\n" + sp
+		} else {
+			devInstructions = sp
+		}
+	}
+	if devInstructions != "" {
+		params["developerInstructions"] = devInstructions
+	}
+	model := p.model
+	if model == "" {
+		model = spec.Model
+	}
+	if model != "" {
+		params["model"] = model
+	}
+	if p.mode != "" {
+		params["sandbox"], params["approvalPolicy"] = p.mode, p.policy
+	}
+	return params, nil
 }
 
 func (p *codexProcess) open(spec StartSpec) error {
@@ -235,25 +293,12 @@ func (p *codexProcess) open(spec StartSpec) error {
 		return err
 	}
 
-	params := map[string]any{
-		"cwd":    spec.workDir(),
-		"config": codexThreadConfig(spec),
-	}
-	if spec.Instructions != "" {
-		text, err := os.ReadFile(spec.Instructions)
-		if err != nil {
-			return fmt.Errorf("read instruction file: %w", err)
-		}
-		params["developerInstructions"] = string(text)
-	}
-	if spec.Model != "" {
-		params["model"] = spec.Model
-	}
-	if p.mode != "" {
-		params["sandbox"], params["approvalPolicy"] = p.mode, p.policy
+	params, err := p.threadParams(spec)
+	if err != nil {
+		return err
 	}
 	method := "thread/start"
-	if spec.SessionID != "" {
+	if !spec.Ephemeral && spec.SessionID != "" {
 		params["threadId"] = spec.SessionID
 		// The open response only needs metadata, and history can exceed the stream's line limit.
 		params["excludeTurns"] = true
@@ -262,10 +307,29 @@ func (p *codexProcess) open(spec StartSpec) error {
 	if _, err := p.call("open", method, params); err != nil {
 		return fmt.Errorf("%s: %w", method, err)
 	}
+	if spec.Ephemeral {
+		return nil
+	}
 	// A listing failure is not an admission failure: the harness default
 	// still works. Expose no guessed model names or effort levels.
 	if _, err := p.call("models", "model/list", map[string]any{}); err != nil {
 		p.deliver(Event{Notice: "codex model/list: " + err.Error()})
+	}
+	return nil
+}
+
+// Reset starts a fresh ephemeral thread on the resident codex app-server
+// process, clearing conversation context without restarting the CLI.
+func (p *codexProcess) Reset(ctx context.Context) error {
+	if !p.ephemeral {
+		return ErrUnsupported
+	}
+	params, err := p.threadParams(p.ephemeralSpec)
+	if err != nil {
+		return err
+	}
+	if _, err := p.callContext(ctx, "open", "thread/start", params); err != nil {
+		return fmt.Errorf("thread/start: %w", err)
 	}
 	return nil
 }
@@ -282,6 +346,21 @@ func (p *codexProcess) open(spec StartSpec) error {
 // fs.* tools are pre-approved too, for leads and workers, and
 // features.shell_tool is false.
 func codexThreadConfig(spec StartSpec) map[string]any {
+	if spec.Ephemeral {
+		// Ephemeral launches attach no ws-mcp and shadow bundled plugin MCP
+		// servers as disabled (with a placeholder URL, since Codex rejects
+		// enabled=false without a transport), while disabling subagents,
+		// shell_tool, and web search.
+		return map[string]any{
+			"agents":     map[string]any{"enabled": false},
+			"web_search": "disabled",
+			"features":   map[string]any{"shell_tool": false},
+			"mcp_servers": map[string]any{
+				"ws":     map[string]any{"url": "http://127.0.0.1:0/disabled", "enabled": false},
+				"wsflow": map[string]any{"url": "http://127.0.0.1:0/disabled", "enabled": false},
+			},
+		}
+	}
 	server := map[string]any{
 		"url": spec.MCPSession.URL, "bearer_token_env_var": EnvMCPSessionToken, "required": true,
 	}

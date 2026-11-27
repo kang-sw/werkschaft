@@ -62,6 +62,16 @@ type StartSpec struct {
 	// Instructions is the composed instruction file to append to the
 	// harness's own system prompt; empty appends none.
 	Instructions string
+	// Ephemeral launches a lightweight non-persistent process without session
+	// directory, holder, audit, or ws-MCP plumbing (for EphemeralPool).
+	Ephemeral bool
+	// SystemPrompt is inline system prompt text appended without writing a
+	// file to disk (used by Ephemeral launches).
+	SystemPrompt string
+	// ephemeralStateDir isolates native harness state for Ephemeral launches
+	// whose backend declares LifecyclePolicy.EphemeralIsolatedStateDir so the
+	// user's home harness state directory is untouched.
+	ephemeralStateDir string
 	// WSMCP is the ws-mcp server to attach, carrying the profile's ws tool
 	// allowlist; nil when the profile allows no ws tool.
 	WSMCP *MCPCommand
@@ -271,6 +281,13 @@ type workerRecoverer interface {
 	recoveryReply(startedAt int64) (message, turnErr string, taken []string, err error)
 }
 
+// conversationResetter is a Process that clears its conversation context
+// in-stream between turns (for EphemeralPool warm reuse). ErrUnsupported
+// tells the pool to close and restart the slot instead.
+type conversationResetter interface {
+	Reset(ctx context.Context) error
+}
+
 // processControls is the runner's control boundary for one launched process.
 // Nil optional controls are unavailable; required Process controls still
 // decide support from their arguments (notably Pi model/effort changes).
@@ -285,6 +302,7 @@ type processControls struct {
 	commands commandRunner
 	turns    turnProber
 	recovery workerRecoverer
+	reset    conversationResetter
 	// replacesTurn marks a steer that ends the running turn and starts
 	// another (agy's replacement prompt) rather than joining it: a tool
 	// call in flight loses its turn to it.
@@ -318,10 +336,18 @@ func controlsFor(proc Process) processControls {
 	c.commands, _ = proc.(commandRunner)
 	c.turns, _ = proc.(turnProber)
 	c.recovery, _ = proc.(workerRecoverer)
+	c.reset, _ = proc.(conversationResetter)
 	if r, ok := proc.(turnReplacingSteerer); ok {
 		c.replacesTurn = r.SteerReplacesTurn()
 	}
 	return c
+}
+
+func (c processControls) resetConversation(ctx context.Context) error {
+	if c.reset == nil {
+		return ErrUnsupported
+	}
+	return c.reset.Reset(ctx)
 }
 
 func (c processControls) runCommand(cmd wsinbox.Command) error {

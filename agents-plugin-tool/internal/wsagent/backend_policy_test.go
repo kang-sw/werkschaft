@@ -63,7 +63,7 @@ func TestBuiltinBackendPolicyTable(t *testing.T) {
 			modes:     map[PermissionLevel]string{PermissionReadOnly: "read-only", PermissionWorkdirWrite: "workspace-write", PermissionFull: "danger-full-access"},
 			legacy:    map[string]PermissionLevel{"read-only": PermissionReadOnly, "workspace-write": PermissionWorkdirWrite, "danger-full-access": PermissionFull}},
 		{backend: BackendAgy, terminal: true, admitter: true,
-			lifecycle: LifecyclePolicy{ComposedLeadInstructions: true, LeadHTTPMCP: true, TurnActivity: true, InternalTurns: true, WorkerLog: true, SingleHardCompactionSteer: true}},
+			lifecycle: LifecyclePolicy{ComposedLeadInstructions: true, LeadHTTPMCP: true, TurnActivity: true, InternalTurns: true, WorkerLog: true, SingleHardCompactionSteer: true, EphemeralIsolatedStateDir: true}},
 	} {
 		t.Run(tc.backend, func(t *testing.T) {
 			reg, ok := regs[tc.backend]
