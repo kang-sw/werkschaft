@@ -1022,13 +1022,14 @@
 
     var wantClass = "wbupdate-item-id wbupdate-cap wbupdate-cls-" + state.cls;
     if (chip.className !== wantClass) chip.className = wantClass;
-    var tip = "(" + id + ")" + (state.title ? " " + state.title : "");
+    var tip = "(" + id + ")" + (state.title ? " " + state.title : "") + (state.text ? "\n" + state.text : "");
     if (chip.getAttribute("title") !== tip) chip.setAttribute("title", tip);
 
     var idEl = chip.querySelector(".wbupdate-cap-id");
     var clsEl = chip.querySelector(".wbupdate-cap-cls");
     var ttlEl = chip.querySelector(".wbupdate-cap-ttl");
     var arrEl = chip.querySelector(".wbupdate-cap-arr");
+    var markEl = chip.querySelector(".wbupdate-cap-mark");
     if (!idEl || !clsEl || !ttlEl) {
       chip.textContent = "";
       idEl = doc.createElement("span"); idEl.className = "wbupdate-cap-id";
@@ -1037,6 +1038,7 @@
       chip.appendChild(idEl);
       chip.appendChild(clsEl);
       chip.appendChild(ttlEl);
+      markEl = null;
       if (chip.tagName === "A") {
         arrEl = doc.createElement("span");
         arrEl.className = "wbupdate-cap-arr";
@@ -1044,6 +1046,13 @@
         arrEl.textContent = "↗";
         chip.appendChild(arrEl);
       }
+    }
+    if (!markEl) {
+      markEl = doc.createElement("span");
+      markEl.className = "wbupdate-cap-mark";
+      markEl.setAttribute("aria-hidden", "true");
+      markEl.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>';
+      chip.insertBefore(markEl, arrEl || null);
     }
     var idText = "(" + id + ")";
     if (idEl.textContent !== idText) idEl.textContent = idText;

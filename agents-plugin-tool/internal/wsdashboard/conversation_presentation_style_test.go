@@ -115,3 +115,33 @@ func TestConversationPresentationTranslationContract(t *testing.T) {
 		})
 	}
 }
+
+// Option C compact whiteboard-update capsule contract (chat-wb-card-compact).
+func TestWbUpdateCapsuleCompactOptionCContract(t *testing.T) {
+	data, err := os.ReadFile("assets/dashboard-conversation.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(data)
+	for _, want := range []string{
+		"height: 25px;",
+		"background: color-mix(in srgb, rgb(var(--wb-qcap-rgb)) 16%, var(--wb-card))",
+		".wbupdate-qitem[data-wb-state=\"settled\"] .wbupdate-cap { background: transparent;",
+		".wbupdate-qitem[data-wb-state=\"settled\"] .wbupdate-cap-cls { background: transparent;",
+		".wbupdate-qitem[data-wb-state=\"settled\"] .wbupdate-cap-mark { display: inline-flex; }",
+		".wbupdate-ans { display: none; }",
+		"--wb-qcap-badge: var(--wb-policy)", "--wb-qcap-badge: var(--wb-technical)",
+		"--wb-qcap-badge: var(--wb-announced)", "--wb-qcap-badge: var(--wb-ph-think)",
+		"--wb-qcap-check: 106 79 196;",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("css missing %q", want)
+		}
+	}
+	if strings.Count(css, "--wb-qcap-check: 168 140 245;") != 2 {
+		t.Error("dark check tint must be the muted purple in both dark blocks")
+	}
+	if strings.Contains(css, "--wb-qcap-check: 162 166 173") || strings.Contains(css, "--wb-qcap-check: 95 100 107") {
+		t.Error("check class must not use neutral gray")
+	}
+}

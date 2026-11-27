@@ -32,7 +32,7 @@ const captureDir = process.env.WS_QUESTION_CARDS_CAPTURE_DIR || '';
     await page.goto(`${base}/s/qcards?lang=en&theme=dark`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.wbupdate-cap[data-wb-item-id="1"]', { timeout: 10000 });
 
-    // 1. All 4 classes hydrated as 1-line 22px cellophane capsules + outside dim status in .wbupdate-ans.
+    // 1. All 4 classes hydrated as 1-line 25px compact Option C capsules + outside dim status in .wbupdate-ans.
     const initial = await page.evaluate(() => {
       const card = document.querySelector('[data-entry="e-001"] .wbupdate-topic');
       const items = [1, 2, 3, 4, 5, 6, 7, 8].map(id => {
@@ -67,7 +67,7 @@ const captureDir = process.env.WS_QUESTION_CARDS_CAPTURE_DIR || '';
       assert.ok(it.clsText && it.clsText.length > 0, `item ${it.id} class micro-badge`);
       assert.ok(it.ttlText && it.ttlText.length > 0, `item ${it.id} title`);
       assert.equal(it.arrText, '↗', `item ${it.id} hover arrow`);
-      assert.equal(it.height, 22, `item ${it.id} capsule height must be 22px`);
+      assert.equal(it.height, 25, `item ${it.id} capsule height must be 25px`);
     }
     // Open items 1..4 are open unanswered (ask-time row for item 1 must NOT drive settled status).
     for (let i = 0; i < 4; i++) {
