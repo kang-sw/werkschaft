@@ -1508,15 +1508,30 @@
   function convMotionInit() {
     if (convMotionEngine) return convMotionEngine;
     if (typeof doc === "undefined" || !doc || !doc.getElementById("convo")) return null;
-    convMotionEngine = WsConvMotion.mount({});
-    return convMotionEngine;
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("convMotion", "convMotionInit") : null;
+    try {
+      convMotionEngine = WsConvMotion.mount({});
+      return convMotionEngine;
+    } finally {
+      if (jTok) WsJank.end(jTok);
+    }
   }
   function convMotionSync() {
-    var eng = convMotionInit();
-    if (eng) eng.syncFromDOM();
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("convMotion", "convMotionSync") : null;
+    try {
+      var eng = convMotionInit();
+      if (eng) eng.syncFromDOM();
+    } finally {
+      if (jTok) WsJank.end(jTok);
+    }
   }
   function convMotionRelayout() {
-    if (convMotionEngine) convMotionEngine.relayout();
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("convMotion", "convMotionRelayout") : null;
+    try {
+      if (convMotionEngine) convMotionEngine.relayout();
+    } finally {
+      if (jTok) WsJank.end(jTok);
+    }
   }
   if (typeof doc !== "undefined" && doc && doc.getElementById && doc.getElementById("convo")) {
     convMotionInit();

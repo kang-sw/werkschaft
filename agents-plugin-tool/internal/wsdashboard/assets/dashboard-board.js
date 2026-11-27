@@ -58,6 +58,8 @@
     var board = name === "board";
     if (board && boardReturnTimer) still = true;
     if (el.getAttribute("data-h") === hash && !(board && Object.keys(boardPending).length)) { if (board) { deferred = null; boardReturnApply(); } if (name === "rail") { if (railGate) railGate.forget(); if (typeof html !== "string") railRendered = html; } if (name === "tree" && typeof html !== "string") treeRendered = html; if (name === "entries" && typeof html !== "string") entryRendered = html; if (name === "panels" && typeof html !== "string") panelRendered = html; return; }
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("board", { op: "swap", region: typeof name === "string" ? name : "" }) : null;
+    try {
     if (board && window.WsOverview && window.WsOverview.holding()) {
       boardOverviewHeld = { hash: hash, html: html };
       patchOverviewPreview(html);
@@ -242,6 +244,9 @@
     if (name === "rail") { railMarks(); railScrollTo(railTop); railRefocus(railFoc); }
     if (name === "head" || name === "convlive") leadSwapped(name);
     if (name === "rail" || name === "sessions") apScan(el, name);
+    } finally {
+      if (jTok) WsJank.end(jTok);
+    }
   }
 
   // --- board morph: unchanged topics keep their nodes -------------------------
@@ -705,6 +710,8 @@
   // nodes it inserted, in order, for the caller to prepare.
   function morphBoard(el, html) {
     var seen = {}, want = [], ins = [], live = {}, liveClosed = [], pages = [], more = null, grafts = [], changed = [];
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("board", "morphBoard") : null;
+    try {
     var docked = window.WsCards.docked();
     Array.prototype.forEach.call(el.children, function (n) {
       var k = topicKey(n);
@@ -834,6 +841,9 @@
     frameKept(reuse);
     if (typeof virtualPrune === "function") virtualPrune();
     return ins;
+    } finally {
+      if (jTok) WsJank.end(jTok, { count: ins.length });
+    }
   }
   // --- incremental board inputs ---------------------------------------------
   // These are immutable incoming snapshots, not the live DOM. Hidden pages,
@@ -1393,11 +1403,15 @@
   function boardFlushViewed(explicit) {
     boardReleaseFrame = 0;
     if (!Object.keys(boardPending).length) return;
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("board", "boardFlushViewed") : null;
     boardRelease = !!explicit;
     try {
       if (boardLatest) swap("board", boardLatest.hash, boardLatest.html, true);
       boardPendingBadge();
-    } finally { boardRelease = false; }
+    } finally {
+      boardRelease = false;
+      if (jTok) WsJank.end(jTok);
+    }
   }
   // A card held for an active editor releases when the editor leaves it;
   // visible cards' staged updates wait until they leave the viewport.

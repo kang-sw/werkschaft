@@ -915,33 +915,38 @@
     });
   }
   function outboxAcked(m, id) {
-    m.acked = true;
-    m.id = id;
-    m.at = Date.now();
-    outboxUnrow(m);
-    if (m.body.command) outboxDrop(m);
-    else {
-      var live = doc.querySelector("#r-convlive .clive");
-      // A replacement empty live region already reflects an authoritative
-      // render; do not resurrect the held message after that render.
-      var emptyRender = m.live && live && m.live !== live && !Array.prototype.some.call(live.children, function (el) { return el.classList.contains("held"); });
-      if (lastUserEntry() !== m.user || emptyRender) outboxDrop(m);
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("composer", "outboxAcked") : null;
+    try {
+      m.acked = true;
+      m.id = id;
+      m.at = Date.now();
+      outboxUnrow(m);
+      if (m.body.command) outboxDrop(m);
       else {
-        m.el = outboxBubble(m);
-        m.lingerTimer = setTimeout(function () { outboxDrop(m); }, OUTBOX_LINGER);
+        var live = doc.querySelector("#r-convlive .clive");
+        // A replacement empty live region already reflects an authoritative
+        // render; do not resurrect the held message after that render.
+        var emptyRender = m.live && live && m.live !== live && !Array.prototype.some.call(live.children, function (el) { return el.classList.contains("held"); });
+        if (lastUserEntry() !== m.user || emptyRender) outboxDrop(m);
+        else {
+          m.el = outboxBubble(m);
+          m.lingerTimer = setTimeout(function () { outboxDrop(m); }, OUTBOX_LINGER);
+        }
+        boardFlushViewed(false);
       }
-      boardFlushViewed(false);
+      // A fresh draft numbers its images from 1 again once nothing, sent or
+      // not, could name a number.
+      if (!outboxUnsent() && !imgs.length && !(typeof textRefs !== "undefined" && textRefs.length) && !ctext.value && !chipList().length && !topicNotes().length) {
+        imgSeq = 0;
+        if (typeof txtSeq === "number") txtSeq = 0;
+      }
+      saveDraft();
+      outboxSync();
+      followConvo();
+      if (m.cancel) cancelEntry(id, function () { m.cancel = false; outboxSync(); followConvo(); });
+    } finally {
+      if (jTok) WsJank.end(jTok);
     }
-    // A fresh draft numbers its images from 1 again once nothing, sent or
-    // not, could name a number.
-    if (!outboxUnsent() && !imgs.length && !(typeof textRefs !== "undefined" && textRefs.length) && !ctext.value && !chipList().length && !topicNotes().length) {
-      imgSeq = 0;
-      if (typeof txtSeq === "number") txtSeq = 0;
-    }
-    saveDraft();
-    outboxSync();
-    followConvo();
-    if (m.cancel) cancelEntry(id, function () { m.cancel = false; outboxSync(); followConvo(); });
   }
   function outboxDrop(m) {
     var i = outbox.indexOf(m);

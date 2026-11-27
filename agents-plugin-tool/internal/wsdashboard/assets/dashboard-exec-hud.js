@@ -585,5 +585,10 @@
   // one queued.
   function execWake(rev) {
     if (!xhEnabled || xhAbsent) return;
-    xhFetch();
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("exec", "execWake") : null;
+    try {
+      xhFetch();
+    } finally {
+      if (jTok) WsJank.end(jTok);
+    }
   }

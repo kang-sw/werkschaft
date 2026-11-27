@@ -934,19 +934,24 @@
     }
   }
   function shDrop(ent, leaving) {
-    if (shHandoff) {
-      if (shHandoff.ent === ent) shClearHandoff();
-      else if (shHandoff.from === ent) shFinishHandoff(shHandoff.token);
-    }
-    clearTimeout(ent.headTimer); ent.headTimer = null;
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("shell", "shDrop") : null;
     try {
-      if (leaving && ent.el.contentWindow.wsFinishSessionLeave) ent.el.contentWindow.wsFinishSessionLeave();
-      else if (ent.el.contentWindow.wsSaveSessionDraft) ent.el.contentWindow.wsSaveSessionDraft();
-      if (ent.el.contentWindow.wsSaveSessionView) ent.el.contentWindow.wsSaveSessionView();
-    } catch (e) { /* only safe or never-shown documents are discarded */ }
-    shFrames.splice(shFrames.indexOf(ent), 1);
-    if (shWant === ent) shWant = null;
-    ent.el.remove();
+      if (shHandoff) {
+        if (shHandoff.ent === ent) shClearHandoff();
+        else if (shHandoff.from === ent) shFinishHandoff(shHandoff.token);
+      }
+      clearTimeout(ent.headTimer); ent.headTimer = null;
+      try {
+        if (leaving && ent.el.contentWindow.wsFinishSessionLeave) ent.el.contentWindow.wsFinishSessionLeave();
+        else if (ent.el.contentWindow.wsSaveSessionDraft) ent.el.contentWindow.wsSaveSessionDraft();
+        if (ent.el.contentWindow.wsSaveSessionView) ent.el.contentWindow.wsSaveSessionView();
+      } catch (e) { /* only safe or never-shown documents are discarded */ }
+      shFrames.splice(shFrames.indexOf(ent), 1);
+      if (shWant === ent) shWant = null;
+      ent.el.remove();
+    } finally {
+      if (jTok) WsJank.end(jTok);
+    }
   }
   function shPrune() {
     var limit = Math.max(1, window.WsShell.cacheLimit || 0);
@@ -1117,6 +1122,8 @@
     clearTimeout(ent.headTimer); ent.headTimer = null;
     var was = shOn;
     if (was === ent || shLeaving && shLeaving.ent === was) return;
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("shell", "shShow") : null;
+    try {
     // Async tool/draft callbacks can change eligibility during a cold load.
     // Keep the ready destination, but settle the draft decision before
     // hiding or destroying an outgoing document that is no longer safe.
@@ -1184,6 +1191,9 @@
     shScroll(ent);
     if (ent.title) doc.title = ent.title;
     if (!shSettingsEntry && !(typeof rp !== "undefined" && rp.P)) try { ent.el.contentWindow.focus(); } catch (x) { /* unloading */ }
+    } finally {
+      if (jTok) WsJank.end(jTok);
+    }
   }
   // Private UI state only: no daemon protocol or persistence contract changes.
   function shSettings(ent) { shSend(ent, "settings", { layout: layoutMode, input: inputMode, stageFill: typeof stageFill !== "undefined" && !!stageFill, extraMotion: typeof extraMotion === "undefined" ? true : !!extraMotion }); }
@@ -1370,6 +1380,10 @@
           var dest;
           try { dest = new URL(m.href, location.origin); } catch (x) { return; }
           shOpenSettings(dest);
+        } else if (m.wsShell === "jank-stall" && typeof WsJank !== "undefined" && WsJank) {
+          WsJank.ingest(m.stall);
+        } else if (m.wsShell === "jank-minor" && typeof WsJank !== "undefined" && WsJank) {
+          WsJank.ingestMinor(m);
         }
         return;
       }
@@ -1434,6 +1448,12 @@
             broadcastSettings = true;
           }
           if (broadcastSettings) shFrames.forEach(function (f) { if (f !== ent) shSettings(f); });
+          break;
+        case "jank-stall":
+          if (typeof WsJank !== "undefined" && WsJank) WsJank.ingest(m.stall);
+          break;
+        case "jank-minor":
+          if (typeof WsJank !== "undefined" && WsJank) WsJank.ingestMinor(m);
           break;
       }
     });
@@ -1635,6 +1655,10 @@
       else if (m.wsShell === "sync") { sent = {}; queueHead(); shPost("title", { title: doc.title }); }
     });
     queue();
+    if (typeof WsJank !== "undefined" && WsJank) {
+      WsJank.setRelay(function (stall) { shPost("jank-stall", { stall: stall }); });
+      WsJank.setMinorRelay(function (minor) { shPost("jank-minor", minor); });
+    }
     shPost("ready", { hideAck: true });
     shPost("title", { title: doc.title });
     if (window.scrollY) send("scroll", { y: Math.round(window.scrollY) });
@@ -1853,9 +1877,54 @@
       else if (s.state === "apply-error") toast(wsT("js.update.applyfailed", m), { kind: "warn", sticky: true, dismiss: close, actions: pageAct });
     });
   }
+  var jankMenuMounted = false;
+  function jankMenuMount() {
+    if (jankMenuMounted || window !== window.top) return;
+    if (!root || !root.hasAttribute("data-sysopen")) return;
+    var card = gmenu && gmenu.querySelector(".gmenu");
+    if (!card || typeof WsJank === "undefined" || !WsJank) return;
+    jankMenuMounted = true;
+    var note = card.querySelector(".gn");
+    var head = doc.createElement("span");
+    head.id = "jank-menu-head";
+    head.className = "gt gt2";
+    head.textContent = wsT("js.jank.section");
+    card.insertBefore(head, note);
+    var btn = doc.createElement("button");
+    btn.type = "button";
+    btn.id = "jank-open";
+    var kbd = doc.createElement("span");
+    kbd.className = "gk";
+    kbd.textContent = "⚡";
+    var lbl = doc.createElement("span");
+    lbl.textContent = wsT("js.jank.open");
+    var badge = doc.createElement("span");
+    badge.id = "jank-badge";
+    badge.className = "d-jank-badge";
+    badge.hidden = true;
+    btn.appendChild(kbd);
+    btn.appendChild(lbl);
+    btn.appendChild(badge);
+    card.insertBefore(btn, note);
+    function syncBadge(count) {
+      var n = typeof count === "number" ? count : WsJank.count();
+      badge.textContent = n > 0 ? String(n) : "";
+      badge.hidden = n <= 0;
+    }
+    syncBadge(WsJank.count());
+    WsJank.onChange(syncBadge);
+    btn.addEventListener("click", function () {
+      WsJank.openModal({
+        copyText: typeof copyText === "function" ? copyText : null,
+        triggerEl: $("gear") || btn,
+        closeMenu: function () { if (typeof railPopClose === "function") railPopClose(true); }
+      });
+    });
+  }
   if (!shell) trackerStart();
   window.addEventListener("werkschaft-update-ready", desktopUpdate);
   desktopUpdate();
+  jankMenuMount();
   syncSpinnerPhases(doc);
   connect();
 })();

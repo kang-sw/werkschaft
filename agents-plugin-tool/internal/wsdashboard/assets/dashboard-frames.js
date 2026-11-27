@@ -38,30 +38,35 @@
   var mountTimer = 0;
   function mountFrame(p) {
     if (shHidden || (typeof shStaged !== "undefined" && shStaged)) return p;
-    var f = doc.createElement("iframe");
-    var isMockup = p.hasAttribute("data-mockup-src");
-    Array.prototype.forEach.call(p.attributes, function (a) { if (a.name !== "data-sandbox") f.setAttribute(a.name, a.value); });
-    f.setAttribute("sandbox", p.getAttribute("data-sandbox") || "");
-    if (isMockup) {
-      f.setAttribute("src", p.getAttribute("data-mockup-src") || "");
-    } else {
-      f.setAttribute("srcdoc", p.getAttribute("data-srcdoc") || "");
-      // A frame never laid out (no height yet) grows its topic when its first
-      // height lands, and a frame mounted again (unmountFrame) may land at
-      // another height than the one its placeholder kept (a narrower column,
-      // a diagram drawn again): topicResized keeps the view through either
-      // (wbFirst). The marks a board swap left for a frame's first height
-      // (wbKeep, wbGrow) stay on a frame unmounted before that height.
-      if (!p.style.height || p.wbUnmounted) f.wbFirst = true;
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("frames", "mountFrame") : null;
+    try {
+      var f = doc.createElement("iframe");
+      var isMockup = p.hasAttribute("data-mockup-src");
+      Array.prototype.forEach.call(p.attributes, function (a) { if (a.name !== "data-sandbox") f.setAttribute(a.name, a.value); });
+      f.setAttribute("sandbox", p.getAttribute("data-sandbox") || "");
+      if (isMockup) {
+        f.setAttribute("src", p.getAttribute("data-mockup-src") || "");
+      } else {
+        f.setAttribute("srcdoc", p.getAttribute("data-srcdoc") || "");
+        // A frame never laid out (no height yet) grows its topic when its first
+        // height lands, and a frame mounted again (unmountFrame) may land at
+        // another height than the one its placeholder kept (a narrower column,
+        // a diagram drawn again): topicResized keeps the view through either
+        // (wbFirst). The marks a board swap left for a frame's first height
+        // (wbKeep, wbGrow) stay on a frame unmounted before that height.
+        if (!p.style.height || p.wbUnmounted) f.wbFirst = true;
+      }
+      if (p.wbKeep) f.wbKeep = true;
+      if (p.wbGrow) f.wbGrow = true;
+      if (p.parentNode) p.parentNode.replaceChild(f, p);
+      if (f.contentWindow) {
+        frameWins.set(f.contentWindow, f);
+        if (typeof virtualStats !== "undefined") virtualStats.frameIndexes++;
+      }
+      return f;
+    } finally {
+      if (jTok) WsJank.end(jTok);
     }
-    if (p.wbKeep) f.wbKeep = true;
-    if (p.wbGrow) f.wbGrow = true;
-    if (p.parentNode) p.parentNode.replaceChild(f, p);
-    if (f.contentWindow) {
-      frameWins.set(f.contentWindow, f);
-      if (typeof virtualStats !== "undefined") virtualStats.frameIndexes++;
-    }
-    return f;
   }
   function mountFrames(el) {
     if (shHidden || (typeof shStaged !== "undefined" && shStaged)) return;
@@ -84,14 +89,20 @@
   function mountSlice() {
     mountTimer = 0;
     if (shHidden || (typeof shStaged !== "undefined" && shStaged)) { mountList = []; mountTask = false; return; }
-    var t = performance.now();
-    mountTask = true;
-    while (mountList.length && performance.now() - t < 8) {
-      var p = mountList.shift();
-      if (frameShown(p) && frameNear(p)) mountFrame(p);
+    var jTok = mountList.length && typeof WsJank !== "undefined" && WsJank ? WsJank.begin("frames", "mountSlice") : null;
+    var jCount = 0;
+    try {
+      var t = performance.now();
+      mountTask = true;
+      while (mountList.length && performance.now() - t < 8) {
+        var p = mountList.shift();
+        if (frameShown(p) && frameNear(p)) { mountFrame(p); jCount++; }
+      }
+      mountTask = mountList.length > 0;
+      if (mountTask) mountTimer = setTimeout(mountSlice, 0);
+    } finally {
+      if (jTok) WsJank.end(jTok, { count: jCount });
     }
-    mountTask = mountList.length > 0;
-    if (mountTask) mountTimer = setTimeout(mountSlice, 0);
   }
   function frameToggle(e) {
     var d = e.target;
@@ -475,6 +486,9 @@
   }
   function applyFrameHeights() {
     if (shHidden) { frameSizes.clear(); frameSizeFrame = 0; return; }
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("frames", "applyFrameHeights") : null;
+    var jCount = 0;
+    try {
     // While overview is active or transitioning, off-preview board frames are
     // inside display:none containers and report collapsed heights; defer them
     // with a one-shot release listener while sizing Quick Look preview frames
@@ -541,6 +555,10 @@
     });
     if (kept) kept.h.apply();
     if (pinLayout) freePinLayout();
+    jCount = batch.size;
+    } finally {
+      if (jTok) WsJank.end(jTok, { count: jCount });
+    }
   }
   window.wbCardFindFrame = { post: postDoc };
   window.addEventListener("message", function (e) {
