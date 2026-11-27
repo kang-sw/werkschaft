@@ -95,12 +95,13 @@ type tokenAgents struct {
 // Override lifecycle and host-binding methods: f.runner is already started
 // and closed by the fixture, so StartDaemon must not rebind or tear down its
 // endpoint, live host, audit sink, or SQLite metadata store.
-func (a *tokenAgents) Start(func(string, string))              {}
-func (a *tokenAgents) Close()                                  {}
-func (a *tokenAgents) SetEndpoint(string)                      {}
-func (a *tokenAgents) SetLiveHost(wsdashboard.LiveHost)        {}
-func (a *tokenAgents) SetAuditSink(wsaudit.Sink)               {}
-func (a *tokenAgents) SetMeta(*wsmeta.Store, *wsmeta.Snapshot) {}
+func (a *tokenAgents) Start(func(string, string))                                {}
+func (a *tokenAgents) StartForPublication(func(string, string), <-chan struct{}) {}
+func (a *tokenAgents) Close()                                                    {}
+func (a *tokenAgents) SetEndpoint(string)                                        {}
+func (a *tokenAgents) SetLiveHost(wsdashboard.LiveHost)                          {}
+func (a *tokenAgents) SetAuditSink(wsaudit.Sink)                                 {}
+func (a *tokenAgents) SetMeta(*wsmeta.Store, *wsmeta.Snapshot)                   {}
 func (a *tokenAgents) ResolveMCPToken(token string) (wsdashboard.ProxyHello, <-chan struct{}, bool) {
 	h, ok := a.hellos[token]
 	return h, nil, ok
