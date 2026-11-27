@@ -12,6 +12,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 // gitSearchFixture is a lead fixture whose ws-mcp allowlists git.search,
@@ -22,15 +23,6 @@ type gitSearchFixture struct {
 	// root is the registered root, canonical; repo is the repository in it.
 	root string
 	repo string
-}
-
-func canonicalTestDir(t *testing.T, path string) string {
-	t.Helper()
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return resolved
 }
 
 func newGitSearchFixture(t *testing.T) *gitSearchFixture {
@@ -44,7 +36,7 @@ func newGitSearchFixture(t *testing.T) *gitSearchFixture {
 	f := newWhiteboardFixture(t)
 	t.Setenv("WS_MCP_ALLOWED_TOOLS", gitSearchTool+",config.tune")
 
-	root := canonicalTestDir(t, t.TempDir())
+	root := wstestutil.CanonicalTempDir(t)
 	repo := filepath.Join(root, "proj")
 	mustWrite(t, repo, "a.txt", "hello\nworld\n")
 	mustWrite(t, repo, "sub/b.txt", "foo bar\n")
@@ -88,9 +80,9 @@ func (f *gitSearchFixture) mustSearch(t *testing.T, args map[string]any) string 
 
 func TestGitSearchListsRootsWithoutRepo(t *testing.T) {
 	f := newGitSearchFixture(t)
-	agentRoot := canonicalTestDir(t, t.TempDir())
+	agentRoot := wstestutil.CanonicalTempDir(t)
 	registerGitSearchSession(t, "agentconversation", agentRoot, true, time.Now())
-	knobRoot := canonicalTestDir(t, t.TempDir())
+	knobRoot := wstestutil.CanonicalTempDir(t)
 	missing := filepath.Join(knobRoot, "missing")
 	value := strings.Join([]string{knobRoot, "relative/dir", missing}, string(filepath.ListSeparator))
 	if resp := f.call(t, "config.tune", map[string]any{"key": wsconfig.ItemAgentGitSearchRoots, "value": value}); isToolError(resp) {
@@ -124,7 +116,7 @@ func TestGitSearchRefusesUnknownSession(t *testing.T) {
 
 func TestGitSearchPathScope(t *testing.T) {
 	f := newGitSearchFixture(t)
-	outside := canonicalTestDir(t, t.TempDir())
+	outside := wstestutil.CanonicalTempDir(t)
 	initGit(t, outside)
 
 	text, failed := f.search(t, map[string]any{"repo": outside, "command": "ls-files"})
@@ -169,7 +161,7 @@ func TestGitSearchPathScope(t *testing.T) {
 func TestGitSearchRegistrationsAndKnobRoots(t *testing.T) {
 	f := newGitSearchFixture(t)
 	repoAt := func(name string) string {
-		dir := filepath.Join(canonicalTestDir(t, t.TempDir()), name)
+		dir := filepath.Join(wstestutil.CanonicalTempDir(t), name)
 		mustWrite(t, dir, "x.txt", "x\n")
 		initGit(t, dir)
 		runGit(t, dir, "add", ".")

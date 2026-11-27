@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 func openTest(t *testing.T, changed func(string)) (*Registry, string) {
@@ -19,7 +21,7 @@ func openTest(t *testing.T, changed func(string)) (*Registry, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = r.Close() })
+	wstestutil.CloseBeforeTempDir(t, r.Close)
 	return r, path
 }
 

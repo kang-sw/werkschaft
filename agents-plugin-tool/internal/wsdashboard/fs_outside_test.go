@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 // ReadOutsideLinks lists the outside files a test linked on id's board.
@@ -43,14 +44,7 @@ type outsideFixture struct {
 
 func startOutsideFixture(t *testing.T) *outsideFixture {
 	t.Helper()
-	resolved := func(dir string) string {
-		real, err := filepath.EvalSymlinks(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return real
-	}
-	o := &outsideFixture{home: filepath.Join(resolved(t.TempDir()), "home"), away: filepath.Join(resolved(t.TempDir()), "away", "site")}
+	o := &outsideFixture{home: filepath.Join(wstestutil.CanonicalTempDir(t), "home"), away: filepath.Join(wstestutil.CanonicalTempDir(t), "away", "site")}
 	for _, dir := range []string{o.home, o.away} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 func gitInitFixture(t *testing.T) (*pageFixture, string) {
@@ -25,10 +27,7 @@ func gitInitFixture(t *testing.T) (*pageFixture, string) {
 		o.Worktrees = gitWorktreeSource{}
 		o.Agents = &startOrderAgents{}
 	})
-	base, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := wstestutil.CanonicalTempDir(t)
 	folder := mkDir(t, filepath.Join(base, "notes"))
 	if _, err := f.d.workspaces.add(folder, false); err != nil {
 		t.Fatal(err)

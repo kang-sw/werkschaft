@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsmeta"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 func openTestMetaStore(t *testing.T, dir string) (*wsmeta.Store, *wsmeta.Snapshot) {
@@ -21,7 +22,7 @@ func openTestMetaStore(t *testing.T, dir string) (*wsmeta.Store, *wsmeta.Snapsho
 	if err != nil {
 		t.Fatalf("wsmeta.Open: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
+	wstestutil.CloseBeforeTempDir(t, store.Close)
 	validators := map[string]wsmeta.LegacyValidator{
 		wsmeta.StoreAgentRecord:       func(_, _ string, _ []byte) error { return nil },
 		wsmeta.StoreUsageHistory:      ValidateLegacyUsageHistory,

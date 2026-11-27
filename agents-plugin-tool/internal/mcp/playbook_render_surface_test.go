@@ -9,6 +9,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsstate"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 // playbook.render surface: render-minted child keys, the delegation
@@ -227,7 +228,7 @@ func TestRenderDispatchSeparatesResourceAndWorktreeRoots(t *testing.T) {
 				args["root_override"] = tc.override
 				// A root_override binds to its resolved path (macOS /var is
 				// itself a symlink to /private/var).
-				wantRoot = canonicalTestPath(t, worktree)
+				wantRoot = wstestutil.CanonicalPath(worktree)
 			}
 			resp := callToolOnce(t, s, 1, "playbook.render", args)
 			if toolIsError(t, resp) {
@@ -301,8 +302,8 @@ func TestRenderFromWorktreeSessionCommitsInThatWorktree(t *testing.T) {
 	}
 
 	overrideKey := render(t, map[string]any{"name": "impl-pb", "session_key": workerKey, "root_override": other})
-	if entry, ok := s.sessions.lookup(overrideKey); !ok || entry.root != canonicalTestPath(t, other) {
-		t.Errorf("root_override child = %+v, found=%v; want bound to %q", entry, ok, canonicalTestPath(t, other))
+	if entry, ok := s.sessions.lookup(overrideKey); !ok || entry.root != wstestutil.CanonicalPath(other) {
+		t.Errorf("root_override child = %+v, found=%v; want bound to %q", entry, ok, wstestutil.CanonicalPath(other))
 	}
 
 	childKey := render(t, map[string]any{"name": "impl-pb", "session_key": workerKey})

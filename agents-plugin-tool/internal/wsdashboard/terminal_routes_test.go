@@ -22,6 +22,7 @@ import (
 	"golang.org/x/net/websocket"
 
 	"github.com/kang-sw/devenv/internal/wsholder"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 // termRequest runs one request through the daemon's handler from peer,
@@ -318,10 +319,7 @@ func TestSessionTerminalDropsInheritedHarnessSessionEnv(t *testing.T) {
 // repository for "root", a typed absolute folder for "path", and a refusal
 // code for a path that is relative, missing, or a file.
 func TestTerminalFolder(t *testing.T) {
-	base, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := wstestutil.CanonicalTempDir(t)
 	main, linked, file := filepath.Join(base, "main"), filepath.Join(base, "linked"), filepath.Join(base, "file.txt")
 	gitdir := filepath.Join(main, ".git", "worktrees", "linked")
 	for _, dir := range []string{gitdir, linked} {
@@ -599,10 +597,7 @@ func head(seqs []uint64, n int) []uint64 {
 func TestTerminalRoundTripsInputOutputResizeAndExit(t *testing.T) {
 	holdersDir, python := termHoldersDir(t)
 	f := startTermFixture(t, holdersDir, python, 0)
-	work, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	work := wstestutil.CanonicalTempDir(t)
 	if code, answer := f.do(t, http.MethodPost, "/s/livesession/terminals", `{"folder":"path","path":"`+filepath.Join(work, "gone")+`"}`); code != http.StatusBadRequest || strings.TrimSpace(answer) != terminalFolderMissing {
 		t.Fatalf("create in a missing folder = %d (%s), want 400 %s", code, strings.TrimSpace(answer), terminalFolderMissing)
 	}

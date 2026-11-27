@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsi18n"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 // withWorkspaces runs a fixture daemon that keeps stored workspaces, in a
@@ -59,10 +60,7 @@ func worktreeRepo(t *testing.T) (base, root string) {
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	base, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	base = wstestutil.CanonicalTempDir(t)
 	root = filepath.Join(base, "repo")
 	gitRun(t, base, "init", "-q", "-b", "main", root)
 	gitCommit(t, root, "a")
