@@ -1396,6 +1396,7 @@ func (c *conv) closeIf(done func() bool) bool {
 	c.rec.QuotaContinuation = nil
 	c.rec.PendingCompaction = nil
 	c.closed = true
+	c.syncStateLocked()
 	rec := c.rec
 	c.mu.Unlock()
 	if err := c.r.persistAgentRecord(c.dir, rec); err != nil {

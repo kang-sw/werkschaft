@@ -185,5 +185,6 @@ func (c *conv) commitDurableRecord(stage func(*Record), after func()) error {
 	if after != nil {
 		after()
 	}
+	c.syncStateLocked()
 	return nil
 }

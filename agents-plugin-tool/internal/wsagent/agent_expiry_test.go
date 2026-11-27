@@ -250,7 +250,9 @@ func TestHeartbeatExpiryWaitsForStartupRegistration(t *testing.T) {
 	var scheduled bool
 	ancestor.do(func() {
 		ancestor.heartbeat()
+		ancestor.mu.Lock()
 		scheduled = ancestor.expiring
+		ancestor.mu.Unlock()
 	})
 	if scheduled {
 		eventually(t, "the premature expiry to delete the ancestor", func() bool { return gone(h, "ancestor") })
@@ -356,7 +358,11 @@ func TestHeartbeatExpiryKeepsAncestorAcrossClosedBridge(t *testing.T) {
 				}
 				eventually(t, "heartbeat expiry decision", func() bool {
 					var scheduled bool
-					ancestor.do(func() { scheduled = ancestor.expiring })
+					ancestor.do(func() {
+						ancestor.mu.Lock()
+						scheduled = ancestor.expiring
+						ancestor.mu.Unlock()
+					})
 					return !scheduled
 				})
 				if h.runner.conv("ancestor") == nil || h.state("ancestor").Status == StatusClosed {
@@ -419,7 +425,11 @@ func TestHeartbeatExpiryRechecksTreeAfterCheckoutRelease(t *testing.T) {
 	unpause()
 	eventually(t, "expiry decision", func() bool {
 		var expiring bool
-		return !ancestor.do(func() { expiring = ancestor.expiring }) || !expiring
+		return !ancestor.do(func() {
+			ancestor.mu.Lock()
+			expiring = ancestor.expiring
+			ancestor.mu.Unlock()
+		}) || !expiring
 	})
 	for _, id := range []string{"ancestor", "leaf"} {
 		if r.conv(id) == nil {
@@ -530,7 +540,11 @@ func TestChildWaitingExpiryRetriesAfterFailedClose(t *testing.T) {
 	// heartbeat can retry.
 	eventually(t, "expiring flag cleared for heartbeat retry", func() bool {
 		var expiring bool
-		if !c.do(func() { expiring = c.expiring }) {
+		if !c.do(func() {
+			c.mu.Lock()
+			expiring = c.expiring
+			c.mu.Unlock()
+		}) {
 			return false
 		}
 		return !expiring

@@ -410,6 +410,7 @@ func (r *Runner) AdmitCompletion(id string, gen uint64, eventID, text string) (C
 	c.sends++
 	c.held++
 	c.rec.Sends = c.sends
+	c.syncStateLocked()
 	c.cancelModelWaitBackoffForInput()
 	if c.rec.Parent != nil {
 		c.rec.LastActiveAt = r.opts.Now().UTC().Format(time.RFC3339)

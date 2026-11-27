@@ -24,6 +24,7 @@ import (
 // inbox change through signalInbox().
 type conv struct {
 	r             *Runner
+	id            string // immutable ReplyID set at startConvWith; safe to read without mu
 	dir           string
 	inbox         string
 	live          *liveWriter
@@ -33,6 +34,12 @@ type conv struct {
 	// inboxC (one slot) tells the loop the inbox changed (signalInbox).
 	inboxC chan struct{}
 	done   chan struct{}
+
+	// closedOrParked and awakeMirror mirror lock-guarded lifecycle/awake state
+	// (updated via syncStateLocked under mu) so lock-free readers (OwnsLive,
+	// awakeChildrenLocked) never acquire c.mu.
+	closedOrParked atomic.Bool
+	awakeMirror    atomic.Bool
 
 	// mu guards what state() reads: rec and the status fields below. Send
 	// holds it across its closed check and inbox write; close sets closed
@@ -1209,6 +1216,7 @@ func (c *conv) update(fn func(rec *Record)) error {
 	defer c.wmu.Unlock()
 	c.mu.Lock()
 	fn(&c.rec)
+	c.syncStateLocked()
 	c.mu.Unlock()
 	return c.persistRecord()
 }
@@ -1236,6 +1244,7 @@ func (c *conv) flushRecord() {
 func (c *conv) setStatus(fn func()) {
 	c.mu.Lock()
 	fn()
+	c.syncStateLocked()
 	c.mu.Unlock()
 }
 
@@ -1469,6 +1478,7 @@ func (c *conv) release() {
 	c.r.mu.Lock()
 	if c.r.convs[rec.ReplyID] == c {
 		delete(c.r.convs, rec.ReplyID)
+		c.r.liveOwners.CompareAndDelete(rec.ReplyID, c)
 	}
 	c.r.closed[rec.ReplyID] = rec
 	if c.r.closedRows == nil {
@@ -2427,6 +2437,7 @@ func (c *conv) voidCancelled() {
 	if grew {
 		c.voided = c.sends
 		clear(c.deliverySenders)
+		c.syncStateLocked()
 	}
 	parent := c.rec.Parent
 	c.mu.Unlock()

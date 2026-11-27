@@ -58,36 +58,55 @@ func (c *conv) setHidden(hidden bool) error {
 }
 
 // PageInput admits a composer write without waiting for the conversation
-// loop. As with Send, mu serializes admission and the write against close.
-// A committed own-page message restores a hidden session asynchronously;
-// generic InboxChanged signals and Runner.Send remain passive.
+// loop. As with Send, wmu serializes admission and the write against close,
+// parking, and quota-continuation firing, while c.mu is released before
+// invoking write so external callbacks (which may acquire dashboard locks and
+// call OwnsLive) can never self-deadlock on c.mu. A committed own-page
+// message restores a hidden session asynchronously; generic InboxChanged
+// signals and Runner.Send remain passive.
 func (r *Runner) PageInput(id string, write func() bool) error {
 	c := r.conv(id)
 	if c == nil {
 		return errUnknown
 	}
-	c.mu.Lock()
-	if c.closed {
-		err := endedError(c.rec)
+	committed, hidden, err := func() (bool, bool, error) {
+		c.wmu.Lock()
+		defer c.wmu.Unlock()
+		c.mu.Lock()
+		if c.parkedOut {
+			c.mu.Unlock()
+			return false, false, errUnknown
+		}
+		if c.closed {
+			err := endedError(c.rec)
+			c.mu.Unlock()
+			return false, false, err
+		}
+		select {
+		case <-c.done:
+			c.mu.Unlock()
+			return false, false, errClosed
+		default:
+		}
 		c.mu.Unlock()
+
+		committed := write()
+
+		c.mu.Lock()
+		if committed && !c.closed {
+			c.cancelQuotaContinuationForInput()
+			if c.rec.Lead {
+				// Update in memory only; rides the next agent.json write (0 extra I/O).
+				c.rec.LastActiveAt = r.opts.Now().UTC().Format(time.RFC3339)
+			}
+		}
+		hidden := c.hidden
+		c.mu.Unlock()
+		return committed, hidden, nil
+	}()
+	if err != nil {
 		return err
 	}
-	select {
-	case <-c.done:
-		c.mu.Unlock()
-		return errClosed
-	default:
-	}
-	committed := write()
-	if committed {
-		c.cancelQuotaContinuationForInput()
-		if c.rec.Lead {
-			// Update in memory only; rides the next agent.json write (0 extra I/O).
-			c.rec.LastActiveAt = r.opts.Now().UTC().Format(time.RFC3339)
-		}
-	}
-	hidden := c.hidden
-	c.mu.Unlock()
 	if committed && !hidden {
 		c.signalInbox()
 	}

@@ -158,6 +158,26 @@ func (c *conv) awakeLocked() bool {
 	return !c.closed && (c.proc != nil || c.keepsAwakeLocked())
 }
 
+// awakeNoExecLocked is awakeLocked without the lock-free ownsLiveExec check,
+// mirrored into awakeMirror under mu by syncStateLocked.
+func (c *conv) awakeNoExecLocked() bool {
+	return !c.closed && !c.parkedOut && (c.proc != nil || c.turn || c.bgTasks != 0 || c.holding || c.spawnPending ||
+		(!c.wakeRefused && (c.sends > max(c.settled.mark, c.voided) || len(c.rec.Mail) > 0)))
+}
+
+// syncStateLocked mirrors lock-guarded lifecycle and awake flags into atomic
+// fields so lock-free readers (OwnsLive, awakeChildrenLocked) never take c.mu.
+// Caller holds c.mu (or owns c before publication).
+func (c *conv) syncStateLocked() {
+	c.closedOrParked.Store(c.closed || c.parkedOut)
+	c.awakeMirror.Store(c.awakeNoExecLocked())
+}
+
+// isAwake reports awakeLocked without acquiring c.mu.
+func (c *conv) isAwake() bool {
+	return !c.closedOrParked.Load() && (c.awakeMirror.Load() || c.ownsLiveExec())
+}
+
 // keepsAwakeLocked is the one sleep predicate, which a parent's idle gate
 // (idleNow) reads for each child: work of its own (workingLocked), an
 // initial spawn before its first Send, or input or claimed mail it has not
@@ -185,15 +205,13 @@ func (r *Runner) awakeChildren(parent ParentRef) int {
 }
 
 // awakeChildrenLocked counts parent's awake direct children plus in-flight
-// width-checked spawns. Caller holds r.mu.
+// width-checked spawns. Caller holds r.mu. Never acquires c.mu.
 func (r *Runner) awakeChildrenLocked(parent ParentRef) int {
 	n := r.pendingSpawns[parent]
-	for _, c := range r.convs {
-		c.mu.Lock()
-		if c.rec.Parent != nil && *c.rec.Parent == parent && c.awakeLocked() {
+	for id := range r.childrenIndex[parent] {
+		if c := r.convs[id]; c != nil && c.isAwake() {
 			n++
 		}
-		c.mu.Unlock()
 	}
 	return n
 }

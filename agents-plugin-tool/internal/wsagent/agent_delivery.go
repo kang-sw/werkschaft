@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"maps"
 	"net/http"
 	"os"
 	"slices"
@@ -230,7 +229,11 @@ func (r *Runner) expire(id string) bool {
 	}
 	if len(order) == 0 {
 		// A later heartbeat tries again.
-		c.do(func() { c.expiring = false })
+		c.do(func() {
+			c.mu.Lock()
+			c.expiring = false
+			c.mu.Unlock()
+		})
 		return false
 	}
 	for _, d := range order {
@@ -240,36 +243,79 @@ func (r *Runner) expire(id string) bool {
 }
 
 func (r *Runner) liveExpiryDescendants(root ParentRef) ([]string, bool) {
+	type snapNode struct {
+		conv   *conv
+		closed Record
+		hasRec bool
+		parked bool
+	}
+	// Snapshot the reachable subtree structure under r.mu without acquiring
+	// any conversation lock, then evaluate waiting/awake state outside r.mu.
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	c := r.convs[root.ReplyID]
-	if c == nil {
+	rootConv := r.convs[root.ReplyID]
+	if rootConv == nil {
+		r.mu.Unlock()
 		return nil, false
 	}
-	c.mu.Lock()
-	waiting := c.childWaitingLocked()
-	c.mu.Unlock()
+	edges := map[ParentRef][]string{}
+	nodes := map[string]snapNode{}
+	seen := map[string]bool{root.ReplyID: true}
+	queue := []ParentRef{root}
+	for i := 0; i < len(queue); i++ {
+		parent := queue[i]
+		children := r.childrenIndex[parent]
+		if len(children) == 0 {
+			continue
+		}
+		list := make([]string, 0, len(children))
+		for id := range children {
+			list = append(list, id)
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			if child := r.convs[id]; child != nil {
+				nodes[id] = snapNode{conv: child}
+				// Enqueue both parent kinds so snapshot traversal never reads
+				// child.rec.Lead under r.mu.
+				queue = append(queue, ParentRef{Kind: ParentConversation, ReplyID: id}, ParentRef{Kind: ParentLead, ReplyID: id})
+			} else if rec, ok := r.closed[id]; ok {
+				nodes[id] = snapNode{closed: rec, hasRec: true, parked: r.parked[id]}
+				queue = append(queue, safeStopParent(id, rec.Lead))
+			}
+		}
+		edges[parent] = list
+	}
+	r.mu.Unlock()
+
+	rootConv.mu.Lock()
+	waiting := rootConv.childWaitingLocked()
+	rootConv.mu.Unlock()
 	if !waiting {
 		return nil, false
 	}
 	return expiryDescendants(root, func(parent ParentRef) iter.Seq[string] {
-		return maps.Keys(r.childrenIndex[parent])
+		return slices.Values(edges[parent])
 	}, func(id string) expiryNode {
-		if child := r.convs[id]; child != nil {
-			child.mu.Lock()
-			defer child.mu.Unlock()
+		node, ok := nodes[id]
+		if !ok {
+			return expiryNode{}
+		}
+		if node.conv != nil {
+			node.conv.mu.Lock()
+			defer node.conv.mu.Unlock()
 			return expiryNode{
-				parent: safeStopParent(id, child.rec.Lead),
-				closed: child.closed,
-				quiet:  !child.awakeLocked(),
+				parent: safeStopParent(id, node.conv.rec.Lead),
+				closed: node.conv.closed,
+				quiet:  !node.conv.awakeLocked(),
 			}
 		}
-		if rec, ok := r.closed[id]; ok {
-			if r.parked[id] {
+		if node.hasRec {
+			if node.parked {
 				// Open and quiet by construction; the cascade rehydrates it.
-				return expiryNode{parent: safeStopParent(id, rec.Lead), quiet: true}
+				return expiryNode{parent: safeStopParent(id, node.closed.Lead), quiet: true}
 			}
-			return expiryNode{parent: safeStopParent(id, rec.Lead), closed: true}
+			return expiryNode{parent: safeStopParent(id, node.closed.Lead), closed: true}
 		}
 		return expiryNode{}
 	})

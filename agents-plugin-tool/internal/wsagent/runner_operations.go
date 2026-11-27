@@ -125,6 +125,7 @@ func (r *Runner) sendFrom(id, text string, operator bool, sender string) (State,
 		}
 		c.held++
 		c.rec.Sends = c.sends
+		c.syncStateLocked()
 		c.cancelModelWaitBackoffForInput()
 		c.cancelQuotaContinuationForInput()
 		if c.rec.Parent != nil || c.rec.Lead {
@@ -608,8 +609,13 @@ func (r *Runner) releaseParent(id string) {
 
 // closeOne closes conversation id alone.
 func (r *Runner) closeOne(id string) (State, error) {
+	var closedRec Record
 	st, err := r.act(id, func(c *conv) error {
-		return c.close()
+		if err := c.close(); err != nil {
+			return err
+		}
+		closedRec = c.record()
+		return nil
 	})
 	if err != nil {
 		return st, err
@@ -617,7 +623,8 @@ func (r *Runner) closeOne(id string) (State, error) {
 	r.mu.Lock()
 	if c, ok := r.convs[id]; ok {
 		delete(r.convs, id)
-		r.closed[id] = c.record()
+		r.liveOwners.CompareAndDelete(id, c)
+		r.closed[id] = closedRec
 		if r.closedRows == nil {
 			r.closedRows = map[string]State{}
 		}

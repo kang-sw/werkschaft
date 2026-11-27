@@ -100,6 +100,10 @@ func (r *Runner) loadParked(rec Record) {
 	r.watchParked(rec)
 }
 
+// parkedOwnerSentinel is stored in Runner.liveOwners for parked children so
+// OwnsLive can answer true without acquiring r.mu or any conversation lock.
+var parkedOwnerSentinel = new(struct{})
+
 // registerParkedLocked puts rec in the closed set as a parked child.
 func (r *Runner) registerParkedLocked(rec Record) {
 	r.closed[rec.ReplyID] = rec
@@ -107,6 +111,11 @@ func (r *Runner) registerParkedLocked(rec Record) {
 		r.parked = map[string]bool{}
 	}
 	r.parked[rec.ReplyID] = true
+	if rec.ClosedAt == "" {
+		r.liveOwners.Store(rec.ReplyID, parkedOwnerSentinel)
+	} else {
+		r.liveOwners.Delete(rec.ReplyID)
+	}
 	r.indexChildLocked(rec)
 }
 
@@ -141,6 +150,7 @@ func (r *Runner) watchParked(rec Record) {
 // dropParkedLocked forgets id's parked state and stops its mail watch.
 func (r *Runner) dropParkedLocked(id string) {
 	delete(r.parked, id)
+	r.liveOwners.CompareAndDelete(id, parkedOwnerSentinel)
 	if stop := r.parkStop[id]; stop != nil {
 		delete(r.parkStop, id)
 		go stop()
@@ -233,16 +243,35 @@ func (r *Runner) parkedState(rec Record) State {
 // OwnsLive reports whether this daemon's runner serves session id as an open
 // conversation: resident or parked. The index reads liveness of such a
 // session from here, so its registration.json heartbeat is never rewritten.
+//
+// Lock-free: acquires neither r.mu nor c.mu so Index.effective and inbox
+// write paths can never deadlock against Runner or conversation locks.
 func (r *Runner) OwnsLive(id string) bool {
-	r.mu.Lock()
-	c, open := r.convs[id]
-	rec, closed := r.closed[id]
-	parked := r.parked[id]
-	r.mu.Unlock()
-	if open {
-		return !c.isClosedOrParked()
+	var prev any
+	for {
+		v, ok := r.liveOwners.Load(id)
+		if !ok {
+			return false
+		}
+		if v == parkedOwnerSentinel {
+			return true
+		}
+		c, ok := v.(*conv)
+		if !ok || c == nil {
+			return false
+		}
+		if !c.closedOrParked.Load() {
+			return true
+		}
+		// If c just transitioned live -> parked (maybePark stores
+		// parkedOwnerSentinel in liveOwners before setting c.closedOrParked)
+		// or was replaced by a newer *conv generation, re-read liveOwners
+		// once so the handoff never produces a transient false negative.
+		if v == prev {
+			return false
+		}
+		prev = v
 	}
-	return closed && parked && rec.ClosedAt == ""
 }
 
 func (c *conv) isParkedOut() bool {
@@ -252,9 +281,7 @@ func (c *conv) isParkedOut() bool {
 }
 
 func (c *conv) isClosedOrParked() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.closed || c.parkedOut
+	return c.closedOrParked.Load()
 }
 
 // parkEligibleLocked reports whether the conversation may leave memory now.
@@ -307,18 +334,27 @@ func (c *conv) maybePark() bool {
 	// The presentation is taken before the runner's lock (c.mu is below it).
 	st := c.memoryState()
 	st.Lifecycle = wsdashboard.SessionChildWaiting
-	// The runner's lock comes first, as everywhere that holds both.
+	// The runner's lock comes first, as everywhere that holds both. TryLock
+	// prevents parking from blocking on a contended c.mu while holding r.mu;
+	// if c.mu is busy, abort and retry on the next heartbeat.
 	r.mu.Lock()
-	c.mu.Lock()
+	if !c.mu.TryLock() {
+		r.mu.Unlock()
+		return false
+	}
 	if !c.parkEligibleLocked() || r.convs[c.rec.ReplyID] != c || r.hasOpenChildLocked(c.rec.ReplyID) {
 		c.mu.Unlock()
 		r.mu.Unlock()
 		return false
 	}
 	rec = c.rec
-	c.parkedOut = true
-	delete(r.convs, rec.ReplyID)
+	// Store parkedOwnerSentinel in liveOwners (via registerParkedLocked)
+	// BEFORE marking c.closedOrParked=true so a concurrent lock-free OwnsLive
+	// never observes a false negative across the live -> parked handoff.
 	r.registerParkedLocked(rec)
+	c.parkedOut = true
+	c.syncStateLocked()
+	delete(r.convs, rec.ReplyID)
 	if r.closedRows == nil {
 		r.closedRows = map[string]State{}
 	}

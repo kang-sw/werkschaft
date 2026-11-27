@@ -116,6 +116,7 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 	dir := wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID)
 	c := &conv{
 		r:            r,
+		id:           rec.ReplyID,
 		dir:          dir,
 		inbox:        wsinbox.Dir(dir),
 		rec:          rec,
@@ -299,8 +300,13 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 		// process, and end this one to do it.
 		c.reattach()
 	}
+	// Mirror initial awake/closed state before exposing c in r.convs or liveOwners.
+	c.syncStateLocked()
 	r.mu.Lock()
 	r.convs[rec.ReplyID] = c
+	// Store live *conv in liveOwners before removing parked state so a
+	// concurrent lock-free OwnsLive never observes a gap across unpark.
+	r.liveOwners.Store(rec.ReplyID, c)
 	r.indexChildLocked(rec)
 	delete(r.closed, rec.ReplyID)
 	delete(r.closedRows, rec.ReplyID)

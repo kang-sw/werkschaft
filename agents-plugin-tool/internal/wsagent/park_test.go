@@ -83,6 +83,10 @@ func TestIdleChildParksAndRehydratesOnSend(t *testing.T) {
 	h, _ := agentHarness(t, func(o *Options) { o.ParkIdleChildren = true })
 	a, ap := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "work", Tier: "small", Authority: "read-only"})
 	ap.reply("first done")
+	eventually(t, "first turn settled", func() bool {
+		rec := h.record(a)
+		return rec.LastTurn != nil && !rec.TurnOpen
+	})
 	h.asleep(a)
 	eventually(t, "the child parked", func() bool { return h.runner.isParked(a) && !h.runner.residentConv(a) })
 	before := h.record(a)

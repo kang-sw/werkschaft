@@ -220,7 +220,12 @@ func (r *Runner) CompactWithSummary(callerKey, target string, resume *bool, lead
 		}
 	}
 	r.mu.Lock()
+	convs := make([]*conv, 0, len(r.convs))
 	for _, c := range r.convs {
+		convs = append(convs, c)
+	}
+	r.mu.Unlock()
+	for _, c := range convs {
 		rec := c.record()
 		if rec.WSKey == callerKey {
 			own = c
@@ -229,7 +234,6 @@ func (r *Runner) CompactWithSummary(callerKey, target string, resume *bool, lead
 			dest = c
 		}
 	}
-	r.mu.Unlock()
 	if own == nil {
 		return CompactResult{"unsupported", "the caller is not a hosted session"}
 	}

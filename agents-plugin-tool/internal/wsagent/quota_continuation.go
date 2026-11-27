@@ -461,6 +461,7 @@ func (c *conv) quotaContinuationTimedOut() bool {
 		c.sends++
 		c.held++
 		c.rec.Sends = c.sends
+		c.syncStateLocked()
 	}
 	c.mu.Unlock()
 	c.wmu.Unlock()

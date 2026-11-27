@@ -47,20 +47,28 @@ func (r *Runner) FenceDurableStarts() func() {
 // DurableSessions lists open durable sessions, including sleeping ones
 // and live projections whose private record is currently unavailable.
 func (r *Runner) DurableSessions() []wsdashboard.DurableSession {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var sessions []wsdashboard.DurableSession
-	for id, c := range r.convs {
-		c.mu.Lock()
-		live := !c.closed && r.durableProcess(c.rec.Backend)
-		c.mu.Unlock()
-		if live {
-			sessions = append(sessions, wsdashboard.DurableSession{ID: id})
-		}
+	type liveEntry struct {
+		id string
+		c  *conv
 	}
+	r.mu.Lock()
+	live := make([]liveEntry, 0, len(r.convs))
+	for id, c := range r.convs {
+		live = append(live, liveEntry{id: id, c: c})
+	}
+	var sessions []wsdashboard.DurableSession
 	for id, rec := range r.closed {
 		if r.convs[id] == nil && r.durableProcess(rec.Backend) && rec.ClosedAt == "" && rec.handedOff() {
 			sessions = append(sessions, wsdashboard.DurableSession{ID: id, Unavailable: true})
+		}
+	}
+	r.mu.Unlock()
+	for _, e := range live {
+		e.c.mu.Lock()
+		ok := !e.c.closed && r.durableProcess(e.c.rec.Backend)
+		e.c.mu.Unlock()
+		if ok {
+			sessions = append(sessions, wsdashboard.DurableSession{ID: e.id})
 		}
 	}
 	sort.Slice(sessions, func(i, j int) bool { return sessions[i].ID < sessions[j].ID })

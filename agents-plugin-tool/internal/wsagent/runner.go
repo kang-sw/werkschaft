@@ -337,6 +337,9 @@ type Runner struct {
 	closed        map[string]Record
 	childrenIndex map[ParentRef]map[string]bool // mu; parent identity is immutable
 	pendingSpawns map[ParentRef]int             // mu; in-flight width-checked spawns until registered
+	// liveOwners mirrors resident *conv entries and parked records
+	// (parkedOwnerSentinel) for lock-free OwnsLive lookups without r.mu or c.mu.
+	liveOwners sync.Map
 	// releases is each checkout's latest completed release this daemon
 	// knows of, keyed by releaseKey: fed by worktree.release's notice and by
 	// every marker a cold check reads. It holds only releases found, never
