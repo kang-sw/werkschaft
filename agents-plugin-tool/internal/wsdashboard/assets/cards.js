@@ -2636,6 +2636,143 @@
     c.paint();
     return c;
   }
+  // --- title-bar click scroll-to-top ------------------------------------------
+  var TITLE_PRESS_SLOP = 5;
+  var titlePress = null;
+  function reducedMotion() {
+    return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  }
+  function titleInteractive(t) {
+    return !!(t && t.closest && t.closest("button, a, input, textarea, select, summary, label, [role='button'], .pop"));
+  }
+  function titlePressStart(e) {
+    if (!e || e.isPrimary === false || (e.button !== undefined && e.button !== 0)) return;
+    var t = e.target;
+    if (!t || !t.closest || titleInteractive(t) || !t.closest(".tbar, .bc-hd")) {
+      titlePress = null;
+      return;
+    }
+    titlePress = { id: e.pointerId, x: e.clientX || 0, y: e.clientY || 0, moved: false };
+  }
+  function titlePressMove(e) {
+    var p = titlePress;
+    if (!p || (p.id !== undefined && e.pointerId !== undefined && e.pointerId !== p.id)) return;
+    if (Math.abs((e.clientX || 0) - p.x) > TITLE_PRESS_SLOP || Math.abs((e.clientY || 0) - p.y) > TITLE_PRESS_SLOP) p.moved = true;
+  }
+  function titlePressEnd(e) {
+    var p = titlePress;
+    if (!p) return;
+    if (e && p.id !== undefined && e.pointerId !== undefined && e.pointerId !== p.id) return;
+    if (e && e.type === "pointercancel") { titlePress = null; return; }
+    setTimeout(function () { if (titlePress === p) titlePress = null; }, 0);
+  }
+  function scrollBoxTop(box, behavior) {
+    if (!box) return false;
+    if (box.scrollTo) box.scrollTo({ top: 0, behavior: behavior });
+    else box.scrollTop = 0;
+    return true;
+  }
+  function railInsetPx(bcol, sc, head) {
+    var v = bcol && bcol.style && bcol.style.getPropertyValue ? parseFloat(bcol.style.getPropertyValue("--wb-rail-inset")) : NaN;
+    if (!isNaN(v)) return v;
+    if (bcol && typeof getComputedStyle === "function") {
+      try { v = parseFloat(getComputedStyle(bcol).getPropertyValue("--wb-rail-inset")); } catch (e) {}
+      if (!isNaN(v)) return v;
+    }
+    if (sc && sc.style && sc.style.scrollPaddingTop) {
+      v = parseFloat(sc.style.scrollPaddingTop);
+      if (!isNaN(v)) return v;
+    }
+    if (sc && typeof getComputedStyle === "function") {
+      try { v = parseFloat(getComputedStyle(sc).scrollPaddingTop); } catch (e) {}
+      if (!isNaN(v)) return v;
+    }
+    var stick = head && head.closest ? head.closest(".tophead") : null;
+    var el = stick || head;
+    if (el && el.style && el.style.getPropertyValue) {
+      v = parseFloat(el.style.getPropertyValue("--wb-rail-top"));
+      if (!isNaN(v)) return v;
+    }
+    return 0;
+  }
+  function railCapPx(cardEl) {
+    if (!cardEl || !cardEl.hasAttribute || !(cardEl.hasAttribute("data-topic") || cardEl.hasAttribute("data-rail"))) return 0;
+    var cap = cardEl.getAttribute("data-anchor-cap");
+    if (cap === "0") return 0;
+    if (cap === "rail0") return 24;
+    if (cap === "1") return 44;
+    var count = 0;
+    if (board && board.querySelectorAll) {
+      var list = board.querySelectorAll("section.topic[data-topic], .bcard[data-rail]");
+      for (var i = 0; i < list.length; i++) {
+        var n = list[i];
+        if (n === cardEl) break;
+        if (!n.hidden && !n.hasAttribute("data-state-filtered") && (!n.getBoundingClientRect || n.getBoundingClientRect().height)) {
+          count++;
+          if (count >= 2) break;
+        }
+      }
+    }
+    return count ? 4 + count * 20 : 0;
+  }
+  function titleClick(e) {
+    var press = titlePress;
+    titlePress = null;
+    if (!e || e.defaultPrevented || (e.button !== undefined && e.button !== 0)) return false;
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.detail > 1) return false;
+    if (dragged || (dg && dg.on)) return false;
+    if (press) {
+      if (press.moved) return false;
+      if (typeof e.clientX === "number" && typeof e.clientY === "number" && (e.clientX !== 0 || e.clientY !== 0) &&
+          (Math.abs(e.clientX - press.x) > TITLE_PRESS_SLOP || Math.abs(e.clientY - press.y) > TITLE_PRESS_SLOP)) return false;
+    }
+    var t = e.target;
+    if (!t || !t.closest || titleInteractive(t)) return false;
+    var head = t.closest(".tbar, .bc-hd");
+    if (!head) return false;
+    var sel = window.getSelection && window.getSelection();
+    if (sel && !sel.isCollapsed) return false;
+    var isBcard = head.classList.contains("bc-hd");
+    var cardEl = isBcard ? head.closest(".bcard") : head.closest("section.topic");
+    if (!cardEl) return false;
+    var calm = reducedMotion(), behavior = calm ? "auto" : "smooth";
+    var inPreview = !!(cardEl.closest && cardEl.closest(".overview-preview-stage"));
+    var isMax = !!(cardEl.hasAttribute && cardEl.hasAttribute("data-max"));
+    if (isMax || inPreview) {
+      return scrollBoxTop(isBcard ? (cardEl.querySelector && cardEl.querySelector(":scope > .bc-in > .bc-body")) : cardEl, behavior);
+    }
+    var inGal = !!((galEl && galEl.contains && galEl.contains(cardEl)) || (cardEl.closest && cardEl.closest("#bgal, .gal-pane")));
+    if (inGal) {
+      var target = cardEl.querySelector && cardEl.querySelector(isBcard ? ":scope > .bc-in > .bc-body" : ":scope > .gal-pbody");
+      return scrollBoxTop(target, behavior);
+    }
+    if (overviewOn || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-overview"))) return false;
+    if (maxed || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-board-max"))) return false;
+    if (board && board.querySelector && board.querySelector("[data-max]")) return false;
+    var bcol = doc.getElementById("bcol") || (board && board.closest && board.closest("#bcol")) || board;
+    if (bcol && bcol.hasAttribute && bcol.hasAttribute("data-board-free") &&
+        window.WsBoardAnchor && typeof window.WsBoardAnchor.select === "function") {
+      window.WsBoardAnchor.select(cardEl, { smooth: !calm, alignTop: true });
+      return true;
+    }
+    var sc = scroller(board) || doc.scrollingElement || doc.documentElement;
+    if (!sc) return false;
+    var top;
+    if (cardEl.getAttribute && cardEl.getAttribute("data-anchor-cap") === "0") {
+      top = 0;
+    } else {
+      var main = sc === doc.scrollingElement || sc === doc.documentElement;
+      var scRectTop = main ? 0 : (sc.getBoundingClientRect ? sc.getBoundingClientRect().top + (sc.clientTop || 0) : 0);
+      var padTop = main ? 0 : (typeof getComputedStyle === "function" ? (parseFloat(getComputedStyle(sc).paddingTop) || 0) : 0);
+      var cardTop = cardEl.getBoundingClientRect().top;
+      var clearTop = scRectTop + padTop + railInsetPx(bcol, sc, head) + railCapPx(cardEl);
+      top = Math.max(0, Math.round(sc.scrollTop + (cardTop - clearTop)));
+    }
+    if (sc.scrollTo) sc.scrollTo({ top: top, behavior: behavior });
+    else sc.scrollTop = top;
+    return true;
+  }
+
   window.WsCards = {
     icon: licon,
     register: function (name, kind) { kinds[name] = kind; },
@@ -2676,7 +2813,7 @@
       place(weave(Array.prototype.filter.call(board.childNodes, function (n) { return !fixedNode(n); })), fixedNode);
       persist();
       [board, galEl].forEach(function (box) {
-        box.addEventListener("pointerdown", dragStart);
+        box.addEventListener("pointerdown", function (e) { titlePressStart(e); dragStart(e); });
         box.addEventListener("click", function (e) {
           var pp = e.target.closest && e.target.closest(".ppin");
           if (pp && pp.parentNode && pp.parentNode.tagName === "SUMMARY") {
@@ -2698,12 +2835,13 @@
             if (action.classList.contains("t-fold")) foldUnit(u, !u.folded); else raise(u);
           }
           sheetClick(e);
+          titleClick(e);
         });
         box.addEventListener("contextmenu", function (e) { if (dg && dg.touch) e.preventDefault(); });
       });
-      doc.addEventListener("pointermove", dragMove);
-      doc.addEventListener("pointerup", dragEnd);
-      doc.addEventListener("pointercancel", dragEnd);
+      doc.addEventListener("pointermove", function (e) { titlePressMove(e); dragMove(e); });
+      doc.addEventListener("pointerup", function (e) { titlePressEnd(e); dragEnd(e); });
+      doc.addEventListener("pointercancel", function (e) { titlePressEnd(e); dragEnd(e); });
       doc.addEventListener("pointermove", railMove);
       doc.addEventListener("pointerup", railEnd);
       doc.addEventListener("pointercancel", railEnd);
