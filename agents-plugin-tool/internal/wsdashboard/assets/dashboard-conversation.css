@@ -291,7 +291,7 @@ details[open] > summary.conv-row > .row-chevron { transform: rotate(0deg); }
 .wbupdate-panel-body.md :is(ul, ol) { padding-left: 16px; }
 .wbupdate-panel-body.md li { margin: 1px 0; }
 .wbupdate-panel-body.md blockquote { padding: 2px 8px; border-left: 2px solid color-mix(in srgb, var(--wb-primary) 55%, transparent); color: var(--wb-muted-fg); }
-.wbupdate-panel-body.md code { font-family: var(--wb-mono); font-size: 11px; padding: 0 3px; border-radius: 4px; background: var(--wb-muted); }
+.wbupdate-panel-body.md :not(pre) > code { font-family: var(--wb-mono); font-size: 11px; padding: 0 3px; border-radius: 4px; background: var(--wb-muted); box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 .wbupdate-panel-body.md pre { margin: 0 0 4px; padding: 4px 7px; border-radius: 6px; background: var(--wb-muted); font-size: 11px; line-height: 1.4; overflow: hidden; white-space: pre; }
 .wbupdate-panel-body.md pre > code { padding: 0; background: transparent; font-size: inherit; }
 .wbupdate-panel-body.md table { width: 100%; border-collapse: collapse; font-size: 11px; }
