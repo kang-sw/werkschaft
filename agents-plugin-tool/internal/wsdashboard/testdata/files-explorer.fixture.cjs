@@ -46,7 +46,11 @@ function explorer(rid, local = true, options = {}) {
 }
 function rootRequest(x, path) { if (x.at('.froot-pop').hidden) x.at('.fchange-root').click(); x.at('.froot-pop .fpin').value = path; x.at('.fgo .pr').click(); }
 async function previewHookChecks() {
-  var dispatched = [], x = explorer('preview-hook', true, { location: { root: '/picked', dir: '' }, preview: (path, o) => dispatched.push([path, o]) });
+  var dispatched = [], openedNative = [], x = explorer('preview-hook', true, {
+    preview: (path, o) => dispatched.push([path, o]),
+    post: (route, body, done) => { openedNative.push([route, body]); if (done) done(true); },
+    location: { root: '/picked', dir: '' },
+  });
   x.instance.shown();
   await answer(take('preview-hook', 'list'), listing('/picked', [{ name: 'a.txt' }, { name: 'b.txt' }, { name: 'file.bin' }, { name: 'folder', dir: true }]));
   x.at('.fdirectory').getBoundingClientRect = () => ({ left: 10, right: 510, top: 10, bottom: 600 });
@@ -61,20 +65,22 @@ async function previewHookChecks() {
   key(x.at('[data-entry="b.txt"]'), 'Enter'); await answer(take('preview-hook', 'preview'), content);
   check('double-click and Enter retain durable intent through owner hook', dispatched.slice(1).map(([p, o]) => [p, o.keep]), [['a.txt', true], ['b.txt', true]]);
   click('file.bin'); await answer(take('preview-hook', 'preview'), { kind: 'none', reason_code: 'binary' });
-  check('binary preflight uses visible row actions before owner dispatch', [dispatched.length, x.previews.length, !!doc.querySelector('.fmenu')], [3, 0, true]);
-  key(doc.querySelector('.fmenu'), 'Escape');
+  check('single-click on binary keeps selection only without owner dispatch or menu', [dispatched.length, x.previews.length, openedNative.length, !!doc.querySelector('.fmenu'), x.instance.selection().path], [3, 0, 0, false, 'file.bin']);
   click('a.txt'); await answer(take('preview-hook', 'preview'), { kind: 'none', reason: 'size limit' });
-  check('non-binary none answer still reaches owner', dispatched.at(-1)[1].answer.reason, 'size limit');
+  check('single-click on size-limit file keeps selection only without owner dispatch or menu', [dispatched.length, x.previews.length, openedNative.length, !!doc.querySelector('.fmenu'), x.instance.selection().path], [3, 0, 0, false, 'a.txt']);
+  click('file.bin', 'dblclick'); await answer(take('preview-hook', 'preview'), { kind: 'none', reason_code: 'binary' });
+  click('a.txt', 'dblclick'); await answer(take('preview-hook', 'preview'), { kind: 'none', reason: 'size limit' });
+  check('double-click on unpreviewable binary or size-limit opens natively instead of owner preview', [dispatched.length, !!doc.querySelector('.fmenu'), openedNative], [3, false, [['fs/act', { path: 'file.bin', action: 'open', root: '/picked' }], ['fs/act', { path: 'a.txt', action: 'open', root: '/picked' }]]]);
   click('a.txt'); await refuse(take('preview-hook', 'preview'));
-  check('preflight refusal delegates existing renderer fallback to owner', [dispatched.length, dispatched.at(-1)[0], 'answer' in dispatched.at(-1)[1], x.previews.length], [5, 'a.txt', false, 0]);
+  check('preflight refusal delegates existing renderer fallback to owner', [dispatched.length, dispatched.at(-1)[0], 'answer' in dispatched.at(-1)[1], x.previews.length], [4, 'a.txt', false, 0]);
   click('a.txt'); var stale = take('preview-hook', 'preview');
   click('b.txt'); await answer(take('preview-hook', 'preview'), content);
   await answer(stale, content);
-  check('superseded preflight cannot dispatch to owner', [dispatched.length, dispatched.at(-1)[0]], [6, 'b.txt']);
+  check('superseded preflight cannot dispatch to owner', [dispatched.length, dispatched.at(-1)[0]], [5, 'b.txt']);
   click('a.txt'); var navigated = take('preview-hook', 'preview');
   x.instance.navigate('folder'); await answer(take('preview-hook', 'list', 'folder'), listing('/picked/folder', []));
   await refuse(navigated);
-  check('late preflight failure after navigation cannot dispatch fallback', dispatched.length, 6);
+  check('late preflight failure after navigation cannot dispatch fallback', dispatched.length, 5);
   x.instance.navigate('');
   x.all('.fseg button')[1].click(); x.q.value = 'needle'; event(x.q, 'input'); await timers();
   await answer(take('preview-hook', 'search'), { files: [{ path: 'deep/match.txt', matches: [{ line: 17, hit: 'needle' }] }] });
@@ -89,13 +95,17 @@ async function previewHookChecks() {
     x.instance.cancelPreview();
     if (result === 'refused') await refuse(cancelled);
     else await answer(cancelled, result === 'binary' ? { kind: 'none', reason_code: 'binary' } : content);
-    check('dismissal retires pending ' + result + ' preflight without reopening owner or row menu', [dispatched.length, !!doc.querySelector('.fmenu'), x.instance.selection().path], [7, false, 'b.txt']);
+    check('dismissal retires pending ' + result + ' preflight without reopening owner or row menu', [dispatched.length, !!doc.querySelector('.fmenu'), x.instance.selection().path], [6, false, 'b.txt']);
   }
+  click('file.bin', 'dblclick'); var cancelledDblclick = take('preview-hook', 'preview');
+  x.instance.cancelPreview();
+  await answer(cancelledDblclick, { kind: 'none', reason_code: 'binary' });
+  check('dismissal retires pending dblclick preflight without native open', openedNative.length, 2);
   click('a.txt'); await answer(take('preview-hook', 'preview'), content);
-  check('cancelPreview does not block a later intentional file click', [dispatched.length, dispatched.at(-1)[0]], [8, 'a.txt']);
+  check('cancelPreview does not block a later intentional file click', [dispatched.length, dispatched.at(-1)[0]], [7, 'a.txt']);
   click('a.txt'); var destroyed = take('preview-hook', 'preview'); x.instance.destroy();
   await answer(destroyed, content);
-  check('destroyed owner cannot receive late dispatch', dispatched.length, 8);
+  check('destroyed owner cannot receive late dispatch', dispatched.length, 7);
 
   // No hook on toolbar/card/default explorers: all still use WsPreview.open.
   var fallback = explorer('preview-default'); fallback.instance.shown();
@@ -826,7 +836,7 @@ async function multiSelectChecks() {
   // Run both production modules together: activation preflights before card
   // creation, and a failing player reuses the originating explorer's row menu.
   El.prototype.offsetWidth = 120; El.prototype.offsetHeight = 120;
-  var media = explorer('media'), previewCards = [], previewKind, openedCards = 0;
+  var mediaActs = [], media = explorer('media', true, { post: (route, body, done) => { mediaActs.push([route, body]); if (done) done(true); } }), previewCards = [], previewKind, openedCards = 0;
   media.instance.shown();
   var playable = [['mp4', 'video'], ['webm', 'video'], ['mov', 'video'], ['ogv', 'video'], ['m4v', 'video'],
     ['mp3', 'audio'], ['wav', 'audio'], ['ogg', 'audio'], ['oga', 'audio'], ['flac', 'audio'], ['m4a', 'audio'], ['aac', 'audio'], ['opus', 'audio'],
@@ -861,12 +871,17 @@ async function multiSelectChecks() {
     if (keyboard) key(row, 'Enter'); else event(row, 'dblclick');
   }
   for (var path of binaries) {
+    var actsBefore = mediaActs.length;
     activateMedia(path, path === 'file.exe');
     await answer(take('media', 'preview'), { kind: 'none', reason: 'localized binary reason', reason_code: 'binary' });
     var menu = doc.querySelector('.fmenu');
-    check(path + ' activates row menu without ever creating a preview', [openedCards, previewCards.length, !!menu, menu.style.left, menu.style.top], [0, 0, true, '20px', '54px']);
-    check(path + ' retains existing system and copy actions', menu.querySelectorAll('button').map(n => n.textContent), ['js.menu.preview', 'js.preview.openext', 'js.files.menu.reveal', 'js.menu.copyrel', 'js.menu.copyabs']);
-    key(menu, 'Escape');
+    if (path === 'file.exe') {
+      check(path + ' executable falls back to row menu without auto-opening', [openedCards, previewCards.length, mediaActs.length - actsBefore, !!menu, menu.style.left, menu.style.top], [0, 0, 0, true, '20px', '54px']);
+      check(path + ' retains existing system and copy actions', menu.querySelectorAll('button').map(n => n.textContent), ['js.menu.preview', 'js.preview.openext', 'js.files.menu.reveal', 'js.menu.copyrel', 'js.menu.copyabs']);
+      key(menu, 'Escape');
+    } else {
+      check(path + ' non-executable binary opens natively without card or menu', [openedCards, previewCards.length, !!menu, mediaActs.length - actsBefore, mediaActs.at(-1)], [0, 0, false, 1, ['fs/act', { path, action: 'open', root: '' }]]);
+    }
   }
   for (var [ext, kind] of playable) {
     activateMedia('play.' + ext);
@@ -886,10 +901,10 @@ async function multiSelectChecks() {
     check(name + ' retains existing preview kind', [previewCards[0].el.getAttribute('data-preview-kind'), !!doc.querySelector('.fmenu')], [previewAnswer.kind === 'text' ? 'code' : previewAnswer.kind, false]);
     previewCards[0].close();
   }
+  var actsBeforeLarge = mediaActs.length;
   activateMedia('large.txt');
   await answer(take('media', 'preview'), { kind: 'none', reason: 'too large' });
-  check('too-large text retains its existing fallback preview', [previewCards[0].body.querySelector('.pv-none') !== null, !!doc.querySelector('.fmenu')], [true, false]);
-  previewCards[0].close();
+  check('too-large text opens natively on dblclick without creating a preview card', [previewCards.length, !!doc.querySelector('.fmenu'), mediaActs.length - actsBeforeLarge, mediaActs.at(-1)], [0, false, 1, ['fs/act', { path: 'large.txt', action: 'open', root: '' }]]);
   activateMedia('play.mp3');
   await answer(take('media', 'preview'), { kind: 'audio', src: '/s/media/fs/raw?path=play.mp3' });
   var offscreen = previewCards[0];
@@ -916,12 +931,19 @@ async function multiSelectChecks() {
   check('late binary preflight cannot replace a newer preview with a menu', [previewCards.length, !!doc.querySelector('.fmenu')], [1, false]);
   previewCards[0].close();
   media.q.value = 'unknown'; event(media.q, 'input'); await timers();
-  await answer(take('media', 'find'), { items: [{ path: 'deep/unknown.custom' }] });
+  await answer(take('media', 'find'), { items: [{ path: 'deep/unknown.custom' }, { path: 'deep/run.sh' }] });
   media.hits.getBoundingClientRect = () => ({ left: 10, right: 510, top: 10, bottom: 600 });
-  media.at('.hit').getBoundingClientRect = () => ({ left: 20, right: 490, top: 30, bottom: 50 });
-  event(media.hits, 'click', { target: media.at('.hit') });
+  media.all('.hit').forEach(hit => hit.getBoundingClientRect = () => ({ left: 20, right: 490, top: 30, bottom: 50 }));
+  var actsBeforeHit = mediaActs.length;
+  event(media.hits, 'click', { target: media.all('.hit')[0] });
   await answer(take('media', 'preview'), { kind: 'none', reason_code: 'binary' });
-  check('binary search hit uses its visible row menu, not a preview', [previewCards.length, !!doc.querySelector('.fmenu')], [0, true]);
+  check('single-click binary search hit does not open menu or native app', [previewCards.length, !!doc.querySelector('.fmenu'), mediaActs.length - actsBeforeHit], [0, false, 0]);
+  event(media.hits, 'dblclick', { target: media.all('.hit')[0] });
+  await answer(take('media', 'preview'), { kind: 'none', reason_code: 'binary' });
+  check('dblclick non-executable binary search hit opens natively', [previewCards.length, !!doc.querySelector('.fmenu'), mediaActs.length - actsBeforeHit, mediaActs.at(-1)], [0, false, 1, ['fs/act', { path: 'deep/unknown.custom', action: 'open', root: '' }]]);
+  event(media.hits, 'dblclick', { target: media.all('.hit')[1] });
+  await answer(take('media', 'preview'), { kind: 'none', reason_code: 'binary' });
+  check('dblclick script search hit falls back to its visible row menu', [previewCards.length, !!doc.querySelector('.fmenu'), mediaActs.length - actsBeforeHit], [0, true, 1]);
   key(doc.querySelector('.fmenu'), 'Escape'); key(media.q, 'Escape');
   activateMedia('file.zip'); var destroyedPreview = take('media', 'preview');
   media.instance.destroy();
