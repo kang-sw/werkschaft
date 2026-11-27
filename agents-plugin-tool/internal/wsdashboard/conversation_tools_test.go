@@ -88,9 +88,10 @@ func TestWhiteboardEffectsDoNotReplaceLegacyToolSummaries(t *testing.T) {
 	if drawerEnd < 0 || wbPos < drawerEnd {
 		t.Fatalf("whiteboard card was absorbed into tool drawer:\n%s", html)
 	}
-	// Conversation cards expose committed panel recaps, not panel payloads.
-	if strings.Contains(html, "committed payload") {
-		t.Fatal("panel payload escaped its board-only surface")
+	// Conversation cards expose committed panel recaps alongside bounded,
+	// sanitized panel previews.
+	if !strings.Contains(html, "committed payload") || !strings.Contains(html, `class="wbupdate-panel-body md"`) {
+		t.Fatalf("panel preview missing from conversation card:\n%s", html)
 	}
 }
 
