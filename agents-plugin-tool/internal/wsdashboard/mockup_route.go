@@ -320,5 +320,10 @@ func (d *Daemon) handleFSMockup(w http.ResponseWriter, r *http.Request, replyID,
 	if r.Header.Get("Origin") == "null" {
 		h.Set("Access-Control-Allow-Origin", "null")
 	}
-	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(data))
+	body := data
+	lowerRel := strings.ToLower(rel)
+	if (strings.HasSuffix(lowerRel, ".html") || strings.HasSuffix(lowerRel, ".htm")) && wantsPreviewZoomBridge(r) {
+		body = injectPreviewZoomBridge(data)
+	}
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(body))
 }

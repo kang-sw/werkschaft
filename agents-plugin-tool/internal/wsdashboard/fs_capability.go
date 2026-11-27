@@ -389,6 +389,61 @@ func (d *Daemon) handleFSCapability(w http.ResponseWriter, r *http.Request, repl
 	d.serveCapabilityFile(w, r, f, rel, info, "http://"+r.Host+"/s/"+replyID+part+capability+"/", view)
 }
 
+const previewZoomBridgeScript = `<script>(function(){try{window.addEventListener("wheel",function(e){if(e.ctrlKey||e.metaKey){e.preventDefault();if(e.deltaY)parent.postMessage({wsPreviewZoom:e.deltaY<0?1:-1},"*");}},{passive:false,capture:true});window.addEventListener("keydown",function(e){if((e.ctrlKey||e.metaKey)&&(e.key==="0"||e.code==="Digit0")&&!e.altKey){e.preventDefault();parent.postMessage({wsPreviewZoom:0},"*");}},{capture:true});}catch(_){}})();</script>`
+
+func isHTMLCapExt(ext string) bool {
+	return strings.EqualFold(ext, ".html") || strings.EqualFold(ext, ".htm")
+}
+
+func wantsPreviewZoomBridge(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	return strings.EqualFold(r.Header.Get("Sec-Fetch-Dest"), "iframe") || r.URL.Query().Get("ws_preview") == "1"
+}
+
+func lastASCIIFoldIndex(data []byte, lowerNeedle string) int {
+	n := len(lowerNeedle)
+	for i := len(data) - n; i >= 0; i-- {
+		match := true
+		for j := 0; j < n; j++ {
+			b := data[i+j]
+			if b >= 'A' && b <= 'Z' {
+				b += 'a' - 'A'
+			}
+			if b != lowerNeedle[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
+}
+
+// injectPreviewZoomBridge returns a newly allocated copy of an HTML document
+// with a passive-false wheel / Ctrl-0 listener posting zoom steps to parent.
+// Never mutates data in place; runs only under CSP inline script rules without
+// weakening sandbox isolation.
+func injectPreviewZoomBridge(data []byte) []byte {
+	idx := lastASCIIFoldIndex(data, "</body>")
+	if idx < 0 {
+		idx = lastASCIIFoldIndex(data, "</html>")
+	}
+	out := make([]byte, 0, len(data)+len(previewZoomBridgeScript))
+	if idx < 0 {
+		out = append(out, data...)
+		out = append(out, previewZoomBridgeScript...)
+		return out
+	}
+	out = append(out, data[:idx]...)
+	out = append(out, previewZoomBridgeScript...)
+	out = append(out, data[idx:]...)
+	return out
+}
+
 // serveCapabilityFile writes the opened file f, at rel under its root with
 // stat info, as the capability route serves one, or with view as the page
 // route does, under the policy for the path prefix prefix (see the file
@@ -411,7 +466,7 @@ func (d *Daemon) serveCapabilityFile(w http.ResponseWriter, r *http.Request, f i
 			csp = imageContentSecurityPolicy
 		}
 		switch {
-		case ext == ".html" || ext == ".htm":
+		case isHTMLCapExt(ext):
 			data, ok := readViewable(f, info)
 			if !ok {
 				fsNotFound(w)
@@ -419,6 +474,13 @@ func (d *Daemon) serveCapabilityFile(w http.ResponseWriter, r *http.Request, f i
 			}
 			content = bytes.NewReader(data)
 		case info.Size() > fsViewAssetMax:
+			fsNotFound(w)
+			return
+		}
+	} else if isHTMLCapExt(ext) && wantsPreviewZoomBridge(r) {
+		if data, ok := readViewable(f, info); ok {
+			content = bytes.NewReader(injectPreviewZoomBridge(data))
+		} else if _, err := f.Seek(0, io.SeekStart); err != nil {
 			fsNotFound(w)
 			return
 		}

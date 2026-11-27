@@ -114,17 +114,49 @@
     return ph;
   }
 
+  function syncCardActions(card) {
+    if (!card || !card.actions) return;
+    var panelId = card.data && card.data.panel || "";
+    var list = [];
+    if (card._panelIsMockup && window.WsCards && window.WsCards.buildZoomGroup) {
+      var zkey = card._panelZoomKey || "";
+      var grp = window.WsCards.buildZoomGroup(function (dir) {
+        var k = card._panelZoomKey || zkey;
+        if (k) window.WsCards.stepMockupZoom(k, dir);
+      });
+      if (window.WsCards.applyZoomGroup && window.WsCards.getMockupZoom && zkey) {
+        window.WsCards.applyZoomGroup(grp, window.WsCards.getMockupZoom(zkey));
+      }
+      list.push(grp);
+    }
+    list.push({
+      icon: "external-link",
+      cls: "bc-jump",
+      title: t("js.panel.jump", "Jump to panel in topic"),
+      run: function () {
+        if (panelId && typeof window.wbBoardJump === "function") window.wbBoardJump(panelId);
+      }
+    });
+    card.actions(list);
+  }
+
   function mountIfConnected(card) {
     if (!card || card._panelClosed || !card.body || !card.body.isConnected) return;
     if (!hooks.mountFrames) return;
     if (card.body.querySelector && card.body.querySelector("div.doc-frame[data-srcdoc], div.doc-frame[data-mockup-src]")) {
       hooks.mountFrames(card.body);
     }
+    if (card._panelIsMockup && window.WsCards && window.WsCards.syncMockupElement) {
+      window.WsCards.syncMockupElement(card.body);
+    }
   }
 
   function showUnavailable(card) {
     if (!card || card._panelClosed) return;
     card._panelMissing = true;
+    card._panelIsMockup = false;
+    card._panelZoomKey = "";
+    syncCardActions(card);
     if (card.body.querySelector && card.body.querySelector(".panel-card-empty")) return;
     card.body.textContent = "";
     var msg = doc.createElement("div");
@@ -147,14 +179,24 @@
     var mockupSrc = srcFrame.getAttribute("data-mockup-src") || "";
     if (!mockupSrc && mockup) mockupSrc = srcFrame.getAttribute("src") || "";
     var mockupSha = srcFrame.getAttribute("data-mockup-sha") || "";
+    var isMockupPanel = !!(mockup || mockupSrc || (srcFrame.closest && srcFrame.closest(".mockup-wrap")));
+    var zoomKey = isMockupPanel ? (srcFrame.getAttribute("data-doc-key") || srcFrame.getAttribute("data-doc") || mockupSrc || "") : "";
     if (card._panelMounted && card._panelEntry === entry && card._panelSrcdoc === srcdoc && card._panelMockupSrc === mockupSrc && card._panelMockupSha === mockupSha) {
+      if (card._panelIsMockup !== isMockupPanel || card._panelZoomKey !== zoomKey) {
+        card._panelIsMockup = isMockupPanel;
+        card._panelZoomKey = zoomKey;
+        syncCardActions(card);
+      }
       mountIfConnected(card);
+      if (isMockupPanel && window.WsCards && window.WsCards.syncMockupElement) {
+        window.WsCards.syncMockupElement(card.body);
+      }
       return true;
     }
     var wrap = doc.createElement("div");
     wrap.className = "doc-body panel-card-doc";
     var ph = buildPlaceholder(srcFrame);
-    if (mockup || mockupSrc || (srcFrame.closest && srcFrame.closest(".mockup-wrap"))) {
+    if (isMockupPanel) {
       var mwrap = doc.createElement("div");
       mwrap.className = "mockup-wrap";
       mwrap.appendChild(ph);
@@ -166,11 +208,17 @@
     card.body.appendChild(wrap);
     card._panelMounted = true;
     card._panelMissing = false;
+    card._panelIsMockup = isMockupPanel;
+    card._panelZoomKey = zoomKey;
     card._panelEntry = entry;
     card._panelSrcdoc = srcdoc;
     card._panelMockupSrc = mockupSrc;
     card._panelMockupSha = mockupSha;
+    syncCardActions(card);
     mountIfConnected(card);
+    if (isMockupPanel && window.WsCards && window.WsCards.syncMockupElement) {
+      window.WsCards.syncMockupElement(card.body);
+    }
     return true;
   }
 
@@ -289,20 +337,15 @@
         card._panelMounted = false;
         card._panelMissing = false;
         card._panelFetching = false;
+        card._panelIsMockup = false;
+        card._panelZoomKey = "";
         card._panelEntry = null;
         card._panelSrcdoc = null;
         card._panelMockupSrc = null;
         card._panelMockupSha = null;
         card._panelHead = null;
         updateHeader(card, { name: panelId, sub: topicName, badge: panelId, topic: topicName });
-        card.actions([{
-          icon: "external-link",
-          cls: "bc-jump",
-          title: t("js.panel.jump", "Jump to panel in topic"),
-          run: function () {
-            if (panelId && typeof window.wbBoardJump === "function") window.wbBoardJump(panelId);
-          }
-        }]);
+        syncCardActions(card);
         syncCard(card);
         syncButtons();
       },

@@ -177,8 +177,137 @@
     }
     return box;
   }
+  var ZOOM_STEPS = cards.zoomSteps || [0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1, 1.25, 1.5, 2];
+  var MIN_ZOOM = ZOOM_STEPS[0], MAX_ZOOM = ZOOM_STEPS[ZOOM_STEPS.length - 1];
+  var previewFrames = [];
+  var zoomMsgBound = false;
+
+  function normPreviewZoom(z) {
+    if (cards.normZoom) return cards.normZoom(z);
+    var n = Number(z);
+    if (!isFinite(n) || n <= 0) return 1;
+    var best = ZOOM_STEPS[0], bestDist = Math.abs(n - best);
+    for (var i = 1; i < ZOOM_STEPS.length; i++) {
+      var d = Math.abs(n - ZOOM_STEPS[i]);
+      if (d < bestDist) { best = ZOOM_STEPS[i]; bestDist = d; }
+    }
+    return best;
+  }
+  function stepPreviewZoomVal(cur, dir) {
+    if (cards.stepZoom) return cards.stepZoom(cur, dir);
+    if (dir === 0) return 1;
+    var z = normPreviewZoom(cur);
+    var idx = ZOOM_STEPS.indexOf(z);
+    if (idx < 0) idx = ZOOM_STEPS.indexOf(1);
+    return ZOOM_STEPS[dir > 0 ? Math.min(ZOOM_STEPS.length - 1, idx + 1) : Math.max(0, idx - 1)];
+  }
+  function previewZoomSvg(pathD) {
+    return '<svg class="li" viewBox="0 0 24 24" aria-hidden="true"><path d="' + pathD + '"/></svg>';
+  }
+  function previewTxt(translated, key, fallback) {
+    return translated && translated !== key ? translated : fallback;
+  }
+  function buildPreviewZoom(onAction) {
+    if (cards.buildZoomGroup) return cards.buildZoomGroup(onAction);
+    var grp = mk("span", "d-zoom-grp");
+    if (grp.setAttribute) grp.setAttribute("role", "group");
+    var tOut = previewTxt(typeof wsT === "function" ? wsT("js.preview.zoom.out") : "", "js.preview.zoom.out", "Zoom out");
+    var tReset = previewTxt(typeof wsT === "function" ? wsT("js.preview.zoom.reset") : "", "js.preview.zoom.reset", "Reset zoom (100%)");
+    var tIn = previewTxt(typeof wsT === "function" ? wsT("js.preview.zoom.in") : "", "js.preview.zoom.in", "Zoom in");
+    var outBtn = mk("button", "ibtn d-zoom-btn d-zoom-out");
+    outBtn.type = "button";
+    outBtn.title = tOut;
+    if (outBtn.setAttribute) outBtn.setAttribute("aria-label", tOut);
+    outBtn.innerHTML = previewZoomSvg("M5 12h14");
+    var pctBtn = mk("button", "d-zoom-pct", "100%");
+    pctBtn.type = "button";
+    pctBtn.title = tReset;
+    if (pctBtn.setAttribute) pctBtn.setAttribute("aria-label", tReset);
+    var inBtn = mk("button", "ibtn d-zoom-btn d-zoom-in");
+    inBtn.type = "button";
+    inBtn.title = tIn;
+    if (inBtn.setAttribute) inBtn.setAttribute("aria-label", tIn);
+    inBtn.innerHTML = previewZoomSvg("M12 5v14M5 12h14");
+    grp._zp = { out: outBtn, pct: pctBtn, in: inBtn };
+    grp.appendChild(outBtn);
+    grp.appendChild(pctBtn);
+    grp.appendChild(inBtn);
+    if (grp.addEventListener) grp.addEventListener("click", function (e) { if (e.preventDefault) e.preventDefault(); if (e.stopPropagation) e.stopPropagation(); });
+    if (outBtn.addEventListener) outBtn.addEventListener("click", function (e) { if (e.preventDefault) e.preventDefault(); if (e.stopPropagation) e.stopPropagation(); onAction(-1); });
+    if (pctBtn.addEventListener) pctBtn.addEventListener("click", function (e) { if (e.preventDefault) e.preventDefault(); if (e.stopPropagation) e.stopPropagation(); onAction(0); });
+    if (inBtn.addEventListener) inBtn.addEventListener("click", function (e) { if (e.preventDefault) e.preventDefault(); if (e.stopPropagation) e.stopPropagation(); onAction(1); });
+    return grp;
+  }
+  function applyPreviewZoomGroup(grp, z) {
+    if (cards.applyZoomGroup) { cards.applyZoomGroup(grp, z); return; }
+    if (!grp) return;
+    var pct = Math.round(z * 100), p = grp._zp;
+    var outBtn = p && p.out, pctBtn = p && p.pct, inBtn = p && p.in;
+    if (pctBtn) pctBtn.textContent = pct + "%";
+    if (outBtn) outBtn.disabled = z <= MIN_ZOOM;
+    if (inBtn) inBtn.disabled = z >= MAX_ZOOM;
+    if (z === 1) grp.removeAttribute && grp.removeAttribute("data-zoom-custom");
+    else grp.setAttribute && grp.setAttribute("data-zoom-custom", String(pct));
+  }
+  function applyPreviewZoomTarget(stage, z) {
+    if (cards.applyZoomTarget) { cards.applyZoomTarget(stage, z); return; }
+    if (!stage) return;
+    if (z === 1) {
+      if (stage.removeAttribute) stage.removeAttribute("data-zoom");
+      if (stage.style) {
+        if (stage.style.removeProperty) stage.style.removeProperty("--wb-zoom");
+        else delete stage.style["--wb-zoom"];
+      }
+    } else {
+      if (stage.setAttribute) stage.setAttribute("data-zoom", String(Math.round(z * 100)));
+      if (stage.style) {
+        if (stage.style.setProperty) stage.style.setProperty("--wb-zoom", String(z));
+        else stage.style["--wb-zoom"] = String(z);
+      }
+    }
+  }
+  function previewKey(d) {
+    return (d.out ? "o:" : "r:") + (d.root || "") + "\n" + d.path + (d.line ? "#L" + d.line : "");
+  }
+  function clearPreviewFrame(owner) {
+    if (owner) owner._previewZoomStep = null;
+    for (var i = previewFrames.length - 1; i >= 0; i--) {
+      if (previewFrames[i].owner === owner) previewFrames.splice(i, 1);
+    }
+  }
+  function onPreviewZoomMessage(e) {
+    if (!e || !e.source || !e.data || typeof e.data !== "object") return;
+    var dir = e.data.wsPreviewZoom;
+    if (dir !== 1 && dir !== -1 && dir !== 0) return;
+    for (var i = previewFrames.length - 1; i >= 0; i--) {
+      var item = previewFrames[i];
+      if (!item.frame || !item.step) { previewFrames.splice(i, 1); continue; }
+      if (item.frame.contentWindow && e.source === item.frame.contentWindow) {
+        item.step(dir);
+        return;
+      }
+    }
+  }
+  function bindPreviewHostWheel(host, owner) {
+    if (!host || !host.addEventListener || owner._previewWheelBound) return;
+    owner._previewWheelBound = true;
+    host.addEventListener("wheel", function (e) {
+      if (!e || e.defaultPrevented || e._wsZoomHandled || !(e.ctrlKey || e.metaKey) || !owner._previewZoomStep) return;
+      e._wsZoomHandled = true;
+      if (e.preventDefault) e.preventDefault();
+      if (!e.deltaY) return;
+      owner._previewZoomStep(e.deltaY < 0 ? 1 : -1);
+    }, { passive: false });
+  }
+  function ensureZoomMsgListener() {
+    if (zoomMsgBound || typeof window === "undefined" || !window.addEventListener) return;
+    zoomMsgBound = true;
+    window.addEventListener("message", onPreviewZoomMessage);
+  }
+
   function draw(card, v) {
     var d = card.data, box;
+    clearPreviewFrame(card);
     // Monospace text views are code, regardless of the HTML/SVG source flag;
     // rendered Markdown is prose. Use renderer kinds, not extensions or MIME.
     card.el.setAttribute("data-preview-kind", v.kind === "text" ? "code" : v.kind);
@@ -211,13 +340,45 @@
       // opaque origin, apart from the dashboard page, its cookie, and its
       // routes. The capability route's own policy says the same.
       box = mk("div", "pv-sand");
-      box.appendChild(mk("div", "pv-cap", wsT("js.preview.sandbox")));
+      var cap = mk("div", "pv-cap");
+      cap.appendChild(mk("span", "pv-cap-txt", wsT("js.preview.sandbox")));
+      var stage = mk("div", "pv-sand-stage");
       var fr = mk("iframe");
       fr.setAttribute("sandbox", "allow-scripts");
       fr.setAttribute("referrerpolicy", "no-referrer");
       fr.title = d.path;
       fr.src = v.frame;
-      box.appendChild(fr);
+      stage.appendChild(fr);
+      var pkey = previewKey(d);
+      var curZ = card._previewZoomKey === pkey && card._previewZoom ? normPreviewZoom(card._previewZoom) : 1;
+      card._previewZoomKey = pkey;
+      card._previewZoom = curZ;
+      var zoomGrp = buildPreviewZoom(function (dir) {
+        if (card._previewZoomStep) card._previewZoomStep(dir);
+      });
+      function setFrameZoom(nextZ) {
+        curZ = card._previewZoom = normPreviewZoom(nextZ);
+        applyPreviewZoomTarget(stage, curZ);
+        applyPreviewZoomGroup(zoomGrp, curZ);
+      }
+      card._previewZoomStep = function (dir) {
+        setFrameZoom(stepPreviewZoomVal(curZ, dir));
+      };
+      setFrameZoom(curZ);
+      cap.appendChild(zoomGrp);
+      box.appendChild(cap);
+      box.appendChild(stage);
+      if (box.addEventListener) {
+        box.addEventListener("wheel", function (e) {
+          if (!e || e.defaultPrevented || e._wsZoomHandled || !(e.ctrlKey || e.metaKey)) return;
+          e._wsZoomHandled = true;
+          if (e.preventDefault) e.preventDefault();
+          if (!e.deltaY) return;
+          if (card._previewZoomStep) card._previewZoomStep(e.deltaY < 0 ? 1 : -1);
+        }, { passive: false });
+      }
+      previewFrames.push({ owner: card, frame: fr, step: card._previewZoomStep });
+      ensureZoomMsgListener();
     } else if (v.kind === "markdown") {
       box = mk("article", "md pv-md");
       box.innerHTML = v.html;
@@ -308,10 +469,11 @@
           if (e.target.closest(".bc-hd") && !e.target.closest("button")) promote(card);
         });
       }
+      bindPreviewHostWheel(card.el, card);
       changed(card);
       load(card);
     },
-    close: function (card) { card.turn = -1; card.mediaError = null; doc.dispatchEvent(new Event("ws-file-cards")); },
+    close: function (card) { card.turn = -1; card.mediaError = null; clearPreviewFrame(card); doc.dispatchEvent(new Event("ws-file-cards")); },
     // Both pinning and unpinning end the transient preview state.
     pinned: function (card) { card.preview = false; changed(card); }
   });
@@ -339,6 +501,7 @@
         title: function (v) { name.textContent = v.name; path.textContent = v.sub; path.title = v.sub; },
         close: function () { pane.close(); }
       };
+      bindPreviewHostWheel(el, view);
       var pane = {
         open: function (p, o) {
           current = { path: p, options: o || {} };
@@ -347,6 +510,7 @@
           if (o && o.line) view.data.line = o.line;
           view.mediaError = o && o.mediaError;
           if (o && o.answer) answers.set(view.data, o.answer);
+          clearPreviewFrame(view);
           body.textContent = "";
           el.hidden = false;
           load(view);
@@ -362,6 +526,9 @@
           // Increment, never reset: an old answer must not match a later open.
           view.turn = (view.turn || 0) + 1;
           view.mediaError = null;
+          view._previewZoom = null;
+          view._previewZoomKey = null;
+          clearPreviewFrame(view);
           body.textContent = "";
           el.hidden = true;
           if (closed) closed(hadFocus);
@@ -370,8 +537,9 @@
         current: function () { return current; }
       };
       keep.addEventListener("click", function () {
+        var z = view._previewZoom;
         var previous = pane.close();
-        if (previous) window.WsPreview.open(previous.path, Object.assign({}, previous.options, { keep: true }));
+        if (previous) window.WsPreview.open(previous.path, Object.assign({}, previous.options, z && z !== 1 ? { keep: true, zoom: z } : { keep: true }));
       });
       exit.addEventListener("click", function () { pane.close(); });
       el.addEventListener("keydown", function (e) {
@@ -420,6 +588,10 @@
         if (card) card.preview = !o.keep;
       }
       if (!card) return null;
+      if (o.zoom > 0) {
+        card._previewZoomKey = previewKey(data);
+        card._previewZoom = normPreviewZoom(o.zoom);
+      }
       changed(card);
       cards.relayout();
       card.mediaError = o.mediaError || null;

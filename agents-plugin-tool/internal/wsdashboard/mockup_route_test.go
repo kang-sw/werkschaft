@@ -318,3 +318,98 @@ func TestMockupLRUBoundedEviction(t *testing.T) {
 		t.Fatal("expected k3 in /b2 to survive EvictBoard(/b1)")
 	}
 }
+
+func TestFSMockPreviewZoomBridgeInjectionAndByteSafety(t *testing.T) {
+	d, base, src, project := startMockupFixture(t, false)
+	now := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
+	d.fsNow = func() time.Time { return now }
+
+	noFollow := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Timeout:       5 * time.Second,
+	}
+	req, _ := http.NewRequest(http.MethodGet, base+"/s/boardsession/board/mockup?entry=e5", nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.AddCookie(localhostTestCookie(t, d))
+	resp, err := noFollow.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("GET /board/mockup status = %d, want 302", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	capPrefix := strings.TrimSuffix(loc, "index.html")
+
+	fetch := func(path string, hdr map[string]string) (*http.Response, string) {
+		r, _ := http.NewRequest(http.MethodGet, base+path, nil)
+		for k, v := range hdr {
+			r.Header.Set(k, v)
+		}
+		res, err := noFollow.Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		return res, string(b)
+	}
+
+	rawHTML, err := os.ReadFile(filepath.Join(project, "ai-docs", "assets", "mockups", "261126", "demo", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Plain GET without Sec-Fetch-Dest: iframe or ws_preview=1 stays byte-exact.
+	res, plainBody := fetch(loc, nil)
+	if res.StatusCode != http.StatusOK || plainBody != string(rawHTML) {
+		t.Fatalf("plain GET root = %d %q, want byte-exact %q", res.StatusCode, plainBody, string(rawHTML))
+	}
+	if strings.Contains(plainBody, "wsPreviewZoom") {
+		t.Fatal("plain GET root must not inject preview zoom bridge")
+	}
+
+	// Iframe navigation injects previewZoomBridgeScript right before </body> and preserves sandbox/Vary headers.
+	res, frameBody := fetch(loc, map[string]string{"Sec-Fetch-Dest": "iframe"})
+	if res.StatusCode != http.StatusOK || !strings.Contains(frameBody, previewZoomBridgeScript+"</body></html>") {
+		t.Fatalf("iframe GET root = %d %q, want script injected before </body>", res.StatusCode, frameBody)
+	}
+	if res.Header.Get("Vary") != "Origin" {
+		t.Fatalf("iframe Vary = %q, want Origin", res.Header.Get("Vary"))
+	}
+	csp := res.Header.Get("Content-Security-Policy")
+	if !strings.Contains(csp, "sandbox allow-scripts;") || strings.Contains(csp, "allow-same-origin") {
+		t.Fatalf("unexpected iframe CSP %q", csp)
+	}
+	if src.reads.Load() != 1 {
+		t.Fatalf("expected cached LRU hit (reads=1), got %d", src.reads.Load())
+	}
+
+	// Subsequent plain GET proves LRU source bytes were never mutated.
+	res, afterBody := fetch(loc, nil)
+	if res.StatusCode != http.StatusOK || afterBody != string(rawHTML) {
+		t.Fatalf("post-iframe plain GET = %d %q, want unmutated cached bytes %q", res.StatusCode, afterBody, string(rawHTML))
+	}
+
+	// Explicit ws_preview=1 query injects even without Sec-Fetch-Dest: iframe.
+	res, qpBody := fetch(loc+"?ws_preview=1", nil)
+	if res.StatusCode != http.StatusOK || !strings.Contains(qpBody, previewZoomBridgeScript) {
+		t.Fatalf("ws_preview=1 GET = %d %q, want injected bridge", res.StatusCode, qpBody)
+	}
+	if res.Header.Get("Vary") != "Origin" {
+		t.Fatalf("ws_preview=1 Vary = %q, want Origin", res.Header.Get("Vary"))
+	}
+
+	// Non-HTML assets remain byte-exact even when Sec-Fetch-Dest: iframe and ws_preview=1 are sent.
+	for rel, want := range map[string]string{
+		"app.js":          `fetch('data/state.json');`,
+		"app.css":         `body { color: #222; }`,
+		"data/state.json": `{"ok":true}`,
+	} {
+		res, got := fetch(capPrefix+rel+"?ws_preview=1", map[string]string{"Sec-Fetch-Dest": "iframe"})
+		if res.StatusCode != http.StatusOK || got != want {
+			t.Fatalf("non-HTML %s = %d %q, want byte-exact %q", rel, res.StatusCode, got, want)
+		}
+	}
+}
