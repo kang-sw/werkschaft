@@ -199,11 +199,20 @@
   font: 12px/1.4 var(--wb-sans, system-ui, sans-serif);
   overflow-wrap: anywhere;
 }
-.rail[data-companion-dock="unregistered"] .rlist > [data-companion-before-unreg] { margin-bottom: var(--companion-slot); }
+.rail[data-companion-dock="unregistered"] details.rws-unreg { margin-top: var(--companion-slot); }
 .rail[data-companion-dock="footer"] .rfoot { margin-top: var(--companion-slot); }
 
-/* Pure-VRM bottom-right bust dock: borderless transparent WebGL canvas with
-   bottom-edge Digital Dissolve pixel-scatter mask. */
+/* Pure-VRM left-rail bust dock (>= 1600px): borderless transparent WebGL canvas
+   anchored over #rail-companion-slot with a soft bottom dissolve fade. */
+.ws-companion[data-dock="rail-slot"] .ws-companion-character {
+  cursor: pointer;
+}
+.ws-companion[data-dock="rail-slot"] .ws-companion-character:active {
+  cursor: pointer;
+}
+.ws-companion[data-dock="rail-slot"] .ws-companion-resize {
+  display: none;
+}
 .ws-companion-vrm-wrap {
   position: relative;
   width: 100%;
@@ -219,17 +228,17 @@
   -webkit-mask-image: linear-gradient(
     to bottom,
     #000 0%,
-    #000 72%,
-    rgb(0 0 0 / 0.65) 84%,
-    rgb(0 0 0 / 0.18) 93%,
+    #000 74%,
+    rgb(0 0 0 / 0.72) 86%,
+    rgb(0 0 0 / 0.22) 95%,
     transparent 100%
   );
   mask-image: linear-gradient(
     to bottom,
     #000 0%,
-    #000 72%,
-    rgb(0 0 0 / 0.65) 84%,
-    rgb(0 0 0 / 0.18) 93%,
+    #000 74%,
+    rgb(0 0 0 / 0.72) 86%,
+    rgb(0 0 0 / 0.22) 95%,
     transparent 100%
   );
 }
@@ -245,19 +254,25 @@
 }
 .ws-dissolve-grid {
   position: absolute;
-  left: 8px;
-  right: 8px;
+  left: 16px;
+  right: 16px;
   bottom: 0;
-  height: 44px;
+  height: 26px;
   pointer-events: none;
-  opacity: 0.9;
+  opacity: 0.16;
   background-image:
-    radial-gradient(color-mix(in srgb, var(--wb-primary) 55%, transparent) 1.4px, transparent 1.4px),
-    radial-gradient(color-mix(in srgb, var(--wb-fg) 25%, transparent) 1px, transparent 1px);
+    radial-gradient(color-mix(in srgb, var(--wb-primary) 42%, transparent) 1px, transparent 1px),
+    radial-gradient(color-mix(in srgb, var(--wb-fg) 18%, transparent) 0.8px, transparent 0.8px);
   background-size: 10px 10px, 6px 6px;
   background-position: 0 0, 3px 4px;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 65%, transparent 100%);
-  mask-image: linear-gradient(to bottom, transparent 0%, #000 65%, transparent 100%);
+  -webkit-mask-image:
+    linear-gradient(to bottom, transparent 0%, #000 68%, transparent 100%),
+    linear-gradient(to right, transparent 0%, #000 18%, #000 82%, transparent 100%);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(to bottom, transparent 0%, #000 68%, transparent 100%),
+    linear-gradient(to right, transparent 0%, #000 18%, #000 82%, transparent 100%);
+  mask-composite: intersect;
 }
 .ws-companion-vrm-overlay {
   position: absolute;

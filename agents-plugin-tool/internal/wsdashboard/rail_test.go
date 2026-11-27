@@ -1570,6 +1570,13 @@ func TestRailUnregisteredWorkspaceSessionsKeepNotificationRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(reg.HTML)
+	slotTag := `<div id="rail-companion-slot" class="rail-companion-slot" hidden></div>`
+	slotIdx := strings.Index(html, slotTag)
+	unregIdx := strings.Index(html, `<details class="rws-unreg"`)
+	rlistClose := strings.Index(html, `</div>`+slotTag)
+	if slotIdx < 0 || unregIdx < 0 || rlistClose < 0 || slotIdx >= unregIdx {
+		t.Fatalf("expected #rail-companion-slot strictly between #rlist close and details.rws-unreg (slot=%d rlistClose=%d unreg=%d):\n%s", slotIdx, rlistClose, unregIdx, html)
+	}
 	_, box, ok := strings.Cut(html, `<div class="unreg-notif" hidden>`)
 	if !ok {
 		t.Fatalf("no hidden notification box:\n%s", html)

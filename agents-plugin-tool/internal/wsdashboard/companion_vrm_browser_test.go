@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"os/exec"
@@ -122,6 +123,174 @@ func TestCompanionVrmBrowser(t *testing.T) {
 	t.Log(string(out))
 	if err != nil {
 		t.Fatalf("Chromium VRM companion verification: %v", err)
+	}
+}
+
+// TestCompanionVrmRailDockBrowser verifies the left-rail bottom VRM dock
+// layout with a long scrollable session list and pending unregistered
+// workspaces: zero dead-zone occlusion at the bottom of #rlist, clean layout
+// when details.rws-unreg opens below #rail-companion-slot, complete hide+pause
+// below 1600px (1440px 2-col and 720px 1-col), and unclipped FX badges and
+// context menu in document.body. Optional WS_COMPANION_RAIL_QA_SHOTS (absolute
+// dir) writes the 4 visual QA PNGs.
+func TestCompanionVrmRailDockBrowser(t *testing.T) {
+	if os.Getenv("WS_PLAYWRIGHT_MODULE") == "" {
+		t.Skip("set WS_PLAYWRIGHT_MODULE to use cached Chromium")
+	}
+	shots := os.Getenv("WS_COMPANION_RAIL_QA_SHOTS")
+	if shots != "" && !filepath.IsAbs(shots) {
+		t.Fatal("WS_COMPANION_RAIL_QA_SHOTS must be absolute")
+	}
+	if os.Getenv("PLAYWRIGHT_BROWSERS_PATH") == "" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			t.Setenv("PLAYWRIGHT_BROWSERS_PATH", filepath.Join(home, "Library", "Caches", "ms-playwright"))
+		}
+	}
+	home := t.TempDir()
+	cfgHome := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	t.Setenv("WS_CACHE_HOME", t.TempDir())
+	t.Setenv("WS_CONFIG_HOME", cfgHome)
+	SetDevAssets(nil)
+
+	backend := settingsTestBackend(t)
+	backend.LoadCompanion = func() (CompanionConfig, error) {
+		return CompanionConfig{
+			Enabled:              false,
+			Director:             "rules",
+			Pack:                 "default",
+			Preset:               "werkschaft-d1",
+			AgentCooldownSeconds: 30,
+			AgentHourlyCap:       20,
+		}, nil
+	}
+
+	paths, err := companionPaths(backend.Options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stageVrmPack := func(id, name, srcPath, wantVer string, fallback []byte) string {
+		var raw []byte
+		if srcPath != "" {
+			var err error
+			raw, err = os.ReadFile(srcPath)
+			if err != nil {
+				t.Fatalf("read VRM fixture %q: %v", srcPath, err)
+			}
+		} else {
+			raw = fallback
+		}
+		if ver, err := inspectCompanionVRM(raw); err != nil || ver != wantVer {
+			t.Fatalf("VRM fixture %q failed inspector: ver=%q want=%q err=%v", id, ver, wantVer, err)
+		}
+		dir := filepath.Join(paths.packs, id)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "model.vrm"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		manifest, err := json.Marshal(map[string]any{
+			"schema": "ws-companion-vrm/v1",
+			"id":     id,
+			"name":   name,
+			"model":  "model.vrm",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "pack.json"), manifest, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+
+	vrm0ID := stageVrmPack("vrm0-rail-qa", "VRM 0 Fixture", os.Getenv("WS_VRM0_SAMPLE"), "0.x", buildRenderableSyntheticVRM(false))
+	vrm1ID := stageVrmPack("vrm1-rail-qa", "VRM 1 Fixture", os.Getenv("WS_VRM1_SAMPLE"), "1.0", buildRenderableSyntheticVRM(true))
+
+	wsRoot := t.TempDir()
+	wsAlpha := mkDir(t, filepath.Join(wsRoot, "alpha-app"))
+	wsBeta := mkDir(t, filepath.Join(wsRoot, "beta-service"))
+	unreg1 := mkDir(t, filepath.Join(wsRoot, "scratch-tools"))
+	unreg2 := mkDir(t, filepath.Join(wsRoot, "design-sandbox"))
+	unreg3 := mkDir(t, filepath.Join(wsRoot, "proto-lab"))
+	wsFile := filepath.Join(cfgHome, "dashboard", "workspaces.json")
+	if err := os.MkdirAll(filepath.Dir(wsFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wsDoc, err := json.Marshal(workspacesDoc{
+		Version:    workspacesSchemaVersion,
+		Workspaces: []workspaceRecord{{Path: wsAlpha}, {Path: wsBeta}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(wsFile, wsDoc, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f := startPageFixture(t, func(o *DaemonOptions) {
+		o.Port = 0
+		o.LAN = false
+		o.bindHost = "127.0.0.1"
+		o.Config = backend
+		o.WorkspacesFile = wsFile
+	})
+
+	now := time.Now()
+	harnesses := []string{"claude", "codex", "pi"}
+	addLive := func(rid, proj, harness, phase string, age time.Duration) {
+		reg := Registration{
+			ReplyID:      rid,
+			Project:      proj,
+			Harness:      harness,
+			RegisteredAt: stampFor(now.Add(-age)),
+			HeartbeatAt:  stampFor(now),
+		}
+		if err := WriteRegistration(f.dir, reg); err != nil {
+			t.Fatal(err)
+		}
+		writeSnapshot(t, f.dir, rid, &wslive.Snapshot{
+			SchemaVersion: 1,
+			Adapter:       harness,
+			UpdatedAt:     now.UnixMilli(),
+			HeartbeatMs:   30000,
+			Lead:          wslive.Lead{Activity: wslive.Activity{Phase: phase}},
+		})
+		f.src.setPage(rid, PageContent{HasBoard: true, Seq: 1, Board: boardRegions(t, "active session board")})
+	}
+	for i := 1; i <= 10; i++ {
+		phase := wslive.PhaseIdle
+		if i%4 == 0 {
+			phase = wslive.PhaseTool
+		}
+		addLive(fmt.Sprintf("alpha%02d", i), wsAlpha, harnesses[i%3], phase, time.Duration(30-i)*time.Minute)
+	}
+	for i := 1; i <= 8; i++ {
+		phase := wslive.PhaseIdle
+		if i%3 == 0 {
+			phase = wslive.PhaseThinking
+		}
+		addLive(fmt.Sprintf("beta%02d", i), wsBeta, harnesses[(i+1)%3], phase, time.Duration(20-i)*time.Minute)
+	}
+	addLive("unregs1", unreg1, "claude", wslive.PhaseIdle, 8*time.Minute)
+	addLive("unregs2", unreg2, "codex", wslive.PhaseIdle, 6*time.Minute)
+	addLive("unregs3", unreg3, "pi", wslive.PhaseIdle, 4*time.Minute)
+	f.d.Index().Refresh()
+	waitFor(t, "rail dock sessions indexed", func() bool {
+		_, ok1 := f.d.Index().Session("beta08")
+		_, ok2 := f.d.Index().Session("unregs3")
+		return ok1 && ok2
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "node", "testdata/companion-vrm-rail-dock.browser.cjs", f.base, shots, vrm0ID, vrm1ID).CombinedOutput()
+	t.Log(string(out))
+	if err != nil {
+		t.Fatalf("Chromium VRM rail dock verification: %v", err)
 	}
 }
 

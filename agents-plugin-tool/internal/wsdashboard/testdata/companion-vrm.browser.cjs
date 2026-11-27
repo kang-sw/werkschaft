@@ -92,7 +92,7 @@ async function saveDockShot(page, name) {
     args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist']
   });
   try {
-    const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'dark' });
+    const context = await browser.newContext({ viewport: { width: 1680, height: 960 }, colorScheme: 'dark' });
     await context.addInitScript(() => {
       if (self !== top) return;
       const workers = navigator.serviceWorker;
@@ -184,13 +184,29 @@ async function saveDockShot(page, name) {
         const wrap = document.querySelector('.ws-companion-vrm-wrap');
         const cwrap = document.querySelector('.ws-companion-vrm-canvas-wrap');
         const grid = document.querySelector('.ws-dissolve-grid');
+        const slot = document.getElementById('rail-companion-slot');
+        const hit = document.querySelector('.ws-companion-hit');
+        const rlist = document.getElementById('rlist');
+        const unreg = document.querySelector('#rail details.rws-unreg');
+        const rfoot = document.querySelector('#rail .rfoot');
         const wStyle = getComputedStyle(wrap);
         const cwStyle = getComputedStyle(cwrap);
+        const rectOf = el => {
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
+        };
         return {
           wrapBg: wStyle.backgroundColor,
           wrapContain: wStyle.contain,
           maskImage: cwStyle.maskImage || cwStyle.webkitMaskImage || '',
           hasDissolveGrid: !!grid,
+          slotHidden: slot ? slot.hidden : true,
+          slotRect: rectOf(slot),
+          hitRect: rectOf(hit),
+          rlistRect: rectOf(rlist),
+          belowRect: rectOf(unreg || rfoot),
+          unregInsideRlist: !!(unreg && rlist && rlist.contains(unreg)),
           stage: window.WsCompanion.debugStage()
         };
       });
@@ -200,8 +216,22 @@ async function saveDockShot(page, name) {
       assert.equal(st.vrm.prop, null, `${pack.label} ground-zero baseline must not show 3D props`);
       assert.equal(st.vrm.framing?.usedBox3, true, `${pack.label} must frame bust using THREE.Box3`);
       assert.ok(st.vrm.framing.topY >= st.vrm.framing.headY + 0.18, `${pack.label} framing topY must include head/hair margin`);
-      assert.equal(st.size, 240);
-      assert.equal(st.vrmHeight, 280);
+      assert.equal(st.dock, 'rail-slot', `${pack.label} must dock in left rail slot at >= 1600px`);
+      assert.equal(st.vrmRailVisible, true);
+      assert.equal(st.avoiding, false);
+      assert.equal(visuals.unregInsideRlist, false, 'details.rws-unreg must sit outside #rlist');
+      assert.equal(visuals.slotHidden, false, '#rail-companion-slot must be visible at >= 1600px');
+      assert.ok(visuals.slotRect && visuals.slotRect.width >= 300 && visuals.slotRect.height >= 160,
+        `unexpected rail slot rect: ${JSON.stringify(visuals.slotRect)}`);
+      assert.ok(visuals.slotRect.top >= visuals.rlistRect.bottom - 1,
+        `slot (${JSON.stringify(visuals.slotRect)}) must sit below #rlist (${JSON.stringify(visuals.rlistRect)})`);
+      assert.ok(visuals.slotRect.bottom <= visuals.belowRect.top + 1,
+        `slot (${JSON.stringify(visuals.slotRect)}) must sit above unreg/footer (${JSON.stringify(visuals.belowRect)})`);
+      assert.ok(Math.abs(visuals.hitRect.left - visuals.slotRect.left) <= 2 &&
+        Math.abs(visuals.hitRect.bottom - visuals.slotRect.bottom) <= 2 &&
+        Math.abs(visuals.hitRect.width - visuals.slotRect.width) <= 2 &&
+        Math.abs(visuals.hitRect.height - visuals.slotRect.height) <= 2,
+        `VRM hit rect ${JSON.stringify(visuals.hitRect)} must align with #rail-companion-slot ${JSON.stringify(visuals.slotRect)}`);
       assert.equal(visuals.wrapBg, 'rgba(0, 0, 0, 0)', 'VRM wrap must have transparent borderless background');
       assert.match(visuals.wrapContain, /layout/, 'VRM wrap must declare contain: layout style');
       assert.match(visuals.maskImage, /linear-gradient/, 'VRM canvas wrap must apply bottom Digital Dissolve mask');
@@ -260,12 +290,10 @@ async function saveDockShot(page, name) {
         await saveDockShot(page, `${pack.label}-fx-${fxName}`);
       }
       await sendCommand({ sessionId: 'livesession', expression: 'idle', ttl_ms: 800 });
-      await page.waitForTimeout(180);
-      const fxCleared = await page.evaluate(() => {
+      await page.waitForFunction(() => {
         const fxEl = document.querySelector('.ws-companion-fx');
         return !fxEl || fxEl.hidden;
-      });
-      assert.equal(fxCleared, true, `${pack.label}: FX badge must hide cleanly when returning to idle`);
+      }, null, { timeout: 3000 });
 
       // Verify 2D paper-doll wardrobe controls are hidden in settings modal.
       await page.locator('.ws-companion-gear').click({ force: true });
@@ -282,47 +310,82 @@ async function saveDockShot(page, name) {
       await page.waitForTimeout(120);
     }
 
-    // 4. Right-column (#bcol / #bgal) hover slide avoidance, hover freeze (no cursor-flee ping-pong), and return home.
+    // 4. Rail-docked stability: hovering #bcol does NOT slide, dragging does NOT detach,
+    //    context menu opens outside .rail clip, rail refresh preserves WebGL context,
+    //    and narrowing < 1600px hides + pauses cleanly (0 frames) before resuming >= 1600px.
     const frame = page.frameLocator('.sframe.on');
     const rightColLoc = frame.locator('#bcol');
     const rcBox = await rightColLoc.boundingBox();
     assert.ok(rcBox && rcBox.width > 40, 'expected visible #bcol in live session frame');
     const homeDockBefore = await page.locator('.ws-companion-hit').boundingBox();
     await page.mouse.move(rcBox.x + rcBox.width / 2, rcBox.y + Math.min(200, rcBox.height / 2));
-    await page.waitForFunction(() => window.WsCompanion.debugStage()?.avoiding === true, null, { timeout: 5000 });
-    await page.waitForTimeout(550);
-    const dockAvoiding = await page.locator('.ws-companion-hit').boundingBox();
-    const intersects = dockAvoiding.x + dockAvoiding.width > rcBox.x + 1 && dockAvoiding.x < rcBox.x + rcBox.width - 1;
-    assert.equal(intersects, false, `avoiding dock ${JSON.stringify(dockAvoiding)} still intersects right-col ${JSON.stringify(rcBox)}`);
-    await saveShot(page, 'vrm-avoiding-right-col');
-
-    // Move mouse from #bcol directly onto the avoiding companion & gear button:
-    // position must freeze with zero ping-pong and gear must click cleanly without force.
-    await page.mouse.move(dockAvoiding.x + dockAvoiding.width * 0.5, dockAvoiding.y + dockAvoiding.height * 0.5, { steps: 6 });
-    await page.waitForTimeout(450);
-    const dockHoverA = await page.locator('.ws-companion-hit').boundingBox();
-    assert.ok(Math.abs(dockHoverA.x - dockAvoiding.x) < 4,
-      `companion fled on hover! avoiding=${dockAvoiding.x}, hovered=${dockHoverA.x}`);
-    const gearBox = await page.locator('.ws-companion-gear').boundingBox();
-    assert.ok(gearBox && gearBox.width >= 18, 'gear button must be visible and targetable');
-    await page.mouse.move(gearBox.x + gearBox.width * 0.5, gearBox.y + gearBox.height * 0.5, { steps: 4 });
     await page.waitForTimeout(350);
-    const dockHoverB = await page.locator('.ws-companion-hit').boundingBox();
-    assert.ok(Math.abs(dockHoverB.x - dockAvoiding.x) < 4,
-      `companion fled when hovering gear! avoiding=${dockAvoiding.x}, gearHover=${dockHoverB.x}`);
-    await saveShot(page, 'vrm-hover-frozen');
-    await page.mouse.click(gearBox.x + gearBox.width * 0.5, gearBox.y + gearBox.height * 0.5);
-    await page.locator('dialog.ws-companion-settings[open]').waitFor({ timeout: 3000 });
-    await saveShot(page, 'vrm-gear-modal');
+    const dockAfterRightHover = await page.locator('.ws-companion-hit').boundingBox();
+    assert.equal(await page.evaluate(() => window.WsCompanion.debugStage()?.avoiding), false, 'rail-docked VRM must not run right-col avoidance');
+    assert.ok(Math.abs(dockAfterRightHover.x - homeDockBefore.x) < 2, 'rail-docked VRM must stay anchored on right-col hover');
+
+    // Attempt free drag on rail-docked VRM -> must stay locked in rail slot.
+    await page.mouse.move(homeDockBefore.x + homeDockBefore.width * 0.5, homeDockBefore.y + homeDockBefore.height * 0.5);
+    await page.mouse.down();
+    await page.mouse.move(homeDockBefore.x + 360, homeDockBefore.y - 200, { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(200);
+    const dockAfterDrag = await page.locator('.ws-companion-hit').boundingBox();
+    assert.ok(Math.abs(dockAfterDrag.x - homeDockBefore.x) < 2 && Math.abs(dockAfterDrag.y - homeDockBefore.y) < 2,
+      `rail-docked VRM must not detach on drag: before=${JSON.stringify(homeDockBefore)}, after=${JSON.stringify(dockAfterDrag)}`);
+
+    // Right-click opens context menu in document.body to the right of the rail with zero clipping.
+    await page.locator('.ws-companion-character').click({ button: 'right' });
+    await page.locator('.ws-companion-menu:not([hidden])').waitFor({ timeout: 3000 });
+    const menuCheck = await page.evaluate(() => {
+      const rail = document.getElementById('rail').getBoundingClientRect();
+      const menu = document.querySelector('.ws-companion-menu').getBoundingClientRect();
+      return { railRight: rail.right, menuLeft: menu.left, menuRight: menu.right, menuWidth: menu.width, menuHeight: menu.height, vw: window.innerWidth };
+    });
+    assert.ok(menuCheck.menuLeft >= menuCheck.railRight - 2 && menuCheck.menuRight <= menuCheck.vw && menuCheck.menuWidth > 80,
+      `context menu must render unclipped beside the rail: ${JSON.stringify(menuCheck)}`);
     await page.keyboard.press('Escape');
 
-    // Move mouse away from right-col -> returns home.
-    await page.mouse.move(120, 120);
-    await page.waitForFunction(() => window.WsCompanion.debugStage()?.avoiding === false, null, { timeout: 5000 });
-    await page.waitForTimeout(550);
-    const dockReturned = await page.locator('.ws-companion-hit').boundingBox();
-    assert.ok(Math.abs(dockReturned.x - homeDockBefore.x) < 12,
-      `dock did not return home: before=${homeDockBefore.x}, after=${dockReturned.x}`);
+    // Rail refresh must never duplicate .rws-unreg and must never recreate/lose the WebGL context.
+    const ctxCountBeforeRefresh = await page.evaluate(() => window.__webglContextsCreated);
+    await page.locator('#railref').click();
+    await page.waitForTimeout(400);
+    const afterRefresh = await page.evaluate(() => ({
+      ctxCount: window.__webglContextsCreated,
+      unregCount: document.querySelectorAll('#rail details.rws-unreg').length,
+      slotCount: document.querySelectorAll('#rail #rail-companion-slot').length,
+      slotHidden: document.getElementById('rail-companion-slot')?.hidden,
+      contextLost: window.WsCompanion.debugStage()?.vrm?.contextLost
+    }));
+    assert.equal(afterRefresh.ctxCount, ctxCountBeforeRefresh, 'rail refresh must never recreate WebGL context');
+    assert.ok(afterRefresh.unregCount <= 1, `rail refresh duplicated details.rws-unreg (${afterRefresh.unregCount})`);
+    assert.equal(afterRefresh.slotCount, 1, 'rail refresh must keep exactly one #rail-companion-slot');
+    assert.equal(afterRefresh.slotHidden, false, '#rail-companion-slot must remain visible after rail refresh');
+    assert.equal(afterRefresh.contextLost, false);
+
+    // Narrow viewport (< 1600px) hides VRM and pauses WebGL rendering (0 frames).
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForFunction(() => window.WsCompanion.debugStage()?.vrmRailVisible === false, null, { timeout: 5000 });
+    const narrowState = await page.evaluate(() => ({
+      st: window.WsCompanion.debugStage(),
+      hitHidden: document.querySelector('.ws-companion-hit')?.hidden,
+      slotDisplay: getComputedStyle(document.getElementById('rail-companion-slot')).display
+    }));
+    assert.equal(narrowState.hitHidden, true, 'VRM hit must be hidden below 1600px');
+    assert.equal(narrowState.slotDisplay, 'none', '#rail-companion-slot must be display:none below 1600px');
+    assert.equal(narrowState.st.vrm.paused, true, 'VRM render loop must pause below 1600px');
+    const narrowFramesA = narrowState.st.vrm.framesRendered;
+    await page.waitForTimeout(700);
+    const narrowFramesB = await page.evaluate(() => window.WsCompanion.debugStage().vrm.framesRendered);
+    assert.equal(narrowFramesB, narrowFramesA, `VRM must render 0 frames below 1600px (got ${narrowFramesB - narrowFramesA})`);
+
+    // Widen back to >= 1600px -> resumes smoothly without recreating WebGL context.
+    await page.setViewportSize({ width: 1680, height: 960 });
+    await page.waitForFunction(prev => {
+      const st = window.WsCompanion.debugStage();
+      return st && st.vrmRailVisible === true && !st.hidden && st.vrm && !st.vrm.paused && st.vrm.framesRendered > prev + 2;
+    }, narrowFramesB, { timeout: 8000 });
+    assert.equal(await page.evaluate(() => window.__webglContextsCreated), ctxCountBeforeRefresh, 'widening back must reuse existing WebGL context');
 
     // 5. Simulated WebGL context loss & restore without network refetch of .vrm.
     const fetchesBeforeLoss = vrmModelRequests.length;
