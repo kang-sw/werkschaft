@@ -38,7 +38,7 @@ func TestWhiteboardEffectsPanelRecapOnlyAndStable(t *testing.T) {
 		"Some changes or values were omitted",
 		`data-wb-jump="p1"`,
 		`data-wb-topic="topic-706c616e"`,
-		`class="wbupdate-panel-wrap"`,
+		`class="wbupdate-panel-wrap" data-wb-element="p1"`,
 		`class="wbupdate-row wbupdate-panel wbupdate-panel-has-preview"`,
 		`class="wbupdate-panel-body md"`,
 		`<span class="wbupdate-preview-badge">Inline HTML content</span>`,

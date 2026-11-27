@@ -360,7 +360,8 @@
     var selection = window.getSelection && window.getSelection();
     if (!link && selection && !selection.isCollapsed) return;
     e.preventDefault();
-    var row = t.closest(".wbupdate-row[data-wb-element]");
+    var row = t.closest("[data-wb-element]");
+    if (row && card.contains && !card.contains(row)) row = null;
     var id = link ? link.getAttribute("data-wb-jump") : row ? row.getAttribute("data-wb-element") : card.getAttribute("data-wb-topic");
     effectJumpTo(card, id);
   }

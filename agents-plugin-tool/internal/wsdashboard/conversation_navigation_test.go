@@ -21,13 +21,14 @@ function node(id,topic,history){return {id:id,owned:true,tagName:'DIV',parentNod
 function topic(id){var n=node(id);n.tagName='SECTION';n.targets={};topics.push(n);return n;}
 var a=topic('topic-6161'),b=topic('topic-6262');
 var e=node('e7',a,true),p=node('p4',a,true),item=node('item-42',a);a.targets={'e7':e,'p4':p,'item-42':item};
+var selectionCollapsed=true;
 var window={WsCards:{unfoldTopic:function(n){reveals.push(n.id);},revealTopic:function(n,done){if(pendingReveal===true)pendingReveal=done;else done();}},
- wbHistory:{loadTarget:function(topic,id,before){loads.push([topic.id,id]);var n=topic.targets[id];if(n&&before)before(n);return n||null;},keep:function(){}},getSelection:function(){return {isCollapsed:true};}};
+ wbHistory:{loadTarget:function(topic,id,before){loads.push([topic.id,id]);var n=topic.targets[id];if(n&&before)before(n);return n||null;},keep:function(){}},getSelection:function(){return {isCollapsed:selectionCollapsed};}};
 function loadClosed(btn){closedLoads++;if(btn.load)btn.load();return Promise.resolve(true);}
 function done(topic,exact){results.push([topic,exact]);}
-var status={textContent:''},card={getAttribute:function(){return 'topic-6161';},querySelector:function(){return status;}},link=null,row=null,interactive=false;
+var status={textContent:''},card={getAttribute:function(){return 'topic-6161';},querySelector:function(){return status;},contains:function(n){return !n||n.inCard!==false;}},link=null,row=null,interactive=false;
 var containedCard=card,box={contains:function(n){return n===containedCard;}};function entriesBox(){return box;}
-function target(){return {closest:function(s){if(s==='.wbupdate-topic[data-wb-topic]')return card;if(s==='a[data-wb-jump]')return link;if(s==='.wbupdate-row[data-wb-element]')return row;if(s.indexOf('a, summary, button, input, textarea, select')>=0)return interactive?{}:null;return null;}};}
+function target(){return {closest:function(s){if(s==='.wbupdate-topic[data-wb-topic]')return card;if(s==='a[data-wb-jump]')return link;if(s==='[data-wb-element]'||s==='.wbupdate-row[data-wb-element]')return row;if(s.indexOf('a, summary, button, input, textarea, select')>=0)return interactive?{}:null;return null;}};}
 function click(){var event={target:target(),button:0,preventDefault:function(){this.prevented=true;}};return event;}
 function keydown(k){return {target:target(),key:k,preventDefault:function(){this.prevented=true;}};}
 `+src+`
@@ -79,6 +80,20 @@ function keydown(k){return {target:target(),key:k,preventDefault:function(){this
  k=keydown('Enter');k.ctrlKey=true;effectJumpKey(k);
  interactive=true;effectJumpKey(keydown('Enter'));interactive=false;
  check('other keys, modified keys, and nested interactive targets do not jump on keydown',focused.length,before);
+ row=null;
+ // Panel preview body wraps under [data-wb-element="p4"] inside the topic card.
+ row={getAttribute:function(){return 'p4';},closest:function(s){return s==='.wbupdate-topic[data-wb-topic]'?card:null;}};
+ effectJumpClick(click());
+ check('panel preview body click targets panel instead of topic',focused[focused.length-1],['p4',true]);
+ // Interactive links inside the preview body are preserved and do not trigger panel jump.
+ before=focused.length;interactive=true;effectJumpClick(click());interactive=false;
+ check('interactive link inside panel preview does not jump',focused.length,before);
+ // Drag-selection inside the preview body is not hijacked.
+ selectionCollapsed=false;effectJumpClick(click());selectionCollapsed=true;
+ check('non-collapsed text selection inside panel preview does not jump',focused.length,before);
+ // An ancestor [data-wb-element] outside the card cannot redirect the jump.
+ row={getAttribute:function(){return 'p4';},inCard:false};effectJumpClick(click());
+ check('external [data-wb-element] falls back to topic',focused[focused.length-1],[a.id,true]);
  row=null;
  before=focused.length;interactive=true;effectJumpClick(click());interactive=false;ev=click();ev.ctrlKey=true;effectJumpClick(ev);
  var ownCard=card;card={getAttribute:function(){return a.id;},querySelector:function(){return status;}};effectJumpClick(click());card=ownCard;
