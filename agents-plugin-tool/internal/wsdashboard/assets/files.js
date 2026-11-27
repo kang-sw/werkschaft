@@ -28,10 +28,10 @@
 
   // --- pure parts (files_test.go runs them under node) ---------------------
   // showsEntry reports whether the View toggles show the listing entry e:
-  // an ignored entry only while view.ign is on, a dot entry unless view.dot
+  // an ignored entry unless view.ign is false, a dot entry unless view.dot
   // (hide dot entries) is on.
   function showsEntry(e, view) {
-    return (!e.ign || !!view.ign) && !(view.dot && e.name.charAt(0) === ".");
+    return (!e.ign || !view || view.ign !== false) && !(view && view.dot && e.name.charAt(0) === ".");
   }
   // opens reports a folder the tree can expand: on disk and no symlink.
   function opens(e) {
@@ -114,7 +114,7 @@
   var gen = 0, rootAttempt = 0, previewAttempt = 0, started = false, destroyed = false, listeners = [];
   var lists = {}, open = {}, sel = null, sels = [], anchor = null, cur = null, info = null, rootAbs = "";
   var marquee = null, skipEmptyClick = false;
-  var view = { ign: false, dot: false }, rows = [], rowEls = {};
+  var view = { ign: true, dot: false }, rows = [], rowEls = {};
   var mode = "name", caseOn = false, regexOn = false, timer = null, ctrl = null, searchResult = null, searchPaused = false;
   var treeTop = 0, hitsTop = 0, pop = null, popFrom = null, menu = null, menuFrom = null;
   var ui = {}, api, tabs = [], active = -1, tabSeq = 0, dir = "", viewMode = "details", contentTop = 0, navAttempt = 0;
@@ -406,7 +406,7 @@
   }
   function readView() {
     var v = info ? viewMap()[info.root] : null;
-    view = directoriesOnly ? { ign: true, dot: false } : { ign: !!(v && v.ign), dot: !!(v && v.dot) };
+    view = directoriesOnly ? { ign: true, dot: false } : { ign: v && typeof v.ign === "boolean" ? v.ign : true, dot: !!(v && v.dot) };
     ui.vIgn.checked = view.ign;
     ui.vDot.checked = view.dot;
   }
@@ -1129,7 +1129,11 @@
       ui.rErr.textContent = "";
       ui.rIn.value = info ? info.root : "";
       ui.rFilter.focus();
-    } else ui.vIgn.focus();
+    } else {
+      ui.vIgn.checked = view.ign;
+      ui.vDot.checked = view.dot;
+      ui.vIgn.focus();
+    }
   }
 
   // --- search ------------------------------------------------------------------
@@ -1420,6 +1424,8 @@
     }
     ui.vIgn = opt(wsT("js.files.view.ign"));
     ui.vDot = opt(wsT("js.files.view.dot"));
+    ui.vIgn.checked = view.ign;
+    ui.vDot.checked = view.dot;
     el.appendChild(ui.viewPop);
 
     ui.rootPop = mk("div", "fpop froot-pop");
