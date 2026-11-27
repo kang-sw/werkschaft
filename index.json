@@ -444,19 +444,6 @@
     "261125-research-ws-live-voice-gpt-realtime": {
       "registered_at": "2026-11-25T12:38:04Z"
     },
-    "261126-feat-ws-companion-vrm-engine": {
-      "registered_at": "2026-11-26T13:52:18Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-26T15:09:54Z",
-        "impl": {
-          "branch": "impl/develop/chip-juror-shy"
-        }
-      }
-    },
     "261126-refactor-oversized-multi-responsibility-files": {
       "registered_at": "2026-11-26T05:40:46Z"
     },
@@ -478,7 +465,7 @@
         "email": "ki6080@gmail.com",
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
-        "phase": "active",
+        "phase": "closed",
         "touched_at": "2026-11-27T13:25:32Z",
         "impl": {
           "branch": "impl/develop/fix-route-review-path-decision13"
