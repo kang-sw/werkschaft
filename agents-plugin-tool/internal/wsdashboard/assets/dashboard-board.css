@@ -137,6 +137,12 @@ section.topic.quiet[data-max] > .tophead > .tbar { border-top-left-radius: 0; bo
 details.entry-panel[data-max] > summary { background: var(--wb-bg); cursor: default; }
 section.topic[data-max] > .tophead > .tbar > .d-max, section.topic[data-max] > .tophead > .tbar > .tpin, section.topic[data-max] > .tophead > .tbar > .t-fold, section.topic[data-max] > .tophead > .tbar > .t-raise, details.entry-panel[data-max] > summary > .d-max, details.entry-panel[data-max] > summary > .ppin { display: none; }
 section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-max] > summary > .d-min { display: inline-grid; }
+details.entry-panel[open][data-max]:has(.mockup-wrap) { display: flex; flex-direction: column; overflow: hidden; }
+details.entry-panel[open][data-max]:has(.mockup-wrap)::details-content { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+details.entry-panel[open][data-max]:has(.mockup-wrap) > summary { flex: 0 0 auto; }
+details.entry-panel[open][data-max]:has(.mockup-wrap) > :not(summary):not(.doc-body) { flex: 0 0 auto; }
+details.entry-panel[open][data-max] > .doc-body:has(> .mockup-wrap) { flex: 1 1 0; min-height: 0; margin: 0; padding: 0; border-left: 0; display: flex; flex-direction: column; overflow: hidden; }
+details.entry-panel[open][data-max] > .doc-body > .mockup-wrap { flex: 1 1 0; height: 100%; min-height: 240px; resize: none; border: 0; border-radius: 0; }
 @media (max-width: 640px) { section.topic[data-max], details.entry-panel[data-max] { top: 46px; left: 8px; right: 8px; bottom: 8px; } }
 @media (prefers-reduced-motion: reduce) { .bcard.flash .bc-in { animation: none; } .bc-grip::after { transition: none; } }
 
