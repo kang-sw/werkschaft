@@ -257,6 +257,10 @@ type Options struct {
 	heartbeat time.Duration
 	// beforeExpiryClose pauses heartbeat expiry before starting its close (tests).
 	beforeExpiryClose func()
+	// beforeExpiryCascade pauses expiry between snapshot and fenced close (tests).
+	beforeExpiryCascade func(id string)
+	// admitCompletionAdmitting pauses AdmitCompletion between open and wmu (tests).
+	admitCompletionAdmitting func(id string)
 	// WakeRefused, when not nil, tells the sender of a message Deliver
 	// queued for a sleeping conversation whose start admission refused
 	// now (from: the sender's reply-id, id: the conversation, reason).
@@ -380,6 +384,12 @@ type Runner struct {
 	parked    map[string]bool
 	parkStop  map[string]func()
 	unparking map[string]chan struct{}
+	// convGen counts resident/parked incarnation transitions per reply-id under
+	// mu so expiry fences detect any unpark, re-park, or reopen since snapshot.
+	convGen map[string]uint64
+	// closing is set under mu by Close before closing quit and calling wg.Wait,
+	// fencing late park-wake and expiry callbacks from calling wg.Add.
+	closing bool
 	// Retired Pi process bindings are independent of the ended history rows.
 	// The holder manager supplies their liveness. Guarded by mu.
 	retiredPiBindings map[string]retiredPiBinding

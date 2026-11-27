@@ -111,6 +111,10 @@ func (r *Runner) registerParkedLocked(rec Record) {
 		r.parked = map[string]bool{}
 	}
 	r.parked[rec.ReplyID] = true
+	if r.convGen == nil {
+		r.convGen = map[string]uint64{}
+	}
+	r.convGen[rec.ReplyID]++
 	if rec.ClosedAt == "" {
 		r.liveOwners.Store(rec.ReplyID, parkedOwnerSentinel)
 	} else {
@@ -125,9 +129,21 @@ func (r *Runner) watchParked(rec Record) {
 	if !ok || rec.WSKey == "" {
 		return
 	}
+	r.mu.Lock()
+	closing := r.closing
+	r.mu.Unlock()
+	if closing {
+		return
+	}
 	id := rec.ReplyID
 	stop := w.WatchParked(rec.Root, rec.WSKey, func() {
+		r.mu.Lock()
+		if r.closing {
+			r.mu.Unlock()
+			return
+		}
 		r.wg.Add(1)
+		r.mu.Unlock()
 		go func() {
 			defer r.wg.Done()
 			r.unpark(id)
@@ -137,7 +153,7 @@ func (r *Runner) watchParked(rec Record) {
 	if r.parkStop == nil {
 		r.parkStop = map[string]func(){}
 	}
-	if r.parked[id] {
+	if !r.closing && r.parked[id] {
 		r.parkStop[id] = stop
 		stop = nil
 	}
@@ -183,6 +199,10 @@ func (r *Runner) unpark(id string) *conv {
 			<-ch
 			continue
 		}
+		if r.closing {
+			r.mu.Unlock()
+			return nil
+		}
 		select {
 		case <-r.quit:
 			r.mu.Unlock()
@@ -204,8 +224,17 @@ func (r *Runner) unpark(id string) *conv {
 		c := r.startConvWith(rec, nil, false, nil, nil)
 		r.mu.Lock()
 		delete(r.unparking, id)
+		closed := r.closing
 		r.mu.Unlock()
 		close(ch)
+		if closed {
+			return nil
+		}
+		if c != nil && c.hasHeldInbox() {
+			// Kick any inbox entry already on disk when rehydrating (e.g., a
+			// dashboard post that landed right before or during parking).
+			c.signalInbox()
+		}
 		return c
 	}
 }

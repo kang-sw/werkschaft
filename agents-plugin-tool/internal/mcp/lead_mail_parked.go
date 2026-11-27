@@ -42,7 +42,14 @@ func (m *LeadMailbox) WatchParked(root, key string, changed func()) (stop func()
 	return func() {
 		m.pmu.Lock()
 		delete(m.parkedW, w)
+		empty := len(m.parkedW) == 0
 		m.pmu.Unlock()
+		if empty {
+			select {
+			case m.pkick <- struct{}{}:
+			default:
+			}
+		}
 	}
 }
 

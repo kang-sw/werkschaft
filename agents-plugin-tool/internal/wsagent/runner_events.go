@@ -1378,6 +1378,29 @@ func (c *conv) close() error {
 	return nil
 }
 
+// closeIfPermitted is close guarded by done under wmu+mu; it reports whether
+// the conversation closed.
+func (c *conv) closeIfPermitted(done func() bool) (bool, error) {
+	if err := c.closeRetired(); err != nil {
+		return false, err
+	}
+	if c.closed {
+		return false, nil
+	}
+	if c.r.durableProcess(c.rec.Backend) {
+		c.wmu.Lock()
+		c.mu.Lock()
+		allow := done == nil || done()
+		c.mu.Unlock()
+		c.wmu.Unlock()
+		if !allow {
+			return false, nil
+		}
+		return true, c.closeDurable()
+	}
+	return c.closeIf(done), nil
+}
+
 // closeIf is close when done (nil for always) holds in the same mu hold
 // that marks the conversation closed, and reports whether it closed. It
 // runs in the loop.
