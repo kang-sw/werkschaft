@@ -469,7 +469,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-27T23:21:08Z"
+        "touched_at": "2026-11-27T23:22:26Z",
+        "impl": {
+          "branch": "impl/develop/talon-many-jaws"
+        }
       }
     },
     "261127-feat-ws-non-git-directory-workspace-support": {
