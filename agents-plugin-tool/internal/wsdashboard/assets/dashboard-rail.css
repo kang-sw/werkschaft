@@ -321,6 +321,14 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rail .rfh[aria-expanded="true"] { color: var(--wb-fg); font-weight: 700; }
 .rail .rfh:disabled { opacity: .5; cursor: default; }
 .rail .rfh:disabled::after { content: none; }
+.rail .rfold[data-empty="1"] { display: none; }
+:root[data-can-control].rdragging-life .rail .rsessions.d-rlife-src > .rfold[data-empty="1"] { display: flex; margin-top: 10px; }
+:root[data-can-control].rdragging-life .rail .rsessions.d-rlife-src > .rfold > .rfh:disabled { opacity: .82; }
+.rail .rfh.d-rdrop-arch, .rail .rfh.d-rdrop-del { border-radius: 5px; opacity: 1; }
+.rail .rfh.d-rdrop-arch { color: var(--wb-primary); background: color-mix(in srgb, var(--wb-primary) 16%, transparent); }
+.rail .rfh.d-rdrop-del { color: var(--wb-fail); background: color-mix(in srgb, var(--wb-fail) 14%, transparent); }
+.rail .rended.d-rdrop-list { border-radius: 6px; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 45%, transparent); background: color-mix(in srgb, var(--wb-primary) 6%, transparent); }
+.rail .rended[data-k="del"].d-rdrop-list { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-fail) 45%, transparent); background: color-mix(in srgb, var(--wb-fail) 6%, transparent); }
 .rail .rfold + .rended { margin-top: 2px; }
 .rail .rended:not(.on) { display: none; }
 .rail .rs { position: relative; display: flex; align-items: flex-start; gap: 0; padding-left: 14px; border-radius: 6px; }
@@ -361,8 +369,19 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rail .rs:hover .drgrip, .rail .rs:focus-within .drgrip { opacity: .7; }
 .rail .drgrip:hover { opacity: 1; color: var(--wb-fg); }
 @media (pointer: coarse) { .rail .drgrip { opacity: .55; } }
+.rail .drgrip:not([data-drag="1"]),
+:root:not([data-can-control]) .rail :is(.rs.ended, .rs.archived) .drgrip { display: none; }
 .rdragging.drno, .rdragging.drno * { cursor: not-allowed !important; }
 .drhint { position: fixed; z-index: 47; padding: 4px 8px; border-radius: 6px; background: var(--wb-fg); color: var(--wb-bg); font-size: 12px; font-weight: 600; white-space: nowrap; box-shadow: var(--wb-shadow-hi); pointer-events: none; }
+.rpop.d-rconf { gap: 8px; }
+.rpop .d-rconf-note { margin: 0; font-size: 12px; color: var(--wb-muted-fg); overflow-wrap: anywhere; }
+.rpop .d-rconf-risks { margin: 0; padding: 7px 10px 7px 24px; border-radius: 8px; background: color-mix(in srgb, var(--wb-warn) 12%, var(--wb-card)); color: color-mix(in srgb, var(--wb-warn-ink) 80%, var(--wb-fg)); font-size: 12px; display: grid; gap: 3px; }
+.rpop .d-rconf-row { display: flex; justify-content: flex-end; align-items: center; gap: 6px; padding-top: 2px; }
+.rpop .d-rconf-btn { white-space: nowrap; flex: none; font: inherit; font-size: 12px; font-weight: 700; border: 0; border-radius: 999px; padding: 4px 14px; cursor: pointer; background: var(--wb-muted); color: var(--wb-muted-fg); }
+.rpop .d-rconf-btn.go { background: var(--wb-primary); color: var(--wb-primary-fg); }
+.rpop .d-rconf-btn.d-rconf-danger { background: var(--wb-fail); color: var(--wb-card); }
+.rpop .d-rconf-btn:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: 1px; }
+.rpop .d-rconf-btn:disabled { opacity: .45; cursor: default; }
 /* the tree: a parent's children box (.rkids) indents its rows one step
    from the harness column (16px; 12px in the overlay rail) under a guide
    line. The parent's toggle (chevron, person, child count) opens its
