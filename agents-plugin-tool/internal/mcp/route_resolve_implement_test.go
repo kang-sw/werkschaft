@@ -352,7 +352,7 @@ func TestEnterImplementAllocatesSingleReviewForBoundedPublicExistingTestChange(t
 	}
 	review := readTodoInstruction(t, server, 3, key, "review")
 	for _, want := range []string{
-		"Render `reviewer`", "one full-scope review", "rendered path", "generated findings path",
+		"Render `reviewer`", "one full-scope review", "rendered path", "ticket path", "own findings artifact under its own session",
 	} {
 		if !strings.Contains(review, want) {
 			t.Fatalf("single-review todo instruction missing %q: %q", want, review)

@@ -136,6 +136,28 @@ func TestImplementReviewStructuredWrappers(t *testing.T) {
 	}
 }
 
+func TestImplementReviewInstructionReviewerOwnsArtifact(t *testing.T) {
+	for _, alloc := range []string{"partitioned: correctness, test", "lite", "single", "full"} {
+		t.Run(alloc, func(t *testing.T) {
+			review := implementReviewInstruction(implementTodoVerdict{ReviewAlloc: alloc})
+			for _, want := range []string{
+				"Do not pre-generate a findings path",
+				"own findings artifact under its own session",
+				"read the artifact path each reviewer returns",
+			} {
+				if !strings.Contains(review, want) {
+					t.Fatalf("review instruction for %q missing %q: %q", alloc, want, review)
+				}
+			}
+			for _, forbidden := range []string{"a generated findings path", "generated review paths"} {
+				if strings.Contains(review, forbidden) {
+					t.Fatalf("review instruction for %q retained %q: %q", alloc, forbidden, review)
+				}
+			}
+		})
+	}
+}
+
 func TestDeriveImplementTodoInstructionsPartitionedReview(t *testing.T) {
 	got := deriveImplementTodosFromVerdict(implementTodoVerdict{
 		Delegation:  "delegated",

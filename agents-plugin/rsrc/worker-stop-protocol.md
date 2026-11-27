@@ -83,6 +83,8 @@ the resolved paths plus any paths its refusal names.
      `{{.McpNamespace}}/playbook.render` and no context (a wrapper declares no
      per-run variable), and spawn by {{.SpawnIdiom}} with the rendered path;
      the ticket path and branch name go in the spawn prompt.
+   - Do not pre-generate a review artifact path for a reviewer: each reviewer
+     generates its own cache path under its own session key and returns it.
    - Read the artifact path the reviewer returns; the generated cache artifact
      is the complete review report.
    - `lite`: one pass, no re-review — fix Critical and Important findings once;
