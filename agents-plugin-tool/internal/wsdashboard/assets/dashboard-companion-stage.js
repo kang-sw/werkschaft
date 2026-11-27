@@ -138,6 +138,7 @@
       persist();
     }, options);
     return {
+      isActive() { return !!active; },
       value(fallback, width, height) {
         cap = Math.max(1, Math.min(maxSize, width - 24, height - 24));
         const value = Math.min(preferred ?? fallback, cap);
@@ -220,10 +221,11 @@
     let currentConfig = config, preset = config.preset;
     let frame = 0, idleTimer = 0, last = 0, now = 0, viewStart = 0, lastBusy = 0, nextIdle = 45000;
     let lastVrmRenderAt = -Infinity, lastVrmActivityAt = 0, vrmIdleMode = false, lastVrmGazeX = 0, lastVrmGazeY = 0;
-    let beat = null, viewBeat, viewPlaying, prop, fx, propCanvas, propCtx, decoration, quip, quipWidth = 0, lastCount;
+    let beat = null, viewBeat, viewPlaying, prop, fx, propCanvas, propCtx, decoration, quip, quipWidth = 0, quipHeight = 28, fxWidth = 36, fxHeight = 24, lastCount;
     let size = 96, vrmHeight = 280, dpr = 1, vw = 0, vh = 0, dirty = true;
     let frameElement = null, frameInput = null, frameBox = null;
     let home = { x: 60, y: 96 }, arrived = false, custom = null, drag = null, suppressClick = false;
+    let companionHover = false, lastAvoidFrozen = false;
     const physics = { swing: 0, swingVel: 0 };
     const beatOrigin = { x: 0, y: 0 };
     const position = { x: 0, y: 0 }, cursor = { x: 0, y: 0 }, gaze = { x: 0, y: 0, prop: false };
@@ -461,6 +463,39 @@
       applyPreset, notice
     });
 
+    function isCompanionTarget(el) {
+      return !!(el && el !== node && node.contains(el));
+    }
+
+    function avoidanceFrozen() {
+      return companionHover || !menu.hidden || !!settings?.open || !!drag || vrmSizing.isActive() || sizing.isActive();
+    }
+
+    function inAvoidCorridor() {
+      const rc = marks["right-col"];
+      if (!home.avoiding || !rc) return false;
+      const leftEdge = Math.min(position.x, home.x) - size / 2 - 20;
+      const topEdge = (home.y || vh - 16) - vrmHeight - 20;
+      return cursor.x >= leftEdge && cursor.x <= rc.right && cursor.y >= topEdge && cursor.y <= vh;
+    }
+
+    function setCompanionHover(next) {
+      const flag = !!next;
+      if (companionHover === flag) return;
+      companionHover = flag;
+      node.dataset.hover = flag ? "1" : "0";
+      if (isVrm()) {
+        if (flag && arrived && !custom && !drag) {
+          const margin = 16;
+          const defaultX = clamp(vw - margin - size / 2, margin + size / 2, Math.max(margin + size / 2, vw - margin - size / 2));
+          home = { ...home, x: clamp(position.x, margin + size / 2, defaultX) };
+        }
+        dirty = true;
+        markVrmActivity();
+        schedule();
+      }
+    }
+
     let beforeUnreg = null;
     function setBeforeUnreg(el) {
       if (beforeUnreg === el) return;
@@ -488,8 +523,17 @@
         const defaultX = clamp(vw - margin - size / 2, margin + size / 2, Math.max(margin + size / 2, vw - margin - size / 2));
         const defaultY = clamp(vh - margin, vrmHeight + 8, vh - 8);
         const rc = marks["right-col"];
+        const frozen = avoidanceFrozen();
+        const prevAvoiding = !!home.avoiding;
+        const corridorHold = !state.rightColActive && inAvoidCorridor();
         let homeX = defaultX, avoiding = false;
-        if (state.rightColActive && rc && !custom && !drag) {
+        if (frozen && !custom && !drag) {
+          // Freeze horizontal avoidance while hovering or interacting with the
+          // companion, its menu, settings modal, or resize handle so it never flees.
+          const currentX = arrived && Number.isFinite(position.x) ? position.x : (Number.isFinite(home.x) ? home.x : defaultX);
+          homeX = clamp(currentX, margin + size / 2, defaultX);
+          avoiding = prevAvoiding || (defaultX - homeX > 1);
+        } else if ((state.rightColActive || corridorHold) && rc && !custom && !drag) {
           const defaultLeft = defaultX - size / 2;
           const defaultRight = defaultX + size / 2;
           if (defaultRight > rc.left && defaultLeft < rc.right) {
@@ -655,14 +699,13 @@
       const attached = attach.data && propBehavior(next.prop, attach.data) === "attach" &&
         (!attach.data.anchor || attach.data.anchor === "behind-head" || attach.data.anchor === "body");
       const renderPose = next.pose || "stand";
-      const vrmPropList = isVrm() && propId ? [propId] : [];
-      view = rig.view(renderPose, next.gesture, next.expression || "idle", attached ? [propId] : vrmPropList);
+      view = rig.view(renderPose, next.gesture, next.expression || "idle", attached ? [propId] : []);
       markVrmActivity();
       node.dataset.pose = view.pose;
       node.dataset.scenario = playing?.entry.id || "";
       prop = !attached && attach.data ? attach : null;
-      fx = rig.prop(propAction(next.fx), "fx");
-      if (!fx.data) fx.data = C.own(C.fxDefaults, propAction(next.fx));
+      const rawFx = rig.prop(propAction(next.fx), "fx");
+      fx = rawFx?.data ? rawFx : { ...(rawFx || { drawable: false, draw() {} }), data: C.own(C.fxDefaults, propAction(next.fx)) };
       lastCount = null;
       if (quip) quip.hidden = !next.quip;
       if (next.quip) {
@@ -674,6 +717,7 @@
         // Text only: a quip may come from a model and must never become markup.
         quip.textContent = next.quip;
         quipWidth = quip.offsetWidth || 0;
+        quipHeight = quip.offsetHeight || 28;
       }
     }
 
@@ -774,6 +818,9 @@
           if (count > 1) decoration.append("×" + count);
           decoration.style.color = typeof def?.color === "string" ? def.color : "";
           decoration.dataset.kind = def?.kind || "badge";
+          decoration.hidden = false;
+          fxWidth = decoration.offsetWidth || (fxContext ? 96 : 36);
+          fxHeight = decoration.offsetHeight || (fxContext ? 96 : 24);
         }
         if (fxContext) {
           fxContext.setTransform(96 / rig.width, 0, 0, 96 / rig.height, 0, 0);
@@ -782,8 +829,27 @@
         }
         decoration.hidden = false;
         const charH = isVrm() ? vrmHeight : size;
-        decoration.style.transform = "translate3d(" + (position.x + size * 0.26) + "px," +
-          (position.y - charH * (0.77 + progress * 0.36)) + "px,0)";
+        const padX = def?.kind === "particles" ? 36 : 8;
+        const padTop = def?.kind === "particles" ? 18 : 8;
+        const fxW = fxWidth || 36;
+        const fxH = fxHeight || 24;
+        let fxX, fxY;
+        if (isVrm()) {
+          // Keep FX badges neatly near the upper side of the bust, clamped
+          // inside both visible viewport and companion container bounds.
+          const minX = Math.max(padX, bodyBox.x + 8);
+          const maxX = Math.max(minX, Math.min(vw - fxW - padX, bodyBox.x + bodyBox.width - fxW - 26));
+          fxX = clamp(position.x + size * 0.22, minX, maxX);
+          const rawY = bodyBox.y + Math.round(charH * 0.16) - Math.round(Math.min(24, charH * 0.09) * progress);
+          const minY = Math.max(padTop, bodyBox.y + 8);
+          const maxY = Math.max(minY, Math.min(vh - fxH - 8, bodyBox.y + bodyBox.height - fxH - 8));
+          fxY = clamp(rawY, minY, maxY);
+        } else {
+          fxX = clamp(position.x + size * 0.26, padX, Math.max(padX, vw - fxW - padX));
+          const rawY = position.y - charH * (0.77 + progress * 0.36);
+          fxY = clamp(rawY, padTop, Math.max(padTop, vh - fxH - 8));
+        }
+        decoration.style.transform = "translate3d(" + Math.round(fxX) + "px," + Math.round(fxY) + "px,0)";
         decoration.style.opacity = String(Math.min(1, (1 - progress) * 4, !playing && progress ? progress * 12 : 1));
         if (def?.kind === "particles") {
           const nodes = decoration.children;
@@ -796,7 +862,8 @@
       if (quip && !quip.hidden) {
         const charH = isVrm() ? vrmHeight : size;
         const left = clamp(position.x - quipWidth / 2, 6, Math.max(6, vw - quipWidth - 6));
-        quip.style.transform = "translate3d(" + left + "px," + (position.y - charH * 0.95) + "px,0)";
+        const top = clamp(position.y - charH * 0.95, 6, Math.max(6, vh - (quipHeight || 28) - 6));
+        quip.style.transform = "translate3d(" + Math.round(left) + "px," + Math.round(top) + "px,0)";
       }
     }
 
@@ -840,6 +907,11 @@
       const dt = last ? clamp(stamp - last, 0, isVrm() && vrmIdleMode ? 200 : 50) : 16;
       now += dt;
       last = stamp;
+      const frozenNow = isVrm() && avoidanceFrozen();
+      if (frozenNow !== lastAvoidFrozen) {
+        lastAvoidFrozen = frozenNow;
+        dirty = true;
+      }
       if (dirty) layout();
       if (posture.activity !== "idle" || drag) nextIdle = now + 45000;
       else if (now >= nextIdle) { fire("idle.long"); nextIdle = now + 45000; }
@@ -853,6 +925,7 @@
       const rest = target();
       let x = rest.x, y = rest.y;
       if (rest.corner) x = 12 + ((view.bounds[2] - view.bounds[0]) * size) / 2;
+      if (frozenNow && arrived && !drag?.moving && !custom) x = position.x;
       if (drag?.moving) { x = drag.x; y = drag.y; }
       const age = (now - viewStart) / 1000;
       const progress = playing?.beat.ms ? clamp((now - playing.start) / playing.beat.ms, 0, 1) : playing ? 0 : age % 2.3 / 2.3;
@@ -875,9 +948,20 @@
         physics.swing = clamp(physics.swing + physics.swingVel * step, -maxSwing, maxSwing);
       }
       const pendulum = next.stage === "pendulum-drag";
-      (C.own(timing.stage, next.stage) || timing.stage.stay).sample(progress, physical);
-      physical.angle = physical.rotDeg * C.RAD + (pendulum && !view.articulatedDrag ? physics.swing * bodyFallbackScale : 0);
-      propRecoil(progress);
+      if (isVrm()) {
+        // Ground-zero VRM baseline: stay calmly grounded with zero vertical
+        // hopping/bouncing, squash/stretch, or prop recoil.
+        physical.tx = 0;
+        physical.lift = 0;
+        physical.sx = 1;
+        physical.sy = 1;
+        physical.rotDeg = 0;
+        physical.angle = 0;
+      } else {
+        (C.own(timing.stage, next.stage) || timing.stage.stay).sample(progress, physical);
+        physical.angle = physical.rotDeg * C.RAD + (pendulum && !view.articulatedDrag ? physics.swing * bodyFallbackScale : 0);
+        propRecoil(progress);
+      }
       measureCharacter();
       positionProp(progress, age);
       look(age, dt, playing);
@@ -928,7 +1012,12 @@
       body.addEventListener("pointermove", event => {
         cursor.x = event.clientX + (frameBox?.left || 0);
         cursor.y = event.clientY + (frameBox?.top || 0);
-        if (isVrm()) { markVrmActivity(); schedule(); }
+        setCompanionHover(false);
+        if (isVrm()) {
+          if (home.avoiding && !state.rightColActive && !inAvoidCorridor()) dirty = true;
+          markVrmActivity();
+          schedule();
+        }
       }, { signal: frameInput.signal, passive: true });
     }
     function trackFrame(element) {
@@ -951,10 +1040,24 @@
         invalidated();
       }
     }, options);
+    node.addEventListener("pointerover", event => {
+      if (isCompanionTarget(event.target)) setCompanionHover(true);
+    }, { ...options, passive: true });
+    node.addEventListener("pointerout", event => {
+      if (!isCompanionTarget(event.relatedTarget)) setCompanionHover(false);
+    }, { ...options, passive: true });
     doc.addEventListener("pointermove", event => {
       cursor.x = event.clientX;
       cursor.y = event.clientY;
-      if (isVrm()) { markVrmActivity(); schedule(); }
+      setCompanionHover(isCompanionTarget(event.target));
+      if (isVrm()) {
+        if (home.avoiding && !state.rightColActive && !inAvoidCorridor()) dirty = true;
+        markVrmActivity();
+        schedule();
+      }
+    }, { ...options, passive: true });
+    doc.documentElement?.addEventListener?.("pointerleave", () => {
+      setCompanionHover(false);
     }, { ...options, passive: true });
 
     function returnHome() {
@@ -1026,9 +1129,11 @@
           home: { ...home },
           position: { ...position },
           avoiding: !!home.avoiding,
+          companionHover,
+          avoidanceFrozen: avoidanceFrozen(),
           vrmIdleMode,
           vrm: rig?.debugState?.() || null,
-          projectedBounds: rig?.getProjectedFeatureBounds?.() || null
+          projectedBounds: null
         };
       },
       dispose() {

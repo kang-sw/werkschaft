@@ -15,7 +15,7 @@ function loadCompanion(globals = {}) {
     ...globals
   });
   context.window = context.window || {};
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "sources", "settings", "vrm", "vrm-ik", "vrm-props", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "sources", "settings", "vrm", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return { C: context.window.WsCompanion, context };
@@ -300,7 +300,11 @@ test("all 12 built-in scenarios resolve cleanly against the VRM adapter without 
     const beats = Array.isArray(def.steps) && def.steps.length ? def.steps : [def];
     for (const beat of beats) {
       const resolved = C.resolveVrmScenario(id, beat);
-      assert.equal(resolved.mode, "full", `Phase 2 scenario ${id} must resolve to full mapping (got ${resolved.mode})`);
+      assert.ok(resolved.mode === "full" || resolved.mode === "expression",
+        `ground-zero scenario ${id} must resolve cleanly (got ${resolved.mode})`);
+      assert.equal(resolved.pose, "stand", `ground-zero scenario ${id} must stay on stand pose`);
+      assert.equal(resolved.prop, null, `ground-zero scenario ${id} must drop 3D props`);
+      assert.equal(resolved.stage, "stay", `ground-zero scenario ${id} must disable vertical hop/bounce stage effects`);
       assert.ok(validExpressions.has(resolved.expression), `scenario ${id} resolved to unknown expression ${resolved.expression}`);
       const propId = typeof beat.prop === "string" ? beat.prop : beat.prop?.id;
       const view = rig.view(beat.pose || "stand", beat.gesture || null, beat.expression || "idle", propId ? [propId] : []);
@@ -690,79 +694,16 @@ test("VRM adapter recovers from webglcontextlost during initial .vrm fetch and g
   rig.dispose();
 });
 
-test("Phase 2 2-bone analytical arm IK hits targets identically on VRM 0.x and VRM 1.0 and applies 5 finger presets with graceful fallback", async () => {
+test("THREE.Box3 bust framing includes tall hair/ears with headroom, and gesture registry extension seam works", async () => {
   const { pathToFileURL } = require("node:url");
   const rt = await import(pathToFileURL(path.join(__dirname, "assets", "companion-vrm-runtime.mjs")).href);
   const { THREE } = rt;
-  const { C } = loadCompanion();
 
-  const L1 = 0.24, L2 = 0.22;
-  const shoulder = new THREE.Vector3(0.16, 1.32, 0.0);
-  const target = new THREE.Vector3(0.06, 1.24, 0.22);
-  const pole = new THREE.Vector3(0.38, 1.12, -0.18);
-
-  const qVrm1Parent = new THREE.Quaternion();
-  const qVrm0Parent = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
-
-  const solved1 = C.vrmIK.solveTwoBoneArmIK(THREE, {
-    shoulderPos: shoulder,
-    targetPos: target,
-    polePos: pole,
-    upperLen: L1,
-    lowerLen: L2,
-    parentWorldQuat: qVrm1Parent,
-    restUpperDir: new THREE.Vector3(1, 0, 0),
-    restLowerDir: new THREE.Vector3(1, 0, 0),
-    restElbowDir: new THREE.Vector3(0, 0, -1)
-  });
-
-  const solved0 = C.vrmIK.solveTwoBoneArmIK(THREE, {
-    shoulderPos: shoulder,
-    targetPos: target,
-    polePos: pole,
-    upperLen: L1,
-    lowerLen: L2,
-    parentWorldQuat: qVrm0Parent,
-    restUpperDir: new THREE.Vector3(-1, 0, 0),
-    restLowerDir: new THREE.Vector3(-1, 0, 0),
-    restElbowDir: new THREE.Vector3(0, 0, 1)
-  });
-
-  // Forward-kinematics verification on both VRM 1.0 and VRM 0.x.
-  const fk = (parentQ, upperQ, lowerQ, restDir) => {
-    const upperW = parentQ.clone().multiply(upperQ);
-    const elbow = shoulder.clone().add(restDir.clone().multiplyScalar(L1).applyQuaternion(upperW));
-    const lowerW = upperW.clone().multiply(lowerQ);
-    const hand = elbow.clone().add(restDir.clone().multiplyScalar(L2).applyQuaternion(lowerW));
-    return { elbow, hand };
-  };
-  const fk1 = fk(qVrm1Parent, solved1.upperQuat, solved1.lowerQuat, new THREE.Vector3(1, 0, 0));
-  const fk0 = fk(qVrm0Parent, solved0.upperQuat, solved0.lowerQuat, new THREE.Vector3(-1, 0, 0));
-
-  assert.ok(fk1.hand.distanceTo(target) < 1e-3, `VRM 1.0 hand missed target by ${fk1.hand.distanceTo(target)}`);
-  assert.ok(fk0.hand.distanceTo(target) < 1e-3, `VRM 0.x hand missed target by ${fk0.hand.distanceTo(target)}`);
-  assert.ok(fk1.elbow.distanceTo(fk0.elbow) < 1e-3, "VRM 0.x and VRM 1.0 elbows must match in world space");
-  assert.ok(fk1.hand.distanceTo(fk0.hand) < 1e-3, "VRM 0.x and VRM 1.0 hands must match in world space");
-
-  // Out-of-reach & too-close targets clamp cleanly without NaN.
-  const farSolved = C.vrmIK.solveTwoBoneArmIK(THREE, {
-    shoulderPos: shoulder,
-    targetPos: new THREE.Vector3(0.16, 1.32, 3.0),
-    polePos: pole,
-    upperLen: L1,
-    lowerLen: L2,
-    parentWorldQuat: qVrm1Parent,
-    restUpperDir: new THREE.Vector3(1, 0, 0),
-    restLowerDir: new THREE.Vector3(1, 0, 0),
-    restElbowDir: new THREE.Vector3(0, 0, -1)
-  });
-  assert.ok(Number.isFinite(farSolved.upperQuat.w) && Math.abs(farSolved.clampedDistance - (L1 + L2) * 0.995) < 1e-4);
-
-  // 5 finger presets on a humanoid with finger bones vs graceful fallback without finger bones.
-  function makeRigVrm(isVrm0, withFingers) {
+  // Build a minimal real-Three.js VRM scene with tall hair/ears extending +0.48m above head bone.
+  function makeTallHairVrm(metaVersion) {
     const root = new THREE.Group();
-    if (isVrm0) root.rotation.y = Math.PI;
-    const lSign = isVrm0 ? -1 : 1;
+    const is0 = metaVersion === "0";
+    if (is0) root.rotation.y = Math.PI;
     const bones = new Map();
     const addBone = (name, parent, x, y, z) => {
       const n = new THREE.Object3D();
@@ -772,117 +713,242 @@ test("Phase 2 2-bone analytical arm IK hits targets identically on VRM 0.x and V
       bones.set(name, n);
       return n;
     };
-    const chest = addBone("chest", root, 0, 1.15, 0);
-    const upperChest = addBone("upperChest", chest, 0, 0.12, 0);
-    addBone("head", upperChest, 0, 0.22, 0);
+    const hips = addBone("hips", root, 0, 0.88, 0);
+    const spine = addBone("spine", hips, 0, 0.10, 0);
+    const chest = addBone("chest", spine, 0, 0.14, 0);
+    const upperChest = addBone("upperChest", chest, 0, 0.10, 0);
+    const neck = addBone("neck", upperChest, 0, 0.10, 0);
+    const head = addBone("head", neck, 0, 0.08, 0); // world y = 1.40
+    const lSign = is0 ? -1 : 1;
+    addBone("leftShoulder", upperChest, lSign * 0.06, 0.04, 0);
     const lU = addBone("leftUpperArm", upperChest, lSign * 0.16, 0.04, 0);
-    const lL = addBone("leftLowerArm", lU, lSign * 0.18, 0, 0);
-    const lH = addBone("leftHand", lL, lSign * 0.16, 0, 0);
+    const lL = addBone("leftLowerArm", lU, lSign * 0.22, 0, 0);
+    addBone("leftHand", lL, lSign * 0.20, 0, 0);
+    addBone("rightShoulder", upperChest, -lSign * 0.06, 0.04, 0);
     const rU = addBone("rightUpperArm", upperChest, -lSign * 0.16, 0.04, 0);
-    const rL = addBone("rightLowerArm", rU, -lSign * 0.18, 0, 0);
-    const rH = addBone("rightHand", rL, -lSign * 0.16, 0, 0);
-    if (withFingers) {
-      for (const [side, hand] of [["left", lH], ["right", rH]]) {
-        for (const f of ["ThumbMetacarpal", "ThumbProximal", "ThumbDistal", "IndexProximal", "IndexIntermediate", "IndexDistal", "MiddleProximal", "MiddleIntermediate", "MiddleDistal", "RingProximal", "RingIntermediate", "RingDistal", "LittleProximal", "LittleIntermediate", "LittleDistal"]) {
-          addBone(side + f, hand, 0.02, 0, 0);
-        }
-      }
-    }
+    const rL = addBone("rightLowerArm", rU, -lSign * 0.22, 0, 0);
+    addBone("rightHand", rL, -lSign * 0.20, 0, 0);
+
+    // Tall hair / ornament mesh peaking at head.y + 0.48 = 1.88m.
+    const hairGeo = new THREE.BoxGeometry(0.26, 0.48, 0.24);
+    const hairMesh = new THREE.Mesh(hairGeo, new THREE.MeshBasicMaterial());
+    hairMesh.position.set(0, 0.24, 0); // top at +0.48 above head bone
+    head.add(hairMesh);
     root.updateMatrixWorld(true);
-    return { scene: root, bones, humanoid: { getNormalizedBoneNode: name => bones.get(name) || null } };
+
+    const vals = new Map();
+    const presets = { neutral: {}, blink: {}, happy: {}, sad: {}, angry: {}, relaxed: {}, surprised: {} };
+    return {
+      meta: { metaVersion },
+      scene: root,
+      bones,
+      humanoid: { getNormalizedBoneNode: name => bones.get(name) || null },
+      expressionManager: {
+        presetExpressionMap: presets,
+        customExpressionMap: {},
+        expressions: Object.keys(presets).map(expressionName => ({ expressionName })),
+        setValue: (k, v) => vals.set(k, v)
+      },
+      lookAt: { target: null },
+      update() { root.updateMatrixWorld(true); }
+    };
   }
 
-  const vrmWithFingers = makeRigVrm(false, true);
-  const solverF = C.vrmIK.createArmIKSolver(THREE, vrmWithFingers, false);
-  const presetCurlSums = new Map();
-  for (const preset of ["relaxed", "open", "hold_phone", "point", "cup"]) {
-    let applied = 0;
-    for (let i = 0; i < 20; i++) applied = solverF.applyFingerPreset("right", preset, 0.05);
-    assert.equal(applied, 15, `expected 15 right finger bones updated for preset ${preset}`);
-    const idxCurl = Math.abs(vrmWithFingers.bones.get("rightIndexProximal").rotation.z);
-    const midCurl = Math.abs(vrmWithFingers.bones.get("rightMiddleProximal").rotation.z);
-    presetCurlSums.set(preset, { idxCurl, midCurl });
+  let capturedCamera = null;
+  class StubRenderer {
+    constructor() { this.shadowMap = { enabled: true }; this.info = { render: { calls: 1, triangles: 12 } }; }
+    setClearColor() {}
+    setPixelRatio() {}
+    setSize() {}
+    render(_scene, cam) { capturedCamera = cam; }
+    dispose() {}
+    forceContextLoss() {}
   }
-  assert.ok(presetCurlSums.get("point").idxCurl < 0.05 && presetCurlSums.get("point").midCurl > 0.7, "point preset extends index and curls middle finger");
-  assert.ok(presetCurlSums.get("hold_phone").idxCurl > 0.5 && presetCurlSums.get("open").idxCurl < 0.1);
 
-  const vrmNoFingers = makeRigVrm(true, false);
-  const solverNoF = C.vrmIK.createArmIKSolver(THREE, vrmNoFingers, true);
-  assert.equal(solverNoF.applyFingerPreset("right", "hold_phone", 0.05), 0, "missing finger bones must degrade gracefully");
+  const vrm1 = makeTallHairVrm("1");
+  const stubRuntime = {
+    THREE: { ...THREE, WebGLRenderer: StubRenderer },
+    GLTFLoader: class {
+      register() {}
+      async parseAsync() { return { scene: vrm1.scene, userData: { vrm: vrm1 } }; }
+    },
+    VRMLoaderPlugin: class {},
+    VRMAnimationLoaderPlugin: class {},
+    VRMUtils: { removeUnnecessaryVertices() {}, combineSkeletons() {}, rotateVRM0() {}, deepDispose() {} },
+    createVRMAnimationClip: () => ({})
+  };
 
-  // 3D Toon Props controller: verify all props, lookAt tracking, inset bounds, and clean disposal.
-  const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(26, 240 / 280, 0.08, 25);
-  camera.position.set(0, 1.38, 1.72);
-  camera.lookAt(0, 1.35, 0);
-  camera.updateProjectionMatrix();
-  camera.updateMatrixWorld(true);
-
-  const propsCtrl = C.vrmProps.createController(rt, vrmWithFingers, scene, camera, {
-    isVrm0: false,
-    framing: { headY: 1.49, chestY: 1.15, bustSpan: 0.34, targetY: 1.38 },
-    getSize: () => ({ width: 240, height: 280 })
+  const doc = { createElement: tag => makeFakeElement(tag, doc), addEventListener() {} };
+  const { C } = loadCompanion({
+    document: doc,
+    window: { innerWidth: 1200, innerHeight: 800, devicePixelRatio: 1, addEventListener() {} },
+    fetch: async () => ({ ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer })
   });
+  C.vrmRuntimeLoader = async () => stubRuntime;
 
-  // typing -> smartphone visible + screen bounce light active + inset bounds ok.
-  for (let i = 0; i < 12; i++) propsCtrl.update({ dt: 0.05, elapsed: i * 0.05, pose: "typing", gesture: null, prop: null, expression: "focused", physics: null, extra: { progress: 0.5 } });
-  const bTyping = propsCtrl.getProjectedBounds();
-  assert.ok(bTyping.props.smartphone, "typing must show smartphone 3D prop");
-  assert.equal(bTyping.allWithinInset4, true, `typing bounds exceeded 4px inset: ${JSON.stringify(bTyping)}`);
+  const pack = { id: "vrm-tall", rev: "r1", renderer: "vrm", modelFile: "avatar.vrm", manifest: {}, expressionMap: {}, animations: {} };
+  const rig = C.makeVrmRig(pack);
+  await rig.mount(makeFakeElement("div", doc), { width: 240, height: 280, dpr: 1 });
 
-  // subagent_dispatch -> drone visible + lookAt tracks drone + inset bounds ok.
-  for (let i = 0; i < 12; i++) {
-    propsCtrl.update({
-      dt: 0.05, elapsed: i * 0.05, pose: "stand", gesture: "cup_hands", prop: "drone", expression: "oo", physics: null,
-      extra: { progress: 0.55, beat: { prop: { id: "drone", action: "launch" } } }
-    });
-  }
-  assert.ok(propsCtrl.getLookAtWorldTarget(), "drone launch must drive vrm.lookAt world target");
-  const bDrone = propsCtrl.getProjectedBounds();
-  assert.ok(bDrone.props.drone, "subagent_dispatch must show drone 3D prop");
-  assert.equal(bDrone.allWithinInset4, true, `drone bounds exceeded 4px inset: ${JSON.stringify(bDrone)}`);
+  const st = rig.debugState();
+  assert.equal(st.framing.usedBox3, true, "autoFrameBust must use THREE.Box3 on posed meshes");
+  assert.ok(st.framing.topY >= 1.87, `expected topY >= 1.87 to include tall hair (got ${st.framing.topY})`);
+  assert.ok(capturedCamera, "camera must be used in render");
+  capturedCamera.updateMatrixWorld(true);
 
-  // coffee, mail_send, mailbox_bonk, wave, point, headrub, cup_hands, perched, dangle, and oo.
-  for (const [label, state] of [
-    ["coffee", { pose: "stand", gesture: "coffee", prop: null, expression: "half_lid", extra: { progress: 0.4 } }],
-    ["mail_send", { pose: "stand", gesture: "cup_hands", prop: "mail", expression: "oo", extra: { progress: 0.5, beat: { prop: { id: "mail", motion: "hand-liftoff" } } } }],
-    ["mailbox_bonk", { pose: "stand", gesture: null, prop: "mail", expression: "oo", extra: { progress: 0.42, beat: { prop: { id: "mail", motion: "bonk-from-edge" } } } }],
-    ["wave", { pose: "stand", gesture: "wave", prop: null, expression: "happy", extra: { progress: 0.5 } }],
-    ["point", { pose: "stand", gesture: "point", prop: null, expression: "oo", extra: { progress: 0.5 } }],
-    ["headrub", { pose: "stand", gesture: "headrub", prop: null, expression: "happy", extra: { progress: 0.5 } }],
-    ["cup_hands", { pose: "stand", gesture: "cup_hands", prop: null, expression: "idle", extra: { progress: 0.5 } }],
-    ["perched", { pose: "perched", gesture: "perched", prop: null, expression: "idle", extra: { progress: 0.5 } }],
-    ["dangle", { pose: "dangle", gesture: "dangle", prop: null, expression: "oo", physics: { swing: 0.22 }, extra: { progress: 0.5 } }],
-    ["oo", { pose: "stand", gesture: null, prop: null, expression: "oo", extra: { progress: 0.5 } }]
-  ]) {
-    for (let i = 0; i < 12; i++) propsCtrl.update({ dt: 0.05, elapsed: i * 0.05, physics: null, ...state });
-    const b = propsCtrl.getProjectedBounds();
-    assert.equal(b.allWithinInset4, true, `${label} bounds exceeded 4px inset: ${JSON.stringify(b)}`);
-  }
+  // Project the front-most top vertex of the tall hair into NDC and verify comfortable headroom.
+  const hairTopFront = new THREE.Vector3(0, 1.88, 0.12).project(capturedCamera);
+  assert.ok(hairTopFront.y < 0.85, `tall hair top projected too close to/past top edge (ndcY=${hairTopFront.y.toFixed(3)})`);
+  assert.ok(hairTopFront.y > 0.25, `tall hair top projected too low (ndcY=${hairTopFront.y.toFixed(3)})`);
 
-  // IK -> stand -> IK must sync armQuatCache from current stand bones instead of snapping back to stale raised pose.
-  for (let i = 0; i < 12; i++) propsCtrl.update({ dt: 0.05, elapsed: i * 0.05, pose: "stand", gesture: "wave", prop: null, expression: "happy", physics: null, extra: {} });
-  const rightUpper = vrmWithFingers.humanoid.getNormalizedBoneNode("rightUpperArm");
-  const raisedQuat = rightUpper.quaternion.clone();
-  // Simulate stand lowering rightUpperArm directly via Euler rotation.
-  rightUpper.rotation.set(0.05, -0.04, 1.24, "XYZ");
-  const standQuat = rightUpper.quaternion.clone();
-  propsCtrl.update({ dt: 0.016, elapsed: 1.0, pose: "stand", gesture: null, prop: null, expression: "idle", physics: null, extra: {} });
-  // First tiny step of next IK gesture must stay close to standQuat, not snap back to raisedQuat.
-  propsCtrl.update({ dt: 0.016, elapsed: 1.02, pose: "stand", gesture: "point", prop: null, expression: "oo", physics: null, extra: {} });
-  const angleFromStand = rightUpper.quaternion.angleTo(standQuat);
-  const angleFromRaised = rightUpper.quaternion.angleTo(raisedQuat);
-  assert.ok(angleFromStand < angleFromRaised,
-    `IK -> stand -> IK snapped toward stale raised pose (fromStand=${angleFromStand.toFixed(3)}, fromRaised=${angleFromRaised.toFixed(3)})`);
+  // Verify relaxed lowered-arm stand pose (never T-pose).
+  assert.ok(vrm1.bones.get("leftUpperArm").rotation.z < -1.1, "leftUpperArm must be lowered naturally");
+  assert.ok(vrm1.bones.get("rightUpperArm").rotation.z > 1.1, "rightUpperArm must be lowered naturally");
 
-  propsCtrl.dispose();
-  assert.equal(scene.children.length, 0, "propsCtrl.dispose() must remove all 3D prop groups from scene");
+  // Verify clean gesture extension seam: registerVrmGesture -> resolve -> update -> unregister.
+  let gestureCalls = 0;
+  assert.equal(C.registerVrmGesture("custom_nod", ctx => {
+    gestureCalls++;
+    ctx.setBoneEuler("head", 0.22, 0, 0);
+  }), true);
+  assert.ok(Object.hasOwn(C.vrmVocabulary(pack).gestures, "custom_nod"));
+  const res = C.resolveVrmScenario("test", { pose: "stand", gesture: "custom_nod", expression: "happy" }, pack);
+  assert.equal(res.mode, "full");
+  assert.equal(res.gesture, "custom_nod");
+  const v = rig.view("stand", "custom_nod", "happy", []);
+  v.render(0.5, { x: 0, y: 0 }, null, { progress: 0.5 });
+  assert.equal(gestureCalls, 1, "registered custom VRM gesture handler must be invoked on render");
+  assert.equal(C.unregisterVrmGesture("custom_nod"), true);
+  assert.equal(Object.hasOwn(C.vrmVocabulary(pack).gestures, "custom_nod"), false);
+
+  rig.dispose();
 });
 
-test("Phase 2 optional .vrma clip playback cross-fades on matching gesture, hides 3D props, and caches failed loads", async () => {
+test("VRM hover freeze prevents right-col ping-pong, zeroes vertical lift/hop, and clamps FX badges inside bounds", async () => {
+  let now = 0, raf = null, rafId = 0;
+  const storage = new Map();
+  const docListeners = {};
+  const doc = {
+    hidden: false,
+    documentElement: {
+      dataset: { rid: "s1" },
+      classList: { contains: () => false },
+      hasAttribute: () => true,
+      addEventListener() {}
+    },
+    body: null,
+    getElementById: () => null,
+    createElement: tag => makeFakeElement(tag, doc),
+    createElementNS: (_ns, tag) => makeFakeElement(tag, doc),
+    addEventListener: (type, fn) => { (docListeners[type] ||= []).push(fn); }
+  };
+  doc.body = makeFakeElement("body", doc);
+
+  const fakeThree = makeFakeVrmRuntime("1");
+  const { C } = loadCompanion({
+    document: doc,
+    window: {
+      innerWidth: 1400,
+      innerHeight: 900,
+      devicePixelRatio: 1,
+      localStorage: {
+        getItem: k => storage.has(k) ? storage.get(k) : null,
+        setItem: (k, v) => storage.set(k, String(v)),
+        removeItem: k => storage.delete(k)
+      },
+      addEventListener() {},
+      WsShell: { companionContext: (routeKind = "home") => ({ routeKind, activity: "idle", landmarks: {}, events: [], rightColActive: false, drawerOpen: false }) },
+      wsCompanionModalRows: []
+    },
+    ResizeObserver: class { observe() {} disconnect() {} },
+    MutationObserver: class { observe() {} disconnect() {} },
+    performance: { now: () => now },
+    wsT: k => k,
+    requestAnimationFrame: fn => { raf = fn; return ++rafId; },
+    cancelAnimationFrame: () => { raf = null; },
+    fetch: async url => {
+      if (url.includes("/api/companion/packs?")) {
+        return { ok: true, json: async () => ({ resolvedAuto: { packId: "vrm1" }, packs: [{ id: "vrm1", rev: "rv1", renderer: "vrm", schema: "ws-companion-vrm/v1" }] }) };
+      }
+      if (url === "/api/companion/packs") {
+        return { ok: true, json: async () => ({ packs: [{ id: "vrm1", rev: "rv1", renderer: "vrm", schema: "ws-companion-vrm/v1" }] }) };
+      }
+      if (url.includes("/vrm1/pack.json")) {
+        return { ok: true, json: async () => ({ schema: "ws-companion-vrm/v1", id: "vrm1", model: "a.vrm" }) };
+      }
+      return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer };
+    }
+  });
+  C.quickMenu = () => ({ rebuild() {}, measure() {}, place() {}, close() {} });
+  C.vrmRuntimeLoader = async () => fakeThree.runtime;
+
+  const stage = C.mount({ pack: "vrm1", preset: "" }, () => {});
+  for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r));
+  const step = (dt = 40) => { const fn = raf; raf = null; if (fn) { now += dt; fn(now); } };
+  step();
+
+  const rootNode = doc.body.children[0];
+  const hitEl = rootNode.all().find(el => el.className === "ws-companion-hit");
+  const gearEl = rootNode.all().find(el => el.className === "ws-companion-gear");
+  const homeX = stage.debugState().home.x;
+
+  // Hover #bcol -> VRM slides left.
+  stage.context({
+    routeKind: "session", activity: "idle", sessionId: "s1", events: [],
+    rightColActive: true, drawerOpen: false,
+    landmarks: { "right-col": { x: 1050, y: 0, width: 350, height: 900 } }
+  }, { left: 0, top: 0, width: 1400, height: 900 });
+  for (let i = 0; i < 12; i++) step(40);
+  const shiftedX = stage.debugState().position.x;
+  assert.ok(shiftedX < homeX - 100, "VRM should slide left when right-col is hovered");
+
+  // Pointer moves onto companion gear -> companionHover freezes horizontal avoidance even if rightColActive drops!
+  rootNode.dispatchEvent({ type: "pointerover", target: gearEl });
+  assert.equal(stage.debugState().companionHover, true);
+  assert.equal(stage.debugState().avoidanceFrozen, true);
+  stage.context({
+    routeKind: "session", activity: "idle", sessionId: "s1", events: [],
+    rightColActive: false, drawerOpen: false,
+    landmarks: { "right-col": { x: 1050, y: 0, width: 350, height: 900 } }
+  }, { left: 0, top: 0, width: 1400, height: 900 });
+  for (let i = 0; i < 8; i++) step(40);
+  assert.ok(Math.abs(stage.debugState().position.x - shiftedX) < 1.5,
+    `companion fled while hovered: was ${shiftedX}, moved to ${stage.debugState().position.x}`);
+
+  // Pointer leaves companion and moves far left to (120, 120) -> smoothly returns home.
+  rootNode.dispatchEvent({ type: "pointerout", target: gearEl, relatedTarget: null });
+  for (const fn of docListeners.pointermove || []) fn({ clientX: 120, clientY: 120, target: doc.body });
+  for (let i = 0; i < 20; i++) step(40);
+  assert.equal(stage.debugState().avoiding, false);
+  assert.ok(Math.abs(stage.debugState().position.x - homeX) < 4, "VRM must return home once pointer leaves companion and right-col");
+
+  // Trigger hop-bounce scenario (e.g. celebrate / ask_open) -> VRM must have ZERO vertical lift/hop.
+  const baseTransform = hitEl.style.transform;
+  const parseY = tf => {
+    const m = /translate3d\([^,]+,\s*([-\d.]+)px/.exec(tf || "");
+    return m ? Number(m[1]) : NaN;
+  };
+  const baseY = parseY(baseTransform);
+  assert.equal(stage.command({ sessionId: "s1", scenario: "celebrate", fx: "alert", ttl_ms: 3000 }), true);
+  for (let i = 0; i < 15; i++) {
+    step(40);
+    const curY = parseY(hitEl.style.transform);
+    assert.ok(Math.abs(curY - baseY) < 0.01, `VRM must not hop vertically during celebrate (baseY=${baseY}, curY=${curY})`);
+  }
+
+  // FX badge must be clamped inside visible container & viewport bounds (never above bodyBox top).
+  const fxEl = rootNode.all().find(el => el.className === "ws-companion-fx");
+  assert.ok(fxEl && !fxEl.hidden, "FX badge should be visible");
+  const fxY = parseY(fxEl.style.transform);
+  assert.ok(fxY >= baseY + 8 && fxY < 900 - 8, `FX badge Y (${fxY}) escaped VRM container/viewport bounds (baseY=${baseY})`);
+
+  stage.dispose();
+});
+
+test("Optional .vrma clip playback cross-fades on matching gesture/pose and negatively caches failed loads", async () => {
   const doc = { createElement: tag => makeFakeElement(tag, doc), addEventListener() {} };
   const fakeThree = makeFakeVrmRuntime("1");
-  let clipLoads = 0, fadeIns = 0, fadeOuts = 0, mixerUpdates = 0, hideCalls = 0;
+  let clipLoads = 0, fadeIns = 0, fadeOuts = 0, mixerUpdates = 0;
   fakeThree.runtime.createVRMAnimationClip = () => { clipLoads++; return { name: "typing-clip" }; };
   fakeThree.runtime.THREE.AnimationMixer = class {
     update() { mixerUpdates++; }
@@ -917,13 +983,6 @@ test("Phase 2 optional .vrma clip playback cross-fades on matching gesture, hide
       return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer };
     }
   });
-  const origCreateProps = C.vrmProps.createController;
-  C.vrmProps.createController = (...args) => {
-    const ctrl = origCreateProps(...args);
-    const origHide = ctrl.hideAllProps;
-    ctrl.hideAllProps = () => { hideCalls++; origHide(); };
-    return ctrl;
-  };
   C.vrmRuntimeLoader = async () => fakeThree.runtime;
 
   const pack = {
@@ -934,8 +993,8 @@ test("Phase 2 optional .vrma clip playback cross-fades on matching gesture, hide
   const rig = C.makeVrmRig(pack);
   await rig.mount(makeFakeElement("div", doc), { width: 240, height: 280, dpr: 1 });
 
-  // Trigger typing -> fetches typing.vrma, activates mixer, and calls propsCtrl.hideAllProps().
-  const vTyping = rig.view("typing", null, "focused", ["smartphone"]);
+  // Trigger typing -> fetches typing.vrma and activates mixer.
+  const vTyping = rig.view("typing", null, "focused", []);
   vTyping.render(0.1, { x: 0, y: 0 }, null, {});
   for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r));
   vTyping.render(0.2, { x: 0, y: 0 }, null, {});
@@ -944,9 +1003,8 @@ test("Phase 2 optional .vrma clip playback cross-fades on matching gesture, hide
   assert.equal(fadeIns, 1);
   assert.equal(rig.debugState().activeVrmaKey, "typing");
   assert.ok(mixerUpdates >= 1);
-  assert.ok(hideCalls >= 1, "active .vrma must hide 3D props instead of leaving them frozen");
 
-  // Return to stand -> fades out .vrma cleanly and resumes procedural pose.
+  // Return to stand -> fades out .vrma cleanly and resumes procedural stand pose.
   const vStand = rig.view("stand", null, "idle", []);
   vStand.render(0.3, { x: 0, y: 0 }, null, {});
   vStand.render(0.55, { x: 0, y: 0 }, null, {});
