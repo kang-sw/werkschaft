@@ -85,8 +85,8 @@
 .account-icon.d-hold-btn::before {
   content: "";
   position: absolute;
-  inset: -7px;
-  border-radius: 50%;
+  inset: 0;
+  border-radius: inherit;
   background: color-mix(in srgb, var(--wb-fail) 34%, transparent);
   transform: scale(0);
   pointer-events: none;

@@ -457,7 +457,7 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rail .drstop.d-stop-safe:hover, .rail .drstop.d-stop-safe:focus-visible { color: var(--wb-fg); background: var(--wb-muted); }
 .rail .drstop.d-stop-unsafe { color: var(--wb-fail); }
 .rail .drstop.d-stop-unsafe:hover, .rail .drstop.d-stop-unsafe:focus-visible { color: var(--wb-fail); background: color-mix(in srgb, var(--wb-fail) 14%, transparent); }
-.rail .drstop.d-stop-unsafe::before { content: ""; position: absolute; inset: -4px; border-radius: 50%; background: color-mix(in srgb, var(--wb-fail) 34%, transparent); transform: scale(0); transform-origin: center; opacity: 0; pointer-events: none; z-index: 0; }
+.rail .drstop.d-stop-unsafe::before { content: ""; position: absolute; inset: 0; border-radius: inherit; background: color-mix(in srgb, var(--wb-fail) 34%, transparent); transform: scale(0); transform-origin: center; opacity: 0; pointer-events: none; z-index: 0; }
 .rail .drstop.d-stop-unsafe.d-hold-active::before { opacity: 1; animation: d-hold-radial var(--d-hold-dur, 1500ms) linear forwards; }
 .rail .drstop.d-stop-unsafe.d-hold-ready { color: var(--wb-card); box-shadow: inset 0 0 0 1.5px var(--wb-fail); }
 .rail .drstop.d-stop-unsafe.d-hold-ready::before { background: var(--wb-fail); transform: scale(1); opacity: 1; animation: none; }
