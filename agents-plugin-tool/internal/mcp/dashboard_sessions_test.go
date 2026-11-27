@@ -487,3 +487,166 @@ func TestDashboardFirstRegistrationPrunesExpiredEntries(t *testing.T) {
 		}
 	})
 }
+
+func TestDashboardUnregisterRetriesAfterLookupError(t *testing.T) {
+	t.Run("retries on next dashboardTouch", func(t *testing.T) {
+		dir := dashboardSessionEnv(t)
+		root := dashboardGitRoot(t)
+		s, key, _ := dashboardSessionServer(t, root, true)
+		defer s.Close()
+
+		dashCall(t, s, "todo.list", map[string]any{"session_key": key})
+		if _, ok := readRegistration(t, dir, key); !ok {
+			t.Fatal("not registered with key on")
+		}
+
+		// Tune dashboard off while no daemon is running -> fail-closed deferral
+		// leaves registration.json on disk and retains unregisterPending.
+		resp := dashCall(t, s, "config.tune", map[string]any{"session_key": key, "key": DashboardEnabledKey, "value": "false", "scope": "session"})
+		if isToolError(resp) {
+			t.Fatalf("config.tune off: %s", resp)
+		}
+		if _, ok := readRegistration(t, dir, key); !ok {
+			t.Fatal("registration removed despite daemon unavailable")
+		}
+
+		// Once daemon recovers, the next touch retries and removes registration.json.
+		startFakeDaemon(t, dir, http.StatusNoContent, false)
+		dashCall(t, s, "todo.list", map[string]any{"session_key": key})
+		if _, ok := readRegistration(t, dir, key); ok {
+			t.Fatal("registration remained after daemon recovered and touch retried")
+		}
+	})
+
+	t.Run("retries on dashboardHeartbeat", func(t *testing.T) {
+		dir := dashboardSessionEnv(t)
+		root := dashboardGitRoot(t)
+		s, key, _ := dashboardSessionServer(t, root, true)
+		defer s.Close()
+
+		dashCall(t, s, "todo.list", map[string]any{"session_key": key})
+		if _, ok := readRegistration(t, dir, key); !ok {
+			t.Fatal("not registered with key on")
+		}
+
+		resp := dashCall(t, s, "config.tune", map[string]any{"session_key": key, "key": DashboardEnabledKey, "value": "false", "scope": "session"})
+		if isToolError(resp) {
+			t.Fatalf("config.tune off: %s", resp)
+		}
+		if _, ok := readRegistration(t, dir, key); !ok {
+			t.Fatal("registration removed despite daemon unavailable")
+		}
+
+		// Daemon recovers without another tool call; heartbeat retries unregister.
+		startFakeDaemon(t, dir, http.StatusNoContent, false)
+		s.dashboardHeartbeat()
+		if _, ok := readRegistration(t, dir, key); ok {
+			t.Fatal("registration remained after daemon recovered and heartbeat retried")
+		}
+	})
+}
+
+func TestDashboardUnregisterDoesNotHoldLockOrRaceReenable(t *testing.T) {
+	dir := dashboardSessionEnv(t)
+	root := dashboardGitRoot(t)
+
+	inLookup := make(chan struct{})
+	releaseLookup := make(chan struct{})
+	var enterOnce, releaseOnce sync.Once
+	unlock := func() { releaseOnce.Do(func() { close(releaseLookup) }) }
+	defer unlock()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"service":"ws-dashboard","pid":1,"version":"test"}`))
+			return
+		case wsdashboard.MetaUnregisterCheckPath:
+			enterOnce.Do(func() { close(inLookup) })
+			<-releaseLookup
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"has_agent_record":false}`))
+			return
+		case wsdashboard.MetaPrunePath:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"pruned":0}`))
+			return
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	t.Cleanup(func() {
+		unlock()
+		srv.Close()
+	})
+	_, portText, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	port, _ := strconv.Atoi(portText)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	endpoint := fmt.Sprintf(`{"schema_version": 1, "port": %d, "pid": 1, "version": "test", "token": "t"}`, port)
+	if err := os.WriteFile(filepath.Join(dir, "endpoint.json"), []byte(endpoint), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, key1, loginRoot := dashboardSessionServer(t, root, true)
+	defer s.Close()
+	key2, _ := parseLoginResponse(t, callLogin(t, s, 900001, root, nil))
+
+	dashCall(t, s, "todo.list", map[string]any{"session_key": key1})
+	dashCall(t, s, "todo.list", map[string]any{"session_key": key2})
+	if _, ok := readRegistration(t, dir, key1); !ok {
+		t.Fatal("key1 not registered")
+	}
+
+	// Trigger unregister on key1; its /meta/unregister-check stalls in flight.
+	tuneOffDone := make(chan string, 1)
+	go func() {
+		tuneOffDone <- dashCall(t, s, "config.tune", map[string]any{"session_key": key1, "key": DashboardEnabledKey, "value": "false", "scope": "session"})
+	}()
+
+	select {
+	case <-inLookup:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for unregister-check to enter handler")
+	}
+
+	// Concurrent dashboardPageURL and dashboardTouch for another session must not
+	// block behind the stalled unregister lookup.
+	concurrentDone := make(chan struct{})
+	go func() {
+		_, _ = s.dashboardPageURL(key2)
+		s.dashboardTouch(key2, loginRoot, false)
+		close(concurrentDone)
+	}()
+	select {
+	case <-concurrentDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("dashboardPageURL/dashboardTouch blocked while unregister lookup was in flight")
+	}
+
+	// Re-enabling key1 while the unregister lookup is still in flight must also
+	// succeed immediately and its newly written registration must survive when
+	// the stale unregister finishes.
+	reenableDone := make(chan string, 1)
+	go func() {
+		reenableDone <- dashCall(t, s, "config.tune", map[string]any{"session_key": key1, "key": DashboardEnabledKey, "value": "true", "scope": "session"})
+	}()
+	select {
+	case resp := <-reenableDone:
+		if isToolError(resp) {
+			t.Fatalf("re-enable config.tune failed: %s", resp)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("re-enabling key1 blocked while unregister lookup was in flight")
+	}
+
+	unlock()
+	if resp := <-tuneOffDone; isToolError(resp) {
+		t.Fatalf("initial tune off failed: %s", resp)
+	}
+	if _, ok := readRegistration(t, dir, key1); !ok {
+		t.Fatal("stale in-flight unregister deleted registration after concurrent re-enable")
+	}
+}

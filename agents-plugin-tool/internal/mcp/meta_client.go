@@ -56,9 +56,29 @@ func (s *Server) daemonUnavailableError(dir string, cause error) error {
 }
 
 func (s *Server) metaHTTPClient() *http.Client {
-	return &http.Client{
-		Timeout:   2 * time.Second,
-		Transport: &http.Transport{Proxy: nil},
+	s.metaHTTPMu.Lock()
+	defer s.metaHTTPMu.Unlock()
+	if s.metaClient == nil {
+		s.metaTransport = &http.Transport{
+			Proxy:               nil,
+			MaxIdleConns:        16,
+			MaxIdleConnsPerHost: 8,
+			IdleConnTimeout:     30 * time.Second,
+		}
+		s.metaClient = &http.Client{
+			Timeout:   2 * time.Second,
+			Transport: s.metaTransport,
+		}
+	}
+	return s.metaClient
+}
+
+func (s *Server) closeMetaHTTPClient() {
+	s.metaHTTPMu.Lock()
+	tr := s.metaTransport
+	s.metaHTTPMu.Unlock()
+	if tr != nil {
+		tr.CloseIdleConnections()
 	}
 }
 

@@ -17,13 +17,28 @@ var ErrDaemonUnavailable = errors.New("dashboard daemon unavailable")
 
 const defaultMetaTimeout = 2 * time.Second
 
+// defaultMetaTransport is shared across loopback metadata RPC clients so
+// repeated requests reuse keep-alive connections and keep idle sockets bounded
+// instead of allocating a fresh Transport per call.
+var defaultMetaTransport = &http.Transport{
+	Proxy:               nil,
+	MaxIdleConns:        16,
+	MaxIdleConnsPerHost: 8,
+	IdleConnTimeout:     30 * time.Second,
+}
+
+var defaultMetaClient = &http.Client{
+	Timeout:   defaultMetaTimeout,
+	Transport: defaultMetaTransport,
+}
+
 func newMetaHTTPClient(timeout time.Duration) *http.Client {
-	if timeout <= 0 {
-		timeout = defaultMetaTimeout
+	if timeout <= 0 || timeout == defaultMetaTimeout {
+		return defaultMetaClient
 	}
 	return &http.Client{
 		Timeout:   timeout,
-		Transport: &http.Transport{Proxy: nil},
+		Transport: defaultMetaTransport,
 	}
 }
 

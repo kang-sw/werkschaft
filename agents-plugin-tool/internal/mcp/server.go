@@ -9,6 +9,7 @@ import (
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wscron"
 	"io"
+	"net/http"
 	"os"
 	"runtime/debug"
 	"slices"
@@ -103,6 +104,9 @@ type Server struct {
 	directStdio    bool
 	ensureDaemon   func()
 	ensureMetaOnce sync.Once
+	metaHTTPMu     sync.Mutex
+	metaTransport  *http.Transport
+	metaClient     *http.Client
 	// env is the caller process's environment; nil reads this process's
 	// live (process_env.go). ownerPID is the caller's PID; zero means this
 	// process. debug is the caller's debug ring.

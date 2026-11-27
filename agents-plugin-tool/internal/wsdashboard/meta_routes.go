@@ -257,6 +257,7 @@ func (d *Daemon) PruneRegistrationsFor(stateDir string, now time.Time, retention
 }
 
 func (d *Daemon) pruneRegistrationsInMeta(now time.Time, retention time.Duration) int {
+	checker, _ := d.agents.(AgentForgetChecker)
 	forgetter, _ := d.agents.(AgentForgetter)
 	return pruneRegistrationsWith(d.dir, now, retention, func(replyID string) (agentRecordEnd, bool) {
 		snap, ok := d.agentRecord(replyID)
@@ -280,21 +281,33 @@ func (d *Daemon) pruneRegistrationsInMeta(now time.Time, retention time.Duration
 		}
 		return end, true
 	}, func(replyID string, hosted bool) bool {
-		if hosted && forgetter != nil {
+		if !hosted {
+			return true
+		}
+		if checker != nil {
+			return checker.CanForgetClosed(replyID)
+		}
+		if forgetter != nil {
 			return forgetter.ForgetClosed(replyID)
 		}
 		return true
-	}, func(replyID string) {
+	}, func(replyID string, hosted bool) {
+		if hosted && checker != nil {
+			checker.ForgetClosed(replyID)
+		}
 		if err := d.deleteSessionMeta(replyID); err != nil && d.log != nil {
 			fmt.Fprintf(d.log, "dashboard: delete pruned session metadata %s: %v\n", replyID, err)
 		}
 	})
 }
 
+// removeSessionDir is a test seam for os.RemoveAll in pruneRegistrationsWith.
+var removeSessionDir = os.RemoveAll
+
 // pruneRegistrationsWith mirrors PruneRegistrations using lookup for agent
 // record metadata instead of reading agent.json from disk. PruneRegistrations
 // in registry.go stays untouched because legacy tests extract it by AST.
-func pruneRegistrationsWith(dir string, now time.Time, retention time.Duration, lookup func(replyID string) (agentRecordEnd, bool), beforeRemove func(replyID string, hosted bool) bool, afterRemove func(replyID string)) int {
+func pruneRegistrationsWith(dir string, now time.Time, retention time.Duration, lookup func(replyID string) (agentRecordEnd, bool), beforeRemove func(replyID string, hosted bool) bool, afterRemove func(replyID string, hosted bool)) int {
 	entries, err := wsstate.ReadDir(filepath.Join(dir, sessionsDirName))
 	if err != nil {
 		return 0
@@ -334,9 +347,9 @@ func pruneRegistrationsWith(dir string, now time.Time, retention time.Duration, 
 			continue
 		}
 		wslive.DropRing(wslive.RingDir(sessionDir))
-		if os.RemoveAll(sessionDir) == nil {
+		if removeSessionDir(sessionDir) == nil {
 			if afterRemove != nil {
-				afterRemove(entry.Name())
+				afterRemove(entry.Name(), hosted)
 			}
 			pruned++
 		}

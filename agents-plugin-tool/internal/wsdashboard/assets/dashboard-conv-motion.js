@@ -640,16 +640,17 @@
         if (staleTimer) { clearTimeout(staleTimer); staleTimer = 0; }
       }
 
-      function armStaleTimer() {
+      function armStaleTimer(delayMs) {
         clearStaleTimer();
         if (state.runnerMode === "idle") return;
+        var wait = typeof delayMs === "number" ? Math.max(0, delayMs) : staleMs;
         staleTimer = setTimeout(function () {
           staleTimer = 0;
           if (state.runnerMode === "idle") return;
           stale = true;
           stopAllMotion();
           syncActivityDOM();
-        }, staleMs);
+        }, wait);
       }
 
       function markGeomDirty() { geomDirty = true; }
@@ -1234,10 +1235,23 @@
         var activityAt = snap.activityAt || 0;
         var hasActivity = !!snap.hasActivity;
 
+        var now = nowFn();
+        var age = activityAt > 0 ? Math.max(0, now - activityAt) : 0;
+        var isAlreadyStale = activityAt > 0 && age >= staleMs;
+        var remainingStaleMs = activityAt > 0 ? Math.max(0, staleMs - age) : staleMs;
+
         var changed = phase !== lastPhase || tool !== lastTool || done !== lastDone || failed !== lastFailed || exactTokens !== lastExactTokens || activityAt !== lastActivityAt || turn !== lastTurn;
         if (changed) {
-          lastLiveStamp = nowFn();
-          stale = false;
+          lastLiveStamp = now;
+          stale = isAlreadyStale;
+          if (stale) {
+            clearStaleTimer();
+            stopAllMotion();
+          }
+        } else if (!stale && isAlreadyStale) {
+          stale = true;
+          clearStaleTimer();
+          stopAllMotion();
         }
 
         var completedCount = 0;
@@ -1282,7 +1296,7 @@
             state.swayWeave.length = 0;
             state.popIn = null;
           }
-          if (changed || !staleTimer) armStaleTimer();
+          if (!stale && (changed || !staleTimer)) armStaleTimer(remainingStaleMs);
         } else if (hasActivity && phase === "tool") {
           var nextCat = classifyTool(tool);
           var newTool = state.runnerMode !== "sway" || tool !== lastTool || completedCount > 0;
@@ -1298,7 +1312,7 @@
               spawnPopIn(getPalette()[nextCat] || getPalette().file, prevMode === "thinking");
             }
           }
-          if (changed || !staleTimer) armStaleTimer();
+          if (!stale && (changed || !staleTimer)) armStaleTimer(remainingStaleMs);
         } else {
           state.runnerMode = "idle";
           state.swayTrail.length = 0;
@@ -1340,8 +1354,15 @@
         if (!enabled) {
           stopAllMotion();
         } else {
-          stale = false;
-          if (state.runnerMode !== "idle") armStaleTimer();
+          var now = nowFn();
+          var age = lastActivityAt > 0 ? Math.max(0, now - lastActivityAt) : 0;
+          stale = lastActivityAt > 0 && age >= staleMs;
+          if (stale) {
+            clearStaleTimer();
+            stopAllMotion();
+          } else if (state.runnerMode !== "idle") {
+            armStaleTimer(lastActivityAt > 0 ? Math.max(0, staleMs - age) : staleMs);
+          }
         }
         syncActivityDOM();
         ensureLoop();
