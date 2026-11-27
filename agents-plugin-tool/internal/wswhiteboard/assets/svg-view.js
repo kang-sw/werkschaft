@@ -28,7 +28,10 @@ function wbFlattenSvg(src) {
   var gfx = ["fill", "fill-opacity", "fill-rule", "stroke", "stroke-width", "stroke-opacity", "stroke-dasharray",
     "stroke-linecap", "stroke-linejoin", "opacity", "color", "font-family", "font-size", "font-weight", "font-style",
     "letter-spacing", "text-anchor", "dominant-baseline", "visibility", "display"];
-  var htm = ["color", "font-family", "font-size", "font-weight", "font-style", "line-height", "text-align", "white-space"];
+  // An edge label is an HTML pill inside a foreignObject: its fill, padding,
+  // radius and border must travel too, or the pill is flat text in the viewer.
+  var htm = ["color", "font-family", "font-size", "font-weight", "font-style", "line-height", "text-align", "white-space",
+    "background-color", "padding", "border", "border-radius"];
   var skip = /^(style|script|title|desc|metadata|defs|lineargradient|radialgradient|stop|filter|fe[a-z]+)$/i;
   var box = src.getBoundingClientRect(), vb = src.viewBox && src.viewBox.baseVal;
   var w = vb && vb.width > 0 ? vb.width : box.width, h = vb && vb.height > 0 ? vb.height : box.height;

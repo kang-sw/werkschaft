@@ -480,12 +480,15 @@ func TestMarkdownMermaidBlock(t *testing.T) {
 	init := string(assets.MermaidInit)
 	wantAll(t, init,
 		"getComputedStyle(probe).color",
-		`c("--wb-card")`, `c("--wb-fg")`, `c("--wb-muted")`, `c("--wb-muted-fg")`, `c("--wb-now")`,
-		"m.initialize(", `theme: "base"`, `securityLevel: "strict"`, "themeVariables:", "themeCSS:",
-		".node.store rect", "var(--wb-now)", `m.run({ querySelector: "pre.mermaid" })`,
+		`c("--wb-card", "card")`, `c("--wb-fg", "fg")`, `c("--wb-muted", "muted")`, `c("--wb-muted-fg", "mutedFg")`, `c("--wb-now", "now")`,
+		"mm.initialize(", `theme: "base"`, `securityLevel: "strict"`, "themeVariables:", "themeCSS:",
+		".node.store rect", "suppressErrorRendering: true", "mirrorActors: false", "prefers-color-scheme: dark",
 		"if (!m) return;",
 	)
-	if strings.Index(init, "getComputedStyle(probe)") > strings.Index(init, "m.initialize(") {
+	if strings.Contains(init, "m.run(") {
+		t.Error("blocks draw one by one through mm.render so failures get the compact card")
+	}
+	if strings.Index(init, "getComputedStyle(probe)") > strings.Index(init, "mm.initialize(") {
 		t.Error("colours must resolve before mermaid.initialize")
 	}
 
