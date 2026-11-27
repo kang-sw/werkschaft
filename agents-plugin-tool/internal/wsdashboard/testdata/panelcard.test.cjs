@@ -805,3 +805,12 @@ test('dashboard-board.css sizes pinned and maximized .mockup-wrap panels cleanly
   assert.match(boardCssSrc, /\.bcard\[data-kind="panel"\] \.panel-card-doc > \.mockup-wrap \{[^}]*flex:\s*1 1 0;[^}]*height:\s*100%;[^}]*min-height:\s*240px;[^}]*resize:\s*none;[^}]*border:\s*0;[^}]*\}/);
   assert.match(boardCssSrc, /\.bcard\[data-kind="panel"\] \.panel-card-doc \{\s*padding:\s*8px 12px 10px;\s*\}/);
 });
+
+test('dashboard-board.css sizes maximized details.entry-panel[data-max] .mockup-wrap panels cleanly without breaking non-mockup panels', () => {
+  assert.match(boardCssSrc, /details\.entry-panel\[open\]\[data-max\]:has\(\.mockup-wrap\) \{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*overflow:\s*hidden;[^}]*\}/);
+  assert.match(boardCssSrc, /details\.entry-panel\[open\]\[data-max\]:has\(\.mockup-wrap\)::details-content \{[^}]*flex:\s*1 1 0;[^}]*min-height:\s*0;[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*\}/);
+  assert.match(boardCssSrc, /details\.entry-panel\[open\]\[data-max\]:has\(\.mockup-wrap\) > summary \{\s*flex:\s*0 0 auto;\s*\}/);
+  assert.match(boardCssSrc, /details\.entry-panel\[open\]\[data-max\]:has\(\.mockup-wrap\) > :not\(summary\):not\(\.doc-body\) \{\s*flex:\s*0 0 auto;\s*\}/);
+  assert.match(boardCssSrc, /details\.entry-panel\[open\]\[data-max\] > \.doc-body:has\(> \.mockup-wrap\) \{[^}]*flex:\s*1 1 0;[^}]*min-height:\s*0;[^}]*margin:\s*0;[^}]*padding:\s*0;[^}]*border-left:\s*0;[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*overflow:\s*hidden;[^}]*\}/);
+  assert.match(boardCssSrc, /details\.entry-panel\[open\]\[data-max\] > \.doc-body > \.mockup-wrap \{[^}]*flex:\s*1 1 0;[^}]*height:\s*100%;[^}]*min-height:\s*240px;[^}]*resize:\s*none;[^}]*border:\s*0;[^}]*border-radius:\s*0;[^}]*\}/);
+});
