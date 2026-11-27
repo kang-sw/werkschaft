@@ -118,10 +118,15 @@
       this.available = new Set();
       this.weights = new Map();
       this.currentState = "idle";
+      this.coLeadOverlay = null;
       this.surprisedStrategy = "none";
       this.blinkTimer = 2.6;
       this.blinkProgress = -1;
       this.blinkDuration = 0.16;
+    }
+
+    setCoLeadOverlay(overlay) {
+      this.coLeadOverlay = overlay && typeof overlay === "object" ? overlay : null;
     }
 
     attach(vrm) {
@@ -165,8 +170,11 @@
 
     update(dt) {
       if (!this.vrm?.expressionManager) return;
+      const overlay = this.coLeadOverlay;
+      const sleepyOverride = overlay?.mode === "sleepy";
+      const allowBlink = !sleepyOverride && (!BLINK_SUPPRESSED.has(this.currentState) || !!overlay?.allowBlink);
       let autoBlink = 0;
-      if (!BLINK_SUPPRESSED.has(this.currentState)) {
+      if (allowBlink) {
         if (this.blinkProgress >= 0) {
           this.blinkProgress += dt;
           if (this.blinkProgress >= this.blinkDuration) {
@@ -224,13 +232,24 @@
       const overrideWeight = override && typeof override.weight === "number" && Number.isFinite(override.weight)
         ? override.weight : 1.0;
 
-      if (overrideTarget) {
+      if (sleepyOverride) {
+        setTarget(kBlink, overlay.blink ?? 0.92);
+        setTarget(kRelaxed, overlay.relaxed ?? 0.44);
+      } else if (overrideTarget) {
         setTarget(overrideTarget, overrideWeight);
-        if (!BLINK_SUPPRESSED.has(this.currentState)) setTarget(kBlink, autoBlink);
+        if (allowBlink) setTarget(kBlink, autoBlink);
       } else {
         switch (this.currentState) {
           case "idle":
-            setTarget(kNeutral, 1.0);
+            if (overlay) {
+              const h = overlay.happy ?? 0;
+              const r = overlay.relaxed ?? 0;
+              setTarget(kNeutral, Math.max(0.25, 1.0 - h * 0.55 - r * 0.35));
+              if (h > 0.005) setTarget(kHappy, h);
+              if (r > 0.005) setTarget(kRelaxed, r);
+            } else {
+              setTarget(kNeutral, 1.0);
+            }
             setTarget(kBlink, autoBlink);
             break;
           case "idle_doze":
@@ -238,9 +257,17 @@
             setTarget(kRelaxed, 0.4);
             break;
           case "focused":
-            setTarget(kNeutral, 0.85);
-            setTarget(kBlink, 0.15);
-            setTarget(kAngry, 0.10);
+            if (overlay) {
+              setTarget(kNeutral, 0.84);
+              if ((overlay.happy ?? 0) > 0.005) setTarget(kHappy, overlay.happy);
+              if ((overlay.relaxed ?? 0) > 0.005) setTarget(kRelaxed, overlay.relaxed);
+              setTarget(kAngry, 0.04);
+              setTarget(kBlink, autoBlink);
+            } else {
+              setTarget(kNeutral, 0.85);
+              setTarget(kBlink, 0.15);
+              setTarget(kAngry, 0.10);
+            }
             break;
           case "half_lid":
             setTarget(kBlink, 0.50);
@@ -349,10 +376,12 @@
     };
   }
 
+  let activeVrmRig = null;
+
   function makeVrmRig(pack, options = {}) {
     let mounted = false, disposed = false, paused = false, contextLost = false;
     let container = null, canvasWrap = null, canvas = null, dissolveGrid = null, overlay = null;
-    let runtime = null, renderer = null, scene = null, camera = null, vrm = null;
+    let runtime = null, renderer = null, scene = null, camera = null, vrm = null, coLead = null;
     let isVrm0 = false, lookTarget = null, headPosVec = null, mixer = null, activeVrmaAction = null, activeVrmaKey = "";
     let vrmaClips = new Map(), vrmaLoading = new Set(), vrmaFailed = new Set();
     let width = LOGICAL_W, height = LOGICAL_H, dpr = 1;
@@ -361,7 +390,9 @@
     let modelFetchCount = 0, framesRendered = 0;
     let lastSeconds = 0, elapsed = 0;
     let activePose = "stand", activeGesture = null, activeExpression = "idle";
+    let rawPose = "stand", rawGesture = null;
     let activeBeatMeta = null;
+    let pendingAccent = null, pendingCoLeadBeat = null, pendingHover = null;
     let gaze = { x: 0, y: 0 }, smoothedLook = { yaw: 0, pitch: 0 }, smoothedHead = { yaw: 0, pitch: 0 };
     const boneRotations = new Map();
     const exprCtrl = new VrmExpressionController(pack?.expressionMap);
@@ -369,6 +400,7 @@
     let listenersCancel = null;
     let cameraFraming = {
       headY: 1.45, chestY: 1.18, waistY: 0.98, topY: 1.72,
+      centerX: 0, headZ: 0,
       bustSpan: 0.27, targetY: 1.38, frameHeight: 0.85,
       headroomRatio: 0.13, cameraZ: 1.85, usedBox3: false
     };
@@ -402,6 +434,10 @@
 
     function disposeRendererOnly(forceLoss) {
       disposeVrmOnly();
+      if (coLead) {
+        try { coLead.dispose(); } catch (_) { /* ignore */ }
+        coLead = null;
+      }
       if (renderer) {
         try { renderer.dispose(); } catch (_) { /* ignore */ }
         if (forceLoss) {
@@ -444,6 +480,13 @@
       coolRim.position.set(-0.9, 1.75, -1.65);
       scene.add(keyLight, hemiLight, coolRim);
 
+      if (typeof C.createVrmCoLead === "function") {
+        coLead = C.createVrmCoLead({ THREE, scene, camera });
+        if (pendingAccent !== null) coLead.setLaptopAccent(pendingAccent);
+        if (pendingCoLeadBeat !== null) coLead.setCoLeadBeat(pendingCoLeadBeat);
+        if (pendingHover !== null) coLead.setHover(pendingHover);
+      }
+
       applyResize();
     }
 
@@ -459,7 +502,9 @@
     }
 
     function applyImmediateStandPose(loadedVrm, vrm0Flag) {
-      const targets = computeStandTargets(0, 0, 0, 0, 1);
+      const targets = coLead && C.vrmCoLeadMath
+        ? C.vrmCoLeadMath.computeCoLeadTargets({ elapsed: 0, typingWeight: 1, glanceWeight: 0, sleepyWeight: 0, reactionWeight: 0, workingWeight: 0, tiltDir: 1, headYaw: 0, headPitch: 5.6 * DEG, headPitchCue: 0 })
+        : computeStandTargets(0, 0, 0, 0, 1);
       for (const boneName of BASE_BONES) {
         const node = loadedVrm.humanoid?.getNormalizedBoneNode(boneName);
         if (!node) continue;
@@ -582,6 +627,8 @@
         chestY: chestPos.y,
         waistY,
         topY,
+        centerX,
+        headZ: headPos.z,
         bustSpan,
         targetY,
         frameHeight,
@@ -589,6 +636,7 @@
         cameraZ: headPos.z + dist,
         usedBox3
       };
+      coLead?.layoutProp(cameraFraming, camera);
     }
 
     async function parseVrmBuffer(buffer) {
@@ -729,18 +777,12 @@
           ? activePose : "";
       if (vrmaKey || activeVrmaAction) syncVrma(vrmaKey);
 
+      let coState = null;
       if (activeVrmaAction && mixer) {
+        exprCtrl.setCoLeadOverlay(null);
         mixer.update(dt);
         syncBoneCacheFromRig();
       } else {
-        // Gentle damped head/neck follow-through toward gaze (suppressed during doze).
-        const gazeScale = activeExpression === "idle_doze" ? 0.15 : 1.0;
-        const headFollowAlpha = Math.min(1, dt * 5.2);
-        const wantHeadYaw = gx * 12 * DEG * gazeScale;
-        const wantHeadPitch = gy * 8 * DEG * gazeScale;
-        smoothedHead.yaw += (wantHeadYaw - smoothedHead.yaw) * headFollowAlpha;
-        smoothedHead.pitch += (wantHeadPitch - smoothedHead.pitch) * headFollowAlpha;
-
         let headPitchCue = 0;
         if (activeExpression === "idle_doze") headPitchCue = 0.12 + Math.sin(elapsed * 0.85) * 0.04;
         else if (activeExpression === "cry") headPitchCue = 0.11;
@@ -748,19 +790,53 @@
         else if (activeExpression === "oo") headPitchCue = -0.03;
         else if (activeExpression === "focused") headPitchCue = 0.02;
 
-        const targets = computeStandTargets(
-          elapsed,
-          headPitchCue,
-          smoothedHead.yaw,
-          smoothedHead.pitch,
-          activeExpression === "focused" ? 0.45 : 1
-        );
-        const lerpAlpha = Math.min(1, dt * 8.0);
+        let targets;
+        if (coLead) {
+          const domHover = !!(container?.closest?.(".ws-companion")?.dataset?.hover === "1");
+          coState = coLead.step({
+            dt,
+            elapsed,
+            expression: activeExpression,
+            rawPose,
+            rawGesture,
+            scenarioId: extra?.playing?.entry?.id || "",
+            beat: extra?.beat || null,
+            gazeX: gx,
+            gazeY: gy,
+            headPitchCue,
+            hover: domHover
+          });
+          exprCtrl.setCoLeadOverlay(coState.exprOverlay);
+          targets = coState.boneTargets;
+        } else {
+          exprCtrl.setCoLeadOverlay(null);
+          // Gentle damped head/neck follow-through toward gaze (suppressed during doze).
+          const gazeScale = activeExpression === "idle_doze" ? 0.15 : 1.0;
+          const headFollowAlpha = 1 - Math.exp(-5.2 * dt);
+          const wantHeadYaw = gx * 12 * DEG * gazeScale;
+          const wantHeadPitch = gy * 8 * DEG * gazeScale;
+          smoothedHead.yaw += (wantHeadYaw - smoothedHead.yaw) * headFollowAlpha;
+          smoothedHead.pitch += (wantHeadPitch - smoothedHead.pitch) * headFollowAlpha;
+          targets = computeStandTargets(
+            elapsed,
+            headPitchCue,
+            smoothedHead.yaw,
+            smoothedHead.pitch,
+            activeExpression === "focused" ? 0.45 : 1
+          );
+        }
+
+        const lerpAlpha = 1 - Math.exp(-8.5 * dt);
         for (const boneName of BASE_BONES) {
           const node = vrm.humanoid?.getNormalizedBoneNode(boneName);
           if (!node) continue;
           const rawTarget = targets[boneName] || [0, 0, 0];
-          const [tx, ty, tz] = conjugateVrm0Euler(rawTarget[0], rawTarget[1], rawTarget[2], isVrm0);
+          const [tx, ty, tz] = conjugateVrm0Euler(
+            Number.isFinite(rawTarget[0]) ? rawTarget[0] : 0,
+            Number.isFinite(rawTarget[1]) ? rawTarget[1] : 0,
+            Number.isFinite(rawTarget[2]) ? rawTarget[2] : 0,
+            isVrm0
+          );
           let cur = boneRotations.get(boneName);
           if (!cur) {
             cur = [tx, ty, tz];
@@ -793,15 +869,15 @@
         }
       }
 
-      // Clamped LookAt eye tracking wired to normalized gaze.{x, y}.
+      // Clamped LookAt eye tracking wired to Co-Lead gaze choreography or normalized gaze.{x, y}.
       if (vrm.lookAt && lookTarget) {
         const headNode = vrm.humanoid?.getNormalizedBoneNode("head");
         const headPos = headPosVec || (headPosVec = new THREE.Vector3());
         headPos.set(0, cameraFraming.headY, 0);
         if (headNode) headNode.getWorldPosition(headPos);
-        const targetYaw = gx * 26 * DEG;
-        const targetPitch = -gy * 16 * DEG;
-        const la = Math.min(1, dt * 9);
+        const targetYaw = coState ? coState.eyeYaw : gx * 26 * DEG;
+        const targetPitch = coState ? coState.eyePitch : -gy * 16 * DEG;
+        const la = 1 - Math.exp(-9.0 * dt);
         smoothedLook.yaw += (targetYaw - smoothedLook.yaw) * la;
         smoothedLook.pitch += (targetPitch - smoothedLook.pitch) * la;
         const dist = 1.6;
@@ -816,8 +892,8 @@
     function renderTick(dt, currentGaze, physics, extra) {
       if (disposed || paused || contextLost || !renderer || !scene || !camera || !vrm) return;
       const clampedDt = Math.min(Math.max(dt, 0.001), 0.1);
-      exprCtrl.update(clampedDt);
       updatePoseAndLook(clampedDt, currentGaze, physics, extra);
+      exprCtrl.update(clampedDt);
       vrm.update(clampedDt);
       renderer.render(scene, camera);
       framesRendered++;
@@ -927,12 +1003,17 @@
       }
     };
 
-    return {
+    const rigApi = {
       renderer: "vrm",
       width: LOGICAL_W,
       height: LOGICAL_H,
-      mount,
+      mount(targetContainer, mountOptions) {
+        activeVrmRig = rigApi;
+        return mount(targetContainer, mountOptions);
+      },
       view(pose, gesture, expression, props) {
+        rawPose = typeof pose === "string" && pose ? pose : "stand";
+        rawGesture = typeof gesture === "string" && gesture ? gesture : null;
         const resolved = resolveScenario("", { pose, gesture, expression, prop: Array.isArray(props) ? props[0] : null }, pack);
         activePose = resolved.pose;
         activeGesture = resolved.gesture;
@@ -952,6 +1033,18 @@
         gaze.x = C.clamp(Number.isFinite(next.x) ? next.x : 0, -1, 1);
         gaze.y = C.clamp(Number.isFinite(next.y) ? next.y : 0, -1, 1);
       },
+      setLaptopAccent(hex) {
+        pendingAccent = hex;
+        return coLead ? coLead.setLaptopAccent(hex) : (C.vrmCoLeadMath?.normalizeHexColor(hex) || null);
+      },
+      setCoLeadBeat(beat) {
+        pendingCoLeadBeat = beat;
+        return coLead ? coLead.setCoLeadBeat(beat) : String(beat || "auto");
+      },
+      setHover(flag) {
+        pendingHover = flag;
+        coLead?.setHover(flag);
+      },
       resize(w, h, nextDpr) {
         const prevAspect = width / Math.max(1, height);
         if (Number.isFinite(w) && w > 0) width = w;
@@ -960,6 +1053,7 @@
         applyResize();
         const nextAspect = width / Math.max(1, height);
         if (vrm && Math.abs(nextAspect - prevAspect) > 0.01) autoFrameBust(vrm);
+        else if (vrm && coLead) coLead.layoutProp(cameraFraming, camera);
       },
       pause() { paused = true; },
       resume() { paused = false; },
@@ -980,6 +1074,7 @@
           activeVrmaKey,
           surprisedStrategy: exprCtrl.surprisedStrategy,
           framing: { ...cameraFraming },
+          coLead: coLead ? coLead.debugState() : null,
           contextLost,
           paused,
           disposed,
@@ -992,6 +1087,7 @@
       dispose() {
         if (disposed) return;
         disposed = true;
+        if (activeVrmRig === rigApi) activeVrmRig = null;
         loadEpoch++;
         loadCancel.abort();
         listenersCancel?.abort();
@@ -1003,6 +1099,7 @@
         container = canvasWrap = canvas = dissolveGrid = overlay = null;
       }
     };
+    return rigApi;
   }
 
   Object.assign(C, {
@@ -1010,6 +1107,9 @@
     vrmVocabulary,
     registerVrmGesture,
     unregisterVrmGesture,
+    setLaptopAccent(hex) { return activeVrmRig?.setLaptopAccent?.(hex) ?? null; },
+    setCoLeadBeat(beat) { return activeVrmRig?.setCoLeadBeat?.(beat) ?? null; },
+    setVrmHover(flag) { activeVrmRig?.setHover?.(flag); },
     VrmExpressionController,
     resolveVrmScenario: resolveScenario,
     vrmMath: { conjugateVrm0Euler, conjugateVrm0Quat }
