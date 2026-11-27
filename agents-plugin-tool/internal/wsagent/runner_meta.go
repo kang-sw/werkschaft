@@ -30,7 +30,7 @@ func (*Runner) ValidateLegacyRecord(rel, replyID string, raw []byte) error {
 // durable agent records, and retired Pi purges persist exclusively through
 // SQLite without writing legacy session sidecars. The daemon owns closing store.
 func (r *Runner) SetMeta(store *wsmeta.Store, snap *wsmeta.Snapshot) {
-	if r == nil || store == nil || snap == nil {
+	if r == nil || store == nil || snap == nil || r.started.Load() {
 		return
 	}
 	r.meta = store
