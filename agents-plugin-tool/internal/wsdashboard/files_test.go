@@ -74,6 +74,10 @@ func TestWideExplorerRouting(t *testing.T) {
 	}
 }
 
+func TestFilesExplorerDblclickOpen(t *testing.T) {
+	runNodeTestSuite(t, "testdata/files-dblclick-open.test.cjs")
+}
+
 // TestFilesExplorerInstances executes the complete production explorer with
 // controlled promises; unlike helper extraction this covers closure ownership.
 func TestFilesExplorerInstances(t *testing.T) {
