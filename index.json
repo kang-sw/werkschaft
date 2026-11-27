@@ -463,7 +463,14 @@
       "registered_at": "2026-11-27T01:26:29Z"
     },
     "261127-feat-ws-ephemeral-lightweight-harness-pool": {
-      "registered_at": "2026-11-27T04:05:01Z"
+      "registered_at": "2026-11-27T04:05:01Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-27T13:49:59Z"
+      }
     },
     "261127-feat-ws-harness-account-switcher-and-slot-continuity": {
       "registered_at": "2026-11-27T05:17:22Z"
