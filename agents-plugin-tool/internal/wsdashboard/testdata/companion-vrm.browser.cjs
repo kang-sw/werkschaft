@@ -197,6 +197,9 @@ async function saveDockShot(page, name) {
       const st = visuals.stage;
       assert.equal(st.vrm.isVrm0, pack.expectVrm0, `${pack.label} metaVersion mismatch: ${JSON.stringify(st.vrm)}`);
       assert.equal(st.vrm.pose, 'stand');
+      assert.equal(st.vrm.prop, null, `${pack.label} ground-zero baseline must not show 3D props`);
+      assert.equal(st.vrm.framing?.usedBox3, true, `${pack.label} must frame bust using THREE.Box3`);
+      assert.ok(st.vrm.framing.topY >= st.vrm.framing.headY + 0.18, `${pack.label} framing topY must include head/hair margin`);
       assert.equal(st.size, 240);
       assert.equal(st.vrmHeight, 280);
       assert.equal(visuals.wrapBg, 'rgba(0, 0, 0, 0)', 'VRM wrap must have transparent borderless background');
@@ -215,53 +218,54 @@ async function saveDockShot(page, name) {
       // Cycle all 7 unified expressions via directed commands.
       for (const expr of EXPRESSIONS) {
         await sendCommand({ sessionId: 'livesession', expression: expr, ttl_ms: 1500 });
-        await page.waitForTimeout(180);
+        await page.waitForTimeout(320);
         const cur = await page.evaluate(() => window.WsCompanion.debugStage()?.vrm?.expression);
         assert.equal(cur, expr, `${pack.label} failed to apply expression ${expr} (got ${cur})`);
+        await saveDockShot(page, `${pack.label}-expr-${expr}`);
       }
       await saveDockShot(page, `${pack.label}-happy`);
 
-      // Phase 2: exercise IK gestures, 3D toon props, drone lookAt, and 4px inset framing on both VRM 1.0 and 0.x.
-      if (phase === '2') {
-        const phase2Cases = [
-          { name: 'typing', cmd: { scenario: 'working_tatata', ttl_ms: 4000 }, wantProp: 'smartphone' },
-          { name: 'subagent_dispatch', cmd: { scenario: 'subagent_dispatch', ttl_ms: 4000 }, wantProp: 'drone', wantLookAt: true },
-          { name: 'subagent_return', cmd: { scenario: 'subagent_return', ttl_ms: 4000 }, wantProp: 'drone', wantLookAt: true },
-          { name: 'thinking', cmd: { gesture: 'coffee', expression: 'half_lid', ttl_ms: 4000 }, wantProp: 'coffee' },
-          { name: 'mail_send', cmd: { scenario: 'mail_send', ttl_ms: 4000 }, wantProp: 'mail', wantLookAt: true },
-          { name: 'wave', cmd: { gesture: 'wave', expression: 'happy', ttl_ms: 4000 } },
-          { name: 'point', cmd: { gesture: 'point', expression: 'oo', ttl_ms: 4000 } },
-          { name: 'oo', cmd: { expression: 'oo', ttl_ms: 4000 } }
-        ];
-        for (const tc of phase2Cases) {
-          const beforeFrames = await page.evaluate(() => window.WsCompanion.debugStage()?.vrm?.framesRendered || 0);
-          await sendCommand({ sessionId: 'livesession', ...tc.cmd });
-          await page.waitForFunction(
-            minFrames => (window.WsCompanion.debugStage()?.vrm?.framesRendered || 0) >= minFrames,
-            beforeFrames + 10,
-            { timeout: 4000 }
-          );
-          const check = await page.evaluate(() => {
-            const st = window.WsCompanion.debugStage();
-            return { vrm: st?.vrm || null, bounds: st?.projectedBounds || null };
-          });
-          assert.ok(check.vrm && check.vrm.loaded, `${pack.label}/${tc.name}: VRM not loaded`);
-          assert.ok(check.bounds, `${pack.label}/${tc.name}: projectedBounds unavailable`);
-          if (tc.wantProp) {
-            assert.ok(check.bounds.props && check.bounds.props[tc.wantProp],
-              `${pack.label}/${tc.name}: expected 3D prop ${tc.wantProp}, got ${JSON.stringify(check.bounds.props)}`);
-          }
-          if (tc.wantLookAt) {
-            assert.equal(check.vrm.hasLookAtOverride, true,
-              `${pack.label}/${tc.name}: expected vrm.lookAt to track live 3D prop`);
-          }
-          assert.equal(check.bounds.allWithinInset4, true,
-            `${pack.label}/${tc.name}: hands/props exceeded 4px canvas inset: ${JSON.stringify(check.bounds)}`);
-          await saveDockShot(page, `${pack.label}-${tc.name}`);
-        }
-        // Reset back to a short idle command so subsequent idle FPS test starts cleanly.
-        await sendCommand({ sessionId: 'livesession', expression: 'idle', ttl_ms: 1000 });
+      // Ground-zero baseline: verify FX badges render their own glyphs, stay strictly clamped, and clear cleanly on idle.
+      const fxExpect = { alert: '!', sparkle: '✦', zzz: 'Zzz' };
+      for (const fxName of ['alert', 'sparkle', 'zzz']) {
+        await sendCommand({ sessionId: 'livesession', fx: fxName, ttl_ms: 1800 });
+        await page.waitForTimeout(260);
+        const fxCheck = await page.evaluate(() => {
+          const st = window.WsCompanion.debugStage();
+          const root = document.querySelector('.ws-companion');
+          const fxEl = document.querySelector('.ws-companion-fx');
+          const rootRect = root ? root.getBoundingClientRect() : null;
+          const fxRect = fxEl ? fxEl.getBoundingClientRect() : null;
+          return {
+            st,
+            fxHidden: !fxEl || fxEl.hidden,
+            fxText: fxEl ? fxEl.textContent : '',
+            rootRect: rootRect ? { left: rootRect.left, top: rootRect.top, right: rootRect.right, bottom: rootRect.bottom } : null,
+            fxRect: fxRect ? { left: fxRect.left, top: fxRect.top, right: fxRect.right, bottom: fxRect.bottom, width: fxRect.width, height: fxRect.height } : null
+          };
+        });
+        assert.equal(fxCheck.fxHidden, false, `${pack.label}/${fxName}: FX element should be visible`);
+        assert.ok(fxCheck.fxText.includes(fxExpect[fxName]),
+          `${pack.label}/${fxName}: expected FX text containing ${fxExpect[fxName]}, got ${JSON.stringify(fxCheck.fxText)}`);
+        assert.ok(fxCheck.fxRect && fxCheck.rootRect, `${pack.label}/${fxName}: missing FX or root rect`);
+        assert.ok(fxCheck.fxRect.top >= fxCheck.rootRect.top - 1,
+          `${pack.label}/${fxName}: FX clipped top edge: fx=${JSON.stringify(fxCheck.fxRect)} root=${JSON.stringify(fxCheck.rootRect)}`);
+        assert.ok(fxCheck.fxRect.left >= fxCheck.rootRect.left - 1,
+          `${pack.label}/${fxName}: FX clipped left edge: fx=${JSON.stringify(fxCheck.fxRect)} root=${JSON.stringify(fxCheck.rootRect)}`);
+        assert.ok(fxCheck.fxRect.right <= fxCheck.rootRect.right + 1,
+          `${pack.label}/${fxName}: FX clipped right edge: fx=${JSON.stringify(fxCheck.fxRect)} root=${JSON.stringify(fxCheck.rootRect)}`);
+        assert.equal(fxCheck.st.vrm.prop, null, `${pack.label}/${fxName}: ground-zero baseline must not spawn 3D props`);
+        assert.ok(Math.abs(fxCheck.st.position.y - fxCheck.st.home.y) < 1,
+          `${pack.label}/${fxName}: VRM companion must not hop vertically`);
+        await saveDockShot(page, `${pack.label}-fx-${fxName}`);
       }
+      await sendCommand({ sessionId: 'livesession', expression: 'idle', ttl_ms: 800 });
+      await page.waitForTimeout(180);
+      const fxCleared = await page.evaluate(() => {
+        const fxEl = document.querySelector('.ws-companion-fx');
+        return !fxEl || fxEl.hidden;
+      });
+      assert.equal(fxCleared, true, `${pack.label}: FX badge must hide cleanly when returning to idle`);
 
       // Verify 2D paper-doll wardrobe controls are hidden in settings modal.
       await page.locator('.ws-companion-gear').click({ force: true });
@@ -278,7 +282,7 @@ async function saveDockShot(page, name) {
       await page.waitForTimeout(120);
     }
 
-    // 4. Right-column (#bcol / #bgal) hover slide avoidance & return home.
+    // 4. Right-column (#bcol / #bgal) hover slide avoidance, hover freeze (no cursor-flee ping-pong), and return home.
     const frame = page.frameLocator('.sframe.on');
     const rightColLoc = frame.locator('#bcol');
     const rcBox = await rightColLoc.boundingBox();
@@ -291,6 +295,26 @@ async function saveDockShot(page, name) {
     const intersects = dockAvoiding.x + dockAvoiding.width > rcBox.x + 1 && dockAvoiding.x < rcBox.x + rcBox.width - 1;
     assert.equal(intersects, false, `avoiding dock ${JSON.stringify(dockAvoiding)} still intersects right-col ${JSON.stringify(rcBox)}`);
     await saveShot(page, 'vrm-avoiding-right-col');
+
+    // Move mouse from #bcol directly onto the avoiding companion & gear button:
+    // position must freeze with zero ping-pong and gear must click cleanly without force.
+    await page.mouse.move(dockAvoiding.x + dockAvoiding.width * 0.5, dockAvoiding.y + dockAvoiding.height * 0.5, { steps: 6 });
+    await page.waitForTimeout(450);
+    const dockHoverA = await page.locator('.ws-companion-hit').boundingBox();
+    assert.ok(Math.abs(dockHoverA.x - dockAvoiding.x) < 4,
+      `companion fled on hover! avoiding=${dockAvoiding.x}, hovered=${dockHoverA.x}`);
+    const gearBox = await page.locator('.ws-companion-gear').boundingBox();
+    assert.ok(gearBox && gearBox.width >= 18, 'gear button must be visible and targetable');
+    await page.mouse.move(gearBox.x + gearBox.width * 0.5, gearBox.y + gearBox.height * 0.5, { steps: 4 });
+    await page.waitForTimeout(350);
+    const dockHoverB = await page.locator('.ws-companion-hit').boundingBox();
+    assert.ok(Math.abs(dockHoverB.x - dockAvoiding.x) < 4,
+      `companion fled when hovering gear! avoiding=${dockAvoiding.x}, gearHover=${dockHoverB.x}`);
+    await saveShot(page, 'vrm-hover-frozen');
+    await page.mouse.click(gearBox.x + gearBox.width * 0.5, gearBox.y + gearBox.height * 0.5);
+    await page.locator('dialog.ws-companion-settings[open]').waitFor({ timeout: 3000 });
+    await saveShot(page, 'vrm-gear-modal');
+    await page.keyboard.press('Escape');
 
     // Move mouse away from right-col -> returns home.
     await page.mouse.move(120, 120);

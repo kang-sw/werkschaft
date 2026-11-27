@@ -12,6 +12,7 @@
     var watched = ["r-board", "bgal", "bcol", "drawer", "r-panels", "r-entries", "r-convlive", "r-tree", "r-head", "composer", "agisland"];
     var rightColHover = false, rightColFocus = false;
     var rightColSelector = "#bgal.bgal, #bcol.bcol, #drawer.drawer.open";
+    var companionOverlaySelector = ".ws-companion-hit, .ws-companion-gear, .ws-companion-menu, .ws-companion-settings";
     var directCommit = /^(?:mcp__[^\s]+__)?(?:git_commit|git_merge|(?:ws\/)?git\.(?:commit|merge))$/i;
     var shellTool = /^(?:mcp__[^\s]+__)?(?:bash|shell(?:_command)?|exec_command|run_command|terminal)$/i;
     var concreteCommand = /(?:^|[;&|\n])\s*(?:command:\s*)?(?:[A-Z_][A-Z_0-9]*=[^\s;]+\s+)*(?:git\s+(?:commit|merge)|go\s+(?:-C\s+\S+\s+)?test|npm\s+test|pytest|cargo\s+test|(?:npx\s+)?(?:vitest|jest))(?=\s|$)/i;
@@ -430,6 +431,28 @@
       return !!(target && typeof target.closest === "function" && target.closest(rightColSelector));
     }
 
+    function inCompanionOverlay(target) {
+      return !!(target && typeof target.closest === "function" && target.closest(companionOverlaySelector));
+    }
+
+    function parentPointerInCompanion(e) {
+      try {
+        var parentWin = window.parent;
+        if (!parentWin || parentWin === window) return false;
+        var parentDoc = parentWin.document;
+        if (!parentDoc) return false;
+        if (parentDoc.querySelector?.('.ws-companion[data-hover="1"]')) return true;
+        var frameEl = window.frameElement;
+        if (frameEl && typeof parentDoc.elementFromPoint === "function" &&
+            Number.isFinite(e?.clientX) && Number.isFinite(e?.clientY)) {
+          var r = frameEl.getBoundingClientRect();
+          var hit = parentDoc.elementFromPoint(r.left + e.clientX, r.top + e.clientY);
+          return inCompanionOverlay(hit);
+        }
+      } catch (_) { /* Cross-origin or detached parent. */ }
+      return false;
+    }
+
     function setRightColHover(next) {
       if (rightColHover === next) return;
       rightColHover = next;
@@ -442,15 +465,23 @@
       queue();
     }
 
+    function handleRightColPointer(e) {
+      if (inCompanionOverlay(e?.target)) return;
+      setRightColHover(inRightCol(e?.target));
+    }
+
     var listen = { signal: listened.signal };
     doc.addEventListener("visibilitychange", visible, listen);
     doc.addEventListener("ws-page-visibility", visible, listen);
     doc.addEventListener("input", input, listen);
     doc.addEventListener("change", queue, listen);
     doc.addEventListener("scroll", queue, { ...listen, capture: true });
-    doc.addEventListener("pointerover", function (e) { setRightColHover(inRightCol(e.target)); }, { ...listen, passive: true });
-    doc.addEventListener("pointermove", function (e) { setRightColHover(inRightCol(e.target)); }, { ...listen, passive: true });
-    doc.documentElement?.addEventListener?.("pointerleave", function () { setRightColHover(false); }, { ...listen, passive: true });
+    doc.addEventListener("pointerover", handleRightColPointer, { ...listen, passive: true });
+    doc.addEventListener("pointermove", handleRightColPointer, { ...listen, passive: true });
+    doc.documentElement?.addEventListener?.("pointerleave", function (e) {
+      if (parentPointerInCompanion(e)) return;
+      setRightColHover(false);
+    }, { ...listen, passive: true });
     doc.addEventListener("focusin", function (e) { setRightColFocus(inRightCol(e.target)); }, listen);
     doc.addEventListener("focusout", function (e) { setRightColFocus(inRightCol(e.relatedTarget)); }, listen);
     window.addEventListener("resize", queue, listen);

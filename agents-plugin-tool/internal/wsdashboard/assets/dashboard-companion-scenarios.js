@@ -255,7 +255,7 @@
     if (!C.record(command)) return null;
     const isVrm = pack?.renderer === "vrm";
     const manifest = pack?.manifest || {}, sharedManifest = shared?.manifest || {};
-    const vrmVocab = isVrm ? (C.vrmVocabulary?.() || {}) : null;
+    const vrmVocab = isVrm ? (C.vrmVocabulary?.(pack) || {}) : null;
     const patch = {};
     const fields = isVrm ? [
       ["expression", [vrmVocab.expressions]],

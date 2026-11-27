@@ -277,10 +277,25 @@
   left: 2px;
   right: auto;
   top: 2px;
+  z-index: 2;
+  width: 22px;
+  height: 22px;
   cursor: nwse-resize;
   transform: scaleX(-1);
 }
 .ws-companion[data-renderer="vrm"] .ws-companion-gear {
   top: 2px;
   right: 2px;
+  z-index: 2;
+  width: 22px;
+  height: 22px;
+}
+.ws-companion[data-renderer="vrm"] .ws-companion-hit:is(:hover, :focus-within) :is(.ws-companion-gear, .ws-companion-resize) {
+  opacity: 0.62;
+  background: color-mix(in srgb, var(--wb-card) 72%, transparent);
+}
+.ws-companion[data-renderer="vrm"] .ws-companion-hit :is(.ws-companion-gear, .ws-companion-resize):is(:hover, :active, :focus-visible),
+.ws-companion[data-renderer="vrm"] .ws-companion-gear[aria-expanded="true"] {
+  opacity: 0.96;
+  background: color-mix(in srgb, var(--wb-card) 92%, transparent);
 }
