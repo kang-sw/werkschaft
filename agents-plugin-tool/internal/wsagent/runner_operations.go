@@ -520,13 +520,13 @@ func (r *Runner) setPermissionMode(id, mode string, user bool) (State, error) {
 // fails the close (errHolderNotEnded); a descendant that does stops the
 // cascade before its ancestors close, so closing id again retries it.
 func (r *Runner) CloseConversation(id string) (State, error) {
-	st, _, err := r.closeConversation(id, false)
+	st, _, err := r.closeConversation(id)
 	return st, err
 }
 
 // closeConversation returns the deepest-first order on success, or a nil
-// order if the expiry is deferred or the cascade fails.
-func (r *Runner) closeConversation(id string, expiry bool) (State, []string, error) {
+// order if the cascade fails.
+func (r *Runner) closeConversation(id string) (State, []string, error) {
 	// The jobs a predecessor left are known only once bound: a close
 	// before that would close over jobs it cannot stop. The wait holds no
 	// lock.
@@ -537,9 +537,6 @@ func (r *Runner) closeConversation(id string, expiry bool) (State, []string, err
 	defer r.resumeMu.Unlock()
 	if _, err := r.open(id); err != nil {
 		return State{}, nil, err
-	}
-	if expiry {
-		return r.closeConversationExpiryLocked(id, true)
 	}
 	descendants := r.descendants(id)
 	order := append(descendants, id)
@@ -588,11 +585,9 @@ func (r *Runner) closeExpiryCascade(id string, plan expiryPlan) (State, error) {
 	var markedExpiring []*conv
 	clearExpiring := func() {
 		for _, c := range markedExpiring {
-			c.do(func() {
-				c.mu.Lock()
-				c.expiring = false
-				c.mu.Unlock()
-			})
+			c.mu.Lock()
+			c.expiring = false
+			c.mu.Unlock()
 		}
 	}
 	abortErr := func(from int, err error) (State, error) {
@@ -631,10 +626,12 @@ func (r *Runner) closeExpiryCascade(id string, plan expiryPlan) (State, error) {
 			return abort(0)
 		}
 		c.mu.Lock()
-		c.expiring = true
+		if !c.expiring {
+			c.expiring = true
+			markedExpiring = append(markedExpiring, c)
+		}
 		c.mu.Unlock()
-		markedExpiring = append(markedExpiring, c)
-		plan.incarnations[d] = expiryIncarnation{conv: c, parked: false, gen: newGen}
+		plan.incarnations[d] = expiryIncarnation{conv: c, parked: false, gen: newGen, sends: snap.sends, lastTurnID: snap.lastTurnID}
 		if !c.do(func() {
 			// Consume startConvWith's initial mail signal before running
 			// mailChanged so a resident mailC token does not trip admitsExpiryTree
@@ -652,12 +649,24 @@ func (r *Runner) closeExpiryCascade(id string, plan expiryPlan) (State, error) {
 			return abort(0)
 		}
 	}
-	if ok, missingRoot := r.admitsExpiryTree(plan, plan.order); !ok {
+	expiringDone, newlyMarked, ok, missingRoot := r.admitsAndFenceExpiryTree(plan)
+	markedExpiring = append(markedExpiring, newlyMarked...)
+	if !ok {
 		if missingRoot {
 			return abortErr(0, errUnknown)
 		}
 		return abort(0)
 	}
+	defer func() {
+		r.mu.Lock()
+		for nid := range plan.treeNodes {
+			if r.expiring[nid] == expiringDone {
+				delete(r.expiring, nid)
+			}
+		}
+		r.mu.Unlock()
+		close(expiringDone)
+	}()
 	for i, d := range plan.order {
 		if ok, missingRoot := r.admitsExpiryTree(plan, plan.order[i:]); !ok {
 			if missingRoot {
@@ -675,7 +684,10 @@ func (r *Runner) closeExpiryCascade(id string, plan expiryPlan) (State, error) {
 		if d == id {
 			break
 		}
-		if _, err := r.closeOneExpiry(d, false, plan.incarnations[d].conv, false, time.Time{}); err != nil {
+		if r.opts.beforeExpiryNodeClose != nil {
+			r.opts.beforeExpiryNodeClose(d)
+		}
+		if _, err := r.closeOneExpiry(d, false, plan.incarnations[d], false, time.Time{}); err != nil {
 			if errors.Is(err, errExpiryAborted) {
 				return abort(i)
 			}
@@ -689,7 +701,10 @@ func (r *Runner) closeExpiryCascade(id string, plan expiryPlan) (State, error) {
 			r.unfenceExec(d)
 		}
 	}
-	st, err := r.closeOneExpiry(id, true, plan.incarnations[id].conv, plan.checkAge, plan.rootLastActive)
+	if r.opts.beforeExpiryNodeClose != nil {
+		r.opts.beforeExpiryNodeClose(id)
+	}
+	st, err := r.closeOneExpiry(id, true, plan.incarnations[id], plan.checkAge, plan.rootLastActive)
 	if err != nil {
 		r.unfenceExec(id)
 		clearExpiring()
@@ -699,9 +714,10 @@ func (r *Runner) closeExpiryCascade(id string, plan expiryPlan) (State, error) {
 	return st, nil
 }
 
-// closeOneExpiry closes the exact snapshotted incarnation expected only if its
+// closeOneExpiry closes the exact snapshotted incarnation snap only if its
 // quiet/expiry predicate still holds atomically under wmu+mu.
-func (r *Runner) closeOneExpiry(id string, isRoot bool, expected *conv, checkAge bool, rootLastActive time.Time) (State, error) {
+func (r *Runner) closeOneExpiry(id string, isRoot bool, snap expiryIncarnation, checkAge bool, rootLastActive time.Time) (State, error) {
+	expected := snap.conv
 	if expected == nil {
 		return State{}, errExpiryAborted
 	}
@@ -713,20 +729,7 @@ func (r *Runner) closeOneExpiry(id string, isRoot bool, expected *conv, checkAge
 			return
 		}
 		closed, err := expected.closeIfPermitted(func() bool {
-			if expected.closed || expected.parkedOut {
-				return false
-			}
-			if len(expected.inboxC) != 0 || len(expected.mailC) != 0 || r.execLive(expected.id) > 0 {
-				return false
-			}
-			if !expected.wakeRefused && expected.held > 0 {
-				return false
-			}
-			if isRoot {
-				at := lastActive(expected.rec)
-				return expected.childWaitingLocked() && at.Equal(rootLastActive) && (!checkAge || (!at.IsZero() && r.opts.Now().Sub(at) >= r.childWaitingExpiry()))
-			}
-			return !expected.awakeNoExecLocked()
+			return expected.expiryPermittedLocked(isRoot, snap, checkAge, rootLastActive)
 		})
 		if err != nil {
 			closeErr = err

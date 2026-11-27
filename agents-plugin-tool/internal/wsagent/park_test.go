@@ -150,7 +150,7 @@ func TestDaemonStartKeepsWaitingChildrenParked(t *testing.T) {
 		t.Fatalf("the parked child's children = %+v", kids)
 	}
 	// A release of the checkout they are bound in meets them.
-	if len(h.runner.boundConvs(h.root)) == 0 {
+	if len(h.runner.boundConvs(canonicalWorktreePath(h.root))) == 0 {
 		t.Fatal("a checkout release does not see the parked children")
 	}
 	for _, id := range []string{a, b} {

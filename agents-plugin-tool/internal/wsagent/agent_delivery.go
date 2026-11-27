@@ -15,6 +15,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
 
@@ -256,9 +257,68 @@ func (r *Runner) expireChecked(id string, checkAge bool) bool {
 var errExpiryAborted = errors.New("expiry aborted: conversation active")
 
 type expiryIncarnation struct {
-	conv   *conv
-	parked bool
-	gen    uint64
+	conv       *conv
+	parked     bool
+	gen        uint64
+	sends      uint64
+	pageInputs uint64
+	lastTurnID string
+}
+
+func lastTurnID(rec Record) string {
+	if rec.LastTurn == nil {
+		return ""
+	}
+	return rec.LastTurn.ID
+}
+
+// hasFreshDiskHeldLocked checks c.inbox on disk for any readable non-interrupt
+// entry not yet reflected in c.held (for example, an out-of-band inbox write
+// before InboxChanged reached the loop). Caller holds c.mu (and c.wmu in close
+// paths). Only invoked on the rare expiry-commit path.
+func (c *conv) hasFreshDiskHeldLocked() bool {
+	names, err := wsinbox.Names(c.inbox)
+	if err != nil {
+		return false
+	}
+	for _, name := range names {
+		if message, known := c.heldKinds[name]; known {
+			if message {
+				return true
+			}
+			continue
+		}
+		entry, err := wsinbox.ReadHeld(c.inbox, name)
+		if err != nil {
+			continue
+		}
+		if !entry.Interrupt {
+			return true
+		}
+	}
+	return false
+}
+
+// expiryPermittedLocked reports whether c still matches its snapshotted quiet
+// incarnation and expiry age under c.wmu+c.mu.
+func (c *conv) expiryPermittedLocked(isRoot bool, snap expiryIncarnation, checkAge bool, rootLastActive time.Time) bool {
+	if c.closed || c.parkedOut {
+		return false
+	}
+	if len(c.inboxC) != 0 || len(c.mailC) != 0 || c.r.execLive(c.id) > 0 {
+		return false
+	}
+	if !c.wakeRefused && (c.held > 0 || c.hasFreshDiskHeldLocked()) {
+		return false
+	}
+	if c.sends != snap.sends || c.pageInputs != snap.pageInputs || lastTurnID(c.rec) != snap.lastTurnID {
+		return false
+	}
+	if isRoot {
+		at := lastActive(c.rec)
+		return c.childWaitingLocked() && at.Equal(rootLastActive) && (!checkAge || (!at.IsZero() && c.r.opts.Now().Sub(at) >= c.r.childWaitingExpiry()))
+	}
+	return !c.awakeNoExecLocked()
 }
 
 type expiryPlan struct {
@@ -338,6 +398,9 @@ func (r *Runner) planExpiry(id string, checkAge bool) (expiryPlan, bool) {
 	expiry := r.childWaitingExpiry()
 	rootConv.mu.Lock()
 	at := lastActive(rootConv.rec)
+	rootSends := rootConv.sends
+	rootPageInputs := rootConv.pageInputs
+	rootLastTurn := lastTurnID(rootConv.rec)
 	waiting := rootConv.childWaitingLocked() &&
 		(rootConv.wakeRefused || rootConv.held == 0) &&
 		len(rootConv.inboxC) == 0 && len(rootConv.mailC) == 0 &&
@@ -346,6 +409,12 @@ func (r *Runner) planExpiry(id string, checkAge bool) (expiryPlan, bool) {
 	if !waiting || r.execLive(id) > 0 {
 		return expiryPlan{}, false
 	}
+	type liveMark struct {
+		sends      uint64
+		pageInputs uint64
+		lastTurnID string
+	}
+	liveMarks := map[string]liveMark{}
 	descendants, ok := expiryDescendants(root, func(parent ParentRef) iter.Seq[string] {
 		return slices.Values(edges[parent])
 	}, func(cid string) expiryNode {
@@ -356,6 +425,7 @@ func (r *Runner) planExpiry(id string, checkAge bool) (expiryPlan, bool) {
 		if node.conv != nil {
 			node.conv.mu.Lock()
 			defer node.conv.mu.Unlock()
+			liveMarks[cid] = liveMark{sends: node.conv.sends, pageInputs: node.conv.pageInputs, lastTurnID: lastTurnID(node.conv.rec)}
 			quiet := !node.conv.parkedOut && !node.conv.awakeLocked() &&
 				(node.conv.wakeRefused || node.conv.held == 0) &&
 				len(node.conv.inboxC) == 0 && len(node.conv.mailC) == 0
@@ -379,10 +449,15 @@ func (r *Runner) planExpiry(id string, checkAge bool) (expiryPlan, bool) {
 	}
 	order := append(descendants, id)
 	inc := make(map[string]expiryIncarnation, len(order))
-	inc[id] = expiryIncarnation{conv: rootConv, gen: rootGen}
+	inc[id] = expiryIncarnation{conv: rootConv, gen: rootGen, sends: rootSends, pageInputs: rootPageInputs, lastTurnID: rootLastTurn}
 	for _, cid := range descendants {
 		n := nodes[cid]
-		inc[cid] = expiryIncarnation{conv: n.conv, parked: n.parked, gen: n.gen}
+		if n.conv != nil {
+			m := liveMarks[cid]
+			inc[cid] = expiryIncarnation{conv: n.conv, gen: n.gen, sends: m.sends, pageInputs: m.pageInputs, lastTurnID: m.lastTurnID}
+		} else {
+			inc[cid] = expiryIncarnation{parked: n.parked, gen: n.gen, sends: n.closed.Sends, lastTurnID: lastTurnID(n.closed)}
+		}
 	}
 	return expiryPlan{
 		root:           id,
@@ -401,11 +476,24 @@ func (r *Runner) planExpiry(id string, checkAge bool) (expiryPlan, bool) {
 // inbox/mail signal, or live exec aborts expiry. missingRoot is true when the
 // root vanished from both convs/parked and closed unexpectedly.
 func (r *Runner) admitsExpiryTree(plan expiryPlan, remaining []string) (ok bool, missingRoot bool) {
+	_, _, ok, missingRoot = r.admitsExpiryTreeWithFence(plan, remaining, false)
+	return ok, missingRoot
+}
+
+// admitsAndFenceExpiryTree validates the full expiry tree and atomically
+// installs the runner-level expiring barrier (r.expiring) and per-conv
+// expiring flags under the same r.mu + TryLock(c.mu) hold, so no concurrent
+// spawn can reserve or register a child under any node in the cascade.
+func (r *Runner) admitsAndFenceExpiryTree(plan expiryPlan) (expiringDone chan struct{}, marked []*conv, ok bool, missingRoot bool) {
+	return r.admitsExpiryTreeWithFence(plan, plan.order, true)
+}
+
+func (r *Runner) admitsExpiryTreeWithFence(plan expiryPlan, remaining []string, installFence bool) (expiringDone chan struct{}, marked []*conv, ok bool, missingRoot bool) {
 	const maxTryLockRetries = 16
 	for attempt := 0; attempt < maxTryLockRetries; attempt++ {
-		res, contended, missing := r.admitsExpiryTreeOnce(plan, remaining)
+		fence, m, res, contended, missing := r.admitsExpiryTreeOnce(plan, remaining, installFence)
 		if !contended {
-			return res, missing
+			return fence, m, res, missing
 		}
 		if attempt < 8 {
 			runtime.Gosched()
@@ -413,10 +501,10 @@ func (r *Runner) admitsExpiryTree(plan expiryPlan, remaining []string) (ok bool,
 			time.Sleep(time.Millisecond)
 		}
 	}
-	return false, false
+	return nil, nil, false, false
 }
 
-func (r *Runner) admitsExpiryTreeOnce(plan expiryPlan, remaining []string) (ok bool, contended bool, missingRoot bool) {
+func (r *Runner) admitsExpiryTreeOnce(plan expiryPlan, remaining []string, installFence bool) (expiringDone chan struct{}, marked []*conv, ok bool, contended bool, missingRoot bool) {
 	now := r.opts.Now()
 	expiry := r.childWaitingExpiry()
 	r.mu.Lock()
@@ -430,9 +518,9 @@ func (r *Runner) admitsExpiryTreeOnce(plan expiryPlan, remaining []string) (ok b
 
 	if r.convs[plan.root] == nil && !r.parked[plan.root] {
 		if _, closed := r.closed[plan.root]; !closed {
-			return false, false, true
+			return nil, nil, false, false, true
 		}
-		return false, false, false
+		return nil, nil, false, false, false
 	}
 
 	root := safeStopParent(plan.root, false)
@@ -441,11 +529,11 @@ func (r *Runner) admitsExpiryTreeOnce(plan expiryPlan, remaining []string) (ok b
 	for i := 0; i < len(queue); i++ {
 		parent := queue[i]
 		if r.pendingSpawns[parent] > 0 {
-			return false, false, false
+			return nil, nil, false, false, false
 		}
 		for cid := range r.childrenIndex[parent] {
 			if !plan.treeNodes[cid] || r.unparking[cid] != nil {
-				return false, false, false
+				return nil, nil, false, false, false
 			}
 			if visited[cid] {
 				continue
@@ -458,46 +546,64 @@ func (r *Runner) admitsExpiryTreeOnce(plan expiryPlan, remaining []string) (ok b
 	for _, nid := range remaining {
 		snap, ok := plan.incarnations[nid]
 		if !ok || r.unparking[nid] != nil || r.convGen[nid] != snap.gen {
-			return false, false, false
+			return nil, nil, false, false, false
 		}
 		if snap.parked {
 			if !r.parked[nid] || r.convs[nid] != nil {
-				return false, false, false
+				return nil, nil, false, false, false
 			}
 			continue
 		}
 		c := r.convs[nid]
 		if c == nil || c != snap.conv {
-			return false, false, false
+			return nil, nil, false, false, false
 		}
 		if !c.mu.TryLock() {
-			return false, true, false
+			return nil, nil, false, true, false
 		}
 		locked = append(locked, c)
 		if c.closed || c.parkedOut || len(c.inboxC) != 0 || len(c.mailC) != 0 {
-			return false, false, false
+			return nil, nil, false, false, false
 		}
 		if !c.wakeRefused && c.held > 0 {
-			return false, false, false
+			return nil, nil, false, false, false
+		}
+		if c.sends != snap.sends || c.pageInputs != snap.pageInputs || lastTurnID(c.rec) != snap.lastTurnID {
+			return nil, nil, false, false, false
 		}
 		if nid == plan.root {
 			at := lastActive(c.rec)
 			if !c.childWaitingLocked() || !at.Equal(plan.rootLastActive) || (plan.checkAge && (at.IsZero() || now.Sub(at) < expiry)) {
-				return false, false, false
+				return nil, nil, false, false, false
 			}
 		} else if c.awakeNoExecLocked() {
-			return false, false, false
+			return nil, nil, false, false, false
 		}
 	}
 
 	if exec := r.exec.live.Load(); exec != nil {
 		for _, nid := range remaining {
 			if (*exec)[nid] > 0 {
-				return false, false, false
+				return nil, nil, false, false, false
 			}
 		}
 	}
-	return true, false, false
+	if installFence {
+		expiringDone = make(chan struct{})
+		if r.expiring == nil {
+			r.expiring = map[string]chan struct{}{}
+		}
+		for nid := range plan.treeNodes {
+			r.expiring[nid] = expiringDone
+		}
+		for _, c := range locked {
+			if !c.expiring {
+				c.expiring = true
+				marked = append(marked, c)
+			}
+		}
+	}
+	return expiringDone, marked, true, false, false
 }
 
 type expiryNode struct {

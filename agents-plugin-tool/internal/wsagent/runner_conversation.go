@@ -356,21 +356,28 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 	delete(r.closed, rec.ReplyID)
 	delete(r.closedRows, rec.ReplyID)
 	delete(r.parked, rec.ReplyID)
+	staleParkStop := r.parkStop[rec.ReplyID]
+	delete(r.parkStop, rec.ReplyID)
 	if claimWidth != nil {
 		claimWidth()
 	}
 	r.wg.Add(1)
 	go c.loop()
 	r.mu.Unlock()
+	if staleParkStop != nil {
+		staleParkStop()
+	}
 	// Do not expose a previous LastTurn while startup still reconciles the
 	// later TurnOpen. The loop reconciles before it accepts this request.
 	c.do(func() {})
-	if (rec.Lead || rec.Parent != nil) && r.opts.Mail != nil && !foreign {
+	if (rec.Lead || rec.Parent != nil) && r.opts.Mail != nil && !foreign && !c.isMailStopped() {
 		// Mail that waited while no daemon ran is found by the first check.
 		// A spawned child is watched asleep too: mail to its address wakes
 		// it.
-		c.stopMail = r.opts.Mail.Watch(rec.Root, rec.WSKey, c.signalMail)
-		c.signalMail()
+		stop := r.opts.Mail.Watch(rec.Root, rec.WSKey, c.signalMail)
+		if c.installMailStop(stop) {
+			c.signalMail()
+		}
 	}
 	if (len(rec.Queued) > 0 || len(rec.Reports) > 0) && !foreign {
 		// Drained input an earlier daemon queued: nothing else would send

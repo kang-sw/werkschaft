@@ -259,8 +259,12 @@ type Options struct {
 	beforeExpiryClose func()
 	// beforeExpiryCascade pauses expiry between snapshot and fenced close (tests).
 	beforeExpiryCascade func(id string)
+	// beforeExpiryNodeClose pauses expiry right before closing node id (tests).
+	beforeExpiryNodeClose func(id string)
 	// admitCompletionAdmitting pauses AdmitCompletion between open and wmu (tests).
 	admitCompletionAdmitting func(id string)
+	// pageInputAdmitting pauses PageInput between conv lookup and wmu (tests).
+	pageInputAdmitting func(id string)
 	// WakeRefused, when not nil, tells the sender of a message Deliver
 	// queued for a sleeping conversation whose start admission refused
 	// now (from: the sender's reply-id, id: the conversation, reason).
@@ -380,10 +384,14 @@ type Runner struct {
 	// children with no loop (runner_park.go): their record stays in closed
 	// so every read of a record sees them, and a wake path rehydrates the
 	// conversation (unpark). parkStop holds each one's mail watch stop and
-	// unparking the rehydrations under way. All under mu.
+	// unparking the rehydrations under way. expiring holds a close-barrier
+	// channel per node while an expiry cascade is closing its tree, fencing
+	// concurrent spawns against publishing live children under an expiring
+	// ancestor. All under mu.
 	parked    map[string]bool
 	parkStop  map[string]func()
 	unparking map[string]chan struct{}
+	expiring  map[string]chan struct{}
 	// convGen counts resident/parked incarnation transitions per reply-id under
 	// mu so expiry fences detect any unpark, re-park, or reopen since snapshot.
 	convGen map[string]uint64

@@ -3,6 +3,7 @@ package wsagent
 import (
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -153,15 +154,18 @@ func TestOwnsLiveLockFreeAndTransitionContinuity(t *testing.T) {
 	// transitions: must never dip to false.
 	var stopPoll atomic.Bool
 	var sawFalse atomic.Bool
+	var polls atomic.Int64
 	var pollWG sync.WaitGroup
 	pollWG.Add(1)
 	go func() {
 		defer pollWG.Done()
 		for !stopPoll.Load() {
+			polls.Add(1)
 			if !h.runner.OwnsLive(a) {
 				sawFalse.Store(true)
 				return
 			}
+			runtime.Gosched()
 		}
 	}()
 
@@ -185,6 +189,9 @@ func TestOwnsLiveLockFreeAndTransitionContinuity(t *testing.T) {
 
 	stopPoll.Store(true)
 	pollWG.Wait()
+	if polls.Load() == 0 {
+		t.Fatal("OwnsLive poller did not run across transitions")
+	}
 	if sawFalse.Load() {
 		t.Fatal("OwnsLive returned false during live -> parked -> unparked -> parked transition")
 	}
@@ -233,18 +240,22 @@ func TestRMuReadersAndReserveSpawnWidthDoNotBlockOnContendedConvMu(t *testing.T)
 
 	// Start snapshot-based readers while c.mu is held: they will wait on c.mu
 	// AFTER releasing r.mu, so r.mu must remain uncontended throughout.
+	readersStarted := make(chan struct{}, 2)
 	durableDone := make(chan struct{})
 	go func() {
+		readersStarted <- struct{}{}
 		_ = h.runner.DurableSessions()
 		close(durableDone)
 	}()
 	descDone := make(chan struct{})
 	go func() {
+		readersStarted <- struct{}{}
 		_ = h.runner.descendants(leadParent.ReplyID)
 		close(descDone)
 	}()
-	// Give the reader goroutines time to pass through r.mu and block on c.mu.
-	time.Sleep(50 * time.Millisecond)
+	<-readersStarted
+	<-readersStarted
+	runtime.Gosched()
 
 	rmuDone := make(chan struct{})
 	go func() {
@@ -260,6 +271,12 @@ func TestRMuReadersAndReserveSpawnWidthDoNotBlockOnContendedConvMu(t *testing.T)
 	case <-time.After(2 * time.Second):
 		c.mu.Unlock()
 		t.Fatal("r.mu stalled while DurableSessions/descendants waited on contended c.mu")
+	}
+	select {
+	case <-durableDone:
+		c.mu.Unlock()
+		t.Fatal("DurableSessions completed while c.mu was still held")
+	default:
 	}
 
 	c.mu.Unlock()

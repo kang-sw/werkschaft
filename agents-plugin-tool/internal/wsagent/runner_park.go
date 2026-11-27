@@ -91,21 +91,22 @@ func (r *Runner) coldParkable(open []Record, dead map[string]*admissionRefusal, 
 func (r *Runner) loadParked(rec Record) {
 	st := r.parkedState(rec)
 	r.mu.Lock()
-	r.registerParkedLocked(rec)
+	gen := r.registerParkedLocked(rec)
 	if r.closedRows == nil {
 		r.closedRows = map[string]State{}
 	}
 	r.closedRows[rec.ReplyID] = st
 	r.mu.Unlock()
-	r.watchParked(rec)
+	r.watchParked(rec, gen)
 }
 
 // parkedOwnerSentinel is stored in Runner.liveOwners for parked children so
 // OwnsLive can answer true without acquiring r.mu or any conversation lock.
 var parkedOwnerSentinel = new(struct{})
 
-// registerParkedLocked puts rec in the closed set as a parked child.
-func (r *Runner) registerParkedLocked(rec Record) {
+// registerParkedLocked puts rec in the closed set as a parked child and
+// returns its updated incarnation generation.
+func (r *Runner) registerParkedLocked(rec Record) uint64 {
 	r.closed[rec.ReplyID] = rec
 	if r.parked == nil {
 		r.parked = map[string]bool{}
@@ -115,30 +116,32 @@ func (r *Runner) registerParkedLocked(rec Record) {
 		r.convGen = map[string]uint64{}
 	}
 	r.convGen[rec.ReplyID]++
+	gen := r.convGen[rec.ReplyID]
 	if rec.ClosedAt == "" {
 		r.liveOwners.Store(rec.ReplyID, parkedOwnerSentinel)
 	} else {
 		r.liveOwners.Delete(rec.ReplyID)
 	}
 	r.indexChildLocked(rec)
+	return gen
 }
 
-// watchParked installs rec's parked mail watch.
-func (r *Runner) watchParked(rec Record) {
+// watchParked installs rec's parked mail watch for parked incarnation gen.
+func (r *Runner) watchParked(rec Record, gen uint64) {
 	w, ok := r.opts.Mail.(ParkedMailWatcher)
 	if !ok || rec.WSKey == "" {
 		return
 	}
 	r.mu.Lock()
-	closing := r.closing
+	skip := r.closing || !r.parked[rec.ReplyID] || r.unparking[rec.ReplyID] != nil || r.convGen[rec.ReplyID] != gen
 	r.mu.Unlock()
-	if closing {
+	if skip {
 		return
 	}
 	id := rec.ReplyID
 	stop := w.WatchParked(rec.Root, rec.WSKey, func() {
 		r.mu.Lock()
-		if r.closing {
+		if r.closing || !r.parked[id] || r.unparking[id] != nil || r.convGen[id] != gen {
 			r.mu.Unlock()
 			return
 		}
@@ -146,14 +149,14 @@ func (r *Runner) watchParked(rec Record) {
 		r.mu.Unlock()
 		go func() {
 			defer r.wg.Done()
-			r.unpark(id)
+			r.unparkIfGen(id, gen)
 		}()
 	})
 	r.mu.Lock()
 	if r.parkStop == nil {
 		r.parkStop = map[string]func(){}
 	}
-	if !r.closing && r.parked[id] {
+	if !r.closing && r.parked[id] && r.unparking[id] == nil && r.convGen[id] == gen && r.parkStop[id] == nil {
 		r.parkStop[id] = stop
 		stop = nil
 	}
@@ -184,18 +187,35 @@ func (r *Runner) isParked(id string) bool {
 // conversation, or nil when id is neither open nor parked). Concurrent
 // callers wait for the one rehydration.
 func (r *Runner) unpark(id string) *conv {
+	return r.unparkWithGen(id, 0, false)
+}
+
+// unparkIfGen rehydrates parked child id only while it still belongs to
+// parked incarnation gen, so a delayed watch callback from an earlier parked
+// generation never spuriously wakes a later parked generation.
+func (r *Runner) unparkIfGen(id string, gen uint64) *conv {
+	return r.unparkWithGen(id, gen, true)
+}
+
+func (r *Runner) unparkWithGen(id string, gen uint64, checkGen bool) *conv {
 	for {
 		r.mu.Lock()
 		if c := r.convs[id]; c != nil {
 			r.mu.Unlock()
+			if checkGen {
+				return nil
+			}
 			return c
 		}
-		if !r.parked[id] {
+		if !r.parked[id] || (checkGen && r.convGen[id] != gen) {
 			r.mu.Unlock()
 			return nil
 		}
 		if ch := r.unparking[id]; ch != nil {
 			r.mu.Unlock()
+			if checkGen {
+				return nil
+			}
 			<-ch
 			continue
 		}
@@ -309,10 +329,6 @@ func (c *conv) isParkedOut() bool {
 	return c.parkedOut
 }
 
-func (c *conv) isClosedOrParked() bool {
-	return c.closedOrParked.Load()
-}
-
 // parkEligibleLocked reports whether the conversation may leave memory now.
 // It runs in the loop with c.mu held.
 func (c *conv) parkEligibleLocked() bool {
@@ -380,7 +396,7 @@ func (c *conv) maybePark() bool {
 	// Store parkedOwnerSentinel in liveOwners (via registerParkedLocked)
 	// BEFORE marking c.closedOrParked=true so a concurrent lock-free OwnsLive
 	// never observes a false negative across the live -> parked handoff.
-	r.registerParkedLocked(rec)
+	gen := r.registerParkedLocked(rec)
 	c.parkedOut = true
 	c.syncStateLocked()
 	delete(r.convs, rec.ReplyID)
@@ -390,7 +406,7 @@ func (c *conv) maybePark() bool {
 	r.closedRows[rec.ReplyID] = st
 	c.mu.Unlock()
 	r.mu.Unlock()
-	r.watchParked(rec)
+	r.watchParked(rec, gen)
 	return true
 }
 
@@ -409,7 +425,7 @@ func (r *Runner) hasOpenChildLocked(id string) bool {
 		return true
 	}
 	for child := range r.childrenIndex[ParentRef{Kind: ParentConversation, ReplyID: id}] {
-		if r.convs[child] != nil {
+		if r.convs[child] != nil || r.unparking[child] != nil {
 			return true
 		}
 	}

@@ -217,6 +217,17 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 			return State{}, err
 		}
 	}
+	var releaseDirectParent func()
+	var claimParent func()
+	if spawn != nil && spawn.Parent != nil && spawn.claimWidth == nil {
+		claim, release, err := r.reserveParentSpawn(*spawn.Parent)
+		if err != nil {
+			return State{}, err
+		}
+		claimParent = claim
+		releaseDirectParent = release
+		defer releaseDirectParent()
+	}
 	releaseDurableCreation := func() {}
 	if r.durableProcess(rp.Definition.Backend) {
 		release, err := r.admitDurableTransition()
@@ -333,10 +344,15 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		seed = r.withPlaybookCommands(rec, r.lastCommands(rec))
 	}
 	var claimWidth func()
+	spawnPending := false
 	if spawn != nil {
 		claimWidth = spawn.claimWidth
+		spawnPending = claimWidth != nil
 	}
-	c := r.startConvWith(rec, seed, claimWidth != nil, claimWidth, nil)
+	if claimWidth == nil {
+		claimWidth = claimParent
+	}
+	c := r.startConvWith(rec, seed, spawnPending, claimWidth, nil)
 	releaseDurableCreation()
 	unlockBound()
 	if spawn != nil {

@@ -93,13 +93,18 @@ func (r *Runner) StopDurableSession(id string) error {
 }
 
 func (c *conv) closeDurable() error {
+	_, err := c.closeDurableIf(nil)
+	return err
+}
+
+func (c *conv) closeDurableIf(done func() bool) (bool, error) {
 	// Committed claims already belong to the drained history. Only the
 	// staged remainder is discarded after the close has committed.
 	if err := c.ackInboxClaims(); err != nil {
-		return fmt.Errorf("%w: acknowledge input: %w", errDurableClose, err)
+		return false, fmt.Errorf("%w: acknowledge input: %w", errDurableClose, err)
 	}
 	now := c.r.opts.Now()
-	err := c.commitDurableRecord(func(rec *Record) {
+	closed, err := c.commitDurableRecordIf(done, func(rec *Record) {
 		rec.ClosedAt = now.UTC().Format(time.RFC3339)
 		rec.OpenGen++
 		finishActiveTurn(rec, now.UnixMilli())
@@ -116,12 +121,15 @@ func (c *conv) closeDurable() error {
 		c.closed = true
 	})
 	if err != nil {
-		return fmt.Errorf("%w: %w", errDurableClose, err)
+		return false, fmt.Errorf("%w: %w", errDurableClose, err)
+	}
+	if !closed {
+		return false, nil
 	}
 	if err := wsinbox.DiscardClaims(c.inbox); err != nil {
 		// Reopen retries before the closed record can admit input again.
 		fmt.Fprintf(c.r.opts.Log, "agent %s: discard closed inbox claims: %v\n", c.rec.ReplyID, err)
 	}
 	c.finishClose()
-	return nil
+	return true, nil
 }

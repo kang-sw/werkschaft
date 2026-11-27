@@ -67,6 +67,13 @@ func (m *LeadMailbox) parkedLoop() {
 		}
 		m.pmu.Unlock()
 		m.scanParked()
+		m.pmu.Lock()
+		if len(m.parkedW) == 0 {
+			m.pRunning = false
+			m.pmu.Unlock()
+			return
+		}
+		m.pmu.Unlock()
 		select {
 		case <-m.pkick:
 		case <-sub.Hard():

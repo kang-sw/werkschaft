@@ -277,11 +277,12 @@ type conv struct {
 	rowStampSet bool
 	rowStampV   rowStamp
 
-	// A lead's or spawned child's own, loop-owned. mailC (one slot) tells
-	// the loop the mailbox may hold mail (signalMail); stopMail ends the
-	// watch.
-	mailC    chan struct{}
-	stopMail func()
+	// A lead's or spawned child's mail watch. mailC (one slot) tells the loop
+	// the mailbox may hold mail (signalMail); stopMail and mailStopped are
+	// guarded by c.mu so late Watch installs after loop exit stop immediately.
+	mailC       chan struct{}
+	stopMail    func()
+	mailStopped bool
 	// spawnC coalesces daemon-owned descendant changes for this writer.
 	spawnC     chan struct{}
 	spawnDirty bool
@@ -474,6 +475,7 @@ type conv struct {
 	// whose start kick was deferred until StartForPublication's serving channel
 	// closes.
 	sends        uint64
+	pageInputs   uint64
 	settled      TurnResult
 	settleC      chan struct{}
 	voided       uint64
@@ -886,6 +888,7 @@ func (c *conv) loop() {
 			c.spawnTimer.Stop()
 		}
 		c.stopBgGrace()
+		c.stopMailWatch()
 	}()
 	// Before the first scan, Stop can report an existing holder unknown.
 	// Keep its rejoined transport and persisted identity until holdersScanned
@@ -1024,11 +1027,6 @@ func (c *conv) loop() {
 			c.heartbeat()
 		case <-c.r.quit:
 			c.letGo()
-			// The watch's listening marker names this process: left behind,
-			// it would name a dead one until the next daemon's watch.
-			if c.stopMail != nil {
-				c.stopMail()
-			}
 			return
 		}
 		c.syncAwake()
@@ -1066,10 +1064,44 @@ func (c *conv) settle() bool {
 	if !ended {
 		return false
 	}
-	if c.stopMail != nil {
-		c.stopMail()
-	}
 	return true
+}
+
+func (c *conv) isMailStopped() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed || c.parkedOut || c.mailStopped
+}
+
+// installMailStop attaches a resident mail watch stop handle under c.mu. If
+// the conversation already closed, parked, or exited its loop, stop runs
+// immediately outside c.mu so the watch never leaks.
+func (c *conv) installMailStop(stop func()) bool {
+	if stop == nil {
+		return false
+	}
+	c.mu.Lock()
+	if c.closed || c.parkedOut || c.mailStopped {
+		c.mu.Unlock()
+		stop()
+		return false
+	}
+	c.stopMail = stop
+	c.mu.Unlock()
+	return true
+}
+
+// stopMailWatch stops any installed resident mail watch and fences late
+// Watch installs from startConvWith.
+func (c *conv) stopMailWatch() {
+	c.mu.Lock()
+	c.mailStopped = true
+	stop := c.stopMail
+	c.stopMail = nil
+	c.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
 }
 
 // refreshHeld reads only this conversation's inbox, never a global listing.

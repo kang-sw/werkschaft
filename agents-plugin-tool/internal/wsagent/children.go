@@ -430,7 +430,13 @@ func newReportID() string {
 // the caller's goroutine: the handover runs in the parent's loop, and no
 // loop waits on another's.
 func (r *Runner) deliverLater(id string) {
+	r.mu.Lock()
+	if r.closing {
+		r.mu.Unlock()
+		return
+	}
 	r.wg.Add(1)
+	r.mu.Unlock()
 	go func() {
 		defer r.wg.Done()
 		r.deliver(id)
@@ -845,7 +851,13 @@ func (c *conv) releaseHeld() {
 // children (releaseHeld) off the caller's goroutine, which may be another
 // conversation's loop: no loop waits on another's.
 func (r *Runner) releaseLater(id string) {
+	r.mu.Lock()
+	if r.closing {
+		r.mu.Unlock()
+		return
+	}
 	r.wg.Add(1)
+	r.mu.Unlock()
 	go func() {
 		defer r.wg.Done()
 		if c := r.resident(id); c != nil {

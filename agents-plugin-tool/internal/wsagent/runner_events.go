@@ -1388,15 +1388,7 @@ func (c *conv) closeIfPermitted(done func() bool) (bool, error) {
 		return false, nil
 	}
 	if c.r.durableProcess(c.rec.Backend) {
-		c.wmu.Lock()
-		c.mu.Lock()
-		allow := done == nil || done()
-		c.mu.Unlock()
-		c.wmu.Unlock()
-		if !allow {
-			return false, nil
-		}
-		return true, c.closeDurable()
+		return c.closeDurableIf(done)
 	}
 	return c.closeIf(done), nil
 }

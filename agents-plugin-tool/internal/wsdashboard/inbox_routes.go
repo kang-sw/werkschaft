@@ -273,7 +273,7 @@ func (d *Daemon) handleInboxWrite(w http.ResponseWriter, r *http.Request, replyI
 			status, answer = d.messageWrite(dir, replyID, raw, localViewer(r), now)
 			return status == http.StatusOK
 		}
-		if host, ok := d.agents.(AgentPageInputHost); ok && s.Hosted {
+		if host, ok := d.agents.(AgentPageInputHost); ok && (s.Hosted || s.Agent) {
 			if err := host.PageInput(replyID, write); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
