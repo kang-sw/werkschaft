@@ -1,8 +1,9 @@
-// Package wsusercmd holds the user commands ("command slots"): bash lines an
-// open hosted lead registers (session-scoped, source "agent") or a user saves
-// per project worktree root (root-scoped, source "user"). The registry serves
-// every read from memory, and the SQLite store (storage type 2) is written once
-// per changed command and read once at start.
+// Package wsusercmd holds the user commands ("command slots"): bash lines kept
+// per project worktree root, whether an open hosted lead registered them
+// (source "agent") or a user saved them (source "user"). Both sources share
+// one scope and one cap. The registry serves every read from memory, and the
+// SQLite store (storage type 2) is written once per changed command and read
+// once at start.
 package wsusercmd
 
 import (
@@ -23,8 +24,8 @@ import (
 
 // The registration limits and scope constants.
 const (
-	// MaxPerScope is the most commands kept in one scope (per session+worktree
-	// for agent commands, and per worktree root for user commands).
+	// MaxPerScope is the most commands kept in one worktree root, agent and
+	// user commands together.
 	MaxPerScope = 32
 	// MaxLabel and MaxDescription bound texts in characters; MaxLine, MaxPrompt
 	// and MaxCwd bound their fields in bytes.
@@ -34,9 +35,10 @@ const (
 	MaxPrompt      = 4 << 10
 	MaxCwd         = 512
 
-	// SourceAgent identifies session-scoped commands registered by the agent.
+	// SourceAgent identifies commands registered by the agent (a badge: they
+	// live in the worktree scope like every other command).
 	SourceAgent = "agent"
-	// SourceUser identifies project-root-persistent commands saved by the user.
+	// SourceUser identifies commands saved by the user.
 	SourceUser = "user"
 )
 
@@ -121,8 +123,6 @@ var (
 	ErrStale = errors.New("the user command changed since it was displayed")
 )
 
-type scopeKey struct{ reply, root string }
-
 type entry struct {
 	Command
 	seq int64
@@ -138,7 +138,6 @@ type Registry struct {
 	// guards the maps and is held only for memory work.
 	wmu        sync.Mutex
 	mu         sync.RWMutex
-	scopes     map[scopeKey]map[string]*entry
 	rootScopes map[string]map[string]*entry
 	rev        map[string]uint64
 	rootRev    map[string]uint64
@@ -165,7 +164,7 @@ func openClock(path string, onChange func(reply string), clock func() int64) (*R
 	if err != nil {
 		return nil, err
 	}
-	agentRows, rootRows, err := st.load()
+	rootRows, err := st.load()
 	if err != nil {
 		_ = st.Close()
 		return nil, err
@@ -177,7 +176,6 @@ func openClock(path string, onChange func(reply string), clock func() int64) (*R
 	}
 	r := &Registry{
 		store:      st,
-		scopes:     map[scopeKey]map[string]*entry{},
 		rootScopes: map[string]map[string]*entry{},
 		rev:        map[string]uint64{},
 		rootRev:    map[string]uint64{},
@@ -194,21 +192,10 @@ func openClock(path string, onChange func(reply string), clock func() int64) (*R
 	// well so that a store that was deleted still starts above what an old page
 	// held. The clock only raises the seed: a clock set back never reuses one.
 	r.nextRev = max(r.clock(), high)
-	for _, row := range agentRows {
-		k := scopeKey{row.Reply, row.Root}
-		if r.scopes[k] == nil {
-			r.scopes[k] = map[string]*entry{}
-		}
-		row.Command.Source = SourceAgent
-		r.scopes[k][row.ID] = &entry{Command: row.Command, seq: row.Seq}
-		r.nextRev = max(r.nextRev, row.Revision)
-		r.nextSeq = max(r.nextSeq, row.Seq)
-	}
 	for _, row := range rootRows {
 		if r.rootScopes[row.Root] == nil {
 			r.rootScopes[row.Root] = map[string]*entry{}
 		}
-		row.Command.Source = SourceUser
 		r.rootScopes[row.Root][row.ID] = &entry{Command: row.Command, seq: row.Seq}
 		r.nextRev = max(r.nextRev, row.Revision)
 		r.nextSeq = max(r.nextSeq, row.Seq)
@@ -280,9 +267,11 @@ func checkFields(in Input) (Input, error) {
 	return in, nil
 }
 
-// Set registers or replaces the agent command in.ID of conversation reply in
-// worktree root. A definition equal to the stored one commits nothing and keeps
-// its revision. Replacing an existing command succeeds at the cap.
+// Set registers or replaces the agent command in.ID in worktree root (reply is
+// the registering conversation: it keeps its own revision moving and nothing
+// else; the command belongs to the worktree). A definition equal to the stored
+// one commits nothing and keeps its revision. Replacing an existing command
+// succeeds at the cap; an ID held by a user command is refused with ErrExists.
 func (r *Registry) Set(reply, root string, in Input) (Command, Outcome, error) {
 	in.Source = SourceAgent
 	in, err := check(in)
@@ -295,11 +284,13 @@ func (r *Registry) Set(reply, root string, in Input) (Command, Outcome, error) {
 	if r.closed {
 		return Command{}, 0, ErrStoreClosed
 	}
-	k := scopeKey{reply, root}
 	r.mu.RLock()
-	old := r.scopes[k][in.ID]
-	count := len(r.scopes[k])
+	old := r.rootScopes[root][in.ID]
+	count := len(r.rootScopes[root])
 	r.mu.RUnlock()
+	if old != nil && old.Source != SourceAgent {
+		return Command{}, 0, ErrExists
+	}
 	if old != nil && old.Label == in.Label && old.Description == in.Description && old.Line == in.Line && old.Prompt == in.Prompt && old.Cwd == in.Cwd {
 		return old.Command, Unchanged, nil
 	}
@@ -307,8 +298,7 @@ func (r *Registry) Set(reply, root string, in Input) (Command, Outcome, error) {
 		return Command{}, 0, ErrFull
 	}
 	next := row{
-		Reply: reply,
-		Root:  root,
+		Root: root,
 		Command: Command{
 			ID:          in.ID,
 			Label:       in.Label,
@@ -327,16 +317,16 @@ func (r *Registry) Set(reply, root string, in Input) (Command, Outcome, error) {
 		next.Seq = r.nextSeq + 1
 	}
 	next.Revision = r.nextRev + 1
-	if err := r.store.put(next); err != nil {
+	if err := r.store.putRoot(next); err != nil {
 		return Command{}, 0, err
 	}
 	r.nextRev, r.nextSeq = next.Revision, max(r.nextSeq, next.Seq)
 	r.mu.Lock()
-	if r.scopes[k] == nil {
-		r.scopes[k] = map[string]*entry{}
+	if r.rootScopes[root] == nil {
+		r.rootScopes[root] = map[string]*entry{}
 	}
-	r.scopes[k][in.ID] = &entry{Command: next.Command, seq: next.Seq}
-	r.bumpReplyLocked(reply)
+	r.rootScopes[root][in.ID] = &entry{Command: next.Command, seq: next.Seq}
+	r.bumpRootLocked(root, reply)
 	r.mu.Unlock()
 	r.notify(reply)
 	return next.Command, outcome, nil
@@ -399,7 +389,7 @@ func (r *Registry) CreateUser(root string, in Input) (Command, error) {
 		r.rootScopes[root] = map[string]*entry{}
 	}
 	r.rootScopes[root][in.ID] = &entry{Command: next.Command, seq: next.Seq}
-	r.bumpRootLocked(root)
+	r.bumpRootLocked(root, "")
 	r.mu.Unlock()
 	r.notify("")
 	return next.Command, nil
@@ -426,14 +416,9 @@ func (r *Registry) PatchIf(reply, root, source, id string, rev int64, patch Patc
 		return Command{}, ErrStoreClosed
 	}
 	r.mu.RLock()
-	var old *entry
-	if src == SourceUser {
-		old = r.rootScopes[root][id]
-	} else {
-		old = r.scopes[scopeKey{reply, root}][id]
-	}
+	old := r.rootScopes[root][id]
 	var cur entry
-	found := old != nil
+	found := old != nil && old.Source == src
 	if found {
 		cur = *old
 	}
@@ -476,8 +461,7 @@ func (r *Registry) PatchIf(reply, root, source, id string, rev int64, patch Patc
 		return cur.Command, nil
 	}
 	next := row{
-		Reply: reply,
-		Root:  root,
+		Root: root,
 		Command: Command{
 			ID:          cur.ID,
 			Label:       merged.Label,
@@ -490,27 +474,15 @@ func (r *Registry) PatchIf(reply, root, source, id string, rev int64, patch Patc
 		},
 		Seq: cur.seq,
 	}
-	if src == SourceUser {
-		if err := r.store.putRoot(next); err != nil {
-			return Command{}, err
-		}
-		r.nextRev = next.Revision
-		r.mu.Lock()
-		r.rootScopes[root][cur.ID] = &entry{Command: next.Command, seq: next.Seq}
-		r.bumpRootLocked(root)
-		r.mu.Unlock()
-		r.notify("")
-	} else {
-		if err := r.store.put(next); err != nil {
-			return Command{}, err
-		}
-		r.nextRev = next.Revision
-		r.mu.Lock()
-		r.scopes[scopeKey{reply, root}][cur.ID] = &entry{Command: next.Command, seq: next.Seq}
-		r.bumpReplyLocked(reply)
-		r.mu.Unlock()
-		r.notify(reply)
+	if err := r.store.putRoot(next); err != nil {
+		return Command{}, err
 	}
+	r.nextRev = next.Revision
+	r.mu.Lock()
+	r.rootScopes[root][cur.ID] = &entry{Command: next.Command, seq: next.Seq}
+	r.bumpRootLocked(root, reply)
+	r.mu.Unlock()
+	r.notify(reply)
 	return next.Command, nil
 }
 
@@ -544,17 +516,11 @@ func (r *Registry) remove(reply, root, source, id string, rev int64) error {
 	if r.closed {
 		return ErrStoreClosed
 	}
-	k := scopeKey{reply, root}
 	r.mu.RLock()
-	var e *entry
-	var ok bool
-	if source == SourceUser {
-		e, ok = r.rootScopes[root][id]
-	} else {
-		e, ok = r.scopes[k][id]
-	}
+	e, ok := r.rootScopes[root][id]
 	var cur int64
 	if ok {
+		ok = e.Source == source
 		cur = e.Revision
 	}
 	r.mu.RUnlock()
@@ -566,38 +532,23 @@ func (r *Registry) remove(reply, root, source, id string, rev int64) error {
 	}
 	// The withdrawal consumes a revision too: the high-water never falls.
 	issued := r.nextRev + 1
-	if source == SourceUser {
-		if err := r.store.delRoot(root, id, issued); err != nil {
-			return err
-		}
-		r.nextRev = issued
-		r.mu.Lock()
-		delete(r.rootScopes[root], id)
-		if len(r.rootScopes[root]) == 0 {
-			delete(r.rootScopes, root)
-		}
-		r.bumpRootLocked(root)
-		r.mu.Unlock()
-		r.notify("")
-		return nil
-	}
-	if err := r.store.del(reply, root, id, issued); err != nil {
+	if err := r.store.delRoot(root, id, issued); err != nil {
 		return err
 	}
 	r.nextRev = issued
 	r.mu.Lock()
-	delete(r.scopes[k], id)
-	if len(r.scopes[k]) == 0 {
-		delete(r.scopes, k)
+	delete(r.rootScopes[root], id)
+	if len(r.rootScopes[root]) == 0 {
+		delete(r.rootScopes, root)
 	}
-	r.bumpReplyLocked(reply)
+	r.bumpRootLocked(root, reply)
 	r.mu.Unlock()
 	r.notify(reply)
 	return nil
 }
 
-// List returns the merged commands (agent commands for reply+root and user
-// commands for root) in registration order. It reads memory only.
+// List returns the commands of worktree root, both sources, in registration
+// order. reply is accepted for the callers' symmetry. It reads memory only.
 func (r *Registry) List(reply, root string) []Command {
 	nr := normRoot(root)
 	r.mu.RLock()
@@ -606,11 +557,7 @@ func (r *Registry) List(reply, root string) []Command {
 }
 
 func (r *Registry) listLocked(reply, nr string) []Command {
-	k := scopeKey{reply, nr}
-	es := make([]*entry, 0, len(r.scopes[k])+len(r.rootScopes[nr]))
-	for _, e := range r.scopes[k] {
-		es = append(es, e)
-	}
+	es := make([]*entry, 0, len(r.rootScopes[nr]))
 	for _, e := range r.rootScopes[nr] {
 		es = append(es, e)
 	}
@@ -647,13 +594,8 @@ func (r *Registry) GetBySource(reply, root, source, id string) (Command, bool) {
 	nr := normRoot(root)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	var e *entry
-	if src == SourceUser {
-		e = r.rootScopes[nr][id]
-	} else {
-		e = r.scopes[scopeKey{reply, nr}][id]
-	}
-	if e == nil {
+	e := r.rootScopes[nr][id]
+	if e == nil || e.Source != src {
 		return Command{}, false
 	}
 	return e.Command, true
@@ -680,59 +622,15 @@ func (r *Registry) combinedRevLocked(reply, nr string) uint64 {
 	return max(r.rev[reply], r.rootRev[nr])
 }
 
-// Reconcile drops the agent commands of every conversation known reports
-// unknown, in one commit (nothing is committed when there are none). Root user
-// commands are never touched.
-func (r *Registry) Reconcile(known func(reply string) bool) error {
-	r.wmu.Lock()
-	defer r.wmu.Unlock()
-	if r.closed {
-		return ErrStoreClosed
-	}
-	seen := map[string]bool{}
-	r.mu.RLock()
-	for k := range r.scopes {
-		seen[k.reply] = true
-	}
-	r.mu.RUnlock()
-	var gone []string
-	for reply := range seen {
-		if !known(reply) {
-			gone = append(gone, reply)
-		}
-	}
-	if len(gone) == 0 {
-		return nil
-	}
-	if err := r.store.delReplies(gone); err != nil {
-		return err
-	}
-	r.mu.Lock()
-	for k := range r.scopes {
-		for _, reply := range gone {
-			if k.reply == reply {
-				delete(r.scopes, k)
-			}
-		}
-	}
-	for _, reply := range gone {
-		r.bumpReplyLocked(reply)
-	}
-	r.mu.Unlock()
-	for _, reply := range gone {
-		r.notify(reply)
-	}
-	return nil
-}
-
-func (r *Registry) bumpReplyLocked(reply string) {
-	r.changeN++
-	r.rev[reply] = r.changeN
-}
-
-func (r *Registry) bumpRootLocked(nr string) {
+// bumpRootLocked advances the worktree's revision, and the acting
+// conversation's (when there is one) to the same number so the combined
+// revision of every conversation bound to the worktree stays equal.
+func (r *Registry) bumpRootLocked(nr, reply string) {
 	r.changeN++
 	r.rootRev[nr] = r.changeN
+	if reply != "" {
+		r.rev[reply] = r.changeN
+	}
 }
 
 func (r *Registry) notify(reply string) {

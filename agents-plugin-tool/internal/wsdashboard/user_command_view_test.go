@@ -235,6 +235,7 @@ func TestUserCommandWithAdjacentImages(t *testing.T) {
 func TestOutboxBubbleHydratesUserCommandCard(t *testing.T) {
 	src := mustAsset(t, "dashboard.js")
 	fns := composerFunc(t, src, "ucmdUnescapeXml") +
+		composerFunc(t, src, "parseUcmdAddBlock") +
 		composerFunc(t, src, "parseUcmdBlock") +
 		composerFunc(t, src, "splitUcmdParts") +
 		composerFunc(t, src, "formatUcmdPreview") +
@@ -314,5 +315,75 @@ const bad = "<ws:ucmd label=\"Broken\">\n<cmd>echo hi</cmd>";
 const badBub = outboxBubble({ id: "h2", back: { text: bad }, pics: [] });
 assert.equal(badBub.querySelector(".ucmd-req"), null);
 assert.equal(badBub.textContent.includes("<ws:ucmd"), true);
+`)
+}
+
+// TestUserCommandAddRequestRendersTonalBubbleWithoutGuidance: a <ws:ucmd-add>
+// turn renders as the .ucmd-req.is-add bubble (badge, tool pill, request text),
+// hides the agent-facing guidance, and previews as the request text.
+func TestUserCommandAddRequestRendersTonalBubbleWithoutGuidance(t *testing.T) {
+	payload := wsinbox.FormatUserCommandAdd(`run <go test> & "report"`, "call `session.register_user_command` with {id}")
+	offset := 540
+	entry := wsinbox.Entry{SentAt: testNow.UnixMilli(), UTCOffsetMinutes: &offset, Parts: []string{payload}}
+	ring := []wslive.RingRecord{
+		ringRecord(1, wslive.RingEntry{Kind: wslive.RingUser, Origin: wslive.OriginWhiteboard, Text: entry.Text()}),
+	}
+	v := buildSessionView(pageInputs{
+		Session:  liveSession("self", "/proj", testNow),
+		Snapshot: liveSnap(testNow, wslive.Lead{}),
+		Ring:     ring,
+		Now:      testNow,
+	})
+	set, err := renderSessionRegions(v, newEntryCache())
+	if err != nil {
+		t.Fatal(err)
+	}
+	markup := string(set[regionEntries].HTML)
+	for _, want := range []string{
+		`class="ucmd-req is-add"`,
+		`class="ucmd-req-badge">New user command request</span>`,
+		`<code class="ucmd-req-tool-pill">session.register_user_command</code>`,
+		`class="ucmd-req-prompt">run &lt;go test&gt; &amp; &#34;report&#34;</div>`,
+	} {
+		if !strings.Contains(markup, want) {
+			t.Fatalf("SSR markup missing %q:\n%s", want, markup)
+		}
+	}
+	for _, forbid := range []string{"&lt;ws:ucmd-add", "mcp-guidance", "with {id}"} {
+		if strings.Contains(markup, forbid) {
+			t.Fatalf("SSR markup leaked %q:\n%s", forbid, markup)
+		}
+	}
+	if got := formatUserCommandPreview(payload); got != `run <go test> & "report"` {
+		t.Fatalf("preview = %q", got)
+	}
+}
+
+// TestOutboxParsesUserCommandAddBlock: the client mirror of the Go parser reads
+// a <ws:ucmd-add> turn as an add request and previews it as the request text.
+func TestOutboxParsesUserCommandAddBlock(t *testing.T) {
+	src := mustAsset(t, "dashboard.js")
+	fns := composerFunc(t, src, "ucmdUnescapeXml") +
+		composerFunc(t, src, "parseUcmdAddBlock") +
+		composerFunc(t, src, "parseUcmdBlock") +
+		composerFunc(t, src, "splitUcmdParts") +
+		composerFunc(t, src, "formatUcmdPreview")
+	runNode(t, "outbox ucmd-add parse", fns+`
+const assert = require("node:assert/strict");
+const xml = [
+  '<ws:ucmd-add scope="worktree" tool="session.register_user_command">',
+  '  <request>run &lt;go test&gt; &amp; report</request>',
+  '  <mcp-guidance>',
+  'call it with {id}',
+  '  </mcp-guidance>',
+  '</ws:ucmd-add>'
+].join("\n");
+const parts = splitUcmdParts("hello\n" + xml + "\nbye");
+const add = parts.filter(p => p.ucmd)[0];
+assert.ok(add && add.ucmd.add, "add block parsed");
+assert.equal(add.ucmd.request, "run <go test> & report");
+assert.equal(formatUcmdPreview(xml), "run <go test> & report");
+const bad = xml.replace("<mcp-guidance>", "<x>").replace("</mcp-guidance>", "</x>");
+assert.equal(splitUcmdParts(bad).filter(p => p.ucmd).length, 0, "no guidance is not an add block");
 `)
 }

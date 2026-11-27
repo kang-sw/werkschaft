@@ -15,6 +15,8 @@
   var ucmdBadge = null, ucmdBadgeCnt = null, ucmdPop = null;
   var ucmdCountEl = null, ucmdSubEl = null, ucmdAddBtn = null;
   var ucmdForm = null, ucmdFormErr = null, ucmdFormSave = null;
+  var ucmdAddMode = "agent", ucmdAgentBox = null, ucmdAgentTa = null, ucmdAgentErr = null, ucmdAgentSend = null;
+  var ucmdAgentSending = false, ucmdMcpOpen = false;
   var ucmdEmptyEl = null, ucmdListEl = null;
   var ucmdAttemptKey = "ws.ucmd.attempt." + rid, ucmdGuardMs = 600;
   var UCMD_HOLD_MS = 1000, ucmdHold = null, ucmdHoldControl = null;
@@ -147,6 +149,13 @@
 
     var acts = doc.createElement("div");
     acts.className = "ucmd-form-acts";
+    var back = doc.createElement("button");
+    back.type = "button";
+    back.className = "ucmd-link-btn";
+    back.setAttribute("data-act", "agent");
+    back.textContent = wsT("js.ucmd.agent.back");
+    back.addEventListener("click", function () { ucmdSetAddMode("agent"); });
+    acts.appendChild(back);
     var cancel = doc.createElement("button");
     cancel.type = "button";
     cancel.className = "ucmd-btn-ghost";
@@ -165,6 +174,205 @@
       ucmdCreateSubmit();
     });
     return form;
+  }
+
+  // The agent-request box (the default of "+ New command"): a natural-language
+  // textarea whose Send posts a <ws:ucmd-add> turn with the tool guidance; the
+  // four-field manual form is one link away (ucmdSetAddMode).
+  function ucmdAddGuidance() {
+    return [
+      "To handle this request, call the MCP tool `session.register_user_command` to register a user command for the current worktree.",
+      '(Harnesses with callFallback, such as `agy`, call it as `call(tool: "session.register_user_command", arguments: {...})`.)',
+      "",
+      "Required arguments:",
+      "- session_key: your lead session key",
+      "- id: a stable command id (`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)",
+      "- label: the button's display name (max 64 chars)",
+      "- line: the bash command or script to run (the command line, max 4KiB)",
+      "",
+      "Optional arguments:",
+      "- description: a one-line description (max 256 chars)",
+      "- prompt: the default instruction sent when the user asks the agent with the ask button (max 4KiB)",
+      "- cwd: working directory relative to the worktree (max 512B)",
+      "",
+      "Storage: kept per worktree in SQLite and persists across restarts (max 32 commands per worktree)."
+    ].join("\n");
+  }
+
+  function ucmdAddText(request) {
+    return [
+      '<ws:ucmd-add scope="worktree" tool="session.register_user_command">',
+      "  <request>" + ucmdEscapeXml(request, false) + "</request>",
+      "  <mcp-guidance>",
+      ucmdEscapeXml(ucmdAddGuidance(), false),
+      "  </mcp-guidance>",
+      "</ws:ucmd-add>"
+    ].join("\n");
+  }
+
+  function ucmdAgentError(on) {
+    if (!ucmdAgentErr) return;
+    ucmdAgentErr.hidden = !on;
+    ucmdAgentErr.textContent = on ? wsT("js.ucmd.agent.err") : "";
+  }
+
+  function ucmdAgentSubmit() {
+    if (ucmdAgentSending || !ucmdAgentTa) return;
+    var request = ucmdAgentTa.value.trim();
+    if (!request) {
+      ucmdAgentError(true);
+      ucmdAgentTa.focus();
+      return;
+    }
+    ucmdAgentError(false);
+    ucmdAgentSending = true;
+    if (ucmdAgentSend) ucmdAgentSend.disabled = true;
+    post("message", {
+      utcOffsetMinutes: -new Date().getTimezoneOffset(),
+      text: ucmdAddText(request),
+      chips: [],
+      topics: [],
+      mentions: []
+    }, function (ok, ans) {
+      ucmdAgentSending = false;
+      if (ucmdAgentSend) ucmdAgentSend.disabled = false;
+      if (ok) {
+        ucmdAgentTa.value = "";
+        ucmdClosePopover(false);
+        noteOk(wsT("js.ucmd.agent.sent"));
+      } else {
+        noteWarn(wsT("js.send.fail", ans));
+      }
+    });
+  }
+
+  function ucmdBuildAgentBox() {
+    var box = doc.createElement("div");
+    box.className = "ucmd-agent-box";
+    box.hidden = true;
+
+    var hd = doc.createElement("div");
+    hd.className = "ucmd-agent-hd";
+    var row = doc.createElement("div");
+    row.className = "ucmd-agent-title-row";
+    var h = doc.createElement("h3");
+    h.className = "ucmd-agent-title";
+    var dot = doc.createElement("span");
+    dot.className = "ucmd-agent-title-dot";
+    h.appendChild(dot);
+    var ht = doc.createElement("span");
+    ht.textContent = wsT("js.ucmd.agent.title");
+    h.appendChild(ht);
+    row.appendChild(h);
+    var sub = doc.createElement("p");
+    sub.className = "ucmd-agent-sub";
+    sub.textContent = wsT("js.ucmd.agent.sub");
+    hd.appendChild(row);
+    hd.appendChild(sub);
+    box.appendChild(hd);
+
+    var ta = ucmdAgentTa = doc.createElement("textarea");
+    ta.className = "ucmd-agent-ta";
+    ta.placeholder = wsT("js.ucmd.agent.ph");
+    ta.maxLength = 2048;
+    ta.spellcheck = false;
+    ta.addEventListener("input", function () { ucmdAgentError(false); });
+    ta.addEventListener("keydown", function (ev) {
+      if (ev.isComposing) return;
+      if (ev.key === "Enter" && !ev.shiftKey) {
+        ev.preventDefault();
+        ucmdAgentSubmit();
+      }
+    });
+    box.appendChild(ta);
+
+    var chips = doc.createElement("div");
+    chips.className = "ucmd-quick-chips";
+    var lbl = doc.createElement("span");
+    lbl.className = "ucmd-quick-lbl";
+    lbl.textContent = wsT("js.ucmd.agent.chips");
+    chips.appendChild(lbl);
+    [
+      ["js.ucmd.agent.chip.1", "js.ucmd.agent.chip.1.req"],
+      ["js.ucmd.agent.chip.2", "js.ucmd.agent.chip.2.req"],
+      ["js.ucmd.agent.chip.3", "js.ucmd.agent.chip.3.req"]
+    ].forEach(function (k) {
+      var b = doc.createElement("button");
+      b.type = "button";
+      b.className = "ucmd-qchip";
+      b.textContent = wsT(k[0]);
+      b.addEventListener("click", function () {
+        ta.value = wsT(k[1]);
+        ucmdAgentError(false);
+        ta.focus();
+      });
+      chips.appendChild(b);
+    });
+    box.appendChild(chips);
+
+    var det = doc.createElement("details");
+    det.className = "ucmd-mcp-details";
+    det.open = ucmdMcpOpen;
+    det.addEventListener("toggle", function () { ucmdMcpOpen = det.open; });
+    var sum = doc.createElement("summary");
+    sum.className = "ucmd-mcp-summary";
+    var left = doc.createElement("span");
+    left.className = "ucmd-mcp-sum-left";
+    var lt = doc.createElement("span");
+    lt.textContent = wsT("js.ucmd.agent.mcp");
+    left.appendChild(lt);
+    var pill = doc.createElement("code");
+    pill.className = "ucmd-mcp-pill";
+    pill.textContent = "session.register_user_command";
+    left.appendChild(pill);
+    var more = doc.createElement("span");
+    more.textContent = wsT("js.ucmd.agent.mcp.more");
+    sum.appendChild(left);
+    sum.appendChild(more);
+    var mbody = doc.createElement("div");
+    mbody.className = "ucmd-mcp-body";
+    mbody.textContent = wsT("js.ucmd.agent.mcp.body");
+    var code = doc.createElement("pre");
+    code.className = "ucmd-mcp-code";
+    code.textContent = "tool: session.register_user_command\nrequired: session_key, id, label, line\noptional: description, prompt, cwd";
+    mbody.appendChild(code);
+    det.appendChild(sum);
+    det.appendChild(mbody);
+    box.appendChild(det);
+
+    ucmdAgentErr = doc.createElement("p");
+    ucmdAgentErr.className = "ucmd-form-err";
+    ucmdAgentErr.setAttribute("role", "alert");
+    ucmdAgentErr.hidden = true;
+    box.appendChild(ucmdAgentErr);
+
+    var foot = doc.createElement("div");
+    foot.className = "ucmd-agent-foot";
+    var sw = doc.createElement("button");
+    sw.type = "button";
+    sw.className = "ucmd-link-btn";
+    sw.setAttribute("data-act", "manual");
+    sw.textContent = wsT("js.ucmd.agent.manual");
+    sw.addEventListener("click", function () { ucmdSetAddMode("manual"); });
+    var grp = doc.createElement("div");
+    grp.className = "ucmd-btn-group";
+    var cancel = doc.createElement("button");
+    cancel.type = "button";
+    cancel.className = "ucmd-btn-cancel";
+    cancel.textContent = wsT("js.ucmd.form.cancel");
+    cancel.addEventListener("click", function () { ucmdSetAdding(false); });
+    ucmdAgentSend = doc.createElement("button");
+    ucmdAgentSend.type = "button";
+    ucmdAgentSend.className = "ucmd-btn-primary";
+    ucmdAgentSend.setAttribute("data-act", "send");
+    ucmdAgentSend.textContent = wsT("js.ucmd.agent.send");
+    ucmdAgentSend.addEventListener("click", ucmdAgentSubmit);
+    grp.appendChild(cancel);
+    grp.appendChild(ucmdAgentSend);
+    foot.appendChild(sw);
+    foot.appendChild(grp);
+    box.appendChild(foot);
+    return box;
   }
 
   function ucmdEnsureUI() {
@@ -244,6 +452,8 @@
     var body = doc.createElement("div");
     body.className = "ucmd-pop-body";
 
+    ucmdAgentBox = ucmdBuildAgentBox();
+    body.appendChild(ucmdAgentBox);
     ucmdForm = ucmdBuildForm();
     body.appendChild(ucmdForm);
 
@@ -360,6 +570,7 @@
     ucmdAdding = false;
     if (ucmdPop) ucmdPop.hidden = true;
     if (ucmdForm) ucmdForm.hidden = true;
+    if (ucmdAgentBox) ucmdAgentBox.hidden = true;
     if (ucmdAddBtn) ucmdAddBtn.classList.remove("is-active");
     if (ucmdBadge) {
       ucmdBadge.setAttribute("aria-expanded", "false");
@@ -369,14 +580,27 @@
   }
   function ucmdSetAdding(on) {
     ucmdAdding = !!on;
-    if (ucmdForm) ucmdForm.hidden = !ucmdAdding;
+    if (ucmdAdding) ucmdAddMode = "agent";
+    ucmdSyncAddSurface(ucmdAdding);
+  }
+  // ucmdSetAddMode switches an open add surface between the agent request and
+  // the manual four-field form (the typed text of each is kept).
+  function ucmdSetAddMode(mode) {
+    ucmdAddMode = mode === "manual" ? "manual" : "agent";
+    ucmdAdding = true;
+    ucmdSyncAddSurface(true);
+  }
+  function ucmdSyncAddSurface(focus) {
+    var manual = ucmdAdding && ucmdAddMode === "manual";
+    if (ucmdForm) ucmdForm.hidden = !manual;
+    if (ucmdAgentBox) ucmdAgentBox.hidden = !(ucmdAdding && !manual);
     if (ucmdAddBtn) ucmdAddBtn.classList.toggle("is-active", ucmdAdding);
     if (ucmdFormErr) { ucmdFormErr.hidden = true; ucmdFormErr.textContent = ""; }
+    ucmdAgentError(false);
     ucmdSyncEmpty();
-    if (ucmdAdding && ucmdForm) {
-      var first = ucmdForm.querySelector('[data-f="label"]');
-      if (first) first.focus();
-    }
+    if (!ucmdAdding || !focus) return;
+    var first = manual ? ucmdForm && ucmdForm.querySelector('[data-f="label"]') : ucmdAgentTa;
+    if (first) first.focus();
   }
   function ucmdSyncEmpty() {
     if (!ucmdEmptyEl || !ucmdListEl) return;

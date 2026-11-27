@@ -840,3 +840,176 @@
     transition: none !important;
   }
 }
+
+/* Add via agent: natural-language request box (default of "+ New command"), */
+/* quick chips, MCP guidance details and the footer actions. */
+.ucmd-agent-box {
+  border-radius: 11px;
+  background: var(--ucmd-band);
+  padding: 10px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: var(--wb-shadow);
+}
+.ucmd-agent-hd { display: flex; flex-direction: column; gap: 2px; }
+.ucmd-agent-title-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.ucmd-agent-title {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--wb-fg);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ucmd-agent-title-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--ucmd-ask-accent);
+  display: inline-block;
+}
+.ucmd-agent-sub { margin: 0; font-size: 11.5px; color: var(--wb-muted-fg); }
+
+.ucmd-agent-ta {
+  width: 100%;
+  min-height: 62px;
+  max-height: 130px;
+  resize: vertical;
+  border: 0;
+  outline: none;
+  border-radius: 9px;
+  padding: 8px 10px;
+  background: var(--ucmd-input);
+  color: var(--wb-fg);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.ucmd-agent-ta:focus { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--ucmd-ask-accent) 55%, transparent); }
+.ucmd-agent-ta::placeholder { color: var(--ucmd-dim); }
+
+.ucmd-quick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+.ucmd-quick-lbl { font-size: 11px; color: var(--wb-muted-fg); margin-right: 2px; }
+.ucmd-qchip {
+  border: 0;
+  border-radius: 999px;
+  height: 22px;
+  padding: 0 9px;
+  background: color-mix(in srgb, var(--wb-fg) 7%, transparent);
+  color: var(--wb-fg);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+.ucmd-qchip:hover {
+  background: color-mix(in srgb, var(--ucmd-ask-accent) 18%, transparent);
+  color: var(--ucmd-ask-ink);
+}
+
+/* Collapsible MCP Tool Preview Chip */
+.ucmd-mcp-details {
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-fg) 4%, var(--ucmd-body));
+  overflow: hidden;
+}
+.ucmd-mcp-summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 6px 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--wb-muted-fg);
+  user-select: none;
+}
+.ucmd-mcp-summary::-webkit-details-marker { display: none; }
+.ucmd-mcp-summary:hover { background: var(--ucmd-wash); color: var(--wb-fg); }
+.ucmd-mcp-sum-left { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ucmd-mcp-pill {
+  font-family: var(--wb-mono);
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--ucmd-agent-bg);
+  color: var(--ucmd-agent-fg);
+}
+.ucmd-mcp-body {
+  padding: 7px 9px 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--wb-muted-fg);
+  border-top: 1px solid var(--ucmd-hair);
+}
+.ucmd-mcp-code {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: var(--ucmd-ed-bg);
+  color: var(--ucmd-cmd-fg);
+  font: 10.8px/1.4 var(--wb-mono);
+  white-space: pre-wrap;
+}
+
+.ucmd-agent-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 2px;
+}
+.ucmd-link-btn {
+  border: 0;
+  background: transparent;
+  padding: 3px 4px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: var(--wb-muted-fg);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.ucmd-link-btn:hover { color: var(--wb-fg); background: var(--ucmd-wash); }
+
+.ucmd-btn-group { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.ucmd-btn-cancel {
+  border: 0;
+  border-radius: 8px;
+  height: 28px;
+  padding: 0 11px;
+  background: var(--ucmd-wash);
+  color: var(--wb-muted-fg);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ucmd-btn-cancel:hover { color: var(--wb-fg); }
+.ucmd-btn-primary {
+  border: 0;
+  border-radius: 8px;
+  height: 28px;
+  padding: 0 12px;
+  background: var(--ucmd-ask-accent);
+  color: var(--wb-primary-fg);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: filter .12s ease;
+}
+.ucmd-btn-primary:hover { filter: brightness(1.08); }
+.ucmd-btn-primary.is-blue { background: var(--wb-primary); color: var(--wb-primary-fg); }
+
+.ucmd-agent-box[hidden] { display: none; }
+.ucmd-form-acts .ucmd-link-btn { margin-right: auto; }

@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS root_user_commands (
 	cwd         TEXT NOT NULL DEFAULT '',
 	revision    INTEGER NOT NULL,
 	seq         INTEGER NOT NULL,
+	source      TEXT NOT NULL DEFAULT 'user',
 	PRIMARY KEY (root, id)
 );
 CREATE TABLE IF NOT EXISTS meta (
@@ -73,6 +74,7 @@ const rootTableSchema = `CREATE TABLE IF NOT EXISTS root_user_commands (
 	cwd         TEXT NOT NULL DEFAULT '',
 	revision    INTEGER NOT NULL,
 	seq         INTEGER NOT NULL,
+	source      TEXT NOT NULL DEFAULT 'user',
 	PRIMARY KEY (root, id)
 )`
 
@@ -82,9 +84,14 @@ const rootTableSchema = `CREATE TABLE IF NOT EXISTS root_user_commands (
 // clock does across a restart.
 const metaRevision = "revision"
 
+// metaSessionMigrated is the meta flag set once the legacy session-scoped
+// user_commands rows were copied into root_user_commands (as source "agent").
+// user_commands itself stays in place so an older build still opens the file.
+const metaSessionMigrated = "session_commands_migrated"
+
 // row is one stored user command with its scope.
 type row struct {
-	Reply, Root string
+	Root string
 	Command
 	Seq int64
 }
@@ -203,6 +210,34 @@ func ensureV2Extensions(ctx context.Context, tx *sql.Tx) (bool, error) {
 			changed = true
 		}
 	}
+	rootCols, err := tableColumns(ctx, tx, "root_user_commands")
+	if err != nil {
+		return false, err
+	}
+	if !rootCols["source"] {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE root_user_commands ADD COLUMN source TEXT NOT NULL DEFAULT 'user'`); err != nil {
+			return false, fmt.Errorf("add root_user_commands.source column: %w", err)
+		}
+		changed = true
+	}
+	var flag int64
+	err = tx.QueryRowContext(ctx, `SELECT v FROM meta WHERE k = ?`, metaSessionMigrated).Scan(&flag)
+	if errors.Is(err, sql.ErrNoRows) {
+		// One time: an existing root row wins; among legacy session rows of one
+		// (root, id) the newest revision wins (INSERT OR IGNORE keeps the first
+		// row of the ordered select).
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO root_user_commands (root, id, label, description, line, prompt, cwd, revision, seq, source)
+			SELECT root, id, label, description, line, prompt, cwd, revision, seq, 'agent' FROM user_commands
+			ORDER BY revision DESC, seq DESC, reply`); err != nil {
+			return false, fmt.Errorf("migrate session user commands: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO meta (k, v) VALUES (?, 1)`, metaSessionMigrated); err != nil {
+			return false, fmt.Errorf("flag session user command migration: %w", err)
+		}
+		changed = true
+	} else if err != nil {
+		return false, fmt.Errorf("inspect session migration flag: %w", err)
+	}
 	return changed, nil
 }
 
@@ -249,52 +284,37 @@ func (s *Store) highWater() (int64, error) {
 	return v, nil
 }
 
-// load returns every stored agent and root-user row, oldest registration first.
-func (s *Store) load() (agentRows, rootRows []row, err error) {
+// load returns every stored worktree-scoped row (both sources), oldest
+// registration first.
+func (s *Store) load() ([]row, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return nil, nil, ErrStoreClosed
+		return nil, ErrStoreClosed
 	}
 	ctx := context.Background()
 	s.ops.Add(1)
-	err = sqliteRetry(ctx, func() error {
-		agentRows, rootRows = nil, nil
-		rows, err := s.db.QueryContext(ctx, `SELECT reply, root, id, label, description, line, prompt, cwd, revision, seq FROM user_commands ORDER BY seq, reply, root, id`)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var r row
-			if err := rows.Scan(&r.Reply, &r.Root, &r.ID, &r.Label, &r.Description, &r.Line, &r.Prompt, &r.Cwd, &r.Revision, &r.Seq); err != nil {
-				return err
-			}
-			r.Source = SourceAgent
-			agentRows = append(agentRows, r)
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		rrows, err := s.db.QueryContext(ctx, `SELECT root, id, label, description, line, prompt, cwd, revision, seq FROM root_user_commands ORDER BY seq, root, id`)
+	var out []row
+	err := sqliteRetry(ctx, func() error {
+		out = nil
+		rrows, err := s.db.QueryContext(ctx, `SELECT root, id, label, description, line, prompt, cwd, revision, seq, source FROM root_user_commands ORDER BY seq, root, id`)
 		if err != nil {
 			return err
 		}
 		defer rrows.Close()
 		for rrows.Next() {
 			var r row
-			if err := rrows.Scan(&r.Root, &r.ID, &r.Label, &r.Description, &r.Line, &r.Prompt, &r.Cwd, &r.Revision, &r.Seq); err != nil {
+			if err := rrows.Scan(&r.Root, &r.ID, &r.Label, &r.Description, &r.Line, &r.Prompt, &r.Cwd, &r.Revision, &r.Seq, &r.Source); err != nil {
 				return err
 			}
-			r.Source = SourceUser
-			rootRows = append(rootRows, r)
+			out = append(out, r)
 		}
 		return rrows.Err()
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("load user commands: %w", err)
+		return nil, fmt.Errorf("load user commands: %w", err)
 	}
-	return agentRows, rootRows, nil
+	return out, nil
 }
 
 // raise lifts the stored revision high-water to rev inside tx.
@@ -304,42 +324,17 @@ func raise(ctx context.Context, tx *sql.Tx, rev int64) error {
 	return err
 }
 
-// put writes r into user_commands and raises the revision high-water to
-// r.Revision in one transaction (one WAL commit).
-func (s *Store) put(r row) error {
-	return s.write("put user command "+r.ID, func(ctx context.Context, tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO user_commands (reply, root, id, label, description, line, prompt, cwd, revision, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(reply, root, id) DO UPDATE SET label = excluded.label, description = excluded.description,
-			line = excluded.line, prompt = excluded.prompt, cwd = excluded.cwd, revision = excluded.revision`,
-			r.Reply, r.Root, r.ID, r.Label, r.Description, r.Line, r.Prompt, r.Cwd, r.Revision, r.Seq); err != nil {
-			return err
-		}
-		return raise(ctx, tx, r.Revision)
-	})
-}
-
 // putRoot writes r into root_user_commands and raises the shared revision
 // high-water to r.Revision in one transaction (one WAL commit).
 func (s *Store) putRoot(r row) error {
 	return s.write("put root user command "+r.ID, func(ctx context.Context, tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO root_user_commands (root, id, label, description, line, prompt, cwd, revision, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO root_user_commands (root, id, label, description, line, prompt, cwd, revision, seq, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(root, id) DO UPDATE SET label = excluded.label, description = excluded.description,
-			line = excluded.line, prompt = excluded.prompt, cwd = excluded.cwd, revision = excluded.revision`,
-			r.Root, r.ID, r.Label, r.Description, r.Line, r.Prompt, r.Cwd, r.Revision, r.Seq); err != nil {
+			line = excluded.line, prompt = excluded.prompt, cwd = excluded.cwd, revision = excluded.revision, source = excluded.source`,
+			r.Root, r.ID, r.Label, r.Description, r.Line, r.Prompt, r.Cwd, r.Revision, r.Seq, r.Source); err != nil {
 			return err
 		}
 		return raise(ctx, tx, r.Revision)
-	})
-}
-
-// del removes one agent command and raises the revision high-water to rev in
-// one transaction (one WAL commit): a withdrawal never lowers it.
-func (s *Store) del(reply, root, id string, rev int64) error {
-	return s.write("delete user command", func(ctx context.Context, tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM user_commands WHERE reply = ? AND root = ? AND id = ?`, reply, root, id); err != nil {
-			return err
-		}
-		return raise(ctx, tx, rev)
 	})
 }
 
@@ -351,22 +346,6 @@ func (s *Store) delRoot(root, id string, rev int64) error {
 			return err
 		}
 		return raise(ctx, tx, rev)
-	})
-}
-
-// delReplies removes every command of the given conversations in one
-// transaction.
-func (s *Store) delReplies(replies []string) error {
-	if len(replies) == 0 {
-		return nil
-	}
-	return s.write("delete user commands of closed conversations", func(ctx context.Context, tx *sql.Tx) error {
-		for _, reply := range replies {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM user_commands WHERE reply = ?`, reply); err != nil {
-				return err
-			}
-		}
-		return nil
 	})
 }
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -69,7 +70,7 @@ func openUserCommandsFixture(t *testing.T, dir string, runner *userCommandRunner
 	return u
 }
 
-func TestUserCommandsAreScopedToTheLeadAndItsWorktree(t *testing.T) {
+func TestUserCommandsAreScopedToTheWorktree(t *testing.T) {
 	dir := t.TempDir()
 	wt1, wt2 := filepath.Join(dir, "wt1"), filepath.Join(dir, "wt2")
 	runner := &userCommandRunnerFake{
@@ -81,8 +82,8 @@ func TestUserCommandsAreScopedToTheLeadAndItsWorktree(t *testing.T) {
 	if _, _, err := u.Register("lead", wsusercmd.Input{ID: "build", Label: "Build", Line: "make"}); err != nil {
 		t.Fatal(err)
 	}
-	if got, _, _ := u.List("other"); len(got) != 0 {
-		t.Fatalf("another lead sees %+v", got)
+	if got, _, _ := u.List("other"); len(got) != 1 {
+		t.Fatalf("another lead of the worktree sees %+v", got)
 	}
 	// The lead moves to another worktree: its commands there are its own, the
 	// first worktree's are not shown, and returning shows them again.
@@ -146,8 +147,8 @@ func TestUserCommandsFollowTheRunnersWorktree(t *testing.T) {
 // TestUserCommandsReloadAfterARestartAndAnOldDaemon: the commands are kept in a
 // store of their own. A daemon that does not know it (an older one, which opens
 // only its own databases and holder directories) leaves it untouched, and the
-// daemon that reopens restores every command with its revision; commands of a
-// conversation the runner has forgotten are dropped by that open.
+// daemon that reopens restores every command with its revision; commands are
+// worktree-scoped, so a forgotten conversation does not drop them.
 func TestUserCommandsReloadAfterARestartAndAnOldDaemon(t *testing.T) {
 	dir := t.TempDir()
 	wt := filepath.Join(dir, "wt")
@@ -195,11 +196,11 @@ func TestUserCommandsReloadAfterARestartAndAnOldDaemon(t *testing.T) {
 	runner.mu.Unlock()
 	second := openUserCommandsFixture(t, dir, runner, nil)
 	got, rev, err := second.List("lead")
-	if err != nil || len(got) != 1 || got[0] != stored || rev == "" {
+	if err != nil || len(got) != 2 || got[0] != stored || rev == "" {
 		t.Fatalf("restored %+v rev %q: %v", got, rev, err)
 	}
-	if got, _, err := second.List("gone"); err != nil || len(got) != 0 {
-		t.Fatalf("a forgotten conversation kept %+v (%v)", got, err)
+	if got, _, err := second.List("gone"); err != nil || len(got) != 2 {
+		t.Fatalf("worktree commands must outlive the conversation that registered them: %+v (%v)", got, err)
 	}
 	// The registry's own change signal reaches the dashboard.
 	var changed []string
@@ -296,7 +297,7 @@ func TestUserCommandsV2CreatePatchCwdAndRootRevision(t *testing.T) {
 		t.Fatalf("create user: %+v %v", created, err)
 	}
 	cmds2, rev2After, err := u.List("lead2")
-	if err != nil || len(cmds2) != 1 || cmds2[0].ID != "user-test" || rev2After == rev2Before || u.Revision("lead2") != rev2After {
+	if err != nil || len(cmds2) != 2 || cmds2[1].ID != "user-test" || rev2After == rev2Before || u.Revision("lead2") != rev2After {
 		t.Fatalf("lead2 after root create: cmds=%+v rev=%q (was %q) revFn=%q err=%v", cmds2, rev2After, rev2Before, u.Revision("lead2"), err)
 	}
 	if u.Revision("other") != revOtherBefore {
@@ -315,5 +316,56 @@ func TestUserCommandsV2CreatePatchCwdAndRootRevision(t *testing.T) {
 	}
 	if err := u.RemoveIf("lead1", wsusercmd.SourceUser, created.ID, patched.Revision); err != nil {
 		t.Fatalf("remove user: %v", err)
+	}
+}
+
+// TestUserCommandRootTagIsCaseInsensitiveOnWindows: the scope key and the tag
+// agree on what one worktree is, so a differently cased spelling of the path
+// neither hides the commands nor moves the revision.
+func TestUserCommandRootTagIsCaseInsensitiveOnWindows(t *testing.T) {
+	upper, lower := filepath.Join(os.TempDir(), "WT-Case"), filepath.Join(os.TempDir(), "wt-case")
+	same := rootTag(upper) == rootTag(lower)
+	if runtime.GOOS == "windows" {
+		if !same || !sameRoot(upper, lower) {
+			t.Fatalf("windows spellings differ: %q %q", rootTag(upper), rootTag(lower))
+		}
+	} else if same {
+		t.Fatal("case-sensitive platforms must keep case-distinct tags")
+	}
+	if rootTag(upper) != rootTag(upper+string(filepath.Separator)) {
+		t.Fatal("a trailing separator changes the tag")
+	}
+}
+
+// TestUserCommandAgentRegistrationIsSharedAcrossLeadsOfAWorktree: an agent
+// registration shows up for every lead bound to that worktree (as an agent
+// command), is withdrawn by the registering tool only, and is not visible in
+// another worktree.
+func TestUserCommandAgentRegistrationIsSharedAcrossLeadsOfAWorktree(t *testing.T) {
+	dir := t.TempDir()
+	wt1, wt2 := filepath.Join(dir, "wt1"), filepath.Join(dir, "wt2")
+	runner := &userCommandRunnerFake{
+		gens:  map[string]uint64{"a": 1, "b": 1, "c": 1},
+		roots: map[string]string{"a": wt1, "b": wt1, "c": wt2},
+		known: map[string]bool{"a": true, "b": true, "c": true},
+	}
+	u := openUserCommandsFixture(t, dir, runner, nil)
+	if _, _, err := u.Register("a", wsusercmd.Input{ID: "build", Label: "Build", Line: "make"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := u.List("b"); len(got) != 1 || got[0].Source != wsusercmd.SourceAgent {
+		t.Fatalf("second lead of the worktree: %+v", got)
+	}
+	if got, _, _ := u.List("c"); len(got) != 0 {
+		t.Fatalf("other worktree: %+v", got)
+	}
+	if u.Revision("a") != u.Revision("b") {
+		t.Fatal("leads of one worktree must share the revision")
+	}
+	if err := u.Unregister("b", "build"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := u.List("a"); len(got) != 0 {
+		t.Fatalf("after unregister: %+v", got)
 	}
 }

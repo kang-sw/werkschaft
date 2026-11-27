@@ -144,8 +144,29 @@
     var entities = { "&#91;": "[", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&apos;": "'", "&#39;": "'", "&amp;": "&" };
     return String(text || "").replace(/&#91;|&lt;|&gt;|&quot;|&apos;|&#39;|&amp;/g, function (s) { return entities[s]; });
   }
+  // parseUcmdAddBlock mirrors wsinbox.parseUserCommandAdd: the request text of
+  // a <ws:ucmd-add> block (the agent-facing guidance is never shown).
+  function parseUcmdAddBlock(norm) {
+    var open = '<ws:ucmd-add scope="worktree" tool="session.register_user_command">';
+    var firstNL = norm.indexOf("\n");
+    if (firstNL < 0 || norm.slice(0, firstNL) !== open || norm.slice(-15) !== "\n</ws:ucmd-add>") return null;
+    var body = norm.slice(firstNL + 1, -14).trim();
+    if (body.indexOf("<request>") !== 0) return null;
+    var end = body.indexOf("</request>");
+    if (end < 0) return null;
+    var req = body.slice(9, end), rest = body.slice(end + 10).trim();
+    if (rest.indexOf("<attachments>") === 0) {
+      var ae = rest.indexOf("</attachments>");
+      if (ae < 0) return null;
+      rest = rest.slice(ae + 14).trim();
+    }
+    if (rest.indexOf("<mcp-guidance>") !== 0 || rest.slice(-15) !== "</mcp-guidance>") return null;
+    if (req.indexOf("<") >= 0 || !req.trim()) return null;
+    return { add: true, request: ucmdUnescapeXml(req), label: "", cmd: "", cwd: "", prompt: "", edited: false };
+  }
   function parseUcmdBlock(raw) {
     var norm = String(raw || "").replace(/\r\n/g, "\n");
+    if (norm.indexOf("<ws:ucmd-add") === 0) return parseUcmdAddBlock(norm);
     if (norm.indexOf("<ws:ucmd") !== 0 || norm.slice(-11) !== "\n</ws:ucmd>") return null;
     var firstNL = norm.indexOf("\n");
     if (firstNL < 0 || norm.charAt(firstNL - 1) !== ">") return null;
@@ -206,7 +227,7 @@
         if (stop < 0) break;
         pos = start + stop + term.length; continue;
       }
-      var candidate = /^<\/?ws:ucmd(?:[^A-Za-z0-9_.:-]|$)/.test(body), quote = "", end = start + 1;
+      var candidate = /^<\/?ws:ucmd(?:-add)?(?:[^A-Za-z0-9_.:-]|$)/.test(body), quote = "", end = start + 1;
       for (; end < text.length; end++) {
         var ch = text.charAt(end);
         if (quote) { if (ch === quote) quote = ""; continue; }
@@ -248,7 +269,9 @@
     if (!text || text.indexOf("<ws:ucmd") < 0) return text || "";
     var out = [];
     splitUcmdParts(text).forEach(function (p) {
-      if (p.ucmd) {
+      if (p.ucmd && p.ucmd.add) {
+        out.push(p.ucmd.request.replace(/\s+/g, " ").trim());
+      } else if (p.ucmd) {
         var cmdLine = p.ucmd.cmd.replace(/\s+/g, " ").trim();
         if (p.ucmd.label && cmdLine) out.push("[" + p.ucmd.label + "] " + cmdLine);
         else if (cmdLine) out.push(cmdLine);
@@ -614,7 +637,7 @@
     }
     function buildUcmdCard(cmd) {
       var card = doc.createElement("div"), hd = doc.createElement("div");
-      card.className = "ucmd-req";
+      card.className = cmd.add ? "ucmd-req is-add" : "ucmd-req";
       hd.className = "ucmd-req-hd";
       var ico = doc.createElement("span");
       ico.className = "ucmd-req-ico";
@@ -629,6 +652,22 @@
         ico.appendChild(svg);
       }
       hd.appendChild(ico);
+      if (cmd.add) {
+        var badge = doc.createElement("span");
+        badge.className = "ucmd-req-badge";
+        badge.textContent = wsT("js.ucmd.agent.badge");
+        hd.appendChild(badge);
+        var tool = doc.createElement("code");
+        tool.className = "ucmd-req-tool-pill";
+        tool.textContent = "session.register_user_command";
+        hd.appendChild(tool);
+        card.appendChild(hd);
+        var req = doc.createElement("div");
+        req.className = "ucmd-req-prompt";
+        req.textContent = cmd.request;
+        card.appendChild(req);
+        return card;
+      }
       var lbl = doc.createElement("span");
       lbl.className = "ucmd-req-label";
       lbl.textContent = cmd.label || wsT("js.ucmd.ask.header");

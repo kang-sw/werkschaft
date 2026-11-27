@@ -437,13 +437,13 @@ func TestUserCommandRevisionEventOnTheStream(t *testing.T) {
 	if len(after) != 1 || after[0] != f.users.Revision("livesession") || after[0] == first[0] {
 		t.Fatalf("after a registration: %v (was %v)", after, first)
 	}
-	// Another lead's change moves no revision of this one.
-	if _, _, err := f.users.reg.Set("boardsession", f.users.root, wsusercmd.Input{ID: "x", Label: "x", Line: "true"}); err != nil {
+	// Another worktree's change moves no revision of this one.
+	if _, _, err := f.users.reg.Set("boardsession", filepath.Join(filepath.Dir(f.users.root), "elsewhere"), wsusercmd.Input{ID: "x", Label: "x", Line: "true"}); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(50 * time.Millisecond)
 	if got := revs(mustCollect(t, events)); len(got) != 0 {
-		t.Fatalf("another lead's change reached this stream: %v", got)
+		t.Fatalf("another worktree's change reached this stream: %v", got)
 	}
 }
 
@@ -633,8 +633,8 @@ func TestUserCommandCreateAndUpdateRoutes(t *testing.T) {
 	}
 
 	// PUT also edits an agent-scoped command (keeping source="agent").
-	ag := f.register(t, "go-tests", "make agent")
-	res = ucPut(f.d, "/s/livesession/user-commands/go-tests", map[string]any{
+	ag := f.register(t, "agent-tests", "make agent")
+	res = ucPut(f.d, "/s/livesession/user-commands/agent-tests", map[string]any{
 		"source":   wsusercmd.SourceAgent,
 		"revision": ag.Revision,
 		"line":     "make agent-edited",
@@ -645,7 +645,7 @@ func TestUserCommandCreateAndUpdateRoutes(t *testing.T) {
 		t.Fatalf("put agent = %d %s", res.Code, res.Body)
 	}
 
-	// Remove user command leaves same-id agent command intact.
+	// Remove user command leaves the worktree's agent command intact.
 	res = ucPost(f.d, "/s/livesession/user-commands/go-tests/remove", map[string]any{
 		"source":   wsusercmd.SourceUser,
 		"revision": updated.Command.Revision,
@@ -653,8 +653,8 @@ func TestUserCommandCreateAndUpdateRoutes(t *testing.T) {
 	if res.Code != 200 {
 		t.Fatalf("remove user = %d %s", res.Code, res.Body)
 	}
-	if _, _, ok, _ := f.users.Get("livesession", wsusercmd.SourceAgent, "go-tests"); !ok {
-		t.Fatal("removing user command removed same-id agent command")
+	if _, _, ok, _ := f.users.Get("livesession", wsusercmd.SourceAgent, "agent-tests"); !ok {
+		t.Fatal("removing user command removed the agent command")
 	}
 }
 
@@ -667,7 +667,7 @@ func TestUserCommandRunOverridesCwdFenceAndIdempotency(t *testing.T) {
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	ag := f.register(t, "build", "make agent")
+	ag := f.register(t, "agbuild", "make agent")
 	us, err := f.users.Create("livesession", wsusercmd.Input{ID: "build", Label: "User Build", Line: "make user", Cwd: "backend"})
 	if err != nil {
 		t.Fatal(err)

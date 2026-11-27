@@ -55,8 +55,14 @@ func (s *Server) userCommandHost() UserCommandHost {
 
 // userCommandsListed reports whether this connection is an authenticated open
 // hosted lead (its trusted binding names the conversation and the runner says
-// it is an open lead): only then are the tools advertised.
+// it is an open lead): only then are the tools advertised. The daemon's render
+// of a hosted lead's manual lists them as that lead's connection will.
 func (s *Server) userCommandsListed() bool {
+	if s.connectionDescriptor().leadRender {
+		// A daemon-side render for a hosted lead (RenderLeadManual) has no
+		// connection to authenticate: it lists what the lead's own connection will.
+		return true
+	}
 	if s.conversation == "" {
 		return false
 	}

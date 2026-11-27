@@ -15,6 +15,9 @@ func renderUserCommandCardHTML(lang string, cmd *wsinbox.UserCommand) template.H
 		return ""
 	}
 	esc := template.HTMLEscapeString
+	if cmd.Add {
+		return renderUserCommandAddHTML(lang, cmd)
+	}
 	label := cmd.Label
 	if label == "" {
 		label = wsi18n.T(lang, "js.ucmd.ask.header")
@@ -42,6 +45,23 @@ func renderUserCommandCardHTML(lang string, cmd *wsinbox.UserCommand) template.H
 	return template.HTML(b.String())
 }
 
+// renderUserCommandAddHTML renders a <ws:ucmd-add> request as the tonal
+// .ucmd-req.is-add bubble: badge, tool pill and the user's request text. The
+// agent-facing guidance is not shown.
+func renderUserCommandAddHTML(lang string, cmd *wsinbox.UserCommand) template.HTML {
+	esc := template.HTMLEscapeString
+	var b strings.Builder
+	b.WriteString(`<div class="ucmd-req is-add">`)
+	b.WriteString(`<div class="ucmd-req-hd">`)
+	b.WriteString(`<span class="ucmd-req-ico" aria-hidden="true"><svg class="li" aria-hidden="true"><use href="#l-square-terminal"/></svg></span>`)
+	b.WriteString(`<span class="ucmd-req-badge">` + esc(wsi18n.T(lang, "js.ucmd.agent.badge")) + `</span>`)
+	b.WriteString(`<code class="ucmd-req-tool-pill">session.register_user_command</code>`)
+	b.WriteString(`</div>`)
+	b.WriteString(`<div class="ucmd-req-prompt">` + esc(cmd.Request) + `</div>`)
+	b.WriteString(`</div>`)
+	return template.HTML(b.String())
+}
+
 // formatUserCommandPreview replaces valid <ws:ucmd> XML blocks in a user
 // message with a compact single-line preview (e.g. "[label] cmd" or "cmd") for
 // the session rail. It also unwraps <ws:user> envelopes when present so rail
@@ -56,6 +76,10 @@ func formatUserCommandPreview(text string) string {
 		var out []string
 		for _, p := range parts {
 			if p.Command != nil {
+				if p.Command.Add {
+					out = append(out, strings.Join(strings.Fields(p.Command.Request), " "))
+					continue
+				}
 				cmdLine := strings.Join(strings.Fields(p.Command.Cmd), " ")
 				switch {
 				case p.Command.Label != "" && cmdLine != "":
