@@ -234,6 +234,11 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
 /* ===== pinned panel mirror cards (panelcard.js) ===== */
 .bcard[data-kind="panel"] .panel-card-doc { padding: 8px 12px 10px; }
 .bcard[data-kind="panel"] .panel-card-empty { padding: 18px 16px; color: var(--wb-muted-fg); font-size: 13px; }
+.bcard[data-kind="panel"]:has(.panel-card-doc > .mockup-wrap) .bc-body,
+.bcard[data-kind="panel"][data-max]:has(.panel-card-doc > .mockup-wrap) .bc-body { display: flex; flex-direction: column; }
+.bcard[data-kind="panel"][data-size="fold"]:not([data-max]):not([data-overview-live]):has(.panel-card-doc > .mockup-wrap) .bc-body { display: none; }
+.bcard[data-kind="panel"] .panel-card-doc:has(> .mockup-wrap) { flex: 1 1 0; min-height: 240px; padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+.bcard[data-kind="panel"] .panel-card-doc > .mockup-wrap { flex: 1 1 0; height: 100%; min-height: 240px; resize: none; border: 0; border-radius: 0; }
 .pv-none p { margin: 0; }
 .pv-none .btn { color: var(--wb-fg); height: 26px; }
 

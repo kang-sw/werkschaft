@@ -5,7 +5,11 @@
   "use strict";
   var doc = document;
   var hooks = {};
-  var FRAME_ATTRS = ["data-doc", "data-doc-key", "data-topic", "data-entry", "data-relay", "data-sandbox", "data-srcdoc", "title"];
+  var FRAME_ATTRS = [
+    "data-doc", "data-doc-key", "data-topic", "data-entry", "data-relay",
+    "data-sandbox", "data-srcdoc", "data-mockup-src", "data-mockup-sha",
+    "data-fallback-text", "title"
+  ];
 
   function t(k, fb) {
     if (typeof window.wsT === "function") {
@@ -87,14 +91,22 @@
     }
   }
 
+  function isMockupFrame(srcFrame) {
+    if (!srcFrame) return false;
+    if (srcFrame.classList && srcFrame.classList.contains("mockup-frame")) return true;
+    return !!(srcFrame.getAttribute && srcFrame.getAttribute("data-mockup-src"));
+  }
+
   function buildPlaceholder(srcFrame) {
     var ph = doc.createElement("div");
-    ph.className = "doc-frame";
+    var mockup = isMockupFrame(srcFrame);
+    ph.className = mockup ? "doc-frame mockup-frame" : "doc-frame";
     for (var i = 0; i < FRAME_ATTRS.length; i++) {
       var attr = FRAME_ATTRS[i];
       var val = srcFrame.getAttribute(attr);
       if (attr === "data-sandbox" && val == null) val = srcFrame.getAttribute("sandbox");
       if (attr === "data-srcdoc" && val == null) val = srcFrame.getAttribute("srcdoc");
+      if (attr === "data-mockup-src" && val == null && mockup) val = srcFrame.getAttribute("src");
       if (val != null) ph.setAttribute(attr, val);
     }
     // Never carry canonical DOM ids into the mirror card.
@@ -105,7 +117,7 @@
   function mountIfConnected(card) {
     if (!card || card._panelClosed || !card.body || !card.body.isConnected) return;
     if (!hooks.mountFrames) return;
-    if (card.body.querySelector && card.body.querySelector("div.doc-frame[data-srcdoc]")) {
+    if (card.body.querySelector && card.body.querySelector("div.doc-frame[data-srcdoc], div.doc-frame[data-mockup-src]")) {
       hooks.mountFrames(card.body);
     }
   }
@@ -131,19 +143,33 @@
     var entry = srcFrame.getAttribute("data-entry") || art.getAttribute("data-entry") || "";
     var srcdoc = srcFrame.getAttribute("data-srcdoc");
     if (srcdoc == null) srcdoc = srcFrame.getAttribute("srcdoc") || "";
-    if (card._panelMounted && card._panelEntry === entry && card._panelSrcdoc === srcdoc) {
+    var mockup = isMockupFrame(srcFrame);
+    var mockupSrc = srcFrame.getAttribute("data-mockup-src") || "";
+    if (!mockupSrc && mockup) mockupSrc = srcFrame.getAttribute("src") || "";
+    var mockupSha = srcFrame.getAttribute("data-mockup-sha") || "";
+    if (card._panelMounted && card._panelEntry === entry && card._panelSrcdoc === srcdoc && card._panelMockupSrc === mockupSrc && card._panelMockupSha === mockupSha) {
       mountIfConnected(card);
       return true;
     }
     var wrap = doc.createElement("div");
     wrap.className = "doc-body panel-card-doc";
-    wrap.appendChild(buildPlaceholder(srcFrame));
+    var ph = buildPlaceholder(srcFrame);
+    if (mockup || mockupSrc || (srcFrame.closest && srcFrame.closest(".mockup-wrap"))) {
+      var mwrap = doc.createElement("div");
+      mwrap.className = "mockup-wrap";
+      mwrap.appendChild(ph);
+      wrap.appendChild(mwrap);
+    } else {
+      wrap.appendChild(ph);
+    }
     card.body.textContent = "";
     card.body.appendChild(wrap);
     card._panelMounted = true;
     card._panelMissing = false;
     card._panelEntry = entry;
     card._panelSrcdoc = srcdoc;
+    card._panelMockupSrc = mockupSrc;
+    card._panelMockupSha = mockupSha;
     mountIfConnected(card);
     return true;
   }
@@ -265,6 +291,8 @@
         card._panelFetching = false;
         card._panelEntry = null;
         card._panelSrcdoc = null;
+        card._panelMockupSrc = null;
+        card._panelMockupSha = null;
         card._panelHead = null;
         updateHeader(card, { name: panelId, sub: topicName, badge: panelId, topic: topicName });
         card.actions([{
