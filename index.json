@@ -445,7 +445,14 @@
       "registered_at": "2026-11-25T12:38:04Z"
     },
     "261126-epic-ws-dashboard-conversation-ux-restyle": {
-      "registered_at": "2026-11-26T13:46:28Z"
+      "registered_at": "2026-11-26T13:46:28Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "closed",
+        "touched_at": "2026-11-27T13:17:45Z"
+      }
     },
     "261126-feat-ws-companion-vrm-engine": {
       "registered_at": "2026-11-26T13:52:18Z",
