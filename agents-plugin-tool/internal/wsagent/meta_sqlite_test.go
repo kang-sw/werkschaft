@@ -541,3 +541,28 @@ func TestRunnerCanForgetClosedNonMutatingAndOpenGuard(t *testing.T) {
 		t.Fatalf("closed lead SQLite record remained after ForgetClosed: ok=%v err=%v", ok, err)
 	}
 }
+
+func TestRunnerSetMetaAfterStartDoesNotLeakDurableStore(t *testing.T) {
+	runnerDir := t.TempDir()
+	r := NewRunner(Options{
+		Dir:      runnerDir,
+		Backends: map[string]BackendRegistration{"durable": {ProcessKind: ProcessDurable}},
+	})
+	r.Start(nil)
+	t.Cleanup(r.Close)
+
+	origStore := r.durableRecords
+	if origStore == nil {
+		t.Fatal("expected Start to open durableRecords SQLite store")
+	}
+
+	otherStore, otherSnap := openCutoverTestMeta(t, t.TempDir())
+	r.SetMeta(otherStore, otherSnap)
+
+	if r.meta != nil {
+		t.Fatalf("SetMeta after Start unexpectedly bound r.meta = %p, want nil", r.meta)
+	}
+	if r.durableRecords != origStore {
+		t.Fatalf("SetMeta after Start overwrote durableRecords (%p -> %p), leaking original store handle", origStore, r.durableRecords)
+	}
+}

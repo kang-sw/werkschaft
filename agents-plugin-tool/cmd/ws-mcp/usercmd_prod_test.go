@@ -17,7 +17,9 @@ import (
 
 	"github.com/kang-sw/devenv/internal/mcp"
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 	"github.com/kang-sw/devenv/internal/wsusercmd"
 )
 
@@ -90,8 +92,15 @@ type tokenAgents struct {
 	hellos map[string]wsdashboard.ProxyHello
 }
 
-func (a *tokenAgents) Start(func(string, string)) {}
-func (a *tokenAgents) Close()                     {}
+// Override lifecycle and host-binding methods: f.runner is already started
+// and closed by the fixture, so StartDaemon must not rebind or tear down its
+// endpoint, live host, audit sink, or SQLite metadata store.
+func (a *tokenAgents) Start(func(string, string))              {}
+func (a *tokenAgents) Close()                                  {}
+func (a *tokenAgents) SetEndpoint(string)                      {}
+func (a *tokenAgents) SetLiveHost(wsdashboard.LiveHost)        {}
+func (a *tokenAgents) SetAuditSink(wsaudit.Sink)               {}
+func (a *tokenAgents) SetMeta(*wsmeta.Store, *wsmeta.Snapshot) {}
 func (a *tokenAgents) ResolveMCPToken(token string) (wsdashboard.ProxyHello, <-chan struct{}, bool) {
 	h, ok := a.hellos[token]
 	return h, nil, ok
