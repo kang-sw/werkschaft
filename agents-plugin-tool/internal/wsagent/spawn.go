@@ -139,6 +139,7 @@ func (spec *SpawnSpec) apply(rec *Record) {
 	rec.Label = spec.Label
 	rec.Tier = spec.Tier
 	rec.SystemPrompt = spec.SystemPrompt != ""
+	recordWorkerInstruction(rec, spec.Prompt)
 	if spec.Parent != nil {
 		parent := *spec.Parent
 		rec.Parent = &parent

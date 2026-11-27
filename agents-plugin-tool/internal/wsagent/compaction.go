@@ -98,10 +98,15 @@ func (c *conv) restorePendingCompaction(pc *PendingCompaction) {
 		return
 	}
 	if !c.rec.Lead && pc.Stage == compactStageQueued {
+		triggerPath := "manual"
+		if pc.Origin == wslive.TriggerAuto {
+			triggerPath = "auto_hard_cap"
+		}
 		c.compactPending = &compactRequest{
-			resume:   pc.Resume,
-			internal: pc.ResumeInternal,
-			auto:     pc.Origin == wslive.TriggerAuto,
+			resume:      pc.Resume,
+			internal:    pc.ResumeInternal,
+			auto:        pc.Origin == wslive.TriggerAuto,
+			triggerPath: triggerPath,
 		}
 		if pc.Origin != "" {
 			c.compactOrigin = pc.Origin
@@ -178,13 +183,56 @@ func (c *conv) persistWorkerPendingCompaction(stage string, afterSeq uint64) {
 }
 
 type compactRequest struct {
-	resume   bool
-	internal bool
-	auto     bool
-	crossing bool
-	stage1   bool
-	err      error
-	lead     *wscompact.LeadSummary
+	resume      bool
+	internal    bool
+	auto        bool
+	crossing    bool
+	stage1      bool
+	triggerPath string
+	err         error
+	lead        *wscompact.LeadSummary
+}
+
+// recordWorkerInstruction persists a worker's bounded original prompt and
+// latest distinct parent/user instruction on Record alongside existing writes.
+func recordWorkerInstruction(rec *Record, text string) {
+	if rec == nil || rec.Lead {
+		return
+	}
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return
+	}
+	bounded := wscompact.BoundedText(trimmed, wscompact.WorkerTaskBytes)
+	if rec.InitialPrompt == "" {
+		rec.InitialPrompt = bounded
+		return
+	}
+	if bounded != rec.InitialPrompt {
+		rec.LatestInstruction = bounded
+	}
+}
+
+// workerTaskFromRing scans full ring history (oldest to newest, including
+// records before prior RingCompact cuts) to recover a legacy worker's original
+// prompt and latest distinct user instruction when Record lacks them.
+func workerTaskFromRing(records []wslive.RingRecord) (initial, latest string) {
+	for _, rec := range records {
+		if rec.Kind != wslive.RingUser {
+			continue
+		}
+		text := strings.TrimSpace(rec.Text)
+		if text == "" {
+			continue
+		}
+		bounded := wscompact.BoundedText(text, wscompact.WorkerTaskBytes)
+		if initial == "" {
+			initial = bounded
+		} else if bounded != initial {
+			latest = bounded
+		}
+	}
+	return initial, latest
 }
 
 type compactionNudge struct {
@@ -276,16 +324,23 @@ func (r *Runner) CompactWithSummary(callerKey, target string, resume *bool, lead
 		}
 		internal := dest.compactInternalTurn
 		crossing := dest.aboveCompactHard()
+		triggerPath := "manual"
 		if dest.compactStage1Active {
 			internal = dest.compactStage1Internal
 			crossing = crossing || dest.compactStage1Auto
+			if dest.compactStage1Auto {
+				triggerPath = "stage1_hard_cap"
+			} else {
+				triggerPath = "stage1_manual"
+			}
 		}
 		req := &compactRequest{
-			resume:   again,
-			internal: internal,
-			auto:     dest.compactStage1Active && dest.compactStage1Auto,
-			crossing: crossing,
-			lead:     lead,
+			resume:      again,
+			internal:    internal,
+			auto:        dest.compactStage1Active && dest.compactStage1Auto,
+			crossing:    crossing,
+			triggerPath: triggerPath,
+			lead:        lead,
 		}
 		dest.compactPending = req
 		dest.publishCompaction(false)
@@ -351,19 +406,27 @@ func NotifyCompactionConfigChanged() {
 }
 
 // loadCompaction runs at process start, loading thresholds and resetting
-// process-scoped usage observations.
+// process-scoped usage observations. During an in-progress rotation
+// (c.compacting), it preserves rotation-carried circuit-breaker state
+// (compactHardAtStart, compactOrigin, compactPostRotationNoShrink) and never
+// clears compactTurnRotations (which is owned by the logical turn lifecycle).
 func (c *conv) loadCompaction() {
 	c.loadCompactionThresholds()
 	c.compactLoaded = true
 	c.compactUsageFresh, c.compactAwaitTurn, c.compactContinueAtIdle = false, false, false
 	c.compactPrevTokens, c.compactPrevWindow = 0, 0
-	c.compactHardIssued, c.compactHardSteered, c.compactHardHandled, c.compactHardAtStart = false, false, false, false
 	c.compactHardSteerID = ""
-	c.resetHardOverflow()
+	c.compactHardStepPending = false
+	c.compactHardBoundaries = 0
+	c.compactHardInterrupt, c.compactHardAbort, c.compactHardForce = false, false, false
 	c.compactAdvised, c.compactM1Issued, c.compactM2Issued = false, false, false
 	c.compactNudge = compactionNudge{}
-	c.compactOrigin = ""
 	c.compactStage1Active, c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited = false, false, false, false, false
+	if !c.compacting {
+		c.compactHardIssued, c.compactHardSteered, c.compactHardHandled, c.compactHardAtStart = false, false, false, false
+		c.resetHardOverflow()
+		c.compactOrigin = ""
+	}
 }
 
 func (c *conv) wsManagedLeadCompaction() bool {
@@ -576,7 +639,8 @@ func (c *conv) observeCompaction(ev wslive.Event) {
 	if ev.Kind == wslive.KindTurnStart {
 		c.compactUsageFresh, c.compactAwaitTurn = false, false
 		c.compactContinueAtIdle = false
-		c.compactHardInterrupt, c.compactHardBoundaries = false, 0
+		c.compactHardInterrupt, c.compactHardAbort, c.compactHardBoundaries = false, false, 0
+		c.compactHardStepPending = false
 		c.clearCompactionSteerReplies()
 	}
 	if ev.Kind != wslive.KindStatus || ev.Context == nil || c.compactAwaitTurn {
@@ -592,6 +656,22 @@ func (c *conv) observeCompaction(ev wslive.Event) {
 	c.compactTokens, c.compactWindow = float64(*ctx.Tokens), float64(ctx.Window)
 	c.compactUsageFresh = true
 	c.refreshCompaction()
+	if c.compactHardSteered {
+		// A fresh context-usage sample while steered indicates a new model
+		// step ran after the Stage 1 steer, allowing the next tool boundary to
+		// advance compactHardBoundaries once rather than counting queued
+		// pre-steer sequential tool completions.
+		c.compactHardStepPending = true
+	}
+	if c.compactPostRotationCheck {
+		c.compactPostRotationCheck = false
+		if c.aboveCompactHard() {
+			c.compactNoShrink = c.compactPostRotationNoShrink
+			c.compactHardHandled = c.compactNoShrink >= compactNoShrinkCap
+		} else {
+			c.compactPostRotationNoShrink = 0
+		}
+	}
 	c.disarmCompactionLatches()
 	if c.compactPending != nil && c.aboveCompactHard() {
 		c.compactPending.crossing = true
@@ -922,6 +1002,16 @@ func (c *conv) stageHardCompaction(resume, internal bool) {
 		c.compactPending.crossing = true
 		return
 	}
+	if c.compactTurnRotations >= compactTurnRotationCap {
+		c.compactHardHandled = true
+		if c.rec.Lead {
+			c.setStatus(func() {
+				c.lastErr = fmt.Sprintf("auto-compaction paused after %d automatic compactions in one turn; run /compact or split the task", compactTurnRotationCap)
+			})
+			c.changed(false)
+		}
+		return
+	}
 	c.compactHardIssued, c.compactAdvised, c.compactM1Issued, c.compactM2Issued = true, true, true, true
 	c.compactNudge = compactionNudge{}
 	if why := c.compactUnsupported(); why != "" {
@@ -937,7 +1027,11 @@ func (c *conv) stageHardCompaction(resume, internal bool) {
 	// resume (its report is held by compactHoldsReport) instead of settling.
 	// Explicit ws/compact calls already returned above via c.compactPending != nil.
 	resume = (resume && c.rec.Lead) || c.compactHardForce
-	req := &compactRequest{resume: resume, internal: internal, auto: true, crossing: true, stage1: c.wsManagedLeadCompaction() && !c.compactHardForce}
+	triggerPath := "auto_hard_cap"
+	if c.compactHardForce {
+		triggerPath = "stage2_hard_cap"
+	}
+	req := &compactRequest{resume: resume, internal: internal, auto: true, crossing: true, stage1: c.wsManagedLeadCompaction() && !c.compactHardForce, triggerPath: triggerPath}
 	if c.wsManagedWorkerCompaction() || c.compactHardForce && c.wsManagedLeadCompaction() {
 		// No Stage 1 prose round trip for a worker: rotate from the ring dialog.
 		req.lead = emptyWorkerSummary()
@@ -950,12 +1044,20 @@ func (c *conv) stageHardCompaction(resume, internal bool) {
 // usage at or above hard, so a compaction that frees nothing cannot loop.
 const compactNoShrinkCap = 2
 
+// compactTurnRotationCap bounds consecutive automatic compactions within one
+// logical turn even when each compaction shrinks context, preventing a task
+// that repeatedly re-inflates to hard from looping indefinitely.
+const compactTurnRotationCap = 3
+
 // resetHardOverflow clears every hard-cap latch and Stage 2 counter: usage
-// fell below hard, or a fresh session replaced the overflowed one.
+// fell below hard, or a fresh session replaced the overflowed one. It never
+// resets compactTurnRotations, which spans rotations within a logical turn.
 func (c *conv) resetHardOverflow() {
 	c.compactHardIssued, c.compactHardSteered, c.compactHardHandled, c.compactHardAtStart = false, false, false, false
 	c.compactHardBoundaries, c.compactNoShrink = 0, 0
-	c.compactHardInterrupt, c.compactHardForce = false, false
+	c.compactHardStepPending = false
+	c.compactHardInterrupt, c.compactHardAbort, c.compactHardForce = false, false, false
+	c.compactPostRotationCheck, c.compactPostRotationNoShrink = false, 0
 }
 
 // escalateHardOverflow is Stage 2 of hard-cap enforcement. At a tool boundary
@@ -966,7 +1068,7 @@ func (c *conv) resetHardOverflow() {
 func (c *conv) escalateHardOverflow() {
 	if !c.turn || c.proc == nil || c.quitting || c.replaying || c.wrapHold || c.closed || c.hidden ||
 		c.compacting || c.compactCommand || c.compactPending != nil || c.compactInternalTurn ||
-		c.compactHardInterrupt || c.compactNoShrink >= compactNoShrinkCap ||
+		c.compactHardInterrupt || c.compactHardAbort || c.compactNoShrink >= compactNoShrinkCap ||
 		c.caps != nil && !c.caps.Allows(ItemInterrupt) {
 		return
 	}
@@ -978,7 +1080,10 @@ func (c *conv) escalateHardOverflow() {
 	trigger := false
 	switch {
 	case c.compactHardSteered:
-		c.compactHardBoundaries++
+		if c.compactHardStepPending {
+			c.compactHardStepPending = false
+			c.compactHardBoundaries++
+		}
 		trigger = over || c.compactHardBoundaries >= 3
 	case !c.rec.Lead && c.r.lifecycle(c.rec.Backend).NoWorkerCompactionSteer:
 		trigger = over
@@ -986,7 +1091,26 @@ func (c *conv) escalateHardOverflow() {
 	if !trigger {
 		return
 	}
-	c.compactHardInterrupt, c.compactHardBoundaries = true, 0
+	if c.compactTurnRotations >= compactTurnRotationCap {
+		c.compactHardHandled = true
+		c.compactHardBoundaries = 0
+		c.compactHardStepPending = false
+		if c.rec.Lead {
+			c.setStatus(func() {
+				c.lastErr = fmt.Sprintf("auto-compaction paused after %d automatic compactions in one turn; run /compact or split the task", compactTurnRotationCap)
+			})
+			c.changed(false)
+			return
+		}
+		c.compactHardAbort = true
+		c.disarmModelWait()
+		if err := c.proc.Interrupt(); err != nil {
+			c.compactHardAbort = false
+			fmt.Fprintf(c.r.opts.Log, "agent %s: hard-cap abort interrupt: %v\n", c.rec.ReplyID, err)
+		}
+		return
+	}
+	c.compactHardInterrupt, c.compactHardBoundaries, c.compactHardStepPending = true, 0, false
 	c.disarmModelWait()
 	if err := c.proc.Interrupt(); err != nil {
 		c.compactHardInterrupt = false
@@ -1015,11 +1139,30 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 	}
 	var records []wslive.RingRecord
 	if c.dir != "" {
-		if recs, err := wslive.ReadRing(filepath.Join(c.dir, "ring")); err == nil {
-			records = recs
+		if page, err := wslive.ReadRingPage(filepath.Join(c.dir, "ring"), "", wslive.RingHistoryCap); err == nil {
+			records = page.Records
 		}
 	}
 	dialogRes := wscompact.BuildRingDialog(records, "ring")
+	initialPrompt, latestInstruction := "", ""
+	ticket := dialogRes.Ticket
+	if !rec.Lead {
+		initialPrompt, latestInstruction = rec.InitialPrompt, rec.LatestInstruction
+		if initialPrompt == "" {
+			ringInitial, ringLatest := workerTaskFromRing(records)
+			initialPrompt = ringInitial
+			if latestInstruction == "" {
+				latestInstruction = ringLatest
+			}
+		}
+		if ticket == "" {
+			if t := wscompact.TicketRefRE.FindString(latestInstruction); t != "" {
+				ticket = t
+			} else if t := wscompact.TicketRefRE.FindString(initialPrompt); t != "" {
+				ticket = t
+			}
+		}
+	}
 	prose := make([]string, len(req.lead.Prose))
 	for i, text := range req.lead.Prose {
 		prose[i] = wscompact.BoundedText(wscompact.Scrub(text), wscompact.ProseFieldBytes)
@@ -1031,16 +1174,20 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 	}
 	state := c.r.compactionState(rec.ReplyID)(dialogRes.LastCompactAt)
 	checkpoint := wscompact.BuildCheckpoint(wscompact.CheckpointInput{
-		Lead:         rec.Lead,
-		Ticket:       dialogRes.Ticket,
-		Playbook:     dialogRes.Playbook,
-		State:        state,
-		OmitChildren: rec.Lead && c.r.opts.RestoreBundle != nil,
-		Prose:        prose,
-		Rereads:      rereads,
-		Dialog:       dialogRes.Dialog,
+		Lead:              rec.Lead,
+		Ticket:            ticket,
+		Playbook:          dialogRes.Playbook,
+		InitialPrompt:     initialPrompt,
+		LatestInstruction: latestInstruction,
+		State:             state,
+		OmitChildren:      rec.Lead && c.r.opts.RestoreBundle != nil,
+		Prose:             prose,
+		Rereads:           rereads,
+		Dialog:            dialogRes.Dialog,
 	})
 
+	preTokens := int64(math.Round(c.compactTokens))
+	wasHard := c.compactHardAtStart || c.aboveCompactHard() || c.compactHardSteered || req.crossing
 	at := time.Now()
 	if c.r.opts.Now != nil {
 		at = c.r.opts.Now()
@@ -1050,7 +1197,17 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 		return false, fmt.Errorf("build compaction audit envelope: %w", err)
 	}
 	cut.Subkind, cut.Out = trigger, checkpoint
-	cut.Meta = map[string]any{"mode": wsconfig.CompactionModeWS, "trigger": trigger}
+	cutMeta := map[string]any{"mode": wsconfig.CompactionModeWS, "trigger": trigger}
+	if preTokens > 0 {
+		cutMeta["pre_tokens"] = preTokens
+	}
+	if req.triggerPath != "" {
+		cutMeta["trigger_path"] = req.triggerPath
+	}
+	if trigger == wslive.TriggerAuto {
+		cutMeta["turn_rotations"] = c.compactTurnRotations + 1
+	}
+	cut.Meta = cutMeta
 
 	err = c.sendStandalonePrompt(false, func() error {
 		c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart})
@@ -1082,14 +1239,26 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 			}
 		}
 
+		prevPostRotationNoShrink := c.compactPostRotationNoShrink
 		c.compactOrigin = trigger
 		c.compactCommand = false
 		c.compactRotated = true
 		c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd, Trigger: trigger})
 		c.compactRotated = false
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd, Trigger: trigger})
-		// The replacement session starts with a clean hard-cap slate.
+		// The replacement session starts with a clean immediate hard-cap slate;
+		// if its first fresh usage sample is still >= hard, observeCompaction
+		// restores the no-shrink count from compactPostRotationNoShrink.
 		c.resetHardOverflow()
+		if wasHard {
+			c.compactPostRotationCheck = true
+			c.compactPostRotationNoShrink = prevPostRotationNoShrink + 1
+		}
+		if trigger == wslive.TriggerAuto {
+			c.compactTurnRotations++
+		} else {
+			c.compactTurnRotations = 0
+		}
 		if strings.TrimSpace(c.compactNote) != "" {
 			c.compactNote += "\n\n" + checkpoint
 		} else {
@@ -1102,6 +1271,12 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 			saved.RotatedAfterSends = &sends
 			rec.SessionID, rec.SessionFile = "", ""
 			rec.PendingCompaction = saved
+			if !rec.Lead && rec.InitialPrompt == "" && initialPrompt != "" {
+				rec.InitialPrompt = initialPrompt
+				if rec.LatestInstruction == "" && latestInstruction != "" && latestInstruction != initialPrompt {
+					rec.LatestInstruction = latestInstruction
+				}
+			}
 		})
 		return nil
 	})
@@ -1185,6 +1360,9 @@ func (c *conv) steerCompaction(boundary bool) {
 		return
 	}
 	if id == "" {
+		if !c.compactHardSteered {
+			c.compactHardStepPending = false
+		}
 		c.compactHardSteered = true
 	} else if !c.compactHardSteered {
 		c.compactHardSteerID = id
@@ -1194,7 +1372,14 @@ func (c *conv) steerCompaction(boundary bool) {
 func (c *conv) compactSteerAnswered(reply compactSteerReply) {
 	if reply.id == c.compactHardSteerID {
 		c.compactHardSteerID = ""
-		c.compactHardSteered = reply.refusal == ""
+		if reply.refusal == "" {
+			if !c.compactHardSteered {
+				c.compactHardStepPending = false
+			}
+			c.compactHardSteered = true
+		} else {
+			c.compactHardSteered = false
+		}
 	}
 	if reply.refusal != "" {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: the harness refused compaction guidance: %s\n", c.rec.ReplyID, reply.refusal)
@@ -1389,6 +1574,13 @@ func (c *conv) compactEvent(ev wslive.Event) {
 		if c.compactHardAtStart || c.aboveCompactHard() {
 			c.compactNoShrink++
 			c.compactHardHandled = c.compactNoShrink >= compactNoShrinkCap
+		}
+		if !c.compactRotated {
+			if origin == wslive.TriggerAuto {
+				c.compactTurnRotations++
+			} else if origin == wslive.TriggerManual {
+				c.compactTurnRotations = 0
+			}
 		}
 		c.compactHardAtStart = false
 		// A stats answer queued before compaction may still carry old tokens.

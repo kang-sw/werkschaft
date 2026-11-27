@@ -192,12 +192,18 @@ type conv struct {
 	compactAwaitTurn                                                                                               bool
 	compactHardSteered, compactHardHandled, compactHardAtStart                                                     bool
 	compactHardSteerID                                                                                             string
-	// Stage 2 hard-cap overflow: boundaries seen since the first hard steer,
-	// the daemon-initiated interrupt (distinct from interruptAsked), the
-	// direct-rotation request for the compaction it stages, and consecutive
-	// compactions that left usage at or above hard.
+	// Stage 2 hard-cap overflow: post-steer model-step boundaries seen since
+	// the first hard steer, whether a fresh post-steer usage update arrived
+	// before the next tool boundary, daemon-initiated interrupt vs cap abort
+	// (both distinct from interruptAsked), direct-rotation request, per-turn
+	// auto-rotation count, and consecutive compactions that left usage >= hard.
 	compactHardBoundaries, compactNoShrink int
-	compactHardInterrupt, compactHardForce bool
+	compactHardStepPending                 bool
+	compactHardInterrupt, compactHardAbort bool
+	compactHardForce                       bool
+	compactTurnRotations                   int
+	compactPostRotationCheck               bool
+	compactPostRotationNoShrink            int
 	compactContinueAtIdle, compactIdleInternal                                                                     bool
 	replayCompactEnded, replayCompactFailed                                                                        bool
 	compactStage1Active, compactStage1Resume, compactStage1Internal, compactStage1Auto, compactStage1UsageLimited  bool
@@ -2179,9 +2185,16 @@ func (c *conv) kickInput() {
 	}
 	cmd, inputs, rest := nextTurn(queue)
 	parts := make([]string, len(inputs))
+	var workerInstructionParts []string
 	for i, input := range inputs {
 		parts[i] = input.Text
+		if !c.rec.Lead && cmd == nil && !input.Exec {
+			if t := strings.TrimSpace(input.Text); t != "" {
+				workerInstructionParts = append(workerInstructionParts, t)
+			}
+		}
 	}
+	workerInstruction := strings.Join(workerInstructionParts, "\n\n")
 	whiteboard := slices.ContainsFunc(inputs, func(input QueuedInput) bool { return input.WhiteboardFirst })
 	if !durable && cmd != nil && cmd.Name == "compact" {
 		c.refreshCompaction()
@@ -2312,6 +2325,7 @@ func (c *conv) kickInput() {
 			if ordinary {
 				rec.PendingCompaction = nil
 			}
+			recordWorkerInstruction(rec, workerInstruction)
 			// The open successor supersedes or publishes (below) a held
 			// turn; the record never keeps both.
 			rec.HeldTurn = nil
@@ -2358,6 +2372,7 @@ func (c *conv) kickInput() {
 	}
 	if ordinary {
 		c.compactNote = ""
+		c.compactTurnRotations = 0
 		c.passive.ack(c.passiveTook)
 		c.passiveTook = nil
 		if !c.compactNudge.standalone {
@@ -2410,6 +2425,7 @@ func (c *conv) kickInput() {
 			if ordinary {
 				rec.PendingCompaction = nil
 			}
+			recordWorkerInstruction(rec, workerInstruction)
 			if rec.Parent != nil {
 				rec.TurnOpen, rec.HeldTurn = true, nil
 			}
