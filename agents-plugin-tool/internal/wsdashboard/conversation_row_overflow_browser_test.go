@@ -28,7 +28,17 @@ func TestConversationRowOverflowBrowser(t *testing.T) {
 			}}},
 		}},
 		{Kind: wslive.RingReply, Text: "The lead reply stays in view."},
-		{Kind: wslive.RingTurn, Origin: "terminal", Done: 1, DurationMs: 2000},
+		{Kind: wslive.RingTurn, Origin: "terminal", Done: 1, Failed: 1, DurationMs: 65000, AddedTokens: 14300, Reason: preview},
+		{Kind: wslive.RingMail, Direction: wslive.MailRecv, Peer: "id:turn2recv", Title: "Turn 2 inbound", BodyBytes: 240},
+		{Kind: wslive.RingMail, Direction: wslive.MailSent, Peer: "id:turn2sent", Title: "Turn 2 outbound", BodyBytes: 240},
+		{Kind: wslive.RingTools, Tools: &wslive.ToolSummary{
+			Calls: 5, DurationMs: 65000,
+			Batches: []wslive.ToolBatch{{Calls: 5, DurationMs: 65000, CallArgs: []wslive.ToolCallArgs{
+				{ID: "overflow-turn2-call", Name: "Read", ArgsPreview: "file.go", InBytes: 120},
+			}}},
+		}},
+		{Kind: wslive.RingReply, Text: "Second turn reply."},
+		{Kind: wslive.RingTurn, Origin: "terminal", Done: 5, Failed: 1, DurationMs: 65000, AddedTokens: 14300},
 	}
 	if err := wslive.AppendRing(wslive.RingDir(SessionDir(f.dir, "livesession")), entries); err != nil {
 		t.Fatal(err)
