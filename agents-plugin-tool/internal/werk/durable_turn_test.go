@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/kang-sw/devenv/internal/wsfs"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 func TestDurableTurnResumesModelRequestAndReusesFinishedResult(t *testing.T) {
@@ -90,13 +91,12 @@ func TestDurableTurnResumesModelRequestAndReusesFinishedResult(t *testing.T) {
 }
 
 func TestDurableTurnRecoversPendingReadsAndFileEvidence(t *testing.T) {
-	dir, err := filepath.EvalSymlinks(t.TempDir())
-	must(t, err)
+	dir := wstestutil.CanonicalTempDir(t)
 	session := NewSessionID()
 	cmd := Command{Type: CmdUser, TurnID: "original-turn", Text: "read and write"}
 	store, _, err := OpenStore(dir, session, nil)
 	must(t, err)
-	t.Cleanup(func() { _ = store.Close() })
+	wstestutil.CloseBeforeTempDir(t, store.Close)
 	must(t, store.appendBarrier(turnStartRecord{K: "turn_start", TurnID: cmd.TurnID, User: userItem(cmd.Text)}))
 	items := []json.RawMessage{
 		json.RawMessage(callOf("finished", "fs_read", `{"path":"already-read"}`)),

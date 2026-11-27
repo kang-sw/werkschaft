@@ -16,6 +16,7 @@ import (
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsholder"
 	"github.com/kang-sw/devenv/internal/wsstate"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 // measureSessions is the daemon's execSessions over a real Runner (the
@@ -139,10 +140,7 @@ func TestExecHUDStopAndReadsThroughProductionPaths(t *testing.T) {
 		}
 		m.Close()
 	})
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := wstestutil.CanonicalTempDir(t)
 	launch := func(origin string) string {
 		t.Helper()
 		req, err := execjob.ShellLaunch(id, "exec.shell", root, "", "echo started; sleep 60", os.Environ(), nil)

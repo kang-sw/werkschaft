@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 var testNow = time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
@@ -87,7 +89,7 @@ func openTest(t *testing.T, dir string, opts Options) *Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = s.Close() })
+	wstestutil.CloseBeforeTempDir(t, s.Close)
 	return s
 }
 

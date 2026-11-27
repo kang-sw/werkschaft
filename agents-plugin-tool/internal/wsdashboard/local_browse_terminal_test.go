@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/kang-sw/devenv/internal/wsholder"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 func TestTerminalLocalBrowseAnchorGuards(t *testing.T) {
@@ -102,10 +103,7 @@ func anchorTerminalCreate(t *testing.T, f *termFixture, dir string) TerminalInfo
 func TestTerminalLocalBrowseAnchorExactFolderAndRestart(t *testing.T) {
 	holdersDir, python := termHoldersDir(t)
 	f := startTermFixture(t, holdersDir, python, 0)
-	work, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	work := wstestutil.CanonicalTempDir(t)
 	nested := filepath.Join(work, "nested")
 	if err := os.Mkdir(nested, 0o755); err != nil {
 		t.Fatal(err)

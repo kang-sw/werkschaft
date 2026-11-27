@@ -3,9 +3,10 @@ package mcp
 import (
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 // Both production adapters must accept a freshly initialized repository:
@@ -17,10 +18,7 @@ func TestDashboardGitInitUnbornRailAndSpawnEligibility(t *testing.T) {
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := wstestutil.CanonicalTempDir(t)
 	keys := NewAgentKeyStore()
 	if _, err := keys.LeadRoot(root); err == nil {
 		t.Fatal("plain folder admitted as a lead root")

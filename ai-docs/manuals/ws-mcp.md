@@ -2589,7 +2589,10 @@ agents-plugin-tool/scripts/build-release-assets.sh [version]
 GitHub Actions workflow `.github/workflows/ws-mcp-ci.yml` runs the regular Go
 test group on Ubuntu and sharded Windows jobs for pull requests and manual
 dispatch. The boolean dispatch input `long_tests` defaults to false; true adds
-long-group jobs on both platforms. `scripts/ci-test-shard.sh` owns group
+long-group jobs on both platforms. The optional `windows_shard` choice input
+defaults to `all` (full matrix + desktop); selecting a specific Windows shard
+runs only that Windows leg for manual debugging without desktop or full-matrix
+jobs (and therefore does not satisfy the release gate). `scripts/ci-test-shard.sh` owns group
 membership: `all` excludes long tests, `rest` also excludes `internal/mcp`, and
 `rest` + every MCP shard + `long` covers the full suite. Locally, run the script
 from `agents-plugin-tool` with `bash scripts/ci-test-shard.sh all`, adding a

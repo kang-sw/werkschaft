@@ -16,6 +16,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsgit"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 // occupancyFake is the daemon-side reader with its optional release notice,
@@ -37,7 +38,7 @@ type releaseNotice struct {
 func (f *occupancyFake) CheckoutReleased(worktree string, releasedAt time.Time, cancelTurns bool) []wsagent.ReleasedConversation {
 	f.mu.Lock()
 	observe := f.observe
-	f.notices = append(f.notices, releaseNotice{target: canonicalWorktreeTestPath(worktree), releasedAt: releasedAt, cancelTurns: cancelTurns})
+	f.notices = append(f.notices, releaseNotice{target: wstestutil.CanonicalPath(worktree), releasedAt: releasedAt, cancelTurns: cancelTurns})
 	outcomes := append([]wsagent.ReleasedConversation(nil), f.outcomes...)
 	f.mu.Unlock()
 	if observe != nil {
@@ -79,7 +80,7 @@ func TestWorktreeAcquireSkipsAnExtantLease(t *testing.T) {
 		t.Fatalf("precondition: lease %+v err=%v", before, err)
 	}
 	next := acquireForTest(t, s, 2, leadB, base, "impl/test/next")
-	if canonicalWorktreeTestPath(next.Path) == canonicalWorktreeTestPath(held.Path) || next.Reused {
+	if wstestutil.CanonicalPath(next.Path) == wstestutil.CanonicalPath(held.Path) || next.Reused {
 		t.Fatalf("acquisition reused a leased checkout: %+v", next)
 	}
 	after, err := readWorktreeLease(context.Background(), wsgit.ExecRunner{}, held.Path)
@@ -118,7 +119,7 @@ func TestWorktreeAcquireSkipsOccupiedCheckouts(t *testing.T) {
 			candidate := releasedCandidate(t, s, leadA, base)
 			occ.set(candidate, tc.children...)
 			next := acquireForTest(t, s, 3, leadB, base, "impl/test/next")
-			reused := canonicalWorktreeTestPath(next.Path) == canonicalWorktreeTestPath(candidate)
+			reused := wstestutil.CanonicalPath(next.Path) == wstestutil.CanonicalPath(candidate)
 			if reused != tc.reuse || next.Reused != tc.reuse {
 				t.Fatalf("reused = %v (result %v), want %v", reused, next.Reused, tc.reuse)
 			}
@@ -148,7 +149,7 @@ func TestWorktreeAcquireSkipsOccupiedCheckouts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if canonicalWorktreeTestPath(next.Path) == canonicalWorktreeTestPath(candidate) {
+		if wstestutil.CanonicalPath(next.Path) == wstestutil.CanonicalPath(candidate) {
 			t.Fatal("a candidate the daemon could not vouch for must be skipped")
 		}
 	})
@@ -168,7 +169,7 @@ func TestWorktreeAcquireClaimExcludesSpawnAndRelease(t *testing.T) {
 		}
 		next := acquireForTest(t, s, 3, leadB, base, "impl/test/next")
 		unlockSpawn()
-		if canonicalWorktreeTestPath(next.Path) == canonicalWorktreeTestPath(candidate) {
+		if wstestutil.CanonicalPath(next.Path) == wstestutil.CanonicalPath(candidate) {
 			t.Fatal("acquisition reused a checkout a spawn was registering a child in")
 		}
 	})
@@ -209,7 +210,7 @@ func TestWorktreeAcquireClaimExcludesSpawnAndRelease(t *testing.T) {
 		if err := <-done; err != nil {
 			t.Fatal(err)
 		}
-		if canonicalWorktreeTestPath(acquired.Path) != canonicalWorktreeTestPath(seed.Path) {
+		if wstestutil.CanonicalPath(acquired.Path) != wstestutil.CanonicalPath(seed.Path) {
 			t.Fatalf("expected reuse of %s, got %s", seed.Path, acquired.Path)
 		}
 		unlock, err := wsgit.ReserveWorktreeSpawn(seed.Path)
@@ -249,7 +250,7 @@ func TestWorktreeReleaseIgnoresBindingsFromBeforeTheLastRelease(t *testing.T) {
 	if b := wtBranch(t, acq.Path); b != "HEAD" {
 		t.Fatalf("released worktree not detached: %q", b)
 	}
-	if got := occ.noticeList(); len(got) != 1 || got[0].cancelTurns || got[0].target != canonicalWorktreeTestPath(acq.Path) {
+	if got := occ.noticeList(); len(got) != 1 || got[0].cancelTurns || got[0].target != wstestutil.CanonicalPath(acq.Path) {
 		t.Fatalf("a normal release notifies the daemon without cancelling turns: %+v", got)
 	}
 }
@@ -318,11 +319,11 @@ func TestWorktreeForcedReleaseCancelsEarlierTurnsAndReportsOutcomes(t *testing.T
 	// The child's process lives (its interrupt failed): the checkout stays
 	// out of reuse until it exits or sleeps.
 	occ.set(acq.Path, wsagent.BoundWorktreeChild{Address: "id:runner01", State: wsagent.AgentRunning, BoundBeforeRelease: true, Live: true})
-	if next := acquireForTest(t, s, 3, leadA, base, "impl/test/next"); canonicalWorktreeTestPath(next.Path) == canonicalWorktreeTestPath(acq.Path) {
+	if next := acquireForTest(t, s, 3, leadA, base, "impl/test/next"); wstestutil.CanonicalPath(next.Path) == wstestutil.CanonicalPath(acq.Path) {
 		t.Fatal("acquisition reused a checkout whose earlier child still has a live process")
 	}
 	occ.set(acq.Path, wsagent.BoundWorktreeChild{Address: "id:runner01", State: wsagent.AgentWaiting, BoundBeforeRelease: true})
-	if next := acquireForTest(t, s, 4, leadA, base, "impl/test/later"); canonicalWorktreeTestPath(next.Path) != canonicalWorktreeTestPath(acq.Path) {
+	if next := acquireForTest(t, s, 4, leadA, base, "impl/test/later"); wstestutil.CanonicalPath(next.Path) != wstestutil.CanonicalPath(acq.Path) {
 		t.Fatalf("once the earlier child sleeps the checkout is reusable, got %s", next.Path)
 	}
 }
@@ -394,7 +395,7 @@ func TestWorktreeReleaseBoundaryMixedVersions(t *testing.T) {
 	mu.Lock()
 	got := append([]map[string]any(nil), notices...)
 	mu.Unlock()
-	if len(got) != 1 || got[0]["cancel_turns"] != false || canonicalWorktreeTestPath(got[0]["worktree"].(string)) != canonicalWorktreeTestPath(acq.Path) {
+	if len(got) != 1 || got[0]["cancel_turns"] != false || wstestutil.CanonicalPath(got[0]["worktree"].(string)) != wstestutil.CanonicalPath(acq.Path) {
 		t.Fatalf("release notice = %+v", got)
 	}
 	// The notice carries the marker's instant, so the daemon need not read

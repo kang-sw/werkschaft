@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +13,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 // testRecordReader is an in-memory AgentRecordReader for unit tests that build
@@ -50,13 +50,6 @@ func (r *testRecordReader) RecordByReplyID(replyID string) (wsagent.Record, bool
 	return rec, ok
 }
 
-func canonicalMetaClientPath(path string) string {
-	if resolved, err := filepath.EvalSymlinks(path); err == nil && resolved != "" {
-		return resolved
-	}
-	return path
-}
-
 func TestMetaClientDirectCallFailsWhenDaemonUnavailable(t *testing.T) {
 	cache := t.TempDir()
 	cfg := t.TempDir()
@@ -86,7 +79,7 @@ func TestMetaClientDirectCallFailsWhenDaemonUnavailable(t *testing.T) {
 		t.Fatalf("raw DirectCall must never auto-start daemon; ensureCalls=%d", ensureCalls.Load())
 	}
 	msg := err.Error()
-	wantCache := canonicalMetaClientPath(cache)
+	wantCache := wstestutil.CanonicalPath(cache)
 	for _, want := range []string{"ws-mcp daemon-start", wantCache, cfg} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("DirectCall unavailable error %q missing %q", msg, want)
@@ -184,7 +177,7 @@ func TestMetaClientDirectStdioEnsuresOnceThenRecoversOrFailsRecoverably(t *testi
 		if err1 == nil {
 			t.Fatal("expected recoverable daemon-unavailable error")
 		}
-		wantCache := canonicalMetaClientPath(cache)
+		wantCache := wstestutil.CanonicalPath(cache)
 		for _, want := range []string{"recoverable", "ws-mcp daemon-start", wantCache, cfg} {
 			if !strings.Contains(err1.Error(), want) {
 				t.Errorf("DirectStdio error %q missing %q", err1.Error(), want)

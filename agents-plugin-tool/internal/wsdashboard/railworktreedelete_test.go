@@ -18,6 +18,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wsholder"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 // poolSource lists a repository's worktrees with git, as gitWorktreeSource
@@ -669,10 +670,7 @@ func TestWorktreeDeleteForce(t *testing.T) {
 // run block, the live ones first; an ended session is listed unless the
 // index page leaves it out, and an exited terminal is listed.
 func TestWorktreeHolders(t *testing.T) {
-	base, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := wstestutil.CanonicalTempDir(t)
 	wt := mkDir(t, filepath.Join(base, "wt"))
 	mkDir(t, filepath.Join(wt, "deep"))
 	link := filepath.Join(base, "link")

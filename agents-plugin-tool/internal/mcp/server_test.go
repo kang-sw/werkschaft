@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 // TestMain selects the canonical dev checkout independently of legacy caller
@@ -151,18 +152,6 @@ func toolNameListed(t *testing.T, listLine, toolName string) bool {
 		}
 	}
 	return false
-}
-
-func canonicalTestPath(t *testing.T, path string) string {
-	t.Helper()
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if evaluated, err := filepath.EvalSymlinks(abs); err == nil {
-		abs = evaluated
-	}
-	return abs
 }
 
 func serveStdioWithSession(t *testing.T, server *Server, root, input string, out *bytes.Buffer) error {
@@ -745,8 +734,8 @@ func TestPathGenerateAdvertisesAndAllocatesPlanPaths(t *testing.T) {
 		"session_key": key,
 	})
 	text := strings.TrimSpace(toolText(t, callResp))
-	canonicalText := canonicalTestPath(t, text)
-	wantDir := canonicalTestPath(t, filepath.Join(root, "ai-docs", ".plans"))
+	canonicalText := wstestutil.CanonicalPath(text)
+	wantDir := wstestutil.CanonicalPath(filepath.Join(root, "ai-docs", ".plans"))
 	if !strings.HasPrefix(canonicalText, wantDir+string(os.PathSeparator)) {
 		t.Fatalf("plan path %q is not under %q", text, wantDir)
 	}

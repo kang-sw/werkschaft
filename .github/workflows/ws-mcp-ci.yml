@@ -10,6 +10,10 @@ name: ws-mcp CI
 # publish unless this workflow succeeded on the tagged commit. It publishes
 # nothing; the release workflow remains the sole path that builds and uploads
 # release assets.
+#
+# Manual debug runs may pass `windows_shard` to run a single Windows shard
+# alone; that skips Linux, desktop, long, and the remaining Windows shards so
+# the release gate continues to refuse non-full runs.
 on:
   pull_request:
     paths:
@@ -24,13 +28,70 @@ on:
         description: "Also run the long test group"
         type: boolean
         default: false
+      windows_shard:
+        description: "Single Windows shard for manual debug (default 'all' runs full matrix)"
+        type: choice
+        default: "all"
+        options:
+          - "all"
+          - "mcp-0"
+          - "mcp-1"
+          - "mcp-2"
+          - "mcp-3"
+          - "wsdashboard-0"
+          - "wsdashboard-1"
+          - "rest-0"
+          - "rest-1"
+          - "rest-2"
 
 permissions:
   contents: read
 
 jobs:
+  test-matrix:
+    name: select test matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      value: ${{ steps.select.outputs.value }}
+    steps:
+      - name: Select matrix entries
+        id: select
+        env:
+          EVENT: ${{ github.event_name }}
+          WIN_SHARD: ${{ inputs.windows_shard }}
+        run: |
+          full_matrix='[
+            {"os":"ubuntu-latest","shard":"mcp","args":"mcp"},
+            {"os":"ubuntu-latest","shard":"wsdashboard-0","args":"wsdashboard 0 2"},
+            {"os":"ubuntu-latest","shard":"wsdashboard-1","args":"wsdashboard 1 2"},
+            {"os":"ubuntu-latest","shard":"rest-0","args":"rest 0 3"},
+            {"os":"ubuntu-latest","shard":"rest-1","args":"rest 1 3"},
+            {"os":"ubuntu-latest","shard":"rest-2","args":"rest 2 3"},
+            {"os":"windows-latest","shard":"mcp-0","args":"mcp 0 4"},
+            {"os":"windows-latest","shard":"mcp-1","args":"mcp 1 4"},
+            {"os":"windows-latest","shard":"mcp-2","args":"mcp 2 4"},
+            {"os":"windows-latest","shard":"mcp-3","args":"mcp 3 4"},
+            {"os":"windows-latest","shard":"wsdashboard-0","args":"wsdashboard 0 2"},
+            {"os":"windows-latest","shard":"wsdashboard-1","args":"wsdashboard 1 2"},
+            {"os":"windows-latest","shard":"rest-0","args":"rest 0 3"},
+            {"os":"windows-latest","shard":"rest-1","args":"rest 1 3"},
+            {"os":"windows-latest","shard":"rest-2","args":"rest 2 3"}
+          ]'
+          if [ "$EVENT" != workflow_dispatch ] || [ -z "$WIN_SHARD" ] || [ "$WIN_SHARD" = all ]; then
+            selected=$(printf '%s' "$full_matrix" | jq -c '{include: .}')
+          else
+            selected=$(printf '%s' "$full_matrix" | jq -c --arg shard "$WIN_SHARD" '{include: [.[] | select(.os == "windows-latest" and .shard == $shard)]}')
+          fi
+          if [ "$(printf '%s' "$selected" | jq '.include | length')" -eq 0 ]; then
+            echo "unknown windows_shard: $WIN_SHARD" >&2
+            exit 1
+          fi
+          echo "value=$selected" >> "$GITHUB_OUTPUT"
+
   test:
     name: go test (${{ matrix.os }}, ${{ matrix.shard }})
+    needs: test-matrix
     # Runs on pull requests and manual dispatch only. Before tagging a release,
     # dispatch this workflow on the commit to tag (the ship flow's Publish CI
     # gate does this): the release's CI gate needs a green run on it.
@@ -38,34 +99,18 @@ jobs:
       # Surface every leg's result; a Linux failure must not cancel the Windows
       # run, which is the one this workflow exists to catch early.
       fail-fast: false
-      matrix:
-        # Both Ubuntu and Windows shard the default group so no single leg
-        # approaches the 25 min timeout:
-        #   - internal/wsdashboard splits 2-way on both OSes (~15 min on Windows,
-        #     ~10 min on Ubuntu).
-        #   - internal/mcp runs as one leg on Ubuntu (~5.5 min) and splits 4-way
-        #     on Windows (~15 min serially; git-process heavy).
-        #   - remaining default packages (`rest`) split 3-way with heavy-package
-        #     pins plus deterministic mod assignment so every future package
-        #     automatically lands in exactly one `rest-*` shard.
-        # On each OS, the union of its shards covers exactly `all`. Add the
-        # opt-in long job for full coverage (agents-plugin-tool/scripts/ci-test-shard.sh).
-        include:
-          - { os: ubuntu-latest, shard: mcp, args: "mcp" }
-          - { os: ubuntu-latest, shard: wsdashboard-0, args: "wsdashboard 0 2" }
-          - { os: ubuntu-latest, shard: wsdashboard-1, args: "wsdashboard 1 2" }
-          - { os: ubuntu-latest, shard: rest-0, args: "rest 0 3" }
-          - { os: ubuntu-latest, shard: rest-1, args: "rest 1 3" }
-          - { os: ubuntu-latest, shard: rest-2, args: "rest 2 3" }
-          - { os: windows-latest, shard: mcp-0, args: "mcp 0 4" }
-          - { os: windows-latest, shard: mcp-1, args: "mcp 1 4" }
-          - { os: windows-latest, shard: mcp-2, args: "mcp 2 4" }
-          - { os: windows-latest, shard: mcp-3, args: "mcp 3 4" }
-          - { os: windows-latest, shard: wsdashboard-0, args: "wsdashboard 0 2" }
-          - { os: windows-latest, shard: wsdashboard-1, args: "wsdashboard 1 2" }
-          - { os: windows-latest, shard: rest-0, args: "rest 0 3" }
-          - { os: windows-latest, shard: rest-1, args: "rest 1 3" }
-          - { os: windows-latest, shard: rest-2, args: "rest 2 3" }
+      # Both Ubuntu and Windows shard the default group so no single leg
+      # approaches the 25 min timeout:
+      #   - internal/wsdashboard splits 2-way on both OSes (~15 min on Windows,
+      #     ~10 min on Ubuntu).
+      #   - internal/mcp runs as one leg on Ubuntu (~5.5 min) and splits 4-way
+      #     on Windows (~15 min serially; git-process heavy).
+      #   - remaining default packages (`rest`) split 3-way with heavy-package
+      #     pins plus deterministic mod assignment so every future package
+      #     automatically lands in exactly one `rest-*` shard.
+      # On each OS, the union of its shards covers exactly `all`. Add the
+      # opt-in long job for full coverage (agents-plugin-tool/scripts/ci-test-shard.sh).
+      matrix: ${{ fromJson(needs.test-matrix.outputs.value) }}
     runs-on: ${{ matrix.os }}
     # The Windows smoke job in the release workflow once hung to ~46 min
     # (v0.37.2); a cap turns a hang here into a fast, legible failure.
@@ -114,6 +159,7 @@ jobs:
   # dispatch run on a tagged commit always runs and passes the desktop tests.
   desktop-changes:
     name: desktop change detection
+    if: github.event_name != 'workflow_dispatch' || inputs.windows_shard == '' || inputs.windows_shard == 'all'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -182,7 +228,7 @@ jobs:
   # so the release gate can allow exactly these two skips.
   long-ubuntu:
     name: go test (ubuntu-latest, long)
-    if: github.event_name == 'workflow_dispatch' && inputs.long_tests == true
+    if: github.event_name == 'workflow_dispatch' && inputs.long_tests == true && (inputs.windows_shard == '' || inputs.windows_shard == 'all')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     defaults:
@@ -214,7 +260,7 @@ jobs:
 
   long-windows:
     name: go test (windows-latest, long)
-    if: github.event_name == 'workflow_dispatch' && inputs.long_tests == true
+    if: github.event_name == 'workflow_dispatch' && inputs.long_tests == true && (inputs.windows_shard == '' || inputs.windows_shard == 'all')
     runs-on: windows-latest
     timeout-minutes: 25
     defaults:

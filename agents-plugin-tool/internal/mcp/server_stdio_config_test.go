@@ -12,6 +12,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 func TestServeStdioConfigShow(t *testing.T) {
@@ -38,7 +39,7 @@ func TestServeStdioConfigShow(t *testing.T) {
 	if err := json.Unmarshal([]byte(showBefore), &before); err != nil {
 		t.Fatalf("config.show json response is not JSON: %v\n%s", err, showBefore)
 	}
-	wantConfigPath := filepath.Join(canonicalTestPath(t, cache), "config.json")
+	wantConfigPath := filepath.Join(wstestutil.CanonicalPath(cache), "config.json")
 	if before.Path != wantConfigPath || before.Config.SchemaVersion != 1 {
 		t.Fatalf("config.show json response mismatch: %s", byID["1"])
 	}

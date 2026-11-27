@@ -11,6 +11,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsmeta"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 func openCutoverTestMeta(t *testing.T, dir string) (*wsmeta.Store, *wsmeta.Snapshot) {
@@ -19,7 +20,7 @@ func openCutoverTestMeta(t *testing.T, dir string) (*wsmeta.Store, *wsmeta.Snaps
 	if err != nil {
 		t.Fatalf("wsmeta.Open: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
+	wstestutil.CloseBeforeTempDir(t, store.Close)
 	if _, err := store.Cutover(context.Background(), wsmeta.CutoverOptions{
 		Validate: map[string]wsmeta.LegacyValidator{"agent_record": ValidateLegacyRecord},
 	}); err != nil {

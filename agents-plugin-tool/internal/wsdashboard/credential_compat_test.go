@@ -9,6 +9,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsstate"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 // v0510OutsideDenied is v0.51.0's outsideDenied (f800ba30d,
@@ -52,10 +53,10 @@ func v0510Refuses(path, home, cacheRoot string) bool {
 // a relocated one, and against the pre-release location as the control that
 // the rule set can fail.
 func TestProviderCredentialPathIsRefusedByTheV0510Preview(t *testing.T) {
-	home := t.TempDir()
+	home := wstestutil.CanonicalTempDir(t)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	for name, cacheHome := range map[string]string{"default": "", "relocated": filepath.Join(t.TempDir(), "cache")} {
+	for name, cacheHome := range map[string]string{"default": "", "relocated": filepath.Join(wstestutil.CanonicalTempDir(t), "cache")} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv(wsstate.EnvCacheHome, cacheHome)
 			root, err := wsstate.CacheRoot(wsstate.Options{})
