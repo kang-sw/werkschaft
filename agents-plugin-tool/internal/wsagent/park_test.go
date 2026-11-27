@@ -83,6 +83,10 @@ func TestIdleChildParksAndRehydratesOnSend(t *testing.T) {
 	h, _ := agentHarness(t, func(o *Options) { o.ParkIdleChildren = true })
 	a, ap := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "work", Tier: "small", Authority: "read-only"})
 	ap.reply("first done")
+	eventually(t, "first turn settled", func() bool {
+		rec := h.record(a)
+		return rec.LastTurn != nil && !rec.TurnOpen
+	})
 	h.asleep(a)
 	eventually(t, "the child parked", func() bool { return h.runner.isParked(a) && !h.runner.residentConv(a) })
 	before := h.record(a)
@@ -146,7 +150,7 @@ func TestDaemonStartKeepsWaitingChildrenParked(t *testing.T) {
 		t.Fatalf("the parked child's children = %+v", kids)
 	}
 	// A release of the checkout they are bound in meets them.
-	if len(h.runner.boundConvs(h.root)) == 0 {
+	if len(h.runner.boundConvs(canonicalWorktreePath(h.root))) == 0 {
 		t.Fatal("a checkout release does not see the parked children")
 	}
 	for _, id := range []string{a, b} {

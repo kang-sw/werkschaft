@@ -12,7 +12,22 @@ import (
 )
 
 func (r *Runner) Close() {
-	r.once.Do(func() { close(r.quit) })
+	r.once.Do(func() {
+		r.mu.Lock()
+		r.closing = true
+		stops := make([]func(), 0, len(r.parkStop))
+		for id, stop := range r.parkStop {
+			if stop != nil {
+				stops = append(stops, stop)
+			}
+			delete(r.parkStop, id)
+		}
+		close(r.quit)
+		r.mu.Unlock()
+		for _, stop := range stops {
+			stop()
+		}
+	})
 	r.wg.Wait()
 	r.piPurgeMu.Lock()
 	if r.piPurgeStore != nil && r.piPurgeStore != r.durableRecords && r.piPurgeStore != r.meta {
@@ -36,8 +51,25 @@ func (r *Runner) Close() {
 // interrupts as for its own routes. It returns at once: the loop does the
 // work (inboxChanged). An unknown reply-id is ignored.
 func (r *Runner) InboxChanged(replyID string) {
-	if c := r.conv(replyID); c != nil {
-		c.signalInbox()
+	for {
+		r.mu.Lock()
+		c := r.convs[replyID]
+		parked := r.parked[replyID]
+		if c != nil {
+			// Signal while holding r.mu so a concurrent maybePark either sees
+			// len(c.inboxC) != 0 under r.mu+c.mu and aborts parking, or has
+			// already moved replyID from r.convs to r.parked (handled below).
+			c.signalInbox()
+			r.mu.Unlock()
+			return
+		}
+		r.mu.Unlock()
+		if !parked {
+			return
+		}
+		if r.unpark(replyID) == nil {
+			return
+		}
 	}
 }
 
@@ -116,6 +148,7 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 	dir := wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID)
 	c := &conv{
 		r:            r,
+		id:           rec.ReplyID,
 		dir:          dir,
 		inbox:        wsinbox.Dir(dir),
 		rec:          rec,
@@ -299,27 +332,52 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 		// process, and end this one to do it.
 		c.reattach()
 	}
+	// Mirror initial awake/closed state before exposing c in r.convs or liveOwners.
+	c.syncStateLocked()
 	r.mu.Lock()
+	if r.closing {
+		if claimWidth != nil {
+			claimWidth()
+		}
+		r.mu.Unlock()
+		c.live.closeSlot()
+		close(c.done)
+		return c
+	}
 	r.convs[rec.ReplyID] = c
+	if r.convGen == nil {
+		r.convGen = map[string]uint64{}
+	}
+	r.convGen[rec.ReplyID]++
+	// Store live *conv in liveOwners before removing parked state so a
+	// concurrent lock-free OwnsLive never observes a gap across unpark.
+	r.liveOwners.Store(rec.ReplyID, c)
 	r.indexChildLocked(rec)
 	delete(r.closed, rec.ReplyID)
 	delete(r.closedRows, rec.ReplyID)
 	delete(r.parked, rec.ReplyID)
+	staleParkStop := r.parkStop[rec.ReplyID]
+	delete(r.parkStop, rec.ReplyID)
 	if claimWidth != nil {
 		claimWidth()
 	}
 	r.wg.Add(1)
 	go c.loop()
 	r.mu.Unlock()
+	if staleParkStop != nil {
+		staleParkStop()
+	}
 	// Do not expose a previous LastTurn while startup still reconciles the
 	// later TurnOpen. The loop reconciles before it accepts this request.
 	c.do(func() {})
-	if (rec.Lead || rec.Parent != nil) && r.opts.Mail != nil && !foreign {
+	if (rec.Lead || rec.Parent != nil) && r.opts.Mail != nil && !foreign && !c.isMailStopped() {
 		// Mail that waited while no daemon ran is found by the first check.
 		// A spawned child is watched asleep too: mail to its address wakes
 		// it.
-		c.stopMail = r.opts.Mail.Watch(rec.Root, rec.WSKey, c.signalMail)
-		c.signalMail()
+		stop := r.opts.Mail.Watch(rec.Root, rec.WSKey, c.signalMail)
+		if c.installMailStop(stop) {
+			c.signalMail()
+		}
 	}
 	if (len(rec.Queued) > 0 || len(rec.Reports) > 0) && !foreign {
 		// Drained input an earlier daemon queued: nothing else would send

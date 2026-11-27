@@ -362,65 +362,78 @@ func (r *Runner) AdmitCompletion(id string, gen uint64, eventID, text string) (C
 	if eventID == "" || text == "" {
 		return 0, badRequest("a completion notice needs an event id and text")
 	}
-	c, err := r.open(id)
-	if err != nil {
-		r.mu.Lock()
-		rec, known := r.closed[id]
-		r.mu.Unlock()
-		if known && rec.ClosedAt == "" && rec.handedOff() && rec.OpenGen == gen {
-			return CompletionDeferred, nil
+	for {
+		c, err := r.open(id)
+		if err != nil {
+			r.mu.Lock()
+			rec, known := r.closed[id]
+			r.mu.Unlock()
+			if known && rec.ClosedAt == "" && rec.handedOff() && rec.OpenGen == gen {
+				return CompletionDeferred, nil
+			}
+			return CompletionSuppressed, nil
 		}
-		return CompletionSuppressed, nil
-	}
-	c.wmu.Lock()
-	defer c.wmu.Unlock()
-	c.mu.Lock()
-	if c.closed || c.rec.OpenGen != gen {
+		if r.opts.admitCompletionAdmitting != nil {
+			r.opts.admitCompletionAdmitting(id)
+		}
+		c.wmu.Lock()
+		c.mu.Lock()
+		if c.parkedOut {
+			// Parked after open returned (maybePark holds wmu while it parks):
+			// retry open so the child rehydrates and receives the notice.
+			c.mu.Unlock()
+			c.wmu.Unlock()
+			continue
+		}
+		defer c.wmu.Unlock()
+		if c.closed || c.rec.OpenGen != gen {
+			c.mu.Unlock()
+			return CompletionSuppressed, nil
+		}
+		if c.acceptedEvents == nil {
+			c.acceptedEvents = map[string]struct{}{}
+			for _, have := range c.rec.AcceptedEvents {
+				c.acceptedEvents[have] = struct{}{}
+			}
+			// An entry written just before a crash that lost its record write.
+			held, readErr := wsinbox.EventIDs(c.inbox)
+			for _, have := range held {
+				c.acceptedEvents[have] = struct{}{}
+			}
+			if readErr != nil {
+				fmt.Fprintf(r.opts.Log, "agent %s: read notice ids: %v\n", id, readErr)
+			}
+		}
+		if _, seen := c.acceptedEvents[eventID]; seen {
+			c.mu.Unlock()
+			return CompletionDuplicate, nil
+		}
+		if _, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{text}, Steer: true, EventID: eventID}, r.opts.Now()); err != nil {
+			c.mu.Unlock()
+			return 0, err
+		}
+		c.acceptedEvents[eventID] = struct{}{}
+		accepted := append(c.rec.AcceptedEvents, eventID)
+		if len(accepted) > acceptedEventsCap {
+			accepted = accepted[len(accepted)-acceptedEventsCap:]
+		}
+		c.rec.AcceptedEvents = append([]string(nil), accepted...)
+		c.sends++
+		c.held++
+		c.rec.Sends = c.sends
+		c.syncStateLocked()
+		c.cancelModelWaitBackoffForInput()
+		if c.rec.Parent != nil {
+			c.rec.LastActiveAt = r.opts.Now().UTC().Format(time.RFC3339)
+		}
 		c.mu.Unlock()
-		return CompletionSuppressed, nil
+		c.inboxMutated(1)
+		// The acceptance is durable in the inbox already; the record keeps it
+		// past the entry's drain and trim.
+		_ = c.persistRecord()
+		c.signalInbox()
+		return CompletionAccepted, nil
 	}
-	if c.acceptedEvents == nil {
-		c.acceptedEvents = map[string]struct{}{}
-		for _, have := range c.rec.AcceptedEvents {
-			c.acceptedEvents[have] = struct{}{}
-		}
-		// An entry written just before a crash that lost its record write.
-		held, readErr := wsinbox.EventIDs(c.inbox)
-		for _, have := range held {
-			c.acceptedEvents[have] = struct{}{}
-		}
-		if readErr != nil {
-			fmt.Fprintf(r.opts.Log, "agent %s: read notice ids: %v\n", id, readErr)
-		}
-	}
-	if _, seen := c.acceptedEvents[eventID]; seen {
-		c.mu.Unlock()
-		return CompletionDuplicate, nil
-	}
-	if _, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{text}, Steer: true, EventID: eventID}, r.opts.Now()); err != nil {
-		c.mu.Unlock()
-		return 0, err
-	}
-	c.acceptedEvents[eventID] = struct{}{}
-	accepted := append(c.rec.AcceptedEvents, eventID)
-	if len(accepted) > acceptedEventsCap {
-		accepted = accepted[len(accepted)-acceptedEventsCap:]
-	}
-	c.rec.AcceptedEvents = append([]string(nil), accepted...)
-	c.sends++
-	c.held++
-	c.rec.Sends = c.sends
-	c.cancelModelWaitBackoffForInput()
-	if c.rec.Parent != nil {
-		c.rec.LastActiveAt = r.opts.Now().UTC().Format(time.RFC3339)
-	}
-	c.mu.Unlock()
-	c.inboxMutated(1)
-	// The acceptance is durable in the inbox already; the record keeps it
-	// past the entry's drain and trim.
-	_ = c.persistRecord()
-	c.signalInbox()
-	return CompletionAccepted, nil
 }
 
 // MCPCallBegin counts one ws MCP tool call in flight on session token's

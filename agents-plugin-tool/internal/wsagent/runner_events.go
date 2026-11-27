@@ -1378,6 +1378,21 @@ func (c *conv) close() error {
 	return nil
 }
 
+// closeIfPermitted is close guarded by done under wmu+mu; it reports whether
+// the conversation closed.
+func (c *conv) closeIfPermitted(done func() bool) (bool, error) {
+	if err := c.closeRetired(); err != nil {
+		return false, err
+	}
+	if c.closed {
+		return false, nil
+	}
+	if c.r.durableProcess(c.rec.Backend) {
+		return c.closeDurableIf(done)
+	}
+	return c.closeIf(done), nil
+}
+
 // closeIf is close when done (nil for always) holds in the same mu hold
 // that marks the conversation closed, and reports whether it closed. It
 // runs in the loop.
@@ -1396,6 +1411,7 @@ func (c *conv) closeIf(done func() bool) bool {
 	c.rec.QuotaContinuation = nil
 	c.rec.PendingCompaction = nil
 	c.closed = true
+	c.syncStateLocked()
 	rec := c.rec
 	c.mu.Unlock()
 	if err := c.r.persistAgentRecord(c.dir, rec); err != nil {

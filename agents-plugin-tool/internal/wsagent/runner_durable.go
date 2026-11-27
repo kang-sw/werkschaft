@@ -165,25 +165,36 @@ type durableTurnInput struct {
 // transaction commits. stage assigns fields or copies any slice it changes.
 // after runs under mu after publication, for state read by waiting callers.
 func (c *conv) commitDurableRecord(stage func(*Record), after func()) error {
+	_, err := c.commitDurableRecordIf(nil, stage, after)
+	return err
+}
+
+// commitDurableRecordIf is commitDurableRecord guarded by done in the same
+// wmu+mu hold that persists and publishes the transition.
+func (c *conv) commitDurableRecordIf(done func() bool, stage func(*Record), after func()) (bool, error) {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if done != nil && !done() {
+		return false, nil
+	}
 	next := c.rec
 	stage(&next)
 	if inject := c.r.opts.beforeDurableWrite; inject != nil {
 		if err := inject(next); err != nil {
-			return err
+			return false, err
 		}
 	}
 	if err := c.r.persistAgentRecord(c.dir, next); err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: durable record write: %v\n", c.rec.ReplyID, err)
-		return err
+		return false, err
 	}
 	c.rec = next
 	c.recordDirty = false
 	if after != nil {
 		after()
 	}
-	return nil
+	c.syncStateLocked()
+	return true, nil
 }

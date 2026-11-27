@@ -158,6 +158,26 @@ func (c *conv) awakeLocked() bool {
 	return !c.closed && (c.proc != nil || c.keepsAwakeLocked())
 }
 
+// awakeNoExecLocked is awakeLocked without the lock-free ownsLiveExec check,
+// mirrored into awakeMirror under mu by syncStateLocked.
+func (c *conv) awakeNoExecLocked() bool {
+	return !c.closed && !c.parkedOut && (c.proc != nil || c.turn || c.bgTasks != 0 || c.holding || c.spawnPending ||
+		(!c.wakeRefused && (c.sends > max(c.settled.mark, c.voided) || len(c.rec.Mail) > 0)))
+}
+
+// syncStateLocked mirrors lock-guarded lifecycle and awake flags into atomic
+// fields so lock-free readers (OwnsLive, awakeChildrenLocked) never take c.mu.
+// Caller holds c.mu (or owns c before publication).
+func (c *conv) syncStateLocked() {
+	c.closedOrParked.Store(c.closed || c.parkedOut)
+	c.awakeMirror.Store(c.awakeNoExecLocked())
+}
+
+// isAwake reports awakeLocked without acquiring c.mu.
+func (c *conv) isAwake() bool {
+	return !c.closedOrParked.Load() && (c.awakeMirror.Load() || c.ownsLiveExec())
+}
+
 // keepsAwakeLocked is the one sleep predicate, which a parent's idle gate
 // (idleNow) reads for each child: work of its own (workingLocked), an
 // initial spawn before its first Send, or input or claimed mail it has not
@@ -185,15 +205,13 @@ func (r *Runner) awakeChildren(parent ParentRef) int {
 }
 
 // awakeChildrenLocked counts parent's awake direct children plus in-flight
-// width-checked spawns. Caller holds r.mu.
+// width-checked spawns. Caller holds r.mu. Never acquires c.mu.
 func (r *Runner) awakeChildrenLocked(parent ParentRef) int {
 	n := r.pendingSpawns[parent]
-	for _, c := range r.convs {
-		c.mu.Lock()
-		if c.rec.Parent != nil && *c.rec.Parent == parent && c.awakeLocked() {
+	for id := range r.childrenIndex[parent] {
+		if c := r.convs[id]; c != nil && c.isAwake() {
 			n++
 		}
-		c.mu.Unlock()
 	}
 	return n
 }
@@ -209,19 +227,52 @@ func (r *Runner) releasePendingSpawnLocked(parent ParentRef) {
 }
 
 // reserveSpawnWidth checks parent's awake direct children under r.mu and
-// reserves a slot for an in-flight agent.spawn. claimLocked transfers the
-// slot when the conversation is registered in r.convs under r.mu; release
-// drops an unclaimed slot on error.
+// reserves a slot for an in-flight agent.spawn. It waits out any expiry
+// cascade already closing parent so a concurrent spawn never publishes a live
+// child under an expiring parent. claimLocked transfers the slot when the
+// conversation is registered in r.convs under r.mu; release drops an unclaimed
+// slot on error.
 func (r *Runner) reserveSpawnWidth(parent ParentRef) (claimLocked func(), release func(), err error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if n := r.awakeChildrenLocked(parent); n >= MaxSpawnWidth {
-		return nil, nil, &requestError{status: http.StatusForbidden, msg: fmt.Sprintf("agent.spawn: the spawn width cap is %d awake direct children, and this agent has %d; wait for one to finish (a sleeping child does not count)", MaxSpawnWidth, n)}
+	return r.reserveParentSlot(parent, true)
+}
+
+// reserveParentSpawn reserves an in-flight spawn slot for direct Runner.Spawn
+// calls with a parent, fencing them against in-progress expiry cascades without
+// enforcing the agent.spawn width cap.
+func (r *Runner) reserveParentSpawn(parent ParentRef) (claimLocked func(), release func(), err error) {
+	return r.reserveParentSlot(parent, false)
+}
+
+func (r *Runner) reserveParentSlot(parent ParentRef, checkWidth bool) (claimLocked func(), release func(), err error) {
+	waited := false
+	for {
+		r.mu.Lock()
+		if ch := r.expiring[parent.ReplyID]; ch != nil {
+			r.mu.Unlock()
+			<-ch
+			waited = true
+			continue
+		}
+		if parent.Kind == ParentConversation && r.convs[parent.ReplyID] == nil && !r.parked[parent.ReplyID] {
+			_, closed := r.closed[parent.ReplyID]
+			if waited || closed {
+				r.mu.Unlock()
+				return nil, nil, errClosed
+			}
+		}
+		if checkWidth {
+			if n := r.awakeChildrenLocked(parent); n >= MaxSpawnWidth {
+				r.mu.Unlock()
+				return nil, nil, &requestError{status: http.StatusForbidden, msg: fmt.Sprintf("agent.spawn: the spawn width cap is %d awake direct children, and this agent has %d; wait for one to finish (a sleeping child does not count)", MaxSpawnWidth, n)}
+			}
+		}
+		if r.pendingSpawns == nil {
+			r.pendingSpawns = map[ParentRef]int{}
+		}
+		r.pendingSpawns[parent]++
+		r.mu.Unlock()
+		break
 	}
-	if r.pendingSpawns == nil {
-		r.pendingSpawns = map[ParentRef]int{}
-	}
-	r.pendingSpawns[parent]++
 	done := false
 	claimLocked = func() {
 		if done {

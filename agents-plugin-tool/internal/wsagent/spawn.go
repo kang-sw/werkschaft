@@ -220,6 +220,7 @@ func (r *Runner) spawned(c *conv, prompt string) (State, error) {
 	st, err := r.send(c.rec.ReplyID, prompt, false)
 	c.mu.Lock()
 	c.spawnPending = false
+	c.syncStateLocked()
 	c.mu.Unlock()
 	if err != nil {
 		_, _ = r.CloseConversation(c.rec.ReplyID)
@@ -301,6 +302,7 @@ func (c *conv) hold(res *TurnResult) {
 	}
 	c.mu.Lock()
 	c.holding = res != nil
+	c.syncStateLocked()
 	c.mu.Unlock()
 }
 
@@ -335,6 +337,7 @@ func (c *conv) publishWith(res TurnResult, keepOpen bool, also func(rec *Record)
 	} else if parent == nil && !c.rec.TurnOpen && also == nil {
 		c.mu.Lock()
 		settle()
+		c.syncStateLocked()
 		c.mu.Unlock()
 	} else {
 		c.update(func(rec *Record) {

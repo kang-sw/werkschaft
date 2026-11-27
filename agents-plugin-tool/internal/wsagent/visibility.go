@@ -58,54 +58,87 @@ func (c *conv) setHidden(hidden bool) error {
 }
 
 // PageInput admits a composer write without waiting for the conversation
-// loop. As with Send, mu serializes admission and the write against close.
-// A committed own-page message restores a hidden session asynchronously;
-// generic InboxChanged signals and Runner.Send remain passive.
+// loop. As with Send, wmu serializes admission and the write against close,
+// parking, and quota-continuation firing, while c.mu is released before
+// invoking write so external callbacks (which may acquire dashboard locks and
+// call OwnsLive) can never self-deadlock on c.mu. A committed own-page
+// message restores a hidden session asynchronously; generic InboxChanged
+// signals and Runner.Send remain passive.
 func (r *Runner) PageInput(id string, write func() bool) error {
-	c := r.conv(id)
-	if c == nil {
-		return errUnknown
-	}
-	c.mu.Lock()
-	if c.closed {
-		err := endedError(c.rec)
-		c.mu.Unlock()
-		return err
-	}
-	select {
-	case <-c.done:
-		c.mu.Unlock()
-		return errClosed
-	default:
-	}
-	committed := write()
-	if committed {
-		c.cancelQuotaContinuationForInput()
-		if c.rec.Lead {
-			// Update in memory only; rides the next agent.json write (0 extra I/O).
-			c.rec.LastActiveAt = r.opts.Now().UTC().Format(time.RFC3339)
+	for {
+		c := r.conv(id)
+		if c == nil {
+			return errUnknown
 		}
-	}
-	hidden := c.hidden
-	c.mu.Unlock()
-	if committed && !hidden {
-		c.signalInbox()
-	}
-	if committed && hidden {
-		go c.do(func() {
-			if c.closed {
-				return
+		if r.opts.pageInputAdmitting != nil {
+			r.opts.pageInputAdmitting(id)
+		}
+		committed, hidden, parked, err := func() (bool, bool, bool, error) {
+			c.wmu.Lock()
+			defer c.wmu.Unlock()
+			c.mu.Lock()
+			if c.parkedOut {
+				c.mu.Unlock()
+				return false, false, true, nil
 			}
-			if c.hidden {
-				if err := c.setHidden(false); err != nil {
-					c.setStatus(func() { c.lastErr = "restore session for page input: " + err.Error() })
-					c.r.notify(c.rec.ReplyID, c.rec.Root)
-					return
+			if c.closed {
+				err := endedError(c.rec)
+				c.mu.Unlock()
+				return false, false, false, err
+			}
+			select {
+			case <-c.done:
+				c.mu.Unlock()
+				return false, false, false, errClosed
+			default:
+			}
+			c.mu.Unlock()
+
+			committed := write()
+
+			c.mu.Lock()
+			if committed && !c.closed {
+				c.pageInputs++
+				c.cancelModelWaitBackoffForInput()
+				c.cancelQuotaContinuationForInput()
+				if c.rec.Parent != nil || c.rec.Lead {
+					// Update in memory only; rides the next agent.json write (0 extra I/O).
+					c.rec.LastActiveAt = r.opts.Now().UTC().Format(time.RFC3339)
+					c.recordDirty = true
+				}
+				c.syncStateLocked()
+				if !c.hidden {
+					// Signal before releasing wmu so a racing expiry or park
+					// sees both the activity bump and pending inboxC token.
+					c.signalInbox()
 				}
 			}
-			// The immediate post-write wake may have run while still hidden.
-			c.inboxChanged()
-		})
+			hidden := c.hidden
+			c.mu.Unlock()
+			return committed, hidden, false, nil
+		}()
+		if parked {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if committed && hidden {
+			go c.do(func() {
+				if c.closed {
+					return
+				}
+				if c.hidden {
+					if err := c.setHidden(false); err != nil {
+						c.setStatus(func() { c.lastErr = "restore session for page input: " + err.Error() })
+						c.r.notify(c.rec.ReplyID, c.rec.Root)
+						return
+					}
+				}
+				// The immediate post-write wake may have run while still hidden.
+				c.inboxChanged()
+			})
+		}
+		return nil
 	}
-	return nil
 }

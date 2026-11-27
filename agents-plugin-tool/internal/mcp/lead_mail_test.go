@@ -344,3 +344,65 @@ func TestMailRelationTagRoundTrips(t *testing.T) {
 		t.Fatalf("the tagged text parses to %+v, want %+v", got, want)
 	}
 }
+
+func TestWatchParkedExitsLoopWhenEmptyOnStopAndAfterFire(t *testing.T) {
+	setupMailboxTestEnv(t)
+	stateDir, err := wsdashboard.Dir("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	initGit(t, root)
+	key, err := NewAgentKeyStore().MintLead(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mail := NewLeadMailbox(stateDir)
+	defer mail.server.Close()
+	mail.wake = &wswake.Hub{}
+
+	waitStopped := func(label string) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			mail.pmu.Lock()
+			running := mail.pRunning
+			n := len(mail.parkedW)
+			mail.pmu.Unlock()
+			if !running && n == 0 {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: parkedLoop still running (pRunning=%v watches=%d)", label, running, n)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	// 1. Removing the last watch via stop() must wake and exit parkedLoop promptly.
+	stop := mail.WatchParked(root, key, func() {})
+	stop()
+	waitStopped("after stop()")
+
+	// 2. One-shot fire removing the last watch must exit parkedLoop promptly even
+	// without calling stop().
+	if err := mail.server.mailboxPaths().Store().WithReplyLock(func(store *wsmailbox.ReplyStore) error {
+		store.Queues = wsmailbox.AppendQueue(store.Queues, wsmailbox.ReplyID(key), wsmailbox.Envelope{Content: "wake parked"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fired := make(chan struct{}, 1)
+	_ = mail.WatchParked(root, key, func() {
+		select {
+		case fired <- struct{}{}:
+		default:
+		}
+	})
+	select {
+	case <-fired:
+	case <-time.After(3 * time.Second):
+		t.Fatal("WatchParked did not fire for queued mail")
+	}
+	waitStopped("after one-shot fire without stop()")
+}

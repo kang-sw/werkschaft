@@ -121,6 +121,23 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 	if info, err := wsstate.Stat(root); err != nil || !info.IsDir() {
 		return State{}, badRequest("root %s is not a directory", root)
 	}
+	// For direct Runner.Spawn with a parent (not already width-reserved by
+	// AgentSpawn), reserve the parent's in-flight spawn slot before taking
+	// worktree reservations or holdParentAdmission (selection.admission.RLock):
+	// waiting on <-r.expiring[parent] while holding selection.admission.RLock
+	// would deadlock against a concurrent SetPermissionLevel on the expiring
+	// parent's loop.
+	var releaseDirectParent func()
+	var claimParent func()
+	if spawn != nil && spawn.Parent != nil && spawn.claimWidth == nil {
+		claim, release, err := r.reserveParentSpawn(*spawn.Parent)
+		if err != nil {
+			return State{}, err
+		}
+		claimParent = claim
+		releaseDirectParent = release
+		defer releaseDirectParent()
+	}
 	// Every path that opens a conversation (agent.spawn, pi.spawn, a lead)
 	// holds the worktree's shared release reservation until the conversation
 	// is registered, so worktree.release cannot check for bound children in
@@ -333,10 +350,15 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		seed = r.withPlaybookCommands(rec, r.lastCommands(rec))
 	}
 	var claimWidth func()
+	spawnPending := false
 	if spawn != nil {
 		claimWidth = spawn.claimWidth
+		spawnPending = claimWidth != nil
 	}
-	c := r.startConvWith(rec, seed, claimWidth != nil, claimWidth, nil)
+	if claimWidth == nil {
+		claimWidth = claimParent
+	}
+	c := r.startConvWith(rec, seed, spawnPending, claimWidth, nil)
 	releaseDurableCreation()
 	unlockBound()
 	if spawn != nil {

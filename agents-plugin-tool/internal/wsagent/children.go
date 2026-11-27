@@ -430,7 +430,13 @@ func newReportID() string {
 // the caller's goroutine: the handover runs in the parent's loop, and no
 // loop waits on another's.
 func (r *Runner) deliverLater(id string) {
+	r.mu.Lock()
+	if r.closing {
+		r.mu.Unlock()
+		return
+	}
 	r.wg.Add(1)
+	r.mu.Unlock()
 	go func() {
 		defer r.wg.Done()
 		r.deliver(id)
@@ -496,17 +502,25 @@ func (r *Runner) deliver(id string) {
 // parent: after a daemon start loaded them all, since a child loaded
 // before its parent found none to hand them to.
 func (r *Runner) deliverPending() {
+	type entry struct {
+		id string
+		c  *conv
+	}
 	r.mu.Lock()
-	var ids []string
+	snap := make([]entry, 0, len(r.convs))
 	for id, c := range r.convs {
-		c.mu.Lock()
-		pending := len(c.rec.PendingReports) > 0
-		c.mu.Unlock()
-		if pending {
-			ids = append(ids, id)
-		}
+		snap = append(snap, entry{id: id, c: c})
 	}
 	r.mu.Unlock()
+	var ids []string
+	for _, e := range snap {
+		e.c.mu.Lock()
+		pending := len(e.c.rec.PendingReports) > 0
+		e.c.mu.Unlock()
+		if pending {
+			ids = append(ids, e.id)
+		}
+	}
 	for _, id := range ids {
 		r.deliverLater(id)
 	}
@@ -837,7 +851,13 @@ func (c *conv) releaseHeld() {
 // children (releaseHeld) off the caller's goroutine, which may be another
 // conversation's loop: no loop waits on another's.
 func (r *Runner) releaseLater(id string) {
+	r.mu.Lock()
+	if r.closing {
+		r.mu.Unlock()
+		return
+	}
 	r.wg.Add(1)
+	r.mu.Unlock()
 	go func() {
 		defer r.wg.Done()
 		if c := r.resident(id); c != nil {
@@ -858,16 +878,16 @@ func descendsFrom(p *ParentRef, backend, profile string) bool {
 // conversation id) for the Pi children it spawned, deepest first.
 // Retained name check: legacy Pi history and wire tool names (TestRetiredPiListUsesCallerOwnership).
 func (r *Runner) descendants(id string) []string {
-	r.mu.Lock()
-	byParent := map[string][]string{}
-	for cid, c := range r.convs {
-		c.mu.Lock()
-		p, backend, profile := c.rec.Parent, c.rec.Backend, c.rec.Profile
-		c.mu.Unlock()
-		if descendsFrom(p, backend, profile) {
-			byParent[p.ReplyID] = append(byParent[p.ReplyID], cid)
-		}
+	type liveEntry struct {
+		id string
+		c  *conv
 	}
+	r.mu.Lock()
+	live := make([]liveEntry, 0, len(r.convs))
+	for cid, c := range r.convs {
+		live = append(live, liveEntry{id: cid, c: c})
+	}
+	byParent := map[string][]string{}
 	for cid := range r.parked {
 		rec := r.closed[cid]
 		if descendsFrom(rec.Parent, rec.Backend, rec.Profile) {
@@ -875,6 +895,14 @@ func (r *Runner) descendants(id string) []string {
 		}
 	}
 	r.mu.Unlock()
+	for _, e := range live {
+		e.c.mu.Lock()
+		p, backend, profile := e.c.rec.Parent, e.c.rec.Backend, e.c.rec.Profile
+		e.c.mu.Unlock()
+		if descendsFrom(p, backend, profile) {
+			byParent[p.ReplyID] = append(byParent[p.ReplyID], e.id)
+		}
+	}
 	var out []string
 	seen := map[string]bool{id: true}
 	var walk func(string)

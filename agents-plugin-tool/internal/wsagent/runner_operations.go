@@ -125,6 +125,7 @@ func (r *Runner) sendFrom(id, text string, operator bool, sender string) (State,
 		}
 		c.held++
 		c.rec.Sends = c.sends
+		c.syncStateLocked()
 		c.cancelModelWaitBackoffForInput()
 		c.cancelQuotaContinuationForInput()
 		if c.rec.Parent != nil || c.rec.Lead {
@@ -519,13 +520,13 @@ func (r *Runner) setPermissionMode(id, mode string, user bool) (State, error) {
 // fails the close (errHolderNotEnded); a descendant that does stops the
 // cascade before its ancestors close, so closing id again retries it.
 func (r *Runner) CloseConversation(id string) (State, error) {
-	st, _, err := r.closeConversation(id, false)
+	st, _, err := r.closeConversation(id)
 	return st, err
 }
 
 // closeConversation returns the deepest-first order on success, or a nil
-// order if the expiry is deferred or the cascade fails.
-func (r *Runner) closeConversation(id string, expiry bool) (State, []string, error) {
+// order if the cascade fails.
+func (r *Runner) closeConversation(id string) (State, []string, error) {
 	// The jobs a predecessor left are known only once bound: a close
 	// before that would close over jobs it cannot stop. The wait holds no
 	// lock.
@@ -537,24 +538,228 @@ func (r *Runner) closeConversation(id string, expiry bool) (State, []string, err
 	if _, err := r.open(id); err != nil {
 		return State{}, nil, err
 	}
-	var descendants []string
-	if expiry {
-		// Close exactly the descendants whose ancestry and quiet state
-		// allowed expiry. A fresh open-only walk could lose a released bridge.
-		var quiet bool
-		descendants, quiet = r.liveExpiryDescendants(safeStopParent(id, false))
-		if !quiet {
-			return State{}, nil, nil
-		}
-	} else {
-		descendants = r.descendants(id)
-	}
+	descendants := r.descendants(id)
 	order := append(descendants, id)
 	st, err := r.closeCascade(id, order)
 	if err != nil {
 		return st, nil, err
 	}
 	return st, order, nil
+}
+
+func (r *Runner) closeConversationExpiry(id string, checkAge bool) (State, []string, error) {
+	if err := r.awaitExecBound(); err != nil {
+		return State{}, nil, fmt.Errorf("close %s: %w", id, err)
+	}
+	r.resumeMu.Lock()
+	defer r.resumeMu.Unlock()
+	if _, err := r.open(id); err != nil {
+		return State{}, nil, err
+	}
+	return r.closeConversationExpiryLocked(id, checkAge)
+}
+
+func (r *Runner) closeConversationExpiryLocked(id string, checkAge bool) (State, []string, error) {
+	// Close exactly the descendants whose ancestry, incarnation, and quiet
+	// state allowed expiry, revalidated under an admission fence before
+	// closing any node.
+	plan, quiet := r.planExpiry(id, checkAge)
+	if !quiet {
+		return State{}, nil, nil
+	}
+	st, err := r.closeExpiryCascade(id, plan)
+	if err != nil {
+		if errors.Is(err, errExpiryAborted) {
+			return State{}, nil, nil
+		}
+		return st, nil, err
+	}
+	return st, plan.order, nil
+}
+
+func (r *Runner) closeExpiryCascade(id string, plan expiryPlan) (State, error) {
+	if r.opts.beforeExpiryCascade != nil {
+		r.opts.beforeExpiryCascade(id)
+	}
+	r.fenceExec(plan.order)
+	var markedExpiring []*conv
+	clearExpiring := func() {
+		for _, c := range markedExpiring {
+			c.mu.Lock()
+			c.expiring = false
+			c.mu.Unlock()
+		}
+	}
+	abortErr := func(from int, err error) (State, error) {
+		for _, rest := range plan.order[from:] {
+			r.unfenceExec(rest)
+		}
+		clearExpiring()
+		return State{}, err
+	}
+	abort := func(from int) (State, error) {
+		return abortErr(from, errExpiryAborted)
+	}
+	// Rehydrate parked descendants before closing any node so unread mailbox
+	// or inbox entries are claimed and validated together under the admission
+	// fence. Any descendant woken since snapshot fails the generation check.
+	for _, d := range plan.order {
+		snap := plan.incarnations[d]
+		if !snap.parked {
+			continue
+		}
+		r.mu.Lock()
+		stillParked := r.parked[d] && r.convs[d] == nil && r.unparking[d] == nil && r.convGen[d] == snap.gen
+		r.mu.Unlock()
+		if !stillParked {
+			return abort(0)
+		}
+		c := r.unpark(d)
+		if c == nil {
+			return abort(0)
+		}
+		r.mu.Lock()
+		same := r.convs[d] == c && r.convGen[d] == snap.gen+1
+		newGen := r.convGen[d]
+		r.mu.Unlock()
+		if !same {
+			return abort(0)
+		}
+		c.mu.Lock()
+		if !c.expiring {
+			c.expiring = true
+			markedExpiring = append(markedExpiring, c)
+		}
+		c.mu.Unlock()
+		plan.incarnations[d] = expiryIncarnation{conv: c, parked: false, gen: newGen, sends: snap.sends, lastTurnID: snap.lastTurnID}
+		if !c.do(func() {
+			// Consume startConvWith's initial mail signal before running
+			// mailChanged so a resident mailC token does not trip admitsExpiryTree
+			// when the mailbox is actually empty.
+			select {
+			case <-c.mailC:
+			default:
+			}
+			c.refreshHeld()
+			if c.hasHeldInbox() {
+				c.inboxChanged()
+			}
+			c.mailChanged()
+		}) {
+			return abort(0)
+		}
+	}
+	expiringDone, newlyMarked, ok, missingRoot := r.admitsAndFenceExpiryTree(plan)
+	markedExpiring = append(markedExpiring, newlyMarked...)
+	if !ok {
+		if missingRoot {
+			return abortErr(0, errUnknown)
+		}
+		return abort(0)
+	}
+	defer func() {
+		r.mu.Lock()
+		for nid := range plan.treeNodes {
+			if r.expiring[nid] == expiringDone {
+				delete(r.expiring, nid)
+			}
+		}
+		r.mu.Unlock()
+		close(expiringDone)
+	}()
+	for i, d := range plan.order {
+		if ok, missingRoot := r.admitsExpiryTree(plan, plan.order[i:]); !ok {
+			if missingRoot {
+				return abortErr(i, errUnknown)
+			}
+			return abort(i)
+		}
+		if err := r.stopExec(d); err != nil {
+			for _, rest := range plan.order[i:] {
+				r.unfenceExec(rest)
+			}
+			clearExpiring()
+			return State{}, fmt.Errorf("close %s: an exec job did not stop, so it and the sessions above it stay open: %w", d, err)
+		}
+		if d == id {
+			break
+		}
+		if r.opts.beforeExpiryNodeClose != nil {
+			r.opts.beforeExpiryNodeClose(d)
+		}
+		if _, err := r.closeOneExpiry(d, false, plan.incarnations[d], false, time.Time{}); err != nil {
+			if errors.Is(err, errExpiryAborted) {
+				return abort(i)
+			}
+			if errors.Is(err, errHolderNotEnded) || errors.Is(err, errDurableClose) {
+				for _, rest := range plan.order[i:] {
+					r.unfenceExec(rest)
+				}
+				clearExpiring()
+				return State{}, err
+			}
+			r.unfenceExec(d)
+		}
+	}
+	if r.opts.beforeExpiryNodeClose != nil {
+		r.opts.beforeExpiryNodeClose(id)
+	}
+	st, err := r.closeOneExpiry(id, true, plan.incarnations[id], plan.checkAge, plan.rootLastActive)
+	if err != nil {
+		r.unfenceExec(id)
+		clearExpiring()
+		return st, err
+	}
+	r.releaseParent(id)
+	return st, nil
+}
+
+// closeOneExpiry closes the exact snapshotted incarnation snap only if its
+// quiet/expiry predicate still holds atomically under wmu+mu.
+func (r *Runner) closeOneExpiry(id string, isRoot bool, snap expiryIncarnation, checkAge bool, rootLastActive time.Time) (State, error) {
+	expected := snap.conv
+	if expected == nil {
+		return State{}, errExpiryAborted
+	}
+	var closedRec Record
+	var closeErr error
+	ok := expected.do(func() {
+		if expected.closed || expected.parkedOut {
+			closeErr = errExpiryAborted
+			return
+		}
+		closed, err := expected.closeIfPermitted(func() bool {
+			return expected.expiryPermittedLocked(isRoot, snap, checkAge, rootLastActive)
+		})
+		if err != nil {
+			closeErr = err
+			return
+		}
+		if !closed {
+			closeErr = errExpiryAborted
+			return
+		}
+		closedRec = expected.record()
+	})
+	if !ok {
+		return State{}, errExpiryAborted
+	}
+	if closeErr != nil {
+		return State{}, closeErr
+	}
+	st := expected.state()
+	r.mu.Lock()
+	if r.convs[id] == expected {
+		delete(r.convs, id)
+		r.liveOwners.CompareAndDelete(id, expected)
+		r.closed[id] = closedRec
+		if r.closedRows == nil {
+			r.closedRows = map[string]State{}
+		}
+		r.closedRows[id] = st
+	}
+	r.mu.Unlock()
+	return st, nil
 }
 
 func (r *Runner) closeCascade(id string, order []string) (State, error) {
@@ -608,8 +813,13 @@ func (r *Runner) releaseParent(id string) {
 
 // closeOne closes conversation id alone.
 func (r *Runner) closeOne(id string) (State, error) {
+	var closedRec Record
 	st, err := r.act(id, func(c *conv) error {
-		return c.close()
+		if err := c.close(); err != nil {
+			return err
+		}
+		closedRec = c.record()
+		return nil
 	})
 	if err != nil {
 		return st, err
@@ -617,7 +827,8 @@ func (r *Runner) closeOne(id string) (State, error) {
 	r.mu.Lock()
 	if c, ok := r.convs[id]; ok {
 		delete(r.convs, id)
-		r.closed[id] = c.record()
+		r.liveOwners.CompareAndDelete(id, c)
+		r.closed[id] = closedRec
 		if r.closedRows == nil {
 			r.closedRows = map[string]State{}
 		}

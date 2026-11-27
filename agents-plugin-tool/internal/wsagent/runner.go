@@ -257,6 +257,14 @@ type Options struct {
 	heartbeat time.Duration
 	// beforeExpiryClose pauses heartbeat expiry before starting its close (tests).
 	beforeExpiryClose func()
+	// beforeExpiryCascade pauses expiry between snapshot and fenced close (tests).
+	beforeExpiryCascade func(id string)
+	// beforeExpiryNodeClose pauses expiry right before closing node id (tests).
+	beforeExpiryNodeClose func(id string)
+	// admitCompletionAdmitting pauses AdmitCompletion between open and wmu (tests).
+	admitCompletionAdmitting func(id string)
+	// pageInputAdmitting pauses PageInput between conv lookup and wmu (tests).
+	pageInputAdmitting func(id string)
 	// WakeRefused, when not nil, tells the sender of a message Deliver
 	// queued for a sleeping conversation whose start admission refused
 	// now (from: the sender's reply-id, id: the conversation, reason).
@@ -337,6 +345,9 @@ type Runner struct {
 	closed        map[string]Record
 	childrenIndex map[ParentRef]map[string]bool // mu; parent identity is immutable
 	pendingSpawns map[ParentRef]int             // mu; in-flight width-checked spawns until registered
+	// liveOwners mirrors resident *conv entries and parked records
+	// (parkedOwnerSentinel) for lock-free OwnsLive lookups without r.mu or c.mu.
+	liveOwners sync.Map
 	// releases is each checkout's latest completed release this daemon
 	// knows of, keyed by releaseKey: fed by worktree.release's notice and by
 	// every marker a cold check reads. It holds only releases found, never
@@ -373,10 +384,20 @@ type Runner struct {
 	// children with no loop (runner_park.go): their record stays in closed
 	// so every read of a record sees them, and a wake path rehydrates the
 	// conversation (unpark). parkStop holds each one's mail watch stop and
-	// unparking the rehydrations under way. All under mu.
+	// unparking the rehydrations under way. expiring holds a close-barrier
+	// channel per node while an expiry cascade is closing its tree, fencing
+	// concurrent spawns against publishing live children under an expiring
+	// ancestor. All under mu.
 	parked    map[string]bool
 	parkStop  map[string]func()
 	unparking map[string]chan struct{}
+	expiring  map[string]chan struct{}
+	// convGen counts resident/parked incarnation transitions per reply-id under
+	// mu so expiry fences detect any unpark, re-park, or reopen since snapshot.
+	convGen map[string]uint64
+	// closing is set under mu by Close before closing quit and calling wg.Wait,
+	// fencing late park-wake and expiry callbacks from calling wg.Add.
+	closing bool
 	// Retired Pi process bindings are independent of the ended history rows.
 	// The holder manager supplies their liveness. Guarded by mu.
 	retiredPiBindings map[string]retiredPiBinding

@@ -608,23 +608,27 @@ func (x *Index) readLane(replyID string, l *lane, full bool, stores LiveStores) 
 }
 
 func (x *Index) readLaneLocked(replyID string, full bool, stores LiveStores) {
+	changed := x.readAndApplyLaneLocked(replyID, full, stores)
+	if changed && x.opts.OnChange != nil {
+		x.opts.OnChange(replyID)
+	}
+}
+
+func (x *Index) readAndApplyLaneLocked(replyID string, full bool, stores LiveStores) bool {
 	if x.readSem != nil {
 		x.readSem <- struct{}{}
 		defer func() { <-x.readSem }()
 	}
 	reg, err := ReadRegistration(x.opts.Dir, replyID)
-	var changed bool
 	switch {
 	case err == nil:
-		changed = x.applyRead(replyID, &reg, full, stores)
+		return x.applyRead(replyID, &reg, full, stores)
 	case errors.Is(err, os.ErrNotExist) || errors.Is(err, errRegistrationMismatch):
-		changed = x.apply(replyID, nil)
+		return x.apply(replyID, nil)
 	default:
 		x.retry(replyID)
 		fmt.Fprintf(x.opts.Log, "dashboard: read registration %s: %v\n", replyID, err)
-	}
-	if changed && x.opts.OnChange != nil {
-		x.opts.OnChange(replyID)
+		return false
 	}
 }
 

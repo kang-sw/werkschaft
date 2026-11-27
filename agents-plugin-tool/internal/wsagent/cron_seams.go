@@ -108,6 +108,7 @@ func (r *Runner) DeliverCron(id string, mark wsinbox.Cron, prompt string) (accep
 	c.sends++
 	c.held++
 	c.rec.Sends = c.sends
+	c.syncStateLocked()
 	c.cancelModelWaitBackoffForInput()
 	c.mu.Unlock()
 	c.inboxMutated(1)

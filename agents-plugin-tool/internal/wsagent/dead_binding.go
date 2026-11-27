@@ -113,6 +113,7 @@ func (c *conv) closeDeadBinding(refusal *admissionRefusal) error {
 	proc, events, turn := c.proc, c.events, c.turn
 	c.rec, c.closed, c.lastErr = rec, true, refusal.Error()
 	c.proc, c.events, c.turn = nil, nil, false
+	c.syncStateLocked()
 	senders := c.deliverySenders
 	c.deliverySenders = nil
 	c.mu.Unlock()
@@ -166,6 +167,7 @@ func (c *conv) closeDeadBinding(refusal *admissionRefusal) error {
 	st := c.memoryState()
 	c.r.mu.Lock()
 	delete(c.r.convs, rec.ReplyID)
+	c.r.liveOwners.CompareAndDelete(rec.ReplyID, c)
 	c.r.closed[rec.ReplyID] = rec
 	if c.r.closedRows == nil {
 		c.r.closedRows = map[string]State{}

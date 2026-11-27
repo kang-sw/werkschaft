@@ -290,12 +290,27 @@ func (r *Runner) Subtree(rootID string) []SubtreeNode {
 	}
 	r.mu.Lock()
 	if r.childrenIndex == nil {
-		r.childrenIndex = map[ParentRef]map[string]bool{}
+		// Snapshot live conversations and read their records outside r.mu so
+		// lazy index initialization (used by direct-constructed test runners)
+		// never nests c.mu under r.mu.
+		convs := make([]*conv, 0, len(r.convs))
 		for _, c := range r.convs {
-			r.indexChildLocked(c.record())
+			convs = append(convs, c)
 		}
-		for _, rec := range r.closed {
-			r.indexChildLocked(rec)
+		r.mu.Unlock()
+		recs := make([]Record, 0, len(convs))
+		for _, c := range convs {
+			recs = append(recs, c.record())
+		}
+		r.mu.Lock()
+		if r.childrenIndex == nil {
+			r.childrenIndex = map[ParentRef]map[string]bool{}
+			for _, rec := range recs {
+				r.indexChildLocked(rec)
+			}
+			for _, rec := range r.closed {
+				r.indexChildLocked(rec)
+			}
 		}
 	}
 	seen := map[string]bool{rootID: true}
@@ -407,8 +422,18 @@ func (r *Runner) ExecLiveCounts() map[string]int {
 	return map[string]int{}
 }
 
-// ownsLiveExec reports whether c owns a live exec job.
-func (c *conv) ownsLiveExec() bool { return c.r != nil && c.r.execLive(c.rec.ReplyID) > 0 }
+// ownsLiveExec reports whether c owns a live exec job. Safe without c.mu
+// because c.id is immutable after startConvWith.
+func (c *conv) ownsLiveExec() bool {
+	if c.r == nil {
+		return false
+	}
+	id := c.id
+	if id == "" {
+		id = c.rec.ReplyID
+	}
+	return c.r.execLive(id) > 0
+}
 
 // fenceExec refuses c's new exec jobs, ahead of an explicit close.
 func (r *Runner) fenceExec(ids []string) {
