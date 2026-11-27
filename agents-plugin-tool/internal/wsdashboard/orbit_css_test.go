@@ -77,3 +77,23 @@ func TestRailUnreadAttentionCSS(t *testing.T) {
 		}
 	}
 }
+
+// TestRailSelectedNeonOutlineCSS pins the crisp neon primary outline on the
+// currently selected rail session row (.rail .rs.cur), covering both top-level
+// and nested child .rs rows in light and dark themes without shifting layout or
+// colliding with .attn pseudo-element animations.
+func TestRailSelectedNeonOutlineCSS(t *testing.T) {
+	css := mustAsset(t, "dashboard.css")
+	for _, want := range []string{
+		".rail .rs.cur {",
+		"background: color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card));",
+		"inset 0 0 0 1.5px var(--wb-primary),",
+		"inset 0 0 8px light-dark(color-mix(in srgb, var(--wb-primary) 12%, transparent), color-mix(in srgb, var(--wb-primary) 24%, transparent)),",
+		"0 0 6px light-dark(color-mix(in srgb, var(--wb-primary) 26%, transparent), color-mix(in srgb, var(--wb-primary) 52%, transparent)),",
+		"0 0 2px light-dark(transparent, color-mix(in srgb, var(--wb-primary) 80%, transparent));",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("dashboard.css lacks %q", want)
+		}
+	}
+}
