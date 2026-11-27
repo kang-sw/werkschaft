@@ -9,6 +9,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsrsrc"
+	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
 // HostedRender is what a hosted lead's backend registration
@@ -136,7 +137,27 @@ func RenderHostedRestoreBundle(env []string, root string, render HostedRender, k
 			whiteboardOn = on
 		}
 	}
-	return renderHostedRestoreBundle(key, cause, rec, children, whiteboardOn), nil
+	recentRecv, totalRecv := recentRecvMailForRestore(s.getenv(wsstate.EnvCacheHome), key)
+	return renderHostedRestoreBundleWithMail(key, cause, rec, children, whiteboardOn, recentRecv, totalRecv), nil
+}
+
+func recentRecvMailForRestore(cacheHome, key string) ([]mailboxHistoryRecord, int) {
+	records, err := readMailboxHistory(cacheHome, key)
+	if err != nil {
+		return nil, 0
+	}
+	var recent []mailboxHistoryRecord
+	total := 0
+	for _, r := range records {
+		if r.Direction != mailboxHistoryRecv {
+			continue
+		}
+		total++
+		if len(recent) < restoreRecentMailMax {
+			recent = append(recent, r)
+		}
+	}
+	return recent, total
 }
 
 // RenderLeadPlaybook renders playbook name for the hosted lead whose key is

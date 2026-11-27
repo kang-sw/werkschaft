@@ -209,6 +209,9 @@ func (c *conv) replayDone(lost bool) {
 	// and before a worker's lost-turn probe returns early.
 	c.finishAgyNativeReplay(false)
 	c.queryRecoveryUsage()
+	if !c.rec.Lead {
+		c.reconcileWorkerCompactionReplay()
+	}
 	if !c.rec.Lead && c.rec.Parent != nil {
 		if lost && c.rec.TurnOpen {
 			c.wrapHold = true

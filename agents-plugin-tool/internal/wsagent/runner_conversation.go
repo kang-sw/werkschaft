@@ -142,17 +142,19 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 	stalePendingCompaction := false
 	if loaded != nil && rec.PendingCompaction != nil {
 		pc := rec.PendingCompaction
-		if pc.RotatedAfterSends != nil && rec.Sends > *pc.RotatedAfterSends {
+		deadWorkerStage := !rec.Lead && (r.durableProcess(rec.Backend) || (rec.HolderID == "" && (pc.Stage == compactStageQueued || pc.Stage == compactStageRunning || (pc.Stage == compactStageCompleted && rec.SessionID == ""))))
+		if (pc.RotatedAfterSends != nil && rec.Sends > *pc.RotatedAfterSends) || deadWorkerStage {
 			// An older daemon (which preserves unknown Record fields as T0)
 			// ran at least one newer turn after rotation without consuming
-			// PendingCompaction. Drop the stale handoff and fall through to
-			// normal restart restore.
+			// PendingCompaction, or a worker holder exited before completing
+			// compaction. Drop the stale handoff and fall through to normal
+			// restart restore.
 			stalePendingCompaction = true
 			c.rec.PendingCompaction = nil
 		} else {
-			// Restore a rotated lead's carry-forward compaction handoff before
-			// the loop or any inbox/mail signal can kick. canKick's scan/replay
-			// gates order delivery after holder reconciliation.
+			// Restore a carry-forward compaction handoff before the loop or
+			// any inbox/mail signal can kick. canKick's scan/replay gates
+			// order delivery after holder reconciliation.
 			c.restorePendingCompaction(pc)
 		}
 	}

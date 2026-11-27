@@ -22,6 +22,7 @@
     "mailbox.recv": ">=0.53.2-dev <0.54.0",
     "mailbox.lookup_peers": ">=0.53.2-dev <0.54.0",
     "mailbox.history": ">=0.53.2-dev <0.54.0",
+    "mailbox.read": ">=0.53.2-dev <0.54.0",
     "mailbox.recipients": ">=0.53.2-dev <0.54.0",
     "cron": ">=0.53.2-dev <0.54.0",
     "dashboard.intake": ">=0.53.2-dev <0.54.0",

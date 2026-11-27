@@ -51,7 +51,7 @@ func TestChildSafeWSToolsAllowlist(t *testing.T) {
 		"config.resolve_agent", "infra.read", "playbook.read", "note.query", "rationale.query", "git.log", "git.diff",
 		"git.status", "git.merge_base", "api.list", "project_tree", "runtime.read", "compact",
 		"review.marker",
-		"mailbox.send", "mailbox.recv", "mailbox.recipients", "todo.list", "todo.read", "todo.add",
+		"mailbox.send", "mailbox.recv", "mailbox.history", "mailbox.read", "mailbox.recipients", "todo.list", "todo.read", "todo.add",
 		"todo.check", "todo.erase", "todo.clear", "todo.reorder",
 	} {
 		if !seen[want] {

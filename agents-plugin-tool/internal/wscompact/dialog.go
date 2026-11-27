@@ -44,7 +44,7 @@ var (
 	// elements (case-insensitively) so untrusted conversation, summary, or file
 	// payloads cannot terminate an enclosing framing block. Domain tags such as
 	// <wb:*> or <skill> are intentionally excluded.
-	framingCloseTagRE = regexp.MustCompile(`(?i)</\s*(ws-restore|session-state|work-target|direct-children|compaction-checkpoint|session|lead-summary|worker-summary|children|exec-jobs|rereads|file|dialog|message|tool-calls|tool-call|tool-fold|mail|wake|command)\s*>`)
+	framingCloseTagRE = regexp.MustCompile(`(?i)</\s*(ws-restore|session-state|work-target|direct-children|recent-mail|held-mail|compaction-checkpoint|session|lead-summary|worker-summary|children|exec-jobs|rereads|file|dialog|message|tool-calls|tool-call|tool-fold|mail|wake|command)\s*>`)
 )
 
 // EscapeXMLAttr escapes text for safe inclusion inside a double-quoted XML
