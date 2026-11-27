@@ -491,6 +491,9 @@
     "261127-feat-ws-ephemeral-lightweight-harness-pool": {
       "registered_at": "2026-11-27T04:05:01Z"
     },
+    "261127-feat-ws-harness-account-switcher-and-slot-continuity": {
+      "registered_at": "2026-11-27T05:17:22Z"
+    },
     "261127-feat-ws-non-git-directory-workspace-support": {
       "registered_at": "2026-11-27T05:13:44Z"
     },
