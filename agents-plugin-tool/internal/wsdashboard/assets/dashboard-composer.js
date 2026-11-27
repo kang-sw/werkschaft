@@ -77,7 +77,7 @@
     syncingInline = true;
     try {
       (e.detail.removed || []).forEach(function (r) {
-        if (r.kind === "answer") { dropChip(r.key, true); setItem(r.key, null); }
+        if (r.kind === "answer") { var remItem = setItem(r.key, null); dropChip(r.key, true, false, remItem); }
         if (r.kind === "topic-note") clearTopicNote(r.key);
         if (r.kind === "mention" && r.payload && r.payload.selectionKey) {
           var at = bselections.findIndex(function (s) { return s.key === r.payload.selectionKey; });
@@ -85,7 +85,15 @@
         }
       });
       (e.detail.added || []).forEach(function (r) {
-        if (r.kind === "answer" && r.payload && r.payload.answer) { putChip(r.payload.answer); setItem(r.key, r.payload.answer); }
+        if (r.kind === "answer" && r.payload && r.payload.answer) {
+          putChip(r.payload.answer);
+          var addItem = setItem(r.key, r.payload.answer);
+          if (typeof syncWbUpdateItems === "function") {
+            var addHints = Object.create(null);
+            addHints[r.key] = { openEl: addItem, staged: r.payload.answer, skipVirtual: true };
+            syncWbUpdateItems([r.key], addHints);
+          }
+        }
         if (r.kind === "topic-note" && r.payload && r.payload.note) {
           var note = topicNote(r.key);
           if (note) { note.value = r.payload.note; note.dispatchEvent(new Event("input", { bubbles: true })); }
@@ -101,15 +109,20 @@
   function putChip(c) {
     if (!chips[c.id]) chipOrder.push(c.id);
     chips[c.id] = c;
-    var edit = inlineEditor(); if (edit && !restoringInlineBack) { var was = syncingInline; syncingInline = true; try {
+    var edit = inlineEditor(); if (edit && !restoringInlineBack && !syncingInline) { var was = syncingInline; syncingInline = true; try {
       if (inlineRows("answer").some(function (r) { return r.key === c.id; })) edit.upsert("answer", c.id, answerCapsule(c));
       else edit.insertCapsule("answer", answerCapsule(c), { key: c.id, preserveCaret: true });
     } finally { syncingInline = was; } }
   }
-  function dropChip(id, fromEditor) {
+  function dropChip(id, fromEditor, skipWbSync, itemEl) {
+    var had = Object.prototype.hasOwnProperty.call(chips, id);
     delete chips[id]; chipOrder = chipOrder.filter(function (x) { return x !== id; });
-    var edit = inlineEditor(); if (edit && !fromEditor) { var was = syncingInline; syncingInline = true; try { edit.remove("answer", id); } finally { syncingInline = was; } }
-    if (typeof syncWbUpdateItems === "function") syncWbUpdateItems([id]);
+    var edit = inlineEditor(); if (edit && !fromEditor && !syncingInline) { var was = syncingInline; syncingInline = true; try { edit.remove("answer", id); } finally { syncingInline = was; } }
+    if (!skipWbSync && had && typeof syncWbUpdateItems === "function") {
+      var hints = Object.create(null);
+      hints[id] = { openEl: itemEl || null, staged: null, skipVirtual: true };
+      syncWbUpdateItems([id], hints);
+    }
   }
   function boardItem(id) {
     return boardQ('.card[data-id="' + id + '"], .arow[data-id="' + id + '"], .ckrow[data-id="' + id + '"], .srow[data-id="' + id + '"]')[0] || null;
@@ -128,7 +141,7 @@
   // board's form script rebuild its reply line.
   function setItem(id, c) {
     var item = boardItem(id);
-    if (!item) return;
+    if (!item) return null;
     q(".opt[data-opt], .btn[data-v]", item).forEach(function (b) {
       var v = b.getAttribute("data-opt") || b.getAttribute("data-v");
       b.setAttribute("aria-pressed", String(!!c && v === c.answer));
@@ -142,17 +155,37 @@
     }
     var fire = note || box;
     if (fire) fire.dispatchEvent(new Event("change", { bubbles: true }));
+    return item;
   }
   // syncChips takes the answers of the items on the board into the chips.
-  function syncChips() {
+  function syncChips(target) {
     if (!region("board") || !cchips) return;
-    boardQ(".card[data-id], .arow[data-id], .ckrow[data-id], .srow[data-id]").forEach(function (item) {
-      var c = readItem(item), id = item.getAttribute("data-id");
-      if (c) putChip(c); else if (chips[id]) dropChip(id);
+    var items;
+    if (target && typeof target.closest === "function") {
+      var one = target.closest(".card[data-id], .arow[data-id], .ckrow[data-id], .srow[data-id]");
+      if (one) items = [one];
+      else if (target.id === "ack-all") items = boardQ(".arow[data-id]");
+      else if (target.closest("[data-bulk]")) {
+        var bulkTopic = target.closest(".topic");
+        items = bulkTopic ? q(".card[data-id], .arow[data-id], .ckrow[data-id], .srow[data-id]", bulkTopic) : [];
+      } else if (target.classList && target.classList.contains("tnote")) items = [];
+      else items = boardQ(".card[data-id], .arow[data-id], .ckrow[data-id], .srow[data-id]");
+    } else {
+      items = boardQ(".card[data-id], .arow[data-id], .ckrow[data-id], .srow[data-id]");
+    }
+    var changedIds = [], hints = Object.create(null);
+    items.forEach(function (item) {
+      var c = readItem(item), id = item.getAttribute("data-id"), prev = chips[id];
+      var changed = (!!c !== !!prev) || (c && prev && (c.answer !== prev.answer || c.note !== prev.note));
+      if (c) putChip(c); else if (prev) dropChip(id, false, true, item);
+      if (changed && id) {
+        changedIds.push(id);
+        hints[id] = { openEl: item, staged: c || null, skipVirtual: true };
+      }
     });
     if (inlineEditor()) syncInlineTopics();
     if (!updateNoteChips()) renderChips();
-    if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
+    if (changedIds.length && typeof syncWbUpdateItems === "function") syncWbUpdateItems(changedIds, hints);
   }
   // Typing changes note text, not the chip set. Keep the existing strip (and
   // focused controls) intact; replacing its children also dirties :has() ancestors.

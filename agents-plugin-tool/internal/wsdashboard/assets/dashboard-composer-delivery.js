@@ -101,8 +101,14 @@
     if (typeof textRefs !== "undefined") textRefs = [];
     ctext.value = ""; grow(); clearMentions();
     if (typeof resetAutoMultiline === "function") resetAutoMultiline();
-    list.forEach(function (c) { dropChip(c.id); });
-    list.forEach(function (c) { setItem(c.id, null); });
+    var sentIds = [], sentHints = Object.create(null);
+    list.forEach(function (c) {
+      var itemEl = setItem(c.id, null);
+      dropChip(c.id, false, true, itemEl);
+      sentIds.push(c.id);
+      sentHints[c.id] = { openEl: itemEl, staged: null, skipVirtual: true };
+    });
+    if (sentIds.length && typeof syncWbUpdateItems === "function") syncWbUpdateItems(sentIds, sentHints);
     bmentions = []; bselections = []; closeRequests = []; wpicks = []; wconsoles = [];
     notes.forEach(function (n) {
       if (n.el) { n.el.value = ""; n.el.dispatchEvent(new Event("input", { bubbles: true })); }
