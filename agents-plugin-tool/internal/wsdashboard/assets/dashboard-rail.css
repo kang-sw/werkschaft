@@ -325,7 +325,16 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rail .rended:not(.on) { display: none; }
 .rail .rs { position: relative; display: flex; align-items: flex-start; gap: 0; padding-left: 14px; border-radius: 6px; }
 .rail .rs:hover { background: color-mix(in srgb, var(--wb-primary) 6%, var(--wb-card)); }
-.rail .rs.cur { background: color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card)); }
+/* Owner exception: crisp neon primary outline on the selected rail row so it stays
+   unmistakably distinct from resting/hover rows and the amber .attn wash. */
+.rail .rs.cur {
+  background: color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card));
+  box-shadow:
+    inset 0 0 0 1.5px var(--wb-primary),
+    inset 0 0 8px light-dark(color-mix(in srgb, var(--wb-primary) 12%, transparent), color-mix(in srgb, var(--wb-primary) 24%, transparent)),
+    0 0 6px light-dark(color-mix(in srgb, var(--wb-primary) 26%, transparent), color-mix(in srgb, var(--wb-primary) 52%, transparent)),
+    0 0 2px light-dark(transparent, color-mix(in srgb, var(--wb-primary) 80%, transparent));
+}
 .rail .rs.ended { opacity: .75; }
 /* an archived row is ended to the layout (no drag, no parent) but drawn
    asleep (.stopped), at full strength */
