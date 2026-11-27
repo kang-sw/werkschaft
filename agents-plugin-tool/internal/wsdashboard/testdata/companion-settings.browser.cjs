@@ -10,21 +10,13 @@ const persona = { name: 'Fixture Fox', voice: 'Speaks in short, upbeat lines.\nN
 async function shot(page, name) {
   if (!shots) return;
   fs.mkdirSync(shots, { recursive: true });
-  const box = await page.evaluate(() => {
-    const parts = [document.querySelector('.ws-companion-hit'), document.querySelector('.ws-companion-settings[open]'),
-      document.querySelector('.ws-companion-quip:not([hidden])')].filter(Boolean).map(el => el.getBoundingClientRect());
-    const l = Math.min(...parts.map(b => b.left)), t = Math.min(...parts.map(b => b.top));
-    const r = Math.max(...parts.map(b => b.right)), b = Math.max(...parts.map(b => b.bottom));
-    return { x: Math.max(0, l - 40), y: Math.max(0, t - 40), width: Math.min(innerWidth, r + 40) - Math.max(0, l - 40),
-      height: Math.min(innerHeight, b + 40) - Math.max(0, t - 40) };
-  });
-  await page.screenshot({ path: path.join(shots, name + '.png'), clip: box });
+  await page.screenshot({ path: path.join(shots, name + '.png') });
 }
 
 (async () => {
   const browser = await chromium.launch({ headless: true });
   try {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: 'dark' });
+    const context = await browser.newContext({ viewport: { width: 1280, height: 840 }, colorScheme: 'dark' });
     await context.addInitScript(() => {
       if (self !== top) return;
       const workers = navigator.serviceWorker;
@@ -34,12 +26,11 @@ async function shot(page, name) {
     await context.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url());
       if (url.origin !== base) return route.abort();
-      if (url.pathname === '/api/config/set') {
+      if (url.pathname === '/api/config/set' && request.method() === 'POST') {
         writes.push(JSON.parse(request.postData()));
-        return route.fulfill({ json: { ok: true } });
+        return route.continue();
       }
       if (url.pathname === '/api/companion/packs' && request.method() === 'GET') {
-        // The fixture's default pack has no persona; the catalog carries one.
         const response = await route.fetch();
         const catalog = await response.json();
         for (const pack of catalog.packs) if (pack.id === 'default') pack.persona = persona;
@@ -58,7 +49,6 @@ async function shot(page, name) {
 
     // The gear sits directly under the resize grip and appears on hover.
     const gear = page.locator('.ws-companion-gear');
-    // The grip and gear fill the hit box's top-right column; hover its lower left.
     const hoverCharacter = async () => {
       const box = await page.locator('.ws-companion-hit').boundingBox();
       await page.mouse.move(box.x + 4, box.y + box.height - 6);
@@ -68,75 +58,117 @@ async function shot(page, name) {
     await page.waitForTimeout(100);
     const placement = await page.evaluate(() => {
       const grip = document.querySelector('.ws-companion-resize').getBoundingClientRect();
-      const gear = document.querySelector('.ws-companion-gear').getBoundingClientRect();
+      const gearEl = document.querySelector('.ws-companion-gear').getBoundingClientRect();
       return { opacity: Number(getComputedStyle(document.querySelector('.ws-companion-gear')).opacity), gripBottom: grip.bottom,
-        gearTop: gear.top, sameColumn: Math.abs(grip.right - gear.right) < 1 };
+        gearTop: gearEl.top, sameColumn: Math.abs(grip.right - gearEl.right) < 1 };
     });
     assert.ok(placement.opacity > 0.3, 'gear revealed on hover: ' + placement.opacity);
     assert.ok(placement.sameColumn && placement.gearTop >= placement.gripBottom - 0.5 && placement.gearTop - placement.gripBottom < 6,
       'gear directly under the grip: ' + JSON.stringify(placement));
     await shot(page, 'companion-gear-hover');
 
-    // The gear opens a non-blocking dialog beside the companion.
+    // Clicking the gear opens Dashboard Settings on ?section=companion (no legacy floating modal).
     await gear.click();
-    const dialog = page.locator('dialog.ws-companion-settings[open]');
-    await dialog.waitFor();
-    await page.waitForTimeout(150);
-    const modal = await page.evaluate(() => {
-      const d = document.querySelector('dialog.ws-companion-settings');
-      const b = d.getBoundingClientRect(), hit = document.querySelector('.ws-companion-hit').getBoundingClientRect();
-      return { modal: d.matches(':modal'), l: b.left, t: b.top, r: b.right, b: b.bottom, vw: innerWidth, vh: innerHeight,
-        beside: b.left >= hit.right - 0.5 || b.right <= hit.left + 0.5,
-        expanded: document.querySelector('.ws-companion-gear').getAttribute('aria-expanded'),
-        labels: [...d.querySelectorAll('.ws-companion-settings-label')].map(e => e.textContent),
-        persona: d.querySelector('.ws-companion-settings-persona').textContent,
-        selects: d.querySelectorAll('select').length, numbers: d.querySelectorAll('input[type="number"]').length,
-        colors: [...d.querySelectorAll('input[type="color"]')].map(e => e.closest('.ws-companion-settings-sub').textContent),
-        follow: [...d.querySelectorAll('select')].slice(2).map(s => s.options[0]?.value) };
+    assert.equal(await page.locator('dialog.ws-companion-settings').count(), 0, 'retired floating modal must not render');
+    const settingsDialog = page.locator('#workflow-settings[open]');
+    await settingsDialog.waitFor();
+    const sframe = page.frameLocator('#workflow-settings[open] > iframe');
+    const panel = sframe.locator('[data-companion-settings-panel]');
+    await panel.waitFor();
+    await sframe.locator('[data-companion-wardrobe-grid] [data-config-key="dashboard.companion_preset"] select').waitFor();
+
+    // Verify all 5 groups, persona card, 2D wardrobe controls, and zero horizontal overflow.
+    const state = await panel.evaluate(el => {
+      const sc = document.querySelector('.scontent') || document.documentElement;
+      const groups = [...el.querySelectorAll('[data-companion-group]')].map(g => g.dataset.companionGroup);
+      const personaText = el.querySelector('.cs-avatar-persona')?.textContent || '';
+      const wardrobeSelects = [...el.querySelectorAll('[data-companion-wardrobe-grid] select')];
+      const colors = [...el.querySelectorAll('[data-companion-wardrobe-grid] input[type="color"]')].map(i => i.getAttribute('aria-label'));
+      const cooldownInput = el.querySelector('[data-config-key="dashboard.companion_agent_cooldown_seconds"] input');
+      const capInput = el.querySelector('[data-config-key="dashboard.companion_agent_hourly_cap"] input');
+      return {
+        groups,
+        personaText,
+        selectCount: wardrobeSelects.length,
+        presetVal: wardrobeSelects[0]?.value,
+        colors,
+        cooldownDisabled: cooldownInput?.disabled,
+        capDisabled: capInput?.disabled,
+        overflow: sc.scrollWidth > sc.clientWidth + 1
+      };
     });
-    assert.equal(modal.modal, false, 'the settings dialog is non-modal');
-    assert.ok(modal.l >= 0 && modal.t >= 0 && modal.r <= modal.vw && modal.b <= modal.vh, 'dialog inside the viewport: ' + JSON.stringify(modal));
-    assert.ok(modal.beside, 'dialog beside the companion');
-    assert.equal(modal.expanded, 'true');
-    assert.deepEqual(modal.labels, ['Pack', 'Preset', 'Outfit', 'Hair', 'Eyes', 'Attachments', 'Palette', 'Agent cooldown', 'Agent hourly cap']);
-    // Pack, preset, outfit, hair and eyes are selects; the default pack has no
-    // attachment slots, so that row draws no select. Wardrobe selects start
-    // with "follow preset"; every built-in tint channel gets a color input.
-    assert.equal(modal.selects, 5);
-    assert.equal(modal.numbers, 2);
-    assert.deepEqual(modal.follow, ['', '', '']);
-    for (const channel of ['eye', 'hair', 'outfitAccent', 'outfitPrimary', 'skin']) assert.ok(modal.colors.includes(channel), 'color input for ' + channel + ': ' + modal.colors);
-    assert.match(modal.persona, /Fixture Fox/);
-    assert.match(modal.persona, /short, upbeat lines/);
-    // The page behind stays usable while the dialog is open.
-    assert.equal(await page.evaluate(() => document.querySelector('.sframe.on').inert), false);
-    await shot(page, 'companion-settings-modal');
+    assert.deepEqual(state.groups, ['core', 'avatar', 'sources', 'wardrobe', 'advanced']);
+    assert.match(state.personaText, /Fixture Fox/);
+    assert.match(state.personaText, /short, upbeat lines/);
+    assert.equal(state.selectCount, 1, 'default fixture exposes preset select (no unused empty outfit/hair/eyes selects)');
+    assert.equal(state.presetVal, 'werkschaft-d1');
+    for (const channel of ['eye', 'hair', 'outfitAccent', 'outfitPrimary', 'skin']) {
+      assert.ok(state.colors.includes(channel), 'color swatch for ' + channel + ': ' + state.colors);
+    }
+    assert.equal(state.cooldownDisabled, true, 'cooldown gated when director=rules');
+    assert.equal(state.capDisabled, true, 'hourly cap gated when director=rules');
+    assert.equal(state.overflow, false, 'zero horizontal overflow in companion settings');
+    await shot(page, 'companion-settings-dashboard');
 
-    // A number write goes to the global layer as an integer.
-    const cooldown = dialog.locator('input[type="number"]').first();
-    await cooldown.fill('45');
-    await cooldown.press('Tab');
-    await page.waitForTimeout(150);
-    assert.deepEqual(writes.at(-1), { scope: 'global', key: 'dashboard.companion_agent_cooldown_seconds', value: 45 });
-    await dialog.locator('select').first().waitFor();
+    // Switch director to "agent" -> cooldown & hourly cap unlock -> write integer 45.
+    const directorRow = panel.locator('[data-config-key="dashboard.companion_director"]');
+    await directorRow.locator('.seg button').nth(1).click();
+    await directorRow.locator('button[type="submit"]').click();
+    await page.waitForTimeout(250);
+    const cooldownRow = panel.locator('[data-config-key="dashboard.companion_agent_cooldown_seconds"]');
+    await cooldownRow.locator('input[type="number"]').waitFor();
+    assert.equal(await cooldownRow.locator('input[type="number"]').isDisabled(), false, 'cooldown enabled under agent director');
+    await cooldownRow.locator('input[type="number"]').fill('45');
+    await cooldownRow.locator('button[type="submit"]').click();
+    await page.waitForTimeout(250);
+    assert.ok(writes.some(w => w.scope === 'global' && w.key === 'dashboard.companion_agent_cooldown_seconds' && w.value === 45),
+      'cooldown integer write recorded: ' + JSON.stringify(writes));
 
-    // A palette pick writes the composed channel pair to the global layer.
-    await dialog.locator('.ws-companion-settings-sub', { hasText: /^skin$/ }).locator('input[type="color"]').fill('#aabbcc');
-    await page.waitForTimeout(150);
-    assert.deepEqual(writes.at(-1), { scope: 'global', key: 'dashboard.companion_palette', value: 'skin=#aabbcc' });
+    // Palette color pick writes composed channel pair to global layer.
+    const skinPicker = panel.locator('[data-companion-wardrobe-grid] input[type="color"][aria-label="skin"]');
+    await skinPicker.evaluate(el => {
+      el.value = '#aabbcc';
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await page.waitForTimeout(250);
+    assert.ok(writes.some(w => w.scope === 'global' && w.key === 'dashboard.companion_palette' && w.value === 'skin=#aabbcc'),
+      'palette write recorded: ' + JSON.stringify(writes));
 
-    // Escape, a second gear click, and the close button each close it.
-    await page.keyboard.press('Escape');
-    await dialog.waitFor({ state: 'detached' }).catch(() => {});
-    assert.equal(await page.locator('dialog.ws-companion-settings[open]').count(), 0, 'Escape closes');
-    await hoverCharacter();
-    await gear.click();
-    await dialog.waitFor();
-    await gear.click();
-    assert.equal(await page.locator('dialog.ws-companion-settings[open]').count(), 0, 'second gear click closes');
-    await gear.click();
-    await dialog.locator('.ws-companion-settings-close').click();
-    assert.equal(await page.locator('dialog.ws-companion-settings[open]').count(), 0, 'close button closes');
+    // Toggle companion_enabled OFF -> disabled-but-editable banner appears, while VRM dropzone & sources remain editable.
+    const enabledRow = panel.locator('[data-config-key="dashboard.companion_enabled"]');
+    await enabledRow.locator('button[role="switch"]').click();
+    await enabledRow.locator('button[type="submit"]').click();
+    await panel.locator('[data-companion-disabled-banner]').waitFor();
+    assert.equal(await panel.locator('[data-companion-status-pill]').getAttribute('data-companion-status-pill'), 'off');
+    assert.equal(await panel.locator('[data-companion-vrm-choose]').isDisabled(), false, 'VRM upload stays editable when disabled');
+    assert.equal(await panel.locator('[data-companion-source-input]').isDisabled(), false, 'Pack Sources stays editable when disabled');
+
+    // Re-enable companion so we can also verify quick-menu -> settings handoff and directed quip.
+    const enabledRow2 = panel.locator('[data-config-key="dashboard.companion_enabled"]');
+    await enabledRow2.locator('button[role="switch"]').click();
+    await enabledRow2.locator('button[type="submit"]').click();
+    await panel.locator('[data-companion-status-pill="on"]').waitFor();
+
+    // Close Dashboard Settings via close button.
+    await sframe.locator('[data-settings-close]').click();
+    await page.locator('#workflow-settings').waitFor({ state: 'hidden' });
+
+    // Re-ensure companion stage is visible, then open quick menu and verify "Companion settings" opens Dashboard Settings.
+    await page.evaluate(() => {
+      document.dispatchEvent(new CustomEvent('ws-companion-config', {
+        detail: { enabled: true, director: 'rules', pack: 'default', preset: 'werkschaft-d1' }
+      }));
+    });
+    await page.locator('.ws-companion-hit:not([hidden])').waitFor();
+    await page.locator('.ws-companion-character').dispatchEvent('contextmenu', { bubbles: true, cancelable: true });
+    const qmenu = page.locator('.ws-companion-menu:not([hidden])');
+    await qmenu.waitFor();
+    await qmenu.getByRole('button', { name: /settings|설정/i }).click();
+    await settingsDialog.waitFor();
+    await sframe.locator('[data-companion-settings-panel]').waitFor();
+    assert.equal(await page.locator('dialog.ws-companion-settings').count(), 0, 'quick menu never opens legacy modal');
+    await sframe.locator('[data-settings-close]').click();
+    await page.locator('#workflow-settings').waitFor({ state: 'hidden' });
     await page.mouse.move(5, 5);
 
     // A directed command for another session is ignored; one for the shown

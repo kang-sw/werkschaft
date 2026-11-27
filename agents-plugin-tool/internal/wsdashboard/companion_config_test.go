@@ -1,11 +1,8 @@
 package wsdashboard
 
 import (
-	"encoding/json"
 	"net/http"
-	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -69,55 +66,26 @@ func TestCompanionConfigNotificationRequiresMachineCredential(t *testing.T) {
 	}
 }
 
-// The shell embeds the catalog's companion-modal rows and keeps exactly the
-// settings strings those rows name, in every language.
-func TestCompanionModalRowsAndShellStrings(t *testing.T) {
-	catalog, err := os.ReadFile("assets/dashboard-settings-catalog.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := companionModalRows(catalog)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var rows []companionModalRow
-	if err := json.Unmarshal([]byte(raw), &rows); err != nil {
-		t.Fatal(err)
-	}
-	var keys []string
-	for _, row := range rows {
-		keys = append(keys, row.Key)
-	}
-	want := []string{
-		CompanionPackKey, CompanionPresetKey, CompanionOutfitKey, CompanionHairKey, CompanionEyesKey,
-		CompanionAttachmentsKey, CompanionPaletteKey, CompanionAgentCooldownKey, CompanionAgentHourlyCapKey,
-		CompanionSourcesKey,
-	}
-	if !slices.Equal(keys, want) {
-		t.Fatalf("modal rows = %v, want %v", keys, want)
-	}
+// The shell drops all js.settings.* strings (they live in the Settings page
+// bundle) while keeping the companion stage and quick-menu strings.
+func TestCompanionShellDropsSettingsStrings(t *testing.T) {
 	for _, lang := range wsi18n.Languages() {
-		script := string(wsi18n.ScriptExceptKeeping(lang.Code, []string{"js.settings."}, shellSettingsStrings))
-		for _, row := range rows {
-			for _, id := range []string{row.Label, row.Description, row.Unit} {
-				if id != "" && !strings.Contains(script, strconv.Quote(id)) {
-					t.Errorf("%s: the shell drops %s", lang.Code, id)
-				}
-			}
-		}
-		for _, dropped := range []string{"js.settings.save", "js.settings.key.dashboard.lan_enabled.label"} {
+		script := string(wsi18n.ScriptExcept(lang.Code, "js.settings."))
+		for _, dropped := range []string{
+			"js.settings.save",
+			"js.settings.key.dashboard.lan_enabled.label",
+			"js.settings.key.dashboard.companion_pack.label",
+			"js.settings.companion.group.core.title",
+		} {
 			if strings.Contains(script, strconv.Quote(dropped)) {
 				t.Errorf("%s: the shell keeps settings-page string %s", lang.Code, dropped)
 			}
 		}
-		for _, id := range []string{"js.companion.settings", "js.companion.follow_preset", "js.companion.attachment_none", "js.companion.reset_colors"} {
+		for _, id := range []string{"js.companion.settings", "js.companion.return_home", "js.companion.reset_size", "js.companion.hide", "js.companion.reload"} {
 			if !strings.Contains(script, strconv.Quote(id)) {
-				t.Errorf("%s: the shell lacks the companion modal string %s", lang.Code, id)
+				t.Errorf("%s: the shell lacks companion string %s", lang.Code, id)
 			}
 		}
-	}
-	if _, err := companionModalRows([]byte("{")); err == nil {
-		t.Fatal("a malformed catalog was accepted")
 	}
 }
 

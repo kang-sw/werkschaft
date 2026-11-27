@@ -295,16 +295,29 @@ async function saveDockShot(page, name) {
         return !fxEl || fxEl.hidden;
       }, null, { timeout: 3000 });
 
-      // Verify 2D paper-doll wardrobe controls are hidden in settings modal.
+      // Verify gear routes to Dashboard Settings (/settings?section=companion)
+      // without the retired floating modal, and 2D paper-doll wardrobe controls
+      // are replaced by the VRM-active notice.
+      await page.evaluate(async packId => {
+        for (const [key, value] of [['dashboard.companion_enabled', true], ['dashboard.companion_pack', packId]]) {
+          const res = await fetch('/api/config/set', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ scope: 'global', key, value })
+          });
+          if (!res.ok) throw new Error('set ' + key + ' failed: ' + res.status);
+        }
+      }, pack.id);
       await page.locator('.ws-companion-gear').click({ force: true });
-      await page.locator('dialog.ws-companion-settings[open]').waitFor();
-      const modalLabels = await page.evaluate(() =>
-        Array.from(document.querySelectorAll('.ws-companion-settings-label')).map(el => el.textContent.trim())
-      );
-      for (const forbidden of ['Preset', 'Outfit', 'Hair', 'Eyes', 'Attachments', 'Palette']) {
-        assert.ok(!modalLabels.includes(forbidden), `VRM settings modal must hide 2D control ${forbidden}`);
-      }
-      await page.keyboard.press('Escape');
+      assert.equal(await page.locator('dialog.ws-companion-settings').count(), 0, 'retired floating modal must not render');
+      await page.locator('#workflow-settings[open]').waitFor();
+      const settingsFrame = page.frameLocator('#workflow-settings[open] > iframe');
+      await settingsFrame.locator('[data-companion-settings-panel]').waitFor();
+      await settingsFrame.locator('[data-companion-wardrobe-vrm-note]').waitFor();
+      assert.equal(await settingsFrame.locator('[data-companion-wardrobe-grid]').count(), 0,
+        `VRM Dashboard Settings must hide 2D wardrobe controls for ${pack.label}`);
+      await settingsFrame.locator('[data-settings-close]').click();
+      await page.locator('#workflow-settings').waitFor({ state: 'hidden' });
       await page.mouse.move(120, 120);
       await page.evaluate(() => document.activeElement?.blur?.());
       await page.waitForTimeout(120);

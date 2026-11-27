@@ -13,7 +13,7 @@
     var watched = ["r-board", "bgal", "bcol", "drawer", "r-panels", "r-entries", "r-convlive", "r-tree", "r-head", "composer", "agisland"];
     var rightColHover = false, rightColFocus = false;
     var rightColSelector = "#bgal.bgal, #bcol.bcol, #drawer.drawer.open";
-    var companionOverlaySelector = ".ws-companion-hit, .ws-companion-gear, .ws-companion-menu, .ws-companion-settings";
+    var companionOverlaySelector = ".ws-companion-hit, .ws-companion-gear, .ws-companion-menu";
     var directCommit = /^(?:mcp__[^\s]+__)?(?:git_commit|git_merge|(?:ws\/)?git\.(?:commit|merge))$/i;
     var shellTool = /^(?:mcp__[^\s]+__)?(?:bash|shell(?:_command)?|exec_command|run_command|terminal)$/i;
     var concreteCommand = /(?:^|[;&|\n])\s*(?:command:\s*)?(?:[A-Z_][A-Z_0-9]*=[^\s;]+\s+)*(?:git\s+(?:commit|merge)|go\s+(?:-C\s+\S+\s+)?test|npm\s+test|pytest|cargo\s+test|(?:npx\s+)?(?:vitest|jest))(?=\s|$)/i;

@@ -786,6 +786,8 @@
       shCompanion = window.WsCompanion.mount(config, function () {
         shCompanionMuted = true;
         shCompanionStop();
+      }, function (opener) {
+        shOpenSettings(new URL("/settings?section=companion", location.origin), opener);
       });
       if (!shWant && shOn?.loaded) shCompanionTarget(shOn);
     }
@@ -1380,6 +1382,11 @@
           var dest;
           try { dest = new URL(m.href, location.origin); } catch (x) { return; }
           shOpenSettings(dest);
+        } else if (m.wsShell === "companion-packs-changed") {
+          if (shCompanion && shCompanion.packsChanged) shCompanion.packsChanged();
+        } else if (m.wsShell === "companion-stage-action") {
+          if (m.action === "reset-size") { if (shCompanion && shCompanion.resetSize) shCompanion.resetSize(); }
+          else if (m.action === "return-home") { if (shCompanion && shCompanion.returnHome) shCompanion.returnHome(); }
         } else if (m.wsShell === "jank-stall" && typeof WsJank !== "undefined" && WsJank) {
           WsJank.ingest(m.stall);
         } else if (m.wsShell === "jank-minor" && typeof WsJank !== "undefined" && WsJank) {
