@@ -481,9 +481,21 @@
       });
     }
     if (scope && scope.querySelectorAll) {
+      var touched = Object.create(null), touchedList = [];
+      function noteTouched(el) {
+        var id = el && el.getAttribute && el.getAttribute("data-id");
+        if (id && !touched[id]) { touched[id] = el; touchedList.push(id); }
+      }
       q(".sentmark", scope).forEach(function (m) { if (m.parentNode) m.parentNode.removeChild(m); });
-      q(".sent-sent, .sent-held", scope).forEach(function (el) { el.classList.remove("sent-sent", "sent-held"); });
-      if (!index.size) return;
+      q(".sent-sent, .sent-held", scope).forEach(function (el) { noteTouched(el); el.classList.remove("sent-sent", "sent-held"); });
+      if (!index.size) {
+        if (touchedList.length && typeof syncWbUpdateItems === "function") {
+          var clearHints = Object.create(null);
+          touchedList.forEach(function (k) { clearHints[k] = { openEl: touched[k], skipVirtual: true }; });
+          syncWbUpdateItems(touchedList, clearHints);
+        }
+        return;
+      }
       var scopedItems = new Map();
       q(".card[data-id], .arow[data-id], .ckrow[data-id], .srow[data-id]", scope).forEach(function (item) {
         var id = item.getAttribute("data-id");
@@ -495,9 +507,14 @@
         if (!recs || !recs.length) return;
         var head = item.querySelector(".head, .stext");
         if (!head) return;
+        noteTouched(item);
         for (var r = 0; r < recs.length; r++) appendMark(item, head, recs[r]);
       });
-      if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
+      if (touchedList.length && typeof syncWbUpdateItems === "function") {
+        var scopedHints = Object.create(null);
+        touchedList.forEach(function (k) { scopedHints[k] = { openEl: touched[k], skipVirtual: true }; });
+        syncWbUpdateItems(touchedList, scopedHints);
+      }
       return;
     }
     var sigParts = [];
@@ -509,12 +526,25 @@
     var sig = sigParts.join("\u0002");
     if (!force && sig === sentSig) return;
     sentSig = sig;
+    var prevSent = Object.create(null);
     boardQ(".sentmark").forEach(function (m) { m.parentNode.removeChild(m); });
-    boardQ(".sent-sent, .sent-held").forEach(function (el) { el.classList.remove("sent-sent", "sent-held"); });
+    boardQ(".sent-sent, .sent-held").forEach(function (el) {
+      var eid = el.getAttribute("data-id");
+      if (eid) prevSent[eid] = true;
+      el.classList.remove("sent-sent", "sent-held");
+    });
+    var changedSent = [], sentHints = Object.create(null);
     index.forEach(function (recs, id) {
       var item = boardItem(id), head = item && item.querySelector(".head, .stext");
       if (!head) return;
+      delete prevSent[id];
+      changedSent.push(id);
+      sentHints[id] = { openEl: item, skipVirtual: true };
       for (var r = 0; r < recs.length; r++) appendMark(item, head, recs[r]);
     });
-    if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
+    Object.keys(prevSent).forEach(function (id) {
+      changedSent.push(id);
+      sentHints[id] = { openEl: boardItem(id), skipVirtual: true };
+    });
+    if (changedSent.length && typeof syncWbUpdateItems === "function") syncWbUpdateItems(changedSent, sentHints);
   }

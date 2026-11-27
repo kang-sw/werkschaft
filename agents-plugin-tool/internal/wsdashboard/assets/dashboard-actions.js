@@ -2,9 +2,15 @@
   doc.addEventListener("click", function (e) {
     var t = e.target;
     if (!t || !t.closest) return;
-    if (cchips && inBoard(t)) syncChips();
+    if (cchips && inBoard(t)) syncChips(t);
     var u = t.closest("[data-unchip]");
-    if (u) { var uid = u.getAttribute("data-unchip"); dropChip(uid); setItem(uid, null); renderChips(); return; }
+    if (u) {
+      var uid = u.getAttribute("data-unchip");
+      var hadEl = setItem(uid, null);
+      dropChip(uid, false, false, hadEl);
+      renderChips();
+      return;
+    }
     u = t.closest("[data-untchip]");
     if (u) { clearTopicNote(u.getAttribute("data-untchip")); renderChips(); return; }
     u = t.closest("[data-unmchip]");

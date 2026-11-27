@@ -919,14 +919,20 @@
   function writeAnswers(el, saved) {
     var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("dash", "writeAnswers") : null;
     try {
+      var changedIds = [], hints = {};
       q(".card[data-id], .arow[data-id], .ckrow[data-id], .srow[data-id]", el).forEach(function (item) {
-        var s = saved[item.getAttribute("data-id")];
+        var id = item.getAttribute("data-id");
+        var s = saved[id];
         if (!s) return;
         var note = item.querySelector("textarea.note"), box = item.querySelector("label.ack > input, label.ck > input");
         if (s.pick) q(".opt[data-opt], .btn[data-v]", item).forEach(function (b) { if (pickKey(b) === s.pick) b.setAttribute("aria-pressed", "true"); });
         if (note && (s.note || s.noteOpen)) openNote(note, s);
         if (box && s.checked) box.checked = true;
         if (s.no) setCheckNo(item, true);
+        if (s.pick || s.checked || s.no || s.note) {
+          changedIds.push(id);
+          hints[id] = { openEl: item, skipVirtual: true };
+        }
       });
       q(".tnote[data-topic]", el).forEach(function (note) {
         var s = saved["t:" + note.getAttribute("data-topic")];
@@ -937,7 +943,7 @@
           if (s.capsules && window.WsCapsules) window.WsCapsules.attach(note).restore(s.capsules);
         }
       });
-      if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
+      if (changedIds.length && typeof syncWbUpdateItems === "function") syncWbUpdateItems(changedIds, hints);
     } finally {
       if (jTok) WsJank.end(jTok);
     }

@@ -116,7 +116,7 @@
     ["input", "change"].forEach(function (type) {
       doc.addEventListener(type, function (e) {
         if (!inBoard(e.target)) return;
-        syncChips();
+        syncChips(e.target);
         syncMarkers();
         followImgs();
       });
