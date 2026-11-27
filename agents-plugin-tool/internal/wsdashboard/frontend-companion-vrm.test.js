@@ -15,7 +15,7 @@ function loadCompanion(globals = {}) {
     ...globals
   });
   context.window = context.window || {};
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "sources", "settings", "vrm", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "sources", "settings", "vrm-colead", "vrm", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return { C: context.window.WsCompanion, context };
@@ -1091,4 +1091,243 @@ test("Optional .vrma clip playback cross-fades on matching gesture/pose and nega
   assert.equal(fetched.filter(u => u.includes("empty.vrma")).length, 1, "empty .vrma must be negatively cached");
 
   rig.dispose();
+});
+
+test("Co-Lead typing state machine covers idle bursts, working cadence, sleepy pause, reaction pause, hover & periodic glance-up, accent API, and finite bones", () => {
+  const { C } = loadCompanion();
+  assert.equal(typeof C.createVrmCoLead, "function", "createVrmCoLead must be exported");
+  assert.equal(typeof C.vrmCoLeadMath?.computeCoLeadTargets, "function");
+
+  const co = C.createVrmCoLead({});
+
+  // 1. Default idle starts in typing burst, transitions to reading, and periodically glances up.
+  let sawTyping = false, sawReading = false, sawGlance = false;
+  const glanceRolls = [];
+  let t = 0;
+  let prevGlance = false;
+  for (let i = 0; i < 420; i++) {
+    t += 0.05;
+    const out = co.step({ dt: 0.05, elapsed: t, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+    for (const [bone, rot] of Object.entries(out.boneTargets)) {
+      assert.equal(rot.length, 3, `${bone} must have 3 Euler components`);
+      for (const v of rot) assert.ok(Number.isFinite(v), `${bone} has non-finite rotation ${v}`);
+    }
+    assert.ok(Number.isFinite(out.eyeYaw) && Number.isFinite(out.eyePitch));
+    assert.ok(Number.isFinite(out.screenGlow) && out.screenGlow > 0);
+    if (out.beat === "typing") sawTyping = true;
+    if (out.beat === "reading") sawReading = true;
+    if (out.beat === "glance-up") {
+      sawGlance = true;
+      if (!prevGlance && Math.abs(out.boneTargets.head[2]) > 0.01) {
+        glanceRolls.push(Math.sign(out.boneTargets.head[2]));
+      }
+      prevGlance = true;
+    } else {
+      prevGlance = false;
+    }
+  }
+  assert.equal(sawTyping, true, "idle must enter typing bursts");
+  assert.equal(sawReading, true, "idle must take calm reading pauses");
+  assert.equal(sawGlance, true, "idle must periodically glance up at the user");
+
+  // 2. Hover immediately triggers glance-up with warm smile (happy ~0.35-0.48) and head tilt.
+  let hoveredOut = null;
+  for (let i = 0; i < 40; i++) {
+    t += 0.05;
+    hoveredOut = co.step({ dt: 0.05, elapsed: t, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: true });
+  }
+  assert.equal(hoveredOut.glanceUp, true, "hover must trigger glance-up");
+  assert.equal(hoveredOut.typing, false, "hover glance-up must pause typing");
+  assert.ok(hoveredOut.exprOverlay.happy >= 0.35 && hoveredOut.exprOverlay.happy <= 0.48,
+    `glance-up smile happy=${hoveredOut.exprOverlay.happy} should be in [0.35, 0.48]`);
+  assert.ok(Math.abs(hoveredOut.boneTargets.head[2] + hoveredOut.boneTargets.neck[2]) > 0.08,
+    "glance-up must include charming anime head-tilt roll");
+
+  // Leaving hover returns smoothly to typing.
+  let postHoverOut = null;
+  for (let i = 0; i < 60; i++) {
+    t += 0.05;
+    postHoverOut = co.step({ dt: 0.05, elapsed: t, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+  }
+  assert.equal(postHoverOut.glanceUp, false, "leaving hover must return from glance-up");
+
+  // 3. Working/thinking state boosts screen glow and keeps brisk typing/reading rhythm without glancing away.
+  let workingOut = null;
+  let workingTypingFrames = 0;
+  for (let i = 0; i < 60; i++) {
+    t += 0.05;
+    workingOut = co.step({ dt: 0.05, elapsed: t, expression: "focused", rawPose: "typing", scenarioId: "working_tatata", gazeX: 0, gazeY: 0, hover: false });
+    if (workingOut.typing) workingTypingFrames++;
+  }
+  assert.ok(workingTypingFrames > 25, "working state must actively type");
+  assert.ok(workingOut.screenGlow > 0.19, `working screen glow (${workingOut.screenGlow}) should brighten`);
+
+  // 4. Sleepy state stops typing cleanly and dims screen bounce glow.
+  let sleepyOut = null;
+  for (let i = 0; i < 50; i++) {
+    t += 0.05;
+    sleepyOut = co.step({ dt: 0.05, elapsed: t, expression: "idle_doze", rawPose: "stand", beat: { fx: "zzz" }, gazeX: 0, gazeY: 0, hover: false });
+  }
+  assert.equal(sleepyOut.typing, false, "sleepy must stop typing");
+  assert.ok(sleepyOut.screenGlow < 0.06, `sleepy screen glow (${sleepyOut.screenGlow}) should dim softly`);
+  assert.ok(sleepyOut.boneTargets.head[0] + sleepyOut.boneTargets.neck[0] > 0.08, "sleepy should softly nod head down");
+
+  // 5. Reaction state (alert/error/celebrate) pauses typing immediately so reactions read crisply.
+  let reactionOut = null;
+  for (let i = 0; i < 20; i++) {
+    t += 0.05;
+    reactionOut = co.step({ dt: 0.05, elapsed: t, expression: "happy", rawPose: "stand", scenarioId: "celebrate_done", gazeX: 0.3, gazeY: -0.1, hover: false });
+  }
+  assert.equal(reactionOut.typing, false, "reaction scenario must pause typing");
+
+  // 6. Step 3 seams: setLaptopAccent validates hex and setCoLeadBeat deterministically drives beats.
+  assert.equal(co.setLaptopAccent("#f59e0b"), "#f59e0b");
+  assert.equal(co.setLaptopAccent("#abc"), "#aabbcc");
+  assert.equal(co.setLaptopAccent("not-a-color"), "#aabbcc", "invalid accent must be ignored");
+  assert.equal(co.setCoLeadBeat("glance-up"), "glance-up");
+  assert.equal(co.debugState().beat, "glance-up");
+  assert.equal(co.setCoLeadBeat("sleepy"), "sleepy");
+  const forcedSleepy = co.step({ dt: 0.05, elapsed: t + 0.05, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+  assert.equal(forcedSleepy.exprOverlay?.mode, "sleepy");
+  assert.equal(co.setCoLeadBeat("auto"), "auto");
+  co.dispose();
+});
+
+test("Co-Lead 3D beveled laptop prop frames strictly in bottom <=19% below chin on BOTH VRM 0.x and VRM 1.0 and disposes cleanly on swap", async () => {
+  const { pathToFileURL } = require("node:url");
+  const rt = await import(pathToFileURL(path.join(__dirname, "assets", "companion-vrm-runtime.mjs")).href);
+  const { THREE } = rt;
+
+  function makeBustVrm(metaVersion) {
+    const root = new THREE.Group();
+    const is0 = metaVersion === "0";
+    if (is0) root.rotation.y = Math.PI;
+    const bones = new Map();
+    const addBone = (name, parent, x, y, z) => {
+      const n = new THREE.Object3D();
+      n.name = name;
+      n.position.set(x, y, z);
+      parent.add(n);
+      bones.set(name, n);
+      return n;
+    };
+    const hips = addBone("hips", root, 0, 0.90, 0);
+    const spine = addBone("spine", hips, 0, 0.10, 0);
+    const chest = addBone("chest", spine, 0, 0.15, 0);
+    const upperChest = addBone("upperChest", chest, 0, 0.10, 0);
+    const neck = addBone("neck", upperChest, 0, 0.10, 0);
+    const head = addBone("head", neck, 0, 0.08, 0);
+    const lSign = is0 ? -1 : 1;
+    addBone("leftShoulder", upperChest, lSign * 0.06, 0.04, 0);
+    const lU = addBone("leftUpperArm", upperChest, lSign * 0.16, 0.04, 0);
+    const lL = addBone("leftLowerArm", lU, lSign * 0.22, 0, 0);
+    addBone("leftHand", lL, lSign * 0.20, 0, 0);
+    addBone("rightShoulder", upperChest, -lSign * 0.06, 0.04, 0);
+    const rU = addBone("rightUpperArm", upperChest, -lSign * 0.16, 0.04, 0);
+    const rL = addBone("rightLowerArm", rU, -lSign * 0.22, 0, 0);
+    addBone("rightHand", rL, -lSign * 0.20, 0, 0);
+
+    const torsoMesh = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.34, 0.18), new THREE.MeshBasicMaterial());
+    chest.add(torsoMesh);
+    const headMesh = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.24, 0.20), new THREE.MeshBasicMaterial());
+    headMesh.position.set(0, 0.10, 0);
+    head.add(headMesh);
+    root.updateMatrixWorld(true);
+
+    const vals = new Map();
+    const presets = is0
+      ? { neutral: {}, blink: {}, fun: {}, angry: {}, sorrow: {}, joy: {}, o: {} }
+      : { neutral: {}, blink: {}, happy: {}, sad: {}, angry: {}, relaxed: {}, surprised: {} };
+    return {
+      meta: { metaVersion },
+      scene: root,
+      bones,
+      humanoid: { getNormalizedBoneNode: name => bones.get(name) || null },
+      expressionManager: {
+        presetExpressionMap: presets,
+        customExpressionMap: {},
+        expressions: Object.keys(presets).map(expressionName => ({ expressionName })),
+        setValue: (k, v) => vals.set(k, v),
+        getValue: k => vals.get(k) ?? 0
+      },
+      lookAt: { target: null },
+      update() { root.updateMatrixWorld(true); }
+    };
+  }
+
+  for (const metaVer of ["1", "0"]) {
+    let capturedScene = null;
+    class StubRenderer {
+      constructor() { this.shadowMap = { enabled: true }; this.info = { render: { calls: 2, triangles: 200 } }; }
+      setClearColor() {}
+      setPixelRatio() {}
+      setSize() {}
+      render(sc) { capturedScene = sc; }
+      dispose() {}
+      forceContextLoss() {}
+    }
+
+    const vrmObj = makeBustVrm(metaVer);
+    const stubRuntime = {
+      THREE: { ...THREE, WebGLRenderer: StubRenderer },
+      GLTFLoader: class {
+        register() {}
+        async parseAsync() { return { scene: vrmObj.scene, userData: { vrm: vrmObj } }; }
+      },
+      VRMLoaderPlugin: class {},
+      VRMAnimationLoaderPlugin: class {},
+      VRMUtils: { removeUnnecessaryVertices() {}, combineSkeletons() {}, rotateVRM0() {}, deepDispose() {} },
+      createVRMAnimationClip: () => ({})
+    };
+
+    const doc = { createElement: tag => makeFakeElement(tag, doc), addEventListener() {} };
+    const { C } = loadCompanion({
+      document: doc,
+      window: { innerWidth: 1680, innerHeight: 960, devicePixelRatio: 1, addEventListener() {} },
+      fetch: async () => ({ ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer })
+    });
+    C.vrmRuntimeLoader = async () => stubRuntime;
+
+    const rig = C.makeVrmRig({ id: `vrm-${metaVer}`, rev: "r1", renderer: "vrm", modelFile: "avatar.vrm", manifest: {}, expressionMap: {}, animations: {} });
+    await rig.mount(makeFakeElement("div", doc), { width: 340, height: 240, dpr: 1 });
+
+    // Verify beveled ExtrudeGeometry laptop prop is mounted in scene (never raw BoxGeometry).
+    const laptopGroup = capturedScene.children.find(c => c.name === "ws-colead-laptop");
+    assert.ok(laptopGroup, `VRM ${metaVer}: sleek laptop group must be added to scene`);
+    assert.equal(laptopGroup.children[0].geometry.type, "ExtrudeGeometry", "laptop lid must use beveled ExtrudeGeometry");
+
+    // Verify strict framing invariant: top of laptop lid strictly in bottom <=19% and well below chin!
+    const coSt = rig.debugState().coLead;
+    assert.equal(coSt.hasLaptopProp, true);
+    assert.ok(coSt.laptopTopViewportPct >= 10 && coSt.laptopTopViewportPct <= 19.5,
+      `VRM ${metaVer}: laptop top (${coSt.laptopTopViewportPct}%) must sit cleanly in bottom 10-19.5%`);
+    assert.ok(coSt.laptopTopViewportPct < coSt.chinViewportPct - 20,
+      `VRM ${metaVer}: laptop top (${coSt.laptopTopViewportPct}%) must stay far below chin (${coSt.chinViewportPct}%)`);
+
+    // Verify elbows bend forward (+Z in world space) and NEVER backward on BOTH VRM 0.x and VRM 1.0!
+    vrmObj.scene.updateMatrixWorld(true);
+    const lHandPos = new THREE.Vector3();
+    const lElbowPos = new THREE.Vector3();
+    const rHandPos = new THREE.Vector3();
+    const rElbowPos = new THREE.Vector3();
+    vrmObj.bones.get("leftHand").getWorldPosition(lHandPos);
+    vrmObj.bones.get("leftLowerArm").getWorldPosition(lElbowPos);
+    vrmObj.bones.get("rightHand").getWorldPosition(rHandPos);
+    vrmObj.bones.get("rightLowerArm").getWorldPosition(rElbowPos);
+    assert.ok(lHandPos.z > lElbowPos.z + 0.08, `VRM ${metaVer}: left forearm must bend forward toward keyboard (handZ=${lHandPos.z.toFixed(3)}, elbowZ=${lElbowPos.z.toFixed(3)})`);
+    assert.ok(rHandPos.z > rElbowPos.z + 0.08, `VRM ${metaVer}: right forearm must bend forward toward keyboard (handZ=${rHandPos.z.toFixed(3)}, elbowZ=${rElbowPos.z.toFixed(3)})`);
+
+    // Verify global Step 3 / QA seams forward cleanly to active rig.
+    assert.equal(C.setLaptopAccent("#38bdf8"), "#38bdf8");
+    assert.equal(C.setCoLeadBeat("glance-up"), "glance-up");
+    assert.equal(rig.debugState().coLead.laptopAccent, "#38bdf8");
+    assert.equal(rig.debugState().coLead.beat, "glance-up");
+
+    // Verify disposal cleanly removes laptopGroup and screenLight from scene.
+    const pointLightsBefore = capturedScene.children.filter(c => c.isPointLight).length;
+    assert.equal(pointLightsBefore, 1, "screen bounce PointLight should be attached");
+    rig.dispose();
+    assert.equal(capturedScene.children.some(c => c.name === "ws-colead-laptop"), false, "dispose must remove laptop prop from scene");
+    assert.equal(capturedScene.children.filter(c => c.isPointLight).length, 0, "dispose must remove screen bounce light from scene");
+  }
 });
