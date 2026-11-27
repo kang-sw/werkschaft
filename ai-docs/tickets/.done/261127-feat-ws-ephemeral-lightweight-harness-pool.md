@@ -6,6 +6,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 7bb53dc107cc46c5
 sage-review-completeness-reviewed: 7bb53dc107cc46c5
+completed: 2026-11-28
 ---
 
 # Common Harness Ephemeral Non-Persistent / Warm-Cached Lightweight Instance Pool & Dynamic Tier Routing
@@ -210,3 +211,27 @@ type EphemeralRequest struct {
 3. **Verification:**
    - Integration tests for companion bounded-rotation reactions, `agent.spawn` dynamic tier selection + timeout/error -> static fallback parity, and Windows file-touch / latency sanity checks (`ai-docs/manuals/performance.md`).
    - Measurable pass conditions: (a) after 20 consecutive companion reactions through the pool, zero new `wsmeta` rows, zero new `SessionDir` / `wslive` / `wsholder` entries, and no new files in the harness-native session location (for `agy`, only inside the pool's isolated `--gemini-dir`); (b) a warm pool turn is measurably faster than a cold `RunOneShot` call on the same harness measured in the same test (relative comparison, no absolute threshold, since probe timings are machine-specific); (c) forced timeout, error, and invalid-JSON router calls each yield the exact static tier resolution a non-routed call would (parity assertion).
+
+### Result (dfe58734) - 2026-11-28
+
+- **What landed (`80309ad9..dfe58734`):**
+  - **Companion bounded-rotation pool integration:** Replaced the stateless `CompanionOneShot` func seam with the pool-backed `CompanionEphemeralExecutor` interface across `internal/wsdashboard/daemon.go`, `internal/wsdashboard/companion_director.go`, and `cmd/ws-mcp/dashboard.go` (preserving the `wsdashboard` no-`wsagent`-import boundary). Companion reactions now execute through the daemon's shared `wsagent.EphemeralPool` in `BoundedRotation` mode (`MaxTurns: 20`), with uniform `wsconfig.HarnessTiers` resolution (no harness-name branches in common code), cross-harness drop guard preserved, and zero per-tick `wsmeta`/`SessionDir`/`wslive`/`wsholder`/native-session pollution.
+  - **`agent.spawn` dynamic tier router (opt-in, default off, T0):**
+    - Added `agent.tier_routing_dynamic` (bool, default `false`, global scope) and `agent.tier_routing_dynamic_classifier` (string, default empty `""`, global scope) in `internal/wsconfig/scope.go` and `internal/mcp/config_registry.go`, mirrored into `agents-plugin/*config-manifest.json`, `agents-plugin-wsflow/*config-manifest.json`, `internal/wsdashboard/assets/dashboard-settings-catalog.json` (on the `tier_routing` settings page), and all 11 `internal/wsi18n/tables/*.json` locale tables. Updated `ai-docs/manuals/config-settings-ui.md` for the `tier_routing` section enum.
+    - Implemented `internal/mcp/dynamic_tier_router.go` and wired `EphemeralPool` injection from `cmd/ws-mcp/proxy.go` into `mcp.Server` (`internal/mcp/server.go`, `internal/mcp/server_config.go`, `internal/mcp/process_env.go`, `internal/mcp/agent_tools.go`). When `agent.tier_routing_dynamic` is enabled, `agent.spawn` classifies the prompt/role over the allowed tier targets in `PureOneShot` mode with strict timeout and `{"tier": "..."}` JSON schema validation, re-validating via `routedBinding` and falling back transparently to static tier resolution on opt-out, missing pool, timeout, error, invalid JSON, or out-of-set tier.
+  - **Tests:** Added `cmd/ws-mcp/companion_pool_integration_test.go`, `internal/mcp/dynamic_tier_router_test.go`, and expanded `internal/wsdashboard/companion_director_test.go`, `internal/wsdashboard/daemon_test.go`, `internal/wsdashboard/frontend-settings.test.js`, `internal/mcp/dashboard_settings_ui_catalog_test.go`, and `internal/wsagent/ephemeral_pool_test.go` covering pass conditions (a) 20 consecutive reactions with zero session/disk/ring pollution, (b) warm pool turn vs cold `RunOneShot` latency on the same harness, and (c) forced timeout/error/invalid-JSON/out-of-set static-fallback parity.
+- **Review (`code-review-lite`, one pass, `id:delightedoutdoorsthoseepic`):** Clean (0 Critical, 0 Important, 3 minor optional observations: warm companion prompt accumulation over 20 turns before rotation, explicit caller tier overridden when dynamic routing is enabled — both by design — and Phase 1 `BackendRegistrations` `Command` propagation already covered in Phase 1).
+- **Verification:**
+  - `python3 agents-plugin-tool/scripts/generate-package-assets.py --check`: PASS.
+  - `python3 -m unittest discover -s agents-plugin-wsflow/tests`: PASS (22 tests, 2 skipped).
+  - `node --test agents-plugin-tool/internal/wsdashboard/frontend-settings.test.js`: PASS (26/26).
+  - `cd agents-plugin-tool && go build ./... && GOOS=windows go vet ./...`: PASS.
+  - `cd agents-plugin-tool && go test -race -count=1 -timeout 20m ./internal/wsagent/...`: PASS (`180.294s`).
+  - `cd agents-plugin-tool && go test -race -count=1 ./cmd/ws-mcp/...`: PASS (`298.493s`).
+  - `cd agents-plugin-tool && go test -race -count=1 ./internal/wsdashboard -run 'TestCompanion'`: PASS (`11.377s`); full `-race ./internal/wsdashboard/...` passed all companion/daemon/settings/config tests (3 unrelated pre-existing failures: `TestBoardToolbarPlacementAndCounts`, `TestBoardGallery`, `TestFilesExplorerInstances`).
+  - `cd agents-plugin-tool && go test -race -count=1 ./internal/mcp -run 'DynamicTier|Settings|Manifest'`: PASS (`4.630s`); full `go test -count=1 -timeout 45m ./internal/mcp/...` passed all dynamic-router/settings/agent tests (1 unrelated pre-existing macOS `/var` vs `/private/var` failure in `TestServeStdioConfigShow`).
+  - `cd agents-plugin-tool && go test -race -count=1 ./internal/wsi18n/... ./internal/wspackage/... ./internal/wsconfig/... ./internal/wstestutil/...`: PASS.
+- **Decisions:**
+  - Simplified `companion_director.go` to resolve every harness's small tier uniformly via `wsconfig.HarnessTiers(opts, harness)` (no harness-name branch), preserving `TestCommonCodeHasNoHarnessNameBranch`.
+  - Scoped `agent.tier_routing_dynamic` and `agent.tier_routing_dynamic_classifier` on the dedicated `tier_routing` settings page (per `f4bef1cb`) and kept `agent.tier_routing_dynamic` default `false` so compatibility stays T0.
+
