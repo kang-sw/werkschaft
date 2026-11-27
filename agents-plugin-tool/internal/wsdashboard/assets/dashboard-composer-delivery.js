@@ -930,7 +930,17 @@
         m.el = outboxBubble(m);
         m.lingerTimer = setTimeout(function () { outboxDrop(m); }, OUTBOX_LINGER);
       }
-      boardFlushViewed(false);
+      if (typeof boardScheduleFlushViewed === "function") boardScheduleFlushViewed();
+      else if (typeof requestAnimationFrame === "function") {
+        if (!outboxAcked._flushRaf) {
+          outboxAcked._flushRaf = requestAnimationFrame(function () {
+            outboxAcked._flushRaf = 0;
+            boardFlushViewed(false);
+          });
+        }
+      } else {
+        boardFlushViewed(false);
+      }
     }
     // A fresh draft numbers its images from 1 again once nothing, sent or
     // not, could name a number.

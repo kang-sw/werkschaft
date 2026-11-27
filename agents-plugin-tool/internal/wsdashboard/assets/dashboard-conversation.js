@@ -920,9 +920,209 @@
   }
 
   function wbUpdateQueryBoard(b, sel) {
+    var api = wbUpdateQueryBoard._api;
+    if (!api) {
+      var CARD_SEL = '.card.policy[data-id], .arow[data-id], .ckrow[data-id]:not([data-assumed]), .ckrow[data-item], .wb-hitem.original-question[data-item], .wb-hitem[data-item][data-state="ask"], .wb-hitem[data-item][data-state="settled"]';
+      var recCache = typeof WeakMap === "function" ? new WeakMap() : null;
+      var vsGen = 0, lastVs = null, lastVsGen = -1, lastVsSize = -1, virtDirty = true, virtCombined = null;
+      var makeBucket = function () {
+        return { open: new Map(), ask: new Map(), settledHist: new Map(), settledCk: new Map() };
+      };
+      var putFirst = function (map, key, el, topic, order) {
+        if (!key) return;
+        if (!map.has(key)) map.set(key, { el: el, topic: topic, order: order });
+      };
+      var indexEl = function (bucket, el, topic, orderRef) {
+        if (!el || el.nodeType !== 1) return;
+        var did = el.getAttribute("data-id");
+        if (did) {
+          var cls = el.classList;
+          var isOpen = (cls && ((cls.contains("card") && cls.contains("policy")) || cls.contains("arow") || (cls.contains("ckrow") && (!el.hasAttribute || !el.hasAttribute("data-assumed")))))
+            || (el.matches && el.matches('.card.policy[data-id], .arow[data-id], .ckrow[data-id]:not([data-assumed])'));
+          if (isOpen) putFirst(bucket.open, did, el, topic, orderRef.n++);
+        }
+        var item = el.getAttribute("data-item");
+        if (item) {
+          var isCk = (el.classList && el.classList.contains("ckrow")) || (el.matches && el.matches(".ckrow"));
+          if (isCk) {
+            putFirst(bucket.settledCk, item, el, topic, orderRef.n++);
+          } else {
+            var isHist = (el.classList && el.classList.contains("wb-hitem")) || (el.matches && el.matches(".wb-hitem"));
+            if (isHist) {
+              var st = el.getAttribute("data-state");
+              if ((el.classList && el.classList.contains("original-question")) || st === "ask") {
+                putFirst(bucket.ask, item, el, topic, orderRef.n++);
+              }
+              if (st === "settled") {
+                putFirst(bucket.settledHist, item, el, topic, orderRef.n++);
+              }
+            }
+          }
+        }
+      };
+      var indexSubtree = function (bucket, root, topic, orderRef) {
+        if (!root || root.nodeType !== 1) return;
+        if (root.matches && root.matches(CARD_SEL)) indexEl(bucket, root, topic, orderRef);
+        if (root.querySelectorAll) {
+          var hits = root.querySelectorAll(CARD_SEL);
+          for (var hi = 0; hi < hits.length; hi++) indexEl(bucket, hits[hi], topic, orderRef);
+        }
+      };
+      var getRecBucket = function (rec) {
+        var stashed = rec.stashed && rec.stashed.nodeType === 1 ? rec.stashed : null;
+        var children = !stashed && rec.children && rec.children.length ? rec.children : null;
+        var childLen = children ? children.length : 0;
+        var cached = recCache ? recCache.get(rec) : null;
+        if (cached && cached.stashed === stashed && cached.children === children && cached.childLen === childLen) {
+          return cached.bucket;
+        }
+        var bucket = makeBucket();
+        var orderRef = { n: 0 };
+        if (stashed) {
+          indexSubtree(bucket, stashed, 0, orderRef);
+        } else if (children) {
+          for (var ci = 0; ci < childLen; ci++) {
+            indexSubtree(bucket, children[ci], 0, orderRef);
+          }
+        }
+        if (recCache) recCache.set(rec, { stashed: stashed, children: children, childLen: childLen, bucket: bucket });
+        return bucket;
+      };
+      var hookStore = function (vs) {
+        if (!vs || vs.__wbIdxHooked) return;
+        ["set", "delete", "clear"].forEach(function (m) {
+          var orig = vs[m];
+          if (typeof orig === "function") {
+            try {
+              Object.defineProperty(vs, m, {
+                configurable: true,
+                writable: true,
+                value: function () {
+                  var res = orig.apply(this, arguments);
+                  vsGen++;
+                  virtDirty = true;
+                  return res;
+                }
+              });
+            } catch (e) {}
+          }
+        });
+        try {
+          Object.defineProperty(vs, "__wbIdxHooked", { configurable: true, value: true });
+        } catch (e) {}
+      };
+      var ensureVirtIdx = function () {
+        if (typeof virtualStore === "undefined" || !virtualStore || !virtualStore.size) return null;
+        hookStore(virtualStore);
+        if (virtCombined && lastVs === virtualStore && lastVsGen === vsGen && !virtDirty && lastVsSize === virtualStore.size) {
+          return virtCombined;
+        }
+        var combined = makeBucket();
+        var topicSeq = 0;
+        virtualStore.forEach(function (rec) {
+          if (!rec) return;
+          var tIdx = topicSeq++;
+          var tb = getRecBucket(rec);
+          tb.open.forEach(function (entry, k) {
+            if (!combined.open.has(k)) combined.open.set(k, { el: entry.el, topic: tIdx, order: entry.order });
+          });
+          tb.ask.forEach(function (entry, k) {
+            if (!combined.ask.has(k)) combined.ask.set(k, { el: entry.el, topic: tIdx, order: entry.order });
+          });
+          tb.settledHist.forEach(function (entry, k) {
+            if (!combined.settledHist.has(k)) combined.settledHist.set(k, { el: entry.el, topic: tIdx, order: entry.order });
+          });
+          tb.settledCk.forEach(function (entry, k) {
+            if (!combined.settledCk.has(k)) combined.settledCk.set(k, { el: entry.el, topic: tIdx, order: entry.order });
+          });
+        });
+        virtCombined = combined;
+        lastVs = virtualStore;
+        lastVsGen = vsGen;
+        lastVsSize = virtualStore.size;
+        virtDirty = false;
+        return combined;
+      };
+      var pickOpen = function (bucket, keys) {
+        if (!bucket) return null;
+        var best = null;
+        for (var ki = 0; ki < keys.length; ki++) {
+          var cand = bucket.open.get(keys[ki]);
+          if (cand && (!best || cand.topic < best.topic || (cand.topic === best.topic && cand.order < best.order))) {
+            best = cand;
+          }
+        }
+        return best ? best.el : null;
+      };
+      var pickItem = function (map, key) {
+        if (!map) return null;
+        var entry = map.get(key);
+        return entry ? entry.el : null;
+      };
+      var parseKnownSel = function (s) {
+        if (s.indexOf('.card.policy[data-id="') !== -1 && s.indexOf('.arow[data-id="') !== -1 && s.indexOf('.ckrow[data-id="') !== -1) {
+          var ids = [], seenIds = Object.create(null), re = /\[data-id="([^"]+)"\]/g, m;
+          while ((m = re.exec(s))) {
+            if (!seenIds[m[1]]) { seenIds[m[1]] = true; ids.push(m[1]); }
+          }
+          if (ids.length) return { slot: "open", keys: ids };
+        }
+        var am = s.match(/^\.wb-hitem\.original-question\[data-item="([^"]+)"\], \.wb-hitem\[data-item="([^"]+)"\]\[data-state="ask"\]$/);
+        if (am && am[1] === am[2]) return { slot: "ask", key: am[1] };
+        var sm = s.match(/^\.wb-hitem\[data-item="([^"]+)"\]\[data-state="settled"\]$/);
+        if (sm) return { slot: "settledHist", key: sm[1] };
+        var cm = s.match(/^\.ckrow\[data-item="([^"]+)"\]$/);
+        if (cm) return { slot: "settledCk", key: cm[1] };
+        return null;
+      };
+      var pass = null;
+      api = wbUpdateQueryBoard._api = {
+        getPass: function () { return pass; },
+        beginPass: function (board) {
+          if (pass && pass.board === board) { pass.depth++; return; }
+          if (pass) { pass.depth++; return; }
+          var liveBucket = makeBucket();
+          if (board && board.querySelectorAll) indexSubtree(liveBucket, board, 0, { n: 0 });
+          var virtBucket = ensureVirtIdx();
+          pass = { board: board, live: liveBucket, virt: virtBucket, states: Object.create(null), depth: 1 };
+        },
+        endPass: function () {
+          if (!pass) return;
+          pass.depth--;
+          if (pass.depth <= 0) pass = null;
+        },
+        invalidateVirtual: function (key) {
+          vsGen++;
+          virtDirty = true;
+          virtCombined = null;
+          if (key !== undefined && key !== null && recCache && typeof virtualStore !== "undefined" && virtualStore && virtualStore.get) {
+            var hit = virtualStore.get(key);
+            if (hit) recCache.delete(hit);
+          }
+        },
+        lookupSlot: function (bucket, spec) {
+          if (!bucket || !spec) return null;
+          if (spec.slot === "open") return pickOpen(bucket, spec.keys);
+          if (spec.slot === "ask") return pickItem(bucket.ask, spec.key);
+          if (spec.slot === "settledHist") return pickItem(bucket.settledHist, spec.key);
+          if (spec.slot === "settledCk") return pickItem(bucket.settledCk, spec.key);
+          return null;
+        },
+        virtBucket: ensureVirtIdx,
+        parseSel: parseKnownSel
+      };
+    }
+    if (b === undefined && sel === undefined) return api;
+    if (!b || !sel) return null;
+    var activePass = api.getPass();
+    var spec = api.parseSel(sel);
+    if (spec && activePass && activePass.board === b) {
+      return api.lookupSlot(activePass.live, spec) || api.lookupSlot(activePass.virt, spec);
+    }
     var el = b.querySelector(sel);
     if (el) return el;
     if (typeof virtualStore === "undefined" || !virtualStore || !virtualStore.size) return null;
+    if (spec) return api.lookupSlot(api.virtBucket(), spec);
     var found = null;
     virtualStore.forEach(function (rec) {
       if (found || !rec) return;
@@ -950,6 +1150,12 @@
     var b = region("board");
     var id = wbUpdateNormID(rawId);
     if (!b || !id) return null;
+    var qApi = wbUpdateQueryBoard();
+    var pass = qApi && qApi.getPass ? qApi.getPass() : null;
+    if (pass && pass.board === b && Object.prototype.hasOwnProperty.call(pass.states, id)) {
+      return pass.states[id];
+    }
+    var res = null;
     var pad = id.length < 2 ? "0" + id : id;
     var openSel = '.card.policy[data-id="' + pad + '"], .arow[data-id="' + pad + '"], .ckrow[data-id="' + pad + '"]:not([data-assumed])';
     if (pad !== id) openSel += ', .card.policy[data-id="' + id + '"], .arow[data-id="' + id + '"], .ckrow[data-id="' + id + '"]:not([data-assumed])';
@@ -962,37 +1168,44 @@
       var openCls = wbUpdateClassFromEl(openEl) || wbUpdateClassFromEl(askEl) || "check";
       var openTitle = wbUpdateTitleFromEl(openEl, null, null, askEl);
       if (openEl.classList.contains("sent-held")) {
-        return { cls: openCls, title: openTitle, state: "sent", clsName: "st-sent", text: wsT("js.wbupdate.sent_held") };
+        res = { cls: openCls, title: openTitle, state: "sent", clsName: "st-sent", text: wsT("js.wbupdate.sent_held") };
+      } else if (openEl.classList.contains("sent-sent")) {
+        res = { cls: openCls, title: openTitle, state: "sent", clsName: "st-sent", text: wsT("js.wbupdate.sent_waiting") };
+      } else {
+        var pickBtn = openEl.querySelector('.opt[data-opt][aria-pressed="true"], .btn[data-v][aria-pressed="true"]');
+        var pick = pickBtn ? (pickBtn.getAttribute("data-opt") || pickBtn.getAttribute("data-v") || "") : "";
+        var box = openEl.querySelector("label.ack > input, label.ck > input");
+        if (!pick && openEl.hasAttribute("data-no")) pick = "no";
+        else if (!pick && box && box.checked) pick = "ok";
+        var note = openEl.querySelector("textarea.note, .wsc-backing");
+        var memo = note ? wbUpdateFlattenMemo(note.value) : "";
+        if (pick || memo) {
+          var stCls = pick === "ok" ? "st-staged-ok" : pick === "no" ? "st-staged-no" : "st-staged";
+          var stText = pick && memo ? wsT("js.wbupdate.staged_pick", pick) + " · " + memo
+            : pick ? wsT("js.wbupdate.staged_pick", pick)
+            : wsT("js.wbupdate.staged_memo", memo);
+          res = { cls: openCls, title: openTitle, state: "staged", clsName: stCls, text: stText };
+        } else if (wbUpdateIsHeld(openEl)) {
+          res = { cls: openCls, title: openTitle, state: "held", clsName: "st-held", text: wsT("js.pill.held") };
+        } else {
+          res = { cls: openCls, title: openTitle, state: "open", clsName: "st-open", text: wsT("js.wbupdate.unanswered") };
+        }
       }
-      if (openEl.classList.contains("sent-sent")) {
-        return { cls: openCls, title: openTitle, state: "sent", clsName: "st-sent", text: wsT("js.wbupdate.sent_waiting") };
-      }
-      var pickBtn = openEl.querySelector('.opt[data-opt][aria-pressed="true"], .btn[data-v][aria-pressed="true"]');
-      var pick = pickBtn ? (pickBtn.getAttribute("data-opt") || pickBtn.getAttribute("data-v") || "") : "";
-      var box = openEl.querySelector("label.ack > input, label.ck > input");
-      if (!pick && openEl.hasAttribute("data-no")) pick = "no";
-      else if (!pick && box && box.checked) pick = "ok";
-      var note = openEl.querySelector("textarea.note, .wsc-backing");
-      var memo = note ? wbUpdateFlattenMemo(note.value) : "";
-      if (pick || memo) {
-        var stCls = pick === "ok" ? "st-staged-ok" : pick === "no" ? "st-staged-no" : "st-staged";
-        var stText = pick && memo ? wsT("js.wbupdate.staged_pick", pick) + " · " + memo
-          : pick ? wsT("js.wbupdate.staged_pick", pick)
-          : wsT("js.wbupdate.staged_memo", memo);
-        return { cls: openCls, title: openTitle, state: "staged", clsName: stCls, text: stText };
-      }
-      if (wbUpdateIsHeld(openEl)) {
-        return { cls: openCls, title: openTitle, state: "held", clsName: "st-held", text: wsT("js.pill.held") };
-      }
-      return { cls: openCls, title: openTitle, state: "open", clsName: "st-open", text: wsT("js.wbupdate.unanswered") };
+      if (pass && pass.board === b) pass.states[id] = res;
+      return res;
     }
 
     var settledHist = wbUpdateQueryBoard(b, '.wb-hitem[data-item="' + id + '"][data-state="settled"]');
     var settledCk = wbUpdateQueryBoard(b, '.ckrow[data-item="' + id + '"]');
-    if (!settledHist && !settledCk) return null;
+    if (!settledHist && !settledCk) {
+      if (pass && pass.board === b) pass.states[id] = null;
+      return null;
+    }
     var cls = wbUpdateClassFromEl(settledHist) || wbUpdateClassFromEl(settledCk) || wbUpdateClassFromEl(askEl) || "check";
     var title = wbUpdateTitleFromEl(null, settledCk, settledHist, askEl);
-    return { cls: cls, title: title, state: "settled", clsName: "st-settled", text: "✓ " + wbUpdateSettledSummary(settledHist, settledCk) };
+    res = { cls: cls, title: title, state: "settled", clsName: "st-settled", text: "✓ " + wbUpdateSettledSummary(settledHist, settledCk) };
+    if (pass && pass.board === b) pass.states[id] = res;
+    return res;
   }
 
   function hydrateWbUpdateChip(chip, id, state) {
@@ -1077,35 +1290,85 @@
   function hydrateWbUpdateItems(scope) {
     var rootEl = scope || entriesBox() || doc;
     if (!rootEl || !rootEl.querySelectorAll) return;
-    if (rootEl.matches && rootEl.matches(".wbupdate-items")) {
-      hydrateWbUpdateGroup(rootEl);
-      return;
+    var qApi = wbUpdateQueryBoard();
+    if (qApi && qApi.beginPass) qApi.beginPass(region("board"));
+    try {
+      if (rootEl.matches && rootEl.matches(".wbupdate-items")) {
+        hydrateWbUpdateGroup(rootEl);
+        return;
+      }
+      q(".wbupdate-items", rootEl).forEach(hydrateWbUpdateGroup);
+    } finally {
+      if (qApi && qApi.endPass) qApi.endPass();
     }
-    q(".wbupdate-items", rootEl).forEach(hydrateWbUpdateGroup);
   }
 
   function syncWbUpdateItems(ids) {
-    var box = entriesBox() || doc;
-    if (!box || !box.querySelectorAll) return;
-    if (!ids || !ids.length) {
-      hydrateWbUpdateItems(box);
+    var batch = syncWbUpdateItems._batch;
+    if (batch && batch.depth > 0) {
+      if (!ids || !ids.length) {
+        batch.all = true;
+      } else if (!batch.all) {
+        for (var bi = 0; bi < ids.length; bi++) {
+          var bid = wbUpdateNormID(ids[bi]);
+          if (bid) batch.ids[bid] = true;
+        }
+      }
       return;
     }
-    var seen = Object.create(null);
-    for (var i = 0; i < ids.length; i++) {
-      var id = wbUpdateNormID(ids[i]);
-      if (!id || seen[id]) continue;
-      seen[id] = true;
-      var state = readBoardQuestionState(id);
-      var pad = id.length < 2 ? "0" + id : id;
-      var sel = '.wbupdate-item-id[data-wb-item-id="' + id + '"], .wbupdate-item-id[data-wb-jump="item-' + id + '"]';
-      if (pad !== id) sel += ', .wbupdate-item-id[data-wb-jump="item-' + pad + '"]';
-      var targets = q(sel, box);
-      for (var j = 0; j < targets.length; j++) {
-        hydrateWbUpdateChip(targets[j], id, state);
-        var grp = targets[j].closest(".wbupdate-items");
-        if (grp) grp.classList.toggle("wbupdate-hydrated", !!grp.querySelector(".wbupdate-cap"));
+    var box = entriesBox() || doc;
+    if (!box || !box.querySelectorAll) return;
+    var qApi = wbUpdateQueryBoard();
+    if (qApi && qApi.beginPass) qApi.beginPass(region("board"));
+    try {
+      if (!ids || !ids.length) {
+        hydrateWbUpdateItems(box);
+        return;
       }
+      var seen = Object.create(null);
+      for (var i = 0; i < ids.length; i++) {
+        var id = wbUpdateNormID(ids[i]);
+        if (!id || seen[id]) continue;
+        seen[id] = true;
+        var state = readBoardQuestionState(id);
+        var pad = id.length < 2 ? "0" + id : id;
+        var sel = '.wbupdate-item-id[data-wb-item-id="' + id + '"], .wbupdate-item-id[data-wb-jump="item-' + id + '"]';
+        if (pad !== id) sel += ', .wbupdate-item-id[data-wb-jump="item-' + pad + '"]';
+        var targets = q(sel, box);
+        for (var j = 0; j < targets.length; j++) {
+          hydrateWbUpdateChip(targets[j], id, state);
+          var grp = targets[j].closest(".wbupdate-items");
+          if (grp) grp.classList.toggle("wbupdate-hydrated", !!grp.querySelector(".wbupdate-cap"));
+        }
+      }
+    } finally {
+      if (qApi && qApi.endPass) qApi.endPass();
+    }
+  }
+
+  function wbUpdateInvalidateVirtual(key) {
+    var api = wbUpdateQueryBoard();
+    if (api && api.invalidateVirtual) api.invalidateVirtual(key);
+  }
+
+  function wbUpdateBeginBatch() {
+    var b = syncWbUpdateItems._batch;
+    if (!b) b = syncWbUpdateItems._batch = { depth: 0, all: false, ids: Object.create(null) };
+    b.depth++;
+  }
+
+  function wbUpdateEndBatch() {
+    var b = syncWbUpdateItems._batch;
+    if (!b || b.depth <= 0) return;
+    b.depth--;
+    if (b.depth > 0) return;
+    var all = b.all, idMap = b.ids;
+    b.all = false;
+    b.ids = Object.create(null);
+    if (all) syncWbUpdateItems();
+    else {
+      var keys = Object.keys(idMap);
+      if (keys.length) syncWbUpdateItems(keys);
     }
   }
 
@@ -1191,5 +1454,12 @@
     watchWbUpdateBoard();
     hydrateWbUpdateItems(entriesBox() || doc);
   }
-  window.WsWbUpdateCards = { hydrate: hydrateWbUpdateItems, sync: syncWbUpdateItems, init: initWbUpdateCards };
+  window.WsWbUpdateCards = {
+    hydrate: hydrateWbUpdateItems,
+    sync: syncWbUpdateItems,
+    init: initWbUpdateCards,
+    invalidateVirtual: wbUpdateInvalidateVirtual,
+    beginBatch: wbUpdateBeginBatch,
+    endBatch: wbUpdateEndBatch
+  };
 

@@ -119,94 +119,100 @@
     // fences draw once merged; the streaming reply (convlive) keeps them
     // code blocks.
     var ins = null, convoRegion = name === "entries" || name === "convlive";
-    if (convoRegion) convoSwapping++;
+    var wbBatch = (board || name === "convlive") && typeof wbUpdateBeginBatch === "function";
+    if (wbBatch) wbUpdateBeginBatch();
     try {
-      if (name === "entries") {
-        var entryNext = typeof html === "string" ? entryInputFull(html) : html;
-        mergeEntriesRegion(el, entryNext || html, pin, entryRendered);
-        entryRendered = entryNext;
-        if (typeof wbOnlyOn === "function" && wbOnlyOn()) wbFoldSync();
+      if (convoRegion) convoSwapping++;
+      try {
+        if (name === "entries") {
+          var entryNext = typeof html === "string" ? entryInputFull(html) : html;
+          mergeEntriesRegion(el, entryNext || html, pin, entryRendered);
+          entryRendered = entryNext;
+          if (typeof wbOnlyOn === "function" && wbOnlyOn()) wbFoldSync();
+        }
+        else if (name === "tree") {
+          var treeNext = typeof html === "string" ? treeInputFull(html) : html;
+          ins = treeNext && mergeTreeRows(el, treeRendered, treeNext);
+          treeRendered = treeNext;
+          if (!ins) {
+            el.innerHTML = treeNext ? treeInputHTML(treeNext) : html;
+            restoreOpen(el); fmtTimes(el); sweepOutImgs(el);
+          } else ins.forEach(function (n) { restoreOpen(n); fmtTimes(n); sweepOutImgs(n); });
+        }
+        else if (name === "panels") {
+          var panelNext = typeof html === "string" ? panelInputFull(html) : html;
+          ins = panelNext && mergePanelRows(el, panelRendered, panelNext);
+          panelRendered = panelNext;
+          if (!ins) {
+            el.innerHTML = panelNext ? panelInputHTML(panelNext) : html;
+            restoreOpen(el); fmtTimes(el); sweepOutImgs(el);
+          } else ins.forEach(function (n) { restoreOpen(n); fmtTimes(n); sweepOutImgs(n); });
+        }
+        else if (board) {
+          ins = morphBoard(el, html);
+          if (window.wbHistory && window.wbHistory.sweep) window.wbHistory.sweep();
+          ins.forEach(bandBoard);
+          ins.forEach(function (n) {
+            var taken = n && n.__wbVirtualTaken || null;
+            if (taken) delete n.__wbVirtualTaken;
+            // Materialize the reader's older pages before restoring disclosures
+            // and frame heights, including immutable panel versions off the tail.
+            if (window.wbHistory) {
+              window.wbHistory.init(n);
+              window.wbHistory.restore(n, history);
+              if (taken && taken.history) window.wbHistory.restore(n, taken.history);
+            }
+            watchBoard(n);
+            if (taken && taken.openDetails && typeof virtualRestoreOpen === "function") virtualRestoreOpen(n, taken.openDetails, { stashed: true });
+            restoreOpen(n);
+            fmtTimes(n);
+            sweepOutImgs(n);
+            if (taken && taken.frameH) setFrameHeights(n, taken.frameH);
+            setFrameHeights(n, frameH);
+            mountFrames(n);
+            if (taken && taken.answers) writeAnswers(n, taken.answers);
+            writeAnswers(n, answers);
+            if (taken && taken.scrollTop) n.scrollTop = taken.scrollTop;
+            if (window.WsCards && window.WsCards.decorate) window.WsCards.decorate(n);
+            // A placeholder a swap brought (the viewport bands mount it later)
+            // takes the mark too, and its frame takes it once mounted.
+            q(".doc-frame", n).forEach(function (f) { f.wbKeep = true; });
+          });
+          // The morph retains unchanged topic nodes, including hydrated closed
+          // pages. Their image frames still follow the board's external-file stamp.
+          if (window.wbHistory && window.wbHistory.refreshImages) window.wbHistory.refreshImages(doc);
+        } else {
+          el.innerHTML = html;
+          if (name === "rail" && WsRail) railHoverUpdates = WsRail.hoverUpdates(el);
+          restoreOpen(el);
+          fmtTimes(el);
+          sweepOutImgs(el);
+        }
+      } finally {
+        if (convoRegion) convoSwapping--;
       }
-      else if (name === "tree") {
-        var treeNext = typeof html === "string" ? treeInputFull(html) : html;
-        ins = treeNext && mergeTreeRows(el, treeRendered, treeNext);
-        treeRendered = treeNext;
-        if (!ins) {
-          el.innerHTML = treeNext ? treeInputHTML(treeNext) : html;
-          restoreOpen(el); fmtTimes(el); sweepOutImgs(el);
-        } else ins.forEach(function (n) { restoreOpen(n); fmtTimes(n); sweepOutImgs(n); });
+      syncSpinnerPhases(el);
+      el.setAttribute("data-h", hash);
+      if (board) {
+        indexFrames();
+        if (window.WsPanelCard && window.WsPanelCard.sync) window.WsPanelCard.sync();
+        if (window.wbForm) window.wbForm();
+        bindCapsuleNotes();
+        mermaid(ins);
+        syncChips();
+        // The notes came back with their markers (writeAnswers); their image
+        // rows go back after them, and a note the swap took drops its images.
+        if (ctext) { syncMarkers(); renderImgs(); }
+        // An input-held selection is already a value snapshot, even when its
+        // source frame leaves the board during an update.
+        if (mpend && !mpend.locked && mpend.frame && !doc.contains(mpend.frame)) hideMention();
       }
-      else if (name === "panels") {
-        var panelNext = typeof html === "string" ? panelInputFull(html) : html;
-        ins = panelNext && mergePanelRows(el, panelRendered, panelNext);
-        panelRendered = panelNext;
-        if (!ins) {
-          el.innerHTML = panelNext ? panelInputHTML(panelNext) : html;
-          restoreOpen(el); fmtTimes(el); sweepOutImgs(el);
-        } else ins.forEach(function (n) { restoreOpen(n); fmtTimes(n); sweepOutImgs(n); });
-      }
-      else if (board) {
-        ins = morphBoard(el, html);
-        if (window.wbHistory && window.wbHistory.sweep) window.wbHistory.sweep();
-        ins.forEach(bandBoard);
-        ins.forEach(function (n) {
-          var taken = n && n.__wbVirtualTaken || null;
-          if (taken) delete n.__wbVirtualTaken;
-          // Materialize the reader's older pages before restoring disclosures
-          // and frame heights, including immutable panel versions off the tail.
-          if (window.wbHistory) {
-            window.wbHistory.init(n);
-            window.wbHistory.restore(n, history);
-            if (taken && taken.history) window.wbHistory.restore(n, taken.history);
-          }
-          watchBoard(n);
-          if (taken && taken.openDetails && typeof virtualRestoreOpen === "function") virtualRestoreOpen(n, taken.openDetails, { stashed: true });
-          restoreOpen(n);
-          fmtTimes(n);
-          sweepOutImgs(n);
-          if (taken && taken.frameH) setFrameHeights(n, taken.frameH);
-          setFrameHeights(n, frameH);
-          mountFrames(n);
-          if (taken && taken.answers) writeAnswers(n, taken.answers);
-          writeAnswers(n, answers);
-          if (taken && taken.scrollTop) n.scrollTop = taken.scrollTop;
-          if (window.WsCards && window.WsCards.decorate) window.WsCards.decorate(n);
-          // A placeholder a swap brought (the viewport bands mount it later)
-          // takes the mark too, and its frame takes it once mounted.
-          q(".doc-frame", n).forEach(function (f) { f.wbKeep = true; });
-        });
-        // The morph retains unchanged topic nodes, including hydrated closed
-        // pages. Their image frames still follow the board's external-file stamp.
-        if (window.wbHistory && window.wbHistory.refreshImages) window.wbHistory.refreshImages(doc);
-      } else {
-        el.innerHTML = html;
-        if (name === "rail" && WsRail) railHoverUpdates = WsRail.hoverUpdates(el);
-        restoreOpen(el);
-        fmtTimes(el);
-        sweepOutImgs(el);
+      if (board || name === "convlive") {
+        applySent(board);
+        if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
       }
     } finally {
-      if (convoRegion) convoSwapping--;
-    }
-    syncSpinnerPhases(el);
-    el.setAttribute("data-h", hash);
-    if (board) {
-      indexFrames();
-      if (window.WsPanelCard && window.WsPanelCard.sync) window.WsPanelCard.sync();
-      if (window.wbForm) window.wbForm();
-      bindCapsuleNotes();
-      mermaid(ins);
-      syncChips();
-      // The notes came back with their markers (writeAnswers); their image
-      // rows go back after them, and a note the swap took drops its images.
-      if (ctext) { syncMarkers(); renderImgs(); }
-      // An input-held selection is already a value snapshot, even when its
-      // source frame leaves the board during an update.
-      if (mpend && !mpend.locked && mpend.frame && !doc.contains(mpend.frame)) hideMention();
-    }
-    if (board || name === "convlive") {
-      applySent(board);
-      if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
+      if (wbBatch && typeof wbUpdateEndBatch === "function") wbUpdateEndBatch();
     }
     if (name === "convlive" || name === "entries") outboxSync();
     if (name === "panels") { drawerSync(); restorePanelReader(el, panelReader); }
@@ -223,11 +229,7 @@
     }
     if (pin) (typeof queuePinConvo === "function" ? queuePinConvo() : pinConvo());
     else if (convoRegion && typeof queueSyncConvoBottom === "function") queueSyncConvoBottom();
-    if (live && TAB[name] && !tabShown(TAB[name])) {
-      var dot = tabDot(TAB[name]);
-      if (dot) dot.classList.add("on");
-    }
-    if (live && TAB[name] === "convo" && !visible(convo) && (visible(fpane) || visible($("cterm-panes")) || (grid && grid.getAttribute("data-ctab") !== "convo")) && ctabDot()) ctabDot().classList.add("on");
+    if (live && TAB[name]) queueSwapDot(TAB[name]);
     if (name === "panels") drawerSwapped();
     if (name === "tree" || name === "convlive") drawerWait();
     if (name === "tree") agSwapped();
@@ -257,7 +259,34 @@
   // bytes (TopicHTML, render.go), compared in place of the HTML (topicSeen).
   var boardSeen = {}, boardRendered = null, boardLatest = null, boardPending = Object.create(null), boardRelease = false;
   var boardOwn = Object.create(null), boardImmediate = Object.create(null), boardSnap = null, boardAfterApply = [];
-  var boardChanges = [], boardOffered = null, boardReleaseFrame = 0;
+  var boardChanges = [], boardOffered = null, boardReleaseFrame = 0, boardReleaseTimer = 0;
+  var swapDotFrame = 0, swapDotTimer = 0, swapDotPending = Object.create(null);
+  function flushSwapDots() {
+    swapDotFrame = 0;
+    swapDotTimer = 0;
+    var tabs = Object.keys(swapDotPending);
+    swapDotPending = Object.create(null);
+    for (var i = 0; i < tabs.length; i++) {
+      var t = tabs[i];
+      if (!tabShown(t)) {
+        var dot = tabDot(t);
+        if (dot) dot.classList.add("on");
+      }
+      if (t === "convo") {
+        var cVis = typeof convoVisible === "function" ? convoVisible() : (typeof paneShown === "function" ? paneShown("convo") : visible(convo));
+        var fVis = typeof paneShown === "function" ? paneShown("files") : visible(fpane);
+        var tVis = typeof paneShown === "function" ? paneShown("cterm-panes") : visible($("cterm-panes"));
+        if (!cVis && (fVis || tVis || (grid && grid.getAttribute("data-ctab") !== "convo")) && ctabDot()) ctabDot().classList.add("on");
+      }
+    }
+  }
+  function queueSwapDot(tab) {
+    swapDotPending[tab] = true;
+    if (swapDotFrame || swapDotTimer) return;
+    var hidden = (typeof pageHidden === "function" ? pageHidden() : !!(doc && doc.hidden)) || typeof requestAnimationFrame !== "function";
+    if (hidden) swapDotTimer = setTimeout(flushSwapDots, 0);
+    else swapDotFrame = requestAnimationFrame(flushSwapDots);
+  }
   var boardPaged = Object.create(null);
   var boardReturnTimer = 0, boardReturnFresh = false;
   function topicKey(n) {
@@ -1390,8 +1419,31 @@
       });
     });
   }
+  function boardScheduleFlushViewed() {
+    if (boardReleaseFrame || boardReleaseTimer) return;
+    if (!Object.keys(boardPending).length) return;
+    var hidden = (typeof pageHidden === "function" ? pageHidden() : !!(doc && doc.hidden)) || typeof requestAnimationFrame !== "function";
+    if (hidden) {
+      boardReleaseTimer = setTimeout(function () {
+        boardReleaseTimer = 0;
+        boardFlushViewed(false);
+      }, 0);
+      return;
+    }
+    boardReleaseFrame = requestAnimationFrame(function () {
+      boardReleaseFrame = 0;
+      boardFlushViewed(false);
+    });
+  }
   function boardFlushViewed(explicit) {
+    if (boardReleaseFrame && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(boardReleaseFrame);
+    }
     boardReleaseFrame = 0;
+    if (typeof boardReleaseTimer !== "undefined" && boardReleaseTimer) {
+      clearTimeout(boardReleaseTimer);
+      boardReleaseTimer = 0;
+    }
     if (!Object.keys(boardPending).length) return;
     boardRelease = !!explicit;
     try {

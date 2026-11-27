@@ -237,6 +237,7 @@
       openDetails: snap.openDetails,
       stashed: null
     });
+    if (typeof wbUpdateInvalidateVirtual === "function") wbUpdateInvalidateVirtual(k);
     sec.setAttribute("data-wb-virtual", "1");
     return true;
   }
@@ -317,6 +318,7 @@
     rec.stashed = incomingSec.cloneNode(true);
     rec.children = null;
     virtualStore.set(k, rec);
+    if (typeof wbUpdateInvalidateVirtual === "function") wbUpdateInvalidateVirtual(k);
     return true;
   }
 
@@ -324,11 +326,15 @@
     if (k === null || k === undefined) return null;
     var rec = virtualStore.get(k) || null;
     virtualStore.delete(k);
+    if (typeof wbUpdateInvalidateVirtual === "function") wbUpdateInvalidateVirtual(k);
     return rec;
   }
 
   function virtualDropCollapsed(k) {
-    if (k !== null && k !== undefined) virtualStore.delete(k);
+    if (k !== null && k !== undefined) {
+      virtualStore.delete(k);
+      if (typeof wbUpdateInvalidateVirtual === "function") wbUpdateInvalidateVirtual(k);
+    }
   }
 
   function virtualHydrate(sec, opts) {
@@ -337,7 +343,10 @@
     var k = topicKey(sec);
     var rec = k !== null ? virtualStore.get(k) : null;
     sec.removeAttribute("data-wb-virtual");
-    if (k !== null) virtualStore.delete(k);
+    if (k !== null) {
+      virtualStore.delete(k);
+      if (typeof wbUpdateInvalidateVirtual === "function") wbUpdateInvalidateVirtual(k);
+    }
     if (!virtualNearSet.has(sec)) virtualExemptSet.add(sec);
     if (!rec) return false;
     var immediate = !!(opts && opts.immediate);
@@ -519,7 +528,11 @@
     }
     var pruned = 0;
     Array.from(virtualStore.keys()).forEach(function (k) {
-      if (!present.has(k)) { virtualStore.delete(k); pruned++; }
+      if (!present.has(k)) {
+        virtualStore.delete(k);
+        if (typeof wbUpdateInvalidateVirtual === "function") wbUpdateInvalidateVirtual(k);
+        pruned++;
+      }
     });
     return pruned;
   }
@@ -879,6 +892,13 @@
   function freeMeasureHeight(n) {
     if (!n) return FREE_FALLBACK_H;
     var key = anchorId(n), h = 0;
+    var pageHiddenNow = !!(doc && (doc.hidden || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-animation-paused")))) ||
+      (typeof shHidden !== "undefined" && !!shHidden);
+    if (pageHiddenNow) {
+      if (typeof freeHeightCache !== "undefined") freeHeightCache._skippedHidden = true;
+      if (key !== null && freeHeightCache.has(key)) return freeHeightCache.get(key);
+      return FREE_FALLBACK_H;
+    }
     if (!n.hasAttribute || !n.hasAttribute("data-wb-offwindow")) {
       h = n.offsetHeight || 0;
       if (!(h > 0) && n.getBoundingClientRect) {
@@ -1706,6 +1726,9 @@
     };
   }
   function anchorVisibleCards() {
+    if ((doc && (doc.hidden || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-animation-paused")))) || (typeof shHidden !== "undefined" && !!shHidden)) {
+      return [];
+    }
     if (!freeActive) {
       var cur = anchorCurrent();
       return cur ? [cur] : [];
@@ -2200,6 +2223,20 @@
       boardEl.addEventListener("click", onBoardExemptEvt, { passive: true });
     }
     col.wbScrollOwner = true;
+    if (doc && doc.addEventListener) {
+      doc.addEventListener("ws-page-visibility", function () {
+        var hiddenNow = !!(doc.hidden || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-animation-paused"))) ||
+          (typeof shHidden !== "undefined" && !!shHidden);
+        if (!hiddenNow && typeof freeHeightCache !== "undefined" && freeHeightCache._skippedHidden) {
+          freeHeightCache._skippedHidden = false;
+          var bcol = $("bcol");
+          if (bcol) {
+            anchorApplySizes(bcol);
+            anchorSettle(null);
+          }
+        }
+      });
+    }
     anchorApplySizes(col);
     anchorSettle(null);
     if (!freeActive && typeof virtualReconcile === "function") virtualReconcile({ full: true });
