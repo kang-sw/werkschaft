@@ -626,7 +626,7 @@
   margin: auto;
   width: 24px;
   height: 24px;
-  border-radius: 50%;
+  border-radius: inherit;
   transform: scale(0);
   opacity: 0;
   pointer-events: none;
@@ -640,7 +640,7 @@
   color: var(--ucmd-hold-ink);
 }
 .ucmd-ibtn.is-hold.d-hold-active::before {
-  transform: scale(1.6);
+  transform: scale(1);
   opacity: .95;
   transition: transform var(--d-hold-dur, 1000ms) linear, opacity 120ms ease-out;
 }
@@ -649,7 +649,7 @@
   transform: scale(1.06);
 }
 .ucmd-ibtn.is-hold.d-hold-ready::before {
-  transform: scale(1.7);
+  transform: scale(1);
   opacity: 1;
 }
 

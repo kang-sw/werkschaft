@@ -533,3 +533,50 @@ test('rpSessMake uses hold-confirm for unsafe stop, archive hide, and close (no 
   assert.match(railCss, /\.rpop\s+\.spact\s+\.gs\s*\{[^}]*display:\s*grid/);
   assert.match(railCss, /\.rpop\s+\.spact\s+\.gs\s*>\s*\.gs-idle,\s*\.rpop\s+\.spact\s+\.gs\s*>\s*\.gs-ready\s*\{[^}]*grid-area:\s*1\s*\/\s*1/);
 });
+
+test('radial hold ::before fills inherit button border-radius without scale(>1) or negative inset overshoot', () => {
+  function cssRuleBody(src, selector) {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+    const m = src.match(new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`));
+    assert.ok(m, `missing CSS rule ${selector}`);
+    return m[1];
+  }
+  function assertNoOvershoot(body, label) {
+    assert.doesNotMatch(body, /inset:\s*-/, `${label} must not use negative inset`);
+    assert.doesNotMatch(body, /border-radius:\s*50%/, `${label} must not use border-radius: 50%`);
+    for (const m of body.matchAll(/scale\(\s*([0-9.]+)\s*\)/g)) {
+      assert.ok(Number(m[1]) <= 1, `${label} must not scale > 1 (got scale(${m[1]}))`);
+    }
+  }
+
+  const ucmdCss = readAssetSource('wsdashboard', 'dashboard-composer-ucmd.css');
+  const ucmdBefore = cssRuleBody(ucmdCss, '.ucmd-ibtn.is-hold::before');
+  assert.match(ucmdBefore, /inset:\s*0\s*;/);
+  assert.match(ucmdBefore, /border-radius:\s*inherit\s*;/);
+  assertNoOvershoot(ucmdBefore, '.ucmd-ibtn.is-hold::before');
+  const ucmdActive = cssRuleBody(ucmdCss, '.ucmd-ibtn.is-hold.d-hold-active::before');
+  assert.match(ucmdActive, /transform:\s*scale\(1\)\s*;/);
+  assertNoOvershoot(ucmdActive, '.ucmd-ibtn.is-hold.d-hold-active::before');
+  const ucmdReady = cssRuleBody(ucmdCss, '.ucmd-ibtn.is-hold.d-hold-ready::before');
+  assert.match(ucmdReady, /transform:\s*scale\(1\)\s*;/);
+  assertNoOvershoot(ucmdReady, '.ucmd-ibtn.is-hold.d-hold-ready::before');
+
+  const railCss = readAssetSource('wsdashboard', 'dashboard-rail.css');
+  const railBefore = cssRuleBody(railCss, '.rail .drstop.d-stop-unsafe::before');
+  assert.match(railBefore, /inset:\s*0\s*;/);
+  assert.match(railBefore, /border-radius:\s*inherit\s*;/);
+  assertNoOvershoot(railBefore, '.rail .drstop.d-stop-unsafe::before');
+  const railReady = cssRuleBody(railCss, '.rail .drstop.d-stop-unsafe.d-hold-ready::before');
+  assertNoOvershoot(railReady, '.rail .drstop.d-stop-unsafe.d-hold-ready::before');
+  const radialKf = railCss.match(/@keyframes\s+d-hold-radial\s*\{([^}]*\{[^}]*\}[^}]*\{[^}]*\}[^}]*)\}/);
+  assert.ok(radialKf, 'missing @keyframes d-hold-radial');
+  assertNoOvershoot(radialKf[1], '@keyframes d-hold-radial');
+
+  const acctCss = readAssetSource('wsdashboard', 'dashboard-settings-account.css');
+  const acctBefore = cssRuleBody(acctCss, '.account-icon.d-hold-btn::before');
+  assert.match(acctBefore, /inset:\s*0\s*;/);
+  assert.match(acctBefore, /border-radius:\s*inherit\s*;/);
+  assertNoOvershoot(acctBefore, '.account-icon.d-hold-btn::before');
+  const acctReady = cssRuleBody(acctCss, '.account-icon.d-hold-ready::before');
+  assertNoOvershoot(acctReady, '.account-icon.d-hold-ready::before');
+});
