@@ -275,6 +275,13 @@ func retiredPiFileChanged(source, archive, name string) (bool, error) {
 	if current.Size() != prior.Size() {
 		return true, nil
 	}
+	// Equal size, and the source untouched since the archive copy was written:
+	// the bytes are the ones archived. Skips reading a large session.jsonl on
+	// every startup; a later in-place write moves the source mtime past the
+	// archive's and falls through to the byte comparison.
+	if name == retiredPiSessionFile && !current.ModTime().After(prior.ModTime()) {
+		return false, nil
+	}
 	live, err := os.Open(from)
 	if err != nil {
 		return false, err
