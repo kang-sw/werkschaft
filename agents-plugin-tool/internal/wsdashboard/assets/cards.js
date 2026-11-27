@@ -1384,7 +1384,7 @@
   // gateWheel runs native wheel event e through the gate; an event that a
   // widget took (defaultPrevented) or a pinch (ctrlKey) never charges.
   function gateWheel(e, home) {
-    if (e.defaultPrevented || e.ctrlKey) return;
+    if (e.defaultPrevented || e.ctrlKey || e.metaKey) return;
     gateWheelInput(e.target, e.deltaY, e.deltaX, e.deltaMode, home, function () { e.preventDefault(); });
   }
   // onFrameWheel handles passive wheel deltas forwarded from a topic's
@@ -1536,6 +1536,215 @@
   // section, or the old one with the new bar's content), so this runs
   // after every settle, and draws a large topic or panel large again on the
   // node that now stands for it.
+  var ZOOM_STEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1, 1.25, 1.5, 2];
+  var MIN_ZOOM = ZOOM_STEPS[0], MAX_ZOOM = ZOOM_STEPS[ZOOM_STEPS.length - 1];
+  var zoomByKey = new Map();
+  var zoomBound = false;
+
+  function normZoom(z) {
+    var n = Number(z);
+    if (!isFinite(n) || n <= 0) return 1;
+    var best = ZOOM_STEPS[0], bestDist = Math.abs(n - best);
+    for (var i = 1; i < ZOOM_STEPS.length; i++) {
+      var d = Math.abs(n - ZOOM_STEPS[i]);
+      if (d < bestDist) { best = ZOOM_STEPS[i]; bestDist = d; }
+    }
+    return best;
+  }
+  function stepZoomValue(cur, dir) {
+    if (dir === 0) return 1;
+    var z = normZoom(cur);
+    var idx = ZOOM_STEPS.indexOf(z);
+    if (idx < 0) idx = ZOOM_STEPS.indexOf(1);
+    return ZOOM_STEPS[dir > 0 ? Math.min(ZOOM_STEPS.length - 1, idx + 1) : Math.max(0, idx - 1)];
+  }
+  function zoomSvg(pathD) {
+    return '<svg class="li" viewBox="0 0 24 24" aria-hidden="true"><path d="' + pathD + '"/></svg>';
+  }
+  function zoomLabel(translated, key, fallback) {
+    return translated && translated !== key ? translated : fallback;
+  }
+  function buildZoomGroup(onAction) {
+    var grp = doc.createElement("span");
+    grp.className = "d-zoom-grp";
+    grp.setAttribute("role", "group");
+    var tOut = zoomLabel(typeof wsT === "function" ? wsT("js.preview.zoom.out") : "", "js.preview.zoom.out", "Zoom out");
+    var tReset = zoomLabel(typeof wsT === "function" ? wsT("js.preview.zoom.reset") : "", "js.preview.zoom.reset", "Reset zoom (100%)");
+    var tIn = zoomLabel(typeof wsT === "function" ? wsT("js.preview.zoom.in") : "", "js.preview.zoom.in", "Zoom in");
+    var outBtn = doc.createElement("button");
+    outBtn.type = "button";
+    outBtn.className = "ibtn d-zoom-btn d-zoom-out";
+    outBtn.title = tOut;
+    outBtn.setAttribute("aria-label", tOut);
+    outBtn.innerHTML = zoomSvg("M5 12h14");
+    var pctBtn = doc.createElement("button");
+    pctBtn.type = "button";
+    pctBtn.className = "d-zoom-pct";
+    pctBtn.title = tReset;
+    pctBtn.setAttribute("aria-label", tReset);
+    pctBtn.textContent = "100%";
+    var inBtn = doc.createElement("button");
+    inBtn.type = "button";
+    inBtn.className = "ibtn d-zoom-btn d-zoom-in";
+    inBtn.title = tIn;
+    inBtn.setAttribute("aria-label", tIn);
+    inBtn.innerHTML = zoomSvg("M12 5v14M5 12h14");
+    grp._zp = { out: outBtn, pct: pctBtn, in: inBtn };
+    grp.appendChild(outBtn);
+    grp.appendChild(pctBtn);
+    grp.appendChild(inBtn);
+    grp.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); });
+    if (onAction) {
+      outBtn.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); onAction(-1); });
+      pctBtn.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); onAction(0); });
+      inBtn.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); onAction(1); });
+    }
+    return grp;
+  }
+  function applyZoomToGroup(grp, z) {
+    if (!grp) return;
+    var pct = Math.round(z * 100);
+    var p = grp._zp;
+    var outBtn = (p && p.out) || (grp.querySelector && grp.querySelector(".d-zoom-out"));
+    var pctBtn = (p && p.pct) || (grp.querySelector && grp.querySelector(".d-zoom-pct"));
+    var inBtn = (p && p.in) || (grp.querySelector && grp.querySelector(".d-zoom-in"));
+    if (pctBtn) pctBtn.textContent = pct + "%";
+    if (outBtn) outBtn.disabled = z <= MIN_ZOOM;
+    if (inBtn) inBtn.disabled = z >= MAX_ZOOM;
+    if (z === 1) grp.removeAttribute && grp.removeAttribute("data-zoom-custom");
+    else grp.setAttribute && grp.setAttribute("data-zoom-custom", String(pct));
+  }
+  function applyZoomToTarget(target, z) {
+    if (!target) return;
+    if (z === 1) {
+      if (target.removeAttribute) target.removeAttribute("data-zoom");
+      if (target.style) {
+        if (target.style.removeProperty) target.style.removeProperty("--wb-zoom");
+        else delete target.style["--wb-zoom"];
+      }
+    } else {
+      if (target.setAttribute) target.setAttribute("data-zoom", String(Math.round(z * 100)));
+      if (target.style) {
+        if (target.style.setProperty) target.style.setProperty("--wb-zoom", String(z));
+        else target.style["--wb-zoom"] = String(z);
+      }
+    }
+  }
+  function mockupKeyOfWrap(wrap) {
+    if (!wrap || !wrap.querySelector) return "";
+    var fr = wrap.querySelector(".doc-frame");
+    if (!fr) return "";
+    return fr.getAttribute("data-doc-key") || fr.getAttribute("data-doc") || fr.getAttribute("data-mockup-src") || "";
+  }
+  function getMockupZoom(key) {
+    return key && zoomByKey.has(key) ? zoomByKey.get(key) : 1;
+  }
+  function syncWrapAndChrome(wrap, z) {
+    applyZoomToTarget(wrap, z);
+    var det = wrap.closest && wrap.closest("details.entry-panel");
+    if (det) {
+      var sum = null;
+      for (var n = det.firstElementChild; n; n = n.nextElementSibling) {
+        if (n.tagName === "SUMMARY") { sum = n; break; }
+      }
+      if (sum) applyZoomToGroup(child(sum, "d-zoom-grp"), z);
+    }
+    var cardEl = wrap.closest && wrap.closest('.bcard[data-kind="panel"]');
+    if (cardEl && cardEl.querySelector) {
+      var acts = cardEl.querySelector(".bc-hd .bc-acts");
+      if (acts) applyZoomToGroup(child(acts, "d-zoom-grp"), z);
+    }
+  }
+  function syncMockupElement(el) {
+    if (!el) return;
+    var wrap = el.classList && el.classList.contains("mockup-wrap") ? el : (el.closest ? el.closest(".mockup-wrap") : null);
+    if (!wrap && el.querySelector) wrap = el.querySelector(".mockup-wrap");
+    if (!wrap) return;
+    var key = mockupKeyOfWrap(wrap);
+    if (!key) return;
+    syncWrapAndChrome(wrap, getMockupZoom(key));
+  }
+  function setMockupZoom(key, nextZoom) {
+    if (!key) return 1;
+    var z = normZoom(nextZoom);
+    if (z === 1) zoomByKey.delete(key); else zoomByKey.set(key, z);
+    var seen = [];
+    function checkWrap(w) {
+      if (!w || seen.indexOf(w) >= 0) return;
+      seen.push(w);
+      if (mockupKeyOfWrap(w) === key) syncWrapAndChrome(w, z);
+    }
+    if (doc.querySelectorAll) {
+      Array.prototype.forEach.call(doc.querySelectorAll(".mockup-wrap"), checkWrap);
+    }
+    cards.forEach(function (c) {
+      if (c && c.el && c.el.querySelectorAll) {
+        Array.prototype.forEach.call(c.el.querySelectorAll(".mockup-wrap"), checkWrap);
+      }
+    });
+    return z;
+  }
+  function stepMockupZoom(key, dir) {
+    if (!key) return 1;
+    return setMockupZoom(key, stepZoomValue(getMockupZoom(key), dir));
+  }
+  function findMockupWrapForTarget(t) {
+    if (!t || !t.closest) return null;
+    var wrap = t.closest(".mockup-wrap");
+    if (wrap) {
+      var ownerDet = wrap.closest("details.entry-panel");
+      if (ownerDet && !ownerDet.open) return null;
+      if (doc.documentElement && doc.documentElement.hasAttribute("data-overview") && !wrap.closest(".overview-preview-stage") && !wrap.closest(".bgal")) return null;
+      return wrap;
+    }
+    var det = t.closest("details.entry-panel[data-zoom-ctrl][open]");
+    if (det) {
+      if (doc.documentElement && doc.documentElement.hasAttribute("data-overview") && !det.closest(".overview-preview-stage") && !det.closest(".bgal")) return null;
+      return det.querySelector(".doc-body > .mockup-wrap") || det.querySelector(".mockup-wrap");
+    }
+    var pcard = t.closest('.bcard[data-kind="panel"]');
+    if (pcard && (pcard.getAttribute("data-size") !== "fold" || pcard.hasAttribute("data-max") || pcard.hasAttribute("data-overview-live"))) {
+      if (doc.documentElement && doc.documentElement.hasAttribute("data-overview") && !pcard.closest(".overview-preview-stage") && !pcard.closest(".bgal")) return null;
+      return pcard.querySelector(".panel-card-doc > .mockup-wrap");
+    }
+    return null;
+  }
+  function onMockupWheel(e) {
+    if (!e || e.defaultPrevented || !(e.ctrlKey || e.metaKey)) return;
+    var wrap = findMockupWrapForTarget(e.target);
+    if (!wrap) return;
+    var key = mockupKeyOfWrap(wrap);
+    if (!key) return;
+    e.preventDefault();
+    if (!e.deltaY) return;
+    stepMockupZoom(key, e.deltaY < 0 ? 1 : -1);
+  }
+  function onMockupZoomMessage(e) {
+    if (!e || !e.source || !e.data || typeof e.data !== "object") return;
+    var dir = e.data.wsPreviewZoom;
+    if (dir !== 1 && dir !== -1 && dir !== 0) return;
+    var frames = [];
+    function collect(f) {
+      if (f && frames.indexOf(f) < 0) frames.push(f);
+    }
+    if (doc.querySelectorAll) {
+      Array.prototype.forEach.call(doc.querySelectorAll(".mockup-wrap > iframe.doc-frame.mockup-frame"), collect);
+    }
+    cards.forEach(function (c) {
+      if (c && c.el && c.el.querySelectorAll) {
+        Array.prototype.forEach.call(c.el.querySelectorAll(".mockup-wrap > iframe.doc-frame.mockup-frame"), collect);
+      }
+    });
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i];
+      if (f.contentWindow && e.source === f.contentWindow) {
+        var key = mockupKeyOfWrap(f.parentNode) || f.getAttribute("data-doc-key") || f.getAttribute("data-doc") || f.getAttribute("data-mockup-src") || "";
+        if (key) stepMockupZoom(key, dir);
+        return;
+      }
+    }
+  }
+
   function decorate(scope) {
     function decorateTopic(sec, inGallery) {
       var head = child(sec, "tophead"), bar = head && child(head, "tbar");
@@ -1557,22 +1766,46 @@
       Array.prototype.forEach.call(sec.querySelectorAll("details.entry-panel"), function (det) {
         if (det.classList.contains("msg")) return;
         var art = det.parentNode;
-        if (!art || !art.classList || !art.classList.contains("wb-entry") || !art.classList.contains("panel") || art.classList.contains("historical")) return;
+        var isPanel = !!(art && art.classList && art.classList.contains("wb-entry") && art.classList.contains("panel"));
+        var isHistorical = !!(art && art.classList && art.classList.contains("historical"));
         var sum = null;
         for (var n = det.firstElementChild; n; n = n.nextElementSibling) {
           if (n.tagName === "SUMMARY") { sum = n; break; }
         }
         if (!sum) return;
         var dmax = child(sum, "d-max");
-        if (!dmax) return;
-        var pp = child(sum, "ppin");
-        if (!pp) {
-          pp = ibtn("ppin", "pin", wsT("js.card.pin"));
-          sum.insertBefore(pp, dmax);
+        if (isPanel && !isHistorical && dmax) {
+          var pp = child(sum, "ppin");
+          if (!pp) {
+            pp = ibtn("ppin", "pin", wsT("js.card.pin"));
+            sum.insertBefore(pp, dmax);
+          }
+          var pid = art.getAttribute && art.getAttribute("data-panel");
+          var pOn = !!(pid && window.WsPanelCard && window.WsPanelCard.isPinned && window.WsPanelCard.isPinned(pid));
+          pp.setAttribute("aria-pressed", String(pOn));
         }
-        var pid = art.getAttribute && art.getAttribute("data-panel");
-        var pOn = !!(pid && window.WsPanelCard && window.WsPanelCard.isPinned && window.WsPanelCard.isPinned(pid));
-        pp.setAttribute("aria-pressed", String(pOn));
+        var mwrap = det.querySelector(".doc-body > .mockup-wrap") || det.querySelector(".mockup-wrap");
+        var zkey = mwrap ? mockupKeyOfWrap(mwrap) : "";
+        if (mwrap && dmax && zkey) {
+          det.setAttribute("data-zoom-ctrl", "");
+          if (child(sum, "ppin")) det.setAttribute("data-zoom-pin", "");
+          else det.removeAttribute("data-zoom-pin");
+          var zgrp = child(sum, "d-zoom-grp");
+          if (!zgrp) {
+            zgrp = buildZoomGroup(function (dir) {
+              stepMockupZoom(mockupKeyOfWrap(mwrap) || zkey, dir);
+            });
+            sum.insertBefore(zgrp, dmax);
+          }
+          var curZ = getMockupZoom(zkey);
+          applyZoomToGroup(zgrp, curZ);
+          applyZoomToTarget(mwrap, curZ);
+        } else {
+          det.removeAttribute("data-zoom-ctrl");
+          det.removeAttribute("data-zoom-pin");
+          var stale = child(sum, "d-zoom-grp");
+          if (stale && stale.parentNode) stale.parentNode.removeChild(stale);
+        }
       });
     }
     if (scope && scope.nodeType === 1) {
@@ -1885,6 +2118,10 @@
     var c = this;
     c.acts.textContent = "";
     return (list || []).map(function (a) {
+      if (a && a.nodeType === 1) {
+        c.acts.appendChild(a);
+        return a;
+      }
       var b = ibtn(a.cls || "", a.icon, a.title);
       b.addEventListener("click", function () { a.run(c); });
       c.acts.appendChild(b);
@@ -2014,7 +2251,10 @@
   }
   function clearSheetWidth(c) {
     if (c.widthBtn && c.widthBtn.parentNode) c.widthBtn.parentNode.removeChild(c.widthBtn);
-    if (c.el) ["--sheet-inset", "--sheet-left", "--sheet-right"].forEach(function (k) { c.el.style.removeProperty(k); });
+    if (c.el) {
+      c.el.removeAttribute("data-has-sheet-width");
+      ["--sheet-inset", "--sheet-left", "--sheet-right"].forEach(function (k) { c.el.style.removeProperty(k); });
+    }
     delete c.widthBtn;
     delete c.normalWidth;
     delete c.extended;
@@ -2053,6 +2293,8 @@
       if (focused) c.widthBtn.focus({ preventScroll: true });
     }
     c.widthBtn.hidden = !wide || c.el.hasAttribute("data-float");
+    if (c.widthBtn.hidden) c.el.removeAttribute("data-has-sheet-width");
+    else c.el.setAttribute("data-has-sheet-width", "");
     c.widthBtn.setAttribute("aria-pressed", String(!!c.extended));
     var label = c.extended ? wsT("js.card.width.normal") : wsT("js.card.width.extend");
     c.widthBtn.title = label;
@@ -2852,6 +3094,11 @@
         resizeBound = true;
         window.addEventListener("resize", function () { if (board) relayout(); });
       }
+      if (!zoomBound) {
+        zoomBound = true;
+        if (doc.addEventListener) doc.addEventListener("wheel", onMockupWheel, { passive: false });
+        if (typeof window !== "undefined" && window.addEventListener) window.addEventListener("message", onMockupZoomMessage);
+      }
       floatToolbar();
       fetchMissing();
     },
@@ -2915,6 +3162,16 @@
     unfoldTopic: unfoldTopic,
     revealTopic: revealTopic,
     onFrameWheel: onFrameWheel,
+    zoomSteps: ZOOM_STEPS,
+    buildZoomGroup: buildZoomGroup,
+    applyZoomGroup: applyZoomToGroup,
+    applyZoomTarget: applyZoomToTarget,
+    normZoom: normZoom,
+    stepZoom: stepZoomValue,
+    getMockupZoom: getMockupZoom,
+    setMockupZoom: setMockupZoom,
+    stepMockupZoom: stepMockupZoom,
+    syncMockupElement: syncMockupElement,
     is: isCard
   };
 })();

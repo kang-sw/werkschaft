@@ -41,7 +41,7 @@
     var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("frames", "mountFrame") : null;
     try {
       var f = doc.createElement("iframe");
-      var isMockup = p.hasAttribute("data-mockup-src");
+      var isMockup = p.getAttribute("data-mockup-src") != null;
       Array.prototype.forEach.call(p.attributes, function (a) { if (a.name !== "data-sandbox") f.setAttribute(a.name, a.value); });
       f.setAttribute("sandbox", p.getAttribute("data-sandbox") || "");
       if (isMockup) {
@@ -60,6 +60,7 @@
       if (p.wbKeep) f.wbKeep = true;
       if (p.wbGrow) f.wbGrow = true;
       if (p.parentNode) p.parentNode.replaceChild(f, p);
+      if (isMockup && window.WsCards && window.WsCards.syncMockupElement) window.WsCards.syncMockupElement(f);
       if (f.contentWindow) {
         frameWins.set(f.contentWindow, f);
         if (typeof virtualStats !== "undefined") virtualStats.frameIndexes++;

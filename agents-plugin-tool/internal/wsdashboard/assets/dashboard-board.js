@@ -1318,6 +1318,9 @@
       if (!at || !x.p.isConnected) return;
       at.moveBefore(x.f, x.p);
       at.removeChild(x.p);
+      if (x.f.hasAttribute && (x.f.hasAttribute("data-mockup-src") || x.f.classList && x.f.classList.contains("mockup-frame")) && window.WsCards && window.WsCards.syncMockupElement) {
+        window.WsCards.syncMockupElement(x.f);
+      }
     });
     r.holder.parentNode.removeChild(r.holder);
   }
