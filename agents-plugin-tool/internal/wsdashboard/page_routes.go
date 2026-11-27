@@ -151,6 +151,10 @@ func (d *Daemon) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 		serveGuideAsset(w, data)
 		return
 	}
+	if name, _ := CompanionVrmAsset(); rest == name {
+		serveCompanionVrm(w)
+		return
+	}
 	replyID, sub, slash := strings.Cut(rest, "/")
 	switch {
 	case !slash:

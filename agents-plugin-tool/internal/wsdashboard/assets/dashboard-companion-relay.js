@@ -9,7 +9,9 @@
     var resize = new ResizeObserver(queue);
     var activityEvents = { idle: "session.idle", thinking: "session.thinking", tool: "session.tool", replying: "session.replying", typing_user: "user.typing" };
     var terminal = new Set(["idle", "ended", "closed", "done", "failed"]);
-    var watched = ["r-board", "bgal", "r-panels", "r-entries", "r-convlive", "r-tree", "r-head", "composer", "agisland"];
+    var watched = ["r-board", "bgal", "bcol", "drawer", "r-panels", "r-entries", "r-convlive", "r-tree", "r-head", "composer", "agisland"];
+    var rightColHover = false, rightColFocus = false;
+    var rightColSelector = "#bgal.bgal, #bcol.bcol, #drawer.drawer.open";
     var directCommit = /^(?:mcp__[^\s]+__)?(?:git_commit|git_merge|(?:ws\/)?git\.(?:commit|merge))$/i;
     var shellTool = /^(?:mcp__[^\s]+__)?(?:bash|shell(?:_command)?|exec_command|run_command|terminal)$/i;
     var concreteCommand = /(?:^|[;&|\n])\s*(?:command:\s*)?(?:[A-Z_][A-Z_0-9]*=[^\s;]+\s+)*(?:git\s+(?:commit|merge)|go\s+(?:-C\s+\S+\s+)?test|npm\s+test|pytest|cargo\s+test|(?:npx\s+)?(?:vitest|jest))(?=\s|$)/i;
@@ -281,6 +283,13 @@
       return { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) };
     }
 
+    function visibleRect(el) {
+      var r = rect(el);
+      if (!r) return null;
+      if (typeof getComputedStyle === "function" && getComputedStyle(el)?.visibility === "hidden") return null;
+      return r;
+    }
+
     function collect() {
       var route = rid ? "session" : doc.body.classList.contains("tk-paged") ? "tracker" : "home";
       var payload = window.WsShell.companionContext(route);
@@ -315,6 +324,12 @@
         if (ask) payload.landmarks["whiteboard-ask"] = ask;
         if (hud) payload.landmarks["hud-roster"] = hud;
       }
+      var drawerEl = $("drawer");
+      var drawerRect = drawerEl?.classList?.contains?.("open") ? visibleRect(drawerEl) : null;
+      var rightCol = visibleRect($("bgal")) || visibleRect($("bcol")) || drawerRect;
+      if (rightCol) payload.landmarks["right-col"] = rightCol;
+      payload.drawerOpen = !!drawerRect;
+      payload.rightColActive = !!(rightColHover || rightColFocus);
       return payload;
     }
 
@@ -411,12 +426,33 @@
       else queue();
     }
 
+    function inRightCol(target) {
+      return !!(target && typeof target.closest === "function" && target.closest(rightColSelector));
+    }
+
+    function setRightColHover(next) {
+      if (rightColHover === next) return;
+      rightColHover = next;
+      queue();
+    }
+
+    function setRightColFocus(next) {
+      if (rightColFocus === next) return;
+      rightColFocus = next;
+      queue();
+    }
+
     var listen = { signal: listened.signal };
     doc.addEventListener("visibilitychange", visible, listen);
     doc.addEventListener("ws-page-visibility", visible, listen);
     doc.addEventListener("input", input, listen);
     doc.addEventListener("change", queue, listen);
     doc.addEventListener("scroll", queue, { ...listen, capture: true });
+    doc.addEventListener("pointerover", function (e) { setRightColHover(inRightCol(e.target)); }, { ...listen, passive: true });
+    doc.addEventListener("pointermove", function (e) { setRightColHover(inRightCol(e.target)); }, { ...listen, passive: true });
+    doc.documentElement?.addEventListener?.("pointerleave", function () { setRightColHover(false); }, { ...listen, passive: true });
+    doc.addEventListener("focusin", function (e) { setRightColFocus(inRightCol(e.target)); }, listen);
+    doc.addEventListener("focusout", function (e) { setRightColFocus(inRightCol(e.relatedTarget)); }, listen);
     window.addEventListener("resize", queue, listen);
     visible();
     return {

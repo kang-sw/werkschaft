@@ -8,6 +8,8 @@
   function own(obj, key) { return obj && Object.hasOwn(obj, key) ? obj[key] : undefined; }
   function values(obj) { return Object.values(obj || {}); }
   function raster(file) { return typeof file === "string" && /^[a-z\d][a-z\d._-]{0,127}\.(webp|png)$/i.test(file) && !file.includes(".."); }
+  function vrmModel(file) { return typeof file === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\.vrm$/.test(file) && !file.includes(".."); }
+  function vrmaFile(file) { return typeof file === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\.vrma$/.test(file) && !file.includes(".."); }
 
   // Match the server's known raster fields. Extension keys may contain raster
   // names as ordinary text and never imply extra asset requests.
@@ -59,7 +61,71 @@
     bitmaps.clear();
   }
 
+  async function decodeVrm(info, signal) {
+    const path = base + "/" + encodeURIComponent(info.id);
+    const rev = "?rev=" + encodeURIComponent(info.rev);
+    const manifest = await (await request(path + "/pack.json" + rev, signal)).json();
+    if (manifest.schema !== "ws-companion-vrm/v1" || manifest.id !== info.id || !vrmModel(manifest.model)) {
+      throw new Error("Invalid VRM companion manifest");
+    }
+    const animations = Object.create(null);
+    if (manifest.animations && typeof manifest.animations === "object" && !Array.isArray(manifest.animations)) {
+      for (const [key, file] of Object.entries(manifest.animations)) {
+        if (vrmaFile(file)) animations[key] = file;
+      }
+    }
+    const expressionMap = manifest.expressionMap && typeof manifest.expressionMap === "object" && !Array.isArray(manifest.expressionMap)
+      ? manifest.expressionMap : Object.create(null);
+    return {
+      id: info.id,
+      rev: info.rev,
+      renderer: "vrm",
+      manifest,
+      modelFile: manifest.model,
+      modelUrl: path + "/assets/" + encodeURIComponent(manifest.model) + rev,
+      expressionMap,
+      animations,
+      bitmaps: new Map()
+    };
+  }
+
+  // fetchPackAsset fetches a binary VRM/VRMA asset keyed on pack.rev. On a
+  // 409 (stale revision), it re-reads the catalog once to pick up the fresh
+  // revision (or X-Companion-Current-Rev) and retries a single time.
+  async function fetchPackAsset(pack, file, signal) {
+    const assetPath = base + "/" + encodeURIComponent(pack.id) + "/assets/" + encodeURIComponent(file);
+    let rev = pack.rev || "";
+    const urlFor = r => assetPath + "?rev=" + encodeURIComponent(r);
+    let response = await fetch(urlFor(rev), { signal, credentials: "same-origin" });
+    if (response.status === 409) {
+      let nextRev = response.headers?.get?.("X-Companion-Current-Rev") || "";
+      try {
+        const catalogResp = await fetch(base, { signal, credentials: "same-origin" });
+        if (catalogResp.ok) {
+          const catalog = await catalogResp.json();
+          const info = Array.isArray(catalog?.packs) ? catalog.packs.find(p => p.id === pack.id) : null;
+          if (info?.rev) nextRev = info.rev;
+        }
+      } catch (err) {
+        if (signal?.aborted) throw err;
+      }
+      if (nextRev && nextRev !== rev) {
+        rev = nextRev;
+        pack.rev = nextRev;
+        if (pack.modelFile === file) pack.modelUrl = urlFor(nextRev);
+        response = await fetch(urlFor(rev), { signal, credentials: "same-origin" });
+      }
+    }
+    if (!response.ok) {
+      const error = new Error("Companion asset request failed");
+      error.status = response.status;
+      throw error;
+    }
+    return { buffer: await response.arrayBuffer(), rev };
+  }
+
   async function decode(info, signal) {
+    if (info.renderer === "vrm") return decodeVrm(info, signal);
     const path = base + "/" + encodeURIComponent(info.id);
     const rev = "?rev=" + encodeURIComponent(info.rev);
     const manifest = await (await request(path + "/pack.json" + rev, signal)).json();
@@ -91,7 +157,7 @@
       }
     }
     await Promise.all([worker(), worker(), worker(), worker()]);
-    if (!failure && !signal.aborted) return { id: info.id, rev: info.rev, manifest, bitmaps };
+    if (!failure && !signal.aborted) return { id: info.id, rev: info.rev, renderer: info.renderer || "2d", manifest, bitmaps };
     release(bitmaps);
     signal.throwIfAborted();
     throw failure;
@@ -153,7 +219,8 @@
             candidate = matching(id, info.rev) || await decode(info, signal);
             // The catalog carries the validated persona; the raw manifest is not trusted for it.
             candidate.persona = personaOf(info.persona);
-            const needsDefaults = id !== "default" && defaultInfo?.rev &&
+            const isVrm = (candidate.renderer || info.renderer) === "vrm";
+            const needsDefaults = !isVrm && id !== "default" && defaultInfo?.rev &&
               ["drone", "mail", "prop-typing-desk"].some(prop => !own(candidate.manifest.props, prop));
             if (needsDefaults) defaults = matching("default", defaultInfo.rev) || await decode(defaultInfo, signal);
             if (gen !== loadGen) return;
@@ -197,5 +264,5 @@
     };
   }
 
-  window.WsCompanion = { own, packLoader };
+  window.WsCompanion = { own, packLoader, fetchPackAsset };
 })();

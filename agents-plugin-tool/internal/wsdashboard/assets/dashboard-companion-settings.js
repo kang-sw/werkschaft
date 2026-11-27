@@ -21,6 +21,11 @@
   const keyAttachments = "dashboard.companion_attachments", keyPalette = "dashboard.companion_palette";
   // The wardrobe rows that pick one pack ID, and the wardrobeOptions list each reads.
   const idLists = { "dashboard.companion_outfit": "outfits", "dashboard.companion_hair": "hairs", "dashboard.companion_eyes": "eyesets" };
+  // 2D paper-doll wardrobe controls hidden when a VRM pack is active.
+  const wardrobeOnlyKeys = new Set([
+    "dashboard.companion_preset", "dashboard.companion_outfit", "dashboard.companion_hair",
+    "dashboard.companion_eyes", "dashboard.companion_attachments", "dashboard.companion_palette"
+  ]);
 
   function voiceSummary(voice) {
     const chars = Array.from(voice || "");
@@ -47,10 +52,15 @@
     let controls = new Map(), packIds = null, packRenderers = new Map(), packsRequest = null;
 
     function canWrite() { return doc.documentElement.hasAttribute("data-sysopen"); }
+    function isVrm() {
+      if (hooks.renderer?.() === "vrm") return true;
+      return packRenderers.get(current("dashboard.companion_pack")) === "vrm";
+    }
     // The Sources section renders dashboard.companion_sources, so it has no row of its own here.
     function rows() {
+      const vrm = isVrm();
       return (hooks.rows() || []).filter(row => C.record(row) && Object.hasOwn(configFields, row.key) &&
-        row.key !== sourcesKey);
+        row.key !== sourcesKey && (!vrm || !wardrobeOnlyKeys.has(row.key)));
     }
     function current(key) { return hooks.config()?.[configFields[key]]; }
 
@@ -296,12 +306,16 @@
 
     function applyCatalog(catalog) {
       if (!Array.isArray(catalog?.packs)) return;
+      const wasVrm = isVrm();
       packIds = catalog.packs.map(pack => pack?.id).filter(C.timingId);
       packRenderers = new Map();
       for (const pack of catalog.packs) {
         if (C.timingId(pack?.id) && typeof pack.renderer === "string") packRenderers.set(pack.id, pack.renderer);
       }
-      if (dialog.open) controls.get("dashboard.companion_pack")?.(null);
+      if (dialog.open) {
+        if (wasVrm !== isVrm()) { build(); place(); }
+        else controls.get("dashboard.companion_pack")?.(null);
+      }
       sources.setCatalog(catalog);
     }
 

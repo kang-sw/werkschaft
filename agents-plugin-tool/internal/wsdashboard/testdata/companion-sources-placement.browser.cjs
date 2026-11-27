@@ -26,7 +26,7 @@ function bundle() {
 (async () => {
   const browser = await chromium.launch({ headless: true });
   try {
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1100 }, colorScheme: 'dark' });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1300 }, colorScheme: 'dark' });
     await context.addInitScript(() => {
       if (self !== top) return;
       const workers = navigator.serviceWorker;
@@ -75,7 +75,7 @@ function bundle() {
     assert.ok(expanded.height < expanded.vh - 12, 'the viewport is taller than the expanded dialog, so it is not height-capped: ' + JSON.stringify(expanded));
 
     // The import preview grows the dialog; it moves up to stay inside.
-    await section.locator('input[type="file"]').setInputFiles({ name: 'fixture-fox.zip', mimeType: 'application/zip', buffer: bundle() });
+    await section.locator('input[type="file"][accept*="zip"]').setInputFiles({ name: 'fixture-fox.zip', mimeType: 'application/zip', buffer: bundle() });
     const panel = section.locator('.ws-companion-sources-panel');
     await panel.locator('input[type="checkbox"]').first().waitFor();
     await settled();
@@ -85,7 +85,7 @@ function bundle() {
 
     // The ZIP import control can be reached: scrolled into view inside the
     // dialog, it lies within the viewport and nothing covers it.
-    const file = section.locator('input[type="file"]');
+    const file = section.locator('input[type="file"][accept*="zip"]');
     await file.evaluate(el => el.scrollIntoView({ block: 'nearest' }));
     const reach = await file.evaluate(el => {
       const r = el.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;

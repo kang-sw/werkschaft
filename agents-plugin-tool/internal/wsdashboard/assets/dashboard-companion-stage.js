@@ -1,11 +1,16 @@
 (function (C) {
   "use strict";
   const { clamp, mix, finite } = C;
-  const landmarks = ["composer-top", "whiteboard-ask", "hud-roster"];
+  const landmarks = ["composer-top", "whiteboard-ask", "hud-roster", "right-col"];
+  const dragSnapLandmarks = ["composer-top", "whiteboard-ask", "hud-roster"];
+  const VRM_ASPECT = 280 / 240;
+  const VRM_ACTIVE_FPS = 30;
+  const VRM_IDLE_FPS = 6;
+  const VRM_IDLE_AFTER_MS = 5000;
   // The companion config payload fields the rig's wardrobe reads.
   const wardrobeFields = ["outfit", "hair", "eyes", "attachments", "palette"];
   const railRowSelector = ".rs[data-rid]";
-  let mountedRailObserver;
+  let mountedRailObserver, mountedStage = null;
 
   function railSignals() {
     let rows = new Map();
@@ -87,30 +92,35 @@
     };
   }
 
-  function resizeControl(grip, options, currentSize, changed) {
-    const key = "ws.companion.size";
-    let preferred = null, active = null, cap = 240;
+  function resizeControl(grip, options, currentSize, changed, limits = {}) {
+    const key = limits.key || "ws.companion.size";
+    const minSize = limits.min ?? 64;
+    const maxSize = limits.max ?? 240;
+    const isActive = limits.active || (() => true);
+    const invertX = !!limits.invertX;
+    let preferred = null, active = null, cap = maxSize;
     try {
       const saved = window.localStorage.getItem(key);
       const value = Number(saved);
-      if (saved !== null && Number.isFinite(value) && value >= 64 && value <= 240) preferred = value;
+      if (saved !== null && Number.isFinite(value) && value >= minSize && value <= maxSize) preferred = value;
     } catch (_) { /* Storage may be unavailable. */ }
     function persist() {
       try { window.localStorage.setItem(key, String(preferred)); } catch (_) { /* Storage may be unavailable. */ }
     }
     function update(value) {
-      preferred = Math.round(clamp(value, Math.min(64, cap), cap));
+      preferred = Math.round(clamp(value, Math.min(minSize, cap), cap));
       changed();
     }
     grip.addEventListener("pointerdown", event => {
-      if (event.button !== 0 || active) return;
+      if (!isActive() || event.button !== 0 || active) return;
       event.preventDefault();
       active = { id: event.pointerId, x: event.clientX, y: event.clientY, size: currentSize() };
       grip.setPointerCapture(event.pointerId);
     }, options);
     grip.addEventListener("pointermove", event => {
       if (active?.id !== event.pointerId) return;
-      const dx = event.clientX - active.x, dy = active.y - event.clientY;
+      const dx = invertX ? active.x - event.clientX : event.clientX - active.x;
+      const dy = active.y - event.clientY;
       update(active.size + (Math.abs(dx) >= Math.abs(dy) ? dx : dy));
     }, options);
     function finish(event) {
@@ -120,6 +130,7 @@
     }
     for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) grip.addEventListener(name, finish, options);
     grip.addEventListener("keydown", event => {
+      if (!isActive()) return;
       const direction = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[event.key];
       if (!direction) return;
       event.preventDefault();
@@ -128,9 +139,9 @@
     }, options);
     return {
       value(fallback, width, height) {
-        cap = Math.max(1, Math.min(240, width - 24, height - 24));
+        cap = Math.max(1, Math.min(maxSize, width - 24, height - 24));
         const value = Math.min(preferred ?? fallback, cap);
-        grip.setAttribute("aria-valuemin", String(Math.min(64, cap)));
+        grip.setAttribute("aria-valuemin", String(Math.min(minSize, cap)));
         grip.setAttribute("aria-valuemax", String(cap));
         grip.setAttribute("aria-valuenow", String(Math.round(value)));
         return value;
@@ -174,7 +185,11 @@
     character.setAttribute("aria-expanded", "false");
     const canvas = doc.createElement("canvas");
     canvas.setAttribute("aria-hidden", "true");
-    character.append(canvas);
+    const vrmContainer = doc.createElement("div");
+    vrmContainer.className = "ws-companion-vrm-wrap";
+    vrmContainer.setAttribute("aria-hidden", "true");
+    vrmContainer.hidden = true;
+    character.append(canvas, vrmContainer);
     const grip = doc.createElement("div");
     grip.className = "ws-companion-resize";
     grip.tabIndex = 0;
@@ -203,9 +218,10 @@
     let markedRid, railMark;
     const railEvents = railSignals(), pairs = signalPairs();
     let currentConfig = config, preset = config.preset;
-    let frame = 0, last = 0, now = 0, viewStart = 0, lastBusy = 0, nextIdle = 45000;
+    let frame = 0, idleTimer = 0, last = 0, now = 0, viewStart = 0, lastBusy = 0, nextIdle = 45000;
+    let lastVrmRenderAt = -Infinity, lastVrmActivityAt = 0, vrmIdleMode = false, lastVrmGazeX = 0, lastVrmGazeY = 0;
     let beat = null, viewBeat, viewPlaying, prop, fx, propCanvas, propCtx, decoration, quip, quipWidth = 0, lastCount;
-    let size = 96, dpr = 1, vw = 0, vh = 0, dirty = true;
+    let size = 96, vrmHeight = 280, dpr = 1, vw = 0, vh = 0, dirty = true;
     let frameElement = null, frameInput = null, frameBox = null;
     let home = { x: 60, y: 96 }, arrived = false, custom = null, drag = null, suppressClick = false;
     const physics = { swing: 0, swingVel: 0 };
@@ -216,14 +232,38 @@
     const guards = { routeKind: "home", pose: "stand", idleMs: 0 };
     let marks = Object.create(null);
 
+    function isVrm() { return rig?.renderer === "vrm"; }
+    function markVrmActivity() {
+      lastVrmActivityAt = performance.now();
+      if (vrmIdleMode) {
+        vrmIdleMode = false;
+        if (idleTimer) { clearTimeout(idleTimer); idleTimer = 0; }
+      }
+    }
+
     // The focus report carries the session this stage shows and the pack it
     // renders; before the first pack is drawn nothing is reported.
     function reportFocus() { C.focus?.show(activeRid, model?.id || ""); }
     function notice(key) { window.WsToast?.show(wsT("js.companion." + key), { kind: "notice" }); }
     const loader = C.packLoader((pack, shared) => {
-      const next = C.makeRig(pack, shared, preset, currentConfig);
+      const nextIsVrm = pack.renderer === "vrm";
+      const makeAdapter = C.makeVrmAdapter || C.makeVrmRig;
+      const next = nextIsVrm ? makeAdapter(pack, {
+        onReady: () => { markVrmActivity(); invalidated(); },
+        onContextLost: () => {
+          cancelAnimationFrame(frame);
+          if (idleTimer) { clearTimeout(idleTimer); idleTimer = 0; }
+          frame = 0;
+          last = 0;
+          lastVrmRenderAt = -Infinity;
+        },
+        onContextRestored: () => { markVrmActivity(); invalidated(); }
+      }) : C.makeRig(pack, shared, preset, currentConfig);
       // Prepare the neutral body and its tint cache before replacing the active rig.
       next.view("stand", null, "idle", []);
+      const prevRig = rig;
+      const switchedRenderer = (prevRig?.renderer || "2d") !== (next.renderer || "2d");
+      if (prevRig && prevRig !== next && typeof prevRig.dispose === "function") prevRig.dispose();
       model = pack;
       sharedPack = shared || null;
       rig = next;
@@ -232,8 +272,24 @@
       if (now - switchedAt < 900) runner.fire("route.switch", switchedAt, guards);
       viewBeat = null;
       dirty = true;
+      if (switchedRenderer) {
+        custom = null;
+        arrived = false;
+      }
       node.dataset.pack = pack.id;
       node.dataset.rev = pack.rev;
+      node.dataset.renderer = nextIsVrm ? "vrm" : "2d";
+      canvas.hidden = nextIsVrm;
+      vrmContainer.hidden = !nextIsVrm;
+      if (propCanvas && nextIsVrm) propCanvas.hidden = true;
+      if (nextIsVrm) {
+        rail?.removeAttribute("data-companion-dock");
+        setBeforeUnreg(null);
+        rail?.style.removeProperty("--companion-slot");
+        layout();
+        markVrmActivity();
+        next.mount?.(vrmContainer, { width: size, height: vrmHeight, dpr: Math.min(dpr, 2) });
+      }
       hit.hidden = false;
       reportFocus();
       if (!menu.hidden) controls.rebuild();
@@ -275,6 +331,7 @@
       if (!directed) return false;
       runner.direct(directed.beats, now, directed.ttl, directed.id);
       viewBeat = null;
+      if (isVrm()) markVrmActivity();
       schedule();
       return true;
     }
@@ -313,6 +370,8 @@
     function context(payload, frameRect) {
       const previous = state.activity;
       const previousComposer = marks["composer-top"];
+      const previousRightCol = marks["right-col"];
+      const previousRightActive = !!state.rightColActive;
       state = payload.activity === "streaming" ? { ...payload, activity: "replying" } : payload;
       frameBox = frameRect;
       marks = Object.create(null);
@@ -320,10 +379,17 @@
         const m = payload.landmarks[id];
         if (!m || ![m.x, m.y, m.width, m.height].every(Number.isFinite) || m.width <= 0 || m.height <= 0) continue;
         const left = frameRect.left + m.x;
-        marks[id] = { left, x: left + m.width / 2, y: frameRect.top + m.y };
+        const top = frameRect.top + m.y;
+        marks[id] = { left, top, right: left + m.width, bottom: top + m.height, width: m.width, height: m.height, x: left + m.width / 2, y: top };
       }
       const composer = marks["composer-top"];
-      if (composer?.left !== previousComposer?.left || composer?.y !== previousComposer?.y) dirty = true;
+      const rightCol = marks["right-col"];
+      if (composer?.left !== previousComposer?.left || composer?.y !== previousComposer?.y ||
+          rightCol?.left !== previousRightCol?.left || rightCol?.width !== previousRightCol?.width ||
+          !!state.rightColActive !== previousRightActive) {
+        dirty = true;
+        markVrmActivity();
+      }
       requestPack();
       if (previous === "replying" && state.activity !== "replying") runner.endReply();
       updatePosture();
@@ -333,6 +399,7 @@
         const rid = token.startsWith("perm:") ? token.slice(5) : payload.sessionId;
         receiveSignal({ kind: event.kind, token, rid, source: "frame" });
       }
+      if (payload.events.length || previous !== state.activity) markVrmActivity();
       schedule();
     }
 
@@ -368,19 +435,27 @@
       }
     }
 
-    const sizing = resizeControl(grip, options, () => size, invalidated);
+    const sizing = resizeControl(grip, options, () => size, invalidated, { active: () => !isVrm() });
+    const vrmSizing = resizeControl(grip, options, () => size, invalidated, {
+      key: "ws.companion.vrmSize", min: 180, max: 340, invertX: true, active: () => isVrm()
+    });
 
-    function resetSize() { sizing.reset(); controls.close(); }
+    function resetSize() {
+      if (isVrm()) vrmSizing.reset();
+      else sizing.reset();
+      controls.close();
+    }
 
     const settings = C.settingsModal(node, gear, options, {
       rows: () => window.wsCompanionModalRows,
       config: () => currentConfig,
+      renderer: () => model?.renderer || "2d",
       persona: () => model?.persona || null,
       presets: () => ({ available: Object.keys(model?.manifest.presets || {}), preset }),
       wardrobe: () => C.wardrobeOptions(model?.manifest),
       picks: () => rig?.wardrobe() || null,
       anchor: () => hit.getBoundingClientRect(),
-      resetSize() { sizing.reset(); },
+      resetSize() { if (isVrm()) vrmSizing.reset(); else sizing.reset(); },
       // A pack install, update, uninstall or import already reloaded the daemon's store.
       packsChanged() { requestPack(true); },
       applyPreset, notice
@@ -402,6 +477,32 @@
       dpr = window.devicePixelRatio || 1;
       frameBox = frameElement?.getBoundingClientRect();
       if (!menu.hidden) controls.measure();
+      if (isVrm()) {
+        rail?.removeAttribute("data-companion-dock");
+        setBeforeUnreg(null);
+        const maxWidthForHeight = Math.max(120, Math.floor((vh - 24) / VRM_ASPECT));
+        size = vrmSizing.value(240, Math.min(vw, maxWidthForHeight + 24), vh);
+        vrmHeight = Math.round(size * VRM_ASPECT);
+        rig?.resize?.(size, vrmHeight, Math.min(dpr, 2));
+        const margin = 16;
+        const defaultX = clamp(vw - margin - size / 2, margin + size / 2, Math.max(margin + size / 2, vw - margin - size / 2));
+        const defaultY = clamp(vh - margin, vrmHeight + 8, vh - 8);
+        const rc = marks["right-col"];
+        let homeX = defaultX, avoiding = false;
+        if (state.rightColActive && rc && !custom && !drag) {
+          const defaultLeft = defaultX - size / 2;
+          const defaultRight = defaultX + size / 2;
+          if (defaultRight > rc.left && defaultLeft < rc.right) {
+            const shiftedX = rc.left - 12 - size / 2;
+            homeX = clamp(shiftedX, margin + size / 2, defaultX);
+            avoiding = true;
+          }
+        }
+        node.dataset.avoiding = avoiding ? "1" : "0";
+        home = { x: homeX, y: defaultY, vrm: true, avoiding };
+        return;
+      }
+      node.dataset.avoiding = "0";
       const rect = rail?.getBoundingClientRect();
       const open = vw >= 1600 || root.classList.contains("rail-open");
       const docked = rect && open && rect.right > 0 && getComputedStyle(rail).visibility !== "hidden";
@@ -493,6 +594,13 @@
     }
 
     function measureCharacter() {
+      if (isVrm()) {
+        bodyBox.width = size;
+        bodyBox.height = vrmHeight;
+        bodyBox.x = position.x + physical.tx * size - size / 2;
+        bodyBox.y = position.y + physical.lift * vrmHeight - vrmHeight;
+        return;
+      }
       const v = view, b = v.bounds;
       const width = (b[2] - b[0]) * size, height = (b[3] - b[1]) * size;
       const perching = v.pose === "perched" && (home.rail || custom?.mark);
@@ -503,8 +611,17 @@
       bodyBox.y = position.y + (physical.lift + b[1] - bottom) * size;
     }
 
-    function placeCharacter(seconds) {
+    function placeCharacter(seconds, extra) {
       const { x, y, width, height } = bodyBox, b = view.bounds;
+      if (isVrm()) {
+        rig.setGaze?.(gaze);
+        view.render(seconds, gaze, beat.stage === "pendulum-drag" ? physics : null, extra);
+        hit.style.width = width + "px";
+        hit.style.height = height + "px";
+        hit.style.transform = "translate3d(" + x + "px," + y + "px,0) rotate(" + physical.angle + "rad) scale(" + physical.sx + "," + physical.sy + ")";
+        controls.place(position.x + width / 2 + 6, y + height, vw, vh);
+        return;
+      }
       const widthPixels = Math.ceil(size * dpr);
       if (canvas.width !== widthPixels || canvas.height !== widthPixels) canvas.width = canvas.height = widthPixels;
       const art = view.render(seconds, gaze, beat.stage === "pendulum-drag" && view.articulatedDrag ? physics : null);
@@ -538,7 +655,9 @@
       const attached = attach.data && propBehavior(next.prop, attach.data) === "attach" &&
         (!attach.data.anchor || attach.data.anchor === "behind-head" || attach.data.anchor === "body");
       const renderPose = next.pose || "stand";
-      view = rig.view(renderPose, next.gesture, next.expression || "idle", attached ? [propId] : []);
+      const vrmPropList = isVrm() && propId ? [propId] : [];
+      view = rig.view(renderPose, next.gesture, next.expression || "idle", attached ? [propId] : vrmPropList);
+      markVrmActivity();
       node.dataset.pose = view.pose;
       node.dataset.scenario = playing?.entry.id || "";
       prop = !attached && attach.data ? attach : null;
@@ -662,8 +781,9 @@
           fx.draw(fxContext, age);
         }
         decoration.hidden = false;
+        const charH = isVrm() ? vrmHeight : size;
         decoration.style.transform = "translate3d(" + (position.x + size * 0.26) + "px," +
-          (position.y - size * (0.77 + progress * 0.36)) + "px,0)";
+          (position.y - charH * (0.77 + progress * 0.36)) + "px,0)";
         decoration.style.opacity = String(Math.min(1, (1 - progress) * 4, !playing && progress ? progress * 12 : 1));
         if (def?.kind === "particles") {
           const nodes = decoration.children;
@@ -674,22 +794,24 @@
         }
       }
       if (quip && !quip.hidden) {
+        const charH = isVrm() ? vrmHeight : size;
         const left = clamp(position.x - quipWidth / 2, 6, Math.max(6, vw - quipWidth - 6));
-        quip.style.transform = "translate3d(" + left + "px," + (position.y - size * 0.95) + "px,0)";
+        quip.style.transform = "translate3d(" + left + "px," + (position.y - charH * 0.95) + "px,0)";
       }
     }
 
     function look(age, dt, playing) {
       const key = beat.gaze;
-      let x = (cursor.x - position.x) / 150, y = (cursor.y - position.y + size * 0.6) / 120;
+      const charH = isVrm() ? vrmHeight : size;
+      let x = (cursor.x - position.x) / 150, y = (cursor.y - position.y + charH * 0.6) / 120;
       const mark = gazeMark(key, playing);
       gaze.prop = !!prop && key === "prop:" + propAction(beat.prop);
       if (gaze.prop) {
         x = (propPosition.x - position.x) / size;
-        y = (propPosition.y - position.y + size * 0.61) / size;
+        y = (propPosition.y - position.y + charH * 0.61) / size;
       } else if (mark) {
         x = (mark.x - position.x) / 160;
-        y = (mark.y - position.y + size * 0.61) / 160;
+        y = (mark.y - position.y + charH * 0.61) / 160;
       } else if (key === "scan") { x = Math.sin(age * 3); y = 0.2; }
       else if (key === "up" || key === "down") { x = 0; y = key === "up" ? -1 : 1; }
       const easing = 1 - Math.exp(-dt / (gaze.prop ? 36 : 75));
@@ -699,11 +821,25 @@
 
     function animate(stamp) {
       frame = 0;
-      if (doc.hidden || cancel.signal.aborted) return;
-      const dt = last ? clamp(stamp - last, 0, 50) : 16;
+      if (doc.hidden || cancel.signal.aborted || rig?.isContextLost?.()) return;
+      if (!rig) return;
+      if (isVrm()) {
+        const activeNow = !!viewPlaying || !!drag?.moving || posture.activity !== "idle" ||
+          Math.abs(position.x - target().x) > 0.5 || Math.abs(position.y - target().y) > 0.5;
+        if (activeNow) markVrmActivity();
+        const idleElapsed = performance.now() - lastVrmActivityAt;
+        vrmIdleMode = !activeNow && idleElapsed >= VRM_IDLE_AFTER_MS;
+        const targetFps = vrmIdleMode ? VRM_IDLE_FPS : VRM_ACTIVE_FPS;
+        const minInterval = 1000 / targetFps;
+        if (lastVrmRenderAt > -Infinity && stamp - lastVrmRenderAt < minInterval - 4) {
+          schedule(stamp);
+          return;
+        }
+        lastVrmRenderAt = stamp;
+      }
+      const dt = last ? clamp(stamp - last, 0, isVrm() && vrmIdleMode ? 200 : 50) : 16;
       now += dt;
       last = stamp;
-      if (!rig) return;
       if (dirty) layout();
       if (posture.activity !== "idle" || drag) nextIdle = now + 45000;
       else if (now >= nextIdle) { fire("idle.long"); nextIdle = now + 45000; }
@@ -720,7 +856,7 @@
       if (drag?.moving) { x = drag.x; y = drag.y; }
       const age = (now - viewStart) / 1000;
       const progress = playing?.beat.ms ? clamp((now - playing.start) / playing.beat.ms, 0, 1) : playing ? 0 : age % 2.3 / 2.3;
-      const mark = playing && next.stage === "hop-bounce" && gazeMark(next.gaze, playing);
+      const mark = !isVrm() && playing && next.stage === "hop-bounce" && gazeMark(next.gaze, playing);
       if (mark && !drag?.moving) {
         const toward = progress * progress * (3 - 2 * progress);
         x = mix(beatOrigin.x, clamp(mark.x, size / 2, vw - size / 2), toward);
@@ -745,13 +881,43 @@
       measureCharacter();
       positionProp(progress, age);
       look(age, dt, playing);
-      placeCharacter(age);
+      if (isVrm() && (Math.abs(gaze.x - lastVrmGazeX) > 0.015 || Math.abs(gaze.y - lastVrmGazeY) > 0.015)) {
+        lastVrmGazeX = gaze.x;
+        lastVrmGazeY = gaze.y;
+        markVrmActivity();
+      }
+      const vrmExtra = isVrm() ? {
+        progress,
+        age,
+        beat: next,
+        playing,
+        position: { x: position.x, y: position.y },
+        marks,
+        viewport: { width: vw, height: vh }
+      } : null;
+      placeCharacter(age, vrmExtra);
       effects(playing, progress, age);
-      schedule();
+      schedule(stamp);
     }
 
-    function schedule() {
-      if (!frame && rig && !doc.hidden && !cancel.signal.aborted) frame = requestAnimationFrame(animate);
+    function schedule(stamp) {
+      if (frame || idleTimer || !rig || doc.hidden || cancel.signal.aborted || rig?.isContextLost?.()) return;
+      if (isVrm() && vrmIdleMode) {
+        const nowMs = typeof stamp === "number" ? stamp : performance.now();
+        const elapsedSinceRender = lastVrmRenderAt > -Infinity ? Math.max(0, nowMs - lastVrmRenderAt) : 1000 / VRM_IDLE_FPS;
+        const remaining = (1000 / VRM_IDLE_FPS) - elapsedSinceRender;
+        if (remaining <= 20) {
+          frame = requestAnimationFrame(animate);
+          return;
+        }
+        const delay = Math.max(16, Math.round(remaining - 10));
+        idleTimer = setTimeout(() => {
+          idleTimer = 0;
+          if (!frame && rig && !doc.hidden && !cancel.signal.aborted) frame = requestAnimationFrame(animate);
+        }, delay);
+        return;
+      }
+      frame = requestAnimationFrame(animate);
     }
     function captureCursor() {
       frameInput?.abort();
@@ -762,6 +928,7 @@
       body.addEventListener("pointermove", event => {
         cursor.x = event.clientX + (frameBox?.left || 0);
         cursor.y = event.clientY + (frameBox?.top || 0);
+        if (isVrm()) { markVrmActivity(); schedule(); }
       }, { signal: frameInput.signal, passive: true });
     }
     function trackFrame(element) {
@@ -771,12 +938,23 @@
     }
     doc.addEventListener("visibilitychange", () => {
       captureCursor();
-      if (doc.hidden) { cancelAnimationFrame(frame); frame = 0; last = 0; }
-      else invalidated();
+      if (doc.hidden) {
+        cancelAnimationFrame(frame);
+        if (idleTimer) { clearTimeout(idleTimer); idleTimer = 0; }
+        frame = 0;
+        last = 0;
+        lastVrmRenderAt = -Infinity;
+        rig?.pause?.();
+      } else {
+        rig?.resume?.();
+        markVrmActivity();
+        invalidated();
+      }
     }, options);
     doc.addEventListener("pointermove", event => {
       cursor.x = event.clientX;
       cursor.y = event.clientY;
+      if (isVrm()) { markVrmActivity(); schedule(); }
     }, { ...options, passive: true });
 
     function returnHome() {
@@ -816,7 +994,7 @@
       if (drag.moving) {
         suppressClick = true;
         let distance = Math.hypot(home.x - drag.x, home.y - drag.y), mark = "";
-        for (const id of landmarks) {
+        for (const id of dragSnapLandmarks) {
           const m = marks[id];
           if (!m) continue;
           const d = Math.hypot(m.x - drag.x, m.y - drag.y);
@@ -827,22 +1005,41 @@
         fire("session.idle");
       }
       drag = null;
+      markVrmActivity();
       invalidated();
     }
     for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) character.addEventListener(name, drop, options);
-    character.addEventListener("click", () => { if (!suppressClick) fire("user.poke"); suppressClick = false; }, options);
-    character.addEventListener("dblclick", returnHome, options);
+    character.addEventListener("click", () => { if (!suppressClick) { markVrmActivity(); fire("user.poke"); } suppressClick = false; }, options);
+    character.addEventListener("dblclick", () => { markVrmActivity(); returnHome(); }, options);
 
     mountedRailObserver = observeRail;
     if (rail) observeRail(rail, activeRid, true);
     requestPack();
-    return {
+    const api = {
       apply, reset, context, trackFrame, command, closeMenu: controls.close,
+      debugState() {
+        return {
+          renderer: rig?.renderer || "2d",
+          pack: model?.id || "",
+          size,
+          vrmHeight,
+          home: { ...home },
+          position: { ...position },
+          avoiding: !!home.avoiding,
+          vrmIdleMode,
+          vrm: rig?.debugState?.() || null,
+          projectedBounds: rig?.getProjectedFeatureBounds?.() || null
+        };
+      },
       dispose() {
         if (mountedRailObserver === observeRail) mountedRailObserver = null;
+        if (mountedStage === api) mountedStage = null;
         cancel.abort();
         frameInput?.abort();
         cancelAnimationFrame(frame);
+        if (idleTimer) { clearTimeout(idleTimer); idleTimer = 0; }
+        if (typeof rig?.dispose === "function") rig.dispose();
+        rig = null;
         railChanges.disconnect();
         railResize.disconnect();
         rail?.removeAttribute("data-companion-dock");
@@ -853,9 +1050,12 @@
         C.focus?.show("", "");
       }
     };
+    mountedStage = api;
+    return api;
   }
 
   Object.assign(C, { mount, railSignals, signalPairs, resizeControl,
+    debugStage() { return mountedStage?.debugState?.() || null; },
     hasRailObserver() { return !!mountedRailObserver; },
     observeRail(fragment, activeRid, baseline) { mountedRailObserver?.(fragment, activeRid, baseline); } });
 })(window.WsCompanion);

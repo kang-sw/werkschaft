@@ -120,7 +120,8 @@
   function companionContext(routeKind) {
     return {
       sessionId: "", routeKind: routeKind || "home", harness: "", model: "",
-      activity: "idle", openAskCount: 0, runningSubagents: 0, events: [], landmarks: {}
+      activity: "idle", openAskCount: 0, runningSubagents: 0, events: [], landmarks: {},
+      rightColActive: false, drawerOpen: false
     };
   }
 
