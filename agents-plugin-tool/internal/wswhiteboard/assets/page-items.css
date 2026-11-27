@@ -121,7 +121,7 @@ button.closed-more { display: flex; margin: 0 auto 16px; }
 .opt, .ctx, .rec-line { contain: paint; }
 
 /* markdown in item fields: inline code everywhere, blocks inside .md */
-:not(pre) > code { font-size: .92em; background: var(--wb-muted); border-radius: 4px; padding: 0 4px; }
+:not(pre) > code { font-size: .92em; background: var(--wb-muted); border-radius: 4px; padding: 0 4px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 .cbar code { background: rgb(255 255 255 / .18); }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
@@ -165,7 +165,7 @@ button.closed-more { display: flex; margin: 0 auto 16px; }
 /* Preserve readable minimum widths and scroll wide tables in the document body. */
 .md table { display: table; width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; border: 1px solid var(--wb-line); border-radius: 8px; overflow-wrap: normal; }
 .md th, .md td { padding: 5px 10px; vertical-align: top; max-width: 24ch; overflow-wrap: break-word; word-break: keep-all; }
-.md td code, .md th code { display: inline-block; width: max-content; max-width: 24ch; vertical-align: bottom; overflow-wrap: anywhere; word-break: normal; }
+.md td :not(pre) > code, .md th :not(pre) > code { overflow-wrap: break-word; word-break: normal; }
 .md th + th, .md td + td { border-left: 1px solid color-mix(in srgb, var(--wb-line) 55%, transparent); }
 .md th:not([align]) { text-align: left; }
 .md th { background: var(--wb-wash); font-weight: 700; border-bottom: 1px solid var(--wb-line); }

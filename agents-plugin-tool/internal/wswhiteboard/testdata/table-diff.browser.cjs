@@ -27,14 +27,53 @@ const base = process.argv[2], shots = process.argv[3];
       const sizing = await page.evaluate(() => {
         const body = document.querySelector('.doc-body');
         const fixture = document.createElement('div');
-        fixture.innerHTML = '<table><tr><td>one</td><td>two</td></tr></table><table><tr><td><code>' + 'a'.repeat(80) + '</code></td><td>text</td></tr></table>';
+        fixture.innerHTML = '<table><tr><td>one</td><td>two</td></tr></table><table><tr><td><code>' + 'a'.repeat(200) + '</code></td><td>text</td></tr></table>'
+          + '<div style="width:260px"><table><tr><td>VRM 컴패니언 원점 리셋 (<code>impl/develop/vrm-ground-zero-reset</code>, 순 -691줄)</td></tr></table></div>'
+          + '<pre><code>pre_line_1\npre_line_2</code></pre>';
         body.appendChild(fixture);
-        const [compact, long] = fixture.querySelectorAll('table');
-        const result = { compact: compact.getBoundingClientRect().width, available: body.clientWidth - 28, long: long.getBoundingClientRect().width, code: long.querySelector('code').getBoundingClientRect().width };
-        fixture.remove(); return result;
+        const [compact, long, wrapped] = fixture.querySelectorAll('table');
+        const longCode = long.querySelector('code');
+        const wrappedCode = wrapped.querySelector('code');
+        const td = wrappedCode.closest('td');
+        const codeRange = document.createRange();
+        codeRange.selectNodeContents(wrappedCode);
+        const codeRects = [...codeRange.getClientRects()].map(x => ({ top: x.top, bottom: x.bottom, height: x.height }));
+        const beforeRange = document.createRange();
+        beforeRange.setStart(td.firstChild, td.firstChild.textContent.length - 1);
+        beforeRange.setEnd(td.firstChild, td.firstChild.textContent.length);
+        const beforeRect = beforeRange.getClientRects()[0];
+        const afterRange = document.createRange();
+        afterRange.setStart(wrappedCode.nextSibling, 0);
+        afterRange.setEnd(wrappedCode.nextSibling, 2);
+        const afterRect = afterRange.getClientRects()[0];
+        const preCode = fixture.querySelector('pre > code');
+        const result = {
+          compact: compact.getBoundingClientRect().width,
+          available: body.clientWidth - 28,
+          long: long.getBoundingClientRect().width,
+          code: longCode.getBoundingClientRect().width,
+          wrappedDisplay: getComputedStyle(wrappedCode).display,
+          wrappedBreak: getComputedStyle(wrappedCode).boxDecorationBreak || getComputedStyle(wrappedCode).webkitBoxDecorationBreak,
+          codeRects,
+          beforeTop: beforeRect.top,
+          afterTop: afterRect.top,
+          preBg: getComputedStyle(preCode).backgroundColor,
+          prePadL: getComputedStyle(preCode).paddingLeft,
+          preDisplay: getComputedStyle(preCode).display
+        };
+        fixture.remove();
+        return result;
       });
       assert(sizing.compact >= sizing.available - 1, 'compact table spans panel');
-      assert(sizing.code < 400 && sizing.long < 1000, 'long code stays bounded');
+      assert(sizing.long <= sizing.available + 1 && sizing.code < sizing.long, 'long code stays bounded inside table');
+      assert.equal(sizing.wrappedDisplay, 'inline', 'table inline code keeps natural inline flow');
+      assert.equal(sizing.wrappedBreak, 'clone', 'wrapped inline code clones pill decoration per line');
+      assert(sizing.codeRects.length >= 2, 'long inline code wraps across multiple inline line boxes');
+      assert(sizing.codeRects.every(r => r.height < 22), 'each wrapped code fragment keeps normal single-line height');
+      assert(Math.abs(sizing.beforeTop - sizing.codeRects[0].top) <= 4, 'opening paren stays on first wrapped line');
+      assert(Math.abs(sizing.afterTop - sizing.codeRects[sizing.codeRects.length - 1].top) <= 4, 'trailing text flows on last wrapped line');
+      assert.equal(sizing.preBg, 'rgba(0, 0, 0, 0)', 'pre > code keeps transparent background');
+      assert.equal(sizing.prePadL, '0px', 'pre > code keeps zero inline padding');
       if (shots) await page.screenshot({path:path.join(shots, `table-diff-${theme}-${label}.png`), fullPage:true});
       await page.goto(base + '/remove');
       assert.equal(await page.locator('table > ins, table > del, thead > ins, thead > del, tbody > ins, tbody > del, tfoot > ins, tfoot > del, tr > ins, tr > del').count(), 0);
