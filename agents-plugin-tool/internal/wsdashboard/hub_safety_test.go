@@ -40,8 +40,9 @@ func TestHubClockReadsOnlyDueEvidenceAndRechecksLegacyHeartbeats(t *testing.T) {
 	if !s.Live || s.Rev != 1 || len(*changes) != 0 || src.readCounts()["alpha"] != 2 {
 		t.Fatalf("legacy evidence falsely expired: %+v changes=%v reads=%v", s, *changes, src.readCounts())
 	}
-	// A real crash is observed at the same 30-second clock cadence. Keep
-	// verifying stale legacy evidence so a non-notifying resume is prompt.
+	// A real crash is observed at the same 30-second clock cadence. Once
+	// confirmed stale, the entry is cold: later ticks do no reads, and a
+	// non-notifying resume is found by the Refresh backstop.
 	now = now.Add(90*time.Second + time.Millisecond)
 	idx.RefreshClock()
 	idx.Settle()
@@ -52,15 +53,15 @@ func TestHubClockReadsOnlyDueEvidenceAndRechecksLegacyHeartbeats(t *testing.T) {
 	reads := src.readCounts()["alpha"]
 	idx.RefreshClock()
 	idx.Settle()
-	if src.readCounts()["alpha"] != reads+1 {
-		t.Fatal("stale legacy recovery backstop was lost")
+	if src.readCounts()["alpha"] != reads {
+		t.Fatal("cold stale session was re-read by the clock tick")
 	}
 	reg.HeartbeatAt = stampFor(now)
 	if err := WriteRegistration(dir, reg); err != nil {
 		t.Fatal(err)
 	}
 	src.set("alpha", SessionData{Fingerprint: "same", SnapshotUpdatedAt: now, SnapshotStaleAt: now.Add(90*time.Second + time.Millisecond)})
-	idx.RefreshClock()
+	idx.Refresh()
 	idx.Settle()
 	s, _ = idx.Session("alpha")
 	if !s.Live || s.Rev != 3 || len(*changes) != 2 {

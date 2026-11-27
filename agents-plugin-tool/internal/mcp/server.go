@@ -9,6 +9,7 @@ import (
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wscron"
 	"io"
+	"net/http"
 	"os"
 	"runtime/debug"
 	"slices"
@@ -96,6 +97,16 @@ type Server struct {
 	// callerBinding is the daemon runner's memory-only caller check
 	// (ServerOptions.CallerBinding); nil where no daemon hosts this server.
 	callerBinding CallerBindingReader
+	// recordReader is the daemon runner's memory-only agent record reader
+	// (ServerOptions.RecordReader); nil on out-of-daemon servers.
+	recordReader   AgentRecordReader
+	directCall     bool
+	directStdio    bool
+	ensureDaemon   func()
+	ensureMetaOnce sync.Once
+	metaHTTPMu     sync.Mutex
+	metaTransport  *http.Transport
+	metaClient     *http.Client
 	// env is the caller process's environment; nil reads this process's
 	// live (process_env.go). ownerPID is the caller's PID; zero means this
 	// process. debug is the caller's debug ring.
@@ -421,7 +432,10 @@ func (s *Server) handle(ctx context.Context, req request) response {
 	case "ping":
 		return response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{}}
 	case "tools/list":
-		descriptor := s.connectionDescriptor()
+		descriptor, err := s.connectionDescriptorWithError()
+		if err != nil {
+			return errorResponse(req.ID, -32000, err.Error())
+		}
 		listed := s.filteredTools()
 		if descriptor.directTools != nil {
 			listed = slices.DeleteFunc(listed, func(tool map[string]any) bool {

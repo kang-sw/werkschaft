@@ -587,7 +587,7 @@
   function paletteBodyText(body) {
     var frame = body && body.querySelector(".doc-frame");
     if (!frame) return paletteText(body);
-    if (frame.hasAttribute("data-mockup-src") || frame.hasAttribute("data-fallback-text")) {
+    if (frame.getAttribute("data-mockup-src") !== null || frame.getAttribute("data-fallback-text") !== null) {
       return (frame.getAttribute("data-fallback-text") || "").replace(/\s+/g, " ").trim();
     }
     // Both mounted frames and inert placeholders retain the source document.

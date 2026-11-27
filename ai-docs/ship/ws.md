@@ -146,6 +146,24 @@ fetched state.
   branch head — the regular group must pass. When the owner chose **yes**,
   also run `bash scripts/ci-test-shard.sh long` from `agents-plugin-tool` and
   require it to pass. The script owns long-group membership; `all` excludes it.
+- **Targeted local Windows check (Pre-flight exception, 2026-11-27):** routine
+  non-release `go test` still runs exclusively on `w5090` (to avoid Windows
+  AhnLab V3 scan stalls), **except** during release `Pre-flight`: identify Go
+  packages changed since the previous release tag via
+  `git diff --name-only <prev-tag>..<cut-point> -- agents-plugin-tool/` (unique
+  existing Go package dirs containing changes) and run targeted local Windows
+  `go test` on those changed packages wrapped in `D:/sys_lock.sh run <job> <min> -- ...`
+  before dispatching `ws-mcp CI`.
+- **Re-cut fast path (Windows test-only fixes):** when a release re-cut only
+  fixes Windows test failures (`git diff --name-only <prior-cut>..<new-cut>`
+  touches only `*_test.go` files — zero production code diff — and the prior
+  cut already passed all non-Windows packages in `ci-test-shard.sh all` /
+  `long`), do not duplicate a redundant ~15-minute full `w5090` all-package run.
+  Verify only the affected changed Go packages on `w5090` and locally via
+  `D:/sys_lock.sh run`, re-run `python3 scripts/generate-package-assets.py --check`
+  if assets might be affected, and confirm the release/marketplace contracts
+  before Publish (the `ws-mcp CI` gate still verifies the full Ubuntu + Windows
+  matrix on `<release-head>`).
 - Release contract on the release branch head: for
   `agents-plugin/runtime.json` and `agents-plugin-wsflow/runtime.json`, assert
   `.release_tag == "v" + .plugin_version`.
@@ -225,8 +243,9 @@ Order is deliberate: publish the release branch first, let `ws-mcp CI`
 (`.github/workflows/ws-mcp-ci.yml`, ubuntu + sharded windows matrix, plus the
 long legs when requested) pass on `<release-head>`, and only then promote
 `main` and push the tag. Neither `main`
-nor the tag is published before the release commit is green on Linux and
-Windows, which the local Pre-flight `go test` cannot vouch for. The final gate
+nor the tag is published before the release commit is green across the full
+GitHub Linux and Windows matrix, which Pre-flight alone (`w5090` Linux plus
+targeted local Windows package runs) cannot fully vouch for. The final gate
 precedes every push — all pushes below are reversible-only-before-they-run.
 
 - Final gate: show version, tag, `<cut>`, `release/<version>` at

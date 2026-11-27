@@ -108,13 +108,29 @@ func renderPlaybookBody(s *Server, rsrcRoot fs.FS, name string, callerContext ma
 // prompt rendered for another process (playbook.render): only that text
 // takes a PreferNativeSubagent lead's native-first wording.
 func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot fs.FS, name string, callerContext map[string]string, configOpts wsconfig.Options, mintRoot string, parentKey string, workflowLang string, overrideLookup overrideLookupFn, tierOverride string, selfExecuted bool) (string, string, error) {
-	harness := s.playbookHarness()
-	descriptor := s.connectionDescriptor()
+	descriptor, err := s.connectionDescriptorWithError()
+	if err != nil {
+		return "", "", err
+	}
+	harness := s.currentHarness()
+	if harness == "" {
+		harness = descriptor.manualHarness
+	}
 	// A hosted lead with no ws skills (playbookCommands) is under the
 	// native-subagent removal policy (wsagent.RemovesSubagents): it
 	// delegates through agent.spawn, where its connection allows it.
-	daemonAgentClient := (s.connectionOf(harness).ClientDaemonAgents && s.clientPiDaemonAgents()) || descriptor.playbookCommands || s.callerDaemonAgents(callerKey)
-	daemonAgents := daemonAgentClient && s.agentListed() && s.toolAllowed("agent.spawn") && s.toolAllowed("mailbox.send")
+	daemonAgents := false
+	if s.agentListed() && s.toolAllowed("agent.spawn") && s.toolAllowed("mailbox.send") {
+		if (s.connectionOf(harness).ClientDaemonAgents && s.clientPiDaemonAgents()) || descriptor.playbookCommands {
+			daemonAgents = true
+		} else if callerKey != "" {
+			var err error
+			daemonAgents, err = s.callerDaemonAgents(callerKey)
+			if err != nil {
+				return "", "", err
+			}
+		}
+	}
 	terminology := playbookTerminology(harness, daemonAgents, s.runtimeNamespace())
 	// A PreferNativeSubagent lead resolves its live subagent delegation policy
 	// (native-first vs prompt-only spawn-only, and same-harness avoidance) per

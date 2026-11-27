@@ -2,8 +2,11 @@
   // The file explorer (window.WsFiles): independent card, conversation-tab
   // and toolbar-sheet browsers over the guarded read-only fs routes. Each
   // inner tab owns its root/directory, selection, view mode and scroll.
-  // The lazy tree stays beside non-column directory views; files open in the
-  // board's preview slot (preview.js), or their row actions for binary files.
+  // The lazy tree stays beside non-column directory views; previewable files
+  // open in the board's preview slot (preview.js), while unpreviewable files
+  // (kind === "none") keep row selection on single click and open in the
+  // host's default app on double-click or Enter (falling back to row actions
+  // for executable/script extensions or existing fallback when remote).
   //
   // The page script owns the tab switch and hands the module its pieces
   // once (create), then calls shown each time the pane comes into view: the
@@ -25,10 +28,10 @@
 
   // --- pure parts (files_test.go runs them under node) ---------------------
   // showsEntry reports whether the View toggles show the listing entry e:
-  // an ignored entry only while view.ign is on, a dot entry unless view.dot
+  // an ignored entry unless view.ign is false, a dot entry unless view.dot
   // (hide dot entries) is on.
   function showsEntry(e, view) {
-    return (!e.ign || !!view.ign) && !(view.dot && e.name.charAt(0) === ".");
+    return (!e.ign || !view || view.ign !== false) && !(view && view.dot && e.name.charAt(0) === ".");
   }
   // opens reports a folder the tree can expand: on disk and no symlink.
   function opens(e) {
@@ -94,6 +97,15 @@
     if (/^(html?|svg|xml|css|scss|less|js|mjs|cjs|jsx|ts|tsx|json|ya?ml|toml|go|py|rb|rs|c|h|cc|cpp|hpp|cs|java|kt|swift|php|lua|sh|bash|zsh|ps1|sql|vue|svelte|tmpl|mod|sum)$/.test(x)) return "file-code";
     return "file";
   }
+  var EXEC_EXT_RE = /^(exe|bat|cmd|ps1|psm1|msi|msp|lnk|vbs|vbe|com|scr|hta|sh|bash|zsh|ksh|csh|app|command|pif|jse|wsf|wsh|reg|msc|cpl|scf|url|desktop|appimage)$/;
+  // isExecutablePath reports whether path ends in an executable, installer,
+  // shortcut, or script extension excluded from auto-open (case-insensitive).
+  function isExecutablePath(path) {
+    var s = String(path || "");
+    var base = s.slice(Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\")) + 1);
+    var dot = base.lastIndexOf(".");
+    return dot >= 0 && EXEC_EXT_RE.test(base.slice(dot + 1).toLowerCase());
+  }
 
   // Each owner gets its own DOM, requests, search token and storage adapter.
   function create(node, options) {
@@ -102,7 +114,7 @@
   var gen = 0, rootAttempt = 0, previewAttempt = 0, started = false, destroyed = false, listeners = [];
   var lists = {}, open = {}, sel = null, sels = [], anchor = null, cur = null, info = null, rootAbs = "";
   var marquee = null, skipEmptyClick = false;
-  var view = { ign: false, dot: false }, rows = [], rowEls = {};
+  var view = { ign: true, dot: false }, rows = [], rowEls = {};
   var mode = "name", caseOn = false, regexOn = false, timer = null, ctrl = null, searchResult = null, searchPaused = false;
   var treeTop = 0, hitsTop = 0, pop = null, popFrom = null, menu = null, menuFrom = null;
   var ui = {}, api, tabs = [], active = -1, tabSeq = 0, dir = "", viewMode = "details", contentTop = 0, navAttempt = 0;
@@ -394,7 +406,7 @@
   }
   function readView() {
     var v = info ? viewMap()[info.root] : null;
-    view = directoriesOnly ? { ign: true, dot: false } : { ign: !!(v && v.ign), dot: !!(v && v.dot) };
+    view = directoriesOnly ? { ign: true, dot: false } : { ign: v && typeof v.ign === "boolean" ? v.ign : true, dot: !!(v && v.dot) };
     ui.vIgn.checked = view.ign;
     ui.vDot.checked = view.dot;
   }
@@ -863,7 +875,7 @@
       render();
     });
   }
-  function preview(path, line, keep) {
+  function preview(path, line, keep, explicit) {
     if (directoriesOnly) return;
     if (!window.WsPreview) return;
     var o = {}, g = gen, navigation = navAttempt, attempt = ++previewAttempt;
@@ -891,11 +903,22 @@
       return true;
     }
     o.mediaError = rowActions;
-    // Ask before creating a card: binary files use the row's existing actions,
-    // while size-limit notes and every supported renderer keep their previews.
+    // Ask before creating a card: unpreviewable files (kind === "none": both
+    // binary and >2 MiB) keep row selection only on single click so double-click
+    // never flashes a card or popup; on double-click or Enter local viewers
+    // trigger default-app open (except executables/scripts, which fall back to
+    // row actions), while remote viewers preserve the existing fallback.
     fsGet("preview", { path: path, root: rootAbs, text: line > 0 ? "1" : "" }).then(function (answer) {
       if (destroyed || g !== gen || navigation !== navAttempt || attempt !== previewAttempt) return;
-      if (answer.kind === "none" && answer.reason_code === "binary") { rowActions(); return; }
+      if (answer.kind === "none") {
+        if (!keep && !explicit) return;
+        if (local() && keep) {
+          if (isExecutablePath(path)) { rowActions(); return; }
+          act(path, "open");
+          return;
+        }
+        if (answer.reason_code === "binary" && !explicit) { rowActions(); return; }
+      }
       o.answer = answer;
       (h.preview || window.WsPreview.open)(path, o);
     }, function () {
@@ -903,8 +926,8 @@
     });
   }
   // activate is a click or Enter on a row: a folder opens or closes, a file
-  // is selected and previewed (binary files offer row actions instead);
-  // a deleted entry or a symlink only takes the focus.
+  // is selected (and previewed, or opened/offered row actions on Enter when
+  // unpreviewable); a deleted entry or a symlink only takes the focus.
   function activate(r, keep) {
     if (!r || r.more) return;
     if (opens(r.e)) { toggle(r.path, true); return; }
@@ -1035,7 +1058,7 @@
     var e = r.e, path = r.path, l = lists[r.dir], items = [];
     var values = viewMode !== "column" && sels.indexOf(path) >= 0 ? selections() : [entrySelection(path)], multi = values.length > 1;
     if (!e.gone || multi) {
-      if ((!e.dir && !e.link) || multi) items.push([wsT("js.menu.preview"), function () { resetSelection(path); render(); preview(path); }, multi]);
+      if ((!e.dir && !e.link) || multi) items.push([wsT("js.menu.preview"), function () { resetSelection(path); render(); preview(path, 0, false, true); }, multi]);
       if (local()) {
         items.push([wsT("js.preview.openext"), function () { act(path, "open"); }, multi]);
         items.push([wsT("js.files.menu.reveal"), function () { act(path, "reveal"); }, multi]);
@@ -1106,7 +1129,11 @@
       ui.rErr.textContent = "";
       ui.rIn.value = info ? info.root : "";
       ui.rFilter.focus();
-    } else ui.vIgn.focus();
+    } else {
+      ui.vIgn.checked = view.ign;
+      ui.vDot.checked = view.dot;
+      ui.vIgn.focus();
+    }
   }
 
   // --- search ------------------------------------------------------------------
@@ -1397,6 +1424,8 @@
     }
     ui.vIgn = opt(wsT("js.files.view.ign"));
     ui.vDot = opt(wsT("js.files.view.dot"));
+    ui.vIgn.checked = view.ign;
+    ui.vDot.checked = view.dot;
     el.appendChild(ui.viewPop);
 
     ui.rootPop = mk("div", "fpop froot-pop");

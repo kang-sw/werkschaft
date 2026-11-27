@@ -90,7 +90,7 @@ time.tago, time.entry-at[data-at] { display: inline-block; contain: layout style
 .tophead { background: var(--wb-card); box-shadow: 0 -12px 0 var(--wb-bg); }
 .closed-more { display: block; margin: 0 0 16px; font-size: 12.5px; color: var(--wb-muted-fg); }
 button.closed-more { display: flex; margin: 0 auto 16px; }
-.tbar .chip:not(.policy):not(.ok) { background: rgb(127 127 127 / .28); color: inherit; }
+.tbar .chip:not(.policy):not(.ok):not(.wb-chip-ans):not(.wb-chip-held) { background: rgb(127 127 127 / .28); color: inherit; }
 .tbody { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
 .topic.quiet { box-shadow: none; background: transparent; }
 /* A visible body shares one surface with its bar. */
@@ -184,6 +184,19 @@ button.closed-more { display: flex; margin: 0 auto 16px; }
 .md .footnotes li p { margin: 0; }
 .md pre.mermaid { background: transparent; padding: 0; text-align: center; font-family: var(--wb-mono); }
 .md pre.mermaid svg { max-width: 100%; height: auto; }
+/* mermaid failure: one compact card (summary, source on demand), not mermaid's own error drawing */
+.md pre.mermaid .wb-mmd-err { display: flex; flex-direction: column; gap: 6px; padding: 9px 12px; border-radius: 9px; text-align: left; font-family: var(--wb-sans); background: color-mix(in srgb, var(--wb-warn) 7%, var(--wb-card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-warn) 40%, transparent); }
+.md pre.mermaid .wb-mmd-err-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.md pre.mermaid .wb-mmd-err-title { display: inline-flex; align-items: center; gap: 7px; min-width: 0; flex: 1 1 200px; font-size: 12.5px; font-weight: 600; color: var(--wb-fg); }
+.md pre.mermaid .wb-mmd-err-badge { flex: none; font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--wb-fail) 18%, transparent); color: var(--wb-fail); }
+.md pre.mermaid .wb-mmd-err-sum { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.md pre.mermaid .wb-mmd-err-acts { display: inline-flex; gap: 4px; }
+.md pre.mermaid .wb-mmd-err-btn { border: 0; border-radius: 6px; background: transparent; color: var(--wb-muted-fg); font: inherit; font-size: 11.5px; padding: 2px 8px; cursor: pointer; }
+.md pre.mermaid .wb-mmd-err-btn:hover, .md pre.mermaid .wb-mmd-err-btn:focus-visible { background: var(--wb-wash); color: var(--wb-fg); }
+.md pre.mermaid .wb-mmd-err-msg, .md pre.mermaid .wb-mmd-err-raw { margin: 0; padding: 7px 10px; border-radius: 7px; font-family: var(--wb-mono); font-size: 11.5px; line-height: 1.48; overflow-x: auto; font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; }
+.md pre.mermaid .wb-mmd-err-msg { background: var(--wb-wash); color: var(--wb-muted-fg); white-space: pre-wrap; word-break: break-word; }
+.md pre.mermaid .wb-mmd-err-raw { background: var(--wb-bg); color: var(--wb-fg); white-space: pre; tab-size: 2; }
+.md pre.mermaid .wb-mmd-err [hidden] { display: none; }
 
 /* options: tonal buttons, filled when picked */
 .opts { display: flex; flex-wrap: wrap; gap: 6px; }

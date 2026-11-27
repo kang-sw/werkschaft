@@ -99,30 +99,63 @@ func (r *Runner) startWithServing(notify func(replyID, project string), serving 
 	}
 	private := r.openDurableAgentRecords()
 	r.restoreRetiredPiHistory()
-	entries, _ := wsstate.ReadDir(filepath.Join(r.opts.Dir, "sessions"))
 	var all, open []Record
-	for _, e := range entries {
-		if !e.IsDir() || !wsdashboard.ValidReplyID(e.Name()) {
-			continue
+	if r.meta != nil {
+		privateIDs := make([]string, 0, len(private))
+		for id := range private {
+			privateIDs = append(privateIDs, id)
 		}
-		dir := wsdashboard.SessionDir(r.opts.Dir, e.Name())
-		if rec, ok := private[e.Name()]; ok {
-			r.restoreDurableProjection(dir, rec)
-			all = append(all, rec)
-			continue
+		slices.Sort(privateIDs)
+		for _, id := range privateIDs {
+			all = append(all, private[id])
 		}
-		rec, err := readRecord(dir)
-		if err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				fmt.Fprintf(r.opts.Log, "agent: skip %s: %v\n", e.Name(), err)
+		if r.metaSnap != nil {
+			recordIDs := make([]string, 0, len(r.metaSnap.Records))
+			for id := range r.metaSnap.Records {
+				if _, ok := private[id]; ok {
+					continue
+				}
+				recordIDs = append(recordIDs, id)
 			}
-			continue
+			slices.Sort(recordIDs)
+			for _, id := range recordIDs {
+				ar := r.metaSnap.Records[id]
+				rec, err := decodeRecord("sqlite agent record", id, ar.JSON)
+				if err != nil {
+					fmt.Fprintf(r.opts.Log, "agent: skip %s: %v\n", id, err)
+					continue
+				}
+				if r.durableProcess(rec.Backend) {
+					rec = durableHistoryProjection(rec)
+				}
+				all = append(all, rec)
+			}
 		}
-		// The history projection is never an input to the durable scheduler.
-		if r.durableProcess(rec.Backend) {
-			rec = durableHistoryProjection(rec)
+	} else {
+		entries, _ := wsstate.ReadDir(filepath.Join(r.opts.Dir, "sessions"))
+		for _, e := range entries {
+			if !e.IsDir() || !wsdashboard.ValidReplyID(e.Name()) {
+				continue
+			}
+			dir := wsdashboard.SessionDir(r.opts.Dir, e.Name())
+			if rec, ok := private[e.Name()]; ok {
+				r.restoreDurableProjection(dir, rec)
+				all = append(all, rec)
+				continue
+			}
+			rec, err := readRecord(dir)
+			if err != nil {
+				if !errors.Is(err, os.ErrNotExist) {
+					fmt.Fprintf(r.opts.Log, "agent: skip %s: %v\n", e.Name(), err)
+				}
+				continue
+			}
+			// The history projection is never an input to the durable scheduler.
+			if r.durableProcess(rec.Backend) {
+				rec = durableHistoryProjection(rec)
+			}
+			all = append(all, rec)
 		}
-		all = append(all, rec)
 	}
 	// From the full set, before any record is loaded or rejoined, so a
 	// child read before its parent is admitted from that parent.
@@ -164,9 +197,16 @@ func (r *Runner) startWithServing(notify func(replyID, project string), serving 
 	open = r.expireBeforeServing(open, dead)
 	orphans := r.orphansAtStart(open)
 	startup := make([]*conv, 0, len(open))
+	cold := r.coldParkable(open, dead, orphans)
 	for _, rec := range open {
 		binding := bindings[rec.ReplyID]
 		refusal := dead[rec.ReplyID]
+		if cold[rec.ReplyID] {
+			// A waiting child with nothing pending holds no loop: its mail
+			// or a send rehydrates it (unpark).
+			r.loadParked(rec)
+			continue
+		}
 		// A cross-harness worker must finish the existing rejoin and
 		// retirement path, including settlement of a cut-off turn.
 		if refusal != nil && r.admitWorkerRecord(rec) == nil {
@@ -216,7 +256,7 @@ func (r *Runner) startWithServing(notify func(replyID, project string), serving 
 	}
 	// A child loaded before its parent found no parent to report to.
 	r.deliverPending()
-	r.startHeartbeatSweeper()
+	r.startParkSweeper()
 	if r.opts.Holders == nil {
 		// No holder to wait for.
 		r.markScanned()

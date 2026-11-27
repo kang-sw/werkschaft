@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 func openTest(t *testing.T, changed func(string)) (*Registry, string) {
@@ -19,7 +21,7 @@ func openTest(t *testing.T, changed func(string)) (*Registry, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = r.Close() })
+	wstestutil.CloseBeforeTempDir(t, r.Close)
 	return r, path
 }
 
@@ -93,9 +95,9 @@ func TestReadsTouchNoStore(t *testing.T) {
 	}
 }
 
-func TestReloadScopedToLeadAndWorktree(t *testing.T) {
+func TestReloadScopedToWorktree(t *testing.T) {
 	r, path := openTest(t, nil)
-	cmds := map[[2]string]string{{"lead", "/w1"}: "one", {"lead", "/w2"}: "two", {"other", "/w1"}: "three"}
+	cmds := map[[2]string]string{{"lead", "/w1"}: "one", {"lead", "/w2"}: "two"}
 	for k, id := range cmds {
 		if _, _, err := r.Set(k[0], k[1], in(id)); err != nil {
 			t.Fatal(err)
@@ -119,8 +121,8 @@ func TestReloadScopedToLeadAndWorktree(t *testing.T) {
 	if got := r2.List("lead", "/elsewhere"); len(got) != 0 {
 		t.Fatalf("another worktree sees %+v", got)
 	}
-	if got := r2.List("stranger", "/w1"); len(got) != 0 {
-		t.Fatalf("another lead sees %+v", got)
+	if got := r2.List("stranger", "/w1"); len(got) != 1 {
+		t.Fatalf("another conversation of the worktree sees %+v", got)
 	}
 	after, _ := r2.Get("lead", "/w1", "one")
 	if after != before {
@@ -331,28 +333,6 @@ func TestRevisionChangesPerChange(t *testing.T) {
 	}
 }
 
-func TestReconcileDropsUnknownLeads(t *testing.T) {
-	r, path := openTest(t, nil)
-	_, _, _ = r.Set("live", "/w", in("a"))
-	_, _, _ = r.Set("dead", "/w", in("a"))
-	ops := r.Ops()
-	if err := r.Reconcile(func(string) bool { return true }); err != nil || r.Ops() != ops {
-		t.Fatalf("nothing to drop committed: %v ops %d->%d", err, ops, r.Ops())
-	}
-	if err := r.Reconcile(func(id string) bool { return id == "live" }); err != nil || r.Ops() != ops+1 {
-		t.Fatalf("reconcile: %v ops %d->%d", err, ops, r.Ops())
-	}
-	_ = r.Close()
-	r2, err := Open(path, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r2.Close()
-	if len(r2.List("live", "/w")) != 1 || len(r2.List("dead", "/w")) != 0 {
-		t.Fatal("reconcile did not persist")
-	}
-}
-
 func TestConcurrentWriters(t *testing.T) {
 	r, _ := openTest(t, nil)
 	var wg sync.WaitGroup
@@ -482,119 +462,6 @@ func TestStoreV2InPlaceUpgradeKeepsSchemaVersionTwo(t *testing.T) {
 	list := r2.List("lead", "/w")
 	if len(list) != 2 || list[0].Source != SourceAgent || list[0].ID != "a" || list[1].Source != SourceUser || list[1].ID != u.ID || list[1].Prompt != "Fix lint" || list[1].Cwd != "pkg" {
 		t.Fatalf("reopened list: %+v", list)
-	}
-}
-
-// TestDualScopeCoexistencePatchAndReconcile: agent and user commands share
-// one root list ordered by seq, may share the same ID without colliding,
-// support PatchIf across both scopes without changing Source or seq, and
-// Reconcile drops dead sessions' agent commands while leaving root_user_commands
-// untouched.
-func TestDualScopeCoexistencePatchAndReconcile(t *testing.T) {
-	var notified []string
-	r, path := openTest(t, func(reply string) { notified = append(notified, reply) })
-
-	a, _, err := r.Set("live", "/w", Input{ID: "build", Label: "Agent Build", Line: "make agent", Prompt: "Check agent build", Cwd: "cmd"})
-	if err != nil || a.Source != SourceAgent || a.Prompt != "Check agent build" || a.Cwd != "cmd" {
-		t.Fatalf("agent set: %+v %v", a, err)
-	}
-	u, err := r.CreateUser("/w", Input{ID: "build", Label: "User Build", Line: "make user", Prompt: "Check user build", Cwd: "pkg"})
-	if err != nil || u.Source != SourceUser || u.ID != "build" {
-		t.Fatalf("user create same id: %+v %v", u, err)
-	}
-	// Duplicate user ID returns ErrExists.
-	if _, err := r.CreateUser("/w", Input{ID: "build", Label: "Dup", Line: "true"}); !errors.Is(err, ErrExists) {
-		t.Fatalf("duplicate user id: %v", err)
-	}
-	// Auto-slug generation and collision suffixing.
-	s1, err := r.CreateUser("/w", Input{Label: "Run Tests!", Line: "go test ./..."})
-	if err != nil || s1.ID != "run-tests" {
-		t.Fatalf("slug 1: %+v %v", s1, err)
-	}
-	s2, err := r.CreateUser("/w", Input{Label: "Run Tests!", Line: "go test -race ./..."})
-	if err != nil || !strings.HasPrefix(s2.ID, "run-tests-") || s2.ID == s1.ID || !ValidID(s2.ID) {
-		t.Fatalf("slug 2: %+v %v", s2, err)
-	}
-	// Non-ASCII label falls back to "cmd" slug.
-	s3, err := r.CreateUser("/w", Input{Label: "빌드", Line: "make"})
-	if err != nil || s3.ID != "cmd" {
-		t.Fatalf("non-ascii slug: %+v %v", s3, err)
-	}
-
-	// Merged list for "live" has both "build" entries in seq order; another session
-	// on the same root sees user commands only; another root sees none.
-	liveList, revLive := r.Snapshot("live", "/w")
-	if len(liveList) != 5 || liveList[0].Source != SourceAgent || liveList[1].Source != SourceUser || liveList[1].ID != "build" {
-		t.Fatalf("live list: %+v", liveList)
-	}
-	if got := r.RevisionFor("live", "/w"); got != revLive {
-		t.Fatalf("RevisionFor %q != Snapshot rev %q", got, revLive)
-	}
-	otherList := r.List("other", "/w")
-	if len(otherList) != 4 {
-		t.Fatalf("other session on same root: %+v", otherList)
-	}
-	if len(r.List("other", "/other-root")) != 0 {
-		t.Fatal("other root leaked user commands")
-	}
-
-	// PatchIf updates line and prompt atomically on both scopes, keeping Source and seq.
-	newLine := "make agent-v2"
-	newPrompt := "Updated prompt"
-	a2, err := r.PatchIf("live", "/w", SourceAgent, "build", a.Revision, Patch{Line: &newLine, Prompt: &newPrompt})
-	if err != nil || a2.Source != SourceAgent || a2.Line != newLine || a2.Prompt != newPrompt || a2.Cwd != "cmd" || a2.Revision <= a.Revision {
-		t.Fatalf("patch agent: %+v %v", a2, err)
-	}
-	// Stale revision refused.
-	if _, err := r.PatchIf("live", "/w", SourceAgent, "build", a.Revision, Patch{Line: &newLine}); !errors.Is(err, ErrStale) {
-		t.Fatalf("stale patch: %v", err)
-	}
-	// Patch user command.
-	uLine := "make user-v2"
-	u2, err := r.PatchIf("other", "/w", SourceUser, "build", u.Revision, Patch{Line: &uLine})
-	if err != nil || u2.Source != SourceUser || u2.Line != uLine || u2.Prompt != "Check user build" {
-		t.Fatalf("patch user: %+v %v", u2, err)
-	}
-	// Order preserved: agent "build" still precedes user "build".
-	afterPatch := r.List("live", "/w")
-	if afterPatch[0].Source != SourceAgent || afterPatch[0].Line != newLine || afterPatch[1].Source != SourceUser || afterPatch[1].Line != uLine {
-		t.Fatalf("order after patch: %+v", afterPatch[:2])
-	}
-
-	// RemoveIfSource removes only the named scope.
-	if err := r.RemoveIfSource("live", "/w", SourceUser, "build", u.Revision); !errors.Is(err, ErrStale) {
-		t.Fatalf("stale user remove: %v", err)
-	}
-	if err := r.RemoveIfSource("live", "/w", SourceUser, "build", u2.Revision); err != nil {
-		t.Fatalf("user remove: %v", err)
-	}
-	if _, ok := r.GetBySource("live", "/w", SourceAgent, "build"); !ok {
-		t.Fatal("removing user command removed same-id agent command")
-	}
-	if _, ok := r.GetBySource("live", "/w", SourceUser, "build"); ok {
-		t.Fatal("removed user command still present")
-	}
-
-	// Reconcile drops dead agent session commands but leaves user commands untouched.
-	if _, _, err := r.Set("dead", "/w", in("deadcmd")); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Reconcile(func(id string) bool { return id == "live" }); err != nil {
-		t.Fatal(err)
-	}
-	_ = r.Close()
-	r2, err := Open(path, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r2.Close()
-	if got := r2.List("dead", "/w"); len(got) != 3 { // only the 3 surviving user commands
-		t.Fatalf("after reconcile dead session sees %+v", got)
-	}
-	for _, c := range r2.List("dead", "/w") {
-		if c.Source != SourceUser {
-			t.Fatalf("dead agent command survived reconcile: %+v", c)
-		}
 	}
 }
 

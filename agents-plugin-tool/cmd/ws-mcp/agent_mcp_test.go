@@ -34,7 +34,7 @@ func TestCallFallbackRegistrationAndRenderDescriptor(t *testing.T) {
 		if reg.CallFallback != (name == wsagent.BackendAgy) {
 			t.Fatalf("backend %q fallback = %v; only agy opts in", name, reg.CallFallback)
 		}
-		render := hostedRender(reg, nil)
+		render := hostedRender(reg, nil, nil)
 		if render.CallFallback != reg.CallFallback || render.ToolNameScheme != reg.ToolNameScheme {
 			t.Fatalf("backend %q loses fallback or alias data in prompt rendering: %+v", name, render)
 		}
@@ -232,6 +232,7 @@ func TestAgentMCPHostedWorkerDescriptorThroughProxy(t *testing.T) {
 			holders := wsholder.New(wsholder.Options{Dir: t.TempDir()})
 			defer holders.Close()
 			runner := newAgentRunner(dashDir, io.Discard, nil, nil, nil, holders, nil, nil, nil)
+			runner.Start(nil)
 			defer runner.Close()
 			host := &proxyHost{agents: runner, logw: io.Discard}
 			session, err := host.Accept(wsdashboard.ProxyHello{

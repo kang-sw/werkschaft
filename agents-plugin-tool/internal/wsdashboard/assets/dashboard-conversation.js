@@ -34,33 +34,44 @@
   // stay put unless their mail-wake presentation changes: a hidden mail
   // marker must replace its row (and restore it when the association expires).
   function mergeEntries(box, src, changed) {
-    var have = entryKeys(box), added = [];
-    Array.prototype.slice.call(src.children).forEach(function (n) {
-      var k = n.getAttribute("data-entry");
-      if (!k) return;
-      var old = have[k];
-      if (old) {
-        if (!(changed && changed[k]) && old.getAttribute("data-mail-wake") === n.getAttribute("data-mail-wake")) return;
-        box.replaceChild(n, old);
-      } else {
-        // New entries are usually the newest (live) or the oldest (history),
-        // so walk back from the end strictly over [data-entry] siblings.
-        var c = box.lastElementChild;
-        while (c && (!c.getAttribute || !c.getAttribute("data-entry"))) c = c.previousElementSibling;
-        while (c && c.getAttribute("data-entry") > k) {
-          var prev = c.previousElementSibling;
-          while (prev && (!prev.getAttribute || !prev.getAttribute("data-entry"))) prev = prev.previousElementSibling;
-          c = prev;
+    var added = [];
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("convo", "mergeEntries") : null;
+    try {
+      var have = entryKeys(box);
+      Array.prototype.slice.call(src.children).forEach(function (n) {
+        var k = n.getAttribute("data-entry");
+        if (!k) return;
+        var old = have[k];
+        if (old) {
+          if (!(changed && changed[k]) &&
+              old.getAttribute("data-mail-wake") === n.getAttribute("data-mail-wake") &&
+              old.getAttribute("data-turn-absorbed") === n.getAttribute("data-turn-absorbed") &&
+              old.getAttribute("data-turn-live-absorbed") === n.getAttribute("data-turn-live-absorbed") &&
+              old.getAttribute("data-conv-turn") === n.getAttribute("data-conv-turn") &&
+              old.getAttribute("data-turn-rev") === n.getAttribute("data-turn-rev")) return;
+          box.replaceChild(n, old);
+        } else {
+          // New entries are usually the newest (live) or the oldest (history),
+          // so walk back from the end strictly over [data-entry] siblings.
+          var c = box.lastElementChild;
+          while (c && (!c.getAttribute || !c.getAttribute("data-entry"))) c = c.previousElementSibling;
+          while (c && c.getAttribute("data-entry") > k) {
+            var prev = c.previousElementSibling;
+            while (prev && (!prev.getAttribute || !prev.getAttribute("data-entry"))) prev = prev.previousElementSibling;
+            c = prev;
+          }
+          box.insertBefore(n, c ? c.nextSibling : box.firstChild);
         }
-        box.insertBefore(n, c ? c.nextSibling : box.firstChild);
-      }
-      have[k] = n;
-      added.push(n);
-      restoreOpen(n);
-      fmtTimes(n);
-      if (typeof hydrateWbUpdateItems === "function") hydrateWbUpdateItems(n);
-    });
-    return added;
+        have[k] = n;
+        added.push(n);
+        restoreOpen(n);
+        fmtTimes(n);
+        if (typeof hydrateWbUpdateItems === "function") hydrateWbUpdateItems(n);
+      });
+      return added;
+    } finally {
+      if (jTok) WsJank.end(jTok, { count: added.length });
+    }
   }
   // gapped reports a newest window (nbox) that does not reach what box
   // holds: its oldest entry is newer than box's newest, so entries between
@@ -129,42 +140,47 @@
   // entries past the cap. Either way the older history is loaded again from
   // what the box then holds.
   function mergeEntriesRegion(el, html, pin, previous) {
-    var next = typeof html === "string" ? null : html, box = entriesBox(), changed = Object.create(null);
-    // Without a rendered baseline, the differing full's same-key rows may
-    // have changed since page render (or an unparseable full). The swap owner
-    // already bypasses this merge for equal hashes, preserving no-remount.
-    if (next) next.order.forEach(function (key) {
-      if (!previous || (previous.rows[key] && previous.rows[key].html !== next.rows[key].html)) changed[key] = true;
-    });
-    if (box && next && previous && next.shell === previous.shell && keyedSame(next.order, previous.order)) {
-      var incoming = doc.createElement("div"), have = entryKeys(box);
-      next.order.forEach(function (key) {
-        if (!have[key] || changed[key]) incoming.appendChild(entryRowNode(next.rows[key].html, key));
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("convo", "mergeEntriesRegion") : null;
+    try {
+      var next = typeof html === "string" ? null : html, box = entriesBox(), changed = Object.create(null);
+      // Without a rendered baseline, the differing full's same-key rows may
+      // have changed since page render (or an unparseable full). The swap owner
+      // already bypasses this merge for equal hashes, preserving no-remount.
+      if (next) next.order.forEach(function (key) {
+        if (!previous || (previous.rows[key] && previous.rows[key].html !== next.rows[key].html)) changed[key] = true;
       });
-      var inserted = mergeEntries(box, incoming, changed);
-      inserted.forEach(sweepOutImgs); mermaid(inserted);
+      if (box && next && previous && next.shell === previous.shell && keyedSame(next.order, previous.order)) {
+        var incoming = doc.createElement("div"), have = entryKeys(box);
+        next.order.forEach(function (key) {
+          if (!have[key] || changed[key]) incoming.appendChild(entryRowNode(next.rows[key].html, key));
+        });
+        var inserted = mergeEntries(box, incoming, changed);
+        inserted.forEach(sweepOutImgs); mermaid(inserted);
+        if (pin && evictEntries(box)) histReset();
+        var oldestA = firstEntryEl(box);
+        emitAuditEvent("ws-entries-merged", { oldestAt: oldestA ? (oldestA.getAttribute("data-at") || "") : "", empty: !oldestA });
+        return;
+      }
+      html = next ? entryInputHTML(next) : html;
+      var src = frag(html), head = el.querySelector(".thead"), nhead = src.querySelector(".thead");
+      var nbox = src.querySelector(".centries");
+      if (!box || !nbox) {
+        el.innerHTML = html; restoreOpen(el); fmtTimes(el); sweepOutImgs(el); mermaid(el); if (typeof hydrateWbUpdateItems === "function") hydrateWbUpdateItems(el); histReset();
+        var freshBox = entriesBox(), freshOld = firstEntryEl(freshBox);
+        emitAuditEvent("ws-entries-merged", { oldestAt: freshOld ? (freshOld.getAttribute("data-at") || "") : "", empty: !freshOld });
+        return;
+      }
+      if (head && nhead) { head.parentNode.replaceChild(nhead, head); fmtTimes(nhead); }
+      if (gapped(box, nbox)) { resetEntries(box); histReset(); }
+      var added = mergeEntries(box, nbox, changed);
+      added.forEach(sweepOutImgs);
+      mermaid(added);
       if (pin && evictEntries(box)) histReset();
-      var oldestA = firstEntryEl(box);
-      emitAuditEvent("ws-entries-merged", { oldestAt: oldestA ? (oldestA.getAttribute("data-at") || "") : "", empty: !oldestA });
-      return;
+      var oldestB = firstEntryEl(box);
+      emitAuditEvent("ws-entries-merged", { oldestAt: oldestB ? (oldestB.getAttribute("data-at") || "") : "", empty: !oldestB });
+    } finally {
+      if (jTok) WsJank.end(jTok);
     }
-    html = next ? entryInputHTML(next) : html;
-    var src = frag(html), head = el.querySelector(".thead"), nhead = src.querySelector(".thead");
-    var nbox = src.querySelector(".centries");
-    if (!box || !nbox) {
-      el.innerHTML = html; restoreOpen(el); fmtTimes(el); sweepOutImgs(el); mermaid(el); if (typeof hydrateWbUpdateItems === "function") hydrateWbUpdateItems(el); histReset();
-      var freshBox = entriesBox(), freshOld = firstEntryEl(freshBox);
-      emitAuditEvent("ws-entries-merged", { oldestAt: freshOld ? (freshOld.getAttribute("data-at") || "") : "", empty: !freshOld });
-      return;
-    }
-    if (head && nhead) { head.parentNode.replaceChild(nhead, head); fmtTimes(nhead); }
-    if (gapped(box, nbox)) { resetEntries(box); histReset(); }
-    var added = mergeEntries(box, nbox, changed);
-    added.forEach(sweepOutImgs);
-    mermaid(added);
-    if (pin && evictEntries(box)) histReset();
-    var oldestB = firstEntryEl(box);
-    emitAuditEvent("ws-entries-merged", { oldestAt: oldestB ? (oldestB.getAttribute("data-at") || "") : "", empty: !oldestB });
   }
 
   // Model history is a click-only popover sourced by the entries title bar.
@@ -653,7 +669,7 @@
       if (kept) kept.h.apply();
       if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
       if (typeof boardDialSync === "function") boardDialSync();
-      syncWbUpdateItems();
+      if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
       return true;
     }, function () { btn.disabled = false; return false; });
   }
@@ -803,7 +819,7 @@
   // #r-board DOM as the single source of truth, keeping them synced across
   // picks, notes, holds (via pill.js), in-flight sends, and settlements.
   var WB_QCAP_CLASSES = { policy: "js.wbupdate.cls.policy", technical: "js.wbupdate.cls.technical", announced: "js.wbupdate.cls.announced", check: "js.wbupdate.cls.check" };
-  var wbUpdateObserver = null, wbUpdateObservedBoard = null, wbUpdatePendingAll = false, wbUpdatePendingIds = null, wbUpdateQueued = false;
+  var wbUpdateObserver = null, wbUpdateObservedBoard = null, wbUpdatePendingAll = false, wbUpdatePendingIds = null, wbUpdatePendingHints = null, wbUpdateQueued = false;
 
   function wbUpdateNormID(raw) {
     var s = String(raw || "").trim();
@@ -915,9 +931,209 @@
   }
 
   function wbUpdateQueryBoard(b, sel) {
+    var api = wbUpdateQueryBoard._api;
+    if (!api) {
+      var CARD_SEL = '.card.policy[data-id], .arow[data-id], .ckrow[data-id]:not([data-assumed]), .ckrow[data-item], .wb-hitem.original-question[data-item], .wb-hitem[data-item][data-state="ask"], .wb-hitem[data-item][data-state="settled"]';
+      var recCache = typeof WeakMap === "function" ? new WeakMap() : null;
+      var vsGen = 0, lastVs = null, lastVsGen = -1, lastVsSize = -1, virtDirty = true, virtCombined = null;
+      var makeBucket = function () {
+        return { open: new Map(), ask: new Map(), settledHist: new Map(), settledCk: new Map() };
+      };
+      var putFirst = function (map, key, el, topic, order) {
+        if (!key) return;
+        if (!map.has(key)) map.set(key, { el: el, topic: topic, order: order });
+      };
+      var indexEl = function (bucket, el, topic, orderRef) {
+        if (!el || el.nodeType !== 1) return;
+        var did = el.getAttribute("data-id");
+        if (did) {
+          var cls = el.classList;
+          var isOpen = (cls && ((cls.contains("card") && cls.contains("policy")) || cls.contains("arow") || (cls.contains("ckrow") && (!el.hasAttribute || !el.hasAttribute("data-assumed")))))
+            || (el.matches && el.matches('.card.policy[data-id], .arow[data-id], .ckrow[data-id]:not([data-assumed])'));
+          if (isOpen) putFirst(bucket.open, did, el, topic, orderRef.n++);
+        }
+        var item = el.getAttribute("data-item");
+        if (item) {
+          var isCk = (el.classList && el.classList.contains("ckrow")) || (el.matches && el.matches(".ckrow"));
+          if (isCk) {
+            putFirst(bucket.settledCk, item, el, topic, orderRef.n++);
+          } else {
+            var isHist = (el.classList && el.classList.contains("wb-hitem")) || (el.matches && el.matches(".wb-hitem"));
+            if (isHist) {
+              var st = el.getAttribute("data-state");
+              if ((el.classList && el.classList.contains("original-question")) || st === "ask") {
+                putFirst(bucket.ask, item, el, topic, orderRef.n++);
+              }
+              if (st === "settled") {
+                putFirst(bucket.settledHist, item, el, topic, orderRef.n++);
+              }
+            }
+          }
+        }
+      };
+      var indexSubtree = function (bucket, root, topic, orderRef) {
+        if (!root || root.nodeType !== 1) return;
+        if (root.matches && root.matches(CARD_SEL)) indexEl(bucket, root, topic, orderRef);
+        if (root.querySelectorAll) {
+          var hits = root.querySelectorAll(CARD_SEL);
+          for (var hi = 0; hi < hits.length; hi++) indexEl(bucket, hits[hi], topic, orderRef);
+        }
+      };
+      var getRecBucket = function (rec) {
+        var stashed = rec.stashed && rec.stashed.nodeType === 1 ? rec.stashed : null;
+        var children = !stashed && rec.children && rec.children.length ? rec.children : null;
+        var childLen = children ? children.length : 0;
+        var cached = recCache ? recCache.get(rec) : null;
+        if (cached && cached.stashed === stashed && cached.children === children && cached.childLen === childLen) {
+          return cached.bucket;
+        }
+        var bucket = makeBucket();
+        var orderRef = { n: 0 };
+        if (stashed) {
+          indexSubtree(bucket, stashed, 0, orderRef);
+        } else if (children) {
+          for (var ci = 0; ci < childLen; ci++) {
+            indexSubtree(bucket, children[ci], 0, orderRef);
+          }
+        }
+        if (recCache) recCache.set(rec, { stashed: stashed, children: children, childLen: childLen, bucket: bucket });
+        return bucket;
+      };
+      var hookStore = function (vs) {
+        if (!vs || vs.__wbIdxHooked) return;
+        ["set", "delete", "clear"].forEach(function (m) {
+          var orig = vs[m];
+          if (typeof orig === "function") {
+            try {
+              Object.defineProperty(vs, m, {
+                configurable: true,
+                writable: true,
+                value: function () {
+                  var res = orig.apply(this, arguments);
+                  vsGen++;
+                  virtDirty = true;
+                  return res;
+                }
+              });
+            } catch (e) {}
+          }
+        });
+        try {
+          Object.defineProperty(vs, "__wbIdxHooked", { configurable: true, value: true });
+        } catch (e) {}
+      };
+      var ensureVirtIdx = function () {
+        if (typeof virtualStore === "undefined" || !virtualStore || !virtualStore.size) return null;
+        hookStore(virtualStore);
+        if (virtCombined && lastVs === virtualStore && lastVsGen === vsGen && !virtDirty && lastVsSize === virtualStore.size) {
+          return virtCombined;
+        }
+        var combined = makeBucket();
+        var topicSeq = 0;
+        virtualStore.forEach(function (rec) {
+          if (!rec) return;
+          var tIdx = topicSeq++;
+          var tb = getRecBucket(rec);
+          tb.open.forEach(function (entry, k) {
+            if (!combined.open.has(k)) combined.open.set(k, { el: entry.el, topic: tIdx, order: entry.order });
+          });
+          tb.ask.forEach(function (entry, k) {
+            if (!combined.ask.has(k)) combined.ask.set(k, { el: entry.el, topic: tIdx, order: entry.order });
+          });
+          tb.settledHist.forEach(function (entry, k) {
+            if (!combined.settledHist.has(k)) combined.settledHist.set(k, { el: entry.el, topic: tIdx, order: entry.order });
+          });
+          tb.settledCk.forEach(function (entry, k) {
+            if (!combined.settledCk.has(k)) combined.settledCk.set(k, { el: entry.el, topic: tIdx, order: entry.order });
+          });
+        });
+        virtCombined = combined;
+        lastVs = virtualStore;
+        lastVsGen = vsGen;
+        lastVsSize = virtualStore.size;
+        virtDirty = false;
+        return combined;
+      };
+      var pickOpen = function (bucket, keys) {
+        if (!bucket) return null;
+        var best = null;
+        for (var ki = 0; ki < keys.length; ki++) {
+          var cand = bucket.open.get(keys[ki]);
+          if (cand && (!best || cand.topic < best.topic || (cand.topic === best.topic && cand.order < best.order))) {
+            best = cand;
+          }
+        }
+        return best ? best.el : null;
+      };
+      var pickItem = function (map, key) {
+        if (!map) return null;
+        var entry = map.get(key);
+        return entry ? entry.el : null;
+      };
+      var parseKnownSel = function (s) {
+        if (s.indexOf('.card.policy[data-id="') !== -1 && s.indexOf('.arow[data-id="') !== -1 && s.indexOf('.ckrow[data-id="') !== -1) {
+          var ids = [], seenIds = Object.create(null), re = /\[data-id="([^"]+)"\]/g, m;
+          while ((m = re.exec(s))) {
+            if (!seenIds[m[1]]) { seenIds[m[1]] = true; ids.push(m[1]); }
+          }
+          if (ids.length) return { slot: "open", keys: ids };
+        }
+        var am = s.match(/^\.wb-hitem\.original-question\[data-item="([^"]+)"\], \.wb-hitem\[data-item="([^"]+)"\]\[data-state="ask"\]$/);
+        if (am && am[1] === am[2]) return { slot: "ask", key: am[1] };
+        var sm = s.match(/^\.wb-hitem\[data-item="([^"]+)"\]\[data-state="settled"\]$/);
+        if (sm) return { slot: "settledHist", key: sm[1] };
+        var cm = s.match(/^\.ckrow\[data-item="([^"]+)"\]$/);
+        if (cm) return { slot: "settledCk", key: cm[1] };
+        return null;
+      };
+      var pass = null;
+      api = wbUpdateQueryBoard._api = {
+        getPass: function () { return pass; },
+        beginPass: function (board) {
+          if (pass && pass.board === board) { pass.depth++; return; }
+          if (pass) { pass.depth++; return; }
+          var liveBucket = makeBucket();
+          if (board && board.querySelectorAll) indexSubtree(liveBucket, board, 0, { n: 0 });
+          var virtBucket = ensureVirtIdx();
+          pass = { board: board, live: liveBucket, virt: virtBucket, states: Object.create(null), depth: 1 };
+        },
+        endPass: function () {
+          if (!pass) return;
+          pass.depth--;
+          if (pass.depth <= 0) pass = null;
+        },
+        invalidateVirtual: function (key) {
+          vsGen++;
+          virtDirty = true;
+          virtCombined = null;
+          if (key !== undefined && key !== null && recCache && typeof virtualStore !== "undefined" && virtualStore && virtualStore.get) {
+            var hit = virtualStore.get(key);
+            if (hit) recCache.delete(hit);
+          }
+        },
+        lookupSlot: function (bucket, spec) {
+          if (!bucket || !spec) return null;
+          if (spec.slot === "open") return pickOpen(bucket, spec.keys);
+          if (spec.slot === "ask") return pickItem(bucket.ask, spec.key);
+          if (spec.slot === "settledHist") return pickItem(bucket.settledHist, spec.key);
+          if (spec.slot === "settledCk") return pickItem(bucket.settledCk, spec.key);
+          return null;
+        },
+        virtBucket: ensureVirtIdx,
+        parseSel: parseKnownSel
+      };
+    }
+    if (b === undefined && sel === undefined) return api;
+    if (!b || !sel) return null;
+    var activePass = api.getPass();
+    var spec = api.parseSel(sel);
+    if (spec && activePass && activePass.board === b) {
+      return api.lookupSlot(activePass.live, spec) || api.lookupSlot(activePass.virt, spec);
+    }
     var el = b.querySelector(sel);
     if (el) return el;
     if (typeof virtualStore === "undefined" || !virtualStore || !virtualStore.size) return null;
+    if (spec) return api.lookupSlot(api.virtBucket(), spec);
     var found = null;
     virtualStore.forEach(function (rec) {
       if (found || !rec) return;
@@ -941,53 +1157,157 @@
     return found;
   }
 
-  function readBoardQuestionState(rawId) {
+  function wbUpdateChipMeta(chip) {
+    if (!chip || !chip.classList || !chip.classList.contains("wbupdate-cap")) return null;
+    var cls = "";
+    var keys = Object.keys(WB_QCAP_CLASSES);
+    for (var i = 0; i < keys.length; i++) {
+      if (chip.classList.contains("wbupdate-cls-" + keys[i])) { cls = keys[i]; break; }
+    }
+    var ttlEl = chip.querySelector(".wbupdate-cap-ttl");
+    var wrap = chip.parentNode;
+    var isWrap = wrap && wrap.classList && wrap.classList.contains("wbupdate-qitem");
+    var ansEl = isWrap && wrap.querySelector ? wrap.querySelector(".wbupdate-ans") : null;
+    return {
+      cls: cls,
+      title: ttlEl ? ttlEl.textContent : "",
+      state: isWrap ? (wrap.getAttribute("data-wb-state") || "") : "",
+      text: ansEl ? ansEl.textContent : ""
+    };
+  }
+
+  function wbUpdateOnBoard(b, el) {
+    return !!(b && el && (typeof b.contains !== "function" || b.contains(el)));
+  }
+
+  function wbUpdateStagedChip(id) {
+    if (typeof chips === "undefined" || !chips || typeof cchips === "undefined" || !cchips) return undefined;
+    var norm = wbUpdateNormID(id);
+    if (!norm) return null;
+    var pad = norm.length < 2 ? "0" + norm : norm;
+    return chips[pad] || chips[norm] || null;
+  }
+
+  function wbUpdateReadOpenPickMemo(openEl, id, b, opts) {
+    var useStaged = opts && Object.prototype.hasOwnProperty.call(opts, "staged");
+    var staged = useStaged ? opts.staged : (!wbUpdateOnBoard(b, openEl) ? wbUpdateStagedChip(id) : undefined);
+    if (staged !== undefined) {
+      return {
+        pick: staged && staged.answer ? String(staged.answer) : "",
+        memo: staged && staged.note ? wbUpdateFlattenMemo(staged.note) : ""
+      };
+    }
+    var pickBtn = openEl.querySelector('.opt[data-opt][aria-pressed="true"], .btn[data-v][aria-pressed="true"]');
+    var pick = pickBtn ? (pickBtn.getAttribute("data-opt") || pickBtn.getAttribute("data-v") || "") : "";
+    var box = openEl.querySelector("label.ack > input, label.ck > input");
+    if (!pick && openEl.hasAttribute("data-no")) pick = "no";
+    else if (!pick && box && box.checked) pick = "ok";
+    var note = openEl.querySelector("textarea.note, .wsc-backing");
+    var memo = note ? wbUpdateFlattenMemo(note.value) : "";
+    return { pick: pick, memo: memo };
+  }
+
+  function readBoardQuestionState(rawId, opts) {
     var b = region("board");
     var id = wbUpdateNormID(rawId);
     if (!b || !id) return null;
+    var qApi = wbUpdateQueryBoard();
+    var pass = qApi && qApi.getPass ? qApi.getPass() : null;
+    if (!opts && pass && pass.board === b && Object.prototype.hasOwnProperty.call(pass.states, id)) {
+      return pass.states[id];
+    }
+    var res = null;
     var pad = id.length < 2 ? "0" + id : id;
+    var skipVirtual = !!(opts && opts.skipVirtual);
+    var meta = opts && opts.fallbackMeta;
     var openSel = '.card.policy[data-id="' + pad + '"], .arow[data-id="' + pad + '"], .ckrow[data-id="' + pad + '"]:not([data-assumed])';
     if (pad !== id) openSel += ', .card.policy[data-id="' + id + '"], .arow[data-id="' + id + '"], .ckrow[data-id="' + id + '"]:not([data-assumed])';
-    var openEl = wbUpdateQueryBoard(b, openSel);
-    var askEl = wbUpdateQueryBoard(b, '.wb-hitem.original-question[data-item="' + id + '"], .wb-hitem[data-item="' + id + '"][data-state="ask"]');
+    var candOpen = opts && opts.openEl;
+    if (candOpen && (!candOpen.classList || candOpen.hasAttribute("data-assumed") || !((candOpen.classList.contains("card") && candOpen.classList.contains("policy")) || candOpen.classList.contains("arow") || candOpen.classList.contains("ckrow")))) {
+      candOpen = null;
+    }
+    var openEl = candOpen || ((opts && opts.openEl) ? null : (skipVirtual ? b.querySelector(openSel) : wbUpdateQueryBoard(b, openSel)));
+    var askSel = '.wb-hitem.original-question[data-item="' + id + '"], .wb-hitem[data-item="' + id + '"][data-state="ask"]';
+    var askEl = null;
 
     // An actively open item on the board always takes precedence over historical
     // rows (e.g. an earlier .commented entry before the item was re-asked).
     if (openEl) {
-      var openCls = wbUpdateClassFromEl(openEl) || wbUpdateClassFromEl(askEl) || "check";
-      var openTitle = wbUpdateTitleFromEl(openEl, null, null, askEl);
+      var openCls = wbUpdateClassFromEl(openEl) || (meta && meta.cls) || "";
+      var openTitle = wbUpdateTitleFromEl(openEl, null, null, null) || (meta && meta.title) || "";
+      if (!openCls || !openTitle) {
+        askEl = skipVirtual ? b.querySelector(askSel) : wbUpdateQueryBoard(b, askSel);
+        openCls = openCls || wbUpdateClassFromEl(askEl) || "check";
+        openTitle = openTitle || wbUpdateTitleFromEl(null, null, null, askEl);
+      }
       if (openEl.classList.contains("sent-held")) {
-        return { cls: openCls, title: openTitle, state: "sent", clsName: "st-sent", text: wsT("js.wbupdate.sent_held") };
+        res = { cls: openCls, title: openTitle, state: "sent", clsName: "st-sent", text: wsT("js.wbupdate.sent_held"), pick: "" };
+      } else if (openEl.classList.contains("sent-sent")) {
+        res = { cls: openCls, title: openTitle, state: "sent", clsName: "st-sent", text: wsT("js.wbupdate.sent_waiting"), pick: "" };
+      } else {
+        var pick, memo;
+        if (typeof wbUpdateReadOpenPickMemo === "function") {
+          var pm = wbUpdateReadOpenPickMemo(openEl, id, b, opts);
+          pick = pm.pick;
+          memo = pm.memo;
+        } else {
+          var pickBtn = openEl.querySelector('.opt[data-opt][aria-pressed="true"], .btn[data-v][aria-pressed="true"]');
+          pick = pickBtn ? (pickBtn.getAttribute("data-opt") || pickBtn.getAttribute("data-v") || "") : "";
+          var box = openEl.querySelector("label.ack > input, label.ck > input");
+          if (!pick && openEl.hasAttribute("data-no")) pick = "no";
+          else if (!pick && box && box.checked) pick = "ok";
+          var note = openEl.querySelector("textarea.note, .wsc-backing");
+          memo = note ? wbUpdateFlattenMemo(note.value) : "";
+        }
+        if (pick || memo) {
+          var stCls = pick === "ok" ? "st-staged-ok" : pick === "no" ? "st-staged-no" : "st-staged";
+          var stText = pick && memo ? wsT("js.wbupdate.staged_pick", pick) + " · " + memo
+            : pick ? wsT("js.wbupdate.staged_pick", pick)
+            : wsT("js.wbupdate.staged_memo", memo);
+          res = { cls: openCls, title: openTitle, state: "staged", clsName: stCls, text: stText, pick: pick };
+        } else if (wbUpdateIsHeld(openEl)) {
+          res = { cls: openCls, title: openTitle, state: "held", clsName: "st-held", text: wsT("js.pill.held"), pick: "" };
+        } else {
+          res = { cls: openCls, title: openTitle, state: "open", clsName: "st-open", text: wsT("js.wbupdate.unanswered"), pick: "" };
+        }
       }
-      if (openEl.classList.contains("sent-sent")) {
-        return { cls: openCls, title: openTitle, state: "sent", clsName: "st-sent", text: wsT("js.wbupdate.sent_waiting") };
-      }
-      var pickBtn = openEl.querySelector('.opt[data-opt][aria-pressed="true"], .btn[data-v][aria-pressed="true"]');
-      var pick = pickBtn ? (pickBtn.getAttribute("data-opt") || pickBtn.getAttribute("data-v") || "") : "";
-      var box = openEl.querySelector("label.ack > input, label.ck > input");
-      if (!pick && openEl.hasAttribute("data-no")) pick = "no";
-      else if (!pick && box && box.checked) pick = "ok";
-      var note = openEl.querySelector("textarea.note, .wsc-backing");
-      var memo = note ? wbUpdateFlattenMemo(note.value) : "";
-      if (pick || memo) {
-        var stCls = pick === "ok" ? "st-staged-ok" : pick === "no" ? "st-staged-no" : "st-staged";
-        var stText = pick && memo ? wsT("js.wbupdate.staged_pick", pick) + " · " + memo
-          : pick ? wsT("js.wbupdate.staged_pick", pick)
-          : wsT("js.wbupdate.staged_memo", memo);
-        return { cls: openCls, title: openTitle, state: "staged", clsName: stCls, text: stText };
-      }
-      if (wbUpdateIsHeld(openEl)) {
-        return { cls: openCls, title: openTitle, state: "held", clsName: "st-held", text: wsT("js.pill.held") };
-      }
-      return { cls: openCls, title: openTitle, state: "open", clsName: "st-open", text: wsT("js.wbupdate.unanswered") };
+      if (!opts && pass && pass.board === b) pass.states[id] = res;
+      return res;
     }
 
-    var settledHist = wbUpdateQueryBoard(b, '.wb-hitem[data-item="' + id + '"][data-state="settled"]');
-    var settledCk = wbUpdateQueryBoard(b, '.ckrow[data-item="' + id + '"]');
-    if (!settledHist && !settledCk) return null;
-    var cls = wbUpdateClassFromEl(settledHist) || wbUpdateClassFromEl(settledCk) || wbUpdateClassFromEl(askEl) || "check";
-    var title = wbUpdateTitleFromEl(null, settledCk, settledHist, askEl);
-    return { cls: cls, title: title, state: "settled", clsName: "st-settled", text: "✓ " + wbUpdateSettledSummary(settledHist, settledCk) };
+    if (skipVirtual && meta && meta.state) {
+      if (meta.state === "settled") {
+        return { cls: meta.cls || "check", title: meta.title || "", state: "settled", clsName: "st-settled", text: meta.text || ("✓ " + wsT("js.wbupdate.settled")), pick: "" };
+      }
+      var sv = (opts && Object.prototype.hasOwnProperty.call(opts, "staged")) ? opts.staged : (typeof wbUpdateStagedChip === "function" ? (wbUpdateStagedChip(id) || null) : null);
+      var svPick = sv && sv.answer ? String(sv.answer) : "";
+      var svMemo = sv && sv.note ? wbUpdateFlattenMemo(sv.note) : "";
+      if (svPick || svMemo) {
+        var svCls = svPick === "ok" ? "st-staged-ok" : svPick === "no" ? "st-staged-no" : "st-staged";
+        var svText = svPick && svMemo ? wsT("js.wbupdate.staged_pick", svPick) + " · " + svMemo
+          : svPick ? wsT("js.wbupdate.staged_pick", svPick)
+          : wsT("js.wbupdate.staged_memo", svMemo);
+        return { cls: meta.cls || "check", title: meta.title || "", state: "staged", clsName: svCls, text: svText, pick: svPick };
+      }
+      return { cls: meta.cls || "check", title: meta.title || "", state: "open", clsName: "st-open", text: wsT("js.wbupdate.unanswered"), pick: "" };
+    }
+
+    var settledHist = skipVirtual ? b.querySelector('.wb-hitem[data-item="' + id + '"][data-state="settled"]') : wbUpdateQueryBoard(b, '.wb-hitem[data-item="' + id + '"][data-state="settled"]');
+    var settledCk = skipVirtual ? b.querySelector('.ckrow[data-item="' + id + '"]') : wbUpdateQueryBoard(b, '.ckrow[data-item="' + id + '"]');
+    if (!settledHist && !settledCk) {
+      if (!opts && pass && pass.board === b) pass.states[id] = null;
+      return null;
+    }
+    var cls = wbUpdateClassFromEl(settledHist) || wbUpdateClassFromEl(settledCk) || "";
+    var title = wbUpdateTitleFromEl(null, settledCk, settledHist, null);
+    if (!cls || !title) {
+      askEl = skipVirtual ? b.querySelector(askSel) : wbUpdateQueryBoard(b, askSel);
+      cls = cls || wbUpdateClassFromEl(askEl) || "check";
+      title = title || wbUpdateTitleFromEl(null, null, null, askEl);
+    }
+    res = { cls: cls, title: title, state: "settled", clsName: "st-settled", text: "✓ " + wbUpdateSettledSummary(settledHist, settledCk), pick: "" };
+    if (!opts && pass && pass.board === b) pass.states[id] = res;
+    return res;
   }
 
   function hydrateWbUpdateChip(chip, id, state) {
@@ -1014,16 +1334,24 @@
       wrap.appendChild(chip);
     }
     if (wrap.getAttribute("data-wb-state") !== state.state) wrap.setAttribute("data-wb-state", state.state);
+    var pickText = state.state === "staged" && state.pick ? String(state.pick) : "";
+    if (pickText) {
+      if (wrap.getAttribute("data-wb-empty") !== "1") wrap.setAttribute("data-wb-empty", "1");
+    } else if (wrap.hasAttribute("data-wb-empty")) {
+      wrap.removeAttribute("data-wb-empty");
+    }
 
     var wantClass = "wbupdate-item-id wbupdate-cap wbupdate-cls-" + state.cls;
     if (chip.className !== wantClass) chip.className = wantClass;
-    var tip = "(" + id + ")" + (state.title ? " " + state.title : "");
+    var tip = "(" + id + ")" + (state.title ? " " + state.title : "") + (state.text ? "\n" + state.text : "");
     if (chip.getAttribute("title") !== tip) chip.setAttribute("title", tip);
 
     var idEl = chip.querySelector(".wbupdate-cap-id");
     var clsEl = chip.querySelector(".wbupdate-cap-cls");
     var ttlEl = chip.querySelector(".wbupdate-cap-ttl");
+    var valEl = chip.querySelector(".wbupdate-cap-val");
     var arrEl = chip.querySelector(".wbupdate-cap-arr");
+    var markEl = chip.querySelector(".wbupdate-cap-mark");
     if (!idEl || !clsEl || !ttlEl) {
       chip.textContent = "";
       idEl = doc.createElement("span"); idEl.className = "wbupdate-cap-id";
@@ -1032,6 +1360,8 @@
       chip.appendChild(idEl);
       chip.appendChild(clsEl);
       chip.appendChild(ttlEl);
+      valEl = null;
+      markEl = null;
       if (chip.tagName === "A") {
         arrEl = doc.createElement("span");
         arrEl.className = "wbupdate-cap-arr";
@@ -1040,11 +1370,29 @@
         chip.appendChild(arrEl);
       }
     }
+    if (!markEl) {
+      markEl = doc.createElement("span");
+      markEl.className = "wbupdate-cap-mark";
+      markEl.setAttribute("aria-hidden", "true");
+      markEl.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>';
+      chip.insertBefore(markEl, arrEl || null);
+    }
+    if (!valEl) {
+      valEl = doc.createElement("span");
+      valEl.className = "wbupdate-cap-val";
+      chip.insertBefore(valEl, markEl);
+    }
     var idText = "(" + id + ")";
     if (idEl.textContent !== idText) idEl.textContent = idText;
     var clsLabel = wsT(WB_QCAP_CLASSES[state.cls] || "js.wbupdate.cls.check");
     if (clsEl.textContent !== clsLabel) clsEl.textContent = clsLabel;
     if (ttlEl.textContent !== state.title) ttlEl.textContent = state.title;
+    if (valEl.textContent !== pickText) valEl.textContent = pickText;
+    if (pickText) {
+      if (valEl.getAttribute("data-wb-pick") !== pickText) valEl.setAttribute("data-wb-pick", pickText);
+    } else if (valEl.hasAttribute("data-wb-pick")) {
+      valEl.removeAttribute("data-wb-pick");
+    }
 
     var ans = wrap.querySelector(".wbupdate-ans");
     if (!ans) {
@@ -1072,53 +1420,142 @@
   function hydrateWbUpdateItems(scope) {
     var rootEl = scope || entriesBox() || doc;
     if (!rootEl || !rootEl.querySelectorAll) return;
-    if (rootEl.matches && rootEl.matches(".wbupdate-items")) {
-      hydrateWbUpdateGroup(rootEl);
-      return;
+    var qApi = wbUpdateQueryBoard();
+    if (qApi && qApi.beginPass) qApi.beginPass(region("board"));
+    try {
+      if (rootEl.matches && rootEl.matches(".wbupdate-items")) {
+        hydrateWbUpdateGroup(rootEl);
+        return;
+      }
+      q(".wbupdate-items", rootEl).forEach(hydrateWbUpdateGroup);
+    } finally {
+      if (qApi && qApi.endPass) qApi.endPass();
     }
-    q(".wbupdate-items", rootEl).forEach(hydrateWbUpdateGroup);
   }
 
-  function syncWbUpdateItems(ids) {
+  function syncWbUpdateItems(ids, hints) {
+    var batch = syncWbUpdateItems._batch;
+    if (batch && batch.depth > 0) {
+      if (!ids || !ids.length) {
+        batch.all = true;
+      } else if (!batch.all) {
+        for (var bi = 0; bi < ids.length; bi++) {
+          var bid = wbUpdateNormID(ids[bi]);
+          if (!bid) continue;
+          batch.ids[bid] = true;
+          var bpad = bid.length < 2 ? "0" + bid : bid;
+          var bhint = hints && (hints[bid] || hints[bpad] || hints[ids[bi]]);
+          if (bhint) {
+            if (!batch.hints) batch.hints = Object.create(null);
+            var prevHint = batch.hints[bid];
+            if (!prevHint) batch.hints[bid] = Object.assign({}, bhint);
+            else {
+              if (Object.prototype.hasOwnProperty.call(bhint, "openEl")) prevHint.openEl = bhint.openEl;
+              if (Object.prototype.hasOwnProperty.call(bhint, "staged")) prevHint.staged = bhint.staged;
+              if (!bhint.skipVirtual) prevHint.skipVirtual = false;
+            }
+          }
+        }
+      }
+      return;
+    }
     var box = entriesBox() || doc;
     if (!box || !box.querySelectorAll) return;
-    if (!ids || !ids.length) {
-      hydrateWbUpdateItems(box);
-      return;
-    }
-    var seen = Object.create(null);
-    for (var i = 0; i < ids.length; i++) {
-      var id = wbUpdateNormID(ids[i]);
-      if (!id || seen[id]) continue;
-      seen[id] = true;
-      var state = readBoardQuestionState(id);
-      var pad = id.length < 2 ? "0" + id : id;
-      var sel = '.wbupdate-item-id[data-wb-item-id="' + id + '"], .wbupdate-item-id[data-wb-jump="item-' + id + '"]';
-      if (pad !== id) sel += ', .wbupdate-item-id[data-wb-jump="item-' + pad + '"]';
-      var targets = q(sel, box);
-      for (var j = 0; j < targets.length; j++) {
-        hydrateWbUpdateChip(targets[j], id, state);
-        var grp = targets[j].closest(".wbupdate-items");
-        if (grp) grp.classList.toggle("wbupdate-hydrated", !!grp.querySelector(".wbupdate-cap"));
+    var needPass = !ids || !ids.length;
+    if (!needPass) {
+      for (var pi = 0; pi < ids.length; pi++) {
+        var pid = wbUpdateNormID(ids[pi]);
+        if (!pid) continue;
+        var ppad = pid.length < 2 ? "0" + pid : pid;
+        var ph = hints && (hints[pid] || hints[ppad] || hints[ids[pi]]);
+        if (!ph || !ph.skipVirtual) { needPass = true; break; }
       }
+    }
+    var qApi = needPass ? wbUpdateQueryBoard() : null;
+    if (qApi && qApi.beginPass) qApi.beginPass(region("board"));
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("convo", "syncWbUpdateItems") : null;
+    try {
+      if (!ids || !ids.length) {
+        hydrateWbUpdateItems(box);
+        return;
+      }
+      var seen = Object.create(null);
+      for (var i = 0; i < ids.length; i++) {
+        var id = wbUpdateNormID(ids[i]);
+        if (!id || seen[id]) continue;
+        seen[id] = true;
+        var pad = id.length < 2 ? "0" + id : id;
+        var sel = '.wbupdate-item-id[data-wb-item-id="' + id + '"], .wbupdate-item-id[data-wb-jump="item-' + id + '"]';
+        if (pad !== id) sel += ', .wbupdate-item-id[data-wb-jump="item-' + pad + '"]';
+        var targets = q(sel, box);
+        if (!targets.length) continue;
+        var hint = hints && (hints[id] || hints[pad]);
+        var meta = (!hint || !hint.fallbackMeta) ? (typeof wbUpdateChipMeta === "function" ? wbUpdateChipMeta(targets[0]) : null) : hint.fallbackMeta;
+        var opts = hint ? Object.assign({}, hint, { fallbackMeta: meta }) : null;
+        var state = readBoardQuestionState(id, opts);
+        for (var j = 0; j < targets.length; j++) {
+          hydrateWbUpdateChip(targets[j], id, state);
+          var grp = targets[j].closest(".wbupdate-items");
+          if (grp) grp.classList.toggle("wbupdate-hydrated", !!grp.querySelector(".wbupdate-cap"));
+        }
+      }
+    } finally {
+      if (qApi && qApi.endPass) qApi.endPass();
+      if (jTok) WsJank.end(jTok);
     }
   }
 
-  function wbUpdateQueueSync(id) {
+  function wbUpdateInvalidateVirtual(key) {
+    var api = wbUpdateQueryBoard();
+    if (api && api.invalidateVirtual) api.invalidateVirtual(key);
+  }
+
+  function wbUpdateBeginBatch() {
+    var b = syncWbUpdateItems._batch;
+    if (!b) b = syncWbUpdateItems._batch = { depth: 0, all: false, ids: Object.create(null), hints: null };
+    b.depth++;
+  }
+
+  function wbUpdateEndBatch() {
+    var b = syncWbUpdateItems._batch;
+    if (!b || b.depth <= 0) return;
+    b.depth--;
+    if (b.depth > 0) return;
+    var all = b.all, idMap = b.ids, batchHints = b.hints;
+    b.all = false;
+    b.ids = Object.create(null);
+    b.hints = null;
+    if (all) syncWbUpdateItems();
+    else {
+      var keys = Object.keys(idMap);
+      if (keys.length) syncWbUpdateItems(keys, batchHints);
+    }
+  }
+
+  function wbUpdateQueueSync(id, hint) {
     if (!id || id === "*") wbUpdatePendingAll = true;
     else {
+      var norm = wbUpdateNormID(id);
+      if (!norm) return;
       if (!wbUpdatePendingIds) wbUpdatePendingIds = Object.create(null);
-      wbUpdatePendingIds[id] = true;
+      wbUpdatePendingIds[norm] = true;
+      if (hint) {
+        if (!wbUpdatePendingHints) wbUpdatePendingHints = Object.create(null);
+        var prev = wbUpdatePendingHints[norm];
+        if (!prev) wbUpdatePendingHints[norm] = hint;
+        else if (!hint.skipVirtual) prev.skipVirtual = false;
+      }
     }
     if (wbUpdateQueued) return;
     wbUpdateQueued = true;
     Promise.resolve().then(function () {
       wbUpdateQueued = false;
-      var all = wbUpdatePendingAll, ids = wbUpdatePendingIds;
+      var all = wbUpdatePendingAll, ids = wbUpdatePendingIds, hints = wbUpdatePendingHints;
       wbUpdatePendingAll = false;
       wbUpdatePendingIds = null;
+      wbUpdatePendingHints = null;
       if (all) syncWbUpdateItems();
-      else if (ids) syncWbUpdateItems(Object.keys(ids));
+      else if (ids) syncWbUpdateItems(Object.keys(ids), hints);
     });
   }
 
@@ -1139,11 +1576,23 @@
       for (var i = 0; i < list.length; i++) {
         var m = list[i];
         if (m.type === "attributes") {
+          var host = m.target.closest ? m.target.closest(".card[data-id], .arow[data-id], .ckrow[data-id]") : null;
+          if (host) {
+            var hid = wbUpdateNormID(host.getAttribute("data-id"));
+            if (hid) wbUpdateQueueSync(hid, { openEl: host, skipVirtual: true });
+            continue;
+          }
           var aid = wbUpdateNodeItemID(m.target);
           if (aid) wbUpdateQueueSync(aid);
           continue;
         }
         if (m.type === "childList") {
+          var chost = m.target.closest ? m.target.closest(".card[data-id], .arow[data-id], .ckrow[data-id]") : null;
+          if (chost) {
+            var cid = wbUpdateNormID(chost.getAttribute("data-id"));
+            if (cid) wbUpdateQueueSync(cid, { openEl: chost, skipVirtual: true });
+            continue;
+          }
           var tid = wbUpdateNodeItemID(m.target);
           if (tid) { wbUpdateQueueSync(tid); continue; }
           var scan = function (nodes) {
@@ -1176,7 +1625,20 @@
     doc.addEventListener(type, function (e) {
       var t = e.target;
       if (!t || !inBoard(t)) return;
-      if (t.id === "ack-all") { wbUpdateQueueSync("*"); return; }
+      if (t.id === "ack-all") {
+        var acks = boardQ(".arow[data-id]");
+        for (var i = 0; i < acks.length; i++) {
+          var aid = wbUpdateNormID(acks[i].getAttribute("data-id"));
+          if (aid) wbUpdateQueueSync(aid, { openEl: acks[i], skipVirtual: true });
+        }
+        return;
+      }
+      var host = t.closest ? t.closest(".card[data-id], .arow[data-id], .ckrow[data-id]") : null;
+      if (host) {
+        var hid = wbUpdateNormID(host.getAttribute("data-id"));
+        if (hid) wbUpdateQueueSync(hid, { openEl: host, skipVirtual: true });
+        return;
+      }
       var id = wbUpdateNodeItemID(t);
       if (id) wbUpdateQueueSync(id);
     });
@@ -1186,5 +1648,12 @@
     watchWbUpdateBoard();
     hydrateWbUpdateItems(entriesBox() || doc);
   }
-  window.WsWbUpdateCards = { hydrate: hydrateWbUpdateItems, sync: syncWbUpdateItems, init: initWbUpdateCards };
+  window.WsWbUpdateCards = {
+    hydrate: hydrateWbUpdateItems,
+    sync: syncWbUpdateItems,
+    init: initWbUpdateCards,
+    invalidateVirtual: wbUpdateInvalidateVirtual,
+    beginBatch: wbUpdateBeginBatch,
+    endBatch: wbUpdateEndBatch
+  };
 

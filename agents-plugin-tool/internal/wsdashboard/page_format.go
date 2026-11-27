@@ -74,9 +74,12 @@ func pageFuncs(lang string, icons map[string]bool) template.FuncMap {
 		"tokenTitle":       func(requests int, u *wslive.TokenUsage) string { return tokenTitle(lang, requests, u) },
 		"estContextText":   estContextText,
 		"estContextTitle":  estContextTitle,
-		"requests":         summaryRequests,
-		"batchNums":        func(b wslive.ToolBatch) []batchNum { return batchNums(lang, b) },
-		"batchArgs":        batchArgs,
+		"requests":          summaryRequests,
+		"batchSpanText":     batchSpanText,
+		"batchNums":         func(b wslive.ToolBatch) []batchNum { return batchNums(lang, b) },
+		"turnBatchNums":     func(b wslive.ToolBatch) []batchNum { return turnBatchNums(lang, b) },
+		"turnBatchCategory": turnBatchCategory,
+		"batchArgs":         batchArgs,
 		"argsList":         batchArgsList,
 		"toolsHasCallIDs":  toolsHasCallIDs,
 		"auditCallRows":    func(s *wslive.ToolSummary) []auditCallRow { return buildAuditCallRows(lang, s) },
@@ -399,6 +402,7 @@ type auditCallRow struct {
 	ID            string
 	Name          string
 	ShortName     string
+	Category      string
 	ArgsPreview   string
 	Failed        bool
 	DurationMs    int64
@@ -476,6 +480,7 @@ func buildAuditCallRows(lang string, s *wslive.ToolSummary) []auditCallRow {
 					ID:          c.ID,
 					Name:        c.Name,
 					ShortName:   toolName(c.Name),
+					Category:    toolFamilyCategory(c.Name),
 					ArgsPreview: c.ArgsPreview,
 					Failed:      failed,
 					TokText:     estContextText(c.InBytes, c.OutBytes),
@@ -498,6 +503,7 @@ func buildAuditCallRows(lang string, s *wslive.ToolSummary) []auditCallRow {
 				rows = append(rows, auditCallRow{
 					Name:      label,
 					ShortName: label,
+					Category:  turnBatchCategory(b),
 					Failed:    b.Failed > argsFailed,
 					TokText:   estContextText(remIn, remOut),
 					TokTitle:  estContextTitle(remIn, remOut),
@@ -526,14 +532,21 @@ func buildAuditCallRows(lang string, s *wslive.ToolSummary) []auditCallRow {
 			} else {
 				short = short + " · " + wsi18n.Plural(lang, "batch.calls", b.Calls)
 			}
-			rows = append(rows, auditCallRow{
+			row := auditCallRow{
 				Name:      short,
 				ShortName: short,
+				Category:  turnBatchCategory(b),
 				Failed:    b.Failed > 0,
 				TokText:   estContextText(b.InBytes, b.OutBytes),
 				TokTitle:  estContextTitle(b.InBytes, b.OutBytes),
 				IsSummary: true,
-			})
+			}
+			if b.DurationMs > 0 {
+				row.DurationMs = b.DurationMs
+				row.Duration = batchSpanText(b.DurationMs)
+				row.DurationTitle = wsi18n.T(lang, "batch.duration", commafy(b.DurationMs))
+			}
+			rows = append(rows, row)
 		}
 	}
 	if s.BatchesOmitted > 0 {
@@ -543,6 +556,7 @@ func buildAuditCallRows(lang string, s *wslive.ToolSummary) []auditCallRow {
 		rows = append(rows, auditCallRow{
 			Name:      label,
 			ShortName: label,
+			Category:  "think",
 			Failed:    s.Failed > shownFailed,
 			TokText:   estContextText(remIn, remOut),
 			TokTitle:  estContextTitle(remIn, remOut),

@@ -2,6 +2,7 @@ package wsdashboard
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/wsmeta"
 )
 
 // The session rail's layout: the order of each worktree group's sessions,
@@ -327,10 +330,12 @@ func statRailFile(file string) railFileStamp {
 // every op fails.
 type railLayoutStore struct {
 	file string
+	meta *wsmeta.Store
 
-	mu   sync.Mutex
-	doc  *railLayoutDoc
-	seen railFileStamp
+	mu        sync.Mutex
+	doc       *railLayoutDoc
+	importErr error // non-nil when legacy rail-layout.json failed import (invalid or newer schema)
+	seen      railFileStamp
 	// looked is when the file was last statted (generationSince).
 	looked time.Time
 	// gen rises with every change of doc. It starts at the store's opening
@@ -351,9 +356,129 @@ func openRailLayoutStore(dir string) *railLayoutStore {
 	return s
 }
 
+// openRailLayoutStoreFromMeta initializes the layout from the startup SQLite
+// snapshot without touching rail-layout.json. A legacy document that failed
+// import (invalid or newer schema) leaves the in-memory layout empty and sets
+// importErr so every mutation fails cleanly without overwriting retained bytes.
+func openRailLayoutStoreFromMeta(dir string, store *wsmeta.Store, snap *wsmeta.Snapshot) *railLayoutStore {
+	s := &railLayoutStore{
+		file: filepath.Join(dir, railLayoutFileName),
+		meta: store,
+		doc:  &railLayoutDoc{Workspaces: map[string]*railLayoutWS{}},
+		gen:  uint64(time.Now().UnixMicro()),
+	}
+	if snap == nil {
+		return s
+	}
+	if issue, ok := snap.ImportIssues[railLayoutFileName]; ok {
+		if issue.Status == wsmeta.ImportFuture {
+			s.importErr = fmt.Errorf("%w (%s)", errRailLayoutNewer, issue.Detail)
+		} else {
+			s.importErr = fmt.Errorf("rail layout %s: %s", issue.Status, issue.Detail)
+		}
+		return s
+	}
+	if snap.RailLayout == nil {
+		return s
+	}
+	doc := &railLayoutDoc{
+		SchemaVersion:  railLayoutSchemaVersion,
+		WorkspaceOrder: slices.Clone(snap.RailLayout.WorkspaceOrder),
+		Workspaces:     map[string]*railLayoutWS{},
+	}
+	if len(snap.RailLayout.Extra) > 0 {
+		var extra map[string]json.RawMessage
+		if err := json.Unmarshal(snap.RailLayout.Extra, &extra); err == nil && len(extra) > 0 {
+			doc.extra = extra
+		}
+	}
+	for ws, raw := range snap.RailLayout.Workspaces {
+		var w railLayoutWS
+		if err := json.Unmarshal(raw, &w); err == nil {
+			doc.Workspaces[ws] = &w
+		}
+	}
+	doc.normalize()
+	s.doc = doc
+	return s
+}
+
+func diffRailLayoutPatch(before, after *railLayoutDoc) (wsmeta.RailLayoutPatch, error) {
+	var patch wsmeta.RailLayoutPatch
+	if !slices.Equal(nonNilStrings(before.WorkspaceOrder), nonNilStrings(after.WorkspaceOrder)) {
+		patch.OrderChanged = true
+		patch.WorkspaceOrder = nonNilStrings(after.WorkspaceOrder)
+	}
+	marshalExtra := func(m map[string]json.RawMessage) ([]byte, error) {
+		if len(m) == 0 {
+			return nil, nil
+		}
+		return json.Marshal(m)
+	}
+	beforeExtra, err := marshalExtra(before.extra)
+	if err != nil {
+		return patch, err
+	}
+	afterExtra, err := marshalExtra(after.extra)
+	if err != nil {
+		return patch, err
+	}
+	if !bytes.Equal(beforeExtra, afterExtra) {
+		patch.ExtraChanged = true
+		patch.Extra = afterExtra
+	}
+	for ws, nw := range after.Workspaces {
+		if nw == nil {
+			continue
+		}
+		afterRaw, err := json.Marshal(nw)
+		if err != nil {
+			return patch, err
+		}
+		ow := before.Workspaces[ws]
+		var beforeRaw []byte
+		if ow != nil {
+			beforeRaw, err = json.Marshal(ow)
+			if err != nil {
+				return patch, err
+			}
+		}
+		if ow == nil || !bytes.Equal(beforeRaw, afterRaw) {
+			if patch.PutWorkspaces == nil {
+				patch.PutWorkspaces = map[string]json.RawMessage{}
+			}
+			patch.PutWorkspaces[ws] = afterRaw
+		}
+	}
+	for ws := range before.Workspaces {
+		if after.Workspaces[ws] == nil {
+			patch.DeleteWorkspaces = append(patch.DeleteWorkspaces, ws)
+		}
+	}
+	sort.Strings(patch.DeleteWorkspaces)
+	return patch, nil
+}
+
+func (s *railLayoutStore) writePatchLocked(before, after *railLayoutDoc) (bool, error) {
+	patch, err := diffRailLayoutPatch(before, after)
+	if err != nil {
+		return false, err
+	}
+	if !patch.OrderChanged && !patch.ExtraChanged && len(patch.PutWorkspaces) == 0 && len(patch.DeleteWorkspaces) == 0 {
+		return false, nil
+	}
+	if err := s.meta.UpdateRailLayout(context.Background(), patch); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // refreshLocked reads the file again when its state moved since the last
 // read; mu is held. A read that fails keeps the copy in memory.
 func (s *railLayoutStore) refreshLocked() {
+	if s.meta != nil {
+		return
+	}
 	st := statRailFile(s.file)
 	s.looked = time.Now()
 	if st == s.seen {
@@ -449,6 +574,29 @@ func (s *railLayoutStore) apply(req railLayoutRequest, f railFacts, loaded bool)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.meta != nil {
+		if s.importErr != nil {
+			return railLayoutAnswer{Reason: layoutStore, Gen: s.gen}, s.importErr
+		}
+		doc := s.doc
+		next := doc.clone()
+		if reason := applyRailLayoutOp(next, req, f, loaded); reason != "" {
+			return railLayoutAnswer{Reason: reason, Gen: s.gen}, nil
+		}
+		if loaded {
+			pruneRailLayout(next, f)
+		}
+		changed, err := s.writePatchLocked(doc, next)
+		if err != nil {
+			return railLayoutAnswer{Reason: layoutStore, Gen: s.gen}, err
+		}
+		if !changed {
+			return railLayoutAnswer{Gen: s.gen}, nil
+		}
+		s.doc = next
+		s.gen++
+		return railLayoutAnswer{Changed: true, Gen: s.gen}, nil
+	}
 	st := statRailFile(s.file)
 	doc, err := readRailLayout(s.file)
 	if err != nil {

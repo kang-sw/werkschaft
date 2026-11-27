@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/kang-sw/devenv/internal/wsgit"
 	"github.com/kang-sw/devenv/internal/wsreview"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -416,7 +417,7 @@ func TestImplMergeWorktreeReleaseAdvisory(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root, branch := mergeFixture(t, "develop")
 			runGit(t, root, "switch", "develop")
-			pool := canonicalWorktreeTestPath(t.TempDir())
+			pool := wstestutil.CanonicalTempDir(t)
 			worktree := filepath.Join(pool, "worker")
 			runGit(t, root, "worktree", "add", worktree, branch)
 			if tc.leased {
@@ -426,7 +427,7 @@ func TestImplMergeWorktreeReleaseAdvisory(t *testing.T) {
 			}
 			roots := []string{pool}
 			if !tc.pooled {
-				roots = []string{canonicalWorktreeTestPath(t.TempDir())}
+				roots = []string{wstestutil.CanonicalTempDir(t)}
 			}
 			r, err := mergeImplBranch(context.Background(), root, wsgit.ExecRunner{}, branch, "", mergeMessage(), implMergeAcknowledgement{}, roots, mergeSizeGuard{})
 			if err != nil || r.Status != "merged" {

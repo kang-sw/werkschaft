@@ -1,6 +1,7 @@
 package wstrackerhook
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsledger"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
@@ -111,4 +113,114 @@ func (st *storeState) prune(now time.Time, loc *time.Location) {
 			delete(st.Due, key)
 		}
 	}
+}
+
+func newEmptyStoreState(nonce string) storeState {
+	return storeState{
+		V:         stateVersion,
+		Nonce:     nonce,
+		Processed: map[string]mark{},
+		Due:       map[string]time.Time{},
+	}
+}
+
+func (st storeState) clone() storeState {
+	out := storeState{
+		V:         st.V,
+		Nonce:     st.Nonce,
+		Cursor:    st.Cursor,
+		Processed: make(map[string]mark, len(st.Processed)),
+		Due:       make(map[string]time.Time, len(st.Due)),
+	}
+	for id, m := range st.Processed {
+		out.Processed[id] = m
+	}
+	for id, at := range st.Due {
+		out.Due[id] = at
+	}
+	return out
+}
+
+func storeStateFromMeta(nonce string, raw wsmeta.TrackerHookState) storeState {
+	st := newEmptyStoreState(nonce)
+	if len(raw.Cursor) > 0 {
+		_ = json.Unmarshal(raw.Cursor, &st.Cursor)
+	}
+	for id, body := range raw.Processed {
+		var m mark
+		if json.Unmarshal(body, &m) == nil {
+			st.Processed[id] = m
+		}
+	}
+	for id, body := range raw.Due {
+		var at time.Time
+		if json.Unmarshal(body, &at) == nil {
+			st.Due[id] = at
+		}
+	}
+	return st
+}
+
+// diffTrackerHookState builds an incremental SQLite delta from prev to next so
+// scans touch only changed cursor, processed, and due rows (2004).
+func diffTrackerHookState(prevExists, resetNonce bool, prev, next storeState) (wsmeta.TrackerHookDelta, error) {
+	delta := wsmeta.TrackerHookDelta{ResetNonce: resetNonce}
+	nextCursor, err := json.Marshal(next.Cursor)
+	if err != nil {
+		return wsmeta.TrackerHookDelta{}, err
+	}
+	if !prevExists || resetNonce {
+		delta.CursorChanged = true
+		delta.Cursor = nextCursor
+	} else {
+		prevCursor, err := json.Marshal(prev.Cursor)
+		if err != nil {
+			return wsmeta.TrackerHookDelta{}, err
+		}
+		if !bytes.Equal(prevCursor, nextCursor) {
+			delta.CursorChanged = true
+			delta.Cursor = nextCursor
+		}
+	}
+	for id, m := range next.Processed {
+		old, ok := prev.Processed[id]
+		if !prevExists || resetNonce || !ok || !old.At.Equal(m.At) || !old.TS.Equal(m.TS) {
+			raw, err := json.Marshal(m)
+			if err != nil {
+				return wsmeta.TrackerHookDelta{}, err
+			}
+			if delta.UpsertProcessed == nil {
+				delta.UpsertProcessed = map[string]json.RawMessage{}
+			}
+			delta.UpsertProcessed[id] = raw
+		}
+	}
+	if prevExists && !resetNonce {
+		for id := range prev.Processed {
+			if _, ok := next.Processed[id]; !ok {
+				delta.DeleteProcessed = append(delta.DeleteProcessed, id)
+			}
+		}
+	}
+	for id, at := range next.Due {
+		old, ok := prev.Due[id]
+		if !prevExists || resetNonce || !ok || !old.Equal(at) {
+			raw, err := json.Marshal(at)
+			if err != nil {
+				return wsmeta.TrackerHookDelta{}, err
+			}
+			if delta.UpsertDue == nil {
+				delta.UpsertDue = map[string]json.RawMessage{}
+			}
+			delta.UpsertDue[id] = raw
+		}
+	}
+	if prevExists && !resetNonce {
+		for id := range prev.Due {
+			if _, ok := next.Due[id]; !ok {
+				delta.DeleteDue = append(delta.DeleteDue, id)
+			}
+		}
+	}
+	return delta, nil
 }

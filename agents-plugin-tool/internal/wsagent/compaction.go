@@ -46,12 +46,19 @@ func (r BackendRegistration) CompactionProtocol() CompactionProtocol {
 	return CompactionProtocol{}
 }
 
-// PendingCompaction holds a rotated lead's carry-forward compaction handoff
-// until the replacement session delivers its first prompt. Additive top-level
-// member on Record; preserved as unknown by older daemons (T0).
-// RotatedAfterSends records Record.Sends when rotation committed so a
-// downgrade-reopen (where an older daemon ran newer turns without knowing
-// about PendingCompaction) drops the stale handoff instead of replaying it.
+const (
+	compactStageQueued    = "queued"
+	compactStageRunning   = "running"
+	compactStageCompleted = "completed"
+)
+
+// PendingCompaction holds a carry-forward compaction handoff (for a rotated
+// lead or an in-flight/completed worker resume compaction) until the session
+// completes continuation. Additive top-level member on Record; preserved as
+// unknown by older daemons (T0).
+// RotatedAfterSends records Record.Sends when persisted so a downgrade-reopen
+// (where an older daemon ran newer turns without knowing about
+// PendingCompaction) drops the stale handoff instead of replaying it.
 type PendingCompaction struct {
 	Note              string  `json:"note"`
 	RestoreBundle     bool    `json:"restore_bundle,omitempty"`
@@ -59,6 +66,8 @@ type PendingCompaction struct {
 	ResumeInternal    bool    `json:"resume_internal,omitempty"`
 	Origin            string  `json:"origin,omitempty"`
 	RotatedAfterSends *uint64 `json:"rotated_after_sends,omitempty"`
+	Stage             string  `json:"stage,omitempty"`
+	AfterSeq          uint64  `json:"after_seq,omitempty"`
 }
 
 func clonePendingCompaction(pc *PendingCompaction) *PendingCompaction {
@@ -88,9 +97,31 @@ func (c *conv) restorePendingCompaction(pc *PendingCompaction) {
 	if pc == nil {
 		return
 	}
+	if !c.rec.Lead && pc.Stage == compactStageQueued {
+		c.compactPending = &compactRequest{
+			resume:   pc.Resume,
+			internal: pc.ResumeInternal,
+			auto:     pc.Origin == wslive.TriggerAuto,
+		}
+		if pc.Origin != "" {
+			c.compactOrigin = pc.Origin
+		}
+		return
+	}
+	if !c.rec.Lead && pc.Stage == compactStageRunning {
+		c.compactResume = pc.Resume
+		c.compactResumeInternal = pc.Resume && pc.ResumeInternal
+		if pc.Origin != "" {
+			c.compactOrigin = pc.Origin
+		}
+		c.compacting = true
+		c.compactCommand = true
+		return
+	}
 	if pc.RestoreBundle && c.r != nil && c.r.opts.RestoreBundle != nil {
-		if pc.Note != "" {
-			c.compactNote = compactionRestoreMarker + pc.Note
+		note := strings.TrimSpace(strings.TrimPrefix(pc.Note, compactionRestoreMarker))
+		if note != "" {
+			c.compactNote = compactionRestoreMarker + note
 		} else {
 			c.compactNote = compactionRestoreMarker
 		}
@@ -105,7 +136,14 @@ func (c *conv) restorePendingCompaction(pc *PendingCompaction) {
 }
 
 func (c *conv) clearPendingCompactionResume() {
-	if c.rec.PendingCompaction == nil || (!c.rec.PendingCompaction.Resume && !c.rec.PendingCompaction.ResumeInternal) {
+	if c.rec.PendingCompaction == nil {
+		return
+	}
+	if !c.rec.Lead && c.rec.PendingCompaction.Stage != compactStageCompleted {
+		c.update(func(rec *Record) { rec.PendingCompaction = nil })
+		return
+	}
+	if !c.rec.PendingCompaction.Resume && !c.rec.PendingCompaction.ResumeInternal {
 		return
 	}
 	c.update(func(rec *Record) {
@@ -115,6 +153,27 @@ func (c *conv) clearPendingCompactionResume() {
 		pc := clonePendingCompaction(rec.PendingCompaction)
 		pc.Resume, pc.ResumeInternal = false, false
 		rec.PendingCompaction = pc
+	})
+}
+
+func (c *conv) persistWorkerPendingCompaction(stage string, afterSeq uint64) {
+	hasRestore := c.r != nil && c.r.opts.RestoreBundle != nil
+	note := strings.TrimSpace(strings.TrimPrefix(c.compactNote, compactionRestoreMarker))
+	if !hasRestore && stage == compactStageCompleted && note == "" {
+		note = c.compactionFallbackRestoreNote()
+	}
+	c.update(func(rec *Record) {
+		sends := rec.Sends
+		rec.PendingCompaction = &PendingCompaction{
+			Note:              note,
+			RestoreBundle:     hasRestore,
+			Resume:            true,
+			ResumeInternal:    c.compactResumeInternal,
+			Origin:            c.compactOrigin,
+			RotatedAfterSends: &sends,
+			Stage:             stage,
+			AfterSeq:          afterSeq,
+		}
 	})
 }
 
@@ -152,6 +211,14 @@ func (r *Runner) Compact(callerKey, target string, resume *bool) CompactResult {
 func (r *Runner) CompactWithSummary(callerKey, target string, resume *bool, lead *wscompact.LeadSummary) CompactResult {
 	target = strings.TrimSpace(target)
 	var own, dest *conv
+	if target != "" {
+		// A parked target is rehydrated first: only open sessions compact.
+		for _, rec := range r.parkedRecords() {
+			if rec.WSKey == target || AgentAddress(rec.ReplyID) == target {
+				r.unpark(rec.ReplyID)
+			}
+		}
+	}
 	r.mu.Lock()
 	for _, c := range r.convs {
 		rec := c.record()
@@ -181,7 +248,8 @@ func (r *Runner) CompactWithSummary(callerKey, target string, resume *bool, lead
 	}
 	out := CompactResult{"error", "session closed"}
 	dest.do(func() {
-		if why := dest.compactUnsupported(); why != "" {
+		wsWorker := dest.wsManagedWorkerCompaction()
+		if why := dest.compactUnsupported(); why != "" && !wsWorker {
 			out = CompactResult{"unsupported", why}
 			return
 		}
@@ -190,10 +258,13 @@ func (r *Runner) CompactWithSummary(callerKey, target string, resume *bool, lead
 			return
 		}
 		if lead != nil {
-			if dest != own || !dest.rec.Lead {
-				out = CompactResult{"error", "lead_summary is only available for a hosted lead compacting itself"}
+			if dest != own || !(dest.rec.Lead || wsWorker) {
+				out = CompactResult{"error", "lead_summary is only available for a hosted lead or ws-mode worker compacting itself"}
 				return
 			}
+		}
+		if wsWorker && lead == nil {
+			lead = emptyWorkerSummary()
 		}
 		if dest.compactPending != nil || dest.compacting || dest.compactCommand {
 			out = CompactResult{"queued", "compaction already pending"}
@@ -222,6 +293,8 @@ func (r *Runner) CompactWithSummary(callerKey, target string, resume *bool, lead
 		dest.kick()
 		if req.err != nil {
 			out = CompactResult{"error", req.err.Error()}
+		} else if !dest.rec.Lead && !dest.r.durableProcess(dest.rec.Backend) && dest.compactPending == req && req.resume {
+			dest.persistWorkerPendingCompaction(compactStageQueued, dest.seq)
 		}
 	})
 	return out
@@ -242,6 +315,13 @@ func (r *Runner) compactDescendant(own, child Record) bool {
 }
 
 func (c *conv) compactUnsupported() string {
+	if c.wsManagedWorkerCompaction() {
+		// Rotation needs no native command or lifecycle detection.
+		if c.caps != nil && !c.caps.Allows(ItemCompaction) {
+			return "the session catalog reports compaction unsupported"
+		}
+		return ""
+	}
 	p := c.r.opts.Backends[c.rec.Backend].CompactionProtocol()
 	if !p.DetectsLifecycle() {
 		return "native compaction lifecycle is unsupported by this harness descriptor"
@@ -275,6 +355,7 @@ func (c *conv) loadCompaction() {
 	c.compactPrevTokens, c.compactPrevWindow = 0, 0
 	c.compactHardIssued, c.compactHardSteered, c.compactHardHandled, c.compactHardAtStart = false, false, false, false
 	c.compactHardSteerID = ""
+	c.resetHardOverflow()
 	c.compactAdvised, c.compactM1Issued, c.compactM2Issued = false, false, false
 	c.compactNudge = compactionNudge{}
 	c.compactOrigin = ""
@@ -285,10 +366,56 @@ func (c *conv) wsManagedLeadCompaction() bool {
 	return c.rec.Lead && !c.r.durableProcess(c.rec.Backend) && c.leadCompactionMode(c.record()) == wsconfig.CompactionModeWS
 }
 
+// wsManagedWorkerCompaction reports a non-durable hosted worker whose effective
+// compaction.worker_mode is ws: it compacts by ws-managed session rotation.
+func (c *conv) wsManagedWorkerCompaction() bool {
+	return !c.rec.Lead && !c.r.durableProcess(c.rec.Backend) && c.workerCompactionMode(c.record()) == wsconfig.CompactionModeWS
+}
+
+// WorkerCompactionMode reports the effective mode of an open hosted worker.
+func (r *Runner) WorkerCompactionMode(conversation string) string {
+	c := r.resident(conversation)
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	rec, openWorker := c.rec, !c.rec.Lead && !c.closed
+	c.mu.Unlock()
+	if !openWorker {
+		return ""
+	}
+	return c.workerCompactionMode(rec)
+}
+
+func (c *conv) workerCompactionMode(rec Record) string {
+	c.compactModeMu.Lock()
+	defer c.compactModeMu.Unlock()
+	gen := compactionConfigGen.Load()
+	if c.compactWorkerMode != "" && c.compactWorkerModeGen == gen {
+		return c.compactWorkerMode
+	}
+	var raw string
+	if !WorkerCompactionWSOnly(rec.Backend, c.r.opts.Backends) {
+		resolver := c.compactionResolver(rec)
+		if value, _, err := resolver.Compaction(rec.WSKey, wsconfig.ItemCompactionWorkerMode, rec.Backend, ""); err == nil {
+			raw = value.Value
+		}
+	}
+	c.compactWorkerMode = EffectiveWorkerCompactionMode(rec.Backend, raw, c.r.opts.Backends)
+	c.compactWorkerModeGen = gen
+	return c.compactWorkerMode
+}
+
+// emptyWorkerSummary asks a ws-managed rotation to rebuild the checkpoint from
+// the ring dialog alone, so a worker that supplies no prose never stalls.
+func emptyWorkerSummary() *wscompact.LeadSummary {
+	return &wscompact.LeadSummary{Prose: make([]string, len(wscompact.ProseFields()))}
+}
+
 // LeadCompactionMode reports the effective mode of an authenticated open
 // hosted lead. Discovery needs only the in-memory binding and mode cache.
 func (r *Runner) LeadCompactionMode(conversation string) string {
-	c := r.conv(conversation)
+	c := r.resident(conversation)
 	if c == nil {
 		return ""
 	}
@@ -420,7 +547,7 @@ func (c *conv) disarmCompactionLatches() {
 		c.compactM1Issued, c.compactM2Issued = false, false
 	}
 	if c.compactTokens < c.compactHard.Point(c.compactWindow) {
-		c.compactHardIssued, c.compactHardSteered, c.compactHardHandled = false, false, false
+		c.resetHardOverflow()
 		c.clearCompactionSteerReplies()
 	}
 }
@@ -445,6 +572,7 @@ func (c *conv) observeCompaction(ev wslive.Event) {
 	if ev.Kind == wslive.KindTurnStart {
 		c.compactUsageFresh, c.compactAwaitTurn = false, false
 		c.compactContinueAtIdle = false
+		c.compactHardInterrupt, c.compactHardBoundaries = false, 0
 		c.clearCompactionSteerReplies()
 	}
 	if ev.Kind != wslive.KindStatus || ev.Context == nil || c.compactAwaitTurn {
@@ -576,6 +704,9 @@ func (c *conv) compactIdle() bool {
 		}
 		if c.proc == nil {
 			c.compactPending = nil
+			if !c.rec.Lead && c.rec.PendingCompaction != nil {
+				c.update(func(rec *Record) { rec.PendingCompaction = nil })
+			}
 			c.setStatus(func() { c.lastErr = "compaction requires a running harness" })
 			c.releaseHeld()
 			return false
@@ -611,7 +742,7 @@ func (c *conv) compactIdle() bool {
 		c.compactOrigin = trigger
 		_, acceptsSummary := c.proc.(leadSummaryCompactor)
 		if req.lead != nil && !acceptsSummary {
-			rotated, err := c.rotateExternalLead(req, trigger)
+			rotated, err := c.rotateExternalSession(req, trigger)
 			if checkout, ok := releasedInput(err); ok {
 				req.err = err
 				c.compactOrigin = ""
@@ -635,7 +766,7 @@ func (c *conv) compactIdle() bool {
 				return false
 			}
 			if rotated {
-				// CompactEnd already ran synchronously inside rotateExternalLead;
+				// CompactEnd already ran synchronously inside rotateExternalSession;
 				// fall through so compactResume opens the continuation turn now.
 				goto postCompact
 			}
@@ -663,6 +794,9 @@ func (c *conv) compactIdle() bool {
 			req.err = err
 			c.compactOrigin = ""
 			c.compactCommand, c.compactResume, c.compactResumeInternal = false, false, false
+			if !c.rec.Lead && c.rec.PendingCompaction != nil {
+				c.update(func(rec *Record) { rec.PendingCompaction = nil })
+			}
 			c.dropReleasedInput("compaction", checkout)
 			c.releaseHeld()
 			return false
@@ -673,15 +807,25 @@ func (c *conv) compactIdle() bool {
 			c.stopCompactWatchdog()
 			c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
 			c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
+			if !c.rec.Lead && c.rec.PendingCompaction != nil {
+				c.update(func(rec *Record) { rec.PendingCompaction = nil })
+			}
 			c.setStatus(func() { c.lastErr = "compaction: " + err.Error() })
 			c.releaseHeld()
 			return false
+		}
+		if !c.rec.Lead && !c.r.durableProcess(c.rec.Backend) && c.compactResume {
+			if c.compacting || c.compactCommand {
+				c.persistWorkerPendingCompaction(compactStageRunning, c.seq)
+			} else {
+				c.persistWorkerPendingCompaction(compactStageCompleted, 0)
+			}
 		}
 		return true
 	}
 postCompact:
 	if c.compactResume && c.compactNote != "" {
-		if c.proc == nil && c.rec.Lead && c.rec.PendingCompaction != nil {
+		if c.proc == nil && c.rec.PendingCompaction != nil && (c.rec.Lead || c.rec.SessionID != "") {
 			if err := c.startProcess(); err != nil {
 				if errors.Is(err, errDurableStopping) {
 					return true
@@ -706,7 +850,11 @@ postCompact:
 		if c.r.durableProcess(c.rec.Backend) {
 			return c.compactDurableContinue()
 		}
-		text := c.renderPendingNote(c.compactNote) + "\nContinue the work that was pending."
+		note := strings.TrimSpace(c.renderPendingNote(c.compactNote))
+		if held := formatHeldMailRestore(c.record().Mail); held != "" {
+			note = insertBeforeRestoreClose(note, held)
+		}
+		text := note + "\n\nContinue the work that was pending."
 		c.compactResume = false
 		if err := c.sendStandalonePrompt(!c.compactResumeInternal, func() error { return c.proc.Send(text) }); err != nil {
 			c.compactResumeInternal = false
@@ -779,12 +927,67 @@ func (c *conv) stageHardCompaction(resume, internal bool) {
 		}
 		return
 	}
-	// A durable worker has finished and journaled this turn before the
-	// checkpoint. Automatically compact its next input without extending
-	// the finished turn. An explicit resume request still opens new input.
-	resume = resume && (c.rec.Lead || !c.r.durableProcess(c.rec.Backend))
-	c.compactPending = &compactRequest{resume: resume, internal: internal, auto: true, crossing: true, stage1: c.wsManagedLeadCompaction()}
+	// Only leads auto-resume after a natural-end crossing: workers report
+	// their finished turn to their parent and compact without reopening it.
+	// A Stage 2 forced interrupt aborted the worker mid-work, so it must
+	// resume (its report is held by compactHoldsReport) instead of settling.
+	// Explicit ws/compact calls already returned above via c.compactPending != nil.
+	resume = (resume && c.rec.Lead) || c.compactHardForce
+	req := &compactRequest{resume: resume, internal: internal, auto: true, crossing: true, stage1: c.wsManagedLeadCompaction() && !c.compactHardForce}
+	if c.wsManagedWorkerCompaction() || c.compactHardForce && c.wsManagedLeadCompaction() {
+		// No Stage 1 prose round trip for a worker: rotate from the ring dialog.
+		req.lead = emptyWorkerSummary()
+	}
+	c.compactPending = req
 	c.publishCompaction(false)
+}
+
+// compactNoShrinkCap bounds consecutive hard-crossing compactions that left
+// usage at or above hard, so a compaction that frees nothing cannot loop.
+const compactNoShrinkCap = 2
+
+// resetHardOverflow clears every hard-cap latch and Stage 2 counter: usage
+// fell below hard, or a fresh session replaced the overflowed one.
+func (c *conv) resetHardOverflow() {
+	c.compactHardIssued, c.compactHardSteered, c.compactHardHandled, c.compactHardAtStart = false, false, false, false
+	c.compactHardBoundaries, c.compactNoShrink = 0, 0
+	c.compactHardInterrupt, c.compactHardForce = false, false
+}
+
+// escalateHardOverflow is Stage 2 of hard-cap enforcement. At a tool boundary
+// (never mid-tool, never during compaction) a turn that ignored the Stage 1
+// steer, or that reached 120% of hard, is interrupted so endTurn can compact
+// and resume it. A worker whose harness takes no compaction steer escalates
+// on the 120% ceiling alone, leaving the harness's own auto-compaction room.
+func (c *conv) escalateHardOverflow() {
+	if !c.turn || c.proc == nil || c.quitting || c.replaying || c.wrapHold || c.closed || c.hidden ||
+		c.compacting || c.compactCommand || c.compactPending != nil || c.compactInternalTurn ||
+		c.compactHardInterrupt || c.compactNoShrink >= compactNoShrinkCap ||
+		c.caps != nil && !c.caps.Allows(ItemInterrupt) {
+		return
+	}
+	c.refreshCompaction()
+	if !c.aboveCompactHard() {
+		return
+	}
+	over := c.compactTokens >= c.compactHard.Point(c.compactWindow)*120/100
+	trigger := false
+	switch {
+	case c.compactHardSteered:
+		c.compactHardBoundaries++
+		trigger = over || c.compactHardBoundaries >= 3
+	case !c.rec.Lead && c.r.lifecycle(c.rec.Backend).NoWorkerCompactionSteer:
+		trigger = over
+	}
+	if !trigger {
+		return
+	}
+	c.compactHardInterrupt, c.compactHardBoundaries = true, 0
+	c.disarmModelWait()
+	if err := c.proc.Interrupt(); err != nil {
+		c.compactHardInterrupt = false
+		fmt.Fprintf(c.r.opts.Log, "agent %s: hard-cap interrupt: %v\n", c.rec.ReplyID, err)
+	}
 }
 
 func stage1CompactionPrompt() string {
@@ -797,10 +1000,10 @@ func stage1CompactionPrompt() string {
 		"; use empty strings for sections with nothing to carry forward), optional reread (up to 12 worktree text file paths), and optional agenda_updates if your agenda needs updating so ws can rotate the session with your checkpoint. End your turn after calling ws/compact."
 }
 
-// rotateExternalLead executes ws-managed compaction for an external hosted lead:
-// builds the checkpoint, replaces the holder, and records the explicit audit
-// cut before sending any input to the replacement.
-func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, error) {
+// rotateExternalSession executes ws-managed compaction for an external hosted
+// lead or ws-mode worker: builds the checkpoint, replaces the holder, and
+// records the explicit audit cut before sending any input to the replacement.
+func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool, error) {
 	rec := c.record()
 	rp, err := c.r.resolve(rec.Profile, rec.Root)
 	if err != nil {
@@ -824,11 +1027,11 @@ func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, er
 	}
 	state := c.r.compactionState(rec.ReplyID)(dialogRes.LastCompactAt)
 	checkpoint := wscompact.BuildCheckpoint(wscompact.CheckpointInput{
-		Lead:         true,
+		Lead:         rec.Lead,
 		Ticket:       dialogRes.Ticket,
 		Playbook:     dialogRes.Playbook,
 		State:        state,
-		OmitChildren: c.r.opts.RestoreBundle != nil,
+		OmitChildren: rec.Lead && c.r.opts.RestoreBundle != nil,
 		Prose:        prose,
 		Rereads:      rereads,
 		Dialog:       dialogRes.Dialog,
@@ -859,7 +1062,11 @@ func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, er
 		fresh := c.record()
 		fresh.SessionID, fresh.SessionFile = "", ""
 		noteBefore := c.compactNote
-		if err := c.startLead(fresh, rp.Definition, false); err != nil {
+		start := c.startLead
+		if !rec.Lead {
+			start = c.startWorker
+		}
+		if err := start(fresh, rp.Definition, false); err != nil {
 			return fmt.Errorf("start fresh session: %w", err)
 		}
 
@@ -877,6 +1084,8 @@ func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, er
 		c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd, Trigger: trigger})
 		c.compactRotated = false
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd, Trigger: trigger})
+		// The replacement session starts with a clean hard-cap slate.
+		c.resetHardOverflow()
 		if strings.TrimSpace(c.compactNote) != "" {
 			c.compactNote += "\n\n" + checkpoint
 		} else {
@@ -903,6 +1112,7 @@ func (c *conv) retireCompactionProcess() error {
 	c.setStatus(func() { c.proc = nil })
 	c.events = nil
 	c.clearProcessMCP()
+	c.clearWorkerRejoin()
 	if proc != nil {
 		_ = proc.Close()
 		if audited, ok := proc.(interface{ waitForAudit() }); ok {
@@ -939,7 +1149,8 @@ func (c *conv) steerCompaction(boundary bool) {
 	}
 	c.refreshCompaction()
 	st := controlsFor(c.proc).steer
-	if st == nil || !c.aboveCompactHard() || c.compactHardSteerID != "" || c.compactHardSteered && !boundary {
+	if st == nil || !c.aboveCompactHard() || c.compactHardSteerID != "" ||
+		(c.compactHardSteered && (!boundary || c.r.lifecycle(c.rec.Backend).SingleHardCompactionSteer)) {
 		return
 	}
 	hard := c.compactHard.Point(c.compactWindow)
@@ -1140,6 +1351,9 @@ func (c *conv) compactEvent(ev wslive.Event) {
 		c.compactResumeInternal = false
 		c.compactHardAtStart = false
 		c.compactOrigin = ""
+		if !c.rec.Lead && !c.replaying && c.rec.PendingCompaction != nil {
+			c.update(func(rec *Record) { rec.PendingCompaction = nil })
+		}
 	case wslive.CompactEnd:
 		// Duplicate ends carry neither a second note nor another continue turn.
 		if !c.compacting {
@@ -1165,7 +1379,13 @@ func (c *conv) compactEvent(ev wslive.Event) {
 			}
 			c.compactStage1Active, c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited = false, false, false, false, false
 		}
-		c.compactHardHandled = c.compactHardHandled || c.compactHardAtStart || c.aboveCompactHard()
+		// A compaction that began at or above hard counts as no-shrink until a
+		// later sample drops below hard (disarmCompactionLatches resets it).
+		// Only a bounded run of them disarms overflow protection.
+		if c.compactHardAtStart || c.aboveCompactHard() {
+			c.compactNoShrink++
+			c.compactHardHandled = c.compactNoShrink >= compactNoShrinkCap
+		}
 		c.compactHardAtStart = false
 		// A stats answer queued before compaction may still carry old tokens.
 		// Only the next model turn can produce a fresh post-compaction sample.
@@ -1173,23 +1393,66 @@ func (c *conv) compactEvent(ev wslive.Event) {
 		c.compactPrevTokens = 0
 		c.compactAdvised, c.compactM1Issued, c.compactM2Issued, c.compactHardIssued, c.compactUsageFresh = false, false, false, false, false
 		c.queueRestore(RestoreCompaction)
-		if !c.r.opts.Backends[c.rec.Backend].CompactionProtocol().PromptPersists {
-			if c.rec.Lead {
-				// Rotation starts a fresh process via startLead, which already
-				// embeds composeLeadInstructions (including leadManual).
-				if !c.compactRotated || !c.r.lifecycle(c.rec.Backend).ComposedLeadInstructions {
-					c.compactNote += c.leadManual(c.record())
-				}
-			} else {
-				if c.systemPrompt == "" && c.rec.SystemPrompt && c.dir != "" {
-					if raw, err := os.ReadFile(filepath.Join(c.dir, systemPromptFile)); err == nil {
-						c.systemPrompt = string(raw)
-					}
-				}
-				if c.systemPrompt != "" {
-					c.compactNote += c.systemPrompt + "\n"
-				}
-			}
+		c.appendRestoreInstructions()
+		if !c.rec.Lead && !c.r.durableProcess(c.rec.Backend) && c.compactResume && !c.replaying && c.rec.PendingCompaction != nil {
+			c.persistWorkerPendingCompaction(compactStageCompleted, 0)
+		}
+	}
+}
+
+func (c *conv) appendRestoreInstructions() {
+	if c.r.opts.Backends[c.rec.Backend].CompactionProtocol().PromptPersists {
+		return
+	}
+	if c.rec.Lead {
+		// Rotation starts a fresh process via startLead, which already
+		// embeds composeLeadInstructions (including leadManual).
+		if !c.compactRotated || !c.r.lifecycle(c.rec.Backend).ComposedLeadInstructions {
+			c.compactNote += c.leadManual(c.record())
+		}
+		return
+	}
+	if c.systemPrompt == "" && c.rec.SystemPrompt && c.dir != "" {
+		if raw, err := os.ReadFile(filepath.Join(c.dir, systemPromptFile)); err == nil {
+			c.systemPrompt = string(raw)
+		}
+	}
+	if c.systemPrompt != "" {
+		c.compactNote += c.systemPrompt + "\n"
+	}
+}
+
+func (c *conv) reconcileWorkerCompactionReplay() {
+	if c.rec.Lead || c.r.durableProcess(c.rec.Backend) {
+		return
+	}
+	if c.replayCompactFailed {
+		c.replayCompactFailed, c.replayCompactEnded = false, false
+		c.compacting, c.compactResume, c.compactResumeInternal, c.compactCommand = false, false, false, false
+		c.compactOrigin = ""
+		if c.rec.PendingCompaction != nil {
+			c.update(func(rec *Record) { rec.PendingCompaction = nil })
+		}
+		return
+	}
+	if c.replayCompactEnded {
+		c.replayCompactEnded = false
+		c.compacting, c.compactCommand = false, false
+		if c.compactResume {
+			c.queueRestore(RestoreCompaction)
+			c.appendRestoreInstructions()
+			c.persistWorkerPendingCompaction(compactStageCompleted, 0)
+		}
+		return
+	}
+	if pc := c.rec.PendingCompaction; pc != nil && pc.Stage == compactStageRunning && !c.compacting {
+		// Non-quiet replay processed CompactEnd or CompactFailed while c.replaying
+		// was true; reconcile disk PendingCompaction with the resulting memory state.
+		c.compactCommand = false
+		if c.compactResume {
+			c.persistWorkerPendingCompaction(compactStageCompleted, 0)
+		} else {
+			c.update(func(rec *Record) { rec.PendingCompaction = nil })
 		}
 	}
 }
@@ -1240,6 +1503,10 @@ func (c *conv) compactInput(text string) string {
 	return text
 }
 
+func (c *conv) compactionFallbackRestoreNote() string {
+	return fmt.Sprintf("<ws-restore cause=\"compaction\">\nYour ws session key is `%s`. Context was compacted. Fresh session state is available through the lead-only ws workflow_state tool. Keep using this same key.\n</ws-restore>\n", wscompact.EscapeFramingCloseTags(c.rec.WSKey))
+}
+
 func (c *conv) queueRestore(cause RestoreCause) {
 	marker := compactionRestoreMarker
 	if cause == RestoreRestart {
@@ -1247,11 +1514,55 @@ func (c *conv) queueRestore(cause RestoreCause) {
 	}
 	if c.r == nil || c.r.opts.RestoreBundle == nil {
 		if cause == RestoreCompaction {
-			c.compactNote = fmt.Sprintf("Your ws session key is `%s`. Context was compacted. Fresh session state is available through the lead-only ws workflow_state tool. Keep using this same key.\n", c.rec.WSKey)
+			c.compactNote = c.compactionFallbackRestoreNote()
 		}
 		return
 	}
 	c.compactNote = marker
+}
+
+const heldMailRestoreByteBudget = 4 * 1024
+
+func formatHeldMailRestore(mails []string) string {
+	if len(mails) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("<held-mail>\n## Held Undelivered Mail\n")
+	remaining := heldMailRestoreByteBudget - len("</held-mail>\n") - b.Len()
+	for i, raw := range mails {
+		if remaining <= 40 {
+			fmt.Fprintf(&b, "- ... %d more held message(s) will deliver with your next input turn.\n", len(mails)-i)
+			break
+		}
+		escaped := wscompact.EscapeFramingCloseTags(strings.TrimSpace(raw))
+		if escaped == "" {
+			escaped = "(empty)"
+		}
+		if len(escaped) > remaining-16 {
+			escaped = wscompact.EscapeFramingCloseTags(wscompact.BoundedText(escaped, max(32, remaining-16)))
+		}
+		line := fmt.Sprintf("- [%d] %s\n", i+1, escaped)
+		if len(line) > remaining && i > 0 {
+			fmt.Fprintf(&b, "- ... %d more held message(s) will deliver with your next input turn.\n", len(mails)-i)
+			break
+		}
+		b.WriteString(line)
+		remaining -= len(line)
+	}
+	b.WriteString("</held-mail>")
+	return b.String()
+}
+
+func insertBeforeRestoreClose(bundle, section string) string {
+	if section == "" {
+		return bundle
+	}
+	if idx := strings.LastIndex(bundle, "</ws-restore>"); idx >= 0 {
+		head := strings.TrimRight(bundle[:idx], "\n")
+		return head + "\n\n" + section + "\n" + bundle[idx:]
+	}
+	return strings.TrimSpace(bundle) + "\n\n" + section
 }
 
 // renderPendingNote resolves the marker at the last possible point before a
@@ -1285,7 +1596,7 @@ func (c *conv) renderPendingNote(note string) string {
 	bundle, err := c.r.opts.RestoreBundle(rec.Backend, rec.workDir(), rec.WSKey, cause, c.r.AgentList(caller))
 	if err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: restore bundle: %v\n", rec.ReplyID, err)
-		bundle = fmt.Sprintf("Your ws session key is `%s`. The hosted session-state restore bundle could not be rendered after %s: %v. Call workflow_state with this same key before continuing.", rec.WSKey, cause, err)
+		bundle = fmt.Sprintf("<ws-restore cause=\"%s\" status=\"error\">\nYour ws session key is `%s`. The hosted session-state restore bundle could not be rendered after %s: %s. Call workflow_state with this same key before continuing.\n</ws-restore>\n", wscompact.EscapeXMLAttr(string(cause)), wscompact.EscapeFramingCloseTags(rec.WSKey), wscompact.EscapeFramingCloseTags(string(cause)), wscompact.EscapeFramingCloseTags(err.Error()))
 	}
 	if strings.TrimSpace(tail) != "" {
 		bundle = strings.TrimSpace(bundle) + "\n\n" + strings.TrimSpace(tail)

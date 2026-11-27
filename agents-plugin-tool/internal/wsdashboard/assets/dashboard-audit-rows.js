@@ -282,8 +282,10 @@
         var key = c.getAttribute("data-entry");
         if (!key && c.classList.contains("apanswered")) key = "approval:" + c.getAttribute("data-approval-id");
         if (!key || c.hasAttribute("hidden")) continue;
-        var footer = c.classList.contains("turnline") ? c : c.querySelector(".turnline");
-        var ent = { el: c, key: key, at: c.getAttribute("data-at") || "", turn: !!footer, footer: footer };
+        var turnFooter = c.getAttribute("data-conv-turn") === "1" && c.hasAttribute("data-turn-at") ? c : null;
+        var footer = c.classList.contains("turnline") ? c : (turnFooter || c.querySelector(".turnline"));
+        var at = (turnFooter && turnFooter.getAttribute("data-turn-at")) || c.getAttribute("data-at") || "";
+        var ent = { el: c, key: key, at: at, turn: !!footer, footer: footer };
         if (!footer && c.matches(".msg, .user-batch, .mailline, .mail-block, .mail-notification, .exec-notice, .wbeffects, .boundary-badge, .apanswered, .cardref, .cmdrun, .uiline, .input-record")) ent.source = c;
         if (c.matches(".au-tools, .toolsline")) {
           var rows = Array.from(c.querySelectorAll(".au-row"));
@@ -413,7 +415,37 @@
       return el;
     }
 
+    var auReconcileQueued = false, auReconcileRaf = 0, auReconcileTimer = 0;
+
+    function auCancelScheduledReconcile() {
+      auReconcileQueued = false;
+      if (auReconcileRaf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(auReconcileRaf);
+      auReconcileRaf = 0;
+      if (auReconcileTimer && typeof clearTimeout === "function") clearTimeout(auReconcileTimer);
+      auReconcileTimer = 0;
+    }
+
+    function auFlushScheduledReconcile() {
+      if (!auReconcileQueued) return;
+      auCancelScheduledReconcile();
+      auReconcileRows();
+    }
+
+    function auScheduleReconcile() {
+      if (auReconcileQueued) return;
+      auReconcileQueued = true;
+      var hidden = !!(doc && doc.hidden) || (typeof shHidden !== "undefined" && !!shHidden);
+      if (!hidden && typeof requestAnimationFrame === "function") {
+        auReconcileRaf = requestAnimationFrame(auFlushScheduledReconcile);
+      } else if (typeof setTimeout === "function") {
+        auReconcileTimer = setTimeout(auFlushScheduledReconcile, 0);
+      } else {
+        Promise.resolve().then(auFlushScheduledReconcile);
+      }
+    }
+
     function auReconcileRows() {
+      auCancelScheduledReconcile();
       var box = auEntriesContainer();
       if (!box) return;
       var convo = auConvo(), pin = typeof stick !== "undefined" && stick, changed = false;
@@ -585,7 +617,7 @@
           var more = page && !page.end && page.before;
           if (!more || pages >= maxPages) {
             if (candidateAfter) auLatestAfter = candidateAfter;
-            if (anyAdded) auReconcileRows();
+            if (anyAdded) auScheduleReconcile();
             return { ok: true, page: page, epoch: epoch, capped: !!more, floor: more ? floor : "" };
           }
           before = page.before;
@@ -624,7 +656,7 @@
             auReset410Done = false;
             var nextAfter = page && page.after;
             if (nextAfter) auLatestAfter = nextAfter;
-            if (page && Array.isArray(page.events) && auStoreEvents(page.events)) auReconcileRows();
+            if (page && Array.isArray(page.events) && auStoreEvents(page.events)) auScheduleReconcile();
             if (page && page.events && page.events.length && nextAfter && nextAfter !== cursor) return step();
             return { ok: true };
           });
@@ -695,7 +727,7 @@
       var d = (e && e.detail) || {};
       var box = auEntriesContainer();
       var oldest = d.oldestAt || auFirstDataEntryAt(box);
-      auReconcileRows();
+      auScheduleReconcile();
       auEnqueue(function () {
         var p = Promise.resolve({ ok: true, epoch: pageEpoch });
         if (d.empty && d.end && !oldest) {
@@ -739,7 +771,7 @@
         auPruneBeforeFloor(oldest);
         auCoveredSince = oldest;
       }
-      auReconcileRows();
+      auScheduleReconcile();
       auEnqueue(function () {
         if (auLatestAfter) return auRefreshLatestAfter();
         if (!d.empty && oldest) {
@@ -771,7 +803,7 @@
       auFailedJobs = [];
       auFetchQueue = Promise.resolve();
       auEventsById = Object.create(null);
-      auReconcileRows();
+      auScheduleReconcile();
       if (oldest) auInitialSync();
     });
 
@@ -828,7 +860,7 @@
       }).finally(function () { auInlinePending.delete(detail); });
     }, true);
 
-    doc.addEventListener("ws-approval-rows-changed", auReconcileRows);
+    doc.addEventListener("ws-approval-rows-changed", auScheduleReconcile);
     var liveRegion = doc.getElementById("r-convlive");
     if (liveRegion && typeof MutationObserver !== "undefined") {
       // Only the region's root replacement matters. Audit writes inside it
@@ -842,7 +874,7 @@
       var lastAttempt = retryAttempt();
       new MutationObserver(function () {
         var hasOwners = !!liveRegion.querySelector(liveSelector), attempt = retryAttempt();
-        if (hadOwners || hasOwners) auReconcileRows();
+        if (hadOwners || hasOwners) auScheduleReconcile();
         if (attempt && attempt !== lastAttempt) {
           auEnqueue(function () { if (auLatestAfter) return auRefreshLatestAfter(); });
         }

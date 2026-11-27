@@ -193,7 +193,7 @@ func (c *conv) bindDurableMCP(session *MCPSession, rec Record, proc Process, lev
 		current, workerLevel := c.rec, c.workerPermissionLevel
 		c.mu.Unlock()
 		if current.Lead {
-			selected, explicit, readErr := cachedPermissionSelection(c.dir)
+			selected, explicit, readErr := c.r.cachedPermissionSelection(current.ReplyID, c.dir)
 			level, _, err := c.r.resolveLeadPermission(current, selected, explicit, readErr)
 			if err != nil {
 				return ""
@@ -203,7 +203,7 @@ func (c *conv) bindDurableMCP(session *MCPSession, rec Record, proc Process, lev
 		return wsfs.Authority(workerLevel)
 	}
 	_, liveModes := proc.(liveLeadMode)
-	admission := &permissionSlot(c.dir).admission
+	admission := &c.r.permissionSlot(rec.ReplyID, c.dir).admission
 	files := &wsfs.FileWriteSession{
 		Root: rec.Root, Cwd: rec.workDir(), Authority: wsfs.Authority(level),
 		CurrentAuthority: authority, LiveAuthority: rec.Lead && liveModes,
@@ -315,7 +315,7 @@ func (r *Runner) ResolveCredentialToken(token string) (wsdashboard.CredentialSes
 	}
 	reg, known := r.opts.Backends[hello.Harness]
 	session := wsdashboard.CredentialSession{Conversation: hello.Conversation, Harness: hello.Harness, Permitted: known && reg.ProcessKind != ProcessDurable && reg.ProviderCredentials}
-	if c := r.conv(hello.Conversation); c != nil {
+	if c := r.resident(hello.Conversation); c != nil {
 		c.mu.Lock()
 		session.Lead = c.rec.Lead
 		c.mu.Unlock()

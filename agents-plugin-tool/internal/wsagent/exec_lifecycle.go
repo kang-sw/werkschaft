@@ -179,7 +179,7 @@ func (r *Runner) BindExecJobs(src ExecJobs) {
 	r.mu.Unlock()
 	r.execReconsider(all)
 	for id := range all {
-		if c := r.conv(id); c != nil && r.durableProcess(c.record().Backend) {
+		if c := r.resident(id); c != nil && r.durableProcess(c.record().Backend) {
 			c.signalInbox()
 		}
 	}
@@ -240,7 +240,7 @@ func (r *Runner) ExecJobsChanged() {
 // and its sleep, and wakes its spawn parents up to the root lead.
 func (r *Runner) execReconsider(ids map[string]bool) {
 	for id := range ids {
-		c := r.conv(id)
+		c := r.resident(id)
 		var parent *ParentRef
 		if c != nil {
 			r.releaseLater(id)

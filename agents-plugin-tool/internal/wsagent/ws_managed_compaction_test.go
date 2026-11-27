@@ -320,21 +320,28 @@ func TestWSManagedLeadRotationAuditOrderAndChildDedup(t *testing.T) {
 				t.Fatalf("invalid audit SourceID: %+v", ids[0])
 			}
 
-			// Verify continuation prompt carries RestoreBundle + checkpoint + reread, without duplicate children sections.
+			// Verify continuation prompt carries RestoreBundle + XML-framed checkpoint + reread,
+			// with continuation instruction cleanly outside </compaction-checkpoint>, without duplicate children sections.
 			sends2, _ := procs[1].sent()
 			prompt := sends2[0]
 			for _, want := range []string{
 				"## Hosted Session Restore",
-				"implementing phase 1",
-				"carry me forward",
-				"## Exec jobs",
-				"Continue the work that was pending.",
+				`<compaction-checkpoint role="lead">`,
+				"<lead-summary>\n## Carried forward by the lead",
+				"### Current work\nimplementing phase 1",
+				"</lead-summary>",
+				"<exec-jobs>\n## Exec jobs",
+				"<rereads>\n## Required re-reads (inlined)\n<file path=\"notes.txt\">\ncarry me forward\n</file>\n</rereads>",
+				"<dialog>\n<message role=\"user\" timestamp=",
+				"hello world",
+				"<message role=\"assistant\" timestamp=",
+				"\ninitial reply\n</message>\n</dialog>\n</compaction-checkpoint>\n\nContinue the work that was pending.",
 			} {
 				if !strings.Contains(prompt, want) {
 					t.Fatalf("continuation prompt missing %q:\n%s", want, prompt)
 				}
 			}
-			if strings.Contains(prompt, "## Child agents in flight") || strings.Contains(prompt, "## Child agents finished") {
+			if strings.Contains(prompt, "<children>") || strings.Contains(prompt, "## Child agents in flight") || strings.Contains(prompt, "## Child agents finished") {
 				t.Fatalf("expected checkpoint children sections omitted when RestoreBundle is present:\n%s", prompt)
 			}
 
@@ -1271,7 +1278,7 @@ func TestWSManagedLeadRotationRealProtocolRestartAndAuditStore(t *testing.T) {
 		})
 		h.quiesce(id)
 
-		// Simulate a crash right after rotateExternalLead persisted
+		// Simulate a crash right after rotateExternalSession persisted
 		// PendingCompaction{Resume: true} and before compactIdle dispatched the
 		// standalone continuation.
 		h.runner.Close()

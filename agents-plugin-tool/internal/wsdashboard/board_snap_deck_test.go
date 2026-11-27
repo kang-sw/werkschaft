@@ -34,3 +34,7 @@ func TestBoardFreeCanvasContracts(t *testing.T) {
 func TestBoardVirtualizeContracts(t *testing.T) {
 	runNodeTestSuite(t, "testdata/board-virtualize.test.cjs")
 }
+
+func TestTitleClickScrollTopContracts(t *testing.T) {
+	runNodeTestSuite(t, "testdata/title-click-scroll-top.test.cjs")
+}

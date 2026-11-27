@@ -71,17 +71,29 @@ func (s *railLayoutStore) dropWorktreeOrder(root, path, realPath string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st := statRailFile(s.file)
-	if !st.ok {
-		return nil
-	}
-	doc, err := readRailLayout(s.file)
-	if err != nil {
-		return err
-	}
-	if st != s.seen {
-		s.seen, s.doc = st, doc
-		s.gen++
+	var doc *railLayoutDoc
+	if s.meta != nil {
+		if s.importErr != nil {
+			return s.importErr
+		}
+		doc = s.doc
+		if len(doc.Workspaces) == 0 {
+			return nil
+		}
+	} else {
+		st := statRailFile(s.file)
+		if !st.ok {
+			return nil
+		}
+		var err error
+		doc, err = readRailLayout(s.file)
+		if err != nil {
+			return err
+		}
+		if st != s.seen {
+			s.seen, s.doc = st, doc
+			s.gen++
+		}
 	}
 	next := doc.clone()
 	changed := false
@@ -102,6 +114,17 @@ func (s *railLayoutStore) dropWorktreeOrder(root, path, realPath string) error {
 		}
 	}
 	if !changed {
+		return nil
+	}
+	if s.meta != nil {
+		written, err := s.writePatchLocked(doc, next)
+		if err != nil {
+			return err
+		}
+		if written {
+			s.doc = next
+			s.gen++
+		}
 		return nil
 	}
 	after, err := next.encode()

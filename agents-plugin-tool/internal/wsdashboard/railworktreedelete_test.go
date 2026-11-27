@@ -18,6 +18,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wsholder"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 // poolSource lists a repository's worktrees with git, as gitWorktreeSource
@@ -480,15 +481,12 @@ func TestWorktreeDeletePurgesEndedSessions(t *testing.T) {
 	if agents.forgot("other") {
 		t.Errorf("AgentForgetter.ForgetClosed was unexpectedly called for untouched session other")
 	}
-	doc, err := readRailLayout(filepath.Join(f.dir, railLayoutFileName))
-	if err != nil {
-		t.Fatal(err)
-	}
+	doc, _ := reopenLayoutForTest(t, f.d).current()
 	if w := doc.Workspaces[f.root]; w != nil && slices.ContainsFunc(w.WorktreeOrder, func(p string) bool { return samePath(p, wt) }) {
-		t.Errorf("deleted worktree %s still lingers in rail-layout.json worktree_order: %v", wt, w.WorktreeOrder)
+		t.Errorf("deleted worktree %s still lingers in rail layout worktree_order: %v", wt, w.WorktreeOrder)
 	}
 	if w := doc.Workspaces[f.root]; w == nil || !slices.ContainsFunc(w.WorktreeOrder, func(p string) bool { return samePath(p, keep) }) {
-		t.Errorf("untouched worktree %s missing from rail-layout.json worktree_order: %+v", keep, w)
+		t.Errorf("untouched worktree %s missing from rail layout worktree_order: %+v", keep, w)
 	}
 }
 
@@ -672,10 +670,7 @@ func TestWorktreeDeleteForce(t *testing.T) {
 // run block, the live ones first; an ended session is listed unless the
 // index page leaves it out, and an exited terminal is listed.
 func TestWorktreeHolders(t *testing.T) {
-	base, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := wstestutil.CanonicalTempDir(t)
 	wt := mkDir(t, filepath.Join(base, "wt"))
 	mkDir(t, filepath.Join(wt, "deep"))
 	link := filepath.Join(base, "link")

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 // aliasPlaces makes, under one resolved temp directory, a plain directory,
@@ -16,10 +18,7 @@ import (
 // pointing at target (plain or wt).
 func aliasPlaces(t *testing.T, root string) (plain, wt, alias string) {
 	t.Helper()
-	base, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := wstestutil.CanonicalTempDir(t)
 	plain, wt = filepath.Join(base, "plain"), filepath.Join(base, "wt")
 	for _, d := range []string{plain, wt} {
 		if err := os.Mkdir(d, 0o755); err != nil {
@@ -43,10 +42,7 @@ func pointAlias(t *testing.T, alias, target string) {
 
 func TestReadOnlyHostedLaunchChecksResolvedCwd(t *testing.T) {
 	fx := newHostedFixture(t, time.Second)
-	base, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := wstestutil.CanonicalTempDir(t)
 	root := filepath.Join(base, "root")
 	inside := filepath.Join(root, "sub")
 	outside := filepath.Join(base, "outside")
@@ -99,10 +95,7 @@ func TestReadOnlyHostedLaunchChecksResolvedCwd(t *testing.T) {
 // does not run inside it.
 func TestHostedSpawnsInAdmittedPlaceAfterAliasRepointed(t *testing.T) {
 	fx := newHostedFixture(t, time.Second)
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := wstestutil.CanonicalTempDir(t)
 	plain, wt, alias := aliasPlaces(t, root)
 	pointAlias(t, alias, plain)
 
@@ -180,10 +173,7 @@ func TestLegacySpawnsInAdmittedPlaceAfterAliasRepointed(t *testing.T) {
 // is repointed: the worktree's fence still refuses.
 func TestHostedRestoreKeepsAdmittedPlaceAfterAliasRepointed(t *testing.T) {
 	fx := newHostedFixture(t, time.Second)
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := wstestutil.CanonicalTempDir(t)
 	plain, wt, alias := aliasPlaces(t, root)
 	pointAlias(t, alias, wt)
 	v, err := fx.launch(context.Background(), nil, HostedLaunch{Root: root, Cwd: alias, Async: true})
@@ -247,10 +237,7 @@ func TestLaunchRefusesAnUnresolvablePlace(t *testing.T) {
 // idle pooled checkout, leaves that checkout reusable after restore.
 func TestHostedRestoreOfARenamedPlaceLeavesTheCandidateReusable(t *testing.T) {
 	fx := newHostedFixture(t, time.Second)
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := wstestutil.CanonicalTempDir(t)
 	_, wt, _ := aliasPlaces(t, root)
 	work := filepath.Join(root, "work")
 	if err := os.Mkdir(work, 0o755); err != nil {

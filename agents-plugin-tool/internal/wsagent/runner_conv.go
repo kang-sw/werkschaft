@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"os"
 	"errors"
 	"fmt"
 	"reflect"
@@ -44,6 +45,9 @@ type conv struct {
 	closed        bool
 	held          int // inbox messages, maintained at inbox changes/drains under mu
 	hidden        bool
+	// parkedOut is set under mu when the conversation left memory for the
+	// runner's parked set (runner_park.go); its loop ends right after.
+	parkedOut     bool
 	contextTokens *float64
 	// contextWindow and contextCompaction are the context scale of the
 	// latest status that knew its window, kept while a later one does not
@@ -151,7 +155,7 @@ type conv struct {
 	// failure; empty while none runs or the harness compacts on its own. It is
 	// loop-owned.
 	compactOrigin string
-	// compactRotated is true while rotateExternalLead dispatches CompactEnd
+	// compactRotated is true while rotateExternalSession dispatches CompactEnd
 	// for a freshly started process that already received composed instructions.
 	compactRotated bool
 	// cmpActive, cmpCount and cmpLast mirror the compaction state State shows
@@ -167,8 +171,11 @@ type conv struct {
 
 	compactAdvisory, compactHard wsconfig.Threshold
 	// Lead mode is also read by MCP discovery, outside the conversation loop.
-	compactModeMu                                                                                                  sync.Mutex
-	compactModeGen                                                                                                 uint64
+	compactModeMu  sync.Mutex
+	compactModeGen uint64
+	// compactWorkerMode caches compaction.worker_mode under its own generation.
+	compactWorkerMode                                                                                              string
+	compactWorkerModeGen                                                                                           uint64
 	compactLeadMode                                                                                                string
 	compactTokens, compactWindow                                                                                   float64
 	compactPrevTokens, compactPrevWindow                                                                           int64
@@ -178,7 +185,14 @@ type conv struct {
 	compactAwaitTurn                                                                                               bool
 	compactHardSteered, compactHardHandled, compactHardAtStart                                                     bool
 	compactHardSteerID                                                                                             string
+	// Stage 2 hard-cap overflow: boundaries seen since the first hard steer,
+	// the daemon-initiated interrupt (distinct from interruptAsked), the
+	// direct-rotation request for the compaction it stages, and consecutive
+	// compactions that left usage at or above hard.
+	compactHardBoundaries, compactNoShrink int
+	compactHardInterrupt, compactHardForce bool
 	compactContinueAtIdle, compactIdleInternal                                                                     bool
+	replayCompactEnded, replayCompactFailed                                                                        bool
 	compactStage1Active, compactStage1Resume, compactStage1Internal, compactStage1Auto, compactStage1UsageLimited  bool
 
 	// Agy model-wait watchdog state (loop-owned, in-memory only).
@@ -249,8 +263,12 @@ type conv struct {
 	reconcileMode bool
 	// regMu is leaf-only: it guards the timestamp in memory and is never held
 	// across a registration lock or file I/O.
-	regMu   sync.Mutex
-	lastReg time.Time
+	regMu       sync.Mutex
+	lastReg     time.Time
+	lastWritten wsdashboard.Registration
+	haveWritten bool
+	rowStampSet bool
+	rowStampV   rowStamp
 
 	// A lead's or spawned child's own, loop-owned. mailC (one slot) tells
 	// the loop the mailbox may hold mail (signalMail); stopMail ends the
@@ -342,7 +360,11 @@ type conv struct {
 	// this daemon does not serve; it restarts at the first idle point.
 	mcpStale bool
 	// Backend-filtered hello environment captured at attach, before token restore.
-	workerMCPEnv   []string
+	workerMCPEnv []string
+	// workerRejoined marks that checkReattach already ran the once-per-attached-process
+	// worker rejoin setup (restoreToken, restoreWorkerMCP, events wiring, allowHolderReplay)
+	// so a Holders.Status retry only re-issues Status without voiding the restored MCP token.
+	workerRejoined bool
 	workerRetiring bool // validated downgrade retirement retries before replay
 	// crossHarnessRejoin is a held worker admitWorkerRecord refuses (a
 	// cross-harness worker) that reattach attached for the ownership match only. checkReattach ends a matching
@@ -831,7 +853,7 @@ func (c *conv) steer() {
 	if len(parts) == 0 {
 		return
 	}
-	text := partsText(parts)
+	text := c.steerWithDirective(partsText(parts), recs)
 	c.applyLive(liveEvents(parts))
 	if err := st.Steer(text); err != nil {
 		c.setStatus(func() { c.lastErr = "send the steered message: " + err.Error() })
@@ -1009,21 +1031,19 @@ func (c *conv) loop() {
 	}
 }
 
+// heartbeat runs each interval in the loop. Liveness of an in-daemon session
+// is memory (Runner.OwnsLive, read by the index), so it never rewrites
+// registration.json: that file is written only when its content changes.
 func (c *conv) heartbeat() {
-	registrationDue := c.regDue(c.r.opts.Now())
-	if registrationDue {
-		c.writeRegistration()
-	}
 	c.live.heartbeatSnapshot()
 	c.persistSeq()
 	if c.replaying {
 		// A holder that attached late (a rescan) is found here.
 		c.checkReattach()
 	}
-	if !registrationDue {
-		c.checkRow()
-	}
+	c.checkRow()
 	c.expireIfDue()
+	c.maybePark()
 }
 
 // settle follows each step of the loop: a session whose row a terminal
@@ -1033,7 +1053,10 @@ func (c *conv) settle() bool {
 	if c.isForeign() && !c.closed {
 		c.release()
 	}
-	if !c.closed {
+	c.mu.Lock()
+	ended := c.closed || c.parkedOut
+	c.mu.Unlock()
+	if !ended {
 		return false
 	}
 	if c.stopMail != nil {
@@ -1253,11 +1276,17 @@ func (c *conv) writeRegistration() bool {
 	}
 	// Reuse only the row already read under the lead's ownership lock, not
 	// process-local evidence: a spawn needs a real reservation on disk.
-	if previousRow != nil && !c.regDue(now) {
+	if previousRow != nil {
 		previous := *previousRow
 		previous.HeartbeatAt = reg.HeartbeatAt
 		if previous == reg {
-			return true // no semantic change; leave the scheduled heartbeat due
+			c.setLastRow(reg)
+			return true // no semantic change: nothing to write or announce
+		}
+	} else if last, ok := c.lastRow(); ok && !rec.Lead {
+		last.HeartbeatAt = reg.HeartbeatAt
+		if last == reg {
+			return true
 		}
 	}
 	err := wsdashboard.WriteRegistration(c.r.opts.Dir, reg)
@@ -1266,8 +1295,23 @@ func (c *conv) writeRegistration() bool {
 		return false
 	}
 	c.setLastReg(now)
+	c.setLastRow(reg)
 	c.r.notify(rec.ReplyID, rec.Root)
 	return true
+}
+
+// lastRow is the row this conversation last wrote or found equal on disk; a
+// write of a row equal to it (heartbeat aside) is skipped.
+func (c *conv) lastRow() (wsdashboard.Registration, bool) {
+	c.regMu.Lock()
+	defer c.regMu.Unlock()
+	return c.lastWritten, c.haveWritten
+}
+
+func (c *conv) setLastRow(reg wsdashboard.Registration) {
+	c.regMu.Lock()
+	c.lastWritten, c.haveWritten = reg, true
+	c.regMu.Unlock()
 }
 
 func (c *conv) isForeign() bool { return c.foreignRow.Load() }
@@ -1356,9 +1400,36 @@ func (c *conv) lockRowRead() (unlock func(), row *wsdashboard.Registration, ok b
 // lock, and the row leaves the daemon only through a terminal login, which
 // never gives it back.
 func (c *conv) checkRow() {
-	if c.rec.Lead && !c.isForeign() && rowForeign(c.r.opts.Dir, c.rec.ReplyID) {
-		c.markForeign()
+	if !c.rec.Lead || c.isForeign() {
+		return
 	}
+	// One stat, not a read: the daemon owns the row and writes it only on a
+	// change it records (setRowStamp). A different mtime or size means another
+	// writer (a terminal login) replaced it, and only then is it read.
+	path := wsdashboard.RegistrationPath(c.r.opts.Dir, c.rec.ReplyID)
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	stamp := rowStamp{mod: info.ModTime().UnixNano(), size: info.Size()}
+	c.regMu.Lock()
+	known, same := c.rowStampSet, c.rowStampV == stamp
+	c.regMu.Unlock()
+	if known && same {
+		return
+	}
+	if rowForeign(c.r.opts.Dir, c.rec.ReplyID) {
+		c.markForeign()
+		return
+	}
+	c.regMu.Lock()
+	c.rowStampSet, c.rowStampV = true, stamp
+	c.regMu.Unlock()
+}
+
+type rowStamp struct {
+	mod  int64
+	size int64
 }
 
 // release lets a lead session go to the terminal harness that took its
@@ -2046,7 +2117,7 @@ func (c *conv) kickInput() {
 			queue = append(queue, QueuedInput{Command: &cmd, After: from, Operator: operator})
 		} else if text := strings.TrimSpace(rec.Entry.Text()); text != "" {
 			_, exec := rec.Entry.ExecNotice()
-			queue = append(queue, QueuedInput{Text: text, After: from, Operator: operator, Exec: exec})
+			queue = append(queue, QueuedInput{Text: text, After: from, Operator: operator, Exec: exec, WhiteboardFirst: rec.Entry.WhiteboardFirst})
 		}
 	}
 	if durable && len(recs) > 0 {
@@ -2069,6 +2140,7 @@ func (c *conv) kickInput() {
 	for i, input := range inputs {
 		parts[i] = input.Text
 	}
+	whiteboard := slices.ContainsFunc(inputs, func(input QueuedInput) bool { return input.WhiteboardFirst })
 	if !durable && cmd != nil && cmd.Name == "compact" {
 		c.refreshCompaction()
 		if c.wsManagedLeadCompaction() {
@@ -2135,7 +2207,7 @@ func (c *conv) kickInput() {
 			}
 			c.passiveTook = nil
 			if ordinary {
-				text = c.turnInput(text)
+				text = c.turnInput(text, whiteboard)
 			}
 			interactive := c.rec.Lead && slices.ContainsFunc(queue[:len(queue)-len(rest)], func(input QueuedInput) bool { return input.Operator })
 			committed, err = c.admitDurableTurn(text, rest, mark, startedAt, len(mail) > 0, len(reports) > 0, false, interactive)
@@ -2148,13 +2220,13 @@ func (c *conv) kickInput() {
 		c.syncAwake()
 		c.passiveTook = nil
 		if cmd == nil {
-			err = c.proc.Send(c.turnInput(strings.Join(append(append(slices.Clone(parts), sentReports...), submitted...), "\n\n")))
+			err = c.proc.Send(c.turnInput(strings.Join(append(append(slices.Clone(parts), sentReports...), submitted...), "\n\n"), whiteboard))
 		} else if text, ok := c.playbookTurn(*cmd); ok {
 			// The runner expands a playbook command itself: the harness
 			// has no such command, and the turn carries the playbook's
 			// body.
 			ordinary = true
-			err = c.proc.Send(c.turnInput(text))
+			err = c.proc.Send(c.turnInput(text, false))
 		} else {
 			err = c.runCommand(*cmd)
 		}

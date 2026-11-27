@@ -2,9 +2,11 @@ package wsagent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 )
 
 // Reattaching to a process that kept running under its holder: rejoin, replay end, and recovery probes.
@@ -127,6 +129,7 @@ func (c *conv) checkReattach() {
 					hp.Detach()
 					c.setStatus(func() { c.proc = nil })
 					c.events = nil
+					c.clearWorkerRejoin()
 					c.update(func(rec *Record) {
 						rec.HolderID, rec.HostPID, rec.HolderSeq = "", 0, 0
 						if !rec.Lead {
@@ -153,11 +156,14 @@ func (c *conv) checkReattach() {
 				} else if _, _, err := c.r.childAdmission(rec, rp.Definition); err != nil {
 					fmt.Fprintf(c.r.opts.Log, "agent %s: rejoin permission admission (advisory; applies on next launch): %v\n", c.rec.ReplyID, err)
 				}
-				c.r.restoreToken(c.record())
-				c.restoreWorkerMCP()
-				c.events = c.proc.Events()
-				if gated, ok := c.proc.(interface{ allowHolderReplay() }); ok {
-					gated.allowHolderReplay()
+				if !c.workerRejoined {
+					c.r.restoreToken(c.record())
+					c.restoreWorkerMCP()
+					c.events = c.proc.Events()
+					if gated, ok := c.proc.(interface{ allowHolderReplay() }); ok {
+						gated.allowHolderReplay()
+					}
+					c.workerRejoined = true
 				}
 			}
 		}
@@ -203,6 +209,9 @@ func (c *conv) replayDone(lost bool) {
 	// and before a worker's lost-turn probe returns early.
 	c.finishAgyNativeReplay(false)
 	c.queryRecoveryUsage()
+	if !c.rec.Lead {
+		c.reconcileWorkerCompactionReplay()
+	}
 	if !c.rec.Lead && c.rec.Parent != nil {
 		if lost && c.rec.TurnOpen {
 			c.wrapHold = true
@@ -393,5 +402,26 @@ func (c *conv) persistSeq() {
 		return
 	}
 	c.seqDirty, c.live.ringDirty = false, false
+	if c.r.meta != nil && !c.r.durableProcess(c.rec.Backend) {
+		c.wmu.Lock()
+		defer c.wmu.Unlock()
+		c.mu.Lock()
+		c.rec.HolderSeq = c.seq
+		id, holderID, seq := c.rec.ReplyID, c.rec.HolderID, c.seq
+		c.mu.Unlock()
+		if holderID != "" && !c.recordDirty {
+			err := c.r.persistSQLiteHolderSeq(id, holderID, seq)
+			if err == nil || errors.Is(err, wsmeta.ErrStaleHolder) {
+				return
+			}
+			if !errors.Is(err, wsmeta.ErrNoRecord) {
+				c.seqDirty = true
+				fmt.Fprintf(c.r.opts.Log, "agent %s: holder cursor write: %v\n", id, err)
+				return
+			}
+		}
+		c.persistRecord()
+		return
+	}
 	c.update(func(rec *Record) { rec.HolderSeq = c.seq })
 }

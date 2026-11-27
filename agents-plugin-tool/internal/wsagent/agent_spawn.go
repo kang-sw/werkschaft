@@ -138,7 +138,7 @@ func (r *Runner) AgentSpawn(caller AgentCaller, req AgentSpawnRequest) (AgentSpa
 	// A close of a holder that ran meanwhile listed its descendants before
 	// this child existed: the child closes with it here.
 	if h := caller.holder; h != nil {
-		if c := r.conv(h.ReplyID); c == nil || c.isClosed() {
+		if c := r.resident(h.ReplyID); c == nil || c.isClosed() {
 			_, _ = r.CloseConversation(st.ID)
 			return AgentSpawnResult{}, errClosed
 		}
@@ -506,7 +506,7 @@ func (r *Runner) AgentList(caller AgentCaller) []AgentChild {
 			Address:   AgentAddress(st.ID),
 			Label:     rec.Label,
 			Tier:      st.Backend,
-			Authority: childLevel(wsdashboard.SessionDir(r.opts.Dir, st.ID)),
+			Authority: r.childLevel(st.ID, wsdashboard.SessionDir(r.opts.Dir, st.ID)),
 			State:     AgentStatus(st),
 			Model:     st.Model,
 			Effort:    st.Effort,

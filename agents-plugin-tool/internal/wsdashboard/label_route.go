@@ -1,6 +1,7 @@
 package wsdashboard
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/kang-sw/devenv/internal/wsmeta"
 )
 
 // The session display label: a name the user gives one session on the
@@ -105,6 +108,56 @@ func writeSessionLabel(sessionDir, label string) error {
 	return writePrivateFile(sessionDir, labelFileName, append(raw, '\n'))
 }
 
+// loadLabelsFromMeta seeds the in-memory label map from the startup SQLite
+// snapshot so session reads stay memory-only after cutover (2000).
+func (d *Daemon) loadLabelsFromMeta(snap *wsmeta.Snapshot) {
+	d.labelMu.Lock()
+	defer d.labelMu.Unlock()
+	d.labels = map[string]string{}
+	if snap == nil {
+		return
+	}
+	for replyID, raw := range snap.Labels {
+		if label, err := cleanLabel(raw); err == nil && label != "" {
+			d.labels[replyID] = label
+		}
+	}
+}
+
+// sessionLabel returns replyID's display label from memory when SQLite-backed,
+// or from label.json in legacy fallback.
+func (d *Daemon) sessionLabel(replyID string) string {
+	if d.meta != nil {
+		d.labelMu.RLock()
+		label := d.labels[replyID]
+		d.labelMu.RUnlock()
+		return label
+	}
+	return readSessionLabel(SessionDir(d.dir, replyID))
+}
+
+// setSessionLabel persists replyID's already-clean label and updates the
+// in-memory cache when SQLite-backed.
+func (d *Daemon) setSessionLabel(replyID, label string) error {
+	if d.meta != nil {
+		d.labelMu.Lock()
+		defer d.labelMu.Unlock()
+		if err := d.meta.SetLabel(context.Background(), replyID, label); err != nil {
+			return err
+		}
+		if d.labels == nil {
+			d.labels = map[string]string{}
+		}
+		if label == "" {
+			delete(d.labels, replyID)
+		} else {
+			d.labels[replyID] = label
+		}
+		return nil
+	}
+	return writeSessionLabel(SessionDir(d.dir, replyID), label)
+}
+
 // handleSessionLabel serves POST /s/<reply-id>/label: it sets or clears the
 // session's display label and answers {"label"}, the label as stored.
 func (d *Daemon) handleSessionLabel(w http.ResponseWriter, r *http.Request, replyID string) {
@@ -139,7 +192,7 @@ func (d *Daemon) handleSessionLabel(w http.ResponseWriter, r *http.Request, repl
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := writeSessionLabel(SessionDir(d.dir, replyID), label); err != nil {
+	if err := d.setSessionLabel(replyID, label); err != nil {
 		fmt.Fprintf(d.log, "dashboard: write label %s: %v\n", replyID, err)
 		http.Error(w, "the label could not be saved", http.StatusInternalServerError)
 		return

@@ -112,8 +112,12 @@ async function until(check, message) {
         assert.equal(await fresh.count(), 1, 'new carrier renders as its own update card');
         assert.equal(await fresh.locator('.wbeffect-details, .wbeffect-values').count(), 0, 'saved-change diagnostics are removed');
         await groupedItems(fresh);
-        assert(!(await fresh.textContent()).includes('PANEL-PAYLOAD-ONLY'), 'panel payload stays on the board');
-        assert.equal(await fresh.locator('.wbeffect-fallback, script, img, iframe, strong').count(), 0, 'a fresh effects card has no fallback, script, image, frame or markup');
+        assert((await fresh.locator('.wbupdate-panel-body').textContent()).includes('PANEL-PAYLOAD-ONLY'), 'panel preview shows bounded panel lead-in');
+        assert.equal(await fresh.locator('.wbupdate-panel-body .wbupdate-preview-badge').count(), 1, 'fresh panel preview collapses unsafe fragments into one badge');
+        assert.equal(await fresh.locator('.wbupdate-panel-body strong').count(), 1, 'fresh panel preview renders safe Markdown emphasis');
+        assert.equal(await fresh.locator('.wbeffect-fallback, script, img, iframe, canvas, style, pre.mermaid').count(), 0, 'a fresh effects card has no fallback or heavy/unsafe embeds');
+        assert.equal(await fresh.locator('.wbupdate-panel-body svg, .wbupdate-log svg').count(), 0, 'fresh preview and log emit no inline svg');
+        assert.equal(await fresh.locator('.wbupdate-log strong').count(), 0, 'log rows remain plain literal text');
         assert((await fresh.locator('.wbupdate-log .wbupdate-text').allTextContents()).includes(update.payload), 'newly arriving hostile log remains exact literal text');
         assert.equal(await page.evaluate(() => typeof window.effectsAttack), 'undefined', 'new effects payload never executes');
       }
@@ -150,10 +154,13 @@ async function until(check, message) {
         await groupedItems(effect());
         const values = await effect().locator('.wbupdate-log .wbupdate-text').allTextContents();
         assert(values.some(s => s.includes('<img src=x onerror="window.effectsAttack=1">') && s.includes('**plain text**')), 'valid log stays literal, including HTML and Markdown syntax');
-        assert.equal(await effect().locator('script, img, iframe, strong').count(), 0, 'effects never execute/render panel HTML or Markdown');
+        assert.equal(await effect().locator('script, img, iframe, canvas, style, pre.mermaid').count(), 0, 'effects never execute or emit heavy/unsafe embeds');
+        assert.equal(await effect().locator('.wbupdate-panel-body svg, .wbupdate-log svg').count(), 0, 'saved preview and log emit no inline svg');
+        assert.equal(await effect().locator('.wbupdate-log strong').count(), 0, 'saved log rows never render Markdown');
         assert.equal(await page.evaluate(() => typeof window.effectsAttack), 'undefined', 'saved effects payload never executes');
         assert((await effect().textContent()).includes('Panel recap only'), 'panel has a recap');
-        assert(!(await effect().textContent()).includes('PANEL-PAYLOAD-ONLY'), 'panel body has no in-chat expansion');
+        assert((await effect().locator('.wbupdate-panel-body').textContent()).includes('PANEL-PAYLOAD-ONLY'), 'panel body shows bounded preview');
+        assert.equal(await effect().locator('.wbupdate-panel-body .wbupdate-preview-badge').count(), 1, 'saved panel script collapsed into HTML preview badge');
         assert((await fallback().textContent()).includes('Details unavailable or unsupported'));
         assert((await fallback().locator('.wbeffect-fallback').textContent()).includes('"v":99'));
         assert.equal(await fallback().locator('img, script, iframe, .wbeffect-values').count(), 0, 'unsupported envelope is escaped fallback, not invented effects');

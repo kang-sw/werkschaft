@@ -31,8 +31,8 @@
 // any scenario failed. To add one, append { name, about, run } to SCENARIOS:
 // run(t) gets the scenario context (makeContext below: a fresh browser
 // context and page, the fixture, and the page helpers). The rail's order and
-// stars are the daemon's (its rail layout), so each scenario starts from an
-// empty layout (resetLayout).
+// stars live in metadata.sqlite (imported once from rail-layout.json at daemon
+// start), so each scenario starts from the initial layout (resetLayout).
 
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
@@ -187,10 +187,14 @@ function killDaemon() {
 process.on("exit", killDaemon);
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { killDaemon(); process.exit(130); });
 
-async function startDaemon(root, env) {
+function buildDaemonBin(root) {
   const bin = path.join(root, "bin", process.platform === "win32" ? "ws-mcp.exe" : "ws-mcp");
   console.log("building ws-mcp from this checkout ...");
   execFileSync("go", ["build", "-o", bin, "./cmd/ws-mcp"], { cwd: TOOL, stdio: "inherit" });
+  return bin;
+}
+async function launchDaemon(bin, root, env) {
+  stopping = false;
   const log = fs.openSync(path.join(root, "daemon.log"), "a");
   daemon = spawn(bin, ["dashboard", "--port", "0"], { cwd: root, env, stdio: ["ignore", log, log] });
   daemon.on("exit", (code, sig) => { if (!stopping) console.error(`rail-headless: the daemon exited early (${code ?? sig}); see ${path.join(root, "daemon.log")}`); });
@@ -212,15 +216,47 @@ async function layoutOp(base, cookie, body) {
   const r = await fetch(base + "/rail/layout", { method: "POST", headers, body: JSON.stringify(body) });
   return { status: r.status, reply: await r.json().catch(() => ({})) };
 }
-// Restore the fixture's admitted worktrees and clear the previous scenario's
-// order and stars. A star and an unstar wake the daemon's cached rail.
-async function resetLayout(base, fx) {
-  const file = path.join(fx.cache, "dashboard", "rail-layout.json");
-  writeJSON(file, fx.initialLayout);
-  for (const op of ["star", "unstar"]) {
-    const a = await layoutOp(base, fx.cookie, { op, rid: fx.rid[fx.live[0]] });
-    assert(a.status === 200 && a.reply.applied === true, `resetting the layout (${op}): HTTP ${a.status} ${JSON.stringify(a.reply)}`);
+// Restore the fixture's initial layout by restarting the isolated daemon on a
+// fresh SQLite database seeded from fx.initialLayout (the live daemon never
+// re-reads rail-layout.json after cutover).
+async function resetLayout(state, fx) {
+  await stopDaemon();
+  const dash = path.join(fx.cache, "dashboard");
+  for (const name of ["metadata.sqlite", "metadata.sqlite-wal", "metadata.sqlite-shm", "metadata.sqlite-journal", "tracker-hooks-v2.json"]) {
+    fs.rmSync(path.join(dash, name), { force: true });
   }
+  writeJSON(path.join(dash, "rail-layout.json"), fx.initialLayout);
+  const next = await launchDaemon(state.bin, state.root, state.env);
+  state.base = next.base;
+  fx.cookie = next.cookie;
+}
+// Stop the daemon so WAL checkpoints and EXCLUSIVE lock releases, verify
+// rail-layout.json was not rewritten post-cutover, read the persisted rail
+// layout directly from metadata.sqlite, and restart the daemon.
+async function readStoredLayout(state, fx) {
+  const dash = path.join(fx.cache, "dashboard");
+  const legacyRaw = fs.readFileSync(path.join(dash, "rail-layout.json"), "utf8");
+  const initialRaw = JSON.stringify(fx.initialLayout, null, 2) + "\n";
+  assert(legacyRaw === initialRaw, "rail-layout.json was modified after SQLite cutover");
+  await stopDaemon();
+  const db = path.join(dash, "metadata.sqlite");
+  const py = `
+import json, sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+order = []
+row = conn.execute("SELECT workspace_order_json FROM rail_layout WHERE id = 1").fetchone()
+if row and row[0]:
+    order = json.loads(row[0])
+workspaces = {}
+for ws, body in conn.execute("SELECT workspace, body_json FROM rail_layout_workspaces"):
+    workspaces[ws] = json.loads(body)
+print(json.dumps({"workspace_order": order, "workspaces": workspaces}))
+`;
+  const out = execFileSync("python3", ["-c", py, db], { encoding: "utf8" });
+  const next = await launchDaemon(state.bin, state.root, state.env);
+  state.base = next.base;
+  fx.cookie = next.cookie;
+  return JSON.parse(out);
 }
 let stopping = false;
 async function stopDaemon() {
@@ -559,8 +595,6 @@ function wtScenario(name, direction) {
     assert(await t.railHash() === hash && same(await wtOrder(t), want), `${name}: stale generation undid group order`);
     await t.open("rail-f-1");
     assert(same(await wtOrder(t), want), `${name}: reload lost order`);
-    const stored = JSON.parse(fs.readFileSync(path.join(t.fx.cache, "dashboard", "rail-layout.json"), "utf8"));
-    assert(same(stored.workspaces[t.fx.dirs.alpha].worktree_order, want), `${name}: stored worktree_order differs`);
     assert(same(await wtContents(t), contents) && same(await t.wsOrder(), ws), `${name}: changed subtree or workspace order`);
     const root = t.page.locator(`${wtSel(t, t.fx.dirs.alpha)} > .wthd .wtroot`);
     assert(await root.count() === 1 && await root.isVisible() && !!(await root.getAttribute("title") || await root.getAttribute("aria-label")), "root header lacks a visible, accessible small root marker");
@@ -572,6 +606,8 @@ function wtScenario(name, direction) {
     await t.page.locator("#rail").screenshot({ path: shot, animations: "disabled" });
     assert(fs.statSync(shot).size > 1000, `${shot} is empty`);
     console.log(`  ${shot}`);
+    const stored = await readStoredLayout(t.fx.daemonState, t.fx);
+    assert(same(stored.workspaces[t.fx.dirs.alpha].worktree_order, want), `${name}: stored worktree_order differs`);
   } };
 }
 // A fixture registration is admitted through the isolated source's directory scan.
@@ -959,9 +995,9 @@ const SCENARIOS = [
         assert(same(await t.wsOrder(), ws), "swap lost downward workspace placement");
         await o.open("rail-n-1");
         assert(same(await o.wsOrder(), ws), "reload lost downward workspace placement");
-        const file = fs.readFileSync(path.join(t.fx.cache, "dashboard", "rail-layout.json"), "utf8");
-        assert(file.includes(t.rid(star)) && file.includes(mover), "the layout file does not hold the star and the workspace order");
         assert((await t.legacy()).every((v) => v === null) && (await o.legacy()).every((v) => v === null), "a layout change was stored locally");
+        const stored = JSON.stringify(await readStoredLayout(t.fx.daemonState, t.fx));
+        assert(stored.includes(t.rid(star)) && stored.includes(mover), "metadata.sqlite does not hold the star and the workspace order");
       } finally {
         await o.context.close();
       }
@@ -1692,13 +1728,16 @@ async function main() {
   try {
     const env = { ...scratchEnv(root), WS_MCP_DASHBOARD_DEV_SOURCE: TOOL };
     const fx = seed(root, env);
-    const { base, cookie } = await startDaemon(root, env);
-    fx.cookie = cookie;
-    console.log(`isolated daemon ${base} (pid ${daemon.pid}), fixture ${root}`);
+    const bin = buildDaemonBin(root);
+    const first = await launchDaemon(bin, root, env);
+    const daemonState = { bin, root, env, base: first.base };
+    fx.daemonState = daemonState;
+    fx.cookie = first.cookie;
+    console.log(`isolated daemon ${daemonState.base} (pid ${daemon.pid}), fixture ${root}`);
     browser = await launchBrowser();
     for (const [i, s] of picked.entries()) {
-      if (i > 0) await resetLayout(base, fx);
-      const t = await makeContext(browser, base, fx, (s.contexts && s.contexts[0]) || {});
+      if (i > 0) await resetLayout(daemonState, fx);
+      const t = await makeContext(browser, daemonState.base, fx, (s.contexts && s.contexts[0]) || {});
       const start = Date.now();
       try {
         await s.run(t, browser);

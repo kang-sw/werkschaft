@@ -330,11 +330,12 @@ func testDowngradeRetirement(t *testing.T, stopError string) {
 }
 
 func TestWorkerMCPRestoreRequiresExactTuple(t *testing.T) {
-	for _, mutation := range []string{"valid", "holder", "url", "environment", "token"} {
+	for _, mutation := range []string{"valid", "holder", "url", "environment", "token", "harness env"} {
 		t.Run(mutation, func(t *testing.T) {
 			r := NewRunner(Options{Dir: t.TempDir(), Backends: map[string]BackendRegistration{BackendCodex: {WorkerHTTPMCP: true}}})
 			r.SetEndpoint("http://127.0.0.1:1")
 			rec := Record{ReplyID: "child", Backend: BackendCodex, Root: "/root", HolderID: "holder", HostPID: 123, MCPToken: "existing-token", MCPURL: r.mcpURL(), MCPHolder: "holder", MCPEnv: map[string]string{EnvAgentSessionKey: "child-key"}}
+			workerEnv := []string{"PATH=/usr/bin", "HOME=/home/test"}
 			switch mutation {
 			case "holder":
 				rec.MCPHolder = "foreign"
@@ -344,18 +345,137 @@ func TestWorkerMCPRestoreRequiresExactTuple(t *testing.T) {
 				rec.MCPEnv = nil
 			case "token":
 				rec.MCPToken = ""
+			case "harness env":
+				workerEnv = nil
 			}
-			c := &conv{r: r, rec: rec}
+			c := &conv{r: r, rec: rec, workerMCPEnv: workerEnv}
 			c.restoreWorkerMCP()
 			hello, _, ok := r.ResolveMCPToken("existing-token")
 			if ok != (mutation == "valid") || c.mcpStale == (mutation == "valid") {
 				t.Fatalf("tuple %s: restored=%v stale=%v", mutation, ok, c.mcpStale)
 			}
-			if ok && hello.Env[EnvAgentSessionKey] != "child-key" {
-				t.Fatal("restored hello lost its worker binding")
+			if ok {
+				if hello.Env[EnvAgentSessionKey] != "child-key" {
+					t.Fatal("restored hello lost its worker binding")
+				}
+				if hello.Env["PATH"] != "/usr/bin" || hello.Env["HOME"] != "/home/test" {
+					t.Fatalf("restored hello lost harness env: PATH=%q HOME=%q", hello.Env["PATH"], hello.Env["HOME"])
+				}
+				if c.workerMCPEnv == nil {
+					t.Fatal("restoreWorkerMCP cleared workerMCPEnv eagerly")
+				}
 			}
 		})
 	}
+}
+
+type statusFailHost struct {
+	HolderHost
+	fail  *atomic.Bool
+	calls *atomic.Int32
+}
+
+func (h statusFailHost) Status(id string) (wsholder.AttachInfo, error) {
+	h.calls.Add(1)
+	if h.fail.Load() {
+		return wsholder.AttachInfo{}, errors.New("status timeout")
+	}
+	return h.HolderHost.Status(id)
+}
+
+func TestHeldWorkerReattachStatusRetryPreservesMCPEnv(t *testing.T) {
+	home := t.TempDir()
+	wantPath := "/test/reattach-bin"
+
+	h, _ := workerRecoveryHarness(t, BackendClaude)
+	prevEnviron := environ
+	environ = func() []string { return []string{"PATH=" + wantPath, "HOME=" + home, "USERPROFILE=" + home} }
+	t.Cleanup(func() { environ = prevEnviron })
+	id, _ := spawnHeldRecoveryWorker(t, h, BackendClaude, "workdir-write")
+	token := h.record(id).MCPToken
+	if token == "" {
+		t.Fatal("held worker has no persisted MCP token")
+	}
+
+	h.runner.Close()
+	h.holders.restart()
+	h.opts.heartbeat = time.Hour
+	failStatus := &atomic.Bool{}
+	failStatus.Store(true)
+	statusCalls := &atomic.Int32{}
+	h.opts.Holders = statusFailHost{HolderHost: h.holders, fail: failStatus, calls: statusCalls}
+	h.startAt("http://127.0.0.1:1")
+	wait(t, "initial holder scan", h.runner.rejoined)
+
+	c := h.runner.conv(id)
+	eventually(t, "first Holders.Status failure reset replayAsked", func() bool {
+		if statusCalls.Load() < 1 {
+			return false
+		}
+		var ready bool
+		c.do(func() { ready = c.replaying && !c.replayAsked && c.workerRejoined && len(c.workerMCPEnv) > 0 })
+		return ready
+	})
+
+	hello1, voidCh, ok := h.runner.ResolveMCPToken(token)
+	if !ok {
+		t.Fatal("MCP token was not restored on first checkReattach pass")
+	}
+	if hello1.Env["PATH"] != wantPath || hello1.Env["HOME"] != home {
+		t.Fatalf("first restore env: PATH=%q HOME=%q", hello1.Env["PATH"], hello1.Env["HOME"])
+	}
+
+	// Retry checkReattach via heartbeat while Holders.Status still fails:
+	// restoreWorkerMCP must not re-run or void the restored token.
+	c.do(c.heartbeat)
+	eventually(t, "second Holders.Status attempt failed", func() bool {
+		if statusCalls.Load() < 2 {
+			return false
+		}
+		var ready bool
+		c.do(func() { ready = c.replaying && !c.replayAsked })
+		return ready
+	})
+	select {
+	case <-voidCh:
+		t.Fatal("heartbeat retry voided the restored MCP token")
+	default:
+	}
+
+	// Clear the status failure and let the next heartbeat finish replay.
+	failStatus.Store(false)
+	c.do(c.heartbeat)
+	eventually(t, "replay completes after Holders.Status recovers", func() bool {
+		var done bool
+		c.do(func() { done = !c.replaying })
+		return done
+	})
+	select {
+	case <-voidCh:
+		t.Fatal("successful retry voided the restored MCP token")
+	default:
+	}
+
+	hello2, _, ok := h.runner.ResolveMCPToken(token)
+	if !ok {
+		t.Fatal("MCP token missing after retry succeeded")
+	}
+	if hello2.Env["PATH"] != wantPath || hello2.Env["HOME"] != home {
+		t.Fatalf("post-retry env: PATH=%q HOME=%q", hello2.Env["PATH"], hello2.Env["HOME"])
+	}
+	if count := strings.Count(h.log.String(), "agent "+id+": worker MCP rejoin: restored"); count != 1 {
+		t.Fatalf("worker MCP restored %d times, want 1", count)
+	}
+
+	// Stopping the process clears the loop-owned rejoin flag and captured env.
+	if _, err := h.runner.Stop(id); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "stop cleared worker rejoin state", func() bool {
+		var cleared bool
+		c.do(func() { cleared = c.proc == nil && !c.workerRejoined && c.workerMCPEnv == nil })
+		return cleared
+	})
 }
 
 func TestDowngradeLeadParentAdoptsLateWorkerReport(t *testing.T) {

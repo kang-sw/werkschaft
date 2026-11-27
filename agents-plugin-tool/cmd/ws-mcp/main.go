@@ -8,12 +8,13 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/kang-sw/devenv/internal/mcp"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
-var version = "0.53.1-dev"
+var version = "0.53.2-dev"
 var sourceCommit = "dev"
 
 func main() {
@@ -64,13 +65,31 @@ func serve(args []string) {
 		fmt.Fprintln(os.Stderr, "ws-mcp serve: only --stdio is supported")
 		os.Exit(2)
 	}
-	server := mcp.NewServer(defaultRoot(*root), version, sourceCommit)
+	var ensureOnce sync.Once
+	ensureDone := make(chan struct{})
+	var server *mcp.Server
+	ensureDaemon := func() {
+		ensureOnce.Do(func() {
+			defer close(ensureDone)
+			if server != nil {
+				serveDashboard(server)
+			}
+		})
+		<-ensureDone
+	}
+	server = mcp.NewServerWithOptions(mcp.ServerOptions{
+		Root:         defaultRoot(*root),
+		Version:      version,
+		SourceCommit: sourceCommit,
+		DirectStdio:  true,
+		EnsureDaemon: ensureDaemon,
+	})
 	startParentDeathWatch(func(ppid int) {
 		mcp.RecordLifecycleEvent("process.parent_exited", map[string]any{"ppid": ppid, "action": "self_terminate"})
 		server.DashboardEnd()
 		os.Exit(0)
 	})
-	go serveDashboard(server)
+	go ensureDaemon()
 	if err := server.ServeStdio(context.Background(), os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "ws-mcp serve: %v\n", err)
 		os.Exit(1)

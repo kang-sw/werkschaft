@@ -931,17 +931,33 @@ func tools() []map[string]any {
 		},
 		{
 			"name":        "mailbox.history",
-			"description": `Read-only: list the last 10 messages this session (its session key) sent or received through mailbox.send and mailbox.recv, newest first, without consuming or changing anything. Use it to recover mail the conversation lost after mailbox.recv already drained it, for example after a rewind. Each entry has its direction (recv or sent), the counterparty address, the time this session sent or drained it, and a title: the first line of the body, skipping a leading peer-lead note line, cut at 120 characters. body: true adds the full body as the session saw it. No other session's history is visible, and it survives compaction under the same session key.`,
+			"description": `Read-only: list recent messages this session (its session key) sent or received via mailbox.send/recv (up to 100 kept in RAM, newest first) without consuming anything. Returns id, direction (recv/sent), counterparty, time, and title (first sender line, cut at 120 chars). Optional direction, peer, since, offset, and limit (default 10) filters apply.`,
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"session_key": stringProperty(sessionKeyPropertyDescription),
-					"limit":       integerProperty("Optional maximum number of entries. Defaults to 10; a value below 1 uses the default."),
-					"body":        boolProperty("Optional. true includes each entry's full body; defaults to false (title only)."),
-					"direction":   enumStringProperty(`Optional filter: "recv", "sent", or "all" (default).`, []string{"recv", "sent", "all"}),
+					"limit":       integerProperty("Max entries (default 10; <1 uses default)."),
+					"offset":      integerProperty("Skip first N matching entries (default 0)."),
+					"body":        boolProperty("Include full body (default false)."),
+					"direction":   enumStringProperty(`Filter: "recv", "sent", or "all" (default).`, []string{"recv", "sent", "all"}),
+					"peer":        stringProperty("Filter by counterparty substring (case-insensitive)."),
+					"since":       stringProperty("Filter at or after RFC3339 or YYYY-MM-DD (UTC)."),
 					"format":      stringProperty(formatPropertyDescription),
 				},
 				"required": []string{"session_key"},
+			},
+		},
+		{
+			"name":        "mailbox.read",
+			"description": `Read-only: read one message's full verbatim body and metadata from this session's in-memory mailbox history by exact id or unambiguous id prefix (without consuming or mutating state).`,
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_key": stringProperty(sessionKeyPropertyDescription),
+					"id":          stringProperty("Message id (full or unambiguous prefix) from mailbox.history or restore."),
+					"format":      stringProperty(formatPropertyDescription),
+				},
+				"required": []string{"session_key", "id"},
 			},
 		},
 		{

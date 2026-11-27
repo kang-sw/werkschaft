@@ -101,7 +101,7 @@ func TestCompactionHardSteerRetriesLongGuidanceAfterNativeRefusal(t *testing.T) 
 }
 
 func TestCompactionHardFallbackContinuesWithRestoreWithoutRequest(t *testing.T) {
-	h := compactionHarness(t)
+	h := nativeCompactionHarness(t)
 	id, holder := h.runLead("work")
 	c := h.runner.conv(id)
 	c.doT(t, func(failf func(string, ...any)) {
@@ -152,7 +152,7 @@ func TestCompactionHardNativeCompletionHandlesQueuedCrossing(t *testing.T) {
 		for _, phase := range []string{wslive.CompactStart, wslive.CompactEnd} {
 			c.handle(Event{Live: &wslive.Event{Kind: wslive.KindCompact, Phase: phase, Trigger: wslive.TriggerAuto}})
 		}
-		if c.compactPending != nil || !c.compactHardHandled || c.compactResume {
+		if c.compactPending != nil || c.compactNoShrink != 1 || c.compactResume {
 			t.Error("native completion did not handle the crossing exactly once")
 		}
 		c.endTurn("", false)
@@ -191,14 +191,77 @@ func TestCompactionHardSteerWorkerRoles(t *testing.T) {
 }
 
 func TestCompactionRatioDefaultsAcrossContextWindows(t *testing.T) {
-	for _, lead := range []bool{false, true} {
-		c := &conv{r: NewRunner(Options{}), rec: Record{Lead: lead}}
-		c.loadCompaction()
-		for _, window := range []int64{128_000, 500_000, 1_000_000} {
-			got := c.usageCompaction(window)
-			if got == nil || got.Soft != window/2 || got.Hard != window*8/10 || len(got.Milestones) != 2 || got.Milestones[0] != window*6/10 || got.Milestones[1] != window*7/10 {
-				t.Fatalf("lead=%v window=%d compaction thresholds %+v", lead, window, got)
+	t.Run("builtin defaults", func(t *testing.T) {
+		for _, lead := range []bool{false, true} {
+			c := &conv{r: NewRunner(Options{}), rec: Record{Lead: lead}}
+			c.loadCompaction()
+			for _, tc := range []struct {
+				window int64
+				soft   int64
+				hard   int64
+				m1, m2 int64
+			}{
+				{window: 128_000, soft: 76_800, hard: 102_400, m1: 85_333, m2: 93_867},
+				{window: 500_000, soft: 180_000, hard: 230_000, m1: 196_667, m2: 213_333},
+				{window: 1_000_000, soft: 180_000, hard: 230_000, m1: 196_667, m2: 213_333},
+			} {
+				got := c.usageCompaction(tc.window)
+				if got == nil || got.Soft != tc.soft || got.Hard != tc.hard || len(got.Milestones) != 2 || got.Milestones[0] != tc.m1 || got.Milestones[1] != tc.m2 {
+					t.Fatalf("lead=%v window=%d compaction thresholds %+v", lead, tc.window, got)
+				}
 			}
 		}
+	})
+	t.Run("explicit ratio overrides", func(t *testing.T) {
+		cfg := wsconfig.Options{CacheHome: t.TempDir(), ConfigHome: t.TempDir()}
+		resolver := wsconfig.NewResolver(cfg, nil, nil, nil)
+		for _, kv := range [][2]string{
+			{"compaction.lead_advisory", "50%"},
+			{"compaction.lead_hard", "80%"},
+			{"compaction.worker_advisory", "50%"},
+			{"compaction.worker_hard", "80%"},
+		} {
+			if err := resolver.Set(kv[0], kv[1], wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		r := NewRunner(Options{Config: cfg})
+		for _, lead := range []bool{false, true} {
+			c := &conv{r: r, rec: Record{Lead: lead}}
+			c.loadCompaction()
+			for _, window := range []int64{128_000, 500_000, 1_000_000} {
+				got := c.usageCompaction(window)
+				if got == nil || got.Soft != window/2 || got.Hard != window*8/10 || len(got.Milestones) != 2 || got.Milestones[0] != window*6/10 || got.Milestones[1] != window*7/10 {
+					t.Fatalf("lead=%v window=%d compaction thresholds %+v", lead, window, got)
+				}
+			}
+		}
+	})
+}
+
+func TestAgyHardCompactionSteersOnceAcrossToolBoundaries(t *testing.T) {
+	p := fakeSteerProc{&fakeProc{}}
+	agyReg := BuiltinBackendRegistrations()[BackendAgy]
+	if !agyReg.Lifecycle.SingleHardCompactionSteer {
+		t.Fatal("AgyBackend registration must set SingleHardCompactionSteer")
+	}
+	c := &conv{
+		r: NewRunner(Options{Backends: map[string]BackendRegistration{BackendAgy: agyReg}}),
+		rec: Record{
+			Backend: BackendAgy,
+			Lead:    true,
+			WSKey:   "k-agy",
+		},
+		proc:        p,
+		turn:        true,
+		compactHard: wsconfig.Threshold{Percent: 80},
+	}
+	c.observeCompaction(*compactionUsage(90_000).Live)
+	c.steerCompaction(false)
+	c.steerCompaction(true)
+	c.steerCompaction(true)
+	c.steerCompaction(true)
+	if len(p.steers) != 1 || !strings.Contains(p.steers[0], "has reached the hard point") {
+		t.Fatalf("agy steers = %q, want single initial hard steer without boundary repeats", p.steers)
 	}
 }

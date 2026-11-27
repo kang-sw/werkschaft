@@ -313,7 +313,7 @@ func TestWerkRejoinsAuthenticatedExecAcrossDaemonReplacement(t *testing.T) {
 		job = view
 		return job.State == execjob.HostedRunning
 	})
-	history, err := wsagent.ReadRecord(state, id)
+	history, err := fixture.readRecord(&old, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +341,7 @@ func TestWerkRejoinsAuthenticatedExecAcrossDaemonReplacement(t *testing.T) {
 	}
 	if binary := os.Getenv("WS_WERK_0511_TEST_BINARY"); binary != "" {
 		fixture.run0511(binary, id, job)
-		after, _ := fixture.activeLog(id)
+		after, _ := fixture.activeLog(nil, id)
 		if string(log) != string(after) {
 			t.Fatal("0.51.1 changed the active transcript")
 		}
@@ -392,7 +392,7 @@ func TestWerkRejoinsAuthenticatedExecAcrossDaemonReplacement(t *testing.T) {
 	}
 	unfence()
 	next.daemon.Close()
-	history, err = wsagent.ReadRecord(state, id)
+	history, err = fixture.readRecord(nil, id)
 	if err != nil || history.LastReportedTurn != turnID {
 		t.Fatalf("the projected delivered report lost its original turn identity: %v", err)
 	}

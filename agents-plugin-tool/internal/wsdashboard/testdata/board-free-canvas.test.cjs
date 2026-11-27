@@ -1136,3 +1136,118 @@ test('evicted-frame reload: shell-held card heights seed the runway and the save
   ctx.WsBoardAnchor.select(nodes[12], { smooth: false });
   assert.deepEqual(taken, ['t:t6']);
 });
+
+test('9. Uncached card entering via scrollTick reconciles real height without overlap and caches 320px sub-eps match', () => {
+  const spec = Array.from({ length: 24 }, (_, i) => ({ topic: `t${i}`, height: 320 }));
+  const w = makeFreeCanvasWorld(spec, { viewH: 800, toolbarH: 40 });
+  const { ctx, nodes, bcol } = w;
+
+  let info = ctx.WsBoardAnchor.windowInfo();
+  assert.ok(info.end < 10, `expected initial window end (${info.end}) before card 10`);
+  assert.equal(ctx.freeHeightCache.has('t:t12'), false);
+  assert.equal(ctx.freeHeightCache.has('t:t13'), false);
+
+  // Simulate tall DOM card at index 12 whose height is not yet in freeHeightCache.
+  nodes[12].offsetHeight = 900;
+
+  // Scroll down via scrollTick until cards 12 and 13 enter the mounted window while viewTopY is above card 12.
+  for (let step = 0; step < 30; step++) {
+    info = ctx.WsBoardAnchor.windowInfo();
+    if (info.end >= 14 && info.start <= 12) break;
+    bcol.scrollTop += 400;
+    ctx.freeOnScroll();
+    w.flushRaf();
+  }
+  info = ctx.WsBoardAnchor.windowInfo();
+  assert.ok(info.start <= 12 && info.end >= 14, `cards 12..14 in window: ${info.start}..${info.end}`);
+  assert.ok(info.anchorIdx < 12, `anchor (${info.anchorIdx}) stays above card 12`);
+  assert.equal(ctx.freeHeightCache.has('t:t12'), false, 'scrollTick leaves uncached card 12 out of cache before RO');
+  assert.equal(info.heightOf(nodes[12]), 320, 'scrollTick places uncached card at 320px fallback initially');
+
+  const pos12Before = info.posOf(nodes[12]);
+  const pos13Before = info.posOf(nodes[13]);
+  const pos14Before = info.posOf(nodes[14]);
+  assert.equal(pos13Before - pos12Before, 320 + 16);
+
+  // ResizeObserver reconciles card 12 (900px) and card 13 (320px exact fallback match).
+  w.cardRO().fire([
+    { target: nodes[12], borderBoxSize: [{ blockSize: 900 }], contentRect: { height: 900 } },
+    { target: nodes[13], borderBoxSize: [{ blockSize: 320 }], contentRect: { height: 320 } },
+  ]);
+
+  assert.equal(ctx.freeHeightCache.get('t:t12'), 900, 'uncached resized card populates freeHeightCache');
+  assert.equal(ctx.freeHeightCache.get('t:t13'), 320, 'uncached 320px card populates freeHeightCache even with dh === 0');
+
+  const infoAfter = ctx.WsBoardAnchor.windowInfo();
+  assert.equal(infoAfter.heightOf(nodes[12]), 900);
+  assert.equal(infoAfter.posOf(nodes[12]), pos12Before, 'below-anchor card 12 keeps its top');
+  assert.equal(infoAfter.posOf(nodes[13]), pos13Before + 580, 'sibling card 13 shifts by +580px');
+  assert.equal(nodes[13].style.top, `${Math.round(pos13Before + 580)}px`);
+  assert.equal(infoAfter.posOf(nodes[14]), pos14Before + 580, 'sibling card 14 shifts by +580px');
+  for (let i = infoAfter.start; i < infoAfter.end; i++) {
+    const gap = infoAfter.posOf(nodes[i + 1]) - (infoAfter.posOf(nodes[i]) + infoAfter.heightOf(nodes[i]));
+    assert.ok(gap >= 16, `zero overlap between mounted cards ${i} and ${i + 1}: gap=${gap}`);
+  }
+});
+
+test('10. Multi-entry RO batch, tall straddling anchor, duplicate batch entry, and cache clear stability', () => {
+  const spec = Array.from({ length: 24 }, (_, i) => ({ topic: `m${i}`, height: 320 }));
+  const w = makeFreeCanvasWorld(spec, { viewH: 800, toolbarH: 40 });
+  const { ctx, nodes, bcol } = w;
+
+  let info = ctx.WsBoardAnchor.windowInfo();
+  for (let step = 0; step < 30; step++) {
+    info = ctx.WsBoardAnchor.windowInfo();
+    if (info.start <= 11 && info.end >= 15) break;
+    bcol.scrollTop += 400;
+    ctx.freeOnScroll();
+    w.flushRaf();
+  }
+  info = ctx.WsBoardAnchor.windowInfo();
+  assert.ok(info.start <= 11 && info.end >= 15, `expected window covering 11..15, got ${info.start}..${info.end}`);
+  assert.equal(ctx.freeHeightCache.has('t:m11'), false);
+  assert.equal(ctx.freeHeightCache.has('t:m12'), false);
+  assert.equal(ctx.freeHeightCache.has('t:m13'), false);
+
+  nodes[11].offsetHeight = 900;
+  nodes[12].offsetHeight = 700;
+  nodes[13].offsetHeight = 800;
+
+  // Position viewTopY inside card 12 (anchor === 12).
+  const anchorYBefore = info.posOf(nodes[12]);
+  bcol.scrollTop = anchorYBefore + 120;
+
+  // Multi-entry batch touching above-anchor (11), anchor (12 + duplicate 12), below-anchor (13).
+  w.cardRO().fire([
+    { target: nodes[11], borderBoxSize: [{ blockSize: 900 }], contentRect: { height: 900 } },
+    { target: nodes[12], borderBoxSize: [{ blockSize: 700 }], contentRect: { height: 700 } },
+    { target: nodes[13], borderBoxSize: [{ blockSize: 800 }], contentRect: { height: 800 } },
+    { target: nodes[12], borderBoxSize: [{ blockSize: 700 }], contentRect: { height: 700 } },
+  ]);
+
+  const afterBatch = ctx.WsBoardAnchor.windowInfo();
+  assert.equal(afterBatch.posOf(nodes[12]), anchorYBefore, 'anchor card keeps exact pos during multi-entry batch');
+  assert.equal(afterBatch.posOf(nodes[11]) + 900 + 16, afterBatch.posOf(nodes[12]), 'above-anchor card 11 abuts anchor cleanly');
+  assert.equal(afterBatch.posOf(nodes[12]) + 700 + 16, afterBatch.posOf(nodes[13]), 'below-anchor card 13 abuts anchor without duplicate double-shift');
+  assert.equal(afterBatch.posOf(nodes[13]) + 800 + 16, afterBatch.posOf(nodes[14]), 'card 14 shifts by exact combined delta');
+
+  // Clear freeHeightCache while cards remain mounted, then straddle tall card 11 past 320px fallback.
+  ctx.freeHeightCache.clear();
+  assert.equal(ctx.WsBoardAnchor.windowInfo().heightOf(nodes[11]), 900, 'freeLaidHeight retains 900px despite cache clear');
+  const y11BeforeGrow = ctx.WsBoardAnchor.windowInfo().posOf(nodes[11]);
+  const y12BeforeGrow = ctx.WsBoardAnchor.windowInfo().posOf(nodes[12]);
+  bcol.scrollTop = y11BeforeGrow + 500;
+  ctx.freeOnScroll();
+  w.flushRaf();
+  assert.equal(ctx.WsBoardAnchor.windowInfo().anchorIdx, 11, 'freeFindTopVisibleIdx picks tall card 11 (900px) straddling viewTopY');
+
+  // Further resize of card 11 computes delta against freeLaidH (900 -> 960 = +60px, not +640px).
+  nodes[11].offsetHeight = 960;
+  w.cardRO().fire([
+    { target: nodes[11], borderBoxSize: [{ blockSize: 960 }], contentRect: { height: 960 } },
+  ]);
+  const afterGrow = ctx.WsBoardAnchor.windowInfo();
+  assert.equal(afterGrow.posOf(nodes[11]), y11BeforeGrow, 'straddling anchor card 11 stays pinned on resize');
+  assert.equal(afterGrow.posOf(nodes[12]), y12BeforeGrow + 60, 'card 12 shifts by +60px rather than falling back to 320px');
+  assert.equal(afterGrow.posOf(nodes[11]) + 960 + 16, afterGrow.posOf(nodes[12]));
+});

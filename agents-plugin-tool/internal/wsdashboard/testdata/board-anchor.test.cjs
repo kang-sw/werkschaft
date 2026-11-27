@@ -32,7 +32,7 @@ const shipped = vars(anchorSrc, ['ANCHOR_STORE', 'ANCHOR_CAP', 'ANCHOR_BOT_0', '
     'freeActive', 'freeWinStart', 'freePos', 'freeCardRO', 'freeScrollRaf', 'FREE_PIN_MS', 'freePin']) +
   funcs(anchorSrc, ['anchorIsBounded', 'anchorScroller', 'anchorCapH', 'anchorToolbarFace', 'anchorRailInset', 'anchorBotReserve', 'anchorCardCap', 'anchorLandingTop',
     'anchorId', 'anchorCards', 'anchorNode', 'anchorCurrent', 'anchorStore', 'anchorMark',
-    'freeEnabled', 'freeTopPad', 'freeMeasureHeight', 'freeCachedHeight', 'freeSetOffWindow', 'freeClearNode', 'freeCancelTimers', 'freeSuspend', 'freeSuspendForOverview', 'freeResumeFromOverview',
+    'freeEnabled', 'freeTopPad', 'freeMeasureHeight', 'freeCachedHeight', 'freeLaidHeight', 'freeSetOffWindow', 'freeClearNode', 'freeCancelTimers', 'freeSuspend', 'freeSuspendForOverview', 'freeResumeFromOverview',
     'freeComputeWindow', 'freeSyncRO', 'freeFindTopVisibleIdx', 'freeApplyOffWindow', 'freeUpdateMoreAndStage', 'freeShiftScroll', 'freeLayout', 'freeOnCardResize', 'freeFlushScrolledOutHeld', 'freeFinishJump', 'freeScrollTick', 'freeIdleRecenter', 'freeScheduleIdle', 'freeOnScroll', 'freeWindowInfo', 'anchorVisibleCards',
     'freeReleasePin', 'freePinned', 'freeStartPinWindow', 'freeOffset', 'freeLand', 'freeLandTarget', 'freePinLayout',
     'anchorAlign', 'anchorWaitFrames', 'anchorSelect', 'anchorStep', 'anchorFallback',

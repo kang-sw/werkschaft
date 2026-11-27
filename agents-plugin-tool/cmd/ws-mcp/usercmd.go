@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"hash/fnv"
 	"io"
 	"path/filepath"
@@ -18,7 +17,6 @@ import (
 type userCommandRunner interface {
 	ComposerOpen(id string) (uint64, error)
 	ComposerRoot(id string) (wsagent.ExecOwner, string, error)
-	CronKnown(id string) bool
 }
 
 // userCommands binds the user commands' registry to the open hosted leads. It
@@ -32,19 +30,15 @@ type userCommands struct {
 	runner userCommandRunner
 }
 
-// openUserCommands opens the registry in the daemon's state directory, drops
-// the agent commands of conversations the runner no longer knows (leaving
-// project-root user commands untouched), and returns the binding.
+// openUserCommands opens the registry in the daemon's state directory and
+// returns the binding. Every command, agent- or user-created, is kept per
+// worktree and outlives the conversation that registered it.
 func openUserCommands(dir string, runner userCommandRunner, onChange func(string), logw io.Writer) (*userCommands, error) {
 	reg, err := wsusercmd.Open(filepath.Join(dir, wsusercmd.StoreName), onChange)
 	if err != nil {
 		return nil, err
 	}
-	u := &userCommands{reg: reg, runner: runner}
-	if err := reg.Reconcile(runner.CronKnown); err != nil {
-		fmt.Fprintf(logw, "dashboard: user commands: drop commands of unknown conversations: %v\n", err)
-	}
-	return u, nil
+	return &userCommands{reg: reg, runner: runner}, nil
 }
 
 // Close releases the registry's store.
@@ -62,7 +56,12 @@ func (u *userCommands) root(replyID string) (string, error) {
 // local shell history per worktree).
 func rootTag(root string) string {
 	h := fnv.New32a()
-	_, _ = h.Write([]byte(filepath.Clean(root)))
+	root = filepath.Clean(root)
+	if runtime.GOOS == "windows" {
+		// Same scope key as the registry's: Windows paths compare without case.
+		root = strings.ToLower(root)
+	}
+	_, _ = h.Write([]byte(root))
 	return strconv.FormatUint(uint64(h.Sum32()), 36)
 }
 

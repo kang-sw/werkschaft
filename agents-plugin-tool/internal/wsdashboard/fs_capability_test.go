@@ -452,3 +452,130 @@ func TestFSCapabilityRefusesDotAndIgnoredPaths(t *testing.T) {
 		t.Errorf("%s: preview of a document = %+v, want its source and no capability", stage, a)
 	}
 }
+
+func TestFSCapabilityPreviewZoomBridgeInjection(t *testing.T) {
+	f := startPageFixture(t, lanMode)
+	_, lan := fsViewers(t, f)
+	writeFile(t, filepath.Join(f.project, "docs", "page.html"), "<h1>HTML-INSIDE</h1>")
+	writeFile(t, filepath.Join(f.project, "docs", "uni.htm"), "<!DOCTYPE html><html><head><title>İK한글</title></head><body><h1>UNI</h1></BODY></HTML>")
+	writeFile(t, filepath.Join(f.project, "docs", "frag.html"), "<p>frag</p>")
+	writeFile(t, filepath.Join(f.project, "docs", "app.mjs"), "export default 1")
+	writeFile(t, filepath.Join(f.project, "art.svg"), "<svg><script>1</script></svg>")
+
+	serveHdr := func(v viewer, target string, hdr map[string]string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req.RemoteAddr = v.peer
+		req.Host = v.host
+		if v.cookie != "" {
+			req.AddCookie(&http.Cookie{Name: lanTokenCookie, Value: v.cookie})
+		}
+		if v.localCookie {
+			val, err := f.d.localhostCookieValue()
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.AddCookie(&http.Cookie{Name: localhostCookieName, Value: val})
+		}
+		for k, val := range hdr {
+			req.Header.Set(k, val)
+		}
+		rec := httptest.NewRecorder()
+		f.d.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+
+	frame := capFrame(t, f, lan, "livesession", "docs/page.html")
+	prefix := strings.TrimSuffix(frame, "docs/page.html")
+
+	// Plain GET without iframe hint or ws_preview=1 returns byte-exact HTML.
+	if rec := serve(f.d, lan, http.MethodGet, frame, ""); rec.Code != http.StatusOK || rec.Body.String() != "<h1>HTML-INSIDE</h1>" {
+		t.Fatalf("plain cap GET = %d %q, want byte-exact", rec.Code, rec.Body.String())
+	}
+
+	// Sec-Fetch-Dest: iframe injects bridge script and preserves strict sandbox CSP.
+	rec := serveHdr(lan, frame, map[string]string{"Sec-Fetch-Dest": "iframe"})
+	if rec.Code != http.StatusOK || rec.Body.String() != "<h1>HTML-INSIDE</h1>"+previewZoomBridgeScript {
+		t.Fatalf("iframe cap GET = %d %q", rec.Code, rec.Body.String())
+	}
+	csp := rec.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "sandbox allow-scripts;") || strings.Contains(csp, "allow-same-origin") {
+		t.Fatalf("unexpected iframe cap CSP %q", csp)
+	}
+
+	// ws_preview=1 injects even without Sec-Fetch-Dest.
+	rec = serveHdr(lan, frame+"?ws_preview=1", nil)
+	if rec.Code != http.StatusOK || rec.Body.String() != "<h1>HTML-INSIDE</h1>"+previewZoomBridgeScript {
+		t.Fatalf("ws_preview=1 cap GET = %d %q", rec.Code, rec.Body.String())
+	}
+
+	// .htm with multi-byte UTF-8 and uppercase </BODY> injects at exact byte offset before </BODY>.
+	uniFrame := prefix + "docs/uni.htm"
+	rec = serveHdr(lan, uniFrame, map[string]string{"Sec-Fetch-Dest": "iframe"})
+	wantUni := "<!DOCTYPE html><html><head><title>İK한글</title></head><body><h1>UNI</h1>" + previewZoomBridgeScript + "</BODY></HTML>"
+	if rec.Code != http.StatusOK || rec.Body.String() != wantUni {
+		t.Fatalf("unicode .htm iframe GET = %d %q, want %q", rec.Code, rec.Body.String(), wantUni)
+	}
+
+	// Fragment without closing tags appends bridge script cleanly.
+	rec = serveHdr(lan, prefix+"docs/frag.html", map[string]string{"Sec-Fetch-Dest": "iframe"})
+	if rec.Code != http.StatusOK || rec.Body.String() != "<p>frag</p>"+previewZoomBridgeScript {
+		t.Fatalf("fragment cap GET = %d %q", rec.Code, rec.Body.String())
+	}
+
+	// Non-HTML capability assets (SVG, JS) never inject bridge script even with iframe + ws_preview=1.
+	for rel, want := range map[string]string{
+		"art.svg":      "<svg><script>1</script></svg>",
+		"docs/app.mjs": "export default 1",
+	} {
+		rec = serveHdr(lan, prefix+rel+"?ws_preview=1", map[string]string{"Sec-Fetch-Dest": "iframe"})
+		if rec.Code != http.StatusOK || rec.Body.String() != want {
+			t.Fatalf("non-HTML %s = %d %q, want byte-exact %q", rel, rec.Code, rec.Body.String(), want)
+		}
+	}
+
+	// View route (/fs/view/) must never inject preview zoom bridge.
+	viewURL := pageRedirect(t, f, lan, "docs/page.html") + "?ws_preview=1"
+	rec = serveHdr(lan, viewURL, map[string]string{"Sec-Fetch-Dest": "iframe"})
+	if rec.Code != http.StatusOK || rec.Body.String() != "<h1>HTML-INSIDE</h1>" {
+		t.Fatalf("/fs/view/ GET = %d %q, want uninjected", rec.Code, rec.Body.String())
+	}
+}
+
+func TestInjectPreviewZoomBridgeEdgeCases(t *testing.T) {
+	if !isHTMLCapExt(".html") || !isHTMLCapExt(".HTM") || isHTMLCapExt(".svg") || isHTMLCapExt(".js") {
+		t.Fatal("unexpected isHTMLCapExt result")
+	}
+
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "body case-insensitive with unicode İ and K",
+			in:   "<html><head><title>İK</title></head><body><p>hi</p></BoDy></html>",
+			want: "<html><head><title>İK</title></head><body><p>hi</p>" + previewZoomBridgeScript + "</BoDy></html>",
+		},
+		{
+			name: "html fallback when body missing",
+			in:   "<html><p>İK</p></HTML>",
+			want: "<html><p>İK</p>" + previewZoomBridgeScript + "</HTML>",
+		},
+		{
+			name: "last closing body wins",
+			in:   "<html><body><textarea></body></textarea><p>end</p></body></html>",
+			want: "<html><body><textarea></body></textarea><p>end</p>" + previewZoomBridgeScript + "</body></html>",
+		},
+		{
+			name: "fragment appends",
+			in:   "<div>hi</div>",
+			want: "<div>hi</div>" + previewZoomBridgeScript,
+		},
+	}
+	for _, tc := range cases {
+		got := string(injectPreviewZoomBridge([]byte(tc.in)))
+		if got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

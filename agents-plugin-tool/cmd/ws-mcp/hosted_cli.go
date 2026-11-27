@@ -86,6 +86,12 @@ func (c *hostedCLI) server(root string) *mcp.Server {
 			if reader, ok := c.host.agents.(mcp.WorktreeChildrenReader); ok {
 				opts.WorktreeChildren = reader
 			}
+			if binding, ok := c.host.agents.(mcp.CallerBindingReader); ok {
+				opts.CallerBinding = binding
+			}
+			if reader, ok := c.host.agents.(mcp.AgentRecordReader); ok {
+				opts.RecordReader = reader
+			}
 			if strings.TrimSpace(c.getenv(wsagent.EnvPiToken)) == "" {
 				opts.Agents = c.host.agents
 			}
@@ -96,6 +102,7 @@ func (c *hostedCLI) server(root string) *mcp.Server {
 	} else {
 		// A manually invoked CLI retains executable-relative resource lookup.
 		opts.Env = nil
+		opts.DirectCall = true
 	}
 	server := mcp.NewServerWithOptions(opts)
 	if c.serverReady != nil {

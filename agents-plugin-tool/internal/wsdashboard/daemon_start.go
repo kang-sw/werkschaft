@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/gofrs/flock"
 	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 	"io"
 	"net"
 	"net/http"
@@ -49,9 +50,16 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	if opts.LogUnderLock != nil {
 		endLog = opts.LogUnderLock()
 	}
+	var (
+		metaStore *wsmeta.Store
+		metaSnap  *wsmeta.Snapshot
+	)
 	started := false
 	defer func() {
 		if !started {
+			if metaStore != nil {
+				_ = metaStore.Close()
+			}
 			if endLog != nil {
 				endLog()
 			}
@@ -67,6 +75,48 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	if err != nil {
 		fmt.Fprintf(logw, "dashboard: minor floor refused start: %v\n", err)
 		return nil, err
+	}
+
+	// Open the single daemon-owned SQLite metadata store under dashboard.lock
+	// (2122) and run the one-time legacy cutover (2125, 2135, 2136).
+	openedMeta, err := wsmeta.Open(opts.Dir, wsmeta.Options{})
+	if err != nil {
+		fmt.Fprintf(logw, "dashboard: open metadata store: %v\n", err)
+		return nil, fmt.Errorf("open metadata store: %w", err)
+	}
+	validators := map[string]wsmeta.LegacyValidator{
+		wsmeta.StoreUsageHistory:      ValidateLegacyUsageHistory,
+		wsmeta.StoreUsageHistoryCodex: ValidateLegacyUsageHistory,
+		wsmeta.StoreUsageHistoryAgy:   ValidateLegacyUsageHistory,
+	}
+	if opts.AgentRecordValidator != nil {
+		validators[wsmeta.StoreAgentRecord] = opts.AgentRecordValidator
+	} else if v, ok := opts.Agents.(AgentRecordValidatorHost); ok {
+		validators[wsmeta.StoreAgentRecord] = v.ValidateLegacyRecord
+	}
+	if _, err := openedMeta.Cutover(context.Background(), wsmeta.CutoverOptions{Validate: validators}); err != nil {
+		_ = openedMeta.Close()
+		if errors.Is(err, wsmeta.ErrCutoverUnsupported) {
+			fmt.Fprintf(logw, "dashboard: metadata SQLite cutover unsupported, staying on legacy files: %v\n", err)
+			if sm, ok := opts.Support.(SupportMetaHost); ok {
+				sm.LoadLegacy()
+			}
+			if opts.OnLegacyFallback != nil {
+				opts.OnLegacyFallback()
+			}
+		} else {
+			fmt.Fprintf(logw, "dashboard: metadata SQLite cutover failed: %v\n", err)
+			return nil, fmt.Errorf("metadata cutover: %w", err)
+		}
+	} else {
+		snap, err := openedMeta.Load(context.Background())
+		if err != nil {
+			_ = openedMeta.Close()
+			fmt.Fprintf(logw, "dashboard: load metadata snapshot: %v\n", err)
+			return nil, fmt.Errorf("load metadata snapshot: %w", err)
+		}
+		metaStore = openedMeta
+		metaSnap = snap
 	}
 
 	listener, err := listen(bindHostFor(opts), portCandidates(opts.Dir, opts.Port))
@@ -145,6 +195,8 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		clipboard:       opts.clipboard,
 		hireWake:        make(chan struct{}, 1),
 		hireDone:        make(chan struct{}),
+		meta:            metaStore,
+		metaSnap:        metaSnap,
 		stop:            make(chan struct{}),
 		done:            make(chan struct{}),
 		endpoint: Endpoint{
@@ -179,7 +231,11 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 			// CLAUDE_CONFIG_DIR or CODEX_HOME overrides.
 			getenv = func(string) string { return "" }
 		}
-		d.planUsage = newPlanUsageStore(opts.Dir, home, getenv)
+		if d.meta != nil {
+			d.planUsage = newPlanUsageStoreFromMeta(opts.Dir, home, getenv, d.meta, d.metaSnap)
+		} else {
+			d.planUsage = newPlanUsageStore(opts.Dir, home, getenv)
+		}
 		d.planUsage.resolveAgy = opts.AgyCommand
 		d.planUsage.harnesses = opts.Harnesses
 	}
@@ -225,7 +281,15 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	d.rail = newRailLister(railRead, func() { d.broker.wake(railListRepoKey) }, d.stop)
 	d.workspaces = openWorkspaceStore(opts.WorkspacesFile)
 	d.wsAdmission = openWorkspaceAdmissionStore(WorkspaceAdmissionFilePath(opts.WorkspacesFile))
-	d.layout = openRailLayoutStore(opts.Dir)
+	if d.meta != nil {
+		d.layout = openRailLayoutStoreFromMeta(opts.Dir, d.meta, d.metaSnap)
+		d.loadMemosFromMeta(d.metaSnap)
+		d.loadLabelsFromMeta(d.metaSnap)
+		d.loadAckChecksFromMeta(d.metaSnap)
+		d.loadHiringFromMeta(d.metaSnap)
+	} else {
+		d.layout = openRailLayoutStore(opts.Dir)
+	}
 	d.rail.admission = newRailAdmissionTracker(d.layout)
 	d.pathHost = daemonPathHost()
 	if d.workspaces != nil {
@@ -252,11 +316,33 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 			delay = ackCheckDelay
 		}
 		d.acks = &ackChecker{delay: delay, run: d.checkAnswers}
-		d.index = NewIndex(IndexOptions{Dir: opts.Dir, Source: d.source, Log: logw, OnChange: d.sessionChanged, OnRemove: d.auditSessionRemoved})
+		idxOpts := IndexOptions{Dir: opts.Dir, Source: d.source, Log: logw, OnChange: d.sessionChanged, OnRemove: d.auditSessionRemoved}
+		if d.meta != nil {
+			idxOpts.LabelLookup = d.sessionLabel
+		}
+		if h, ok := opts.Agents.(interface{ OwnsLive(replyID string) bool }); ok {
+			// The runner's sessions never rewrite their heartbeat on disk:
+			// their liveness is its memory.
+			idxOpts.OwnedLive = h.OwnsLive
+		}
+		d.index = NewIndex(idxOpts)
 	}
 	d.openAudit(logw)
 	d.server = &http.Server{Handler: d.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	accepting := make(chan struct{})
+	// Bind runner/support/hiring hooks onto the single daemon-owned SQLite
+	// store before Agents.Start and before Serve accepts any request.
+	if d.meta != nil {
+		if am, ok := d.agents.(AgentMetaHost); ok {
+			am.SetMeta(d.meta, d.metaSnap)
+		}
+		if sm, ok := d.support.(SupportMetaHost); ok {
+			sm.LoadFromMeta(d.meta, d.metaSnap)
+		}
+		if opts.OnMetaReady != nil {
+			opts.OnMetaReady(d, d.meta, d.metaSnap)
+		}
+	}
 	// The runner takes its change hook before the first request can reach
 	// it.
 	if d.agents != nil {
@@ -286,6 +372,11 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		}
 		d.closeAudit()
 		_ = wslive.UnpinRingsUnder(filepath.Join(d.dir, sessionsDirName))
+		if metaStore != nil {
+			_ = metaStore.Close()
+			metaStore = nil
+			d.meta = nil
+		}
 		_ = listener.Close()
 	}
 	if err := updateMinorFloor(opts.Dir, opts.Version, floor, hasFloor, opts.BelowFloor); err != nil {
@@ -321,6 +412,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	}()
 	go d.hireLoop()
 	if d.index != nil {
+		d.pollDone = make(chan struct{})
 		go d.poll(opts.PollInterval)
 	} else {
 		d.pokeHires()

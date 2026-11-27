@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 func TestOneShotClaudeArgsIsolation(t *testing.T) {
@@ -102,8 +104,8 @@ func TestOneShotRoundTripNeutralCwd(t *testing.T) {
 	if len(lines) != 4 {
 		t.Fatalf("reply = %q", got)
 	}
-	wantDir, _ := filepath.EvalSymlinks(os.TempDir())
-	gotDir, _ := filepath.EvalSymlinks(lines[0])
+	wantDir := wstestutil.CanonicalPath(os.TempDir())
+	gotDir := wstestutil.CanonicalPath(lines[0])
 	if gotDir != wantDir {
 		t.Errorf("cwd = %q, want %q", gotDir, wantDir)
 	}

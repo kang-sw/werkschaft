@@ -77,7 +77,7 @@ func (c *conv) handle(ev Event) {
 			c.reply = ev.Live.Text
 		}
 		if quiet && c.replaying && ev.Live.Kind == wslive.KindCompact {
-			c.replayCompaction(*ev.Live)
+			c.replayCompactionSeq(*ev.Live, ev.Seq)
 		} else if !quiet {
 			c.compactEvent(*ev.Live)
 		}
@@ -98,6 +98,7 @@ func (c *conv) handle(ev Event) {
 			}
 		}
 		if !quiet && ev.ToolBoundary {
+			c.escalateHardOverflow()
 			c.steerCompaction(true)
 		}
 		if !quiet && ev.Live.Kind == wslive.KindCompact && ev.Live.Phase != wslive.CompactStart {
@@ -434,7 +435,10 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 	}
 	if ran && !compactCommand && !c.replaying {
 		c.clearCompactionSteerReplies()
-		c.compactContinueAtIdle = turnErr == "" && c.summaryReason != wslive.TurnAborted
+		// A daemon hard-cap interrupt aborts the turn yet still resumes it.
+		hardInt := c.compactHardInterrupt
+		c.compactHardInterrupt = false
+		c.compactContinueAtIdle = turnErr == "" && (c.summaryReason != wslive.TurnAborted || hardInt)
 		c.compactIdleInternal = c.compactInternalTurn
 		if c.compactStage1Active {
 			resume, internal, auto, usageLimited := c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited
@@ -449,7 +453,9 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 				c.publishCompaction(false)
 			}
 		} else {
+			c.compactHardForce = hardInt
 			c.stageHardCompaction(c.compactContinueAtIdle, c.compactIdleInternal)
+			c.compactHardForce = false
 		}
 	}
 	// Observers must see the terminal diagnostic in the same emission as
@@ -831,6 +837,7 @@ func (c *conv) processGone() {
 		hp.Detach()
 	}
 	c.setStatus(func() { c.proc = nil })
+	c.clearWorkerRejoin()
 	c.update(func(rec *Record) {
 		rec.HolderID, rec.HostPID, rec.HolderSeq = "", 0, 0
 		if !rec.Lead {
@@ -909,6 +916,7 @@ func (c *conv) processEnded() {
 		c.background, c.monitors = nil, nil
 	})
 	c.clearProcessMCP()
+	c.clearWorkerRejoin()
 	if hadBackgroundTasks || hadBgGrace || c.heldRes != nil {
 		// A child's held background turn settles and its parent's idle
 		// timer re-arms once the process exits and clears background work

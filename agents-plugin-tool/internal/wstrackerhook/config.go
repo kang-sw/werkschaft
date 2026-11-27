@@ -8,12 +8,19 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/wsmeta"
 )
 
-// FileName is the hooks file in the dashboard daemon's state directory.
+// FileName is the legacy hooks file in the dashboard daemon's state directory.
 // Only the machine's own user writes it: no config layer, and nothing a
 // store holds, can choose what runs.
-const FileName = "tracker-hooks.json"
+const FileName = wsmeta.LegacyTrackerHooksConfigName
+
+// WitnessFileName is the hooks file read after the SQLite metadata cutover
+// (2125): an older daemon does not read it, so a downgrade cannot run hooks
+// against retired tracker-hooks/*.json state files.
+const WitnessFileName = wsmeta.TrackerHooksWitnessName
 
 // Hook scopes.
 const (

@@ -3,6 +3,7 @@ package wsdashboard
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -16,6 +17,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 	"github.com/kang-sw/devenv/internal/wswhiteboard"
 )
 
@@ -100,11 +102,40 @@ type AgentAuditHost interface {
 	SetAuditSink(wsaudit.Sink)
 }
 
+// AgentMetaHost is an optional AgentHost that binds the daemon's shared SQLite
+// metadata store and startup snapshot before Start.
+type AgentMetaHost interface {
+	SetMeta(store *wsmeta.Store, snap *wsmeta.Snapshot)
+}
+
+// AgentRecordValidatorHost is an optional AgentHost that supplies the legacy
+// agent.json validator for the one-time SQLite cutover.
+type AgentRecordValidatorHost interface {
+	ValidateLegacyRecord(rel, replyID string, raw []byte) error
+}
+
+// SupportMetaHost is an optional SupportHost that defers loading support state
+// until StartDaemon acquires dashboard.lock and settles SQLite vs legacy mode.
+type SupportMetaHost interface {
+	LoadFromMeta(store *wsmeta.Store, snap *wsmeta.Snapshot)
+	LoadLegacy()
+}
+
 // AgentForgetter is an optional AgentHost that drops a closed or handed-off
 // conversation when the daemon purges its session directory. ForgetClosed
 // returns whether the daemon may remove the directory.
 type AgentForgetter interface {
 	ForgetClosed(replyID string) bool
+}
+
+// AgentForgetChecker is an optional AgentForgetter that can check whether a
+// closed or handed-off conversation is eligible to be forgotten without
+// mutating runner, durable, or SQLite state. Callers check CanForgetClosed
+// before removing the session directory and call ForgetClosed only after
+// removal succeeds.
+type AgentForgetChecker interface {
+	AgentForgetter
+	CanForgetClosed(replyID string) bool
 }
 
 // AgentHistoryPurger prepares archive deletion before Git removes the
@@ -133,6 +164,46 @@ type AgentSessionMeta struct {
 // metadata for the session view and rail.
 type AgentSessionMetaHost interface {
 	SessionMeta(replyID string) (AgentSessionMeta, bool)
+}
+
+// AgentRecordParent mirrors wsagent.ParentRef without importing wsagent.
+type AgentRecordParent struct {
+	Kind    string `json:"kind"`
+	ReplyID string `json:"reply_id"`
+}
+
+// AgentRecordSnapshot is the daemon-owned metadata snapshot served over the
+// authenticated loopback /meta/* routes and read in-process by page rendering
+// and registry pruning. WSKey is retained in memory for caller authentication
+// and never serialized onto HTTP responses.
+type AgentRecordSnapshot struct {
+	ReplyID            string             `json:"reply_id,omitempty"`
+	WSKey              string             `json:"-"`
+	Profile            string             `json:"profile,omitempty"`
+	ResolvedDefinition json.RawMessage    `json:"resolved_definition,omitempty"`
+	Backend            string             `json:"backend,omitempty"`
+	Root               string             `json:"root,omitempty"`
+	Model              string             `json:"model,omitempty"`
+	Effort             string             `json:"effort,omitempty"`
+	Lead               bool               `json:"lead,omitempty"`
+	ClosedAt           string             `json:"closed_at,omitempty"`
+	HandedOffAt        string             `json:"handed_off_at,omitempty"`
+	HolderID           string             `json:"holder_id,omitempty"`
+	HostPID            int                `json:"host_pid,omitempty"`
+	Tier               string             `json:"tier,omitempty"`
+	Parent             *AgentRecordParent `json:"parent,omitempty"`
+}
+
+// AgentMetadataHost is an optional AgentHost that answers in-memory agent
+// record lookups without reading agent.json from disk.
+type AgentMetadataHost interface {
+	AgentRecord(replyID string) (AgentRecordSnapshot, bool)
+}
+
+// MetaPruner is an optional LiveHost that prunes expired registrations for its
+// own state directory using daemon-owned agent metadata in memory.
+type MetaPruner interface {
+	PruneRegistrationsFor(stateDir string, now time.Time, retention time.Duration) (pruned int, handled bool)
 }
 
 // AgentRoutePrefix is where the daemon mounts AgentHost.Handler.
@@ -366,6 +437,15 @@ func (s agentSessions) ReadClosedTopics(reg Registration, lang string, from, n i
 func (s agentSessions) BoardArchive(reg Registration) ([]byte, bool, error) {
 	if bs, ok := s.inner.(BoardArchiveSource); ok && !reg.Agent {
 		return bs.BoardArchive(reg)
+	}
+	return nil, false, nil
+}
+
+// SetBoardHold forwards to the configured source; an agent conversation has
+// no board.
+func (s agentSessions) SetBoardHold(reg Registration, itemID int, held bool) ([]int, bool, error) {
+	if hs, ok := s.inner.(BoardHoldSource); ok && !reg.Agent {
+		return hs.SetBoardHold(reg, itemID, held)
 	}
 	return nil, false, nil
 }

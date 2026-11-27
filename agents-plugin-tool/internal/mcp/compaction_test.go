@@ -77,9 +77,9 @@ func TestCompactionRegistryManifestParity(t *testing.T) {
 		if builtinConfigDefaults()[key] != def {
 			t.Fatal(key)
 		}
-		if key == wsconfig.ItemCompactionLeadMode {
-			if def != wsconfig.CompactionModeNative {
-				t.Fatalf("%s default = %q, want %q", key, def, wsconfig.CompactionModeNative)
+		if key == wsconfig.ItemCompactionLeadMode || key == wsconfig.ItemCompactionWorkerMode {
+			if def != wsconfig.CompactionModeWS {
+				t.Fatalf("%s default = %q, want %q", key, def, wsconfig.CompactionModeWS)
 			}
 			for _, v := range []string{wsconfig.CompactionModeNative, wsconfig.CompactionModeWS} {
 				if _, err := normalizeTuneScalar(e, v, true); err != nil {
@@ -246,11 +246,11 @@ func TestCompactionConfigTuneLiveReloadsRunningConversation(t *testing.T) {
 	// Tune global hard threshold to Y = 55% via config.tune without restarting.
 	tune(3, map[string]any{"key": "compaction.lead_hard", "value": "55%", "harness": "*", "scope": "global"})
 
-	// Next threshold check uses Y=55% and queues /compact on the same running process.
+	// Next threshold check uses Y=55% and queues default ws-mode stage-1 compaction on the same running process.
 	backend.emit(wsagent.Event{Live: &wslive.Event{Kind: wslive.KindStatus, Context: &wslive.UsageContext{Tokens: &tokens, Window: 100000}}})
 	lifecycleEventually(t, "compact sent at tuned threshold Y=55%", func() bool {
 		_, sends := backend.counts()
-		return len(sends) == 2 && sends[1] == "/compact"
+		return len(sends) == 2 && strings.Contains(sends[1], "Call ws/compact directly with lead_summary")
 	})
 	if starts, _ := backend.counts(); starts != 1 {
 		t.Fatalf("conversation restarted on live reload: starts=%d, want 1", starts)
@@ -268,7 +268,8 @@ func TestCompactionConfigTuneProjectShadowsGlobalLiveReload(t *testing.T) {
 		}
 	}
 
-	// Keep 60% below advisory so this test exercises the hard threshold.
+	// Opt out to native lead compaction and keep 60% below advisory so this test exercises the hard /compact threshold.
+	tune(0, map[string]any{"key": "compaction.lead_mode", "value": wsconfig.CompactionModeNative, "harness": "*", "scope": "global"})
 	tune(1, map[string]any{"key": "compaction.lead_advisory", "value": "70%", "harness": "*", "scope": "global"})
 	tune(2, map[string]any{"key": "compaction.lead_hard", "value": "90%", "harness": "*", "scope": "project"})
 	runner, backend := startCompactionTestRunner(t, s)

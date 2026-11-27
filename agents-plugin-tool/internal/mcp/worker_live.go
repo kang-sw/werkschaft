@@ -57,12 +57,12 @@ func (s *Server) workerRowKey(id string) string {
 	if ok {
 		return key
 	}
-	dir, err := s.dashboard.stateDir()
-	if err != nil {
+	reader := s.agentRecordReader()
+	if reader == nil {
 		return ""
 	}
-	rec, err := wsagent.ReadRecord(dir, id)
-	if err != nil || rec.WSKey == "" {
+	rec, found := reader.RecordByReplyID(id)
+	if !found || rec.WSKey == "" {
 		return ""
 	}
 	s.workerRowKeys.mu.Lock()

@@ -331,8 +331,9 @@ func heldWorkerCompletesAcrossReplacement(t *testing.T, backend, authority strin
 	if whileDown {
 		eventually(t, "the finished worker asleep", func() bool {
 			rec := h.record(id)
-			return rec.HolderID == "" && h.holders.opCount("stop "+holder) == 1
+			return rec.HolderID == "" && rec.MCPToken == "" && h.holders.opCount("stop "+holder) == 1
 		})
+		h.quiesce(id)
 	}
 	after := h.record(id)
 	if after.TurnOpen || after.LastTurn == nil || after.LastTurn.Result.Status != TurnDone {
@@ -638,8 +639,9 @@ func agyHeldFinalAndSuccessor(t *testing.T, viaReport bool) {
 		jsonLine(map[string]any{"jsonrpc": "2.0", "id": successor, "result": map[string]any{"stopReason": "end_turn"}}))
 	eventually(t, "the successor settled", func() bool {
 		rec := h.record(parent)
-		return !rec.TurnOpen && rec.HeldTurn == nil && rec.LastTurn != nil && rec.LastTurn.Result.Message == "successor ack"
+		return !rec.TurnOpen && rec.HeldTurn == nil && rec.LastTurn != nil && rec.LastTurn.Result.Message == "successor ack" && rec.ReportID != "" && rec.LastReportedTurn == rec.ReportID
 	})
+	h.quiesce(parent)
 	var held, acks int
 	for _, rep := range got.lead() {
 		switch {

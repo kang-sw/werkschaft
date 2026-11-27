@@ -12,6 +12,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 func TestSettingsInteractionBrowser(t *testing.T) {
@@ -35,10 +36,7 @@ func TestSettingsProductionBrowser(t *testing.T) {
 	t.Setenv("WS_CONFIG_HOME", home)
 	t.Setenv("WS_RSRC_DEV_CHECKOUT", "")
 	t.Setenv("WS_MCP_DASHBOARD_DEV_SOURCE", "")
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := wstestutil.CanonicalTempDir(t)
 	if out, err := exec.Command("git", "-C", root, "init", "-q", "-b", "main").CombinedOutput(); err != nil {
 		t.Fatalf("initialize session worktree: %v\n%s", err, out)
 	}

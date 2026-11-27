@@ -115,7 +115,13 @@ func writeStructured(t *testing.T, path string, values map[string]string) {
 	for k, v := range values {
 		members[k] = json.RawMessage(v)
 	}
-	raw, err := json.Marshal(map[string]any{"schema_version": 1, "structured_overrides": members})
+	doc := map[string]any{"schema_version": 1}
+	// Keep scalar overrides an earlier Set wrote (testConfig's worker mode).
+	if prior, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(prior, &doc)
+	}
+	doc["structured_overrides"] = members
+	raw, err := json.Marshal(doc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +137,14 @@ func writeStructured(t *testing.T, path string, values map[string]string) {
 // files unless a test writes them.
 func testConfig(t *testing.T) wsconfig.Options {
 	t.Helper()
-	return wsconfig.Options{CacheHome: t.TempDir(), ConfigHome: t.TempDir()}
+	opts := wsconfig.Options{CacheHome: t.TempDir(), ConfigHome: t.TempDir()}
+	// Existing worker compaction tests exercise the native path; ws-mode
+	// worker rotation has its own tests (worker_compaction_test.go).
+	r := wsconfig.NewResolver(opts, nil, nil, nil)
+	if err := r.Set(wsconfig.ItemCompactionWorkerMode, wsconfig.CompactionModeNative, wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
+		t.Fatal(err)
+	}
+	return opts
 }
 
 func TestResolveProfileThroughWorkingRoot(t *testing.T) {

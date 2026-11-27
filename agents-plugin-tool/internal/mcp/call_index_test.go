@@ -8,11 +8,28 @@ import (
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wsusercmd"
 )
+
+// leadOnlyUserCommands is a user command host whose every conversation is an
+// open lead: it makes a fixture connection list the user command tools, as a
+// hosted lead's connection does.
+type leadOnlyUserCommands struct{}
+
+func (leadOnlyUserCommands) Lead(string) error { return nil }
+func (leadOnlyUserCommands) Register(string, wsusercmd.Input) (wsusercmd.Command, wsusercmd.Outcome, error) {
+	return wsusercmd.Command{}, 0, nil
+}
+func (leadOnlyUserCommands) Unregister(string, string) error { return nil }
+
+func bindUserCommandsLead(s *Server) {
+	s.userCommands = func() UserCommandHost { return leadOnlyUserCommands{} }
+}
 
 func TestCallIndexMatchesConnectionDiscovery(t *testing.T) {
 	s, f := hostedBackendConnection(t, wsagent.BackendAgy, descriptorRegistrations())
 	defer s.Close()
+	bindUserCommandsLead(s)
 	reg := descriptorRegistrations()[wsagent.BackendAgy]
 	render := HostedRender{Harness: reg.ManualHarness, PlaybookCommands: reg.PlaybookCommands, ToolNameScheme: reg.ToolNameScheme, CallFallback: reg.CallFallback, DirectTools: reg.DirectTools}
 	rendered, err := RenderLeadManual(os.Environ(), f.root, render, f.hosted)
@@ -87,6 +104,7 @@ func TestCallIndexOnlyWithDescriptorFlag(t *testing.T) {
 func TestCallIndexMarksCutoverExecToolsDirect(t *testing.T) {
 	s, f := hostedBackendConnection(t, wsagent.BackendAgy, descriptorRegistrations())
 	defer s.Close()
+	bindUserCommandsLead(s)
 	hosted := &execjob.Hosted{}
 	s.execCutover = wsagent.BackendAgy
 	s.exec = func() *execjob.Hosted { return hosted }
@@ -180,8 +198,8 @@ func TestCallIndexMarksCompactDirectOnAgyLead(t *testing.T) {
 		name string
 		mode string
 	}{
-		{name: "default native", mode: wsconfig.CompactionModeNative},
-		{name: "compaction.lead_mode=ws", mode: wsconfig.CompactionModeWS},
+		{name: "default ws", mode: wsconfig.CompactionModeWS},
+		{name: "compaction.lead_mode=native", mode: wsconfig.CompactionModeNative},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f := hostedBackendConnection(t, wsagent.BackendAgy, regs)
@@ -220,5 +238,38 @@ func TestCallIndexMarksCompactDirectOnAgyLead(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestHostedRenderLeadManualListsUserCommandTools: the daemon's render of a
+// hosted lead's manual lists the user command tools in the callable index (a
+// callFallback harness reaches them only through that index) without making
+// them direct tools.
+func TestHostedRenderLeadManualListsUserCommandTools(t *testing.T) {
+	setupWorkflowManualNoteEnv(t)
+	root := t.TempDir()
+	initGit(t, root)
+	key, err := NewAgentKeyStore().MintLead(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, err := RenderLeadManual(os.Environ(), root, HostedRender{Harness: "agy", CallFallback: true, DirectTools: []string{"agenda.set"}}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, index, ok := strings.Cut(text, "## Callable ws tools\n\n")
+	if !ok {
+		t.Fatalf("no callable index:\n%.400s", text)
+	}
+	for _, name := range []string{registerUserCommandTool, unregisterUserCommandTool} {
+		line := ""
+		for _, l := range strings.Split(index, "\n") {
+			if strings.HasPrefix(l, name+" - ") {
+				line = l
+			}
+		}
+		if line == "" {
+			t.Fatalf("%s missing from the callable index:\n%s", name, index)
+		}
 	}
 }

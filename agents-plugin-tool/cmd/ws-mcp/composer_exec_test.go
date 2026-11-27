@@ -15,6 +15,7 @@ import (
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 // composerRunnerFake is the runner side of a composer launch: one open lead.
@@ -123,10 +124,7 @@ func openComposerFixtureAnyShell(t *testing.T, gen uint64) (*composerExec, *comp
 	sessions.recordingSessions.notices = make(chan string, 8)
 	d := openHostedExecDaemonWith(t, state, 30*time.Second, sessions)
 	t.Cleanup(func() { d.stopAll(); d.close() })
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := wstestutil.CanonicalTempDir(t)
 	runner := &composerRunnerFake{target: wsagent.ComposerTarget{Owner: wsagent.ExecOwner{ID: "lead", Gen: gen, Lead: true}, Root: root, Environ: os.Environ()}, events: &events}
 	return &composerExec{hosted: d.hosted, runner: runner}, runner, sessions, d, root, &events
 }

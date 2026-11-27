@@ -6,7 +6,7 @@ kind: print
 
 The dashboard daemon runs local commands on tracker events, such as a
 desktop notification or a mail. Write or edit the hook file only when the
-user asks. The file is `tracker-hooks.json` in the daemon's state
+user asks. The file is `tracker-hooks-v2.json` in the daemon's state
 directory, `dashboard/` under the ws cache root (`$WS_CACHE_HOME` when
 set), next to `endpoint.json`:
 

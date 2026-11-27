@@ -297,7 +297,7 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		return State{}, err
 	}
 	if lead != nil && lead.PermissionLevel != "" {
-		if err := writePermissionSelection(dir, lead.PermissionLevel); err != nil {
+		if err := r.writePermissionSelection(rec.ReplyID, dir, lead.PermissionLevel); err != nil {
 			return State{}, err
 		}
 		if mode := r.permissionPolicy(rec.Backend).nativeMode(lead.PermissionLevel); mode != "" {
@@ -305,11 +305,11 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		}
 	}
 	if spawn != nil && spawn.PermissionLevel != "" {
-		writer := writeGenericPermissionSelection
+		writer := r.writeGenericPermissionSelection
 		if spawn.delegatedAuthority {
-			writer = writeDelegatedPermissionSelection
+			writer = r.writeDelegatedPermissionSelection
 		}
-		if err := writer(dir, spawn.PermissionLevel); err != nil {
+		if err := writer(rec.ReplyID, dir, spawn.PermissionLevel); err != nil {
 			return State{}, err
 		}
 	}
@@ -319,7 +319,7 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		}
 	}
 	if lead != nil && lead.HireRequestID != "" {
-		if err := wsdashboard.MarkHired(r.opts.Dir, rec.ReplyID, lead.HireRequestID, lead.HireLabel); err != nil {
+		if err := r.markHired(rec.ReplyID, lead.HireRequestID, lead.HireLabel); err != nil {
 			return State{}, err
 		}
 	}

@@ -603,7 +603,7 @@ func TestIndexSnapshotAgeIsNotAChange(t *testing.T) {
 // ended registration is re-read by the first refresh after it ended and
 // then skipped while unchanged; a nudge still re-reads it, a resumed
 // session is re-read again, a session whose project root is gone is still
-// dropped, and one that only stopped heartbeating is never skipped.
+// dropped, and one that only stopped heartbeating is skipped while unchanged (cold).
 func TestRefreshSkipsAnAppliedEndedRegistration(t *testing.T) {
 	dir := t.TempDir()
 	project := t.TempDir()
@@ -638,8 +638,8 @@ func TestRefreshSkipsAnAppliedEndedRegistration(t *testing.T) {
 	if got := reads("alpha"); got != before+1 {
 		t.Fatalf("an applied ended registration was re-read %d times by later refreshes", got-before-1)
 	}
-	if got := reads("bravo"); got != bravoBefore+2 {
-		t.Fatalf("a session that only stopped heartbeating was read %d times by 2 refreshes", got-bravoBefore)
+	if got := reads("bravo"); got != bravoBefore {
+		t.Fatalf("a cold unchanged session that stopped heartbeating was read %d times by 2 refreshes", got-bravoBefore)
 	}
 
 	if !idx.Nudge("alpha", project) {

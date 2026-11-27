@@ -389,7 +389,7 @@
     if (rp.kind === "settings") found = r && r.querySelector(".settings-toggle");
     else if (rp.kind === "usage") found = topEl && topEl.querySelector(".usage-toggle");
     else if (rp.kind === "sess") found = h && h.querySelector(".host.hbtn");
-    else if (rp.kind === "row") {
+    else if (rp.kind === "row" || rp.kind === "confirm") {
       var row = r && WsRail.refind(r, { cls: "rs", attr: "data-rid", val: rp.ws });
       found = row && row.querySelector(".rl");
     } else if (r) q(rp.kind === "lead" ? ".rnew" : '.radd[data-add="' + rp.kind + '"]', r).forEach(function (b) {
@@ -422,14 +422,14 @@
   function railPopSync() {
     if (!rp.P) return;
     var b = railPopBtn();
-    if (!b || (rp.kind === "row" && !b.getClientRects().length)) { railPopClose(false); return; }
-    if (rp.kind !== "row") b.setAttribute("aria-expanded", "true");
+    if (!b || ((rp.kind === "row" || rp.kind === "confirm") && !b.getClientRects().length)) { railPopClose(false); return; }
+    if (rp.kind !== "row" && rp.kind !== "confirm") b.setAttribute("aria-expanded", "true");
     railPopPlace();
   }
   function railPopClose(refocus) {
     if (!rp.P) return;
     if (window.WsHoldConfirm) window.WsHoldConfirm.cancelAll();
-    var P = rp.P, b = railPopBtn(), row = rp.kind === "row";
+    var P = rp.P, b = railPopBtn(), row = rp.kind === "row" || rp.kind === "confirm";
     P.close();
     P.el.hidden = true;
     rp = { P: null, kind: "", ws: "", btn: null };
@@ -437,6 +437,55 @@
       if (!row) b.setAttribute("aria-expanded", "false");
       if (refocus) b.focus();
     }
+  }
+  var rpConf = null;
+  function rpConfMake() {
+    var P = { spec: null };
+    var el = P.el = rpPop("");
+    el.classList.add("d-rconf");
+    var hd = el.appendChild(mk("div", "sphd"));
+    var title = hd.appendChild(mk("span"));
+    var ctx = hd.appendChild(mk("span", "spctx"));
+    var note = el.appendChild(mk("p", "d-rconf-note"));
+    var risks = el.appendChild(mk("ul", "d-rconf-risks"));
+    var row = el.appendChild(mk("div", "d-rconf-row"));
+    var cancel = row.appendChild(rpBtn("d-rconf-btn", wsT("js.confirm.cancel")));
+    var ok = row.appendChild(rpBtn("d-rconf-btn", ""));
+    cancel.addEventListener("click", function () { railPopClose(true); });
+    ok.addEventListener("click", function () {
+      var sp = P.spec;
+      if (!sp) return;
+      railPopClose(false);
+      sp.onConfirm();
+    });
+    P.open = function (sp) {
+      P.spec = sp;
+      var del = sp.targetSection === "del";
+      el.setAttribute("aria-label", sp.title);
+      title.textContent = sp.title;
+      ctx.textContent = sp.label || sp.rid || "";
+      note.textContent = sp.note || "";
+      note.hidden = !sp.note;
+      risks.textContent = "";
+      (sp.risks || []).forEach(function (k) { risks.appendChild(mk("li", null, wsT(k))); });
+      risks.hidden = !(sp.risks && sp.risks.length);
+      ok.textContent = sp.acceptLabel;
+      ok.className = "d-rconf-btn " + (del ? "d-rconf-danger" : "go");
+      cancel.textContent = wsT("js.confirm.cancel");
+    };
+    P.close = function () { P.spec = null; };
+    P.focus = function () { var del = P.spec && P.spec.targetSection === "del"; requestAnimationFrame(function () { (del ? cancel : ok).focus(); }); };
+    return P;
+  }
+  function railConfirmOpen(spec, anchorEl) {
+    railPopClose(false);
+    var P = rpConf || (rpConf = rpConfMake());
+    if (!P.el.parentNode) doc.body.appendChild(P.el);
+    rp = { P: P, kind: "confirm", ws: spec.rid, btn: anchorEl };
+    P.open(spec);
+    P.el.hidden = false;
+    railPopPlace();
+    P.focus();
   }
   // railPopOpen opens kind's popover ("ws", "wt", "lead": a new session, or
   // "sess": the viewed session's menu) against the button btn; the open
@@ -1215,7 +1264,7 @@
     // the target before the popover's own handlers redraw it.
     doc.addEventListener("click", function (e) {
       var t = e.target;
-      if (!rp.P || !t || !t.closest) return;
+      if (rdrag || rdragged || !rp.P || !t || !t.closest) return;
       if (window.WsHoldConfirm && (window.WsHoldConfirm.isHolding() || window.WsHoldConfirm.wasJustCancelled())) return;
       if (rp.P.el.contains(t) || t.closest(".radd, .rnew, .hbtn, .usage-toggle, .settings-toggle, .pmdlg, .pmhead")) return;
       railPopClose(false);

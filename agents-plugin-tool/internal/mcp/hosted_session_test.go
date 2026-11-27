@@ -232,13 +232,16 @@ func TestHostedWorkflowManualHoldsTheSessionToItsKey(t *testing.T) {
 	setupWorkflowManualNoteEnv(t)
 	root := t.TempDir()
 	initGit(t, root)
+	records := newTestRecordReader()
 	s := NewServer(root, "test")
+	s.recordReader = records
 	hosted, _ := parseLoginResponse(t, callLogin(t, s, 1, root, nil))
 	otherLead, _ := parseLoginResponse(t, callLogin(t, s, 2, root, nil))
 	ferruleChild, _ := parseLoginResponse(t, callLogin(t, s, 3, root, map[string]any{"parent_session_key": hosted}))
 	child := spawnedLeadKey(t, s, root, hosted, wsagent.ParentLead)
 	hostedSessionEnv(t, hosted)
 	s = NewServer(root, "test")
+	s.recordReader = records
 	before := sessionKeyFileCount(t, s)
 
 	for i, tc := range []struct {

@@ -2,9 +2,15 @@
   doc.addEventListener("click", function (e) {
     var t = e.target;
     if (!t || !t.closest) return;
-    if (cchips && inBoard(t)) syncChips();
+    if (cchips && inBoard(t)) syncChips(t);
     var u = t.closest("[data-unchip]");
-    if (u) { var uid = u.getAttribute("data-unchip"); dropChip(uid); setItem(uid, null); renderChips(); return; }
+    if (u) {
+      var uid = u.getAttribute("data-unchip");
+      var hadEl = setItem(uid, null);
+      dropChip(uid, false, false, hadEl);
+      renderChips();
+      return;
+    }
     u = t.closest("[data-untchip]");
     if (u) { clearTopicNote(u.getAttribute("data-untchip")); renderChips(); return; }
     u = t.closest("[data-unmchip]");
@@ -42,8 +48,8 @@
     if (th) { setTheme(th.getAttribute("data-theme-set")); return; }
     var b = t.closest(".gmenu [data-input]");
     if (b) { save(INPUT_KEY, b.getAttribute("data-input")); setInput(b.getAttribute("data-input")); if (shell) shFrames.forEach(shSettings); return; }
-    b = t.closest(".gmenu [data-layout]");
-    if (b) { save(LAYOUT_KEY, b.getAttribute("data-layout")); setLayout(b.getAttribute("data-layout")); if (shell) shFrames.forEach(shSettings); return; }
+    b = t.closest(".gmenu [data-extra-motion]");
+    if (b) { setExtraMotion(b.getAttribute("data-extra-motion"), true); return; }
     if (!live) return;
     b = t.closest("#tabbar [data-tab]");
     if (b) { setTab(b.getAttribute("data-tab")); return; }

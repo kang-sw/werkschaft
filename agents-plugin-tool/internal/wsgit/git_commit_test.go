@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -248,13 +251,42 @@ func TestCommitRefusesBranchMismatch(t *testing.T) {
 	}
 }
 
+const wsgitExitCodeHelperEnv = "WSGIT_TEST_EXIT_CODE"
+
+func TestWSGitExitCodeHelper(t *testing.T) {
+	raw := os.Getenv(wsgitExitCodeHelperEnv)
+	if raw == "" {
+		return
+	}
+	code, err := strconv.Atoi(raw)
+	if err != nil {
+		os.Exit(2)
+	}
+	os.Exit(code)
+}
+
+func wsgitExitCodeError(t *testing.T, code int) error {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestWSGitExitCodeHelper$")
+	cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%d", wsgitExitCodeHelperEnv, code))
+	err := cmd.Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("exit helper returned %v, want *exec.ExitError", err)
+	}
+	if exitErr.ExitCode() != code {
+		t.Fatalf("exit helper exited %d, want %d", exitErr.ExitCode(), code)
+	}
+	return err
+}
+
 // TestCommitRefusesDetachedHead pins the detached-HEAD arm of the guard:
-// `git symbolic-ref --quiet` fails with empty output on a detached HEAD, which
+// `git symbolic-ref --quiet` exits with code 1 on a detached HEAD, which
 // Commit treats as no current branch and refuses before any staging mutation.
 func TestCommitRefusesDetachedHead(t *testing.T) {
 	runner := &sequenceRunner{
 		outs: [][]byte{nil},
-		errs: []error{errors.New("exit status 1")}, // symbolic-ref --quiet exits non-zero on detached HEAD
+		errs: []error{wsgitExitCodeError(t, 1)}, // symbolic-ref --quiet exits 1 on detached HEAD
 	}
 	_, err := (Client{Runner: runner}).Commit(context.Background(), "/repo", CommitOptions{
 		Paths:          []string{"src/file.go"},
@@ -270,6 +302,70 @@ func TestCommitRefusesDetachedHead(t *testing.T) {
 	}
 	if len(runner.calls) != 1 {
 		t.Fatalf("runner.calls = %#v, want exactly 1 (branch guard) — a detached HEAD must refuse before any staging mutation", runner.calls)
+	}
+}
+
+// TestCommitPropagatesSymbolicRefExecutionError verifies that non-detached git
+// execution errors (missing git binary, non-1 exit codes) are propagated instead
+// of being misreported as a detached HEAD.
+func TestCommitPropagatesSymbolicRefExecutionError(t *testing.T) {
+	cases := []struct {
+		name      string
+		err       error
+		wantErrIs error
+	}{
+		{name: "exec.ErrNotFound", err: exec.ErrNotFound, wantErrIs: exec.ErrNotFound},
+		{name: "exit status 128", err: wsgitExitCodeError(t, 128)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &sequenceRunner{
+				outs: [][]byte{nil},
+				errs: []error{tc.err},
+			}
+			_, err := (Client{Runner: runner}).Commit(context.Background(), "/repo", CommitOptions{
+				Paths:          []string{"src/file.go"},
+				Title:          "feat: guarded",
+				AIContext:      []string{"User intent: guarded commit."},
+				ExpectedBranch: "develop",
+			})
+			if err == nil {
+				t.Fatal("Commit did not return an error")
+			}
+			if !strings.Contains(err.Error(), "resolve current branch") {
+				t.Fatalf("Commit error = %v, want resolve current branch context", err)
+			}
+			if strings.Contains(strings.ToLower(err.Error()), "detached") {
+				t.Fatalf("Commit misreported symbolic-ref error as detached HEAD: %v", err)
+			}
+			if tc.wantErrIs != nil && !errors.Is(err, tc.wantErrIs) {
+				t.Fatalf("Commit error = %v, want errors.Is(_, %v)", err, tc.wantErrIs)
+			}
+			if len(runner.calls) != 1 {
+				t.Fatalf("runner.calls = %#v, want exactly 1 (branch guard)", runner.calls)
+			}
+		})
+	}
+}
+
+func TestCommitMergePinsRecheckFailsClosedOnSymbolicRefError(t *testing.T) {
+	pins := &commitMergePins{head: strings.Repeat("a", 40)}
+	runner := &sequenceRunner{
+		outs: [][]byte{nil},
+		errs: []error{exec.ErrNotFound},
+	}
+	err := pins.recheck(context.Background(), runner, "/repo", "ours")
+	if err == nil {
+		t.Fatal("recheck did not fail closed on symbolic-ref error")
+	}
+	if !strings.Contains(err.Error(), "branch changed during merge admission") {
+		t.Fatalf("recheck error = %v, want merge admission branch-changed refusal", err)
+	}
+	if !errors.Is(err, exec.ErrNotFound) {
+		t.Fatalf("recheck error = %v, want wrapped exec.ErrNotFound", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("runner.calls = %#v, want 1", runner.calls)
 	}
 }
 

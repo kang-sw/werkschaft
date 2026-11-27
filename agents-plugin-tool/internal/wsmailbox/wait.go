@@ -442,3 +442,13 @@ func NamedInboxStatus(target WaitTarget) (present, owned bool, err error) {
 	}
 	return true, p.Owner != "" && p.Owner == target.SessionKey, nil
 }
+
+// NewPeeker resolves target once and returns its non-draining check: the
+// peek Wait repeats, for a caller that shares one wake over many targets.
+func NewPeeker(target WaitTarget) (func() (WaitResult, error), error) {
+	resolved, err := resolveWaitTarget(target)
+	if err != nil {
+		return nil, err
+	}
+	return resolved.peek, nil
+}

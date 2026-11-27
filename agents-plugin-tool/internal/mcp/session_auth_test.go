@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 // sessionKeyPattern validates the word-chain session key format: 3 lowercase words.
@@ -734,7 +735,7 @@ func TestRenderPathMintedChildRecordsLeadParent(t *testing.T) {
 		t.Fatalf("rendered child scope = %q, want %q", childEntry.scope, roleLeaf)
 	}
 	// A root_override binds to its resolved path.
-	if want := canonicalTestPath(t, rsrcRoot); childEntry.root != want {
+	if want := wstestutil.CanonicalPath(rsrcRoot); childEntry.root != want {
 		t.Fatalf("rendered child root = %q, want resolved root_override %q", childEntry.root, want)
 	}
 }

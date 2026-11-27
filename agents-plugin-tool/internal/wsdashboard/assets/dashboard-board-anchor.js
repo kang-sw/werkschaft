@@ -28,7 +28,7 @@
   var freeActive = false, freeSuspended = false;
   var freeWinStart = 0, freeWinEnd = -1, freeAnchorIdx = 0;
   // Heights outlive an evicted frame in the shell (dashboard-session-view.js).
-  var freePos = new Map(), freeHeightCache = typeof boardHeightCache === "function" ? boardHeightCache() : new Map();
+  var freePos = new Map(), freeLaidH = new Map(), freeHeightCache = typeof boardHeightCache === "function" ? boardHeightCache() : new Map();
   var freeCardRO = null, freeObserved = new Set(), freeParkedByUs = new WeakSet(), freeDeferredCollapse = new Set();
   var freeScrollRaf = 0, freeIdleTimer = 0, freeJump = null, freeStagePending = false, freeTopRebasePending = false, freeScrollGen = 0, freeLastScrollTop = 0, freeLastShift = 0, freePendingScrollEnd = false;
   var freePin = null, freePinTimer = 0, freePinRaf = 0;
@@ -237,6 +237,7 @@
       openDetails: snap.openDetails,
       stashed: null
     });
+    if (typeof wbUpdateInvalidateVirtual === "function") wbUpdateInvalidateVirtual(k);
     sec.setAttribute("data-wb-virtual", "1");
     return true;
   }
@@ -317,6 +318,7 @@
     rec.stashed = incomingSec.cloneNode(true);
     rec.children = null;
     virtualStore.set(k, rec);
+    if (typeof wbUpdateInvalidateVirtual === "function") wbUpdateInvalidateVirtual(k);
     return true;
   }
 
@@ -324,11 +326,15 @@
     if (k === null || k === undefined) return null;
     var rec = virtualStore.get(k) || null;
     virtualStore.delete(k);
+    if (typeof wbUpdateInvalidateVirtual === "function") wbUpdateInvalidateVirtual(k);
     return rec;
   }
 
   function virtualDropCollapsed(k) {
-    if (k !== null && k !== undefined) virtualStore.delete(k);
+    if (k !== null && k !== undefined) {
+      virtualStore.delete(k);
+      if (typeof wbUpdateInvalidateVirtual === "function") wbUpdateInvalidateVirtual(k);
+    }
   }
 
   function virtualHydrate(sec, opts) {
@@ -337,7 +343,10 @@
     var k = topicKey(sec);
     var rec = k !== null ? virtualStore.get(k) : null;
     sec.removeAttribute("data-wb-virtual");
-    if (k !== null) virtualStore.delete(k);
+    if (k !== null) {
+      virtualStore.delete(k);
+      if (typeof wbUpdateInvalidateVirtual === "function") wbUpdateInvalidateVirtual(k);
+    }
     if (!virtualNearSet.has(sec)) virtualExemptSet.add(sec);
     if (!rec) return false;
     var immediate = !!(opts && opts.immediate);
@@ -519,7 +528,11 @@
     }
     var pruned = 0;
     Array.from(virtualStore.keys()).forEach(function (k) {
-      if (!present.has(k)) { virtualStore.delete(k); pruned++; }
+      if (!present.has(k)) {
+        virtualStore.delete(k);
+        if (typeof wbUpdateInvalidateVirtual === "function") wbUpdateInvalidateVirtual(k);
+        pruned++;
+      }
     });
     return pruned;
   }
@@ -879,6 +892,13 @@
   function freeMeasureHeight(n) {
     if (!n) return FREE_FALLBACK_H;
     var key = anchorId(n), h = 0;
+    var pageHiddenNow = !!(doc && (doc.hidden || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-animation-paused")))) ||
+      (typeof shHidden !== "undefined" && !!shHidden);
+    if (pageHiddenNow) {
+      if (typeof freeHeightCache !== "undefined") freeHeightCache._skippedHidden = true;
+      if (key !== null && freeHeightCache.has(key)) return freeHeightCache.get(key);
+      return FREE_FALLBACK_H;
+    }
     if (!n.hasAttribute || !n.hasAttribute("data-wb-offwindow")) {
       h = n.offsetHeight || 0;
       if (!(h > 0) && n.getBoundingClientRect) {
@@ -897,6 +917,10 @@
     var key = anchorId(n);
     if (key !== null && freeHeightCache.has(key)) return freeHeightCache.get(key);
     return FREE_FALLBACK_H;
+  }
+  function freeLaidHeight(n) {
+    if (freeLaidH.has(n)) return freeLaidH.get(n);
+    return freeCachedHeight(n);
   }
   function freeSetOffWindow(n, mode) {
     if (!n || n.nodeType !== 1) return;
@@ -939,6 +963,7 @@
       freeObserved.delete(n);
     }
     freePos.delete(n);
+    freeLaidH.delete(n);
   }
   function freeCancelTimers() {
     var wasScrolling = !!(freeScrollRaf || freeIdleTimer);
@@ -979,6 +1004,7 @@
     for (var i = 0; i < list.length; i++) freeClearNode(list[i]);
     freePos.forEach(function (_, n) { freeClearNode(n); });
     freePos.clear();
+    freeLaidH.clear();
     if (board && board.querySelector) {
       var moreBtn = board.querySelector("button.closed-more");
       if (moreBtn) {
@@ -1005,16 +1031,16 @@
     var start = Math.max(0, a - FREE_BASE_WINDOW);
     var end = Math.min(n - 1, a + FREE_BASE_WINDOW);
     var aboveH = 0;
-    for (var i = a - 1; i >= start; i--) aboveH += freeCachedHeight(list[i]) + FREE_CARD_GAP;
+    for (var i = a - 1; i >= start; i--) aboveH += freeLaidHeight(list[i]) + FREE_CARD_GAP;
     while (start > 0 && (a - start) < FREE_MAX_WINDOW && aboveH < need) {
       start--;
-      aboveH += freeCachedHeight(list[start]) + FREE_CARD_GAP;
+      aboveH += freeLaidHeight(list[start]) + FREE_CARD_GAP;
     }
     var belowH = 0;
-    for (var j = a + 1; j <= end; j++) belowH += freeCachedHeight(list[j]) + FREE_CARD_GAP;
+    for (var j = a + 1; j <= end; j++) belowH += freeLaidHeight(list[j]) + FREE_CARD_GAP;
     while (end < n - 1 && (end - a) < FREE_MAX_WINDOW && belowH < need) {
       end++;
-      belowH += freeCachedHeight(list[end]) + FREE_CARD_GAP;
+      belowH += freeLaidHeight(list[end]) + FREE_CARD_GAP;
     }
     return { start: start, end: end };
   }
@@ -1046,7 +1072,7 @@
     for (var i = s; i <= e; i++) {
       var n = list[i], y = freePos.get(n);
       if (y === undefined) continue;
-      var h = freeCachedHeight(n);
+      var h = freeLaidHeight(n);
       if (y + h > viewTopY + 0.5) {
         best = i;
         break;
@@ -1100,6 +1126,7 @@
         freeObserved.delete(n);
       }
       freePos.delete(n);
+      freeLaidH.delete(n);
       if (p.exempt) {
         freeSetOffWindow(n, "parked");
         if (p.desc.isTopic) virtualExemptSet.add(n);
@@ -1288,9 +1315,9 @@
     }
     for (var mi = start; mi <= end; mi++) mountSlot(mi);
 
-    // On active scroll ticks use cached/fallback heights instead of synchronous
+    // On active scroll ticks use laid/cached/fallback heights instead of synchronous
     // offsetHeight reflows; freeCardRO reconciles real heights on the next frame.
-    var measureFn = scrollTick ? freeCachedHeight : freeMeasureHeight;
+    var measureFn = scrollTick ? freeLaidHeight : freeMeasureHeight;
     var heights = Object.create(null);
     for (var hi = start; hi <= end; hi++) heights[hi] = measureFn(list[hi]);
     var need = Math.max(1, viewH) * FREE_VIEWPORT_COVERAGE;
@@ -1318,7 +1345,13 @@
     var fullPass = !wasActive || !!opts.forceFull;
     if (fullPass) {
       freePos.forEach(function (_, fn) {
-        if (!anchorCache || !anchorCache.indexByNode.has(fn)) freePos.delete(fn);
+        if (!anchorCache || !anchorCache.indexByNode.has(fn)) {
+          freePos.delete(fn);
+          freeLaidH.delete(fn);
+        }
+      });
+      freeLaidH.forEach(function (_, fn) {
+        if (!freePos.has(fn)) freeLaidH.delete(fn);
       });
       for (var oi = 0; oi < list.length; oi++) {
         if (oi >= start && oi <= end) continue;
@@ -1404,6 +1437,7 @@
     for (var wi = start; wi <= end; wi++) {
       var card = list[wi];
       freePos.set(card, ys[wi]);
+      freeLaidH.set(card, heights[wi]);
       if (!card.hasAttribute || !card.hasAttribute("data-max")) {
         var topStr = Math.round(ys[wi]) + "px";
         if (card.style && card.style.top !== topStr) card.style.top = topStr;
@@ -1457,9 +1491,15 @@
       var newH = (bb ? bb.blockSize : 0) || card.offsetHeight || (e.contentRect ? e.contentRect.height : 0);
       if (!(newH > 0)) continue;
       var key = anchorId(card);
-      var oldH = key !== null && freeHeightCache.has(key) ? freeHeightCache.get(key) : newH;
+      var oldH = freeLaidH.has(card)
+        ? freeLaidH.get(card)
+        : (key !== null && freeHeightCache.has(key) ? freeHeightCache.get(key) : FREE_FALLBACK_H);
       var dh = newH - oldH;
-      if (Math.abs(dh) < FREE_RESIZE_EPS) continue;
+      if (Math.abs(dh) < FREE_RESIZE_EPS) {
+        if (key !== null && !freeHeightCache.has(key)) freeHeightCache.set(key, newH);
+        continue;
+      }
+      freeLaidH.set(card, newH);
       if (key !== null) freeHeightCache.set(key, newH);
       mutated = true;
       if (k < anchor) {
@@ -1505,7 +1545,7 @@
     }
     if (freeWinEnd === list.length - 1) {
       var lastCard = list[freeWinEnd], yEnd = freePos.get(lastCard);
-      if (yEnd !== undefined) freeUpdateMoreAndStage(board, list, freeWinEnd, yEnd, freeCachedHeight(lastCard), !!freeIdleTimer);
+      if (yEnd !== undefined) freeUpdateMoreAndStage(board, list, freeWinEnd, yEnd, freeLaidHeight(lastCard), !!freeIdleTimer);
     }
     freePinLayout();
   }
@@ -1547,7 +1587,7 @@
     var viewH = anchorSized.h || col.clientHeight || window.innerHeight || 600;
     var yFirst = freePos.get(list[freeWinStart]);
     var lastCard = list[freeWinEnd];
-    var yLastBottom = (freePos.get(lastCard) || 0) + freeCachedHeight(lastCard);
+    var yLastBottom = (freePos.get(lastCard) || 0) + freeLaidHeight(lastCard);
     var needSlide = nextAnchor !== freeAnchorIdx ||
       (freeWinStart > 0 && yFirst !== undefined && (top - yFirst) < viewH * 0.75) ||
       (freeWinEnd < list.length - 1 && (yLastBottom - (top + viewH)) < viewH * 0.75) ||
@@ -1561,7 +1601,7 @@
       if (yCur !== undefined) {
         var curTop = top + (didLayout ? freeLastShift : 0);
         var curTopY = curTop + anchorSized.padTop + inset;
-        var span = Math.max(1, freeCachedHeight(nextNode) + FREE_CARD_GAP);
+        var span = Math.max(1, freeLaidHeight(nextNode) + FREE_CARD_GAP);
         var frac = Math.max(0, Math.min(0.999, (curTopY - yCur) / span));
         boardDialScroll(Math.max(0, Math.min(list.length - 1, nextAnchor + frac)));
       }
@@ -1612,7 +1652,7 @@
             if (!freePinned()) freeShiftScroll(col, topShift);
             var endNode = list[freeWinEnd], endY = freePos.get(endNode);
             if (endY !== undefined) {
-              freeUpdateMoreAndStage(board, list, freeWinEnd, endY, freeCachedHeight(endNode), false);
+              freeUpdateMoreAndStage(board, list, freeWinEnd, endY, freeLaidHeight(endNode), false);
             }
             freePinLayout();
           }
@@ -1621,7 +1661,7 @@
       }
       if (freeStagePending) {
         var tail = list[freeWinEnd], tailY = freePos.get(tail);
-        if (tailY !== undefined) freeUpdateMoreAndStage(board, list, freeWinEnd, tailY, freeCachedHeight(tail), false);
+        if (tailY !== undefined) freeUpdateMoreAndStage(board, list, freeWinEnd, tailY, freeLaidHeight(tail), false);
         freePinLayout();
       }
       if (freeWinStart === 0 || freeWinEnd === list.length - 1) return;
@@ -1629,7 +1669,7 @@
       var lastNode = list[freeWinEnd];
       var yLast = freePos.get(lastNode);
       if (yFirst === undefined || yLast === undefined) return;
-      var yLastBottom = yLast + freeCachedHeight(lastNode);
+      var yLastBottom = yLast + freeLaidHeight(lastNode);
       var stageH = parseFloat(board.style.minHeight) || FREE_RUNWAY_HEIGHT;
       if (yFirst >= FREE_RUNWAY_MARGIN && yLastBottom <= stageH - FREE_RUNWAY_MARGIN) return;
       var anchorNodeCur = list[freeAnchorIdx];
@@ -1682,10 +1722,13 @@
         return idx === undefined ? -1 : idx;
       },
       posOf: function (n) { return freePos.has(n) ? freePos.get(n) : undefined; },
-      heightOf: function (n) { return freeCachedHeight(n); }
+      heightOf: function (n) { return freeLaidHeight(n); }
     };
   }
   function anchorVisibleCards() {
+    if ((doc && (doc.hidden || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-animation-paused")))) || (typeof shHidden !== "undefined" && !!shHidden)) {
+      return [];
+    }
     if (!freeActive) {
       var cur = anchorCurrent();
       return cur ? [cur] : [];
@@ -1699,7 +1742,7 @@
     for (var i = Math.max(0, freeWinStart); i <= Math.min(list.length - 1, freeWinEnd); i++) {
       var c = list[i], y = freePos.get(c);
       if (y === undefined) continue;
-      var h = freeCachedHeight(c);
+      var h = freeLaidHeight(c);
       if (y + h > topY + 0.5 && y < botY - 0.5) out.push(c);
     }
     if (!out.length) {
@@ -2180,6 +2223,20 @@
       boardEl.addEventListener("click", onBoardExemptEvt, { passive: true });
     }
     col.wbScrollOwner = true;
+    if (doc && doc.addEventListener) {
+      doc.addEventListener("ws-page-visibility", function () {
+        var hiddenNow = !!(doc.hidden || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-animation-paused"))) ||
+          (typeof shHidden !== "undefined" && !!shHidden);
+        if (!hiddenNow && typeof freeHeightCache !== "undefined" && freeHeightCache._skippedHidden) {
+          freeHeightCache._skippedHidden = false;
+          var bcol = $("bcol");
+          if (bcol) {
+            anchorApplySizes(bcol);
+            anchorSettle(null);
+          }
+        }
+      });
+    }
     anchorApplySizes(col);
     anchorSettle(null);
     if (!freeActive && typeof virtualReconcile === "function") virtualReconcile({ full: true });

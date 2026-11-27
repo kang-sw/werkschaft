@@ -3,10 +3,6 @@ package mcp
 import (
 	"fmt"
 	"strings"
-
-	"github.com/kang-sw/devenv/internal/wsagent"
-	"github.com/kang-sw/devenv/internal/wsdashboard"
-	"github.com/kang-sw/devenv/internal/wsmailbox"
 )
 
 // hostedLineageDepth bounds hostedDescendant's lineage walks: real chains
@@ -42,7 +38,14 @@ func (s *Server) hostedSessionKeyRule(tool string, args map[string]any) string {
 		return ""
 	}
 	key = strings.TrimSpace(key)
-	if key == hosted || s.hostedDescendant(hosted, key) {
+	if key == hosted {
+		return ""
+	}
+	descendant, err := s.hostedDescendant(hosted, key)
+	if err != nil {
+		return fmt.Sprintf("%s: %v", tool, err)
+	}
+	if descendant {
 		return ""
 	}
 	return hostedDescendantRefusal(tool, hosted, key).Error()
@@ -62,50 +65,25 @@ func toolDeclaresSessionKey(tool string) bool {
 	return ok
 }
 
-// hostedDescendant checks runner authority first (agent.spawn keys have no
-// key-record parent), then the session-key parent chain for keys minted by
-// tools such as playbook.render and worktree.acquire.
-func (s *Server) hostedDescendant(hosted, key string) bool {
+// hostedDescendant checks the local session-key parent chain first (keys
+// minted by tools such as playbook.render and worktree.acquire), then asks the
+// daemon's runner authority for agent.spawn lineage.
+func (s *Server) hostedDescendant(hosted, key string) (bool, error) {
 	cacheKey := [2]string{hosted, key}
 	if _, ok := s.hostedDescendants.Load(cacheKey); ok {
-		return true
+		return true, nil
 	}
-	if func() bool {
-		rec, ok := s.callerRecord(key)
-		if !ok {
-			return false
-		}
-		dir, err := s.dashboard.stateDir()
-		if err != nil {
-			return false
-		}
-		target := wsmailbox.ReplyID(hosted)
-		for depth := 0; rec.Parent != nil && depth < hostedLineageDepth; depth++ {
-			parent := rec.Parent.ReplyID
-			if parent == target {
-				return true
-			}
-			if !wsdashboard.ValidReplyID(parent) {
-				return false
-			}
-			if rec, err = wsagent.ReadRecord(dir, parent); err != nil {
-				return false
-			}
-		}
-		return false
-	}() {
-		return true
-	}
+	cur := key
 	for depth := 0; depth < hostedLineageDepth; depth++ {
-		entry, ok := s.lookupSession(key)
+		entry, ok := s.lookupSession(cur)
 		if !ok || entry.parent == "" {
-			return false
+			break
 		}
 		if entry.parent == hosted {
 			s.hostedDescendants.Store(cacheKey, struct{}{})
-			return true
+			return true, nil
 		}
-		key = entry.parent
+		cur = entry.parent
 	}
-	return false
+	return s.lookupHostedDescendant(hosted, key)
 }

@@ -1,0 +1,1973 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>대화창 화이트보드 카드 1행 압축 · 채움/비움 상태 비교 — Werkschaft</title>
+<style>
+:root {
+  --wb-bg: #141518;
+  --wb-card: #1e2024;
+  --wb-muted: #2b2d32;
+  --wb-hover: #25272c;
+  --wb-well: #16181c;
+  --wb-topic: #2a2d33;
+  --wb-on-topic: #e4e5e8;
+  --wb-fg: #e7e7e4;
+  --wb-muted-fg: #a2a6ad;
+  --wb-dim: rgb(220 226 236 / .48);
+  --wb-line: color-mix(in srgb, var(--wb-fg) 15%, transparent);
+  --wb-wash: color-mix(in srgb, var(--wb-fg) 6%, transparent);
+
+  --wb-primary: #7aa2ff;
+  --wb-primary-fg: #0c1424;
+  --wb-ok: #6cc39a;
+  --wb-warn: #e0a36c;
+  --wb-fail: #f0797e;
+  --wb-accent-assumed: #e48aae;
+
+  /* Solid dark role pills (page.css / dashboard.css) */
+  --wb-policy: #5b3a1c;     --wb-on-policy: #f6d9bd;
+  --wb-technical: #26385e;  --wb-on-technical: #d2dcf6;
+  --wb-announced: #1f4433;  --wb-on-announced: #c6ead6;
+  --wb-check: #3d2f6b;      --wb-on-check: #ddd3fb;
+
+  /* RGB tuples for alpha tinting */
+  --rgb-policy: 224 163 108;
+  --rgb-technical: 122 162 255;
+  --rgb-announced: 108 195 154;
+  --rgb-check: 168 140 245;     /* purple/violet aligned with --wb-ph-think */
+  --rgb-check-prod: 162 166 173; /* current prod neutral slate */
+  --rgb-assumed: 228 138 174;
+  --rgb-muted: 162 166 173;
+
+  --wb-shadow: 0 1px 2px rgb(0 0 0 / .5), 0 2px 8px rgb(0 0 0 / .3);
+  --wb-shadow-hi: 0 2px 4px rgb(0 0 0 / .55), 0 8px 22px rgb(0 0 0 / .4);
+  --wb-radius: 12px;
+  --wb-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+  --wb-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --card-max-w: 520px;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--wb-fg) 24%, transparent) transparent;
+}
+*:hover {
+  scrollbar-color: color-mix(in srgb, var(--wb-fg) 42%, transparent) transparent;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--wb-bg);
+  color: var(--wb-fg);
+  font: 13.5px/1.5 var(--wb-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+/* ===== Workbench Shell ===== */
+.wb-bench {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 16px 18px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Top control surface */
+.wb-toolbar {
+  background: var(--wb-card);
+  border-radius: var(--wb-radius);
+  box-shadow: var(--wb-shadow);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wb-tb-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 14px;
+}
+
+.wb-tb-title-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+}
+
+.wb-tb-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--wb-fg);
+}
+
+.wb-tb-sub {
+  font-size: 12px;
+  color: var(--wb-muted-fg);
+}
+
+.wb-tb-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--wb-muted);
+  color: var(--wb-fg);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color .12s, color .12s;
+}
+.wb-btn:hover {
+  background: color-mix(in srgb, var(--wb-primary) 18%, var(--wb-muted));
+}
+.wb-btn:focus-visible {
+  outline: 1.5px solid var(--wb-primary);
+  outline-offset: 2px;
+}
+
+.wb-tb-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--wb-fg) 8%, transparent);
+}
+
+.wb-ctrl-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.wb-ctrl-lbl {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--wb-muted-fg);
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+
+.wb-seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--wb-well);
+}
+
+.wb-seg-btn {
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 9px;
+  background: transparent;
+  color: var(--wb-muted-fg);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color .12s, color .12s;
+}
+.wb-seg-btn:hover {
+  color: var(--wb-fg);
+  background: var(--wb-wash);
+}
+.wb-seg-btn[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--wb-primary) 20%, var(--wb-card));
+  color: var(--wb-fg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 38%, transparent);
+}
+.wb-seg-btn:focus-visible {
+  outline: 1.5px solid var(--wb-primary);
+  outline-offset: 1px;
+}
+
+/* Legend & Interaction strip */
+.wb-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  background: var(--wb-well);
+  font-size: 11.5px;
+  color: var(--wb-muted-fg);
+}
+
+.wb-legend-items {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+
+.wb-lg-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+}
+
+.wb-lg-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  flex: none;
+}
+
+.wb-hint-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  font-size: 11px;
+  color: var(--wb-dim);
+}
+.wb-hint-kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--wb-muted);
+  color: var(--wb-fg);
+  font: 600 10px/1.3 var(--wb-sans);
+}
+
+/* ===== Comparison Stage ===== */
+.wb-stage {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+.wb-stage[data-focus]:not([data-focus="all"]) {
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (max-width: 920px) {
+  .wb-stage {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.wb-pane {
+  min-width: 0;
+  border-radius: var(--wb-radius);
+  background: color-mix(in srgb, var(--wb-card) 42%, var(--wb-bg));
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-fg) 7%, transparent);
+}
+.wb-stage[data-focus]:not([data-focus="all"]) .wb-pane {
+  display: none;
+}
+.wb-stage[data-focus="base"] .wb-pane[data-opt="base"],
+.wb-stage[data-focus="opt-a"] .wb-pane[data-opt="opt-a"],
+.wb-stage[data-focus="opt-b"] .wb-pane[data-opt="opt-b"],
+.wb-stage[data-focus="opt-c"] .wb-pane[data-opt="opt-c"] {
+  display: flex;
+  max-width: 640px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.wb-pane.is-recommended {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 30%, transparent);
+}
+
+.wb-pane-hd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px 10px;
+  padding: 0 2px;
+}
+
+.wb-pane-title-wrap {
+  flex: 1 1 0%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wb-pane-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--wb-fg);
+}
+
+.wb-tag-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--wb-muted);
+  color: var(--wb-muted-fg);
+}
+.wb-tag-pill.is-rec {
+  background: color-mix(in srgb, var(--wb-primary) 20%, var(--wb-card));
+  color: var(--wb-primary);
+}
+.wb-tag-pill.is-base {
+  background: color-mix(in srgb, var(--wb-fg) 8%, var(--wb-card));
+  color: var(--wb-muted-fg);
+}
+
+.wb-pane-desc {
+  font-size: 11.5px;
+  color: var(--wb-muted-fg);
+  line-height: 1.4;
+}
+
+.wb-pane-metric {
+  flex: none;
+  font: 600 10.5px/1.3 var(--wb-mono);
+  font-variant-numeric: tabular-nums;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: var(--wb-well);
+  color: var(--wb-muted-fg);
+  white-space: nowrap;
+}
+.wb-pane-metric b {
+  color: var(--wb-ok);
+  font-weight: 700;
+}
+
+/* Simulated chat column wrapper inside pane */
+.wb-chat-col {
+  width: 100%;
+  max-width: var(--card-max-w);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.wb-case-lbl {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--wb-dim);
+  margin-bottom: 4px;
+  padding: 0 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.wb-case-lbl span:last-child {
+  flex: none;
+  white-space: nowrap;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===== Authentic .wbeffects.wbupdate Production Frame ===== */
+.wbeffects.wbupdate {
+  align-self: stretch;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.wbupdate-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0 12px 5px 8px;
+  font-size: 11px;
+  color: var(--wb-muted-fg);
+}
+.wbupdate-head b {
+  font-weight: 600;
+  color: var(--wb-muted-fg);
+}
+.wbupdate-head .t {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.wbupdate-topic {
+  min-width: 0;
+  border-radius: var(--wb-radius);
+  background: var(--wb-card);
+  box-shadow: var(--wb-shadow);
+  overflow: hidden;
+  overflow: clip;
+}
+
+.wbupdate-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 8px;
+  min-width: 0;
+  padding: 5px 12px;
+  background: var(--wb-topic);
+  color: var(--wb-on-topic);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.wbupdate-bar b {
+  min-width: 0;
+  font-weight: 700;
+}
+.wbupdate-key {
+  min-width: 0;
+  font: 10.5px var(--wb-mono);
+  opacity: .7;
+}
+.wbupdate-bar a {
+  margin-left: auto;
+  color: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: none;
+  opacity: .88;
+}
+.wbupdate-bar a:hover {
+  text-decoration: underline;
+  opacity: 1;
+}
+
+.wbupdate-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px;
+  min-width: 0;
+}
+
+.wbupdate-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+  padding: 2px 2px 2px;
+  min-width: 0;
+}
+
+.wbupdate-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 7px;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 12.5px;
+}
+
+.wbupdate-panel {
+  flex-wrap: nowrap;
+  align-items: center;
+  padding: 5px 8px;
+  border-left: 3px solid var(--wb-primary);
+  border-radius: 3px 6px 6px 3px;
+  background: color-mix(in srgb, var(--wb-primary) 13%, transparent);
+}
+.wbupdate-panel-label {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--wb-primary);
+  font-size: 10.5px;
+  font-weight: 800;
+}
+.wbupdate-panel-label .i {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+}
+.wbupdate-panel .wbupdate-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--wb-fg);
+  font-weight: 600;
+  font-size: 12px;
+}
+.wbupdate-panel a {
+  flex: none;
+  color: var(--wb-primary);
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.wbupdate-panel a:hover {
+  text-decoration: underline;
+}
+
+.wbupdate-log {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 3px 6px 2px;
+}
+.wbupdate-l {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin-top: 2px;
+  border-radius: 50%;
+  font-size: 9px;
+  font-weight: 800;
+  color: var(--wb-primary);
+  background: color-mix(in srgb, var(--wb-primary) 16%, transparent);
+}
+.wbupdate-log .wbupdate-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--wb-muted-fg);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* =========================================================
+   VARIANT 0: CURRENT PRODUCTION BASELINE (2-ROW)
+   ========================================================= */
+.var-base .wbupdate-qitem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 7px;
+  min-width: 0;
+}
+
+.var-base .wbupdate-cap {
+  --c: var(--rgb-check-prod);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  max-width: 100%;
+  height: 22px;
+  padding: 0 7px;
+  min-width: 0;
+  border-radius: 6px;
+  border: 1px solid rgb(var(--c) / .16);
+  background: rgb(var(--c) / .09);
+  color: var(--wb-fg);
+  font: 500 11.5px/1 var(--wb-sans);
+  cursor: pointer;
+  text-align: left;
+  transition: background-color .12s, border-color .12s;
+}
+.var-base .wbupdate-cap:hover {
+  background: rgb(var(--c) / .15);
+  border-color: rgb(var(--c) / .26);
+}
+.var-base .wbupdate-cap:focus-visible {
+  outline: 1.5px solid var(--wb-primary);
+  outline-offset: 1px;
+}
+
+.var-base .cls-policy    { --c: var(--rgb-policy); }
+.var-base .cls-technical { --c: var(--rgb-technical); }
+.var-base .cls-announced { --c: var(--rgb-announced); }
+.var-base .cls-check     { --c: var(--rgb-check); }
+
+.var-base .wbupdate-qitem[data-state="answered"] .wbupdate-cap,
+.var-base .wbupdate-qitem[data-state="assumed"] .wbupdate-cap {
+  background: rgb(var(--c) / .06);
+  border-color: rgb(var(--c) / .12);
+  opacity: .84;
+}
+.var-base .wbupdate-qitem[data-state="withdrawn"] .wbupdate-cap,
+.var-base .wbupdate-qitem[data-state="superseded"] .wbupdate-cap {
+  background: rgb(var(--c) / .04);
+  border-color: rgb(var(--c) / .10);
+  opacity: .56;
+}
+.var-base .wbupdate-qitem[data-state="withdrawn"] .wbupdate-cap-ttl,
+.var-base .wbupdate-qitem[data-state="superseded"] .wbupdate-cap-ttl {
+  text-decoration: line-through;
+  color: var(--wb-muted-fg);
+}
+
+.var-base .wbupdate-cap-id {
+  flex: none;
+  font: 700 10.5px/1 var(--wb-mono);
+  color: rgb(var(--c) / .88);
+  font-variant-numeric: tabular-nums;
+}
+.var-base .wbupdate-cap-cls {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgb(var(--c) / .16);
+  color: rgb(var(--c) / .95);
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+}
+.var-base .wbupdate-cap-ttl {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--wb-fg);
+}
+.var-base .wbupdate-cap-arr {
+  flex: none;
+  font-size: 10px;
+  line-height: 1;
+  opacity: .38;
+}
+.var-base .wbupdate-cap:hover .wbupdate-cap-arr {
+  opacity: .85;
+}
+
+.var-base .wbupdate-ans {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding-left: 2px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: rgba(154, 159, 168, .72);
+}
+.var-base .wbupdate-ans.st-open       { color: rgba(154, 159, 168, .72); }
+.var-base .wbupdate-ans.st-staged     { color: rgba(156, 187, 255, .86); }
+.var-base .wbupdate-ans.st-answered   { color: rgba(156, 187, 255, .86); }
+.var-base .wbupdate-ans.st-settled    { color: rgba(134, 206, 166, .82); }
+.var-base .wbupdate-ans.st-assumed    { color: rgba(228, 138, 174, .85); }
+.var-base .wbupdate-ans.st-withdrawn,
+.var-base .wbupdate-ans.st-superseded { color: rgba(154, 159, 168, .55); }
+
+/* =========================================================
+   SHARED COMPACT 1-ROW GEOMETRY (OPTIONS A / B / C)
+   ========================================================= */
+.var-compact .wb-qrow {
+  --c: var(--rgb-check);
+  position: relative;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  height: 25px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  font: 500 11.5px/1 var(--wb-sans);
+  cursor: pointer;
+  text-align: left;
+  transition: background-color .13s, border-color .13s, box-shadow .13s, color .13s, opacity .13s;
+}
+.var-compact .wb-qrow:focus-visible {
+  outline: 1.5px solid var(--wb-primary);
+  outline-offset: 1px;
+}
+
+.var-compact .cls-policy    { --c: var(--rgb-policy); }
+.var-compact .cls-technical { --c: var(--rgb-technical); }
+.var-compact .cls-announced { --c: var(--rgb-announced); }
+.var-compact .cls-check     { --c: var(--rgb-check); }
+
+.wb-qrow-id {
+  flex: none;
+  font: 700 10.5px/1 var(--wb-mono);
+  font-variant-numeric: tabular-nums;
+  transition: color .13s, opacity .13s;
+}
+
+.wb-qrow-cls {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 15px;
+  padding: 0 5px;
+  border-radius: 3.5px;
+  border: 1px solid transparent;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: .01em;
+  transition: background-color .13s, border-color .13s, color .13s, box-shadow .13s;
+}
+
+.wb-qrow-ttl {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color .13s, opacity .13s;
+}
+
+.wb-qrow-mark {
+  flex: none;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  font-size: 10px;
+  line-height: 1;
+}
+.wb-qrow-mark svg {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.wb-qrow-mini {
+  flex: none;
+  display: none;
+  align-items: center;
+  gap: 3px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font: 700 9.5px/1 var(--wb-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  max-width: 82px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wb-qrow-arr {
+  flex: none;
+  font-size: 10px;
+  line-height: 1;
+  opacity: .36;
+  transition: opacity .12s, transform .12s;
+}
+.wb-qrow:hover .wb-qrow-arr {
+  opacity: .88;
+}
+
+/* Answer display mode visibility across compact options */
+[data-ans-mode="badge"] .wb-qrow[data-has-mini="1"] .wb-qrow-mini {
+  display: inline-flex;
+}
+[data-ans-mode="badge"] .wb-qrow[data-has-mini="1"] .wb-qrow-mark {
+  display: none;
+}
+[data-ans-mode="tooltip"] .wb-qrow[data-state="answered"] .wb-qrow-mark,
+[data-ans-mode="tooltip"] .wb-qrow[data-state="assumed"] .wb-qrow-mark {
+  display: inline-flex;
+}
+
+/* =========================================================
+   OPTION A: 미응답 채움 / 응답됨 비움 (Actionable-Pop)
+   ========================================================= */
+/* Open: rich class-tinted interior + crisp ink */
+.var-opt-a .wb-qrow[data-state="open"] {
+  background: rgb(var(--c) / .19);
+  border-color: rgb(var(--c) / .32);
+}
+.var-opt-a .wb-qrow[data-state="open"]:hover {
+  background: rgb(var(--c) / .26);
+  border-color: rgb(var(--c) / .48);
+}
+.var-opt-a .wb-qrow[data-state="open"] .wb-qrow-id {
+  color: rgb(var(--c) / .96);
+}
+.var-opt-a .wb-qrow[data-state="open"] .wb-qrow-cls {
+  background: rgb(var(--c) / .24);
+  color: rgb(var(--c) / 1);
+}
+.var-opt-a .wb-qrow[data-state="open"] .wb-qrow-ttl {
+  color: var(--wb-fg);
+  font-weight: 550;
+}
+
+/* Answered: interior emptied (transparent / card surface) + muted outline + dimmed text */
+.var-opt-a .wb-qrow[data-state="answered"] {
+  background: transparent;
+  border-color: rgb(var(--c) / .22);
+}
+.var-opt-a .wb-qrow[data-state="answered"]:hover {
+  background: rgb(var(--c) / .08);
+  border-color: rgb(var(--c) / .34);
+}
+.var-opt-a .wb-qrow[data-state="answered"] .wb-qrow-id {
+  color: rgb(var(--c) / .56);
+}
+.var-opt-a .wb-qrow[data-state="answered"] .wb-qrow-cls {
+  background: transparent;
+  border-color: rgb(var(--c) / .28);
+  color: rgb(var(--c) / .68);
+}
+.var-opt-a .wb-qrow[data-state="answered"] .wb-qrow-ttl {
+  color: color-mix(in srgb, var(--wb-muted-fg) 84%, var(--wb-bg));
+}
+.var-opt-a .wb-qrow[data-state="answered"]:hover .wb-qrow-ttl {
+  color: var(--wb-fg);
+}
+
+/* Assumed: emptied with dashed rose outline */
+.var-opt-a .wb-qrow[data-state="assumed"] {
+  background: rgb(var(--rgb-assumed) / .04);
+  border-style: dashed;
+  border-color: rgb(var(--rgb-assumed) / .42);
+}
+.var-opt-a .wb-qrow[data-state="assumed"]:hover {
+  background: rgb(var(--rgb-assumed) / .10);
+  border-color: rgb(var(--rgb-assumed) / .60);
+}
+.var-opt-a .wb-qrow[data-state="assumed"] .wb-qrow-id {
+  color: rgb(var(--rgb-assumed) / .84);
+}
+.var-opt-a .wb-qrow[data-state="assumed"] .wb-qrow-cls {
+  background: rgb(var(--rgb-assumed) / .12);
+  color: var(--wb-accent-assumed);
+}
+.var-opt-a .wb-qrow[data-state="assumed"] .wb-qrow-ttl {
+  color: color-mix(in srgb, var(--wb-muted-fg) 92%, var(--wb-fg));
+}
+
+/* Withdrawn / Superseded: hollow dashed + low opacity + strike */
+.var-opt-a .wb-qrow[data-state="withdrawn"],
+.var-opt-a .wb-qrow[data-state="superseded"] {
+  background: transparent;
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--wb-fg) 15%, transparent);
+  opacity: .48;
+}
+.var-opt-a .wb-qrow[data-state="withdrawn"]:hover,
+.var-opt-a .wb-qrow[data-state="superseded"]:hover {
+  opacity: .75;
+  background: var(--wb-wash);
+}
+.var-opt-a .wb-qrow[data-state="withdrawn"] .wb-qrow-id,
+.var-opt-a .wb-qrow[data-state="superseded"] .wb-qrow-id {
+  color: var(--wb-muted-fg);
+}
+.var-opt-a .wb-qrow[data-state="withdrawn"] .wb-qrow-cls,
+.var-opt-a .wb-qrow[data-state="superseded"] .wb-qrow-cls {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--wb-fg) 16%, transparent);
+  color: var(--wb-muted-fg);
+}
+.var-opt-a .wb-qrow[data-state="withdrawn"] .wb-qrow-ttl,
+.var-opt-a .wb-qrow[data-state="superseded"] .wb-qrow-ttl {
+  color: var(--wb-muted-fg);
+  text-decoration: line-through;
+}
+
+/* =========================================================
+   OPTION B: 응답됨 채움 / 미응답 비움 (Filled-When-Done)
+   ========================================================= */
+/* Open: hollow outlined slot awaiting input */
+.var-opt-b .wb-qrow[data-state="open"] {
+  background: transparent;
+  border-color: rgb(var(--c) / .44);
+}
+.var-opt-b .wb-qrow[data-state="open"]:hover {
+  background: rgb(var(--c) / .08);
+  border-color: rgb(var(--c) / .64);
+}
+.var-opt-b .wb-qrow[data-state="open"] .wb-qrow-id {
+  color: rgb(var(--c) / .95);
+}
+.var-opt-b .wb-qrow[data-state="open"] .wb-qrow-cls {
+  background: transparent;
+  border-color: rgb(var(--c) / .46);
+  color: rgb(var(--c) / .96);
+}
+.var-opt-b .wb-qrow[data-state="open"] .wb-qrow-ttl {
+  color: var(--wb-fg);
+  font-weight: 550;
+}
+
+/* Answered: calm filled interior signifying completion */
+.var-opt-b .wb-qrow[data-state="answered"] {
+  background: rgb(var(--c) / .17);
+  border-color: rgb(var(--c) / .20);
+}
+.var-opt-b .wb-qrow[data-state="answered"]:hover {
+  background: rgb(var(--c) / .24);
+  border-color: rgb(var(--c) / .32);
+}
+.var-opt-b .wb-qrow[data-state="answered"] .wb-qrow-id {
+  color: rgb(var(--c) / .84);
+}
+.var-opt-b .wb-qrow[data-state="answered"] .wb-qrow-cls {
+  background: rgb(var(--c) / .24);
+  color: rgb(var(--c) / .98);
+}
+.var-opt-b .wb-qrow[data-state="answered"] .wb-qrow-ttl {
+  color: color-mix(in srgb, var(--wb-fg) 88%, var(--wb-muted-fg));
+}
+
+/* Assumed: rose-tinted fill with dashed border */
+.var-opt-b .wb-qrow[data-state="assumed"] {
+  background: rgb(var(--rgb-assumed) / .13);
+  border-style: dashed;
+  border-color: rgb(var(--rgb-assumed) / .38);
+}
+.var-opt-b .wb-qrow[data-state="assumed"]:hover {
+  background: rgb(var(--rgb-assumed) / .20);
+}
+.var-opt-b .wb-qrow[data-state="assumed"] .wb-qrow-id {
+  color: var(--wb-accent-assumed);
+}
+.var-opt-b .wb-qrow[data-state="assumed"] .wb-qrow-cls {
+  background: rgb(var(--rgb-assumed) / .22);
+  color: #f4bed4;
+}
+.var-opt-b .wb-qrow[data-state="assumed"] .wb-qrow-ttl {
+  color: color-mix(in srgb, var(--wb-fg) 82%, var(--wb-muted-fg));
+}
+
+/* Withdrawn / Superseded */
+.var-opt-b .wb-qrow[data-state="withdrawn"],
+.var-opt-b .wb-qrow[data-state="superseded"] {
+  background: transparent;
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--wb-fg) 15%, transparent);
+  opacity: .48;
+}
+.var-opt-b .wb-qrow[data-state="withdrawn"]:hover,
+.var-opt-b .wb-qrow[data-state="superseded"]:hover {
+  opacity: .75;
+  background: var(--wb-wash);
+}
+.var-opt-b .wb-qrow[data-state="withdrawn"] .wb-qrow-id,
+.var-opt-b .wb-qrow[data-state="superseded"] .wb-qrow-id {
+  color: var(--wb-muted-fg);
+}
+.var-opt-b .wb-qrow[data-state="withdrawn"] .wb-qrow-cls,
+.var-opt-b .wb-qrow[data-state="superseded"] .wb-qrow-cls {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--wb-fg) 16%, transparent);
+  color: var(--wb-muted-fg);
+}
+.var-opt-b .wb-qrow[data-state="withdrawn"] .wb-qrow-ttl,
+.var-opt-b .wb-qrow[data-state="superseded"] .wb-qrow-ttl {
+  color: var(--wb-muted-fg);
+  text-decoration: line-through;
+}
+
+/* =========================================================
+   OPTION C: 토널 채움 + 배지 채움/비움 연동 (Material Tonal Minimal)
+   ========================================================= */
+/* Open: borderless Material tonal fill + solid Werkschaft role pill */
+.var-opt-c .wb-qrow[data-state="open"] {
+  border-color: transparent;
+  background: color-mix(in srgb, rgb(var(--c)) 16%, var(--wb-card));
+}
+.var-opt-c .wb-qrow[data-state="open"]:hover {
+  background: color-mix(in srgb, rgb(var(--c)) 23%, var(--wb-card));
+}
+.var-opt-c .wb-qrow[data-state="open"] .wb-qrow-id {
+  color: rgb(var(--c) / .96);
+}
+.var-opt-c .wb-qrow[data-state="open"].cls-policy .wb-qrow-cls {
+  background: var(--wb-policy);
+  color: var(--wb-on-policy);
+}
+.var-opt-c .wb-qrow[data-state="open"].cls-technical .wb-qrow-cls {
+  background: var(--wb-technical);
+  color: var(--wb-on-technical);
+}
+.var-opt-c .wb-qrow[data-state="open"].cls-announced .wb-qrow-cls {
+  background: var(--wb-announced);
+  color: var(--wb-on-announced);
+}
+.var-opt-c .wb-qrow[data-state="open"].cls-check .wb-qrow-cls {
+  background: var(--wb-check);
+  color: var(--wb-on-check);
+}
+.var-opt-c .wb-qrow[data-state="open"] .wb-qrow-ttl {
+  color: var(--wb-fg);
+  font-weight: 550;
+}
+
+/* Answered: flat card background + whisper hairline + hollow pill + subtle check */
+.var-opt-c .wb-qrow[data-state="answered"] {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--wb-fg) 11%, transparent);
+}
+.var-opt-c .wb-qrow[data-state="answered"]:hover {
+  background: var(--wb-wash);
+  border-color: color-mix(in srgb, var(--wb-fg) 18%, transparent);
+}
+.var-opt-c .wb-qrow[data-state="answered"] .wb-qrow-id {
+  color: rgb(var(--c) / .60);
+}
+.var-opt-c .wb-qrow[data-state="answered"] .wb-qrow-cls {
+  background: transparent;
+  border-color: rgb(var(--c) / .38);
+  color: rgb(var(--c) / .76);
+}
+.var-opt-c .wb-qrow[data-state="answered"] .wb-qrow-ttl {
+  color: color-mix(in srgb, var(--wb-muted-fg) 88%, var(--wb-bg));
+}
+.var-opt-c .wb-qrow[data-state="answered"]:hover .wb-qrow-ttl {
+  color: var(--wb-fg);
+}
+/* Option C always renders the subtle check mark on answered items */
+.var-opt-c .wb-qrow[data-state="answered"] .wb-qrow-mark {
+  display: inline-flex;
+  color: color-mix(in srgb, var(--wb-ok) 72%, var(--wb-muted-fg));
+}
+
+/* Assumed in Option C: flat card background + dashed rose hairline + hollow rose pill */
+.var-opt-c .wb-qrow[data-state="assumed"] {
+  background: transparent;
+  border-style: dashed;
+  border-color: rgb(var(--rgb-assumed) / .36);
+}
+.var-opt-c .wb-qrow[data-state="assumed"]:hover {
+  background: rgb(var(--rgb-assumed) / .06);
+  border-color: rgb(var(--rgb-assumed) / .54);
+}
+.var-opt-c .wb-qrow[data-state="assumed"] .wb-qrow-id {
+  color: rgb(var(--rgb-assumed) / .82);
+}
+.var-opt-c .wb-qrow[data-state="assumed"] .wb-qrow-cls {
+  background: transparent;
+  border-color: rgb(var(--rgb-assumed) / .44);
+  color: var(--wb-accent-assumed);
+}
+.var-opt-c .wb-qrow[data-state="assumed"] .wb-qrow-ttl {
+  color: color-mix(in srgb, var(--wb-muted-fg) 92%, var(--wb-fg));
+}
+.var-opt-c .wb-qrow[data-state="assumed"] .wb-qrow-mark {
+  display: inline-flex;
+  color: rgb(var(--rgb-assumed) / .82);
+}
+/* In mini-badge mode, suppress Option C's standalone mark so badges replace it cleanly (avoid ✓ + [✓]) */
+body[data-ans-mode="badge"] .var-opt-c .wb-qrow[data-has-mini="1"] .wb-qrow-mark {
+  display: none;
+}
+
+/* Withdrawn / Superseded in Option C */
+.var-opt-c .wb-qrow[data-state="withdrawn"],
+.var-opt-c .wb-qrow[data-state="superseded"] {
+  background: transparent;
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--wb-fg) 12%, transparent);
+  opacity: .46;
+}
+.var-opt-c .wb-qrow[data-state="withdrawn"]:hover,
+.var-opt-c .wb-qrow[data-state="superseded"]:hover {
+  opacity: .74;
+  background: var(--wb-wash);
+}
+.var-opt-c .wb-qrow[data-state="withdrawn"] .wb-qrow-id,
+.var-opt-c .wb-qrow[data-state="superseded"] .wb-qrow-id {
+  color: var(--wb-muted-fg);
+}
+.var-opt-c .wb-qrow[data-state="withdrawn"] .wb-qrow-cls,
+.var-opt-c .wb-qrow[data-state="superseded"] .wb-qrow-cls {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--wb-fg) 16%, transparent);
+  color: var(--wb-muted-fg);
+}
+.var-opt-c .wb-qrow[data-state="withdrawn"] .wb-qrow-ttl,
+.var-opt-c .wb-qrow[data-state="superseded"] .wb-qrow-ttl {
+  color: var(--wb-muted-fg);
+  text-decoration: line-through;
+}
+
+/* Shared mark colors for Option A & B when tooltip mode turns on marks */
+.var-opt-a .wb-qrow[data-state="answered"] .wb-qrow-mark,
+.var-opt-b .wb-qrow[data-state="answered"] .wb-qrow-mark {
+  color: color-mix(in srgb, var(--wb-ok) 78%, var(--wb-muted-fg));
+}
+.var-opt-a .wb-qrow[data-state="assumed"] .wb-qrow-mark,
+.var-opt-b .wb-qrow[data-state="assumed"] .wb-qrow-mark {
+  color: var(--wb-accent-assumed);
+}
+
+/* Right mini-badge styling */
+.wb-qrow-mini {
+  background: color-mix(in srgb, var(--wb-fg) 8%, transparent);
+  color: var(--wb-muted-fg);
+}
+.wb-qrow[data-state="answered"] .wb-qrow-mini {
+  background: color-mix(in srgb, var(--wb-ok) 14%, transparent);
+  color: var(--wb-ok);
+}
+.wb-qrow[data-state="assumed"] .wb-qrow-mini {
+  background: rgb(var(--rgb-assumed) / .14);
+  color: var(--wb-accent-assumed);
+}
+.wb-qrow[data-state="withdrawn"] .wb-qrow-mini,
+.wb-qrow[data-state="superseded"] .wb-qrow-mini {
+  background: color-mix(in srgb, var(--wb-fg) 6%, transparent);
+  color: var(--wb-muted-fg);
+}
+
+/* ===== Trade-off Summary Table ===== */
+.wb-summary {
+  background: var(--wb-card);
+  border-radius: var(--wb-radius);
+  box-shadow: var(--wb-shadow);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wb-summary h2 {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--wb-fg);
+}
+.wb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.wb-table th,
+.wb-table td {
+  text-align: left;
+  padding: 7px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--wb-fg) 8%, transparent);
+  vertical-align: top;
+}
+.wb-table th {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--wb-muted-fg);
+}
+.wb-table tr:last-child td {
+  border-bottom: 0;
+}
+.wb-table td:first-child {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* ===== Floating Dark Tooltip ===== */
+.wb-tip {
+  position: fixed;
+  z-index: 200;
+  max-width: 340px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: #25272c;
+  color: var(--wb-fg);
+  box-shadow: var(--wb-shadow-hi), inset 0 0 0 1px var(--wb-line);
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity .1s ease, transform .1s ease;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.wb-tip.is-shown {
+  opacity: 1;
+  transform: translateY(0);
+}
+.wb-tip-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+.wb-tip-id {
+  font: 700 10.5px/1 var(--wb-mono);
+  color: var(--wb-muted-fg);
+}
+.wb-tip-st {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--wb-muted);
+  color: var(--wb-muted-fg);
+}
+.wb-tip-st.is-open       { background: color-mix(in srgb, var(--wb-warn) 18%, transparent); color: var(--wb-warn); }
+.wb-tip-st.is-answered   { background: color-mix(in srgb, var(--wb-ok) 18%, transparent); color: var(--wb-ok); }
+.wb-tip-st.is-assumed    { background: rgb(var(--rgb-assumed) / .18); color: var(--wb-accent-assumed); }
+.wb-tip-st.is-withdrawn,
+.wb-tip-st.is-superseded { background: color-mix(in srgb, var(--wb-fg) 10%, transparent); color: var(--wb-muted-fg); }
+
+.wb-tip-ttl {
+  color: var(--wb-fg);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.wb-tip-ans {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid color-mix(in srgb, var(--wb-fg) 10%, transparent);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--wb-ok);
+}
+.wb-tip-ans.is-assumed    { color: var(--wb-accent-assumed); }
+.wb-tip-ans.is-withdrawn,
+.wb-tip-ans.is-superseded { color: var(--wb-muted-fg); }
+.wb-tip-ans b {
+  font-family: var(--wb-mono);
+  font-weight: 700;
+}
+</style>
+</head>
+<body data-ans-mode="hidden">
+
+<div class="wb-bench" id="wb-bench">
+  <!-- Workbench Header & Controls -->
+  <header class="wb-toolbar">
+    <div class="wb-tb-head">
+      <div class="wb-tb-title-group">
+        <h1 class="wb-tb-title">대화창 화이트보드 카드 1행 압축 &amp; 채움/비움 상태 비교</h1>
+        <span class="wb-tb-sub">응답 텍스트를 숨긴 상태에서도 색상 채움(fill) / 비움(empty)만으로 미응답·응답됨 즉시 구분</span>
+      </div>
+      <div class="wb-tb-actions">
+        <button type="button" class="wb-btn" id="btn-reset" title="모든 항목을 초기 예시 상태로 되돌리기">↺ 상태 초기화</button>
+      </div>
+    </div>
+
+    <div class="wb-tb-controls">
+      <div class="wb-ctrl-group">
+        <span class="wb-ctrl-lbl">보기</span>
+        <div class="wb-seg" role="group" aria-label="옵션 보기 전환" id="seg-focus">
+          <button type="button" class="wb-seg-btn" data-focus-val="all" aria-pressed="true">나란히 비교</button>
+          <button type="button" class="wb-seg-btn" data-focus-val="base" aria-pressed="false">현재 (2행)</button>
+          <button type="button" class="wb-seg-btn" data-focus-val="opt-a" aria-pressed="false">Option A</button>
+          <button type="button" class="wb-seg-btn" data-focus-val="opt-b" aria-pressed="false">Option B</button>
+          <button type="button" class="wb-seg-btn" data-focus-val="opt-c" aria-pressed="false">Option C</button>
+        </div>
+      </div>
+
+      <div class="wb-ctrl-group">
+        <span class="wb-ctrl-lbl">응답 값 표시 방식</span>
+        <div class="wb-seg" role="group" aria-label="응답 값 표시 방식" id="seg-ans">
+          <button type="button" class="wb-seg-btn" data-ans-val="hidden" aria-pressed="true">완전 숨김 (색상 채움/비움만)</button>
+          <button type="button" class="wb-seg-btn" data-ans-val="badge" aria-pressed="false">우측 미니 배지 (✓ / a / ok)</button>
+          <button type="button" class="wb-seg-btn" data-ans-val="tooltip" aria-pressed="false">호버 툴팁만</button>
+        </div>
+      </div>
+
+      <div class="wb-ctrl-group">
+        <span class="wb-ctrl-lbl">카드 폭</span>
+        <div class="wb-seg" role="group" aria-label="카드 폭 테스트" id="seg-width">
+          <button type="button" class="wb-seg-btn" data-width-val="520px" aria-pressed="true">표준 (520px)</button>
+          <button type="button" class="wb-seg-btn" data-width-val="360px" aria-pressed="false">좁은 분할 (360px)</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Class Legend & Live Interaction Cue -->
+  <div class="wb-legend">
+    <div class="wb-legend-items">
+      <span class="wb-lg-chip"><span class="wb-lg-dot" style="background:rgb(224 163 108)"></span>정책 (amber)</span>
+      <span class="wb-lg-chip"><span class="wb-lg-dot" style="background:rgb(122 162 255)"></span>기술 (blue)</span>
+      <span class="wb-lg-chip"><span class="wb-lg-dot" style="background:rgb(108 195 154)"></span>안내됨 (green)</span>
+      <span class="wb-lg-chip"><span class="wb-lg-dot" style="background:rgb(168 140 245)"></span>확인 (purple)</span>
+      <span class="wb-lg-chip"><span class="wb-lg-dot" style="background:rgb(228 138 174)"></span>추정됨 (rose 점선)</span>
+    </div>
+    <div class="wb-hint-line">
+      <span><span class="wb-hint-kbd">클릭</span> 상태 순환: 미응답 → 응답됨 → 추정됨 → 철회됨 (4개 패널 동시 반영)</span>
+      <span><span class="wb-hint-kbd">호버</span> 전체 제목 및 응답 요약 툴팁</span>
+    </div>
+  </div>
+
+  <!-- 4-Way Comparison Stage -->
+  <main class="wb-stage" id="wb-stage" data-focus="all">
+    <!-- Rendered dynamically by JS for instant synchronized state cycling & live height measurement -->
+  </main>
+
+  <!-- Concise Trade-offs Table -->
+  <section class="wb-summary" aria-label="설계안 비교 요약">
+    <h2>안별 트레이드오프 요약</h2>
+    <table class="wb-table">
+      <thead>
+        <tr>
+          <th>안</th>
+          <th>채움 / 비움 극성</th>
+          <th>장점</th>
+          <th>유의점</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>현재 (2행 기준선)</td>
+          <td>모두 반투명 채움 (강약 차이 0.09 vs 0.06)</td>
+          <td>응답 문구(<code>a 선택됨</code>, <code>미응답</code>)를 바로 읽을 수 있음</td>
+          <td>제목이 길면 2행으로 줄바꿈되어 세로 높이 약 1.65배 증가, 미응답/응답됨 색상 대비 약함</td>
+        </tr>
+        <tr>
+          <td>Option A (Actionable-Pop)</td>
+          <td><b>미응답 채움</b> / 응답됨 비움</td>
+          <td>할 일(미응답)이 즉시 눈에 띄고, 완료 항목은 배경으로 자연스럽게 물러남</td>
+          <td>비워진 응답됨 행이 많아지면 외곽선이 다소 얇아 보일 수 있음 (<code>.22</code> 보더로 보완)</td>
+        </tr>
+        <tr>
+          <td>Option B (Filled-When-Done)</td>
+          <td>미응답 비움 / <b>응답됨 채움</b></td>
+          <td>체크리스트/빈칸을 채우는 직관과 일치하며 진행률(얼마나 채웠는지)이 한눈에 들어옴</td>
+          <td>모두 미응답인 신규 카드가 비어 보여 존재감이 약해질 수 있음 (<code>.44</code> 컬러 테두리로 보완)</td>
+        </tr>
+        <tr>
+          <td>Option C (Material Tonal Minimal)</td>
+          <td><b>미응답 토널 채움+솔리드 배지</b> / 응답됨 평면+할로우 배지+✓</td>
+          <td><code>dashboard-style.md</code>의 무테두리 토널 원칙에 가장 부합하며 이중 신호(면+배지)로 판독성 최고</td>
+          <td>미응답 행이 <code>--wb-policy</code> 등 진한 역할 배지를 사용해 시각 무게가 가장 강함</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+</div>
+
+<!-- Floating dark tooltip -->
+<div class="wb-tip" id="wb-tip" role="tooltip" aria-hidden="true"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  var CLASS_LABEL = {
+    policy: "정책",
+    technical: "기술",
+    announced: "안내됨",
+    check: "확인"
+  };
+
+  var STATE_LABEL = {
+    open: "미응답",
+    answered: "응답됨",
+    assumed: "추정됨",
+    withdrawn: "철회됨",
+    superseded: "대체됨"
+  };
+
+  var CYCLE_ORDER = ["open", "answered", "assumed", "withdrawn"];
+
+  var PANES = [
+    {
+      id: "base",
+      variantClass: "var-base",
+      title: "현재 (2행 기준선)",
+      badge: "기준선 · 2행",
+      badgeClass: "is-base",
+      desc: "현재 프로덕션: 캡슐 폭 100% 도달 시 하단에 응답/미응답 텍스트가 줄바꿈됨 (높이 비교 기준)"
+    },
+    {
+      id: "opt-a",
+      variantClass: "var-opt-a var-compact",
+      title: "Option A — 미응답 채움 / 응답됨 비움",
+      badge: "Actionable-Pop",
+      badgeClass: "",
+      desc: "미응답은 클래스 틴트로 채워 강조하고, 응답됨은 내부를 비워(#1e2024) 시선에서 물러나게 처리"
+    },
+    {
+      id: "opt-b",
+      variantClass: "var-opt-b var-compact",
+      title: "Option B — 응답됨 채움 / 미응답 비움",
+      badge: "Filled-When-Done",
+      badgeClass: "",
+      desc: "미응답은 빈 아웃라인 슬롯으로 대기 상태를 표현하고, 응답됨은 차분한 클래스 틴트로 채워 완료 표현"
+    },
+    {
+      id: "opt-c",
+      variantClass: "var-opt-c var-compact",
+      title: "Option C — 토널 채움 + 배지 연동",
+      badge: "Tonal Minimal · 추천",
+      badgeClass: "is-rec",
+      recommended: true,
+      desc: "무테두리 토널 채움 + 솔리드 배지(미응답) ↔ 플랫 카드면 + 할로우 배지 + ✓(응답됨)"
+    }
+  ];
+
+  function createInitialCards() {
+    return [
+      {
+        caseLabel: "Case 1 · 스크린샷 재현 카드",
+        time: "09:25",
+        headLabel: "화이트보드 업데이트 확정됨",
+        topicTarget: "topic-rail-drag",
+        topicTitle: "세션 레일 드래그 앤 드롭: 보관 ↔ 삭제 이동",
+        topicKey: "rail-drag-archive-delete",
+        panel: {
+          id: "p398",
+          text: "세션 레일 보관·삭제 섹션 구조 및 드래그 앤 드롭 제약 분석"
+        },
+        log: "세션 레일 `보관`/`삭제됨` DOM·포인터 드래그·백엔드 수명주기 맥락 파악 완료 — 범위·확인 UX·백엔드 전이 방식 정리",
+        items: [
+          {
+            id: "1703",
+            cls: "policy",
+            state: "answered",
+            title: "세션 레일 드래그 앤 드롭으로 이동할 수 있는 상태 전이 범위를 어디까지 허용할까?",
+            mini: "a",
+            answerText: "a 선택됨",
+            answerDetail: "보관 ↔ 삭제됨 양방향 허용 (실행중 세션 제외)",
+            baseText: "a 선택됨",
+            baseCls: "st-answered"
+          },
+          {
+            id: "1704",
+            cls: "policy",
+            state: "answered",
+            title: "보관 또는 삭제됨으로 드래그 드롭할 때 안전 확인(실수 방지)은 어떻게 둘까요?",
+            mini: "a",
+            answerText: "a 선택됨",
+            answerDetail: "즉시 이동 + 5초 실행 취소 토스트 제공",
+            baseText: "a 선택됨",
+            baseCls: "st-answered"
+          },
+          {
+            id: "1705",
+            cls: "technical",
+            state: "open",
+            title: "삭제됨 → 보관 전이는 POST /agents/{id}/reopen에 선택 필드 {\"hidden\": true}로 전달",
+            mini: "ok",
+            answerText: "ok 선택됨",
+            answerDetail: "ok 선택됨 · reopen API 선택 필드 적용",
+            baseText: "미응답",
+            baseCls: "st-open"
+          },
+          {
+            id: "1706",
+            cls: "announced",
+            state: "open",
+            title: "권한·대상 제약 및 타깃 규칙: 로컬 소유자(data-can-control) 전용, 호스팅 세션 비활성",
+            mini: "ok",
+            answerText: "ok 선택됨",
+            answerDetail: "ok 선택됨 · 로컬 소유자 전용 제약 확인",
+            baseText: "미응답",
+            baseCls: "st-open"
+          }
+        ]
+      },
+      {
+        caseLabel: "Case 2 · 전체 클래스 & 상태 쇼케이스 (긴 제목 말줄임 포함)",
+        time: "09:38",
+        headLabel: "화이트보드 업데이트 확정됨",
+        topicTarget: "topic-compact-showcase",
+        topicTitle: "대화창 화이트보드 카드 1행 압축 · 상태 모델 정리",
+        topicKey: "convo-wb-compact-sync",
+        panel: {
+          id: "p412",
+          text: "4종 클래스 × 5종 상태 색상 대비 및 좁은 폭 말줄임 규칙 명세"
+        },
+        log: "채움/비움 대비 기준 확립 — 1행 25px 고정 높이 및 추정/철회/대체 점선·취소선 규칙 정의",
+        items: [
+          {
+            id: "1711",
+            cls: "policy",
+            state: "open",
+            title: "미응답 vs 응답됨 시각 극성 선택: 미응답 채움(A/C) 또는 응답됨 채움(B)",
+            mini: "c",
+            answerText: "c 선택됨",
+            answerDetail: "c 선택됨 · 토널 채움 + 할로우 배지 연동 채택",
+            baseText: "미응답",
+            baseCls: "st-open"
+          },
+          {
+            id: "1712",
+            cls: "technical",
+            state: "answered",
+            title: "MutationObserver 디바운스를 microtask 배칭으로 통합하고 virtualStore 스캔 범위 축소",
+            mini: "ok",
+            answerText: "ok 선택됨",
+            answerDetail: "ok 선택됨 · 배칭 반영 확인",
+            baseText: "✓ 확정 · ok",
+            baseCls: "st-settled"
+          },
+          {
+            id: "1713",
+            cls: "announced",
+            state: "answered",
+            title: "호스팅 세션 및 히스토리 전용 뷰에서는 캡슐 하이드레이션 없이 원문 (ID) 배지만 유지",
+            mini: "✓",
+            answerText: "✓ 확인 완료",
+            answerDetail: "✓ 확인 완료 · 히스토리 폴백 유지",
+            baseText: "✓ 확정 · 안내 확인",
+            baseCls: "st-settled"
+          },
+          {
+            id: "1714",
+            cls: "check",
+            state: "open",
+            title: "키보드 Tab 탐색 시 1행 포커스 링과 화살표(↗)가 360px 좁은 분할 화면에서도 겹치지 않고 긴 제목이 깔끔히 말줄임되는지 확인",
+            mini: "ok",
+            answerText: "ok 선택됨",
+            answerDetail: "ok 선택됨 · 360px 말줄임 및 포커스 링 검증",
+            baseText: "미응답",
+            baseCls: "st-open"
+          },
+          {
+            id: "1715",
+            cls: "policy",
+            state: "assumed",
+            title: "드래그 이동 취소 시 직전 레일 스크롤 오프셋 복원 기본값 (추정됨 상태 예시)",
+            mini: "추정 b",
+            answerText: "가정됨 · b 선택으로 해석",
+            answerDetail: "가정됨 · b 선택 (직전 스크롤 위치 복원)",
+            baseText: "✓ 가정됨 · b 선택",
+            baseCls: "st-assumed"
+          },
+          {
+            id: "1716",
+            cls: "technical",
+            state: "withdrawn",
+            title: "레거시 .wbeffect-details 인라인 진단 테이블 폴백 코드 제거",
+            mini: "철회",
+            answerText: "철회됨",
+            answerDetail: "철회됨 · 상위 리팩터링으로 불필요해짐",
+            baseText: "철회됨",
+            baseCls: "st-withdrawn"
+          },
+          {
+            id: "1717",
+            cls: "check",
+            state: "superseded",
+            title: "기존 2행 캡슐(44px) 기준 회귀 스크린샷 스냅샷 전면 갱신",
+            mini: "→1719",
+            answerText: "대체됨 → (1719)",
+            answerDetail: "대체됨 · 후속 항목 (1719)로 통합 대체",
+            baseText: "대체됨 → (1719)",
+            baseCls: "st-superseded"
+          }
+        ]
+      }
+    ];
+  }
+
+  var baseTotalCache = {};
+
+  var state = {
+    cards: createInitialCards(),
+    focus: "all",
+    ansMode: "hidden",
+    cardWidth: "520px"
+  };
+
+  var stageEl = document.getElementById("wb-stage");
+  var tipEl = document.getElementById("wb-tip");
+
+  function esc(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function boardSvg() {
+    return '<svg class="i" viewBox="0 0 16 16" aria-hidden="true">' +
+      '<rect x="2" y="2.5" width="12" height="11" rx="1.6"/>' +
+      '<path d="M6 2.5v11M10 2.5v11"/>' +
+      '</svg>';
+  }
+
+  function checkSvg() {
+    return '<svg viewBox="0 0 16 16" aria-hidden="true">' +
+      '<path d="M3 8.5l3.2 3.1L13 4.6"/>' +
+      '</svg>';
+  }
+
+  function dashSvg() {
+    return '<svg viewBox="0 0 16 16" aria-hidden="true">' +
+      '<path d="M3.5 8h9"/>' +
+      '</svg>';
+  }
+
+  function tildeSvg() {
+    return '<svg viewBox="0 0 16 16" aria-hidden="true">' +
+      '<path d="M3 8.5c1.5-2 3-2 5 0s3.5 2 5 0"/>' +
+      '</svg>';
+  }
+
+  function findItem(id) {
+    for (var c = 0; c < state.cards.length; c++) {
+      var items = state.cards[c].items;
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].id === id) return items[i];
+      }
+    }
+    return null;
+  }
+
+  function displayBaseStatus(item) {
+    if (item.state === "open") return { cls: "st-open", text: "미응답" };
+    if (item.state === "answered") return { cls: item.baseCls === "st-settled" ? "st-settled" : "st-answered", text: item.answerText || "✓ 확정" };
+    if (item.state === "assumed") return { cls: "st-assumed", text: item.answerText && item.answerText.indexOf("가정") >= 0 ? item.answerText : "✓ 가정됨 · " + (item.mini || "b") };
+    if (item.state === "withdrawn") return { cls: "st-withdrawn", text: "철회됨" };
+    if (item.state === "superseded") return { cls: "st-superseded", text: item.answerText || "대체됨" };
+    return { cls: "st-open", text: "미응답" };
+  }
+
+  function displayMiniText(item) {
+    if (item.state === "open") return "";
+    if (item.state === "answered") return item.mini || "✓";
+    if (item.state === "assumed") return item.mini && item.mini.indexOf("추정") >= 0 ? item.mini : "추정 · " + (item.mini || "a");
+    if (item.state === "withdrawn") return "철회";
+    if (item.state === "superseded") return item.mini || "대체";
+    return "";
+  }
+
+  function renderBaselineItems(items) {
+    return items.map(function (it) {
+      var baseSt = displayBaseStatus(it);
+      return '<div class="wbupdate-qitem" data-state="' + esc(it.state) + '">' +
+        '<button type="button" class="wbupdate-cap cls-' + esc(it.cls) + '" data-item-id="' + esc(it.id) + '">' +
+          '<span class="wbupdate-cap-id">(' + esc(it.id) + ')</span>' +
+          '<span class="wbupdate-cap-cls">' + esc(CLASS_LABEL[it.cls]) + '</span>' +
+          '<span class="wbupdate-cap-ttl">' + esc(it.title) + '</span>' +
+          '<span class="wbupdate-cap-arr" aria-hidden="true">↗</span>' +
+        '</button>' +
+        '<span class="wbupdate-ans ' + esc(baseSt.cls) + '">' + esc(baseSt.text) + '</span>' +
+      '</div>';
+    }).join("");
+  }
+
+  function renderCompactItems(items) {
+    return items.map(function (it) {
+      var mini = displayMiniText(it);
+      var markIcon = it.state === "answered" ? checkSvg()
+        : it.state === "assumed" ? tildeSvg()
+        : dashSvg();
+      return '<button type="button" class="wb-qrow cls-' + esc(it.cls) + '" data-item-id="' + esc(it.id) + '" data-state="' + esc(it.state) + '" data-has-mini="' + (mini ? "1" : "0") + '">' +
+        '<span class="wb-qrow-id">(' + esc(it.id) + ')</span>' +
+        '<span class="wb-qrow-cls">' + esc(CLASS_LABEL[it.cls]) + '</span>' +
+        '<span class="wb-qrow-ttl">' + esc(it.title) + '</span>' +
+        '<span class="wb-qrow-mark" aria-hidden="true">' + markIcon + '</span>' +
+        '<span class="wb-qrow-mini">' + esc(mini) + '</span>' +
+        '<span class="wb-qrow-arr" aria-hidden="true">↗</span>' +
+      '</button>';
+    }).join("");
+  }
+
+  function renderCard(card, isBase, paneId, cardIdx) {
+    var itemsHtml = isBase ? renderBaselineItems(card.items) : renderCompactItems(card.items);
+    return '<div class="wb-case-wrap" data-card-idx="' + cardIdx + '">' +
+      '<div class="wb-case-lbl"><span>' + esc(card.caseLabel) + '</span><span class="wb-card-h" data-h-for="' + esc(paneId) + '-' + cardIdx + '"></span></div>' +
+      '<article class="wbeffects wbupdate">' +
+        '<div class="wbupdate-head"><b>' + esc(card.headLabel) + '</b><time class="t">' + esc(card.time) + '</time></div>' +
+        '<section class="wbupdate-topic">' +
+          '<div class="wbupdate-bar">' +
+            '<b>' + esc(card.topicTitle) + '</b>' +
+            '<span class="wbupdate-key">' + esc(card.topicKey) + '</span>' +
+            '<a href="#' + esc(card.topicTarget) + '" onclick="return false;">토픽 ↗</a>' +
+          '</div>' +
+          '<div class="wbupdate-rows">' +
+            '<div class="wbupdate-items">' + itemsHtml + '</div>' +
+            '<div class="wbupdate-row wbupdate-panel">' +
+              '<span class="wbupdate-panel-label">' + boardSvg() + '패널</span>' +
+              '<span class="wbupdate-text">' + esc(card.panel.text) + '</span>' +
+              '<a href="#' + esc(card.panel.id) + '" onclick="return false;">#' + esc(card.panel.id) + '</a>' +
+            '</div>' +
+            '<div class="wbupdate-row wbupdate-log">' +
+              '<span class="wbupdate-l">L</span>' +
+              '<span class="wbupdate-text">' + esc(card.log) + '</span>' +
+            '</div>' +
+          '</div>' +
+        '</section>' +
+      '</article>' +
+    '</div>';
+  }
+
+  function render() {
+    var html = PANES.map(function (pane) {
+      var isBase = pane.id === "base";
+      var cardsHtml = state.cards.map(function (card, idx) {
+        return renderCard(card, isBase, pane.id, idx);
+      }).join("");
+
+      return '<section class="wb-pane ' + esc(pane.variantClass) + (pane.recommended ? " is-recommended" : "") + '" data-opt="' + esc(pane.id) + '">' +
+        '<div class="wb-pane-hd">' +
+          '<div class="wb-pane-title-wrap">' +
+            '<div class="wb-pane-title">' +
+              '<span>' + esc(pane.title) + '</span>' +
+              '<span class="wb-tag-pill ' + esc(pane.badgeClass) + '">' + esc(pane.badge) + '</span>' +
+            '</div>' +
+            '<div class="wb-pane-desc">' + esc(pane.desc) + '</div>' +
+          '</div>' +
+          '<div class="wb-pane-metric" data-metric-for="' + esc(pane.id) + '">계산 중…</div>' +
+        '</div>' +
+        '<div class="wb-chat-col">' + cardsHtml + '</div>' +
+      '</section>';
+    }).join("");
+
+    stageEl.innerHTML = html;
+    measureHeights();
+  }
+
+  function measureHeights() {
+    requestAnimationFrame(function () {
+      var baseTotal = 0;
+      var paneTotals = {};
+
+      function measurePane(paneEl, paneId) {
+        var sum = 0;
+        state.cards.forEach(function (_, idx) {
+          var topicEl = paneEl.querySelector('.wb-case-wrap[data-card-idx="' + idx + '"] .wbupdate-topic');
+          var lblEl = paneEl.querySelector('[data-h-for="' + paneId + '-' + idx + '"]');
+          if (!topicEl) return;
+          var h = Math.round(topicEl.getBoundingClientRect().height);
+          sum += h;
+          if (lblEl) lblEl.textContent = "카드 높이 " + h + "px";
+        });
+        return sum;
+      }
+
+      PANES.forEach(function (pane) {
+        var paneEl = stageEl.querySelector('.wb-pane[data-opt="' + pane.id + '"]');
+        if (!paneEl) return;
+        var sum = measurePane(paneEl, pane.id);
+        paneTotals[pane.id] = sum;
+        if (pane.id === "base") baseTotal = sum;
+      });
+
+      if (baseTotal > 0) {
+        baseTotalCache[state.cardWidth] = baseTotal;
+      } else {
+        var basePaneEl = stageEl.querySelector('.wb-pane[data-opt="base"]');
+        if (basePaneEl) {
+          var prevStyle = basePaneEl.style.cssText;
+          basePaneEl.style.cssText = "display:flex;position:fixed;left:-99999px;top:0;width:100%;max-width:640px;visibility:hidden;pointer-events:none;";
+          var measuredBase = measurePane(basePaneEl, "base");
+          basePaneEl.style.cssText = prevStyle;
+          if (measuredBase > 0) {
+            baseTotal = measuredBase;
+            paneTotals.base = measuredBase;
+            baseTotalCache[state.cardWidth] = measuredBase;
+          }
+        }
+        if (!baseTotal && baseTotalCache[state.cardWidth]) {
+          baseTotal = baseTotalCache[state.cardWidth];
+        }
+      }
+
+      PANES.forEach(function (pane) {
+        var mEl = stageEl.querySelector('[data-metric-for="' + pane.id + '"]');
+        if (!mEl || !paneTotals[pane.id]) return;
+        var tot = paneTotals[pane.id];
+        if (pane.id === "base" || !baseTotal) {
+          mEl.innerHTML = "합계 " + tot + "px";
+        } else {
+          var diffPct = Math.round(((tot - baseTotal) / baseTotal) * 100);
+          mEl.innerHTML = "합계 " + tot + "px <b>(" + diffPct + "%)</b>";
+        }
+      });
+    });
+  }
+
+  function cycleStatus(id) {
+    var item = findItem(id);
+    if (!item) return;
+    var idx = CYCLE_ORDER.indexOf(item.state);
+    item.state = idx === -1 ? "open" : CYCLE_ORDER[(idx + 1) % CYCLE_ORDER.length];
+    render();
+    // Refresh tooltip immediately if hovered over the clicked item
+    if (activeHoverId === id) {
+      var btn = stageEl.querySelector('[data-item-id="' + id + '"]');
+      if (btn) showTip(id, lastPointer.x, lastPointer.y);
+    }
+  }
+
+  var activeHoverId = null;
+  var lastPointer = { x: 0, y: 0 };
+
+  function showTip(id, clientX, clientY) {
+    var item = findItem(id);
+    if (!item) return;
+    activeHoverId = id;
+    lastPointer.x = clientX;
+    lastPointer.y = clientY;
+
+    var stLabel = STATE_LABEL[item.state] || item.state;
+    var ansSection = "";
+    if (item.state !== "open") {
+      var summary = item.state === "answered"
+        ? (item.answerDetail || item.answerText)
+        : item.state === "assumed"
+          ? (item.answerDetail || item.answerText)
+          : item.state === "withdrawn"
+            ? (item.answerDetail || "철회됨")
+            : (item.answerDetail || "대체됨");
+      ansSection = '<div class="wb-tip-ans is-' + esc(item.state) + '">' +
+        '<b>' + esc(item.state === "answered" ? item.answerText : stLabel) + '</b>' +
+        '<span>' + esc(summary) + '</span>' +
+      '</div>';
+    }
+
+    tipEl.innerHTML =
+      '<div class="wb-tip-top">' +
+        '<span class="wb-tip-id">(' + esc(item.id) + ')</span>' +
+        '<span>' + esc(CLASS_LABEL[item.cls]) + '</span>' +
+        '<span class="wb-tip-st is-' + esc(item.state) + '">' + esc(stLabel) + '</span>' +
+      '</div>' +
+      '<div class="wb-tip-ttl">' + esc(item.title) + '</div>' +
+      ansSection;
+
+    tipEl.classList.add("is-shown");
+    tipEl.setAttribute("aria-hidden", "false");
+    positionTip(clientX, clientY);
+  }
+
+  function positionTip(clientX, clientY) {
+    var pad = 12;
+    var rect = tipEl.getBoundingClientRect();
+    var left = clientX + 14;
+    var top = clientY + 14;
+    if (left + rect.width > window.innerWidth - pad) {
+      left = Math.max(pad, clientX - rect.width - 12);
+    }
+    if (top + rect.height > window.innerHeight - pad) {
+      top = Math.max(pad, clientY - rect.height - 12);
+    }
+    tipEl.style.left = left + "px";
+    tipEl.style.top = top + "px";
+  }
+
+  function hideTip() {
+    activeHoverId = null;
+    tipEl.classList.remove("is-shown");
+    tipEl.setAttribute("aria-hidden", "true");
+  }
+
+  // Event delegation inside stage
+  stageEl.addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-item-id]");
+    if (!btn) return;
+    cycleStatus(btn.getAttribute("data-item-id"));
+  });
+
+  stageEl.addEventListener("pointermove", function (e) {
+    var btn = e.target.closest("[data-item-id]");
+    if (!btn) {
+      if (activeHoverId) hideTip();
+      return;
+    }
+    var id = btn.getAttribute("data-item-id");
+    if (activeHoverId !== id) {
+      showTip(id, e.clientX, e.clientY);
+    } else {
+      lastPointer.x = e.clientX;
+      lastPointer.y = e.clientY;
+      positionTip(e.clientX, e.clientY);
+    }
+  });
+
+  stageEl.addEventListener("pointerleave", hideTip);
+
+  stageEl.addEventListener("focusin", function (e) {
+    var btn = e.target.closest("[data-item-id]");
+    if (!btn) return;
+    var r = btn.getBoundingClientRect();
+    showTip(btn.getAttribute("data-item-id"), r.left + 20, r.bottom + 4);
+  });
+
+  stageEl.addEventListener("focusout", function (e) {
+    if (!stageEl.contains(e.relatedTarget)) hideTip();
+  });
+
+  // Segmented controls
+  function bindSeg(containerId, attr, onChange) {
+    var el = document.getElementById(containerId);
+    if (!el) return;
+    el.addEventListener("click", function (e) {
+      var btn = e.target.closest("button[" + attr + "]");
+      if (!btn) return;
+      var val = btn.getAttribute(attr);
+      el.querySelectorAll("button[" + attr + "]").forEach(function (b) {
+        b.setAttribute("aria-pressed", b === btn ? "true" : "false");
+      });
+      onChange(val);
+    });
+  }
+
+  bindSeg("seg-focus", "data-focus-val", function (val) {
+    state.focus = val;
+    stageEl.setAttribute("data-focus", val);
+    hideTip();
+    measureHeights();
+  });
+
+  bindSeg("seg-ans", "data-ans-val", function (val) {
+    state.ansMode = val;
+    document.body.setAttribute("data-ans-mode", val);
+    measureHeights();
+  });
+
+  bindSeg("seg-width", "data-width-val", function (val) {
+    state.cardWidth = val;
+    document.documentElement.style.setProperty("--card-max-w", val);
+    measureHeights();
+  });
+
+  document.getElementById("btn-reset").addEventListener("click", function () {
+    state.cards = createInitialCards();
+    hideTip();
+    render();
+  });
+
+  window.addEventListener("resize", measureHeights);
+
+  render();
+})();
+</script>
+</body>
+</html>

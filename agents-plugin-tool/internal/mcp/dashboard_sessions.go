@@ -54,9 +54,10 @@ const (
 
 // dashboardLink is this process's registry and nudge state.
 type dashboardLink struct {
-	mu       sync.Mutex
-	sessions map[string]*dashboardSession // by session key
-	pruned   bool
+	mu           sync.Mutex
+	sessions     map[string]*dashboardSession // by session key
+	pruned       bool
+	prunePending bool
 	// now is the clock; nil uses time.Now.
 	now func() time.Time
 	// dir resolves the daemon state directory; nil uses
@@ -102,10 +103,49 @@ type dashboardSession struct {
 	daemonRow bool
 	// idle is set once the heartbeat stopped for dashboardIdleCutoff.
 	idle bool
+	// unregisterPending is set while the session's dashboard key resolved off
+	// and registration removal has not yet been confirmed (for example, when
+	// /meta/unregister-check deferred because the daemon was unavailable).
+	// Subsequent touches and heartbeats retry removal until confirmed or the
+	// session is re-enabled.
+	unregisterPending bool
+	// unregisterSeq increments on every unregister start or cancellation so an
+	// in-flight lookup that finishes after a concurrent re-enable (or newer
+	// disable) cannot remove a newer registration. unregisterInFlightSeq holds
+	// the sequence number of the active unlocked lookup (0 when none) so
+	// concurrent touches/heartbeats do not stack duplicate RPCs.
+	unregisterSeq         uint64
+	unregisterInFlightSeq uint64
 	// servedPort is the daemon port this session's most recent nudge round
 	// trip was answered on (204); zero after a failed one or before any
 	// returned. whiteboard.update's pointer line reads it (dashboardPageURL).
 	servedPort int
+}
+
+// beginUnregisterLocked clears the live registration state, marks removal
+// pending, and claims a sequence number for an unlocked unregister call. It
+// returns (0, false) when an unregister for the current disable generation is
+// already in flight. Caller must hold d.mu.
+func (sess *dashboardSession) beginUnregisterLocked() (uint64, bool) {
+	sess.reg = wsdashboard.Registration{}
+	sess.servedPort = 0
+	sess.unregisterPending = true
+	if sess.unregisterInFlightSeq != 0 && sess.unregisterInFlightSeq == sess.unregisterSeq {
+		return 0, false
+	}
+	sess.unregisterSeq++
+	sess.unregisterInFlightSeq = sess.unregisterSeq
+	return sess.unregisterSeq, true
+}
+
+// cancelUnregisterLocked clears pending removal state and advances
+// unregisterSeq so any in-flight unregister becomes stale. Caller must hold
+// d.mu.
+func (sess *dashboardSession) cancelUnregisterLocked() {
+	if sess.unregisterPending || sess.unregisterInFlightSeq != 0 {
+		sess.unregisterPending = false
+		sess.unregisterSeq++
+	}
 }
 
 // served reports whether the daemon has a registration for the session:
@@ -299,6 +339,9 @@ func (s *Server) dashboardReconnect() {
 		if d.sessions == nil {
 			d.sessions = map[string]*dashboardSession{}
 		}
+		var unregisterSess *dashboardSession
+		var unregisterReplyID string
+		var unregisterSeq uint64
 		if _, known := d.sessions[key]; !known {
 			// Keep registration/order and activity age, clearing only the
 			// old serve loop's end mark and refreshing its heartbeat. Keep
@@ -308,7 +351,11 @@ func (s *Server) dashboardReconnect() {
 			sess.enabled = s.dashboardSessionEnabled(key)
 			d.sessions[key] = sess
 			if !sess.enabled {
-				s.dashboardUnregister(dir, sess)
+				if seq, ok := sess.beginUnregisterLocked(); ok {
+					unregisterSess = sess
+					unregisterReplyID = sess.replyID
+					unregisterSeq = seq
+				}
 			} else {
 				if written, err := dashboardWriteRow(dir, sess, reg); err == nil && written {
 					s.queueDashboardNudge(sess)
@@ -316,6 +363,9 @@ func (s *Server) dashboardReconnect() {
 			}
 		}
 		d.mu.Unlock()
+		if unregisterSess != nil {
+			s.dashboardUnregister(dir, key, unregisterSess, unregisterReplyID, unregisterSeq)
+		}
 	}
 }
 
@@ -378,14 +428,21 @@ retry:
 		return
 	}
 	if !sess.enabled {
-		if sess.reg.ReplyID != "" || !known {
+		if sess.reg.ReplyID != "" || !known || sess.unregisterPending {
 			// Off from the first call too: a registration a key-on run of
 			// this session left behind must not keep it listed.
-			s.dashboardUnregister(dir, sess)
+			seq, start := sess.beginUnregisterLocked()
+			replyID := sess.replyID
+			d.mu.Unlock()
+			if start {
+				s.dashboardUnregister(dir, sessionKey, sess, replyID, seq)
+			}
+			return
 		}
 		d.mu.Unlock()
 		return
 	}
+	sess.cancelUnregisterLocked()
 	if sess.reg.ReplyID != "" && !sess.idle {
 		d.mu.Unlock()
 		return
@@ -405,7 +462,13 @@ retry:
 	defer d.mu.Unlock()
 	if !d.pruned {
 		d.pruned = true
-		wsdashboard.PruneRegistrations(dir, now, wsdashboard.RegistryRetention)
+		handled := false
+		if pruner, ok := s.live.host.(wsdashboard.MetaPruner); ok {
+			_, handled = pruner.PruneRegistrationsFor(dir, now, wsdashboard.RegistryRetention)
+		}
+		if !handled {
+			d.prunePending = true
+		}
 	}
 	reg := sess.reg
 	if reg.ReplyID == "" {
@@ -459,19 +522,52 @@ func dashboardWriteRow(dir string, sess *dashboardSession, reg wsdashboard.Regis
 
 // dashboardUnregister takes a session whose dashboard key resolves off out
 // of the registry: its row is removed and this server stops writing it. The
-// row of a session the dashboard daemon has hosted (its directory holds the
-// runner's record) stays as it is instead: the daemon reads that row to
-// learn the session moved to a terminal, and with the row gone it would
-// write its own again and resume a conversation this harness holds. The
-// caller holds d.mu.
-func (s *Server) dashboardUnregister(dir string, sess *dashboardSession) {
-	if _, err := wsstate.Stat(filepath.Join(wsdashboard.SessionDir(dir, sess.replyID), wsdashboard.AgentRecordFileName)); err != nil {
-		if err := wsdashboard.RemoveRegistration(dir, sess.replyID); err != nil {
-			s.debugEvent("dashboard.unregister_failed", map[string]any{"error": err.Error()})
-		}
+// row of a session the dashboard daemon has hosted (confirmed by the daemon's
+// in-memory runner or authenticated /meta/unregister-check) stays as it is
+// instead: the daemon reads that row to learn the session moved to a terminal,
+// and with the row gone it would write its own again and resume a conversation
+// this harness holds. When no registration file exists on disk, no daemon
+// contact is needed. When a registration file exists and the daemon is
+// unavailable, removal fails closed rather than reading legacy agent.json and
+// retains sess.unregisterPending so later touches and heartbeats retry once
+// the daemon recovers. Callers must NOT hold d.mu.
+func (s *Server) dashboardUnregister(dir, sessionKey string, sess *dashboardSession, replyID string, seq uint64) {
+	_, readErr := wsdashboard.ReadRegistration(dir, replyID)
+	var hasRecord bool
+	var lookupErr error
+	if readErr == nil {
+		hasRecord, lookupErr = s.lookupHasAgentRecord(dir, replyID)
 	}
-	sess.reg = wsdashboard.Registration{}
-	sess.servedPort = 0
+	d := &s.dashboard
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if sess.unregisterInFlightSeq == seq {
+		sess.unregisterInFlightSeq = 0
+	}
+	if d.sessions[sessionKey] != sess || sess.enabled || sess.replyID != replyID || sess.daemonRow || sess.unregisterSeq != seq {
+		return
+	}
+	if readErr != nil {
+		if errors.Is(readErr, os.ErrNotExist) {
+			sess.unregisterPending = false
+		}
+		return
+	}
+	if lookupErr != nil {
+		s.debugEvent("dashboard.unregister_deferred", map[string]any{"error": lookupErr.Error()})
+		sess.unregisterPending = true
+		return
+	}
+	if hasRecord {
+		sess.unregisterPending = false
+		return
+	}
+	if err := wsdashboard.RemoveRegistration(dir, replyID); err != nil {
+		s.debugEvent("dashboard.unregister_failed", map[string]any{"error": err.Error()})
+		sess.unregisterPending = true
+		return
+	}
+	sess.unregisterPending = false
 }
 
 // dashboardTouchHosted records the hosted session's keyed call: its first
@@ -499,12 +595,32 @@ func (s *Server) dashboardHeartbeat() {
 	d := &s.dashboard
 	now := d.clock()
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	dir, err := d.stateDir()
 	if err != nil {
+		d.mu.Unlock()
 		return
 	}
+	type unregisterTarget struct {
+		key     string
+		sess    *dashboardSession
+		replyID string
+		seq     uint64
+	}
+	var toUnregister []unregisterTarget
 	for key, sess := range d.sessions {
+		if sess.unregisterPending && !sess.enabled && !sess.daemonRow {
+			if s.dashboardSessionEnabled(key) {
+				sess.enabled = true
+				sess.checkedAt = now
+				sess.cancelUnregisterLocked()
+				continue
+			}
+			sess.checkedAt = now
+			if seq, ok := sess.beginUnregisterLocked(); ok {
+				toUnregister = append(toUnregister, unregisterTarget{key: key, sess: sess, replyID: sess.replyID, seq: seq})
+			}
+			continue
+		}
 		if sess.reg.ReplyID == "" || sess.idle {
 			continue
 		}
@@ -515,7 +631,9 @@ func (s *Server) dashboardHeartbeat() {
 		sess.enabled = s.dashboardSessionEnabled(key)
 		sess.checkedAt = now
 		if !sess.enabled {
-			s.dashboardUnregister(dir, sess)
+			if seq, ok := sess.beginUnregisterLocked(); ok {
+				toUnregister = append(toUnregister, unregisterTarget{key: key, sess: sess, replyID: sess.replyID, seq: seq})
+			}
 			continue
 		}
 		reg := sess.reg
@@ -524,6 +642,10 @@ func (s *Server) dashboardHeartbeat() {
 		if _, err := dashboardWriteRow(dir, sess, reg); err != nil {
 			s.debugEvent("dashboard.heartbeat_failed", map[string]any{"error": err.Error()})
 		}
+	}
+	d.mu.Unlock()
+	for _, target := range toUnregister {
+		s.dashboardUnregister(dir, target.key, target.sess, target.replyID, target.seq)
 	}
 }
 
@@ -678,6 +800,13 @@ func (s *Server) runDashboardNudges(queue <-chan wsdashboard.NudgeBody) {
 			s.recordDashboardNudges(batch, 0)
 			continue
 		}
+		if s.takeDashboardPrunePending() {
+			ctx, cancel := context.WithTimeout(context.Background(), dashboardNudgeTimeout)
+			if _, err := wsdashboard.RequestPruneRegistrations(ctx, client, dir, wsdashboard.RegistryRetention); err != nil {
+				s.debugEvent("dashboard.prune_failed", map[string]any{"error": err.Error()})
+			}
+			cancel()
+		}
 		// A hosted daemon can accept its own cache's invalidations without
 		// touching endpoint.json or making a loopback request. Other cache
 		// roots and older hosts retain the HTTP path.
@@ -712,6 +841,19 @@ func (s *Server) runDashboardNudges(queue <-chan wsdashboard.NudgeBody) {
 			s.recordDashboardNudges([]wsdashboard.NudgeBody{body}, port)
 		}
 	}
+}
+
+// takeDashboardPrunePending consumes the one-shot pending prune flag queued on
+// an out-of-daemon server's first registration.
+func (s *Server) takeDashboardPrunePending() bool {
+	d := &s.dashboard
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.prunePending {
+		return false
+	}
+	d.prunePending = false
+	return true
 }
 
 // recordDashboardNudges records the outcome of the nudges in batch on the
@@ -955,7 +1097,7 @@ func (src *DashboardSessionSource) ReadSession(reg wsdashboard.Registration) (ws
 	}
 	return src.ReadLiveSession(reg, wsdashboard.SessionData{
 		HasBoard:           record.Whiteboard != nil,
-		CountPolicy:        record.Whiteboard.OpenAskCount(),
+		CountPolicy:        record.Whiteboard.OpenAskCountExcluding(record.boardHeld),
 		OpenAskIDs:         record.Whiteboard.OpenAskIDs(),
 		Resumable:          record.HarnessSession != "" && record.HarnessCwd != "",
 		NonLiveFingerprint: hex.EncodeToString(h.Sum(nil)[:16]),

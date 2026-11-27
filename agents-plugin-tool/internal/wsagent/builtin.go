@@ -105,6 +105,8 @@ var ChildSafeWSTools = []string{
 	"review.marker",
 	"mailbox.send",
 	"mailbox.recv",
+	"mailbox.history",
+	"mailbox.read",
 	"mailbox.recipients",
 	"todo.list",
 	"todo.read",

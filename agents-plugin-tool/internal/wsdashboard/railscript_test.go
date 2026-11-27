@@ -442,6 +442,121 @@ check("another input is indented JSON", R.approvalText({ pattern: "x", n: 2 }), 
 check("no input", [R.approvalText(null), R.approvalText({}), R.approvalText(undefined)], ["", "", ""]);
 check("a long input is capped", R.approvalText({ command: new Array(5000).join("x") }).length, 4001);
 
+// lifecycle drag-and-drop helpers: sections, eligibility, risks, targets, and restore positioning.
+var lws = new El("rws", { "data-ws": "/w/a" });
+var lwt1 = lws.appendChild(new El("rwt", { "data-g": "/w/a/wt1" }));
+var lbox1 = lwt1.appendChild(new El("rsessions"));
+var actStar = lbox1.appendChild(new El("rs", { "data-rid": "actStar", "data-star": "1" }));
+actStar.appendChild(new El("drgrip", { "data-host": "1", "data-proc": "1", "data-drag": "1" }));
+var act1 = lbox1.appendChild(new El("rs", { "data-rid": "act1", "data-star": "0", "data-kids": "1" }));
+act1.appendChild(new El("drgrip", { "data-host": "1", "data-bg": "1", "data-drag": "1" }));
+var lkids = lbox1.appendChild(new El("rkids", { "data-parent": "act1" }));
+var kid1 = lkids.appendChild(new El("rs", { "data-rid": "kid1", "data-star": "0", "data-g": "/w/a/wt1" }));
+kid1.appendChild(new El("drgrip", { "data-host": "1", "data-drag": "1" }));
+var actCli = lbox1.appendChild(new El("rs", { "data-rid": "actCli", "data-star": "0" }));
+actCli.appendChild(new El("drgrip", { "data-drag": "1" }));
+var lfold1 = lbox1.appendChild(new El("rfold", { "data-key": "/w/a/wt1" }));
+var lrfhA = lfold1.appendChild(new El("rfh", { "data-k": "arch" }));
+var lrfhD = lfold1.appendChild(new El("rfh", { "data-k": "del" }));
+var ledA = lfold1.appendChild(new El("rended on", { "data-k": "arch" }));
+var ledABox = ledA.appendChild(new El("rsessions"));
+var archStar = ledABox.appendChild(new El("rs ended archived", { "data-rid": "archStar" }));
+archStar.appendChild(new El("drgrip", { "data-host": "1", "data-star-was": "1", "data-drag": "1" }));
+var archPlain = ledABox.appendChild(new El("rs ended archived", { "data-rid": "archPlain" }));
+archPlain.appendChild(new El("drgrip", { "data-host": "1", "data-drag": "1" }));
+var ledD = lfold1.appendChild(new El("rended on", { "data-k": "del" }));
+var ledDBox = ledD.appendChild(new El("rsessions"));
+var delOk = ledDBox.appendChild(new El("rs ended", { "data-rid": "delOk", "data-star": "0" }));
+delOk.appendChild(new El("drgrip", { "data-host": "1", "data-revive": "reopen", "data-drag": "1" }));
+var delBlk = ledDBox.appendChild(new El("rs ended", { "data-rid": "delBlk", "data-star": "0" }));
+delBlk.appendChild(new El("drgrip", { "data-host": "1", "data-revive": "reopen", "data-revive-blocked": "nosession" }));
+var delStarHidden = ledDBox.appendChild(new El("rs ended", { "data-rid": "delStarHidden" }));
+delStarHidden.appendChild(new El("drgrip", { "data-host": "1", "data-revive": "reopen", "data-star-was": "1", "data-drag": "1" }));
+var delCli = ledDBox.appendChild(new El("rs ended", { "data-rid": "delCli", "data-star": "0" }));
+delCli.appendChild(new El("drgrip"));
+var lwt2 = lws.appendChild(new El("rwt", { "data-g": "/w/a/wt2" }));
+var lbox2 = lwt2.appendChild(new El("rsessions"));
+var lfold2 = lbox2.appendChild(new El("rfold", { "data-key": "/w/a/wt2" }));
+var lrfhA2 = lfold2.appendChild(new El("rfh", { "data-k": "arch" }));
+var ledA2 = lfold2.appendChild(new El("rended on", { "data-k": "arch" }));
+var archWt2 = ledA2.appendChild(new El("rsessions")).appendChild(new El("rs ended archived", { "data-rid": "archWt2" }));
+archWt2.appendChild(new El("drgrip", { "data-host": "1", "data-drag": "1" }));
+var lwsFlat = new El("rws", { "data-ws": "/w/flat" });
+var lboxFlat = lwsFlat.appendChild(new El("rsessions"));
+var ledFlatA = lboxFlat.appendChild(new El("rended on", { "data-k": "arch" }));
+var flatArch = ledFlatA.appendChild(new El("rsessions")).appendChild(new El("rs ended archived", { "data-rid": "flatArch" }));
+flatArch.appendChild(new El("drgrip", { "data-host": "1", "data-drag": "1" }));
+
+check("lifecycle sections & boxes", [
+  R.rowSection(act1), R.rowSection(archStar), R.rowSection(delOk),
+  R.activeRowsBox(archStar) === lbox1, R.activeRowsBox(flatArch) === lboxFlat,
+  R.groupKey(act1) === R.groupKey(archStar), R.groupKey(act1) === R.groupKey(lrfhD),
+  R.groupKey(act1) !== R.groupKey(archWt2)
+], ["active", "arch", "del", true, true, true, true, true]);
+
+var mStar = R.rowMeta(actStar), mAct1 = R.rowMeta(act1), mKid = R.rowMeta(kid1), mCli = R.rowMeta(actCli);
+var mArchStar = R.rowMeta(archStar), mArchPlain = R.rowMeta(archPlain);
+var mDelOk = R.rowMeta(delOk), mDelBlk = R.rowMeta(delBlk), mDelSH = R.rowMeta(delStarHidden), mDelCli = R.rowMeta(delCli);
+check("rowMeta & risks", [
+  mArchStar.star, mArchStar.starHidden, mDelSH.star, mDelSH.starHidden, mKid.child,
+  R.rowRisks(mStar), R.rowRisks(mAct1), R.rowRisks(mArchPlain)
+], [true, false, false, true, true, ["proc"], ["kids", "bg"], []]);
+
+check("active->arch/del valid & risky", [
+  R.lifecycleDrop(mStar, { section: "arch", groupKey: R.groupKey(lrfhA) }, { canControl: true }),
+  R.lifecycleDrop(mAct1, { section: "del", groupKey: R.groupKey(lrfhD) }, { canControl: true }),
+  R.lifecycleDrop(mAct1, { section: "active", groupKey: R.groupKey(act1) }, { canControl: true })
+], [
+  { action: "archive", rid: "actStar", url: "/agents/actStar/hide", body: {}, targetSection: "arch", risks: ["proc"] },
+  { action: "delete", rid: "act1", url: "/agents/act1/close", body: {}, targetSection: "del", risks: ["kids", "bg"] },
+  null
+]);
+
+check("lifecycle refusals", [
+  R.lifecycleDrop(mAct1, { section: "arch", groupKey: R.groupKey(lrfhA) }, { canControl: false }),
+  R.lifecycleDrop(mKid, { section: "arch", groupKey: R.groupKey(lrfhA) }, { canControl: true }),
+  R.lifecycleDrop(mCli, { section: "arch", groupKey: R.groupKey(lrfhA) }, { canControl: true }),
+  R.lifecycleDrop(mAct1, { section: "arch", groupKey: R.groupKey(lrfhA2) }, { canControl: true }),
+  R.lifecycleDrop(mAct1, { section: "arch", groupKey: R.groupKey(flatArch) }, { canControl: true }),
+  R.lifecycleDrop(mDelBlk, { section: "arch", groupKey: R.groupKey(lrfhA) }, { canControl: true }),
+  R.lifecycleDrop(mDelCli, { section: "active", groupKey: R.groupKey(act1) }, { canControl: true }),
+  [R.layoutRefusal("control"), R.layoutRefusal("child_life"), R.layoutRefusal("hosted"), R.layoutRefusal("blocked")]
+], [
+  { refusal: "control" },
+  { refusal: "child_life" },
+  { refusal: "hosted" },
+  { refusal: "group" },
+  { refusal: "workspace" },
+  { refusal: "blocked" },
+  { refusal: "hosted" },
+  ["js.rail.drag.control", "js.rail.drag.child", "js.rail.drag.hosted", "js.rail.drag.blocked"]
+]);
+
+var rows1 = R.activeTopRows(lbox1);
+var dDelOkAct = R.lifecycleDrop(mDelOk, { section: "active", groupKey: R.groupKey(act1), targetRow: act1, frac: 0.2 }, { canControl: true, activeRows: rows1 });
+var dWt2EmptyAct = R.lifecycleDrop(R.rowMeta(archWt2), { section: "active", groupKey: R.groupKey(lwt2), targetRow: null, frac: 0 }, { canControl: true, activeRows: [] });
+check("arch <-> del & active restore positions", [
+  R.lifecycleDrop(mArchPlain, { section: "del", groupKey: R.groupKey(lrfhD) }, { canControl: true }),
+  R.lifecycleDrop(mDelOk, { section: "arch", groupKey: R.groupKey(lrfhA) }, { canControl: true }),
+  R.lifecycleDrop(mArchPlain, { section: "arch", groupKey: R.groupKey(lrfhA) }, { canControl: true }),
+  R.lifecycleDrop(mArchPlain, { section: "active", groupKey: R.groupKey(act1), targetRow: act1, frac: 0.8 }, { canControl: true, activeRows: rows1 }).restore.op,
+  R.lifecycleDrop(mArchStar, { section: "active", groupKey: R.groupKey(act1), targetRow: act1, frac: 0.2 }, { canControl: true, activeRows: rows1 }).restore.op,
+  R.lifecycleDrop(mArchPlain, { section: "active", groupKey: R.groupKey(kid1), targetRow: kid1, frac: 0.5 }, { canControl: true, activeRows: rows1 }).restore.op,
+  [dDelOkAct.action, dDelOkAct.rid, dDelOkAct.url, dDelOkAct.body, dDelOkAct.targetSection, dDelOkAct.risks, dDelOkAct.restore.op, dDelOkAct.restore.ref === act1, dDelOkAct.restore.after, dDelOkAct.restore.boxTop],
+  R.lifecycleDrop(mDelSH, { section: "active", groupKey: R.groupKey(act1), targetRow: act1, frac: 0.2 }, { canControl: true, activeRows: rows1 }).restore.op,
+  [dWt2EmptyAct.action, dWt2EmptyAct.rid, dWt2EmptyAct.url, dWt2EmptyAct.body, dWt2EmptyAct.targetSection, dWt2EmptyAct.risks, dWt2EmptyAct.restore.op, dWt2EmptyAct.restore.ref, dWt2EmptyAct.restore.after, dWt2EmptyAct.restore.boxTop]
+], [
+  { action: "delete", rid: "archPlain", url: "/agents/archPlain/close", body: {}, targetSection: "del", risks: [] },
+  { action: "reopen-archive", rid: "delOk", url: "/agents/delOk/reopen", body: { hidden: true }, targetSection: "arch", risks: [] },
+  { noop: true, refusal: "" },
+  { op: "move", rid: "archPlain", after: "act1" },
+  { op: "move", rid: "archStar", after: "actStar" },
+  { op: "move", rid: "archPlain", after: "act1" },
+  ["reopen-active", "delOk", "/agents/delOk/reopen", { hidden: false }, "active", [], { op: "move", rid: "delOk", before: "act1" }, true, false, false],
+  { op: "detach", rid: "delStarHidden", before: "act1" },
+  ["unarchive", "archWt2", "/agents/archWt2/unhide", {}, "active", [], null, null, false, true]
+]);
+
 if (bad.length) console.log(bad.join("\n"));
 `
 

@@ -85,7 +85,7 @@ context.q = () => [];
 vm.runInContext(func('setLayout'), context);
 for (const mode of ['tabs', 'split', 'auto', 'invalid']) {
   context.setLayout(mode);
-  assert.equal(context.doc.body.getAttribute('data-dashboard-layout'), mode === 'invalid' ? 'auto' : mode);
+  assert.equal(context.doc.body.getAttribute('data-dashboard-layout'), 'auto');
   assert.equal(context.grid['data-layout'], context.doc.body.getAttribute('data-dashboard-layout'));
 }
 console.log('composer note chips: in-place text, stable references/focus, add/remove, synchronous send state and layout mirror passed');

@@ -28,12 +28,14 @@ type trackerSupportFixture struct {
 	other    string
 	support  string
 	dashDir  string
+	records  *testRecordReader
 	recorded wsagent.Record
 }
 
 func newTrackerSupportFixture(t *testing.T) *trackerSupportFixture {
 	t.Helper()
-	f := &trackerSupportFixture{whiteboardFixture: newTrackerLeadFixture(t)}
+	f := &trackerSupportFixture{whiteboardFixture: newTrackerLeadFixture(t), records: newTestRecordReader()}
+	f.s.recordReader = f.records
 	f.trackerUpdate(t, trackerPersonal)
 	f.trackerUpdate(t, `<tk:register store="other" member="ada" given="Ada"/>`)
 	f.meItem = trackerWrote(t, f.trackerUpdate(t, `<tk:store name="me"><tk:item.create kind="task" title="Fix the parser" due="2026-11-20"/>
@@ -56,7 +58,7 @@ func newTrackerSupportFixture(t *testing.T) *trackerSupportFixture {
 }
 
 // conversation mints an agent key at root, as the runner's key store does,
-// and writes the daemon's record of a conversation of profile under it.
+// and records a conversation of profile in the daemon's in-memory reader.
 func (f *trackerSupportFixture) conversation(t *testing.T, root, profile string) (string, wsagent.Record) {
 	t.Helper()
 	key, err := NewAgentKeyStore().Mint(root)
@@ -64,9 +66,7 @@ func (f *trackerSupportFixture) conversation(t *testing.T, root, profile string)
 		t.Fatal(err)
 	}
 	rec := wsagent.Record{ReplyID: wsmailbox.ReplyID(key), Profile: profile, Backend: wsagent.BackendClaude, Root: root, WSKey: key, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
-	if err := wsagent.WriteRecordForTest(f.dashDir, rec); err != nil {
-		t.Fatal(err)
-	}
+	f.records.Set(rec)
 	return key, rec
 }
 
@@ -169,9 +169,7 @@ func TestTrackerSupportGateRefusesEveryOtherSpawnedKey(t *testing.T) {
 	// A record naming another key under this key's reply-id.
 	forged := f.recorded
 	forged.ReplyID = wsmailbox.ReplyID(bare)
-	if err := wsagent.WriteRecordForTest(f.dashDir, forged); err != nil {
-		t.Fatal(err)
-	}
+	f.records.Set(forged)
 	refused("record naming another key", bare)
 
 	// A conversation at a directory that is no store's.
@@ -181,9 +179,7 @@ func TestTrackerSupportGateRefusesEveryOtherSpawnedKey(t *testing.T) {
 	// A closed conversation.
 	closed, rec := f.conversation(t, f.meDir, wsagent.SupportProfileClaude)
 	rec.ClosedAt = time.Now().UTC().Format(time.RFC3339)
-	if err := wsagent.WriteRecordForTest(f.dashDir, rec); err != nil {
-		t.Fatal(err)
-	}
+	f.records.Set(rec)
 	refused("closed conversation", closed)
 
 	// A conversation whose profile names no tracker tool, and one whose

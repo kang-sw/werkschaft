@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wscompact"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsreview"
 	"github.com/kang-sw/devenv/internal/wswhiteboard"
@@ -180,43 +181,127 @@ func renderSessionStateBody(rec sessionRecord, includeWhiteboardQuickCard bool) 
 }
 
 func renderHostedRestoreBundle(key, cause string, rec sessionRecord, children []wsagent.AgentChild, whiteboardQuickCard bool) string {
+	return renderHostedRestoreBundleWithMail(key, cause, rec, children, whiteboardQuickCard, nil, 0)
+}
+
+const (
+	restoreRecentMailMax        = 5
+	restoreRecentMailByteBudget = 10 * 1024
+)
+
+func renderHostedRestoreBundleWithMail(key, cause string, rec sessionRecord, children []wsagent.AgentChild, whiteboardQuickCard bool, recentRecv []mailboxHistoryRecord, totalRecv int) string {
 	var sb strings.Builder
+	fmt.Fprintf(&sb, "<ws-restore cause=\"%s\">\n", wscompact.EscapeXMLAttr(cause))
 	sb.WriteString("## Hosted Session Restore\n\n")
-	fmt.Fprintf(&sb, "Your ws session key is `%s`. ", key)
+	fmt.Fprintf(&sb, "Your ws session key is `%s`. ", wscompact.EscapeFramingCloseTags(key))
 	if cause == "compaction" {
 		sb.WriteString("Context was compacted. ")
 	} else {
 		sb.WriteString("The daemon restarted. ")
 	}
 	sb.WriteString("This state was rendered immediately before delivery; keep using the same key.\n\n")
-	sb.WriteString(renderSessionStateBody(rec, whiteboardQuickCard))
-	sb.WriteString("\n## Work Target\n")
-	sb.WriteString(renderHostedWorkTarget(rec.Agenda["implement"]))
-	sb.WriteString("\n## Direct Children\n")
+	sb.WriteString("<session-state>\n")
+	sb.WriteString(strings.TrimRight(wscompact.EscapeFramingCloseTags(renderSessionStateBody(rec, whiteboardQuickCard)), "\n"))
+	sb.WriteString("\n</session-state>\n\n")
+	sb.WriteString("<work-target>\n## Work Target\n")
+	sb.WriteString(strings.TrimRight(wscompact.EscapeFramingCloseTags(renderHostedWorkTarget(rec.Agenda["implement"])), "\n"))
+	sb.WriteString("\n</work-target>\n\n")
+	sb.WriteString("<direct-children>\n## Direct Children\n")
+	var childBuf strings.Builder
 	if len(children) == 0 {
-		sb.WriteString("none\n")
+		childBuf.WriteString("none\n")
 	} else {
 		view := summarizeAgentChildren(children)
 		for _, child := range view.Active {
-			fmt.Fprintf(&sb, "- %s", child.Address)
+			fmt.Fprintf(&childBuf, "- %s", child.Address)
 			if child.Label != "" {
-				fmt.Fprintf(&sb, " (%s)", child.Label)
+				fmt.Fprintf(&childBuf, " (%s)", child.Label)
 			}
-			fmt.Fprintf(&sb, ": %s; tier=%s; authority=%s", child.State, child.Tier, child.Authority)
+			fmt.Fprintf(&childBuf, ": %s; tier=%s; authority=%s", child.State, child.Tier, child.Authority)
 			if child.LastReport != "" {
-				fmt.Fprintf(&sb, "; last=%s", child.LastReport)
+				fmt.Fprintf(&childBuf, "; last=%s", child.LastReport)
 			}
 			if child.Error != "" {
-				fmt.Fprintf(&sb, "; error=%s", child.Error)
+				fmt.Fprintf(&childBuf, "; error=%s", child.Error)
 			}
-			sb.WriteString("\n")
+			childBuf.WriteString("\n")
 		}
 		for _, name := range view.RecentInactive {
-			fmt.Fprintf(&sb, "- %s\n", name)
+			fmt.Fprintf(&childBuf, "- %s\n", name)
 		}
-		sb.WriteString(view.summary())
+		childBuf.WriteString(view.summary())
 	}
-	return strings.TrimSpace(sb.String()) + "\n"
+	sb.WriteString(strings.TrimRight(wscompact.EscapeFramingCloseTags(childBuf.String()), "\n"))
+	sb.WriteString("\n</direct-children>\n")
+	if mailSection := renderRecentMailRestoreSection(recentRecv, totalRecv); mailSection != "" {
+		sb.WriteString("\n")
+		sb.WriteString(mailSection)
+	}
+	sb.WriteString("</ws-restore>\n")
+	return sb.String()
+}
+
+func renderRecentMailRestoreSection(recent []mailboxHistoryRecord, totalRecv int) string {
+	if len(recent) == 0 {
+		return ""
+	}
+	if len(recent) > restoreRecentMailMax {
+		recent = recent[:restoreRecentMailMax]
+	}
+	var b strings.Builder
+	b.WriteString("<recent-mail>\n## Recent Mail\n")
+	footer := ""
+	if totalRecv > len(recent) {
+		footer = fmt.Sprintf("Older received mail (%d total) available via `mailbox.history` and `mailbox.read(id)`.\n", totalRecv)
+	}
+	const closeTag = "</recent-mail>\n"
+	remaining := restoreRecentMailByteBudget - b.Len() - len(closeTag) - len(footer) - 80
+	anyTruncated := false
+	for i, r := range recent {
+		id := mailboxHistoryID(r.Name)
+		header := fmt.Sprintf("- id=%s from=%s at=%s\n",
+			wscompact.EscapeFramingCloseTags(id),
+			wscompact.EscapeFramingCloseTags(r.Counterparty),
+			wscompact.EscapeFramingCloseTags(r.Time),
+		)
+		leftCount := len(recent) - i
+		reserveAfter := max(0, (leftCount-1)*200)
+		entryBudget := min(4096, max(160, remaining-reserveAfter))
+		hint := fmt.Sprintf("\n  [truncated; call mailbox.read(id: %q) for full body]", id)
+		escapedBody := wscompact.EscapeFramingCloseTags(strings.TrimRight(r.Body, "\n"))
+		bodyBudget := entryBudget - len(header) - 2
+		renderedBody := ""
+		if bodyBudget > 0 {
+			if len(escapedBody) <= bodyBudget {
+				renderedBody = escapedBody
+			} else {
+				anyTruncated = true
+				maxExcerpt := max(24, bodyBudget-len(hint))
+				renderedBody = wscompact.EscapeFramingCloseTags(wscompact.BoundedText(escapedBody, maxExcerpt)) + hint
+			}
+		} else {
+			anyTruncated = true
+			renderedBody = strings.TrimPrefix(hint, "\n  ")
+		}
+		var entry strings.Builder
+		entry.WriteString(header)
+		if renderedBody != "" {
+			for _, line := range strings.Split(renderedBody, "\n") {
+				entry.WriteString("  ")
+				entry.WriteString(line)
+				entry.WriteString("\n")
+			}
+		}
+		s := entry.String()
+		b.WriteString(s)
+		remaining -= len(s)
+	}
+	if footer == "" && anyTruncated {
+		footer = "Call `mailbox.read(id)` to retrieve truncated message bodies verbatim.\n"
+	}
+	b.WriteString(footer)
+	b.WriteString(closeTag)
+	return b.String()
 }
 
 func renderHostedWorkTarget(raw json.RawMessage) string {

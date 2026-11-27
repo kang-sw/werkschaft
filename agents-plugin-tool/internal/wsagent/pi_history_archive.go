@@ -2,6 +2,8 @@ package wsagent
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 )
 
 const (
@@ -39,23 +42,35 @@ func (r *Runner) archiveRetiredPiHistory(rec Record) error {
 	root := filepath.Join(r.opts.Dir, retiredPiHistoryDir)
 	dest := filepath.Join(root, rec.ReplyID)
 	source := wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID)
+	var recBytes []byte
+	if r.meta != nil {
+		normalized := rec
+		if normalized.SchemaVersion == 0 {
+			normalized.SchemaVersion = recordSchemaVersion
+		}
+		raw, err := json.MarshalIndent(normalized, "", "  ")
+		if err != nil {
+			return err
+		}
+		recBytes = append(raw, '\n')
+	}
 	if info, err := os.Stat(dest); err == nil {
 		if !info.IsDir() {
 			return errors.New("the retired Pi history path is not a directory")
 		}
 		// An older daemon can add history between two 0.52 runs. Refresh
 		// the recovery copy when the surviving session has changed.
-		if changed, err := retiredPiHistoryChanged(source, dest); err != nil || !changed {
+		if changed, err := retiredPiHistoryChangedWithRecord(source, dest, recBytes); err != nil || !changed {
 			return err
 		}
-		return stageRetiredPiHistory(source, dest, true)
+		return stageRetiredPiHistory(source, dest, true, recBytes)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return err
 	}
-	return stageRetiredPiHistory(source, dest, false)
+	return stageRetiredPiHistory(source, dest, false, recBytes)
 }
 
 func (r *Runner) restoreRetiredPiHistory() {
@@ -99,18 +114,50 @@ func (r *Runner) restoreRetiredPiHistory() {
 			continue
 		}
 		dest := wsdashboard.SessionDir(r.opts.Dir, id)
-		if _, err := os.Stat(dest); !errors.Is(err, os.ErrNotExist) {
+		_, statErr := os.Stat(dest)
+		missingDir := errors.Is(statErr, os.ErrNotExist)
+		missingMeta := r.meta != nil && (r.metaSnap == nil || r.metaSnap.Records[id].ReplyID == "")
+		if !missingDir && !missingMeta {
 			continue
 		}
-		rec, err := readRecord(source)
+		if statErr != nil && !missingDir {
+			continue
+		}
+		raw, err := os.ReadFile(recordPath(source))
+		var rec Record
+		if err == nil {
+			rec, err = decodeRecord(recordPath(source), id, raw)
+		}
 		if err == nil && rec.Backend != BackendPi {
 			err = errors.New("expected a retired Pi history record")
 		}
-		if err == nil {
+		if err == nil && missingDir {
 			err = os.MkdirAll(filepath.Dir(dest), 0o700)
+			if err == nil {
+				err = stageRetiredPiHistory(source, dest, false, nil)
+			}
 		}
-		if err == nil {
-			err = stageRetiredPiHistory(source, dest, false)
+		if err == nil && r.meta != nil {
+			if missingMeta {
+				err = r.meta.PutRecord(context.Background(), id, "", raw)
+				if err == nil {
+					if r.metaSnap != nil {
+						if r.metaSnap.Records == nil {
+							r.metaSnap.Records = map[string]wsmeta.AgentRecord{}
+						}
+						r.metaSnap.Records[id] = wsmeta.AgentRecord{ReplyID: id, JSON: bytes.Clone(raw)}
+					}
+					r.recordBaseMu.Lock()
+					if r.recordBase == nil {
+						r.recordBase = map[string][]byte{}
+					}
+					r.recordBase[id] = bytes.Clone(raw)
+					r.recordBaseMu.Unlock()
+				}
+			}
+			if err == nil && missingDir {
+				_ = os.Remove(recordPath(dest))
+			}
 		}
 		if err != nil {
 			fmt.Fprintf(r.opts.Log, "agent %s: restore retired Pi history: %v\n", id, err)
@@ -144,7 +191,24 @@ func retiredPiHistoryFiles() []string {
 }
 
 func retiredPiHistoryChanged(source, archive string) (bool, error) {
+	return retiredPiHistoryChangedWithRecord(source, archive, nil)
+}
+
+func retiredPiHistoryChangedWithRecord(source, archive string, recBytes []byte) (bool, error) {
 	for _, name := range retiredPiHistoryFiles() {
+		if name == recordFileName && len(recBytes) > 0 {
+			saved, err := os.ReadFile(filepath.Join(archive, name))
+			if errors.Is(err, os.ErrNotExist) {
+				return true, nil
+			}
+			if err != nil {
+				return false, err
+			}
+			if !bytes.Equal(saved, recBytes) {
+				return true, nil
+			}
+			continue
+		}
 		if changed, err := retiredPiFileChanged(source, archive, name); changed || err != nil {
 			return changed, err
 		}
@@ -211,6 +275,13 @@ func retiredPiFileChanged(source, archive, name string) (bool, error) {
 	if current.Size() != prior.Size() {
 		return true, nil
 	}
+	// Equal size, and the source untouched since the archive copy was written:
+	// the bytes are the ones archived. Skips reading a large session.jsonl on
+	// every startup; a later in-place write moves the source mtime past the
+	// archive's and falls through to the byte comparison.
+	if name == retiredPiSessionFile && !current.ModTime().After(prior.ModTime()) {
+		return false, nil
+	}
 	live, err := os.Open(from)
 	if err != nil {
 		return false, err
@@ -238,7 +309,7 @@ func retiredPiFileChanged(source, archive, name string) (bool, error) {
 	return false, nil
 }
 
-func stageRetiredPiHistory(source, dest string, refresh bool) error {
+func stageRetiredPiHistory(source, dest string, refresh bool, recBytes []byte) error {
 	stage := dest + stagedPiHistorySuffix
 	if err := os.RemoveAll(stage); err != nil {
 		return err
@@ -255,6 +326,12 @@ func stageRetiredPiHistory(source, dest string, refresh bool) error {
 		prior = dest
 	}
 	for _, name := range retiredPiHistoryFiles() {
+		if name == recordFileName && len(recBytes) > 0 {
+			if err := os.WriteFile(filepath.Join(stage, name), recBytes, 0o600); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := copyRetiredPiFile(source, prior, stage, name, false); err != nil {
 			return err
 		}

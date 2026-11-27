@@ -110,9 +110,11 @@ type pageAssets struct {
 	frameCSSFile, frameJSFile frameFile
 	frameI18nFiles            map[string]frameFile
 	// viewer is the image viewer, a self-contained script.
-	viewer string
-	sprite template.HTML
-	icons  map[string]bool
+	viewer      string
+	formParts   []ScriptFragment
+	viewerParts []ScriptFragment
+	sprite      template.HTML
+	icons       map[string]bool
 }
 
 var (
@@ -178,17 +180,30 @@ func buildAssets(read func(name string) ([]byte, error)) (*pageAssets, error) {
 		return string(data)
 	}
 	svgView := get("svg-view.js")
+	viewerJS := get("viewer.js")
 	chg := get("chg.js")
 	panelDiff := get("panel-diff.js")
 	code := get("code.js")
 	ago := get("ago.js")
+	streamParts := make([]ScriptFragment, 0, len(pageStreamFiles))
+	var streamBuf bytes.Buffer
+	for _, file := range pageStreamFiles {
+		var part string
+		if err == nil {
+			var raw []byte
+			raw, err = read(file)
+			part = string(raw)
+		}
+		streamParts = append(streamParts, ScriptFragment{File: file, Body: part})
+		streamBuf.WriteString(part)
+	}
 	a := &pageAssets{
 		css:         template.CSS(get("page.css")),
 		answers:     get("answers.js"),
 		form:        get("form.js"),
 		selectAll:   get("select-all.js"),
 		code:        code,
-		stream:      get("stream.js"),
+		stream:      streamBuf.String(),
 		pill:        get("pill.js"),
 		rail:        get("rail.js"),
 		ago:         ago,
@@ -198,9 +213,35 @@ func buildAssets(read func(name string) ([]byte, error)) (*pageAssets, error) {
 		docFrame:    svgView + "\n" + ago + "\n" + chg + "\n" + code + "\n" + panelDiff + "\n" + get("doc-frame.js"),
 		chg:         chg,
 		panelDiff:   panelDiff,
-		viewer:      "(function () {\n" + svgView + "\n" + get("viewer.js") + "})();\n",
+		viewer:      "(function () {\n" + svgView + "\n" + viewerJS + "})();\n",
 		sprite:      template.HTML(strings.TrimSpace(get("sprite.svg"))),
 		icons:       map[string]bool{},
+	}
+	a.formParts = make([]ScriptFragment, 0, 16+len(streamParts))
+	appendFormPart := func(file, body string) {
+		if len(a.formParts) > 0 {
+			a.formParts = append(a.formParts, ScriptFragment{Body: "\n"})
+		}
+		a.formParts = append(a.formParts, ScriptFragment{File: file, Body: body})
+	}
+	appendFormPart("form.js", a.form)
+	appendFormPart("code.js", a.code)
+	appendFormPart("pill.js", a.pill)
+	appendFormPart("wb/rail.js", a.rail)
+	appendFormPart("ago.js", a.ago)
+	appendFormPart("deps.js", a.deps)
+	if len(a.formParts) > 0 {
+		a.formParts = append(a.formParts, ScriptFragment{Body: "\n"})
+	}
+	a.formParts = append(a.formParts, streamParts...)
+	appendFormPart("panel-diff.js", a.panelDiff)
+	appendFormPart("card-find.js", a.cardFind)
+	a.viewerParts = []ScriptFragment{
+		{Body: "(function () {\n"},
+		{File: "svg-view.js", Body: svgView},
+		{Body: "\n"},
+		{File: "viewer.js", Body: viewerJS},
+		{Body: "})();\n"},
 	}
 	a.frameCSSFile = newFrameFile("css", string(a.css)+"\n"+frameCSS)
 	a.frameJSFile = newFrameFile("js", a.docFrame)
@@ -391,6 +432,13 @@ func RenderClosedTopics(view View) (template.HTML, error) {
 	return template.HTML(buf.String()), nil
 }
 
+// ScriptFragment describes one source file or separator snippet inside an
+// assembled whiteboard script bundle. Separator/wrapper snippets leave File empty.
+type ScriptFragment struct {
+	File string
+	Body string
+}
+
 // SharedAssets are the assets for a page that hosts
 // RenderRegions fragments: the stylesheet the fragments are styled by, the
 // icon sprite they reference, the answer-form script that drives the board's
@@ -418,6 +466,18 @@ func PageAssets() (SharedAssets, error) {
 		return SharedAssets{}, fmt.Errorf("whiteboard page assets: %w", err)
 	}
 	return SharedAssets{CSS: a.css, Sprite: a.sprite, FormScript: template.JS(a.form + "\n" + a.code + "\n" + a.pill + "\n" + a.rail + "\n" + a.ago + "\n" + a.deps + "\n" + a.stream + "\n" + a.panelDiff + "\n" + a.cardFind), AnswersScript: template.JS(a.answers), SelectAllScript: template.JS(a.selectAll), MermaidInit: a.mermaidInit, ViewerScript: template.JS(a.viewer)}, nil
+}
+
+// PageScriptFragments returns the ordered source and separator fragments for
+// SharedAssets.FormScript and SharedAssets.ViewerScript.
+func PageScriptFragments() (form, viewer []ScriptFragment, err error) {
+	a, err := loadAssets()
+	if err != nil {
+		return nil, nil, fmt.Errorf("whiteboard page assets: %w", err)
+	}
+	form = append([]ScriptFragment(nil), a.formParts...)
+	viewer = append([]ScriptFragment(nil), a.viewerParts...)
+	return form, viewer, nil
 }
 
 // pageData is what the fragment templates execute on.
@@ -515,7 +575,7 @@ func pageDataBase(view View, a *pageAssets) *pageData {
 		for _, panel := range t.PanelRecaps {
 			p.panelOnPage[panel.PanelID] = true
 		}
-		p.CountPolicy += t.AskCount()
+		p.CountPolicy += t.UnheldAskCount()
 		p.CountAcks += len(t.Acks)
 		for _, list := range [][]ItemView{t.Policy, t.Acks, t.Checks, t.Expanded, t.Collapsed} {
 			for _, iv := range list {

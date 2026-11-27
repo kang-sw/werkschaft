@@ -85,9 +85,18 @@ func (s *railLayoutStore) mutateAdmissions(change func([]railAdmissionRecord) ([
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	doc, err := readRailLayout(s.file)
-	if err != nil {
-		return railLayoutAnswer{Reason: layoutStore}, err
+	var doc *railLayoutDoc
+	if s.meta != nil {
+		if s.importErr != nil {
+			return railLayoutAnswer{Reason: layoutStore}, s.importErr
+		}
+		doc = s.doc
+	} else {
+		var err error
+		doc, err = readRailLayout(s.file)
+		if err != nil {
+			return railLayoutAnswer{Reason: layoutStore}, err
+		}
 	}
 	records, err := railAdmissions(doc)
 	if err != nil {
@@ -110,6 +119,18 @@ func (s *railLayoutStore) mutateAdmissions(change func([]railAdmissionRecord) ([
 		next.extra[railAdmissionField] = raw
 	} else {
 		delete(next.extra, railAdmissionField)
+	}
+	if s.meta != nil {
+		changed, err := s.writePatchLocked(doc, next)
+		if err != nil {
+			return railLayoutAnswer{Reason: layoutStore}, err
+		}
+		if !changed {
+			return railLayoutAnswer{Gen: s.gen}, nil
+		}
+		s.doc = next
+		s.gen++
+		return railLayoutAnswer{Changed: true, Gen: s.gen}, nil
 	}
 	before, err := doc.encode()
 	if err != nil {

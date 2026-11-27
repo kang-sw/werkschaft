@@ -96,17 +96,11 @@ func TestToolAliasTableRefusesCollisions(t *testing.T) {
 func hostedBackendConnection(t *testing.T, backend string, regs map[string]wsagent.BackendRegistration) (*Server, *hostedKeyFixture) {
 	t.Helper()
 	f := newHostedKeyFixture(t)
-	dir, err := NewServer(f.root, "test").dashboard.stateDir()
-	if err != nil {
-		t.Fatal(err)
-	}
 	rec := wsagent.Record{
 		ReplyID: wsmailbox.ReplyID(f.hosted), WSKey: f.hosted, Root: f.root, CreatedAt: time.Now().UTC().Format(time.RFC3339),
 		Backend: backend, Lead: true,
 	}
-	if err := wsagent.WriteRecordForTest(dir, rec); err != nil {
-		t.Fatal(err)
-	}
+	f.records.Set(rec)
 	s := f.connect(t)
 	runner := wsagent.NewRunner(wsagent.Options{Backends: regs})
 	s.agents = runner
@@ -422,19 +416,14 @@ func TestAgyWorkerConnectionSeesAliases(t *testing.T) {
 		Root:          f.root,
 		Version:       "test",
 		AgentBackends: wsagent.NewRunner(wsagent.Options{Backends: descriptorRegistrations()}),
+		RecordReader:  f.records,
 	})
-	dir, err := s.dashboard.stateDir()
-	if err != nil {
-		t.Fatal(err)
-	}
 	rec := wsagent.Record{
 		ReplyID: wsmailbox.ReplyID(f.child), WSKey: f.child, Root: f.root, CreatedAt: time.Now().UTC().Format(time.RFC3339),
 		Backend: wsagent.BackendAgy, Profile: wsagent.AgentWorkerProfile(wsagent.BackendAgy),
 		Parent: &wsagent.ParentRef{Kind: wsagent.ParentLead, ReplyID: wsmailbox.ReplyID(f.hosted)},
 	}
-	if err := wsagent.WriteRecordForTest(dir, rec); err != nil {
-		t.Fatal(err)
-	}
+	f.records.Set(rec)
 	listed := listedToolNames(t, s)
 	if !listed["git_status"] || !listed["agent_tiers"] || listed["git.status"] || listed["git_commit"] || listed["workflow_manual"] || listed["call"] {
 		t.Fatalf("worker's aliased allowlist: %v", listed)
@@ -592,8 +581,8 @@ func TestHostedAgyConnectionTunesAndReadsOwnBuckets(t *testing.T) {
 
 // TestHostedAgyRealDirectToolsListCompact verifies against the real built-in
 // agy registration that compact is directly listed on hosted agy leads in both
-// default (native) and compaction.lead_mode=ws modes, with lead_summary
-// advertised only in ws mode and the full tool definition fitting
+// default (ws) and opt-out (compaction.lead_mode=native) modes, with
+// lead_summary advertised only in ws mode and the full tool definition fitting
 // toolSchemaByteCap.
 func TestHostedAgyRealDirectToolsListCompact(t *testing.T) {
 	for _, tc := range []struct {
@@ -601,8 +590,8 @@ func TestHostedAgyRealDirectToolsListCompact(t *testing.T) {
 		mode           string
 		wantLeadSchema bool
 	}{
-		{name: "default native", mode: wsconfig.CompactionModeNative, wantLeadSchema: false},
-		{name: "compaction.lead_mode=ws", mode: wsconfig.CompactionModeWS, wantLeadSchema: true},
+		{name: "default ws", mode: wsconfig.CompactionModeWS, wantLeadSchema: true},
+		{name: "compaction.lead_mode=native", mode: wsconfig.CompactionModeNative, wantLeadSchema: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := hostedBackendConnection(t, wsagent.BackendAgy, wsagent.BuiltinBackendRegistrations())

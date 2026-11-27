@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1513,4 +1514,106 @@ func TestAcquireFindsSparseHiddenTicket(t *testing.T) {
 		t.Fatalf("acquire of a sparse-hidden ticket = %s", out)
 	}
 	x.mustRefuse("tickets.acquire", ixArgs("260101-feat-no-such-ticket"), "does not exist in this checkout")
+}
+
+const mcpExitCodeHelperEnv = "WSMCP_TEST_EXIT_CODE"
+
+func TestMCPExitCodeHelper(t *testing.T) {
+	raw := os.Getenv(mcpExitCodeHelperEnv)
+	if raw == "" {
+		return
+	}
+	code, err := strconv.Atoi(raw)
+	if err != nil {
+		os.Exit(2)
+	}
+	os.Exit(code)
+}
+
+func mcpExitCodeError(t *testing.T, code int) error {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestMCPExitCodeHelper$")
+	cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%d", mcpExitCodeHelperEnv, code))
+	err := cmd.Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("exit helper returned %v, want *exec.ExitError", err)
+	}
+	if exitErr.ExitCode() != code {
+		t.Fatalf("exit helper exited %d, want %d", exitErr.ExitCode(), code)
+	}
+	return err
+}
+
+func TestResolveIndexCallerAndAcquireTrackError(t *testing.T) {
+	t.Run("detached HEAD exit code 1", func(t *testing.T) {
+		runner := occupiedRootRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			if len(args) > 0 && args[0] == "symbolic-ref" {
+				return nil, mcpExitCodeError(t, 1)
+			}
+			return []byte("a@example.com\n"), nil
+		})
+		caller := resolveIndexCaller(context.Background(), runner, "/repo", "")
+		if caller.branch != "" || caller.branchErr != nil {
+			t.Fatalf("detached caller = %+v, want empty branch and nil branchErr", caller)
+		}
+		err := caller.acquireTrackError("")
+		if err == nil || !strings.Contains(err.Error(), "detached") {
+			t.Fatalf("acquireTrackError = %v, want detached HEAD refusal", err)
+		}
+	})
+
+	for _, tc := range []struct {
+		name      string
+		err       error
+		wantErrIs error
+	}{
+		{name: "exec.ErrNotFound", err: exec.ErrNotFound, wantErrIs: exec.ErrNotFound},
+		{name: "exit status 128", err: mcpExitCodeError(t, 128)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := occupiedRootRunner(func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				if len(args) > 0 && args[0] == "symbolic-ref" {
+					return nil, tc.err
+				}
+				return []byte("a@example.com\n"), nil
+			})
+			caller := resolveIndexCaller(context.Background(), runner, "/repo", "")
+			if caller.branch != "" || caller.branchErr == nil {
+				t.Fatalf("caller = %+v, want non-nil branchErr", caller)
+			}
+			for _, explicitTrack := range []string{"", "develop"} {
+				err := caller.acquireTrackError(explicitTrack)
+				if err == nil {
+					t.Fatalf("acquireTrackError(%q) = nil, want error", explicitTrack)
+				}
+				if !strings.Contains(err.Error(), "tickets.acquire: resolve current branch") {
+					t.Fatalf("acquireTrackError(%q) = %v, want resolve current branch context", explicitTrack, err)
+				}
+				if strings.Contains(strings.ToLower(err.Error()), "detached") {
+					t.Fatalf("acquireTrackError(%q) misreported error as detached HEAD: %v", explicitTrack, err)
+				}
+				if tc.wantErrIs != nil && !errors.Is(err, tc.wantErrIs) {
+					t.Fatalf("acquireTrackError(%q) = %v, want errors.Is(_, %v)", explicitTrack, err, tc.wantErrIs)
+				}
+			}
+		})
+	}
+}
+
+func TestTicketsAcquirePropagatesSymbolicRefError(t *testing.T) {
+	e := newIxEnv(t)
+	x := e.clone("x", "a@example.com")
+	x.init()
+	// Strip git from the server's caller PATH so s.gitRunner() fails symbolic-ref
+	// with exec.ErrNotFound while the test's ixRunner still opens the index.
+	x.server.env = newProcEnv([]string{
+		"PATH=" + t.TempDir(),
+		"WS_CACHE_HOME=" + os.Getenv("WS_CACHE_HOME"),
+		"WS_CONFIG_HOME=" + os.Getenv("WS_CONFIG_HOME"),
+	})
+	out := x.mustRefuse("tickets.acquire", ixArgs(stemAlpha), "tickets.acquire: resolve current branch")
+	if strings.Contains(strings.ToLower(out), "detached") {
+		t.Fatalf("tickets.acquire misreported git lookup failure as detached HEAD: %s", out)
+	}
 }

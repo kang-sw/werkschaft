@@ -227,13 +227,9 @@ func TestReloginToAHostedSessionWithNoProcessTakesItsRow(t *testing.T) {
 			if err := wsdashboard.WriteRegistration(dir, row); err != nil {
 				t.Fatal(err)
 			}
-			// The runner's record stays in the session directory.
-			record := filepath.Join(wsdashboard.SessionDir(dir, row.ReplyID), wsdashboard.AgentRecordFileName)
-			if err := os.WriteFile(record, []byte("{}"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-
+			// The runner holds the session's agent record in memory.
 			s := terminalServer(t, root)
+			s.recordReader = newTestRecordReader(wsagent.Record{ReplyID: row.ReplyID, Lead: true})
 			resp := relogin(t, s, root, key)
 			if toolIsError(t, resp) {
 				t.Fatalf("the re-login was refused: %s", resp)
@@ -489,14 +485,16 @@ func TestReloginAfterAHandOffKeepsTheKey(t *testing.T) {
 func TestReloginMarksTheRowAsHeldByTheTerminal(t *testing.T) {
 	terminalAlive := func(pid int) bool { return pid == terminalHarnessPID }
 	for _, c := range []struct {
-		name            string
-		enabled, record bool
+		name               string
+		enabled, record    bool
+		daemonUnavailable  bool
 		// kept reports that the row outlives the first keyed call.
 		kept bool
 	}{
-		{"dashboard key on", true, false, true},
-		{"dashboard key off, a session the daemon hosted", false, true, true},
-		{"dashboard key off", false, false, false},
+		{"dashboard key on", true, false, false, true},
+		{"dashboard key off, a session the daemon hosted", false, true, false, true},
+		{"dashboard key off", false, false, false, false},
+		{"dashboard key off, daemon unavailable fails closed", false, false, true, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := dashboardSessionEnv(t)
@@ -511,14 +509,15 @@ func TestReloginMarksTheRowAsHeldByTheTerminal(t *testing.T) {
 			if ended.HarnessMayRun(terminalAlive) {
 				t.Fatal("the seeded row should read as a session nothing runs")
 			}
-			if c.record {
-				record := filepath.Join(wsdashboard.SessionDir(dir, ended.ReplyID), wsdashboard.AgentRecordFileName)
-				if err := os.WriteFile(record, []byte(`{"lead":true,"handed_off_at":"`+stamp+`"}`), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
 
 			s := terminalServer(t, root)
+			if !c.daemonUnavailable {
+				records := newTestRecordReader()
+				if c.record {
+					records.Set(wsagent.Record{ReplyID: ended.ReplyID, Lead: true, HandedOffAt: stamp})
+				}
+				s.recordReader = records
+			}
 			if resp := relogin(t, s, root, key); toolIsError(t, resp) {
 				t.Fatalf("the re-login was refused: %s", resp)
 			}

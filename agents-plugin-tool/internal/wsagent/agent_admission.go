@@ -25,7 +25,7 @@ func (r *Runner) holdParentAdmission(parent *ParentRef) func() {
 	if parent == nil {
 		return func() {}
 	}
-	slot := permissionSlot(wsdashboard.SessionDir(r.opts.Dir, parent.ReplyID))
+	slot := r.permissionSlot(parent.ReplyID, wsdashboard.SessionDir(r.opts.Dir, parent.ReplyID))
 	slot.admission.RLock()
 	return slot.admission.RUnlock
 }
@@ -137,7 +137,7 @@ func (r *Runner) childAdmission(rec Record, def Profile) (PermissionLevel, strin
 		return "", "", &admissionRefusal{reason: "permission admission: agent.spawn child has no explicit authority record"}
 	}
 	level = r.legacyDetachedWorkerLevel(rec.Parent, level, source)
-	if err := r.admitWorkerLevel(rec.Parent, level, detachedWorkerFallback(dir, source)); err != nil {
+	if err := r.admitWorkerLevel(rec.Parent, level, r.detachedWorkerFallback(rec.ReplyID, dir, source)); err != nil {
 		return "", "", err
 	}
 	return level, source, nil

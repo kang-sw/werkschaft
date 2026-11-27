@@ -72,7 +72,7 @@ func TestRailRowMetaBrowser(t *testing.T) {
 			t.Fatal(err)
 		}
 		dir := SessionDir(f.dir, s.id)
-		if err := writeSessionLabel(dir, s.label); err != nil {
+		if err := f.d.setSessionLabel(s.id, s.label); err != nil {
 			t.Fatal(err)
 		}
 		snap := &wslive.Snapshot{SchemaVersion: 1, Adapter: s.harness, UpdatedAt: now.UnixMilli(), HeartbeatMs: 30000,

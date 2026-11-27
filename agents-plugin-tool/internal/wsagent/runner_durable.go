@@ -25,19 +25,27 @@ func (r *Runner) openDurableAgentRecords() map[string]Record {
 	if !enabled {
 		return nil
 	}
-	db, err := wsmeta.Open(r.opts.Dir, wsmeta.Options{
-		Logf: func(format string, args ...any) {
-			fmt.Fprintf(r.opts.Log, format+"\n", args...)
-		},
-	})
-	if err != nil {
-		fmt.Fprintf(r.opts.Log, "agent: open durable records: %v\n", err)
-		return nil
+	var db *wsmeta.Store
+	if r.meta != nil {
+		db = r.meta
+	} else {
+		var err error
+		db, err = wsmeta.Open(r.opts.Dir, wsmeta.Options{
+			Logf: func(format string, args ...any) {
+				fmt.Fprintf(r.opts.Log, format+"\n", args...)
+			},
+		})
+		if err != nil {
+			fmt.Fprintf(r.opts.Log, "agent: open durable records: %v\n", err)
+			return nil
+		}
 	}
 	rows, err := db.DurableAgentRecords(context.Background())
 	if err != nil {
 		fmt.Fprintf(r.opts.Log, "agent: read durable records: %v\n", err)
-		_ = db.Close()
+		if db != r.meta {
+			_ = db.Close()
+		}
 		return nil
 	}
 	r.durableRecords = db
@@ -58,6 +66,9 @@ func (r *Runner) openDurableAgentRecords() map[string]Record {
 
 func (r *Runner) persistAgentRecord(dir string, rec Record) error {
 	if !r.durableProcess(rec.Backend) {
+		if r.meta != nil {
+			return r.persistSQLiteRecord(dir, rec)
+		}
 		return writeRecord(dir, rec)
 	}
 	if r.durableRecords == nil {
@@ -75,7 +86,9 @@ func (r *Runner) persistAgentRecord(dir string, rec Record) error {
 	}); err != nil {
 		return err
 	}
-	r.publishDurableProjection(dir, durableHistoryProjection(rec))
+	if r.meta == nil {
+		r.publishDurableProjection(dir, durableHistoryProjection(rec))
+	}
 	return nil
 }
 

@@ -1,6 +1,7 @@
 package wsdashboard
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"github.com/gofrs/flock"
@@ -16,12 +17,14 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
 type hireFake struct {
 	mu        sync.Mutex
 	dir       string
+	d         *Daemon
 	created   int
 	launches  []HireLaunch
 	root      string
@@ -38,7 +41,17 @@ func (h *hireFake) AdmitsLead(name string) bool {
 	return name == "claude" || name == "pi"
 }
 
-func hireRegistryFixture(o *DaemonOptions) { o.Agents = &hireFake{dir: o.Dir} }
+func hireRegistryFixture(o *DaemonOptions) {
+	hf := &hireFake{dir: o.Dir}
+	o.Agents = hf
+	prev := o.OnMetaReady
+	o.OnMetaReady = func(d *Daemon, store *wsmeta.Store, snap *wsmeta.Snapshot) {
+		hf.d = d
+		if prev != nil {
+			prev(d, store, snap)
+		}
+	}
+}
 
 func (h *hireFake) Handler() http.Handler      { return http.NotFoundHandler() }
 func (h *hireFake) Start(func(string, string)) {}
@@ -64,8 +77,15 @@ func (h *hireFake) CreateHireLead(requestID, root string, launch HireLaunch) (st
 	if err := WriteRegistration(h.dir, reg); err != nil {
 		return "", err
 	}
-	if err := MarkHired(h.dir, id, requestID, launch.Label); err != nil {
-		return "", err
+	if h.d != nil && h.d.meta != nil {
+		if err := h.d.meta.MarkHired(context.Background(), id, requestID, launch.Label); err != nil {
+			return "", err
+		}
+		h.d.RecordHired(id, requestID, launch.Label)
+	} else {
+		if err := MarkHired(h.dir, id, requestID, launch.Label); err != nil {
+			return "", err
+		}
 	}
 	h.requests[requestID] = id
 	return id, nil
@@ -203,14 +223,15 @@ func TestHiringFlagAndTrust(t *testing.T) {
 	if res = hirePost(f.d, "/s/livesession/hiring", `{"enabled":true}`); res.Code != 409 {
 		t.Fatalf("nested flag: %d", res.Code)
 	}
-	if err = MarkHired(f.dir, "boardsession", "req-id", ""); err != nil {
+	if err = f.d.meta.MarkHired(context.Background(), "boardsession", "req-id", ""); err != nil {
 		t.Fatal(err)
 	}
+	f.d.RecordHired("boardsession", "req-id", "")
 	if res = hirePost(f.d, "/s/boardsession/hiring", `{"enabled":true}`); res.Code != 409 {
 		t.Fatalf("hired flag: %d", res.Code)
 	}
 	// Even a corrupt/manual enabled+hired combination is not an entitlement.
-	if err = writeHiringMetadata(f.dir, "boardsession", HiringMetadata{Enabled: true, Hired: true}); err != nil {
+	if err = f.d.writeHiringMetadata("boardsession", HiringMetadata{Enabled: true, Hired: true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = f.d.RequestHire("boardsession", req); err == nil || !strings.Contains(err.Error(), "hired") {
@@ -231,7 +252,7 @@ func TestHiringHTTPBodyBoundaries(t *testing.T) {
 	if res.Code != 413 {
 		t.Fatalf("flag body limit: %d", res.Code)
 	}
-	meta, err := ReadHiringMetadata(f.dir, "livesession")
+	meta, err := f.d.readHiringMetadata("livesession")
 	if err != nil || !meta.Enabled {
 		t.Fatalf("malformed request changed flag: %+v %v", meta, err)
 	}
@@ -737,7 +758,7 @@ func TestHiringRoster(t *testing.T) {
 	if res.Code != 200 {
 		t.Fatal(res.Body)
 	}
-	if err := writeSessionLabel(SessionDir(f.dir, "boardsession"), "roster peer"); err != nil {
+	if err := f.d.setSessionLabel("boardsession", "roster peer"); err != nil {
 		t.Fatal(err)
 	}
 	f.d.index.Refresh()

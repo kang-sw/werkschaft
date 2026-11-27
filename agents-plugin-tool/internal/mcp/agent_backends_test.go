@@ -98,9 +98,7 @@ func TestTrackerSupportRegisteredAgentBackend(t *testing.T) {
 	})
 	key, rec := f.conversation(t, f.meDir, "fixture-support")
 	rec.Backend = "fixture"
-	if err := wsagent.WriteRecordForTest(f.dashDir, rec); err != nil {
-		t.Fatal(err)
-	}
+	f.records.Set(rec)
 	rp, err := wsagent.ResolveProfile(f.s.configOptions(), rec.Root, rec.Profile, f.s.agentBackends()...)
 	if err != nil || rp.Definition.Backend != "fixture" {
 		t.Fatalf("registered profile = %+v, %v", rp, err)
@@ -109,9 +107,9 @@ func TestTrackerSupportRegisteredAgentBackend(t *testing.T) {
 	if !ok {
 		t.Fatal("missing support key")
 	}
-	scope, ok := f.s.trackerSupport(key, entry)
-	if !ok || scope.store != "me" || !scope.tools["tracker.query"] || scope.tools["tracker.update"] {
-		t.Fatalf("registered support scope = %+v, %v", scope, ok)
+	scope, ok, err := f.s.trackerSupport(key, entry)
+	if err != nil || !ok || scope.store != "me" || !scope.tools["tracker.query"] || scope.tools["tracker.update"] {
+		t.Fatalf("registered support scope = %+v, %v, %v", scope, ok, err)
 	}
 	resp := f.call(t, "tracker.query", f.as(key, map[string]any{}))
 	if isToolError(resp) {
@@ -143,7 +141,7 @@ func TestPlaybookRegisteredAgentBackendProfileFallback(t *testing.T) {
 	if err != nil || rp.Definition.Backend != "fixture" {
 		t.Fatalf("registered fallback profile = %+v, %v", rp, err)
 	}
-	if f.s.callerDaemonAgents(key) {
-		t.Fatal("playbook fallback failed to resolve the registered profile's native extension")
+	if da, err := f.s.callerDaemonAgents(key); err != nil || da {
+		t.Fatalf("playbook fallback failed to resolve the registered profile's native extension: %v, %v", da, err)
 	}
 }

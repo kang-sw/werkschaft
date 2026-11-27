@@ -19,6 +19,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsfs"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 )
 
 type werkFixtureRoundTripFunc func(*http.Request) (*http.Response, error)
@@ -56,9 +57,45 @@ func awaitWerkFixture[T any](t *testing.T, c <-chan T, what string) T {
 	}
 }
 
-func (f *werkDaemonFixture) activeLog(id string) ([]byte, string) {
+func (f *werkDaemonFixture) readRecord(open *werkDaemonOpening, id string) (wsagent.Record, error) {
+	var store *wsmeta.Store
+	if open != nil && open.daemon != nil && open.daemon.Meta() != nil {
+		store = open.daemon.Meta()
+	} else {
+		opened, err := wsmeta.Open(f.state, wsmeta.Options{})
+		if err == nil {
+			defer opened.Close()
+			store = opened
+		}
+	}
+	if store != nil {
+		if recs, err := store.DurableAgentRecords(context.Background()); err == nil {
+			for _, dr := range recs {
+				if dr.ReplyID == id {
+					var rec wsagent.Record
+					if err := json.Unmarshal(dr.JSON, &rec); err != nil {
+						return wsagent.Record{}, err
+					}
+					return rec, nil
+				}
+			}
+		}
+		if snap, err := store.Load(context.Background()); err == nil && snap != nil {
+			if ar, ok := snap.Records[id]; ok {
+				var rec wsagent.Record
+				if err := json.Unmarshal(ar.JSON, &rec); err != nil {
+					return wsagent.Record{}, err
+				}
+				return rec, nil
+			}
+		}
+	}
+	return wsagent.ReadRecord(f.state, id)
+}
+
+func (f *werkDaemonFixture) activeLog(open *werkDaemonOpening, id string) ([]byte, string) {
 	f.t.Helper()
-	rec, err := wsagent.ReadRecord(f.state, id)
+	rec, err := f.readRecord(open, id)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -89,7 +126,7 @@ func (f *werkDaemonFixture) checkReport(next werkDaemonOpening, id, turnID, answ
 		f.t.Fatal("the resumed turn reported a different result")
 	}
 	next.daemon.Close()
-	rec, err := wsagent.ReadRecord(f.state, id)
+	rec, err := f.readRecord(nil, id)
 	if err != nil || rec.LastReportedTurn != turnID || len(f.reports) != 0 {
 		f.t.Fatalf("the report did not settle once under the original turn identity: %v", err)
 	}
@@ -120,7 +157,7 @@ func TestWerkResendsInterruptedModelRequestAcrossDaemonReplacement(t *testing.T)
 	old := f.open(nil)
 	id := f.spawn(old, "finish the original work", "read-only")
 	first := awaitWerkFixture(t, inputs, "the first provider request")
-	_, turnID := f.activeLog(id)
+	_, turnID := f.activeLog(&old, id)
 	old.daemon.Close()
 	if err := old.jobs.Close(); err != nil {
 		t.Fatal(err)
@@ -209,7 +246,7 @@ func TestWerkRecoversInterruptedFileWritesAcrossDaemonReplacement(t *testing.T) 
 					if err != nil {
 						return nil, err
 					}
-					if call.Method != "tools/call" || call.Params.Name != "fs.write" {
+					if call.Method != "tools/call" || (call.Params.Name != "fs.write" && call.Params.Name != "fs_write") {
 						return wrapped.RoundTrip(req)
 					}
 					if fileCalls.Add(1) != 1 {
@@ -245,7 +282,7 @@ func TestWerkRecoversInterruptedFileWritesAcrossDaemonReplacement(t *testing.T) 
 			if recorded.Load() != 1 || bytes.Contains(reply, []byte(`"isError":true`)) != tc.stopAfterIntent {
 				t.Fatal("the authenticated write did not stop at the selected boundary")
 			}
-			raw, turnID := f.activeLog(id)
+			raw, turnID := f.activeLog(&old, id)
 			if !bytes.Contains(raw, []byte(`"k":"file_intent"`)) || bytes.Contains(raw, []byte("function_call_output")) {
 				t.Fatal("the interrupted turn did not retain exactly the pending intent")
 			}
@@ -313,7 +350,7 @@ func TestWerkDurablePanicFailsOnlyItsOwnTurn(t *testing.T) {
 	open := f.open(nil)
 	panickedID := f.spawn(open, "the panicking turn", "read-only")
 	awaitWerkFixture(t, panicking, "the panicking model request")
-	_, original := f.activeLog(panickedID)
+	_, original := f.activeLog(&open, panickedID)
 	healthyID := f.spawn(open, "the healthy turn", "read-only")
 	other := awaitWerkFixture(t, f.reports, "the healthy worker's report")
 	if other.Result.ID != healthyID || other.Result.Status != wsagent.TurnDone || other.Result.Message != healthy {
@@ -325,7 +362,7 @@ func TestWerkDurablePanicFailsOnlyItsOwnTurn(t *testing.T) {
 		t.Fatal("the provider panic did not fail its own turn")
 	}
 	open.daemon.Close()
-	rec, err := wsagent.ReadRecord(f.state, panickedID)
+	rec, err := f.readRecord(nil, panickedID)
 	if err != nil || rec.LastReportedTurn != original || len(f.reports) != 0 {
 		t.Fatalf("the panic did not settle once under the original turn identity: %v", err)
 	}

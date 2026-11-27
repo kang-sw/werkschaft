@@ -64,7 +64,7 @@ func (r *Runner) supportsLeadPermission(backend string, level PermissionLevel) b
 }
 
 func (r *Runner) leadPermission(rec Record, dir string) (PermissionLevel, string, error) {
-	level, explicit, err := refreshPermissionSelection(dir)
+	level, explicit, err := r.refreshPermissionSelection(rec.ReplyID, dir)
 	return r.resolveLeadPermission(rec, level, explicit, err)
 }
 
@@ -95,7 +95,7 @@ func resolveWorkerPermission(def Profile, level PermissionLevel, explicit bool, 
 // legacy level from the definition that will actually launch. Derived levels
 // are never written back.
 func (r *Runner) workerPermission(rec Record, def Profile, dir string) (PermissionLevel, string, error) {
-	level, explicit, err := refreshPermissionSelection(dir)
+	level, explicit, err := r.refreshPermissionSelection(rec.ReplyID, dir)
 	return resolveWorkerPermission(def, level, explicit, err)
 }
 
@@ -104,7 +104,7 @@ func (r *Runner) workerPermission(rec Record, def Profile, dir string) (Permissi
 // stored definition as the parent's current authority.
 func (r *Runner) currentWorkerPermission(rec Record) (PermissionLevel, string, error) {
 	dir := wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID)
-	level, explicit, err := refreshPermissionSelection(dir)
+	level, explicit, err := r.refreshPermissionSelection(rec.ReplyID, dir)
 	if err != nil || explicit {
 		return resolveWorkerPermission(Profile{}, level, explicit, err)
 	}
@@ -122,7 +122,7 @@ func (r *Runner) currentWorkerPermission(rec Record) (PermissionLevel, string, e
 // cache old enforcement evidence. Selection is cached separately and invalidated
 // by permission writes.
 func (r *Runner) permissionState(st State, rec Record, dir string) State {
-	selected, explicit, readErr := cachedPermissionSelection(dir)
+	selected, explicit, readErr := r.cachedPermissionSelection(rec.ReplyID, dir)
 	var level PermissionLevel
 	var source string
 	var err error
@@ -237,7 +237,7 @@ func (r *Runner) SetPermissionLevel(id string, level PermissionLevel) (State, er
 func (c *conv) setPermissionLevel(level PermissionLevel, user, ack bool) error {
 	rec := c.record()
 	detachedLeadFallback := false
-	selection := permissionSlot(c.dir)
+	selection := c.r.permissionSlot(rec.ReplyID, c.dir)
 	selection.admission.Lock()
 	defer selection.admission.Unlock()
 	if rec.Lead && !c.r.supportsLeadPermission(rec.Backend, level) {
@@ -261,7 +261,7 @@ func (c *conv) setPermissionLevel(level PermissionLevel, user, ack bool) error {
 			return badRequest("permission admission: agent.spawn child has no explicit authority record")
 		}
 		current = c.r.legacyDetachedWorkerLevel(rec.Parent, current, source)
-		detachedLeadFallback = detachedWorkerFallback(c.dir, source)
+		detachedLeadFallback = c.r.detachedWorkerFallback(rec.ReplyID, c.dir, source)
 	}
 	if err != nil {
 		return err
@@ -283,7 +283,7 @@ func (c *conv) setPermissionLevel(level PermissionLevel, user, ack bool) error {
 			return &requestError{status: http.StatusForbidden, msg: fmt.Sprintf("permission admission: authority %s is above the parent's current level %s", level, ceiling)}
 		}
 	}
-	if err := writePermissionSelection(c.dir, level); err != nil {
+	if err := c.r.writePermissionSelection(rec.ReplyID, c.dir, level); err != nil {
 		return err
 	}
 	if rec.Lead {
@@ -315,7 +315,7 @@ func (c *conv) setNativePermissionMode(mode string, user bool) error {
 	if !rec.Lead || len(c.r.opts.Backends[rec.Backend].PermissionModes) == 0 {
 		return categorized(ErrUnsupported, badRequest("the permission mode applies to a supported lead session only"))
 	}
-	selection := permissionSlot(c.dir)
+	selection := c.r.permissionSlot(rec.ReplyID, c.dir)
 	selection.admission.Lock()
 	defer selection.admission.Unlock()
 	if admitter, ok := c.r.opts.Backends[rec.Backend].Backend.(nativeModeAdmitter); ok {
@@ -342,7 +342,7 @@ func (c *conv) setNativePermissionMode(mode string, user bool) error {
 			if err := authorizePermission(current, next, user, false); err != nil {
 				return err
 			}
-			if err := writePermissionSelection(c.dir, next); err != nil {
+			if err := c.r.writePermissionSelection(rec.ReplyID, c.dir, next); err != nil {
 				return err
 			}
 		}

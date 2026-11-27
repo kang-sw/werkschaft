@@ -670,7 +670,7 @@ func testReleasedWorkerDelete(t *testing.T, test releasedWorkerDeleteOptions) {
 		return
 	}
 	assertStopRefused("busy grandchild after checkout delete")
-	if _, err := readRecord(wsdashboard.SessionDir(h.dir, middleID)); err != nil {
+	if _, err := h.readRecord(middleID); err != nil {
 		t.Fatalf("session record for restart after checkout delete: %v", err)
 	}
 

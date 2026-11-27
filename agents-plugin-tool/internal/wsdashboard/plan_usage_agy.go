@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/execjob"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 )
 
 const (
@@ -51,6 +52,7 @@ var agyGroupByKey = map[string]agyGroupSpec{
 
 var agyHistorySpec = planUsageHistorySpec{
 	cacheName:    planUsageAgyHistoryCache,
+	storeKey:     wsmeta.UsageHistoryAgy,
 	valid:        validAgyPlanUsageSample,
 	requiredKeys: []string{"harness", "group", "kind", "source", "resetsAt", "asOf", "percent"},
 }
@@ -82,18 +84,10 @@ func (s *planUsageStore) agyProbeTimeout() time.Duration {
 	return agyDefaultTimeout
 }
 
-func (s *planUsageStore) loadAgyLocked() {
-	raw, err := os.ReadFile(filepath.Join(s.dir, planUsageAgyCache))
-	if err != nil {
-		return
-	}
-	var saved planUsageAgyFile
-	if json.Unmarshal(raw, &saved) != nil || saved.SchemaVersion != 1 {
-		return
-	}
-	groups := make([]planUsageEntry, 0, len(saved.Groups))
+func sanitizeAgyGroups(saved []planUsageEntry) []planUsageEntry {
+	groups := make([]planUsageEntry, 0, len(saved))
 	seen := map[string]bool{}
-	for _, g := range saved.Groups {
+	for _, g := range saved {
 		spec, ok := agyGroupByKey[g.Group]
 		if !ok || seen[spec.key] {
 			continue
@@ -126,9 +120,25 @@ func (s *planUsageStore) loadAgyLocked() {
 		})
 	}
 	if len(groups) == 0 {
-		return
+		return nil
 	}
 	sortAgyGroups(groups)
+	return groups
+}
+
+func (s *planUsageStore) loadAgyLocked() {
+	raw, err := os.ReadFile(filepath.Join(s.dir, planUsageAgyCache))
+	if err != nil {
+		return
+	}
+	var saved planUsageAgyFile
+	if json.Unmarshal(raw, &saved) != nil || saved.SchemaVersion != 1 {
+		return
+	}
+	groups := sanitizeAgyGroups(saved.Groups)
+	if len(groups) == 0 {
+		return
+	}
 	s.agyGroups = groups
 	if canonical, err := json.Marshal(planUsageAgyFile{SchemaVersion: 1, Groups: groups}); err == nil && bytes.Equal(canonical, raw) {
 		s.agyLastSaved = canonical
@@ -137,10 +147,25 @@ func (s *planUsageStore) loadAgyLocked() {
 
 func (s *planUsageStore) saveAgyLocked() {
 	raw, err := json.Marshal(planUsageAgyFile{SchemaVersion: 1, Groups: s.agyGroups})
-	if err == nil && !bytes.Equal(raw, s.agyLastSaved) {
-		if s.write(planUsageAgyCache, raw) == nil {
+	if err != nil || bytes.Equal(raw, s.agyLastSaved) {
+		return
+	}
+	if s.meta != nil {
+		entries := make([]wsmeta.UsageEntry, 0, len(s.agyGroups))
+		for _, g := range s.agyGroups {
+			body, err := json.Marshal(g)
+			if err != nil {
+				return
+			}
+			entries = append(entries, wsmeta.UsageEntry{Key: g.Group, Body: body})
+		}
+		if s.meta.SetUsageLatestEntries(context.Background(), wsmeta.UsageSourceAgy, entries) == nil {
 			s.agyLastSaved = raw
 		}
+		return
+	}
+	if s.write(planUsageAgyCache, raw) == nil {
+		s.agyLastSaved = raw
 	}
 }
 

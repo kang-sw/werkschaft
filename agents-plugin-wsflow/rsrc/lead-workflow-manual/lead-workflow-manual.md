@@ -139,6 +139,14 @@ naming a model.
   (`## AI Context`), ticket state (the ticket).
 - The ambient notes block lacks what you need → query notes.
 
+### User commands
+
+- A user-command add request turn (a `ucmd-add` block), or the user asking for a one-click button for a repeated
+  shell line → `{{.McpNamespace}}/session.register_user_command` (stable `id`,
+  `label`, `line`; optional `description`, `prompt`, `cwd`). It is kept for this
+  worktree and shown to the user as a command; withdraw it with
+  `{{.McpNamespace}}/session.unregister_user_command`.
+
 ### Git
 
 - An operation has a {{.McpNamespace}} Git primitive → use it. Unsupported

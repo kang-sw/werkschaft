@@ -190,7 +190,9 @@ func (c *conv) expireIfDue() {
 	if !c.r.startupReady() {
 		return
 	}
+	c.mu.Lock()
 	c.expiring = true
+	c.mu.Unlock()
 	c.r.expireLater(rec.ReplyID)
 }
 
@@ -207,10 +209,13 @@ func (r *Runner) expireLater(id string) {
 
 // expire is expireLater's body; it reports whether id was deleted.
 func (r *Runner) expire(id string) bool {
-	c := r.conv(id)
+	c := r.conv(id) // rehydrates a parked child: its own loop closes it
 	if c == nil {
 		return false
 	}
+	c.mu.Lock()
+	c.expiring = true // not parked again meanwhile
+	c.mu.Unlock()
 	if hook := r.opts.beforeExpiryClose; hook != nil {
 		hook()
 	}
@@ -260,6 +265,10 @@ func (r *Runner) liveExpiryDescendants(root ParentRef) ([]string, bool) {
 			}
 		}
 		if rec, ok := r.closed[id]; ok {
+			if r.parked[id] {
+				// Open and quiet by construction; the cascade rehydrates it.
+				return expiryNode{parent: safeStopParent(id, rec.Lead), quiet: true}
+			}
 			return expiryNode{parent: safeStopParent(id, rec.Lead), closed: true}
 		}
 		return expiryNode{}
@@ -305,14 +314,29 @@ func expiryDescendants(root ParentRef, children func(ParentRef) iter.Seq[string]
 	return out, ok
 }
 
-var _ wsdashboard.AgentForgetter = (*Runner)(nil)
+var (
+	_ wsdashboard.AgentForgetter     = (*Runner)(nil)
+	_ wsdashboard.AgentForgetChecker = (*Runner)(nil)
+)
+
+// CanForgetClosed reports whether ForgetClosed would allow removing id's
+// session directory, without evicting runner, durable, or SQLite state.
+func (r *Runner) CanForgetClosed(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, _, ok := r.canDropClosedLocked(id)
+	return ok
+}
 
 // ForgetClosed drops a closed or handed-off conversation and any private
 // record. It returns whether the caller may remove the session directory.
 func (r *Runner) ForgetClosed(id string) bool {
 	rec, purge := r.forgetClosed(id)
-	if purge && rec.ReplyID != "" {
-		r.deleteDurableRecord(rec)
+	if purge && !r.CronKnown(id) {
+		if rec.ReplyID != "" {
+			r.deleteDurableRecord(rec)
+		}
+		r.deleteMetaSession(id)
 	}
 	return purge
 }
@@ -327,12 +351,10 @@ func (r *Runner) forgetClosed(id string) (Record, bool) {
 	return rec, purge
 }
 
-func (r *Runner) dropClosed(id string) (Record, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (r *Runner) canDropClosedLocked(id string) (Record, bool, bool) {
 	rec, ok := r.closed[id]
 	if ok && r.hasLiveDescendantsLocked(safeStopParent(id, rec.Lead), nil) {
-		return Record{}, false
+		return Record{}, ok, false
 	}
 	// An ended dashboard row can become visible before its conversation
 	// moves from convs to closed. Check both parent kinds without taking a
@@ -340,11 +362,22 @@ func (r *Runner) dropClosed(id string) (Record, bool) {
 	if r.convs[id] != nil &&
 		(r.hasLiveDescendantsLocked(safeStopParent(id, false), nil) ||
 			r.hasLiveDescendantsLocked(safeStopParent(id, true), nil)) {
+		return Record{}, ok, false
+	}
+	return rec, ok, true
+}
+
+func (r *Runner) dropClosed(id string) (Record, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok, canDrop := r.canDropClosedLocked(id)
+	if !canDrop {
 		return Record{}, false
 	}
 	delete(r.closed, id)
 	delete(r.closedRows, id)
 	delete(r.deadRefusals, id)
+	r.dropParkedLocked(id)
 	if ok {
 		r.unindexChildLocked(rec)
 	}
@@ -375,7 +408,7 @@ func (r *Runner) hasLiveDescendantsLocked(root ParentRef, startupOpen map[string
 				continue
 			}
 			visited[id] = true
-			if _, pending := startupOpen[id]; pending || r.convs[id] != nil {
+			if _, pending := startupOpen[id]; pending || r.convs[id] != nil || r.parked[id] {
 				return true
 			}
 			if child, ok := r.closed[id]; ok {
@@ -406,6 +439,7 @@ func (r *Runner) deleteSessionRecord(rec Record) bool {
 		return false
 	}
 	r.deleteDurableRecord(rec)
+	r.deleteMetaSession(id)
 	return true
 }
 

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 )
 
 const planUsageCache = "plan-usage.json"
@@ -43,11 +44,16 @@ type planUsageStore struct {
 	mu          sync.Mutex
 	queryMu     sync.Mutex
 	dir, home   string
+	meta        *wsmeta.Store
 	getenv      func(string) string
 	claude, gpt planUsageEntry
 	lastQuery   time.Time
-	// lastSaved holds the last successfully written cache bytes, guarded by mu.
-	lastSaved []byte
+	// lastSaved holds the last successfully written cache bytes (legacy JSON),
+	// and lastClaudeJSON/lastGPTJSON track per-key SQLite writes so only the
+	// changed entry is updated. Guarded by mu.
+	lastSaved      []byte
+	lastClaudeJSON []byte
+	lastGPTJSON    []byte
 	// probing marks the one background probe in flight; probes lets tests and
 	// daemon shutdown wait for it. closed and lifetimeCtx/lifetimeCancel tie
 	// background probes to the owning daemon's lifetime. Guarded by mu.
@@ -115,16 +121,7 @@ func (s *planUsageStore) write(name string, data []byte) error {
 }
 
 func newPlanUsageStore(dir, home string, getenv func(string) string) *planUsageStore {
-	lifeCtx, lifeCancel := context.WithCancel(context.Background())
-	s := &planUsageStore{
-		dir:            dir,
-		home:           home,
-		getenv:         getenv,
-		lifetimeCtx:    lifeCtx,
-		lifetimeCancel: lifeCancel,
-		usageURL:       "https://chatgpt.com/backend-api/wham/usage",
-		client:         &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
-	}
+	s := newPlanUsageStoreBase(dir, home, getenv)
 	var saved struct {
 		// Retained name check: the plan-usage file's member names are persisted bytes
 		// (TestPlanUsageHistoryValidatorsKeepPersistedNames).
@@ -136,6 +133,72 @@ func newPlanUsageStore(dir, home string, getenv func(string) string) *planUsageS
 	}
 	s.loadAgyLocked()
 	return s
+}
+
+func newPlanUsageStoreBase(dir, home string, getenv func(string) string) *planUsageStore {
+	lifeCtx, lifeCancel := context.WithCancel(context.Background())
+	return &planUsageStore{
+		dir:            dir,
+		home:           home,
+		getenv:         getenv,
+		lifetimeCtx:    lifeCtx,
+		lifetimeCancel: lifeCancel,
+		usageURL:       "https://chatgpt.com/backend-api/wham/usage",
+		client:         &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+	}
+}
+
+// newPlanUsageStoreFromMeta initializes the usage store from the startup
+// SQLite snapshot without reading legacy plan-usage*.json files.
+func newPlanUsageStoreFromMeta(dir, home string, getenv func(string) string, store *wsmeta.Store, snap *wsmeta.Snapshot) *planUsageStore {
+	s := newPlanUsageStoreBase(dir, home, getenv)
+	s.meta = store
+	s.loadFromMetaLocked(snap)
+	return s
+}
+
+func (s *planUsageStore) loadFromMetaLocked(snap *wsmeta.Snapshot) {
+	if snap != nil {
+		if latest, ok := snap.LatestUsage[wsmeta.UsageSourcePlan]; ok {
+			// Retained name check: the plan-usage SQLite entry key "claude"
+			// preserves the persisted plan-usage.json member name
+			// (TestPlanUsageHistoryValidatorsKeepPersistedNames).
+			for _, e := range latest.Entries {
+				switch e.Key {
+				case "claude":
+					var c planUsageEntry
+					if json.Unmarshal(e.Body, &c) == nil {
+						s.claude = c
+					}
+				case "gpt":
+					var g planUsageEntry
+					if json.Unmarshal(e.Body, &g) == nil {
+						s.gpt = g
+					}
+				}
+			}
+		}
+		if agyLatest, ok := snap.LatestUsage[wsmeta.UsageSourceAgy]; ok {
+			rawGroups := make([]planUsageEntry, 0, len(agyLatest.Entries))
+			for _, e := range agyLatest.Entries {
+				var g planUsageEntry
+				if json.Unmarshal(e.Body, &g) == nil {
+					rawGroups = append(rawGroups, g)
+				}
+			}
+			if groups := sanitizeAgyGroups(rawGroups); len(groups) > 0 {
+				s.agyGroups = groups
+				if canonical, err := json.Marshal(planUsageAgyFile{SchemaVersion: 1, Groups: groups}); err == nil {
+					s.agyLastSaved = canonical
+				}
+			}
+		}
+	}
+	s.lastClaudeJSON, _ = json.Marshal(s.claude)
+	s.lastGPTJSON, _ = json.Marshal(s.gpt)
+	s.loadHistoryFromMetaLocked(&s.hist, defaultHistorySpec, snap)
+	s.loadHistoryFromMetaLocked(&s.codexHist, codexFiveHourHistorySpec, snap)
+	s.loadHistoryFromMetaLocked(&s.agyHist, agyHistorySpec, snap)
 }
 
 // beginClose marks the store closed and cancels its daemon-lifetime context so
@@ -182,6 +245,19 @@ func (s *planUsageStore) nowTime() time.Time {
 	return time.Now()
 }
 func (s *planUsageStore) saveLocked() {
+	if s.meta != nil {
+		if raw, err := json.Marshal(s.claude); err == nil && !bytes.Equal(raw, s.lastClaudeJSON) {
+			if s.meta.PutUsageLatestEntry(context.Background(), wsmeta.UsageSourcePlan, "claude", raw) == nil {
+				s.lastClaudeJSON = raw
+			}
+		}
+		if raw, err := json.Marshal(s.gpt); err == nil && !bytes.Equal(raw, s.lastGPTJSON) {
+			if s.meta.PutUsageLatestEntry(context.Background(), wsmeta.UsageSourcePlan, "gpt", raw) == nil {
+				s.lastGPTJSON = raw
+			}
+		}
+		return
+	}
 	// Retained name check: the plan-usage file's claude member is persisted bytes
 	// (TestPlanUsageHistoryValidatorsKeepPersistedNames).
 	raw, err := json.Marshal(struct {
@@ -219,7 +295,7 @@ func (s *planUsageStore) pushClaude(snap *wslive.Snapshot) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if observedAt < s.claude.AsOf {
+	if s.closed || observedAt < s.claude.AsOf {
 		return
 	}
 	// Sessions disagree near a window boundary: a stale one still reports the

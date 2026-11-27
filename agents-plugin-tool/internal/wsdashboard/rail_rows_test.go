@@ -288,7 +288,7 @@ func TestRailRowsStreams(t *testing.T) {
 	}
 	update := func(label string) {
 		t.Helper()
-		if err := writeSessionLabel(SessionDir(f.dir, "livesession"), label); err != nil {
+		if err := f.d.setSessionLabel("livesession", label); err != nil {
 			t.Fatal(err)
 		}
 		f.src.set("livesession", SessionData{HasBoard: true, Fingerprint: label})

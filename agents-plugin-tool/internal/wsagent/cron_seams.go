@@ -65,7 +65,7 @@ func (r *Runner) CronKnown(id string) bool {
 // CronHeld returns the schedule ids whose cron entries are still held,
 // undrained, in conversation id's inbox.
 func (r *Runner) CronHeld(id string) []string {
-	c := r.conv(id)
+	c := r.resident(id)
 	if c == nil {
 		return nil
 	}

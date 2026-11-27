@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 	"path/filepath"
 	"sync"
 	"time"
@@ -116,6 +117,9 @@ func (d *Daemon) agyActivity(done chan<- struct{}) {
 // session at the external safety interval. Clock-only checks retain the old
 // cadence, with targeted reads only when known liveness evidence expires.
 func (d *Daemon) poll(interval time.Duration) {
+	if d.pollDone != nil {
+		defer close(d.pollDone)
+	}
 	if interval <= 0 {
 		interval = DefaultPollInterval
 	}
@@ -143,6 +147,14 @@ func (d *Daemon) poll(interval time.Duration) {
 // session source.
 func (d *Daemon) Index() *Index { return d.index }
 
+// Meta returns the daemon's single SQLite metadata store, or nil when the
+// daemon stayed on legacy files after ErrCutoverUnsupported.
+func (d *Daemon) Meta() *wsmeta.Store { return d.meta }
+
+// MetaSnapshot returns the startup SQLite snapshot loaded under
+// dashboard.lock, or nil in legacy fallback.
+func (d *Daemon) MetaSnapshot() *wsmeta.Snapshot { return d.metaSnap }
+
 // Endpoint returns what the daemon wrote to its endpoint file.
 func (d *Daemon) Endpoint() Endpoint { return d.endpoint }
 
@@ -158,12 +170,16 @@ func (d *Daemon) Done() <-chan struct{} { return d.done }
 func (d *Daemon) Close() {
 	d.closeOnce.Do(func() {
 		close(d.stop)
+		d.closeMeta()
 		d.accountSignIn.stop()
 		// The composer's runs and background loop end with the stop (a
 		// running launch converts on it); none writes after Close returns.
 		d.composerWait()
 		if d.hireDone != nil {
 			<-d.hireDone
+		}
+		if d.pollDone != nil {
+			<-d.pollDone
 		}
 		if d.leadNudges != nil {
 			d.leadNudges.Close()
@@ -238,6 +254,15 @@ func (d *Daemon) Close() {
 			runFlush(d.beforeUnlock)
 		}
 		flushWG.Wait()
+		// Close SQLite only after every HTTP route, poller, ack checker,
+		// usage probe, runner, and BeforeUnlock hook (including tracker
+		// hooks) has drained, and strictly before releasing dashboard.lock
+		// so a successor never overlaps a live writer (2122).
+		if d.meta != nil {
+			if err := d.meta.Close(); err != nil {
+				fmt.Fprintf(d.log, "dashboard: metadata store close: %v\n", err)
+			}
+		}
 		removeEndpointIfOwned(d.dir, d.endpoint.Token)
 		fmt.Fprintf(d.log, "dashboard: stopped (pid %d)\n", d.endpoint.PID)
 		if d.endLog != nil {

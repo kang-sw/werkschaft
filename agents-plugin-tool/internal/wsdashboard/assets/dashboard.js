@@ -88,7 +88,7 @@
 
   // --- browser storage: guarded, since a locked-down browser throws on access
   var store = null;
-  try { store = window.localStorage; store.getItem("ws.dashboard.layout"); } catch (e) { store = null; }
+  try { store = window.localStorage; store.getItem("ws.dashboard.input"); } catch (e) { store = null; }
   function load(k) { try { return store ? store.getItem(k) : null; } catch (e) { return null; } }
   function save(k, v) {
     try {
@@ -101,6 +101,10 @@
   function parseStageFill(v) { return v === true || v === "1" || v === "true"; }
   var stageFill = parseStageFill(load(STAGE_FILL_KEY));
   if (stageFill) root.setAttribute("data-stage-fill", "");
+  var EXTRA_MOTION_KEY = "ws.dashboard.extraMotion";
+  function parseExtraMotion(v) { return !(v === false || v === "off" || v === "0" || v === "false"); }
+  var extraMotion = parseExtraMotion(load(EXTRA_MOTION_KEY));
+  root.setAttribute("data-extra-motion", extraMotion ? "on" : "off");
 
   // --- times: the server writes epoch ms; the page shows local or relative time
   function two(n) { return (n < 10 ? "0" : "") + n; }
@@ -298,9 +302,17 @@
     if (d.classList.contains("panel") && d.id) return "p:" + d.id;
     return null;
   }
+  function syncTurnAria(d) {
+    if (!d || d.tagName !== "DETAILS") return;
+    var sum = d.firstElementChild;
+    if (sum && sum.hasAttribute("data-conv-turn-summary")) {
+      sum.setAttribute("aria-expanded", d.open ? "true" : "false");
+    }
+  }
   doc.addEventListener("toggle", function (e) {
     var d = e.target;
     if (!d || d.tagName !== "DETAILS") return;
+    if (typeof syncTurnAria === "function") syncTurnAria(d);
     if (isPeer(d)) { save(PEER_KEY + d.getAttribute("data-peer"), d.open ? "1" : null); return; }
     if (d.classList.contains("rended") && d.hasAttribute("data-key") && railSets) { railSets.ended.put(d.getAttribute("data-key"), d.open); return; }
     // A graft's temporary open attribute is not an actual reader open.
@@ -312,16 +324,18 @@
     if (isPanel(d)) shutPut(shutId(d), !d.open);
   }, true);
   function restoreOpenOne(d) {
-    if (isPeer(d)) { d.open = load(PEER_KEY + d.getAttribute("data-peer")) === "1"; return; }
-    if (d.classList.contains("entry-panel") && typeof window !== "undefined" && window.wbHistory && window.wbHistory.restorePanel && window.wbHistory.restorePanel(d)) return;
+    if (isPeer(d)) { d.open = load(PEER_KEY + d.getAttribute("data-peer")) === "1"; if (typeof syncTurnAria === "function") syncTurnAria(d); return; }
+    if (d.classList.contains("entry-panel") && typeof window !== "undefined" && window.wbHistory && window.wbHistory.restorePanel && window.wbHistory.restorePanel(d)) { if (typeof syncTurnAria === "function") syncTurnAria(d); return; }
     var k = openKey(d);
     if (k && Object.prototype.hasOwnProperty.call(openState, k)) d.open = openState[k];
     else if (isPanel(d) && shutHas(shutId(d))) d.open = false;
+    if (typeof syncTurnAria === "function") syncTurnAria(d);
   }
   function restoreOpen(el) {
     if (el.tagName === "DETAILS") restoreOpenOne(el);
     q("details", el).forEach(restoreOpenOne);
   }
+  q('details[data-conv-turn="1"]').forEach(syncTurnAria);
   // forgetOpen drops what the user chose for the keyed details inside el,
   // so the next restoreOpen leaves the server's markup as it arrived.
   function forgetOpen(el) {
@@ -344,7 +358,7 @@
     entries.forEach(function (entry) {
       var el = entry.target, shown = entry.contentRect.width > 0 && entry.contentRect.height > 0;
       paneVisible[el.id] = shown;
-      if (shown && !el.wbScrollOwner) paneScroll[el.id] = el.scrollTop;
+      if (shown && PANES.indexOf(el.id) >= 0 && !el.wbScrollOwner) paneScroll[el.id] = el.scrollTop;
     });
   }) : null;
   function notePanes() {
@@ -367,6 +381,12 @@
       if (!paneFrame) paneFrame = requestAnimationFrame(notePanes);
     }, { passive: true });
   });
+  if (paneObserver) {
+    ["files", "cterm-panes"].forEach(function (id) {
+      var el = $(id);
+      if (el && el.id) paneObserver.observe(el);
+    });
+  }
   // Region messages that arrive in one frame (a warm switch's reconnect sends
   // every region that changed meanwhile) share the first one's snapshot: the
   // offsets read again after a swap's writes would force a layout per message
@@ -598,7 +618,12 @@
     modelHistorySync();
   }
   syncChead();
-  function tabShown(t) { return visible($(PANE[t])) || (t === "convo" && (visible(fpane) || visible($("cterm-panes")))); }
+  function paneShown(id) {
+    var el = $(id);
+    if (!el) return false;
+    return paneObserver && Object.prototype.hasOwnProperty.call(paneVisible, id) ? paneVisible[id] : visible(el);
+  }
+  function tabShown(t) { return paneShown(PANE[t]) || (t === "convo" && (paneShown("files") || paneShown("cterm-panes"))); }
   function tabDot(t) { var b = doc.querySelector('#tabbar [data-tab="' + t + '"]'); return b && b.querySelector(".tdot"); }
   function ctabDot() { return doc.querySelector('#ctabs [data-ctab="convo"] .tdot'); }
   var bootingPanes = false;
@@ -616,31 +641,33 @@
       }
     });
     pinConvo();
-    queueSyncConvoBottom();
+    if (typeof queueSyncConvoBottom === "function") queueSyncConvoBottom();
     nearTop(); // a conversation shown too short to scroll still loads older entries
+    var fs = visible(fpane);
+    paneVisible.files = fs;
+    var ts = visible($("cterm-panes"));
+    paneVisible["cterm-panes"] = ts;
     Object.keys(PANE).forEach(function (t) { var d = tabDot(t); if (d && tabShown(t)) d.classList.remove("on"); });
     var cv = typeof convoVisible === "function" ? convoVisible() : (typeof paneVisible.convo === "boolean" ? paneVisible.convo : visible(convo));
     if (cv && ctabDot()) ctabDot().classList.remove("on");
     // The Files pane hears each time it comes into view (a tab, a layout,
     // or a resize showed it) and each time it leaves.
-    var fs = visible(fpane);
     if (fs !== filesSeen && filesTab) {
       if (fs) filesTab.shown();
       else filesTab.hidden();
     }
     filesSeen = fs;
-    if (window.WsTerm && window.WsTerm.syncCtab) window.WsTerm.syncCtab(!!(grid && grid.getAttribute("data-ctab") === "term"), visible($("cterm-panes")));
+    if (window.WsTerm && window.WsTerm.syncCtab) window.WsTerm.syncCtab(!!(grid && grid.getAttribute("data-ctab") === "term"), ts);
+    if (typeof convMotionRelayout === "function") convMotionRelayout();
   }
-  function setLayout(v) {
-    if (v !== "split" && v !== "tabs") v = "auto";
-    layoutMode = v;
+  function setLayout() {
+    layoutMode = "auto";
     if (grid) {
-      grid.setAttribute("data-layout", v);
+      grid.setAttribute("data-layout", "auto");
       // Mirror layout state for rules outside the grid rather than a body
       // :has() that invalidates the document on chip mutations.
-      doc.body.setAttribute("data-dashboard-layout", v);
+      doc.body.setAttribute("data-dashboard-layout", "auto");
     }
-    q(".gmenu [data-layout]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-layout") === v)); });
     if (live || worktree) revealPanes();
     if (cardBoard) window.WsCards.relayout();
   }
@@ -727,9 +754,24 @@
     if (!changed && !user) return;
     doc.dispatchEvent(new CustomEvent("ws-stage-fill", { detail: { fill: next } }));
     if (typeof galNarrow !== "undefined" && galNarrow && typeof queueGallery === "function") queueGallery();
-    if (user && framed) shPost("settings", { layout: layoutMode, input: inputMode, stageFill: stageFill });
+    if (user && framed) shPost("settings", { layout: layoutMode, input: inputMode, stageFill: stageFill, extraMotion: extraMotion });
   }
   function toggleStageFill() { setStageFill(!stageFill, true); }
+  function setExtraMotion(v, user) {
+    var next = parseExtraMotion(v);
+    var attr = next ? "on" : "off";
+    var changed = next !== extraMotion || root.getAttribute("data-extra-motion") !== attr;
+    extraMotion = next;
+    if (root.getAttribute("data-extra-motion") !== attr) root.setAttribute("data-extra-motion", attr);
+    q(".gmenu [data-extra-motion]").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.getAttribute("data-extra-motion") === attr));
+    });
+    if (user) save(EXTRA_MOTION_KEY, attr);
+    if (!changed && !user) return;
+    doc.dispatchEvent(new CustomEvent("ws-extra-motion", { detail: { enabled: next } }));
+    if (user && framed) shPost("settings", { layout: layoutMode, input: inputMode, stageFill: stageFill, extraMotion: extraMotion });
+    if (user && shell) shFrames.forEach(shSettings);
+  }
   function setTab(t) {
     grid.setAttribute("data-tab", t);
     q("#tabbar [data-tab]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-tab") === t)); });
@@ -754,10 +796,13 @@
   // Storage synchronizes other tabs. The shell also sends its in-memory
   // choice to frames, so denied/full storage never prevents immediate use.
   window.addEventListener("storage", function (e) {
-    if (e.key === LAYOUT_KEY) setLayout(e.newValue);
     if (e.key === INPUT_KEY) setInput(e.newValue);
     if (e.key === STAGE_FILL_KEY || e.key === null) {
       setStageFill(parseStageFill(e.key === null ? load(STAGE_FILL_KEY) : e.newValue));
+      if (shell) shFrames.forEach(shSettings);
+    }
+    if (e.key === EXTRA_MOTION_KEY || e.key === null) {
+      setExtraMotion(e.key === null ? load(EXTRA_MOTION_KEY) : e.newValue);
       if (shell) shFrames.forEach(shSettings);
     }
   });
@@ -872,25 +917,36 @@
     if (on) item.setAttribute("data-no", ""); else item.removeAttribute("data-no");
   }
   function writeAnswers(el, saved) {
-    q(".card[data-id], .arow[data-id], .ckrow[data-id], .srow[data-id]", el).forEach(function (item) {
-      var s = saved[item.getAttribute("data-id")];
-      if (!s) return;
-      var note = item.querySelector("textarea.note"), box = item.querySelector("label.ack > input, label.ck > input");
-      if (s.pick) q(".opt[data-opt], .btn[data-v]", item).forEach(function (b) { if (pickKey(b) === s.pick) b.setAttribute("aria-pressed", "true"); });
-      if (note && (s.note || s.noteOpen)) openNote(note, s);
-      if (box && s.checked) box.checked = true;
-      if (s.no) setCheckNo(item, true);
-    });
-    q(".tnote[data-topic]", el).forEach(function (note) {
-      var s = saved["t:" + note.getAttribute("data-topic")];
-      // A note a send closed (closeTopicNotes) keeps its text closed.
-      if (s && s.noteOpen) openNote(note, s);
-      else if (s) {
-        note.value = s.note || "";
-        if (s.capsules && window.WsCapsules) window.WsCapsules.attach(note).restore(s.capsules);
-      }
-    });
-    if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("dash", "writeAnswers") : null;
+    try {
+      var changedIds = [], hints = {};
+      q(".card[data-id], .arow[data-id], .ckrow[data-id], .srow[data-id]", el).forEach(function (item) {
+        var id = item.getAttribute("data-id");
+        var s = saved[id];
+        if (!s) return;
+        var note = item.querySelector("textarea.note"), box = item.querySelector("label.ack > input, label.ck > input");
+        if (s.pick) q(".opt[data-opt], .btn[data-v]", item).forEach(function (b) { if (pickKey(b) === s.pick) b.setAttribute("aria-pressed", "true"); });
+        if (note && (s.note || s.noteOpen)) openNote(note, s);
+        if (box && s.checked) box.checked = true;
+        if (s.no) setCheckNo(item, true);
+        if (s.pick || s.checked || s.no || s.note) {
+          changedIds.push(id);
+          hints[id] = { openEl: item, skipVirtual: true };
+        }
+      });
+      q(".tnote[data-topic]", el).forEach(function (note) {
+        var s = saved["t:" + note.getAttribute("data-topic")];
+        // A note a send closed (closeTopicNotes) keeps its text closed.
+        if (s && s.noteOpen) openNote(note, s);
+        else if (s) {
+          note.value = s.note || "";
+          if (s.capsules && window.WsCapsules) window.WsCapsules.attach(note).restore(s.capsules);
+        }
+      });
+      if (changedIds.length && typeof syncWbUpdateItems === "function") syncWbUpdateItems(changedIds, hints);
+    } finally {
+      if (jTok) WsJank.end(jTok);
+    }
   }
   // A board swap waits while the user is typing in the answer form, and
   // lands when the focus leaves it.

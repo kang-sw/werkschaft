@@ -163,7 +163,18 @@ func (r *Runner) TakeOver(id string) (State, error) {
 		PermissionMode: rp.Definition.PermissionMode,
 		CreatedAt:      row.RegisteredAt,
 	}
-	if old, err := readRecord(dir); err == nil && old.Lead && old.WSKey == ls.Key && old.Backend == rp.Definition.Backend {
+	var old Record
+	var oldErr error
+	if r.meta != nil {
+		if existing, ok := r.recordOf(id); ok {
+			old = existing
+		} else {
+			oldErr = os.ErrNotExist
+		}
+	} else {
+		old, oldErr = readRecord(dir)
+	}
+	if oldErr == nil && old.Lead && old.WSKey == ls.Key && old.Backend == rp.Definition.Backend {
 		// A session the daemon hosted before: its settings, what it still
 		// holds for the session (undelivered mail), and a holder it could
 		// not end carry over.
@@ -256,13 +267,23 @@ func (c *conv) handOff() error {
 	return nil
 }
 
-// Reopen opens the closed hosted lead session id again: it keeps its key,
-// its harness conversation, and its settings, and resumes on its next
-// input or mail. It is refused once the session's row is a terminal's (a
-// terminal login took the closed session); such a session comes back
-// through TakeOver.
-// Retained name check: retained Pi records and handoff requests (TestRetiredPiHoldersKeepRunning).
+// Reopen opens the closed hosted lead session id again as active (asleep),
+// clearing any leftover hidden flag so it resumes on its next input or mail.
+// It is refused once the session's row is a terminal's (a terminal login took
+// the closed session); such a session comes back through TakeOver.
 func (r *Runner) Reopen(id string) (State, error) {
+	return r.reopen(id, false)
+}
+
+// ReopenHidden opens the closed hosted lead session id again while atomically
+// setting its archived visibility before the conversation loop or mailbox watch
+// starts, so reopen-to-archive cannot wake queued mail before hide takes effect.
+func (r *Runner) ReopenHidden(id string, hidden bool) (State, error) {
+	return r.reopen(id, hidden)
+}
+
+// Retained name check: retained Pi records and handoff requests (TestRetiredPiHoldersKeepRunning).
+func (r *Runner) reopen(id string, hidden bool) (State, error) {
 	r.mu.Lock()
 	_, open := r.convs[id]
 	rec, closed := r.closed[id]
@@ -320,15 +341,32 @@ func (r *Runner) Reopen(id string) (State, error) {
 	closedRec := rec
 	rec.ClosedAt = ""
 	dir := wsdashboard.SessionDir(r.opts.Dir, id)
-	if durable {
+	prevHidden, visErr := wsdashboard.ReadSessionHidden(r.opts.Dir, id)
+	visChanged := false
+	if visErr != nil {
+		err = fmt.Errorf("read session visibility: %w", visErr)
+	}
+	if err == nil && durable {
 		// The previous daemon may have stopped after committing close but
 		// before discarding its staged, undelivered inbox claims.
 		if discardErr := wsinbox.DiscardClaims(wsinbox.Dir(dir)); discardErr != nil {
 			err = fmt.Errorf("discard closed inbox claims: %w", discardErr)
 		}
 	}
+	if err == nil && prevHidden != hidden {
+		if writeErr := wsdashboard.WriteSessionHidden(r.opts.Dir, id, hidden); writeErr != nil {
+			err = writeErr
+		} else {
+			visChanged = true
+		}
+	}
 	if err == nil {
-		err = r.persistAgentRecord(dir, rec)
+		if persistErr := r.persistAgentRecord(dir, rec); persistErr != nil {
+			err = persistErr
+			if visChanged {
+				_ = wsdashboard.WriteSessionHidden(r.opts.Dir, id, prevHidden)
+			}
+		}
 	}
 	r.mu.Lock()
 	if err != nil {
@@ -342,7 +380,9 @@ func (r *Runner) Reopen(id string) (State, error) {
 		return State{}, err
 	}
 	r.unfenceExec(id)
-	return r.startConv(rec, nil).state(), nil
+	st := r.startConv(rec, nil).state()
+	r.notify(rec.ReplyID, rec.Root)
+	return st, nil
 }
 
 // resumeLine renders "change to dir, then run harness name with flag arg"

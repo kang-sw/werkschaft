@@ -22,7 +22,7 @@ import (
 
 const (
 	// HistoryCap is each session's window, received and sent together.
-	HistoryCap = 10
+	HistoryCap = 100
 	// HistoryRetention drops the window of a session idle past it when a
 	// rotation carries live state forward. It equals the session key
 	// retention, so stored bodies do not outlive the keys that reach them.

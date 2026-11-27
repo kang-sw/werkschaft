@@ -272,6 +272,9 @@ type Options struct {
 	CheckoutReleased func(from, id, checkout, reason string)
 	// ChildWaitingDays overrides agent.child_waiting_days; 0 reads it.
 	ChildWaitingDays int
+	// ParkIdleChildren lets a waiting spawned child leave memory until a
+	// message, mail or control wakes it (runner_park.go). The daemon sets it.
+	ParkIdleChildren bool
 	// keepAwake replaces the platform's idle-sleep backend in tests.
 	keepAwake wsawake.Backend
 	// spawnListed observes global spawn-projection listings in tests.
@@ -287,6 +290,9 @@ type Options struct {
 	closedSnapshotRead func(string)
 	// sendAdmitting observes the revival admission fence in tests.
 	sendAdmitting func(string)
+	// OnHired, when not nil, notifies the daemon's in-memory hiring and label
+	// caches after SQLite MarkHired commits for a newly created hired lead.
+	OnHired func(replyID, requestID, label string)
 	// beforeDurableWrite injects a failed private record write in tests.
 	beforeDurableWrite     func(Record) error
 	removeRetiredPiArchive func(string) error // archive removal fault in tests
@@ -300,6 +306,15 @@ type Runner struct {
 	notify func(replyID, project string)
 	// Opened during daemon startup under the dashboard lock, then held
 	// until all conversations have drained.
+	// meta and metaSnap bind the shared daemon SQLite metadata store when
+	// cutover is active (SetMeta); the daemon owns closing meta.
+	meta               *wsmeta.Store
+	metaSnap           *wsmeta.Snapshot
+	recordBaseMu       sync.Mutex
+	recordBase         map[string][]byte // reply-id -> last persisted JSON in SQLite
+	perms              sync.Map          // reply-id -> *permissionSelection (when meta != nil)
+	hiredByReqMu       sync.Mutex
+	hiredByReq         map[string]string // request-id -> reply-id (when meta != nil)
 	durableRecords     *wsmeta.Store
 	durableProjections sync.Map   // reply-id -> last published projection digest
 	deadClosureMu      sync.Mutex // serializes persistence of holder-backed dead closures
@@ -354,6 +369,14 @@ type Runner struct {
 	// closedRows caches immutable closed states under mu, until reopened.
 	// Handed-off snapshots still belong to a terminal and are not cached.
 	closedRows map[string]State
+	// parked marks the ids of closed that are open, waiting spawned
+	// children with no loop (runner_park.go): their record stays in closed
+	// so every read of a record sees them, and a wake path rehydrates the
+	// conversation (unpark). parkStop holds each one's mail watch stop and
+	// unparking the rehydrations under way. All under mu.
+	parked    map[string]bool
+	parkStop  map[string]func()
+	unparking map[string]chan struct{}
 	// Retired Pi process bindings are independent of the ended history rows.
 	// The holder manager supplies their liveness. Guarded by mu.
 	retiredPiBindings map[string]retiredPiBinding

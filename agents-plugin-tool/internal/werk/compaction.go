@@ -179,8 +179,7 @@ func readCompactProse(response *Response, secrets []string) ([]string, error) {
 
 type compactArchive struct {
 	secrets  []string
-	lines    []string
-	bytes    int
+	items    []wscompact.DialogItem
 	ticket   string
 	phase    string
 	playbook string
@@ -188,6 +187,15 @@ type compactArchive struct {
 
 var ticketRefRE = wscompact.TicketRefRE
 var skillRE = wscompact.SkillRE
+
+func isCompactSelfTool(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "compact", "ws_compact", "ws/compact", "mcp_ws_compact":
+		return true
+	default:
+		return false
+	}
+}
 
 func (a *compactArchive) observe(raw json.RawMessage) {
 	if a == nil {
@@ -208,10 +216,21 @@ func (a *compactArchive) observe(raw json.RawMessage) {
 	}
 	if item.Type == "function_call" {
 		a.observeCall(item.Name, item.Arguments)
+		if name := strings.TrimSpace(item.Name); name != "" && !isCompactSelfTool(name) {
+			a.items = append(a.items, wscompact.DialogItem{
+				Kind:     wscompact.DialogTool,
+				ToolName: name,
+				ToolArgs: item.Arguments,
+			})
+		}
 		return
 	}
 	if item.Type != "message" || (item.Role != "user" && item.Role != "assistant") {
 		return
+	}
+	kind := wscompact.DialogUser
+	if item.Role == "assistant" {
+		kind = wscompact.DialogAssistant
 	}
 	for _, part := range item.Content {
 		switch part.Type {
@@ -227,14 +246,10 @@ func (a *compactArchive) observe(raw json.RawMessage) {
 		if strings.TrimSpace(part.Text) == "" {
 			continue
 		}
-		line := "\n" + item.Role + ": " + boundedText(Scrub(part.Text, a.secrets...), dialogBytes-16) + "\n"
-		a.lines = append(a.lines, line)
-		a.bytes += len(line)
-		for a.bytes > dialogBytes {
-			a.bytes -= len(a.lines[0])
-			a.lines[0] = ""
-			a.lines = a.lines[1:]
-		}
+		a.items = append(a.items, wscompact.DialogItem{
+			Kind: kind,
+			Text: part.Text,
+		})
 	}
 }
 
@@ -278,8 +293,7 @@ func (a *compactArchive) notePlaybook(name string) {
 }
 
 func (a *compactArchive) dialog(path string) string {
-	return "## Dialog\nRaw conversation log (relative to the session directory): " + path + "\n" +
-		strings.Join(a.lines, "")
+	return wscompact.BuildDialog("Raw conversation log (relative to the session directory): "+path, a.items, dialogBytes, a.secrets...)
 }
 
 func (a *compactArchive) summary(state CompactionState, prose []string, dialog string, lead bool, rereads string) string {

@@ -19,6 +19,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsgit"
 	"github.com/kang-sw/devenv/internal/wsholder"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 type retiredPiGuardHolder struct {
@@ -337,7 +338,7 @@ func (f *fakeWorktreeChildren) set(target string, children ...wsagent.BoundWorkt
 	if f.byTarget == nil {
 		f.byTarget = map[string][]wsagent.BoundWorktreeChild{}
 	}
-	key := canonicalWorktreeTestPath(target)
+	key := wstestutil.CanonicalPath(target)
 	if len(children) == 0 {
 		delete(f.byTarget, key)
 		return
@@ -348,15 +349,7 @@ func (f *fakeWorktreeChildren) set(target string, children ...wsagent.BoundWorkt
 func (f *fakeWorktreeChildren) ActiveChildrenInWorktree(worktree string) []wsagent.BoundWorktreeChild {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]wsagent.BoundWorktreeChild(nil), f.byTarget[canonicalWorktreeTestPath(worktree)]...)
-}
-
-func canonicalWorktreeTestPath(p string) string {
-	p = filepath.Clean(strings.TrimSpace(p))
-	if resolved, err := filepath.EvalSymlinks(p); err == nil {
-		return filepath.Clean(resolved)
-	}
-	return p
+	return append([]wsagent.BoundWorktreeChild(nil), f.byTarget[wstestutil.CanonicalPath(worktree)]...)
 }
 
 // TestWorktreeReleaseRefusesLiveDirectAndNestedBoundChildren verifies that

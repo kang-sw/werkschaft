@@ -2,6 +2,7 @@ package wsdashboard
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -11,6 +12,41 @@ import (
 	"strings"
 	"testing"
 )
+
+func replaceLayoutForTest(t *testing.T, s *railLayoutStore, doc *railLayoutDoc) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.meta != nil {
+		if _, err := s.writePatchLocked(s.doc, doc); err != nil {
+			t.Fatal(err)
+		}
+		s.doc = doc.clone()
+		s.gen++
+		return
+	}
+	raw, err := doc.encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrivateFile(filepath.Dir(s.file), filepath.Base(s.file), raw); err != nil {
+		t.Fatal(err)
+	}
+	s.doc = doc.clone()
+	s.gen++
+}
+
+func reopenLayoutForTest(t *testing.T, d *Daemon) *railLayoutStore {
+	t.Helper()
+	if d.meta != nil {
+		snap, err := d.meta.Load(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return openRailLayoutStoreFromMeta(d.dir, d.meta, snap)
+	}
+	return openRailLayoutStore(d.dir)
+}
 
 // layoutTestView is a rail as buildRailView lists it, unordered by any
 // layout: a plain folder, a repository with a root and a linked worktree,
@@ -788,8 +824,13 @@ func TestRailLayoutRoute(t *testing.T) {
 	if strings.Contains(ev.HTML, `data-star="1"`) {
 		t.Error("the rail still shows a star after the unstar")
 	}
-	if !strings.Contains(string(readLayoutFile(t, f.dir)), `"boardsession"`) {
-		t.Error("the layout file lacks the imported order")
+	persistedDoc, _ := reopenLayoutForTest(t, f.d).current()
+	persistedRaw, err := persistedDoc.encode()
+	if err != nil || !strings.Contains(string(persistedRaw), `"boardsession"`) {
+		t.Errorf("the persisted layout lacks the imported order: %s (%v)", persistedRaw, err)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, railLayoutFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("post-cutover layout write published legacy rail-layout.json: %v", err)
 	}
 
 	if code, _, _ := postJSON(t, f.base+railLayoutRoute, "http://evil.example", `{"op":"star","rid":"livesession"}`); code != http.StatusForbidden {
@@ -805,5 +846,64 @@ func TestRailLayoutRoute(t *testing.T) {
 		if got := railLayoutStatus(reason); got != want {
 			t.Errorf("status of %s = %d, want %d", reason, got, want)
 		}
+	}
+}
+
+// TestRailLayoutRouteRereadsAfterUnhideCooldown verifies that a restore+move
+// immediately after /unhide or /reopen succeeds even when Index.RereadLive is
+// throttled inside Index.drain's 1s cooldown window.
+func TestRailLayoutRouteRereadsAfterUnhideCooldown(t *testing.T) {
+	f := startPageFixture(t, withWorkspaces(t))
+	if _, err := f.d.workspaces.add(f.project, false); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the index to load", f.d.Index().Loaded)
+
+	reg, err := ReadRegistration(f.dir, "boardsession")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.Hosted = true
+	if err := WriteRegistration(f.dir, reg); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteSessionHidden(f.dir, "boardsession", true); err != nil {
+		t.Fatal(err)
+	}
+	// First RereadLive runs immediately and starts the 1s per-session cooldown.
+	f.d.Index().RereadLive("boardsession")
+	waitFor(t, "boardsession to become archived in index", func() bool {
+		row, ok := railFactsOf(f.d.railBaseView(f.d.pages())).rows["boardsession"]
+		return ok && !row.Live
+	})
+
+	if err := WriteSessionHidden(f.dir, "boardsession", false); err != nil {
+		t.Fatal(err)
+	}
+	// Second RereadLive inside the 1s window is throttled by Index.drain.
+	f.d.Index().RereadLive("boardsession")
+	if row := railFactsOf(f.d.railBaseView(f.d.pages())).rows["boardsession"]; row.Live {
+		t.Fatalf("expected boardsession to still look archived during cooldown before synchronous reread")
+	}
+
+	code, _, raw := postJSON(t, f.base+railLayoutRoute, f.base, `{"op":"move","rid":"boardsession","before":"livesession"}`)
+	var reply railLayoutReply
+	if err := json.Unmarshal([]byte(raw), &reply); err != nil {
+		t.Fatalf("decode reply = %q: %v", raw, err)
+	}
+	if code != http.StatusOK || !reply.Applied {
+		t.Fatalf("POST move right after unhide = %d %+v, want 200 applied:true", code, reply)
+	}
+	view := f.d.railView(f.d.pages())
+	sess := view.Workspaces[0].Sessions
+	if len(sess) == 0 && len(view.Workspaces[0].Worktrees) > 0 {
+		sess = view.Workspaces[0].Worktrees[0].Sessions
+	}
+	var ids []string
+	for _, r := range sess {
+		ids = append(ids, r.ReplyID)
+	}
+	if strings.Join(ids, ",") != "boardsession,livesession" {
+		t.Fatalf("sessions after restore+move = %v, want [boardsession livesession]", ids)
 	}
 }

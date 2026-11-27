@@ -124,6 +124,9 @@ func renderSessionRegions(view SessionView, cache *entryCache) (regionSet, error
 	}
 	view.Conversation.Lang = view.Lang
 	view.Conversation.MailboxCtx = view.viewingMailboxContext()
+	if view.Conversation.LiveTurnSummary != nil {
+		view.Conversation.LiveTurnSummary = prepareTurnSummary(view.Conversation.LiveTurnSummary, view.Lang, view.Conversation.MailboxCtx)
+	}
 	for i := range view.Conversation.Held {
 		view.Conversation.Held[i].Lang = view.Lang
 		view.Conversation.Held[i].MailboxCtx = view.Conversation.MailboxCtx
@@ -147,6 +150,27 @@ func renderSessionRegions(view SessionView, cache *entryCache) (regionSet, error
 	return regions, nil
 }
 
+// prepareTurnSummary clones a TurnSummaryView with the viewer's language and
+// propagates language and mailbox context into any folded mail/wake items.
+func prepareTurnSummary(src *TurnSummaryView, lang string, mbCtx mailboxContext) *TurnSummaryView {
+	ts := *src
+	ts.Lang = lang
+	if ts.MailCount > 0 && len(ts.Gaps) > 0 {
+		gaps := make([]TurnGapItem, len(ts.Gaps))
+		copy(gaps, ts.Gaps)
+		for i := range gaps {
+			if gaps[i].Mail != nil {
+				mc := *gaps[i].Mail
+				mc.Lang = lang
+				mc.MailboxCtx = mbCtx
+				gaps[i].Mail = &mc
+			}
+		}
+		ts.Gaps = gaps
+	}
+	return &ts
+}
+
 // renderEntries sets each entry's Rendered element from cache, rendering it
 // (a lead reply's markdown, then the entry template) only on a miss.
 func renderEntries(a *dashboardAssets, cache *entryCache, replyID string, cv *ConversationView) error {
@@ -154,6 +178,14 @@ func renderEntries(a *dashboardAssets, cache *entryCache, replyID string, cv *Co
 		e := cv.Entries[i]
 		e.Lang = cv.Lang
 		e.MailboxCtx = cv.MailboxCtx
+		if e.TurnSummary != nil {
+			e.TurnSummary = prepareTurnSummary(e.TurnSummary, cv.Lang, cv.MailboxCtx)
+		}
+		if e.TurnPlain != nil {
+			tp := *e.TurnPlain
+			tp.Lang = cv.Lang
+			e.TurnPlain = &tp
+		}
 		if len(e.UserBlocks) > 0 {
 			blocks := make([]ConvEntry, len(e.UserBlocks))
 			copy(blocks, e.UserBlocks)

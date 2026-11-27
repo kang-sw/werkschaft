@@ -177,12 +177,18 @@
     clearTimeout(s.fitTimer);
     s.fitTimer = 0;
     if (!s.term || s.gone || !shows(c)) return;
-    measure(s.term);
-    var d = null;
-    try { d = s.fit.proposeDimensions(); } catch (e) { d = null; }
-    if (!d || !(d.rows > 0) || !(d.cols > 0)) return;
-    if (d.rows !== s.term.rows || d.cols !== s.term.cols) s.term.resize(d.cols, d.rows);
-    sendSize(c);
+    var jank = typeof window !== "undefined" ? window.WsJank : null;
+    var jTok = jank && jank.begin ? jank.begin("term", "term.fit") : null;
+    try {
+      measure(s.term);
+      var d = null;
+      try { d = s.fit.proposeDimensions(); } catch (e) { d = null; }
+      if (!d || !(d.rows > 0) || !(d.cols > 0)) return;
+      if (d.rows !== s.term.rows || d.cols !== s.term.cols) s.term.resize(d.cols, d.rows);
+      sendSize(c);
+    } finally {
+      if (jTok) jank.end(jTok);
+    }
   }
   // sendSize sends the emulator's size unless the daemon has it. A folded
   // or hidden card sends none, on a new connection too: its emulator was
@@ -258,7 +264,14 @@
         break;
       case "out":
         if (f.seq) s.last = f.seq;
-        s.term.write(bytes(f.data));
+        var outBytes = bytes(f.data);
+        var jankOut = typeof window !== "undefined" ? window.WsJank : null;
+        var jTokOut = jankOut && jankOut.begin ? jankOut.begin("term", "term.write") : null;
+        try {
+          s.term.write(outBytes);
+        } finally {
+          if (jTokOut) jankOut.end(jTokOut, { bytes: outBytes && typeof outBytes.length === "number" ? outBytes.length : 0 });
+        }
         break;
       case "exit":
         if (f.seq) s.last = f.seq;

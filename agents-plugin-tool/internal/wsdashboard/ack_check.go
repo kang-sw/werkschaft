@@ -1,6 +1,7 @@
 package wsdashboard
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 	"github.com/kang-sw/devenv/internal/wswhiteboard"
 )
 
@@ -131,15 +133,73 @@ func writeAckCheck(sessionDir string, rec ackCheckRecord) error {
 	return writePrivateFile(sessionDir, ackCheckFileName, append(raw, '\n'))
 }
 
+// loadAckChecksFromMeta seeds the in-memory ack-check cache from the startup
+// SQLite snapshot so checks read memory after cutover (2001).
+func (d *Daemon) loadAckChecksFromMeta(snap *wsmeta.Snapshot) {
+	d.inboxMu.Lock()
+	defer d.inboxMu.Unlock()
+	d.ackChecks = map[string]ackCheckRecord{}
+	if snap == nil {
+		return
+	}
+	for replyID, raw := range snap.AckChecks {
+		var rec ackCheckRecord
+		if json.Unmarshal(raw, &rec) == nil {
+			d.ackChecks[replyID] = rec
+		}
+	}
+}
+
+// readAckCheckLocked reads replyID's answer-check marker while d.inboxMu is
+// held; sessionDir is used only in legacy fallback (d.meta == nil).
+func (d *Daemon) readAckCheckLocked(replyID, sessionDir string) ackCheckRecord {
+	if d.meta != nil {
+		return d.ackChecks[replyID]
+	}
+	return readAckCheck(sessionDir)
+}
+
+// readAckCheck reads replyID's answer-check marker without holding d.inboxMu.
+func (d *Daemon) readAckCheck(replyID, sessionDir string) ackCheckRecord {
+	if d.meta != nil {
+		d.inboxMu.Lock()
+		rec := d.ackChecks[replyID]
+		d.inboxMu.Unlock()
+		return rec
+	}
+	return readAckCheck(sessionDir)
+}
+
+// writeAckCheckLocked persists replyID's answer-check marker while d.inboxMu
+// is held; sessionDir is used only in legacy fallback (d.meta == nil).
+func (d *Daemon) writeAckCheckLocked(replyID, sessionDir string, rec ackCheckRecord) error {
+	if d.meta != nil {
+		raw, err := json.Marshal(rec)
+		if err != nil {
+			return err
+		}
+		if err := d.meta.PutAckCheck(context.Background(), replyID, raw); err != nil {
+			return err
+		}
+		if d.ackChecks == nil {
+			d.ackChecks = map[string]ackCheckRecord{}
+		}
+		d.ackChecks[replyID] = rec
+		return nil
+	}
+	return writeAckCheck(sessionDir, rec)
+}
+
 // recordInterrupt notes a dashboard interrupt of the session whose inbox is
 // inbox at now (ackCheckRecord.InterruptedAt); d.inboxMu is held. A failure
 // is logged: the turn's check then runs as if it ended normally.
 func (d *Daemon) recordInterrupt(inbox string, now time.Time) {
 	sessionDir := filepath.Dir(inbox)
-	rec := readAckCheck(sessionDir)
+	replyID := filepath.Base(sessionDir)
+	rec := d.readAckCheckLocked(replyID, sessionDir)
 	rec.InterruptedAt = now.UnixMilli()
-	if err := writeAckCheck(sessionDir, rec); err != nil {
-		fmt.Fprintf(d.log, "dashboard: record interrupt %s: %v\n", filepath.Base(sessionDir), err)
+	if err := d.writeAckCheckLocked(replyID, sessionDir, rec); err != nil {
+		fmt.Fprintf(d.log, "dashboard: record interrupt %s: %v\n", replyID, err)
 	}
 }
 
@@ -248,7 +308,7 @@ func (d *Daemon) checkAnswers(replyID string) {
 	if holdsMessages(inbox) {
 		return
 	}
-	rec := readAckCheck(sessionDir)
+	rec := d.readAckCheck(replyID, sessionDir)
 	if start <= rec.InterruptedAt {
 		return
 	}
@@ -278,11 +338,11 @@ func (d *Daemon) checkAnswers(replyID string) {
 // changed since read (another check, or an interrupt, ran in between).
 func (d *Daemon) commitAnswerCheck(s Session, sessionDir, inbox string, read ackCheckRecord, start int64, ids []int) {
 	d.inboxMu.Lock()
-	if holdsMessages(inbox) || readAckCheck(sessionDir) != read {
+	if holdsMessages(inbox) || d.readAckCheckLocked(s.ReplyID, sessionDir) != read {
 		d.inboxMu.Unlock()
 		return
 	}
-	if err := writeAckCheck(sessionDir, ackCheckRecord{Through: start, InterruptedAt: read.InterruptedAt}); err != nil {
+	if err := d.writeAckCheckLocked(s.ReplyID, sessionDir, ackCheckRecord{Through: start, InterruptedAt: read.InterruptedAt}); err != nil {
 		d.inboxMu.Unlock()
 		fmt.Fprintf(d.log, "dashboard: answer check %s: %v\n", s.ReplyID, err)
 		return

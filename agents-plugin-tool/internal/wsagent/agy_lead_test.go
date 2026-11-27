@@ -1255,7 +1255,7 @@ func TestAgyWorkerReattachSuspendsNativeFailureForPendingToolOrApproval(t *testi
 // and a hosted agy lead lists only these tools directly.
 func TestAgyDirectToolsListTheMailboxToolsAGroupMarkerPointsAt(t *testing.T) {
 	_, reg := (AgyBackend{}).registration()
-	for _, name := range []string{"mailbox.send", "mailbox.recv", "mailbox.recipients"} {
+	for _, name := range []string{"mailbox.send", "mailbox.recv", "mailbox.history", "mailbox.read", "mailbox.recipients"} {
 		if n := slices.Index(reg.DirectTools, name); n < 0 {
 			t.Fatalf("agy DirectTools lacks %s: %v", name, reg.DirectTools)
 		} else if slices.Index(reg.DirectTools[n+1:], name) >= 0 {

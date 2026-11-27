@@ -16,9 +16,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to embed in ws-mcp binaries, for example 0.53.1-dev"
+        description: "Version to embed in ws-mcp binaries, for example 0.53.2-dev"
         required: false
-        default: "0.53.1-dev"
+        default: "0.53.2-dev"
       tauri_dry_run:
         description: "Build signed Tauri desktop artifacts without publishing; supply a stable or canary version"
         type: boolean
@@ -128,7 +128,7 @@ jobs:
           elif [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
             scripts/build-release-assets.sh "${GITHUB_REF_NAME}"
           else
-            scripts/build-release-assets.sh 0.53.1-dev
+            scripts/build-release-assets.sh 0.53.2-dev
           fi
 
       - name: Verify release asset checksums
@@ -183,8 +183,8 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           python scripts/generate-package-assets.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          go build -trimpath -ldflags "-s -w -X main.version=0.53.1-dev" -o dist/ws-mcp-windows-amd64.exe ./cmd/ws-mcp
-          python scripts/write-runtime-metadata.py dist/ws-mcp-windows-amd64.exe --version 0.53.1-dev
+          go build -trimpath -ldflags "-s -w -X main.version=0.53.2-dev" -o dist/ws-mcp-windows-amd64.exe ./cmd/ws-mcp
+          python scripts/write-runtime-metadata.py dist/ws-mcp-windows-amd64.exe --version 0.53.2-dev
 
       - name: Run Windows executable smoke
         shell: pwsh

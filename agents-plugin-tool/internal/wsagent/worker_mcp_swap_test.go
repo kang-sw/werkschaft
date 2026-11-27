@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,15 +18,29 @@ import (
 	"github.com/kang-sw/devenv/internal/wsholder"
 )
 
-type workerSwapProxy struct{}
+type workerSwapProxy struct {
+	mu     sync.Mutex
+	hellos []wsdashboard.ProxyHello
+}
 
-func (p workerSwapProxy) Accept(wsdashboard.ProxyHello) (wsdashboard.ProxySession, error) {
+func (p *workerSwapProxy) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySession, error) {
+	p.mu.Lock()
+	p.hellos = append(p.hellos, hello)
+	p.mu.Unlock()
 	return p, nil
 }
 
-func (workerSwapProxy) Drain(context.Context) bool { return true }
+func (p *workerSwapProxy) takeHellos() []wsdashboard.ProxyHello {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := append([]wsdashboard.ProxyHello(nil), p.hellos...)
+	p.hellos = nil
+	return out
+}
 
-func (workerSwapProxy) Serve(_ context.Context, stream io.ReadWriteCloser) {
+func (*workerSwapProxy) Drain(context.Context) bool { return true }
+
+func (*workerSwapProxy) Serve(_ context.Context, stream io.ReadWriteCloser) {
 	in, out := json.NewDecoder(stream), json.NewEncoder(stream)
 	for {
 		var message struct {
@@ -61,11 +76,15 @@ for line in sys.stdin:
 	if err := os.WriteFile(script, []byte(claude), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	environ = func() []string { return []string{"HOME=" + home, "USERPROFILE=" + home} }
+	wantPath := "/test/swap-bin"
+	prevEnviron := environ
+	environ = func() []string { return []string{"PATH=" + wantPath, "HOME=" + home, "USERPROFILE=" + home} }
+	t.Cleanup(func() { environ = prevEnviron })
 	h.opts.Alive = nil
 
 	holderOpts := wsholder.Options{Dir: filepath.Join(home, "holders"), Python: python}
 	newManager := func() *wsholder.Manager { return wsholder.New(holderOpts) }
+	proxy := &workerSwapProxy{}
 	var daemon *wsdashboard.Daemon
 	t.Cleanup(func() {
 		if daemon != nil {
@@ -87,7 +106,7 @@ for line in sys.stdin:
 		h.runner = NewRunner(h.opts)
 		var err error
 		daemon, err = wsdashboard.StartDaemon(wsdashboard.DaemonOptions{
-			Dir: h.dir, Home: home, Port: port, Version: h.opts.DaemonVersion, Agents: h.runner, Holders: manager, Proxy: workerSwapProxy{}, Log: h.log,
+			Dir: h.dir, Home: home, Port: port, Version: h.opts.DaemonVersion, Agents: h.runner, Holders: manager, Proxy: proxy, Log: h.log,
 		})
 		if err != nil {
 			manager.Close()
@@ -147,7 +166,19 @@ for line in sys.stdin:
 			t.Fatalf("route returned %d, want %d (%v)", status, want, err)
 		}
 	}
+	checkHelloEnv := func(phase string) {
+		t.Helper()
+		hellos := proxy.takeHellos()
+		if len(hellos) == 0 {
+			t.Fatalf("%s: proxy Accept was not called", phase)
+		}
+		last := hellos[len(hellos)-1]
+		if last.Env["PATH"] != wantPath || last.Env["HOME"] != home {
+			t.Fatalf("%s: ProxyHello.Env lost harness env: PATH=%q (want %q), HOME=%q (want %q)", phase, last.Env["PATH"], wantPath, last.Env["HOME"], home)
+		}
+	}
 	checkRoute(rec.MCPURL, "initialize", http.StatusOK)
+	checkHelloEnv("initial")
 
 	shutdown := func() {
 		t.Helper()
@@ -169,6 +200,7 @@ for line in sys.stdin:
 	start(originalPort)
 	checkHolder()
 	checkRoute(rec.MCPURL, "tools/list", http.StatusOK)
+	checkHelloEnv("post-swap")
 
 	shutdown()
 	reservation.Close()

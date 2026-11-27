@@ -166,7 +166,7 @@ func (d *Daemon) handleHiringFlag(w http.ResponseWriter, r *http.Request, replyI
 		http.NotFound(w, r)
 		return
 	}
-	meta, err := ReadHiringMetadata(d.dir, replyID)
+	meta, err := d.readHiringMetadata(replyID)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -189,12 +189,12 @@ func (d *Daemon) handleHiringFlag(w http.ResponseWriter, r *http.Request, replyI
 		http.Error(w, "session index is not ready", http.StatusServiceUnavailable)
 		return
 	}
-	if *req.Enabled && (!reg.Live(d.hireClock()) || meta.Hired || d.hireParent(replyID) != "") {
+	if *req.Enabled && (!d.regLive(reg, d.hireClock()) || meta.Hired || d.hireParent(replyID) != "") {
 		http.Error(w, "hiring cannot be enabled for an ended, nested, or hired session", 409)
 		return
 	}
 	meta.Enabled = *req.Enabled
-	if err = writeHiringMetadata(d.dir, replyID, meta); err != nil {
+	if err = d.writeHiringMetadata(replyID, meta); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}

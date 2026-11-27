@@ -20,7 +20,7 @@
   .dwrap:not(.narrow) { max-width: none; }
   .dbody { --rail-stage-gap: 8px; display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 0 var(--rail-stage-gap); align-items: start; }
   .dlanding { --dl-r: var(--dl-x); margin-left: calc(0px - var(--rail-stage-gap)); }
-  .dash.live .dbody, .dash.history .dbody { flex: 1 1 0; min-height: 0; align-items: stretch; }
+  .dash.live .dbody, .dash.history .dbody { flex: 1 1 0; min-height: 0; grid-template-rows: minmax(0, 1fr); align-items: stretch; }
   .dash.live .dbody > .dgrid.live, .dash.history .dbody > .dgrid.history { min-height: 0; }
   body.tk-paged .dbody { flex: 1 1 0; min-height: 0; align-items: stretch; }
   .dbody > .tk-spage { grid-column: 2; grid-row: 1; }
@@ -321,11 +321,28 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rail .rfh[aria-expanded="true"] { color: var(--wb-fg); font-weight: 700; }
 .rail .rfh:disabled { opacity: .5; cursor: default; }
 .rail .rfh:disabled::after { content: none; }
+.rail .rfold[data-empty="1"] { display: none; }
+:root[data-can-control].rdragging-life .rail .rsessions.d-rlife-src > .rfold[data-empty="1"] { display: flex; margin-top: 10px; }
+:root[data-can-control].rdragging-life .rail .rsessions.d-rlife-src > .rfold > .rfh:disabled { opacity: .82; }
+.rail .rfh.d-rdrop-arch, .rail .rfh.d-rdrop-del { border-radius: 5px; opacity: 1; }
+.rail .rfh.d-rdrop-arch { color: var(--wb-primary); background: color-mix(in srgb, var(--wb-primary) 16%, transparent); }
+.rail .rfh.d-rdrop-del { color: var(--wb-fail); background: color-mix(in srgb, var(--wb-fail) 14%, transparent); }
+.rail .rended.d-rdrop-list { border-radius: 6px; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 45%, transparent); background: color-mix(in srgb, var(--wb-primary) 6%, transparent); }
+.rail .rended[data-k="del"].d-rdrop-list { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-fail) 45%, transparent); background: color-mix(in srgb, var(--wb-fail) 6%, transparent); }
 .rail .rfold + .rended { margin-top: 2px; }
 .rail .rended:not(.on) { display: none; }
 .rail .rs { position: relative; display: flex; align-items: flex-start; gap: 0; padding-left: 14px; border-radius: 6px; }
 .rail .rs:hover { background: color-mix(in srgb, var(--wb-primary) 6%, var(--wb-card)); }
-.rail .rs.cur { background: color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card)); }
+/* Owner exception: crisp neon primary outline on the selected rail row so it stays
+   unmistakably distinct from resting/hover rows and the amber .attn wash. */
+.rail .rs.cur {
+  background: color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card));
+  box-shadow:
+    inset 0 0 0 1.5px var(--wb-primary),
+    inset 0 0 8px light-dark(color-mix(in srgb, var(--wb-primary) 12%, transparent), color-mix(in srgb, var(--wb-primary) 24%, transparent)),
+    0 0 6px light-dark(color-mix(in srgb, var(--wb-primary) 26%, transparent), color-mix(in srgb, var(--wb-primary) 52%, transparent)),
+    0 0 2px light-dark(transparent, color-mix(in srgb, var(--wb-primary) 80%, transparent));
+}
 .rail .rs.ended { opacity: .75; }
 /* an archived row is ended to the layout (no drag, no parent) but drawn
    asleep (.stopped), at full strength */
@@ -352,8 +369,19 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rail .rs:hover .drgrip, .rail .rs:focus-within .drgrip { opacity: .7; }
 .rail .drgrip:hover { opacity: 1; color: var(--wb-fg); }
 @media (pointer: coarse) { .rail .drgrip { opacity: .55; } }
+.rail .drgrip:not([data-drag="1"]),
+:root:not([data-can-control]) .rail :is(.rs.ended, .rs.archived) .drgrip { display: none; }
 .rdragging.drno, .rdragging.drno * { cursor: not-allowed !important; }
 .drhint { position: fixed; z-index: 47; padding: 4px 8px; border-radius: 6px; background: var(--wb-fg); color: var(--wb-bg); font-size: 12px; font-weight: 600; white-space: nowrap; box-shadow: var(--wb-shadow-hi); pointer-events: none; }
+.rpop.d-rconf { gap: 8px; }
+.rpop .d-rconf-note { margin: 0; font-size: 12px; color: var(--wb-muted-fg); overflow-wrap: anywhere; }
+.rpop .d-rconf-risks { margin: 0; padding: 7px 10px 7px 24px; border-radius: 8px; background: color-mix(in srgb, var(--wb-warn) 12%, var(--wb-card)); color: color-mix(in srgb, var(--wb-warn-ink) 80%, var(--wb-fg)); font-size: 12px; display: grid; gap: 3px; }
+.rpop .d-rconf-row { display: flex; justify-content: flex-end; align-items: center; gap: 6px; padding-top: 2px; }
+.rpop .d-rconf-btn { white-space: nowrap; flex: none; font: inherit; font-size: 12px; font-weight: 700; border: 0; border-radius: 999px; padding: 4px 14px; cursor: pointer; background: var(--wb-muted); color: var(--wb-muted-fg); }
+.rpop .d-rconf-btn.go { background: var(--wb-primary); color: var(--wb-primary-fg); }
+.rpop .d-rconf-btn.d-rconf-danger { background: var(--wb-fail); color: var(--wb-card); }
+.rpop .d-rconf-btn:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: 1px; }
+.rpop .d-rconf-btn:disabled { opacity: .45; cursor: default; }
 /* the tree: a parent's children box (.rkids) indents its rows one step
    from the harness column (16px; 12px in the overlay rail) under a guide
    line. The parent's toggle (chevron, person, child count) opens its
@@ -429,7 +457,7 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rail .drstop.d-stop-safe:hover, .rail .drstop.d-stop-safe:focus-visible { color: var(--wb-fg); background: var(--wb-muted); }
 .rail .drstop.d-stop-unsafe { color: var(--wb-fail); }
 .rail .drstop.d-stop-unsafe:hover, .rail .drstop.d-stop-unsafe:focus-visible { color: var(--wb-fail); background: color-mix(in srgb, var(--wb-fail) 14%, transparent); }
-.rail .drstop.d-stop-unsafe::before { content: ""; position: absolute; inset: -4px; border-radius: 50%; background: color-mix(in srgb, var(--wb-fail) 34%, transparent); transform: scale(0); transform-origin: center; opacity: 0; pointer-events: none; z-index: 0; }
+.rail .drstop.d-stop-unsafe::before { content: ""; position: absolute; inset: 0; border-radius: inherit; background: color-mix(in srgb, var(--wb-fail) 34%, transparent); transform: scale(0); transform-origin: center; opacity: 0; pointer-events: none; z-index: 0; }
 .rail .drstop.d-stop-unsafe.d-hold-active::before { opacity: 1; animation: d-hold-radial var(--d-hold-dur, 1500ms) linear forwards; }
 .rail .drstop.d-stop-unsafe.d-hold-ready { color: var(--wb-card); box-shadow: inset 0 0 0 1.5px var(--wb-fail); }
 .rail .drstop.d-stop-unsafe.d-hold-ready::before { background: var(--wb-fail); transform: scale(1); opacity: 1; animation: none; }

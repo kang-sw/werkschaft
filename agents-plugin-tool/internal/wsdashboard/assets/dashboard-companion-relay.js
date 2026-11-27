@@ -1,8 +1,8 @@
   // A framed view creates its observer only while the outer shell opts in.
   function startCompanionRelay() {
-    var timer = 0, typedTimer = 0, typedUntil = 0, last = -Infinity, serialized = "";
-    var active = false, baseline = true, listened = new AbortController();
-    var tokens = new Set(), pending = [], agents = new Map(), completed = 0, newest = "";
+    var timer = 0, typedTimer = 0, typedUntil = 0, revealRaf = 0, revealTimer = 0, last = -Infinity, serialized = "";
+    var active = false, baseline = true, disposed = false, listened = new AbortController();
+    var tokens = new Set(), pending = [], agents = new Map(), completed = 0, newest = "", liveAbsorbed = new Set();
     var boardInput = boardLatest?.html, parsedBoard, canonicalAsks = null;
     var lastActivity = "", lastRoot = "", lastStreaming = false, failures = 0, previousPermissions = new Set();
     var observer = new MutationObserver(queue);
@@ -200,8 +200,8 @@
     }
 
     function celebrate(row) {
-      if (row.querySelector(".brow.fail")) return false;
-      if (q("span.tool[title]", row).some(tool => directCommit.test(tool.title))) return true;
+      if (row.hasAttribute("data-turn-failed") || row.querySelector(".brow.fail, .au-row.au-fail")) return false;
+      if (q("span.tool[title], .au-tool[title]", row).some(tool => directCommit.test(tool.title))) return true;
       // Ignore separators inside a quoted argument, such as a test command
       // mentioned by an echo. Keep the unquoted command preview grammar.
       function passed(text) {
@@ -210,6 +210,10 @@
       if (q(".ba[title]", row).some(args => {
         var tool = args.closest(".bp")?.querySelector("span.tool");
         return shellTool.test(tool?.title || tool?.firstChild?.textContent.trim() || "") && passed(args.title);
+      })) return true;
+      if (q(".au-args[title]", row).some(args => {
+        var tool = args.closest(".au-row")?.querySelector(".au-tool");
+        return shellTool.test(tool?.title || tool?.textContent.trim() || "") && passed(args.title);
       })) return true;
       return q(".bp[title]", row).some(batch => batch.title.split("\n").some(line => {
         var match = /^(\S+)\s*(.*)$/.exec(line.trim());
@@ -222,9 +226,15 @@
       var top = newest;
       for (var row of rows) {
         var key = row.dataset.entry;
+        if (!key) continue;
+        if (row.hasAttribute("data-turn-live-absorbed")) {
+          liveAbsorbed.add(key);
+          continue;
+        }
+        var finalized = liveAbsorbed.delete(key);
         // Entries are named in ring order. Older pagination prepends them
         // to this same box and must not turn into new mail or celebrations.
-        if (!key || key <= newest) continue;
+        if (key <= newest && !finalized) continue;
         if (key > top) top = key;
         if (row.matches(".mailline.recv.agent-note:not(.fail), .mailline.recv.child-report:not(.fail)")) {
           if (!baseline && row.dataset.wakeCause !== "background_exit") {
@@ -242,7 +252,7 @@
         if (row.matches(".mailline.sent") || row.matches("article.mail-block") && row.querySelector(":scope > details.mailline.sent")) event("mail.send", key);
         if (row.matches(".sysline.compaction:not(.fail)")) event("session.compacted", key);
         if (row.matches(".sysline.notice.fail, .sysline.compaction.fail, .mailline.recv.agent-note.fail") ||
-            row.matches(".toolsline") && row.querySelector(".brow.fail")) event("session.error", key);
+            row.matches(".toolsline") && (row.hasAttribute("data-turn-failed") || row.querySelector(".brow.fail, .au-row.au-fail"))) event("session.error", key);
         if (row.matches(".toolsline:not(.live)") && celebrate(row)) event("session.celebrate", key);
       }
       newest = top;
@@ -345,7 +355,28 @@
       queue();
     }
 
+    function clearReveal() {
+      if (revealRaf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(revealRaf);
+      if (revealTimer) clearTimeout(revealTimer);
+      revealRaf = 0;
+      revealTimer = 0;
+    }
+
+    function scheduleReveal() {
+      clearReveal();
+      var run = function () {
+        revealRaf = 0;
+        revealTimer = 0;
+        if (disposed || !active || pageHidden()) return;
+        reconcile(true);
+      };
+      if (typeof requestAnimationFrame === "function") revealRaf = requestAnimationFrame(run);
+      else revealTimer = setTimeout(run, 0);
+    }
+
     function reconcile(ready) {
+      if (disposed) return;
+      clearReveal();
       if (!ready) {
         baseline = true;
         pending.length = 0;
@@ -368,10 +399,12 @@
     }
 
     function visible() {
+      if (disposed) return;
       if (pageHidden()) {
         active = false;
         observer.disconnect();
         resize.disconnect();
+        clearReveal();
         clearTimeout(timer);
         clearTimeout(typedTimer);
         timer = typedTimer = typedUntil = 0;
@@ -389,7 +422,7 @@
           attributeFilter: ["class", "hidden", "data-phase", "data-assumed", "open", "data-companion-model"] });
         resize.observe(el);
       }
-      if (!rid || companionStreamReady) reconcile(true);
+      if (!rid || companionStreamReady) scheduleReveal();
       else queue();
     }
 
@@ -431,9 +464,11 @@
         queue();
       },
       dispose() {
+        disposed = true;
         listened.abort();
         observer.disconnect();
         resize.disconnect();
+        clearReveal();
         clearTimeout(timer);
         clearTimeout(typedTimer);
         active = false;

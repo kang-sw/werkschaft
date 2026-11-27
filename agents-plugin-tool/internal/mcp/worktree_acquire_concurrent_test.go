@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsgit"
+	"github.com/kang-sw/devenv/internal/wstestutil"
 )
 
 type acquireRunnerFunc func(context.Context, string, ...string) ([]byte, error)
@@ -27,11 +28,7 @@ func (f acquireRunnerFunc) RunGit(ctx context.Context, root string, args ...stri
 
 func acquireTempDir(t *testing.T) string {
 	t.Helper()
-	path, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return path
+	return wstestutil.CanonicalTempDir(t)
 }
 
 func acquireWithServer(ctx context.Context, s *Server, runner wsgit.Runner, root, base, branch string, profile resolvedWorktreeProfile, pool, parent string) (worktreeAcquireResult, error) {

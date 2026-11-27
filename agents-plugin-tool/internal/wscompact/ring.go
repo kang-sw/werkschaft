@@ -1,7 +1,6 @@
 package wscompact
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -30,29 +29,6 @@ func BuildRingDialog(records []wslive.RingRecord, ringRef string, secrets ...str
 			break
 		}
 	}
-	var lines []string
-	total := 0
-	appendLine := func(role, body string) {
-		body = strings.TrimSpace(body)
-		if body == "" {
-			return
-		}
-		line := "\n" + role + ": " + BoundedText(Scrub(body, secrets...), DialogBytes-16) + "\n"
-		lines = append(lines, line)
-		total += len(line)
-		for total > DialogBytes && len(lines) > 0 {
-			total -= len(lines[0])
-			lines[0] = ""
-			lines = lines[1:]
-		}
-	}
-	appendDialog := func(role string, e wslive.RingEntry) {
-		body := strings.TrimSpace(e.Text)
-		if body != "" && e.Truncated {
-			body += " [truncated]"
-		}
-		appendLine(role, body)
-	}
 	observeText := func(text string, checkSkill bool) {
 		if checkSkill {
 			if skill := SkillRE.FindStringSubmatch(text); len(skill) > 0 {
@@ -66,108 +42,113 @@ func BuildRingDialog(records []wslive.RingRecord, ringRef string, secrets ...str
 		}
 	}
 
+	items := make([]DialogItem, 0, len(records)-start)
 	for _, rec := range records[start:] {
 		e := rec.RingEntry
 		switch e.Kind {
 		case wslive.RingUser:
 			observeText(e.Text, true)
-			appendDialog("user", e)
+			if strings.TrimSpace(e.Text) != "" {
+				items = append(items, DialogItem{
+					Kind:      DialogUser,
+					Timestamp: rec.At,
+					Truncated: e.Truncated,
+					Text:      e.Text,
+				})
+			}
 		case wslive.RingReply:
 			observeText(e.Text, false)
-			appendDialog("assistant", e)
+			if strings.TrimSpace(e.Text) != "" {
+				items = append(items, DialogItem{
+					Kind:      DialogAssistant,
+					Timestamp: rec.At,
+					Truncated: e.Truncated,
+					Text:      e.Text,
+				})
+			}
 		case wslive.RingTools:
-			if summary := formatRingTools(e.Tools); summary != "" {
-				observeText(summary, false)
-				appendLine("tools", summary)
-			}
+			toolItems := ringToolItems(e.Tools, observeText)
+			items = append(items, toolItems...)
 		case wslive.RingMail:
-			var parts []string
-			if e.Direction != "" || e.Peer != "" {
-				parts = append(parts, strings.TrimSpace(e.Direction+" "+e.Peer))
-			}
-			if e.Title != "" {
-				parts = append(parts, e.Title)
-			}
-			if e.Text != "" {
-				parts = append(parts, e.Text)
-			}
-			body := strings.Join(parts, ": ")
-			observeText(body, false)
-			appendLine("mail", body)
+			observeText(e.Peer, false)
+			observeText(e.Title, false)
+			observeText(e.Text, false)
+			items = append(items, DialogItem{
+				Kind:      DialogMail,
+				Timestamp: rec.At,
+				Direction: string(e.Direction),
+				Peer:      e.Peer,
+				Title:     e.Title,
+				Text:      e.Text,
+			})
 		case wslive.RingWake:
-			var parts []string
-			if e.Cause != "" {
-				parts = append(parts, e.Cause)
-			}
-			if e.Source != "" {
-				parts = append(parts, e.Source)
-			}
-			if e.Caption != "" {
-				parts = append(parts, e.Caption)
-			}
-			if e.Text != "" {
-				parts = append(parts, e.Text)
-			}
-			body := strings.Join(parts, " · ")
-			observeText(body, false)
-			appendLine("wake", body)
+			observeText(e.Cause, false)
+			observeText(e.Source, false)
+			observeText(e.Caption, false)
+			observeText(e.Text, false)
+			items = append(items, DialogItem{
+				Kind:      DialogWake,
+				Timestamp: rec.At,
+				Cause:     e.Cause,
+				Source:    e.Source,
+				Caption:   e.Caption,
+				Text:      e.Text,
+			})
 		case wslive.RingCommand:
-			body := strings.TrimSpace(e.Command)
-			if text := strings.TrimSpace(e.Text); text != "" {
-				if body != "" {
-					body += "\n" + text
-				} else {
-					body = text
-				}
-			}
-			observeText(body, false)
-			appendLine("command", body)
+			observeText(e.Command, false)
+			observeText(e.Text, false)
+			items = append(items, DialogItem{
+				Kind:      DialogCommand,
+				Timestamp: rec.At,
+				Command:   e.Command,
+				Text:      e.Text,
+			})
 		// Skip UI / lifecycle-only rows: RingTurn, RingCompact, RingCard, RingUI,
 		// RingWhiteboardEffects, notice, and unknown kinds.
 		}
 	}
-	header := "## Dialog\n"
-	if strings.TrimSpace(ringRef) != "" {
-		header += "Conversation ring (relative to the session directory): " + ringRef + "\n"
+	pointer := ""
+	if ref := strings.TrimSpace(ringRef); ref != "" {
+		pointer = "Conversation ring (relative to the session directory): " + ref
 	}
-	out.Dialog = header + strings.Join(lines, "")
+	out.Dialog = BuildDialog(pointer, items, DialogBytes, secrets...)
 	return out
 }
 
-func formatRingTools(ts *wslive.ToolSummary) string {
+func ringToolItems(ts *wslive.ToolSummary, observe func(string, bool)) []DialogItem {
 	if ts == nil {
-		return ""
+		return nil
 	}
-	var parts []string
+	var items []DialogItem
 	for _, batch := range ts.Batches {
 		for _, call := range batch.CallArgs {
 			name := strings.TrimSpace(call.Name)
 			if name == "" {
 				continue
 			}
-			entry := name
-			if p := strings.TrimSpace(call.ArgsPreview); p != "" {
-				entry += "(" + p + ")"
-			}
-			if call.Failed {
-				entry += " [failed]"
-			}
-			parts = append(parts, entry)
+			observe(name+" "+call.ArgsPreview, false)
+			items = append(items, DialogItem{
+				Kind:       DialogTool,
+				ToolName:   name,
+				ToolArgs:   call.ArgsPreview,
+				ToolFailed: call.Failed,
+			})
 		}
 	}
-	if len(parts) > 0 {
-		return strings.Join(parts, ", ")
+	if len(items) > 0 {
+		return items
 	}
 	for _, tally := range ts.Tools {
 		name := strings.TrimSpace(tally.Name)
 		if name == "" {
 			continue
 		}
-		if tally.Calls > 1 {
-			parts = append(parts, fmt.Sprintf("%s x%d", name, tally.Calls))
-		} else {
-			parts = append(parts, name)
-		}
+		observe(name, false)
+		items = append(items, DialogItem{
+			Kind:      DialogTool,
+			ToolName:  name,
+			ToolCalls: tally.Calls,
+		})
 	}
-	return strings.Join(parts, ", ")
+	return items
 }

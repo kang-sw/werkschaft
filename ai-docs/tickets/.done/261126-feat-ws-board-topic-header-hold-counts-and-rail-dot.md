@@ -8,6 +8,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 7962bbe9f8e24d14
 sage-review-completeness-reviewed: 7962bbe9f8e24d14
+completed: 2026-11-27
 ---
 
 # Daemon-Persisted Ask Hold, Topic Header Open/Answered/Held Breakdown, and Hold-Aware Session Rail Dot
@@ -139,6 +140,14 @@ The hold itself lives only in the browser (`pill.js`, `localStorage` `ws.wb.hold
 - Node DOM tests: the floating pill `보류` count and tab-title total follow the server-rendered hold after a swap; a staged draft on a held item clears the hold once through the route (1702); `isHeld` callers reflect the server-rendered held state after a toggle and after an SSE swap with no `localStorage` read; `rail.js` `mergeRows` raises no new-question notification when a held ask is unheld; `.qdot` hides when every open ask is held and the header total follows.
 - Live dashboard check: hold an ask from a second tab and confirm the active board and an inactive session's rail dot update.
 
+### Result (51881033) - 2026-11-26
+
+- **SQLite hold store (`wswhiteboard`):** Added additive `item_holds(item_id INTEGER PRIMARY KEY, loaded_at TEXT NOT NULL, item_changed INTEGER NOT NULL)` table while keeping `boardDBSchemaVersion = 1` (T1 compatibility). Added `BoardDB.SetHold`, `BoardDB.HeldIDs`, `BoardDB.SnapshotWithHolds`, `uncommitted()` tracking, `LoadArchive` wipe, open/load stale-row pruning, and same-transaction auto-clear inside `Update` (`boardApplyHoldClears`) whenever an item disappears, leaves `open` status, advances `Changed`, or changes `LoadedAt`. `SetHold` skips no-op writes in memory and commits only `item_holds` without bumping `generation` or `Revision()`, preventing spurious `WhiteboardStores.changed` nudges.
+- **Route, MCP wiring, counts & memo invalidation (`wsdashboard`, `mcp`):** Added `POST /s/<reply-id>/board/hold` (`BoardHoldSource`, forwarded through `agentSessions`) with `sameOrigin`, `4 KiB` body limit, explicit `{id, held}` JSON validation, 400/404/409 status mapping, idempotent repeat set/unheld clear, and `d.index.Reread`. Excluded held items from `SessionData.CountPolicy`, `RailRow`, `RailView`, `IndexView`, and `Board.CountPolicy` while preserving `OpenAskIDs`/`data-asks` and `TopicView.AskCount()`/`waiting()`. Folded holds into `NonLiveFingerprint`, `boardMemoBase` (keeping `boardMemoSharedBase` hold-free so untouched topics keep memo hits), `topicHistoryBoard`, and `peekHistoryBoard`.
+- **Rendering & client (`wswhiteboard`):** Server-rendered `.wb-held` and `aria-pressed="true"` on open policy/ack/check items from `ViewInput.Held`. Rewired `pill.js` read/write paths to server-rendered DOM + `POST /s/<rid>/board/hold` with zero `localStorage` access, Decision 8 single-shot draft auto-clear (404/409 treated as success), and `st._holdSeq === seq` guard against out-of-order HTTP responses. Deferred `.tbar`/Overview chips and deletion of unused browser-local hold helpers in `pill.js` to Phase 2.
+- **Verification:** `GOOS=windows go vet ./...`, Node DOM tests (`pill-hold.test.cjs`, `rail-hold-dot.test.cjs`, `pill-layout.test.cjs`, `rail-attention.test.cjs`, `notifications.test.cjs`), live two-tab HTTP+SSE daemon test (`TestBoardHoldLiveMultiTabSSEPropagation`), and `-race` Go suites across `wswhiteboard`, `wsdashboard`, and `mcp` all passed; `code-review-lite` clean (sole Minor finding fixed in `51881033`).
+  > Forward: Phase 2 can now delete the unused browser-local hold helpers in `pill.js` (`HOLD_PREFIX`, `itemFingerprint`, `reconcileHolds`, `onStorage`, etc.) and wire `.tbar`/Overview open/answered/held chips directly off the server-rendered `ItemView.Held` / `TopicView.UnheldAskCount()` data.
+
 ### Phase 2: Topic header open/answered/held chips and browser-local hold removal
 
 - Depends on Phase 1.
@@ -149,3 +158,10 @@ The hold itself lives only in the browser (`pill.js`, `localStorage` `ws.wb.hold
 - Node DOM tests: `.tbar` and Overview placeholder show distinct `미결` / `응답함` / `보류` counts as asks are held, unheld, staged (including bulk quick-pick) and settled; no `localStorage` hold reads or writes remain.
 - `GOOS=windows go vet ./...` and `go test -race ./internal/wswhiteboard/... ./internal/wsdashboard/...` for template output.
 - Live dashboard check of board headers, Overview and the left rail across session switches, in dark and light themes.
+
+### Result (040ddd88) - 2026-11-26
+
+- **Topic header & Overview chips (`wswhiteboard`, `wsdashboard`, `wsi18n`):** Implemented distinct `미결` (`chip.open`), `응답함` (`chip.answered`), and `보류` (`chip.held`) count chips for policy+check asks in `.tophead .tbar` (`page.tmpl`, `view.go`, `TopicView.UnheldAskCount()` / `HeldAskCount()`) while keeping the bulk action on the open-ask chip and `.chip.ok` ack chip intact. Wired live chip updates and Overview placeholder mirroring (`pill.js`, `overview.js`, `cards.js`, `rail.js`) and added translations across all 11 `wsi18n/tables/*.json` locales (committed in `8bde8828`).
+- **Browser-local hold removal (`pill.js`):** Deleted all unused browser-local hold machinery (`HOLD_PREFIX`, `itemFingerprint`, `reconcileHolds`, `"storage"` listener, etc.), leaving server-rendered `.wb-held` + `POST /s/<rid>/board/hold` as the sole source of truth.
+- **`code-review-lite` fixes (`040ddd88`) & `develop` sync (`301145b2`):** Resolved all 3 findings from `code-review-lite` over `20f2ba7..8bde8828` — Critical (`rail.js`: `st.refresh = kick` now invalidates `last` cache key before kicking, covered by `TestRailRefreshUpdatesCapsuleAskCount`) and 2 Minor (`cards.js`: guard all-held preview `data-open-asks="true"`; `overview.js`: preserve `.chip.ok` `<svg>` icon instead of overwriting with `p.textContent`). Merged `develop` via `--no-ff` (`301145b2`) preserving all Phase 1 & Phase 2 SHAs.
+- **Verification:** `go test -race -count=1 ./internal/wsi18n/...` (full package including `TestEveryUsedKeyIsInTheEnglishTable`), `GOOS=windows go vet ./...`, Node DOM tests (`pill-hold.test.cjs`, `rail-hold-dot.test.cjs`, `overview-preview-shape.test.cjs`: 13/13 pass; full Node DOM 22/22 prior to merge), targeted `-race` Go tests (`TestRailRefreshUpdatesCapsuleAskCount|TestTopicHeader|TestBoardHold` across `wswhiteboard` and `wsdashboard`), and live Chromium dark+light Playwright acceptance (`TestBoardHoldHeaderOverviewRailBrowser`, `TestBoardChatSmallUXBrowser`) all passed.

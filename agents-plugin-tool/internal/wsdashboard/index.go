@@ -116,9 +116,27 @@ type IndexOptions struct {
 	// of each session a re-read or purge removes from the index. It must not
 	// block or call back into the index.
 	OnRemove func(replyID string, last Registration)
+	// LabelLookup returns a session's display label from memory when set
+	// (SQLite-backed daemons); nil falls back to reading label.json on disk.
+	LabelLookup func(replyID string) string
 	// Log receives one line per session added to or removed from the index;
 	// nil discards them.
 	Log io.Writer
+	// OwnedLive reports whether this daemon's runner serves session id as an
+	// open conversation. Such a session's liveness is memory: its
+	// registration.json heartbeat is never rewritten, so the index treats it
+	// as beating now (effective). Nil keeps every session heartbeat-read.
+	OwnedLive func(replyID string) bool
+}
+
+// effective returns reg with the heartbeat the daemon's own runner holds in
+// memory: an owned, un-ended session beats now. It calls OwnedLive, so the
+// caller must not hold x.mu (the runner's lock is above the index's).
+func (x *Index) effective(reg Registration, now time.Time) Registration {
+	if x.opts.OwnedLive != nil && reg.EndedAt == "" && x.opts.OwnedLive(reg.ReplyID) {
+		reg.HeartbeatAt = now.UTC().Format(time.RFC3339)
+	}
+	return reg
 }
 
 // Index is the daemon's view of the registered sessions, rebuilt from disk
@@ -149,7 +167,16 @@ type Index struct {
 
 	// loaded is set once a Refresh has read the whole registry (Loaded).
 	loaded atomic.Bool
+
+	// readSem caps concurrent disk reads across lanes, so a bulk sweep cannot
+	// park hundreds of OS threads inside a scanner-blocked file syscall. It is
+	// taken only around a lane's source read, with no lock held but that
+	// lane's own, so it cannot join a lock cycle.
+	readSem chan struct{}
 }
+
+// maxConcurrentReads bounds simultaneous session source reads.
+const maxConcurrentReads = 8
 
 // lane is one session's re-read state. Re-reads are serialized per session,
 // never across sessions, so a slow read of one session delays no other.
@@ -194,7 +221,7 @@ func NewIndex(opts IndexOptions) *Index {
 	if opts.Log == nil {
 		opts.Log = io.Discard
 	}
-	x := &Index{opts: opts, sessions: map[string]*indexEntry{}, lanes: map[string]*lane{}, readErrors: map[string]bool{}}
+	x := &Index{opts: opts, sessions: map[string]*indexEntry{}, lanes: map[string]*lane{}, readErrors: map[string]bool{}, readSem: make(chan struct{}, maxConcurrentReads)}
 	x.idle = sync.NewCond(&x.lanesMu)
 	return x
 }
@@ -224,7 +251,7 @@ func (x *Index) Refresh() {
 	}
 	for _, reg := range regs {
 		seen[reg.ReplyID] = true
-		if x.endedApplied(reg) {
+		if x.endedApplied(reg) || x.coldApplied(reg) {
 			continue
 		}
 		x.reread(reg.ReplyID)
@@ -291,6 +318,42 @@ func (x *Index) endedApplied(reg Registration) bool {
 	same := ok && !entry.retry && entry.session.Registration == reg
 	x.mu.Unlock()
 	if !same {
+		return false
+	}
+	_, err := os.Stat(reg.Project)
+	return !errors.Is(err, os.ErrNotExist)
+}
+
+// coldApplied reports whether the sweep may skip re-reading a session whose
+// registration the index already holds unchanged (heartbeat aside) and whose
+// other state needs no backstop: one this daemon's runner serves (its every
+// change arrives through the runner's hook, and its liveness is memory), or
+// one whose heartbeat went stale and stays so (a writer that resumes rewrites
+// its registration, which then differs and is re-read; the clock tick
+// examines liveness). An external live session is always re-read: its board
+// and mailbox change without touching the registration.
+func (x *Index) coldApplied(reg Registration) bool {
+	x.mu.Lock()
+	entry, ok := x.sessions[reg.ReplyID]
+	var held Registration
+	var heldLive bool
+	if ok && !entry.retry {
+		held, heldLive = entry.session.Registration, entry.session.Live
+	} else {
+		ok = false
+	}
+	x.mu.Unlock()
+	if !ok {
+		return false
+	}
+	now := x.opts.Now()
+	if x.opts.OwnedLive != nil && x.opts.OwnedLive(reg.ReplyID) {
+		held.HeartbeatAt, reg.HeartbeatAt = "", ""
+		return held == reg
+	}
+	// Cold: stale before and still stale. A live-held entry whose heartbeat
+	// just aged out is re-read once, so its transition is applied and announced.
+	if held != reg || heldLive || reg.Live(now) {
 		return false
 	}
 	_, err := os.Stat(reg.Project)
@@ -375,17 +438,29 @@ func (x *Index) SetSnapshotUpdatedAt(replyID string, at, staleAt time.Time) {
 func (x *Index) RefreshClock() {
 	now := x.opts.Now()
 	x.mu.Lock()
-	var due []string
+	type clockRow struct {
+		id    string
+		s     Session
+		stale bool
+		was   bool
+	}
+	var rows []clockRow
 	for id, entry := range x.sessions {
-		s := entry.session
-		stale := !entry.snapshotStaleAt.IsZero() && !now.Before(entry.snapshotStaleAt)
-		// Keep checking already-stale, non-ended writers at the previous
-		// cadence too: a legacy writer may resume without sending a nudge.
-		if s.EndedAt == "" && (!s.Registration.Live(now) || stale || s.Live != s.Registration.Live(now) || s.Lifecycle != DeriveSessionLifecycle(s.Registration, s.Hidden, now) || stale != entry.snapshotStale) {
+		rows = append(rows, clockRow{id: id, s: entry.session, stale: !entry.snapshotStaleAt.IsZero() && !now.Before(entry.snapshotStaleAt), was: entry.snapshotStale})
+	}
+	x.mu.Unlock()
+	var due []string
+	for _, row := range rows {
+		id, s, stale := row.id, row.s, row.stale
+		s.Registration = x.effective(s.Registration, now)
+		// Only a transition is due: a live entry that aged out, a lifecycle
+		// change, or a snapshot clock that crossed its stale deadline. An entry
+		// already read as stale and unchanged is cold; a writer that resumes
+		// rewrites its registration, which Refresh re-reads.
+		if s.EndedAt == "" && (s.Live != s.Registration.Live(now) || s.Lifecycle != DeriveSessionLifecycle(s.Registration, s.Hidden, now) || stale != row.was) {
 			due = append(due, id)
 		}
 	}
-	x.mu.Unlock()
 	for _, id := range due {
 		x.Reread(id)
 	}
@@ -533,6 +608,10 @@ func (x *Index) readLane(replyID string, l *lane, full bool, stores LiveStores) 
 }
 
 func (x *Index) readLaneLocked(replyID string, full bool, stores LiveStores) {
+	if x.readSem != nil {
+		x.readSem <- struct{}{}
+		defer func() { <-x.readSem }()
+	}
 	reg, err := ReadRegistration(x.opts.Dir, replyID)
 	var changed bool
 	switch {
@@ -589,7 +668,11 @@ func (x *Index) applyRead(replyID string, reg *Registration, full bool, stores L
 			fmt.Fprintf(x.opts.Log, "dashboard: read session %s: %v\n", replyID, err)
 			return false
 		}
-		label = readSessionLabel(SessionDir(x.opts.Dir, replyID))
+		if x.opts.LabelLookup != nil {
+			label = x.opts.LabelLookup(replyID)
+		} else {
+			label = readSessionLabel(SessionDir(x.opts.Dir, replyID))
+		}
 		if reg.Hosted {
 			hidden, err = ReadSessionHidden(x.opts.Dir, replyID)
 			if err != nil {
@@ -600,6 +683,11 @@ func (x *Index) applyRead(replyID string, reg *Registration, full bool, stores L
 		}
 	}
 	now := x.opts.Now()
+	var eff Registration
+	if keep {
+		eff = x.effective(*reg, now)
+		reg = &eff
+	}
 
 	x.mu.Lock()
 	defer x.mu.Unlock()
@@ -693,6 +781,11 @@ func (x *Index) Sessions() []Session {
 		out = append(out, s)
 	}
 	x.mu.Unlock()
+	for i := range out {
+		out[i].Registration = x.effective(out[i].Registration, now)
+		out[i].Live = out[i].Registration.Live(now)
+		out[i].Lifecycle = DeriveSessionLifecycle(out[i].Registration, out[i].Hidden, now)
+	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Project != out[j].Project {
 			return out[i].Project < out[j].Project
@@ -713,8 +806,22 @@ func (x *Index) Session(replyID string) (Session, bool) {
 	x.mu.Unlock()
 	if ok {
 		now := x.opts.Now()
+		s.Registration = x.effective(s.Registration, now)
 		s.Live = s.Registration.Live(now)
 		s.Lifecycle = DeriveSessionLifecycle(s.Registration, s.Hidden, now)
 	}
 	return s, ok
+}
+
+// regOwned reports whether reg is a session this daemon's runner serves, so
+// its liveness is the runner's memory and not its on-disk heartbeat.
+func (d *Daemon) regOwned(reg Registration) bool {
+	return d.index != nil && d.index.opts.OwnedLive != nil && reg.EndedAt == "" && d.index.opts.OwnedLive(reg.ReplyID)
+}
+
+// regLive is Registration.Live for a registration read from disk: a session
+// the daemon's runner serves is live while it is, whatever its row's
+// heartbeat says (the runner never rewrites it).
+func (d *Daemon) regLive(reg Registration, now time.Time) bool {
+	return reg.Live(now) || d.regOwned(reg)
 }

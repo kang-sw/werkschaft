@@ -1,6 +1,9 @@
 package wsdashboard
 
-import "testing"
+import (
+	"os/exec"
+	"testing"
+)
 
 // TestChatStreamQuestionCardsUnit exercises the chat-stream question capsule
 // hydration and status-resolution functions from dashboard.js under Node so
@@ -16,6 +19,10 @@ func TestChatStreamQuestionCardsUnit(t *testing.T) {
 		"wbUpdateTitleFromEl",
 		"wbUpdateSettledSummary",
 		"wbUpdateQueryBoard",
+		"wbUpdateChipMeta",
+		"wbUpdateOnBoard",
+		"wbUpdateStagedChip",
+		"wbUpdateReadOpenPickMemo",
 		"readBoardQuestionState",
 		"hydrateWbUpdateChip",
 		"hydrateWbUpdateGroup",
@@ -273,10 +280,72 @@ var grp = makeEl("div", { className: "wbupdate-items", children: [chip3] });
 entries.appendChild(grp);
 hydrateWbUpdateItems(entries);
 check("chip hydrated in group", [grp.classList.contains("wbupdate-hydrated"), chip3.classList.contains("wbupdate-cap"), grp.querySelector(".wbupdate-ans").textContent], [true, true, "✓ Acknowledged"]);
+check("compact row: answer in hover title and check mark child, not in title/id/cls spans", [chip3.getAttribute("title"), !!chip3.querySelector(".wbupdate-cap-mark"), chip3.querySelector(".wbupdate-cap-ttl").textContent.indexOf("Acknowledged") < 0], ["(3) " + chip3.querySelector(".wbupdate-cap-ttl").textContent + "\n✓ Acknowledged", true, true]);
+var markNode = chip3.querySelector(".wbupdate-cap-mark");
+syncWbUpdateItems(["3"]);
+check("live resync patches in place (mark node reused, tooltip stable)", [chip3.querySelector(".wbupdate-cap-mark") === markNode, grp.children.length], [true, 1]);
 virtualStore.delete("topic-virt-children");
 syncWbUpdateItems(["3"]);
 check("missing item reverts to bare (ID)", [grp.classList.contains("wbupdate-hydrated"), chip3.className, chip3.textContent], [false, "wbupdate-item-id", "(3)"]);
 
+// 9. Staged choice empty transition + note-only filled + switch + revert + settled stays empty.
+policyCard.classList.remove("sent-sent");
+policyCard.classList.remove("sent-held");
+policyNote.value = "";
+var chip1 = makeEl("a", { className: "wbupdate-item-id", attrs: { "data-wb-jump": "item-1" }, text: "(1)" });
+var grp1 = makeEl("div", { className: "wbupdate-items", children: [chip1] });
+entries.appendChild(grp1);
+hydrateWbUpdateItems(grp1);
+var wrap1 = chip1.parentNode;
+check("open starts filled with empty cap-val", [wrap1.getAttribute("data-wb-state"), wrap1.hasAttribute("data-wb-empty"), chip1.querySelector(".wbupdate-cap-val").textContent], ["open", false, ""]);
+
+// Note-only stays filled (no choice).
+policyNote.value = "only a comment";
+syncWbUpdateItems(["1"], { "1": { openEl: policyCard, skipVirtual: true } });
+check("note-only stays filled with no value badge", [wrap1.getAttribute("data-wb-state"), wrap1.hasAttribute("data-wb-empty"), chip1.querySelector(".wbupdate-cap-val").textContent], ["staged", false, ""]);
+
+// Staging choice 'a' flips immediately to empty and displays 'a'.
+var optA = policyCard.querySelector('.opt[data-opt="a"]');
+optA.setAttribute("aria-pressed", "true");
+syncWbUpdateItems(["1"], { "1": { openEl: policyCard, skipVirtual: true } });
+check("staging choice flips to empty with value", [wrap1.getAttribute("data-wb-state"), wrap1.getAttribute("data-wb-empty"), chip1.querySelector(".wbupdate-cap-val").textContent, chip1.querySelector(".wbupdate-cap-val").getAttribute("data-wb-pick")], ["staged", "1", "a", "a"]);
+
+// Switching 'a' -> 'b' keeps empty state and updates displayed value.
+optA.setAttribute("aria-pressed", "false");
+var optB = makeEl("button", { className: "opt", attrs: { "data-opt": "b", "aria-pressed": "true" } });
+policyCard.appendChild(optB);
+syncWbUpdateItems(["1"], { "1": { openEl: policyCard, skipVirtual: true } });
+check("switching choice updates displayed value", [wrap1.getAttribute("data-wb-empty"), chip1.querySelector(".wbupdate-cap-val").textContent, chip1.querySelector(".wbupdate-cap-val").getAttribute("data-wb-pick")], ["1", "b", "b"]);
+
+// Clearing choice while keeping note reverts to filled with no value badge.
+optB.setAttribute("aria-pressed", "false");
+syncWbUpdateItems(["1"], { "1": { openEl: policyCard, skipVirtual: true } });
+check("clearing choice with note left reverts to filled", [wrap1.getAttribute("data-wb-state"), wrap1.hasAttribute("data-wb-empty"), chip1.querySelector(".wbupdate-cap-val").textContent], ["staged", false, ""]);
+
+// Clearing note too returns to open filled.
+policyNote.value = "";
+syncWbUpdateItems(["1"], { "1": { openEl: policyCard, skipVirtual: true } });
+check("clearing all staged reverts to open filled", [wrap1.getAttribute("data-wb-state"), wrap1.hasAttribute("data-wb-empty"), chip1.querySelector(".wbupdate-cap-val").textContent], ["open", false, ""]);
+
+// Already-settled item stays settled (not data-wb-empty, empty cap-val).
+var chip2 = makeEl("a", { className: "wbupdate-item-id", attrs: { "data-wb-jump": "item-2" }, text: "(2)" });
+var grp2 = makeEl("div", { className: "wbupdate-items", children: [chip2] });
+entries.appendChild(grp2);
+hydrateWbUpdateItems(grp2);
+check("settled stays settled with empty cap-val", [chip2.parentNode.getAttribute("data-wb-state"), chip2.parentNode.hasAttribute("data-wb-empty"), chip2.querySelector(".wbupdate-cap-val").textContent], ["settled", false, ""]);
+
 process.stdout.write(bad.join("\n"));
 `)
+}
+
+func TestChatWbCardStagedEmptyContract(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; run testdata/chat-wb-card-staged-empty.test.cjs locally")
+	}
+	out, err := exec.Command(node, "testdata/chat-wb-card-staged-empty.test.cjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("chat-wb-card-staged-empty contract: %v\n%s", err, out)
+	}
+	t.Log(string(out))
 }

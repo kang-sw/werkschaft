@@ -277,12 +277,21 @@
     ws.onclose = drop;
     ws.onmessage = function (e) {
       if (over) return;
-      var m = null;
-      try { m = JSON.parse(e.data); } catch (x) { return; }
-      if (!m || typeof m.event !== "string") return;
-      if (m.event === "ping") { try { ws.send('{"event":"pong"}'); } catch (x) {} return; }
-      var fn = on.events && Object.prototype.hasOwnProperty.call(on.events, m.event) && on.events[m.event];
-      if (typeof fn === "function") fn(m.data);
+      var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("stream", "ws.onmessage") : null;
+      var evName = "";
+      var rawBytes = typeof e.data === "string" ? e.data.length : 0;
+      var skipCrumb = false;
+      try {
+        var m = null;
+        try { m = JSON.parse(e.data); } catch (x) { return; }
+        if (!m || typeof m.event !== "string") return;
+        evName = m.event;
+        if (m.event === "ping") { skipCrumb = true; try { ws.send('{"event":"pong"}'); } catch (x) {} return; }
+        var fn = on.events && Object.prototype.hasOwnProperty.call(on.events, m.event) && on.events[m.event];
+        if (typeof fn === "function") fn(m.data);
+      } finally {
+        if (jTok && !skipCrumb) WsJank.end(jTok, { event: evName, bytes: rawBytes });
+      }
     };
     return { close: function () { over = true; cleanup(); try { ws.close(); } catch (x) {} } };
   }
@@ -614,6 +623,8 @@
       receiveRegion({ name: "board", hash: ev.hash, html: next });
     }
     function receiveRegion(ev) {
+      var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("stream", "receiveRegion") : null;
+      try {
       if (ev.name === "board" && companionRelay) companionRelay.board(ev.html);
       // Observe even held updates: an ask may open and close while hidden
       // or during a drag. Reconnect's first full rail silently baselines.
@@ -641,6 +652,9 @@
       if (ev.name === "board" && boardReturnTimer) boardReturnFresh = true;
       swap(ev.name, ev.hash, ev.html);
       companionSettled(ev);
+      } finally {
+        if (jTok) WsJank.end(jTok, { region: ev && typeof ev.name === "string" ? ev.name : "", bytes: ev && typeof ev.html === "string" ? ev.html.length : 0 });
+      }
     }
     function companionSettled(ev) {
       // Keyed panels arrive even at an unchanged hash and follow board,
@@ -721,10 +735,16 @@
     if (pageHidden()) return;
     var p = hiddenRegions;
     hiddenRegions = {};
-    Object.keys(p).forEach(function (name) { swap(name, p[name].hash, p[name].html); });
-    tlHeld = {};
-    tlCount();
-    tlShown();
+    var keys = Object.keys(p);
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("stream", "showRegions") : null;
+    try {
+      keys.forEach(function (name) { swap(name, p[name].hash, p[name].html); });
+      tlHeld = {};
+      tlCount();
+      tlShown();
+    } finally {
+      if (jTok) WsJank.end(jTok, { count: keys.length });
+    }
   }
   doc.addEventListener("visibilitychange", showRegions);
   function banner(text) {

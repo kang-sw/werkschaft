@@ -15,13 +15,13 @@ func (r *Runner) Close() {
 	r.once.Do(func() { close(r.quit) })
 	r.wg.Wait()
 	r.piPurgeMu.Lock()
-	if r.piPurgeStore != nil && r.piPurgeStore != r.durableRecords {
+	if r.piPurgeStore != nil && r.piPurgeStore != r.durableRecords && r.piPurgeStore != r.meta {
 		if err := r.piPurgeStore.Close(); err != nil {
 			fmt.Fprintf(r.opts.Log, "agent: close retired Pi purge store: %v\n", err)
 		}
 	}
 	r.piPurgeMu.Unlock()
-	if r.durableRecords != nil {
+	if r.durableRecords != nil && r.durableRecords != r.meta {
 		if err := r.durableRecords.Close(); err != nil {
 			fmt.Fprintf(r.opts.Log, "agent: close durable records: %v\n", err)
 		}
@@ -41,10 +41,24 @@ func (r *Runner) InboxChanged(replyID string) {
 	}
 }
 
-func (r *Runner) conv(replyID string) *conv {
+// resident is the open conversation replyID with a loop now, never waking a
+// parked one: for status reads and bookkeeping that need no loop.
+func (r *Runner) resident(replyID string) *conv {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.convs[replyID]
+}
+
+// conv is the open conversation replyID, rehydrating a parked child: for an
+// action that needs its loop.
+func (r *Runner) conv(replyID string) *conv {
+	r.mu.Lock()
+	c, parked := r.convs[replyID], r.parked[replyID]
+	r.mu.Unlock()
+	if c == nil && parked {
+		return r.unpark(replyID)
+	}
+	return c
 }
 
 // summaryLock returns replyID's summary writer mutex, the same one for
@@ -142,17 +156,19 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 	stalePendingCompaction := false
 	if loaded != nil && rec.PendingCompaction != nil {
 		pc := rec.PendingCompaction
-		if pc.RotatedAfterSends != nil && rec.Sends > *pc.RotatedAfterSends {
+		deadWorkerStage := !rec.Lead && (r.durableProcess(rec.Backend) || (rec.HolderID == "" && (pc.Stage == compactStageQueued || pc.Stage == compactStageRunning || (pc.Stage == compactStageCompleted && rec.SessionID == ""))))
+		if (pc.RotatedAfterSends != nil && rec.Sends > *pc.RotatedAfterSends) || deadWorkerStage {
 			// An older daemon (which preserves unknown Record fields as T0)
 			// ran at least one newer turn after rotation without consuming
-			// PendingCompaction. Drop the stale handoff and fall through to
-			// normal restart restore.
+			// PendingCompaction, or a worker holder exited before completing
+			// compaction. Drop the stale handoff and fall through to normal
+			// restart restore.
 			stalePendingCompaction = true
 			c.rec.PendingCompaction = nil
 		} else {
-			// Restore a rotated lead's carry-forward compaction handoff before
-			// the loop or any inbox/mail signal can kick. canKick's scan/replay
-			// gates order delivery after holder reconciliation.
+			// Restore a carry-forward compaction handoff before the loop or
+			// any inbox/mail signal can kick. canKick's scan/replay gates
+			// order delivery after holder reconciliation.
 			c.restorePendingCompaction(pc)
 		}
 	}
@@ -166,7 +182,7 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 	c.live.coverage = c.snapshotCoverage
 	if rec.Lead {
 		c.leadCompactionMode(rec)
-		_, _, _ = refreshPermissionSelection(dir)
+		_, _, _ = r.refreshPermissionSelection(rec.ReplyID, dir)
 		r.setSummaryOwner(rec.ReplyID, c)
 		c.live.owner = c.lockSummaryWriter
 		c.live.ownerRAM = c.lockSummaryWriterRAM
@@ -288,6 +304,7 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 	r.indexChildLocked(rec)
 	delete(r.closed, rec.ReplyID)
 	delete(r.closedRows, rec.ReplyID)
+	delete(r.parked, rec.ReplyID)
 	if claimWidth != nil {
 		claimWidth()
 	}

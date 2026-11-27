@@ -417,7 +417,7 @@ func TestRailAdmissionRecreatedUserAddKeepsAdmission(t *testing.T) {
 	if record.Origin != "user" || record.State != "admitted" {
 		t.Fatalf("Add-triggered reread downgraded the recreated user worktree: %+v", record)
 	}
-	reopened := openRailLayoutStore(f.dir)
+	reopened := reopenLayoutForTest(t, f.d)
 	record = admissionAt(admissionRecords(t, reopened), f.root, path)
 	if record.Origin != "user" || record.State != "admitted" {
 		t.Fatalf("reopened recreation admission: %+v", record)

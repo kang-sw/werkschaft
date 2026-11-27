@@ -141,7 +141,7 @@ func (r *Runner) LockExecAuthority(id string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	admission := &permissionSlot(c.dir).admission
+	admission := &r.permissionSlot(id, c.dir).admission
 	admission.RLock()
 	return admission.RUnlock, nil
 }
@@ -160,7 +160,7 @@ func (c *conv) execImmediate() bool {
 	if !rec.Lead || rec.agyBypass() {
 		return true
 	}
-	selected, explicit, readErr := cachedPermissionSelection(c.dir)
+	selected, explicit, readErr := c.r.cachedPermissionSelection(rec.ReplyID, c.dir)
 	level, source, err := c.r.resolveLeadPermission(rec, selected, explicit, readErr)
 	if err != nil {
 		return false
@@ -434,7 +434,7 @@ func (r *Runner) MCPCallBegin(token string) (end func()) {
 	if t == nil {
 		return func() {}
 	}
-	c := r.conv(t.id)
+	c := r.resident(t.id)
 	if c == nil {
 		return func() {}
 	}

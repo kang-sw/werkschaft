@@ -34,7 +34,11 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	// A host that cannot take dotted tool names calls the alias its tool
 	// list showed; everything below sees the canonical name. It maps before
 	// the key rule, which reads the tool's schema by canonical name.
-	params.Name = s.connectionDescriptor().aliases.canonical(params.Name)
+	descriptor, err := s.connectionDescriptorWithError()
+	if err != nil {
+		return toolTextResponse(req.ID, "", err)
+	}
+	params.Name = descriptor.aliases.canonical(params.Name)
 	// call is only an envelope. Dispatch re-enters here with the inner name,
 	// arguments and metadata; an omitted, null, or blank inner session_key
 	// forwards a non-blank outer session_key when the target tool declares one,
@@ -562,6 +566,9 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 				return toolTextResponse(req.ID, "", err)
 			}
 			if err := validateCompactionLeadModeTarget(entry.Key, harness, value, s.agentBackends()...); err != nil {
+				return toolTextResponse(req.ID, "", err)
+			}
+			if err := validateCompactionWorkerModeTarget(entry.Key, harness, value, s.agentBackends()...); err != nil {
 				return toolTextResponse(req.ID, "", err)
 			}
 			resolver := wsconfig.NewResolver(writeOpts, builtinConfigDefaults(), adapter, adapter)
@@ -1690,6 +1697,8 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		return s.handleMailboxLookupPeers(req.ID, params.Arguments)
 	case "mailbox.history":
 		return s.handleMailboxHistory(req.ID, params.Arguments)
+	case "mailbox.read":
+		return s.handleMailboxRead(req.ID, params.Arguments)
 	case "mailbox.recipients":
 		return s.handleMailboxRecipients(req.ID, params.Arguments)
 	case "cron":

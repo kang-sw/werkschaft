@@ -228,6 +228,7 @@ test('inline + New command form validates required fields, shows 400 error inlin
   const badge = h.document.getElementById('ucmdbadge');
   h.fire(badge, 'click');
   h.fire(h.composer.querySelector('.ucmd-add-btn'), 'click');
+  h.fire(h.composer.querySelector('.ucmd-agent-foot .ucmd-link-btn'), 'click');
 
   const form = h.composer.querySelector('.ucmd-add-form');
   const errEl = form.querySelector('.ucmd-form-err');
@@ -476,4 +477,71 @@ test('optimistic held outboxBubble hydrates <ws:ucmd> cards adjacent to <wb:sele
     assert.equal(bub.textContent.includes('<ws:ucmd'), false, tc.name + ': raw <ws:ucmd leaked');
     assert.equal(bub.textContent.includes('<wb:selection'), false, tc.name + ': raw <wb:selection leaked');
   }
+});
+
+test('+ New command opens the agent request by default; the link switches to the manual form and back', async () => {
+  const h = makeUcmdHarness(() => jsonRes({ rev: 'e1.1.r1', token: 'tok1', commands: [] }));
+  await h.flushMicrotasks();
+  h.fire(h.document.getElementById('ucmdbadge'), 'click');
+  h.fire(h.composer.querySelector('.ucmd-add-btn'), 'click');
+  const box = h.composer.querySelector('.ucmd-agent-box');
+  const form = h.composer.querySelector('.ucmd-add-form');
+  assert.equal(box.hidden, false, 'agent box is the default surface');
+  assert.equal(form.hidden, true);
+  assert.equal(box.querySelectorAll('.ucmd-qchip').length, 3);
+  assert.equal(box.querySelector('.ucmd-mcp-pill').textContent, 'session.register_user_command');
+  assert.equal(box.querySelector('.ucmd-link-btn').textContent, EN['js.ucmd.agent.manual']);
+  h.fire(box.querySelector('.ucmd-link-btn'), 'click');
+  assert.equal(box.hidden, true);
+  assert.equal(form.hidden, false, 'manual four-field form after the switch');
+  h.fire(form.querySelector('.ucmd-link-btn'), 'click');
+  assert.equal(box.hidden, false, 'the manual form has a way back');
+  assert.equal(form.hidden, true);
+  // Reopening after a close starts at the agent request again.
+  h.fire(box.querySelector('.ucmd-link-btn'), 'click');
+  h.fire(h.composer.querySelector('.ucmd-add-btn'), 'click');
+  h.fire(h.composer.querySelector('.ucmd-add-btn'), 'click');
+  assert.equal(box.hidden, false);
+  assert.equal(form.hidden, true);
+});
+
+test('agent request sends <ws:ucmd-add> with the mcp-guidance, guards empty input, and closes the popover', async () => {
+  const h = makeUcmdHarness(() => jsonRes({ rev: 'e1.1.r1', token: 'tok1', commands: [] }));
+  await h.flushMicrotasks();
+  h.fire(h.document.getElementById('ucmdbadge'), 'click');
+  h.fire(h.composer.querySelector('.ucmd-add-btn'), 'click');
+  const ta = h.composer.querySelector('.ucmd-agent-ta');
+  const err = h.composer.querySelector('.ucmd-agent-box .ucmd-form-err');
+  h.fire(h.composer.querySelector('.ucmd-btn-primary[data-act="send"]'), 'click');
+  assert.equal(h.posts.length, 0, 'empty request is not sent');
+  assert.equal(err.hidden, false);
+  assert.equal(err.textContent, EN['js.ucmd.agent.err']);
+
+  h.fire(h.composer.querySelector('.ucmd-qchip'), 'click');
+  assert.equal(ta.value, EN['js.ucmd.agent.chip.1.req'], 'chip fills the request');
+  ta.value = 'run <go test> & report';
+  const ev = h.fire(ta, 'keydown', { key: 'Enter', shiftKey: false });
+  assert.equal(ev.defaultPrevented, true);
+  assert.equal(h.posts.length, 1);
+  assert.equal(h.posts[0].route, 'message');
+  const text = h.posts[0].body.text;
+  assert.ok(text.startsWith('<ws:ucmd-add scope="worktree" tool="session.register_user_command">\n  <request>run &lt;go test&gt; &amp; report</request>\n  <mcp-guidance>\n'), text);
+  assert.ok(text.endsWith('\n  </mcp-guidance>\n</ws:ucmd-add>'), text);
+  for (const needle of ['session.register_user_command', 'session_key', 'id:', 'label:', 'line:', 'description:', 'prompt:', 'cwd:', 'agy', 'call(tool: "session.register_user_command"', 'per worktree']) {
+    assert.ok(text.includes(needle), 'guidance mentions ' + needle);
+  }
+  assert.deepEqual(h.oks, [EN['js.ucmd.agent.sent']]);
+  assert.equal(h.composer.querySelector('.ucmd-pop').hidden, true, 'popover closes after sending');
+});
+
+test('Shift+Enter keeps a newline in the agent request and does not send', async () => {
+  const h = makeUcmdHarness(() => jsonRes({ rev: 'e1.1.r1', token: 'tok1', commands: [] }));
+  await h.flushMicrotasks();
+  h.fire(h.document.getElementById('ucmdbadge'), 'click');
+  h.fire(h.composer.querySelector('.ucmd-add-btn'), 'click');
+  const ta = h.composer.querySelector('.ucmd-agent-ta');
+  ta.value = 'x';
+  const ev = h.fire(ta, 'keydown', { key: 'Enter', shiftKey: true });
+  assert.equal(ev.defaultPrevented, false);
+  assert.equal(h.posts.length, 0);
 });

@@ -410,9 +410,13 @@
 
     function drawEdges(view, frame, svg) {
       if (!frame.isConnected) return;
+      // Reset previous SVG extents before reading frame dimensions so stale or
+      // subpixel-rounded heights never inflate scrollWidth/scrollHeight.
+      svg.setAttribute("width", "0");
+      svg.setAttribute("height", "0");
       const box = frame.getBoundingClientRect();
       svg.setAttribute("width", String(frame.scrollWidth));
-      svg.setAttribute("height", String(frame.scrollHeight));
+      svg.setAttribute("height", String(frame.clientHeight || frame.scrollHeight));
       svg.replaceChildren();
       const at = {};
       frame.querySelectorAll("[data-id]").forEach(function (node) { at[node.dataset.id] = node.getBoundingClientRect(); });

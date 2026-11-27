@@ -539,8 +539,8 @@ test('template and CSS follow Variant B without touching .cfoot or nesting butto
   );
   assert.match(
     dashboardTmpl,
-    /<div class="cfoot"\{\{if not \(or \.Hosted \.IsChild\)\}\} hidden\{\{end\}\}>\{\{if or \.Hosted \.IsChild\}\}\{\{template "composerpills" \.\}\}\{\{end\}\}\{\{region \. "sline"\}\}<\/div>/,
-    '.cfoot bottom-right remains untouched'
+    /<div class="cfoot"\{\{if not \(or \.Hosted \.IsChild\)\}\} hidden\{\{end\}\}>\{\{if or \.Hosted \.IsChild\}\}\{\{template "composerpills" \.\}\}\{\{end\}\}\{\{region \. "sline"\}\}(?:\{\{if \.WhiteboardCapable\}\}<button type="button" class="wbonly-btn" id="wbonly"[^>]*><span class="wbonly-dot" aria-hidden="true"><\/span><span>\{\{t "composer\.wbonly"\}\}<\/span><\/button>\{\{end\}\})?<\/div>/,
+    '.cfoot keeps hosted pills, sline, and optional whiteboard-only toggle without wbonly-hint'
   );
   assert.match(dashboardCSS, /\.csend\.is-multiline \{[^}]*width: 48px;[^}]*flex-direction: column;/);
   assert.match(dashboardCSS, /\.csend-revert \{[^}]*position: absolute;/);

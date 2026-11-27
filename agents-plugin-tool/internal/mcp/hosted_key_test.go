@@ -12,19 +12,23 @@ import (
 	"github.com/kang-sw/devenv/internal/wsmailbox"
 )
 
-// recordSpawned writes the daemon runner's conversation record of key under
-// the dashboard state directory s reads: an agent.spawn session at root
-// whose authority parent (Record.Parent) is the session of reply-id parent.
+// recordSpawned records key's daemon runner conversation in s's in-memory
+// record reader: an agent.spawn session at root whose authority parent
+// (Record.Parent) is the session of reply-id parent.
 func recordSpawned(t *testing.T, s *Server, root, key, parent, kind string) {
 	t.Helper()
-	dir, err := s.dashboard.stateDir()
-	if err != nil {
-		t.Fatal(err)
-	}
 	rec := wsagent.Record{
 		ReplyID: wsmailbox.ReplyID(key), WSKey: key, Root: root, CreatedAt: time.Now().UTC().Format(time.RFC3339),
 		Backend: wsagent.BackendClaude, Profile: wsagent.AgentWorkerProfile(wsagent.BackendClaude),
 		Parent: &wsagent.ParentRef{Kind: kind, ReplyID: parent},
+	}
+	if r, ok := s.recordReader.(*testRecordReader); ok {
+		r.Set(rec)
+		return
+	}
+	dir, err := s.dashboard.stateDir()
+	if err != nil {
+		t.Fatal(err)
 	}
 	if err := wsagent.WriteRecordForTest(dir, rec); err != nil {
 		t.Fatal(err)
@@ -68,6 +72,7 @@ type hostedKeyFixture struct {
 	// ferruleChild is a key a ferrule call minted with the hosted key as
 	// its parent: a key-record child with no Runner record.
 	ferruleChild string
+	records      *testRecordReader
 }
 
 func newHostedKeyFixture(t *testing.T) *hostedKeyFixture {
@@ -75,7 +80,7 @@ func newHostedKeyFixture(t *testing.T) *hostedKeyFixture {
 	setupWorkflowManualNoteEnv(t)
 	t.Setenv(envHostedSession, "")
 	t.Setenv(envHostedSessionKey, "")
-	f := &hostedKeyFixture{root: t.TempDir()}
+	f := &hostedKeyFixture{root: t.TempDir(), records: newTestRecordReader()}
 	initGit(t, f.root)
 	var err error
 	if f.hosted, err = NewAgentKeyStore().MintLead(f.root); err != nil {
@@ -85,6 +90,7 @@ func newHostedKeyFixture(t *testing.T) *hostedKeyFixture {
 		t.Fatal(err)
 	}
 	s := NewServer(f.root, "test")
+	s.recordReader = f.records
 	f.child = spawnedKey(t, s, f.root, f.hosted, wsagent.ParentLead)
 	f.grandchild = spawnedKey(t, s, f.root, f.child, wsagent.ParentConversation)
 	f.leadChild = spawnedLeadKey(t, s, f.root, f.hosted, wsagent.ParentLead)
@@ -98,6 +104,7 @@ func (f *hostedKeyFixture) connect(t *testing.T) *Server {
 	t.Helper()
 	hostedSessionEnv(t, f.hosted)
 	s := NewServer(f.root, "test")
+	s.recordReader = f.records
 	if s.hostedSessionKey() != f.hosted {
 		t.Fatal("precondition: the connection is the hosted session's")
 	}
@@ -175,6 +182,7 @@ func TestHostedSessionKeyAdmitsItsOwnAndDescendants(t *testing.T) {
 func TestHostedSessionKeyRefusesOtherSessions(t *testing.T) {
 	f := newHostedKeyFixture(t)
 	s := NewServer(f.root, "test")
+	s.recordReader = f.records
 	loopA, err := NewAgentKeyStore().Mint(f.root)
 	if err != nil {
 		t.Fatal(err)

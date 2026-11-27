@@ -519,3 +519,21 @@ test('folded topic placeholder keeps <section> selector match for folded CSS and
     'folded CSS rule preserves folded header padding on <section class="topic" data-size="fold">'
   );
 });
+
+test('overview picker dims closed non-quiet topic titles without affecting open, quiet, or previewed topics', () => {
+  const overviewBlockMatch = boardCSS.match(/\/\* ===== overview picker \(overview\.js\) =====[\s\S]*?\/\* ===== preview cards/);
+  assert.ok(overviewBlockMatch, 'overview picker CSS block must exist');
+  const overviewBlock = overviewBlockMatch[0];
+
+  assert.doesNotMatch(overviewBlock, /:has\(/, 'overview CSS block must not use :has() selectors');
+  assert.match(
+    overviewBlock,
+    /:root\[data-overview\] \.r-board section\.topic\.closed:not\(\.quiet\) > \.tophead > \.tbar \.tname\s*\{\s*opacity:\s*0?\.7;\s*\}/,
+    'closed non-quiet overview cards dim only .tname via compositor-clean opacity: .7 inside :root[data-overview] .r-board'
+  );
+  assert.doesNotMatch(
+    overviewBlock,
+    /\.overview-preview-stage[^}]*\.tname\s*\{[^}]*opacity\s*:/,
+    'overview preview stage must not receive the closed-card title dim'
+  );
+});

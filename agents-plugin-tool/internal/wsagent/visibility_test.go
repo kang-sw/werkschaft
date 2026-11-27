@@ -200,8 +200,22 @@ func TestArchivedLeadRestoresOnReopenAndReadFailureBlocksWake(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.restart()
-	if st, err := h.runner.Reopen(id); err != nil || !st.Hidden || st.Process {
-		t.Fatalf("reopen = %+v, %v", st, err)
+	// Plain Reopen (hidden: false) must clear stale hidden:true from before close.
+	if st, err := h.runner.Reopen(id); err != nil || st.Hidden || st.Process {
+		t.Fatalf("plain reopen = %+v, %v", st, err)
+	}
+	if _, err := h.runner.CloseConversation(id); err != nil {
+		t.Fatal(err)
+	}
+	// Atomic ReopenHidden(id, true) keeps hidden:true before mail can wake the lead.
+	startsBefore := h.holders.opCount("launch")
+	h.mail.deliver(h.record(id).WSKey, "queued while closed")
+	if st, err := h.runner.ReopenHidden(id, true); err != nil || !st.Hidden || st.Process {
+		t.Fatalf("reopen hidden = %+v, %v", st, err)
+	}
+	h.runner.conv(id).do(func() {})
+	if st := h.state(id); !st.Hidden || st.Process || h.holders.opCount("launch") != startsBefore {
+		t.Fatalf("reopen hidden woke process prematurely: %+v, launches=%d", st, h.holders.opCount("launch"))
 	}
 	if _, err := h.runner.Restart(id); !isConflict(err) {
 		t.Fatalf("restart bypassed archive gate: %v", err)
