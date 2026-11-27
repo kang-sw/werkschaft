@@ -1234,7 +1234,7 @@ func tools() []map[string]any {
 		},
 		{
 			"name":        "path.generate",
-			"description": "Generate worktree-scoped writable paths for workflow artifacts.",
+			"description": "Generate worktree-scoped writable paths for workflow artifacts. A cache artifact (review, report, prompt) is writable through path.write only under the session key that generated it, so do not generate one for a child agent to write; each agent generates its own and returns the path.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{

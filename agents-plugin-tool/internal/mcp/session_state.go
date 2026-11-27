@@ -527,20 +527,25 @@ const implementReviewRoundsClause = "Review is two rounds, never more: round two
 // own fix, so this reintroduces no self-review.
 const implementReviewLiteClause = "Lite review is one pass with no re-review: fix the Critical and Important findings in that pass and dispatch no second reviewer. A Critical finding you cannot fix is a stop — report it to the lead; an Important finding you leave unfixed goes under unresolved with the reason."
 
+// implementReviewOwnArtifactClause tells the worker not to pre-generate a
+// findings path: each reviewer produces its own findings artifact under its own
+// session and returns its path, which the worker reads before acting.
+const implementReviewOwnArtifactClause = "Do not pre-generate a findings path for a reviewer: each reviewer produces its own findings artifact under its own session and returns its path; read the artifact path each reviewer returns before acting on findings."
+
 func implementReviewInstruction(verdict implementTodoVerdict) string {
 	if isBranchStop(verdict) {
 		return fmt.Sprintf("Do not start review before implementation can run; resolve the branch blocker first: %s.", firstNonEmpty(verdict.BranchPlan.Reason, "branch action is blocked"))
 	}
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(verdict.ReviewAlloc)), "partitioned:") {
-		return fmt.Sprintf("Dispatch %s reviewers: render each named structured wrapper and supply its rendered path and a generated findings path. %s %s", formatReviewPartitions(verdict.ReviewAlloc), implementReviewFixClause, implementReviewRoundsClause)
+		return fmt.Sprintf("Dispatch %s reviewers: render each named structured wrapper and supply its rendered path, the ticket path, and the branch. %s %s %s", formatReviewPartitions(verdict.ReviewAlloc), implementReviewOwnArtifactClause, implementReviewFixClause, implementReviewRoundsClause)
 	}
 	if strings.EqualFold(strings.TrimSpace(verdict.ReviewAlloc), implementReviewAllocLite) {
-		return fmt.Sprintf("Render `code-review-lite` and dispatch one fresh reviewer covering correctness and test integrity with the rendered path and a generated findings path. %s %s", implementReviewFixClause, implementReviewLiteClause)
+		return fmt.Sprintf("Render `code-review-lite` and dispatch one fresh reviewer covering correctness and test integrity with the rendered path, the ticket path, and the branch. %s %s %s", implementReviewOwnArtifactClause, implementReviewFixClause, implementReviewLiteClause)
 	}
 	if strings.EqualFold(strings.TrimSpace(verdict.ReviewAlloc), "single") {
-		return fmt.Sprintf("Render `reviewer` and dispatch one full-scope review with the rendered path and a generated findings path. %s %s", implementReviewFixClause, implementReviewRoundsClause)
+		return fmt.Sprintf("Render `reviewer` and dispatch one full-scope review with the rendered path, the ticket path, and the branch. %s %s %s", implementReviewOwnArtifactClause, implementReviewFixClause, implementReviewRoundsClause)
 	}
-	return fmt.Sprintf("Dispatch the selected reviewers with the rendered reviewer playbook and generated review paths. %s %s", implementReviewFixClause, implementReviewRoundsClause)
+	return fmt.Sprintf("Dispatch the selected reviewers with the rendered reviewer playbook, the ticket path, and the branch. %s %s %s", implementReviewOwnArtifactClause, implementReviewFixClause, implementReviewRoundsClause)
 }
 
 // Workers terminate with a retained-branch report; merge confirmation belongs
