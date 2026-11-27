@@ -473,7 +473,17 @@
       "registered_at": "2026-11-27T04:40:52Z"
     },
     "261127-bug-ws-route-review-path-decision13-alignment": {
-      "registered_at": "2026-11-27T13:19:47Z"
+      "registered_at": "2026-11-27T13:19:47Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-27T13:24:39Z",
+        "impl": {
+          "branch": "impl/develop/fix-route-review-path-decision13"
+        }
+      }
     },
     "261127-feat-ws-companion-layered-agents-and-naming": {
       "registered_at": "2026-11-27T01:26:29Z"
