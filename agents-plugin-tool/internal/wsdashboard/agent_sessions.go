@@ -128,6 +128,16 @@ type AgentForgetter interface {
 	ForgetClosed(replyID string) bool
 }
 
+// AgentForgetChecker is an optional AgentForgetter that can check whether a
+// closed or handed-off conversation is eligible to be forgotten without
+// mutating runner, durable, or SQLite state. Callers check CanForgetClosed
+// before removing the session directory and call ForgetClosed only after
+// removal succeeds.
+type AgentForgetChecker interface {
+	AgentForgetter
+	CanForgetClosed(replyID string) bool
+}
+
 // AgentHistoryPurger prepares archive deletion before Git removes the
 // worktree and completes it after the corresponding history is removed.
 type AgentHistoryPurger interface {

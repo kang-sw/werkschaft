@@ -296,3 +296,172 @@ func TestStartDaemonPruneDeletesSessionMetaAndRespectsForgetClosed(t *testing.T)
 		t.Fatal("SQLite hiring survived prune")
 	}
 }
+
+type fakeAgentForgetChecker struct {
+	*fakeAgentMetaHost
+	meta          *wsmeta.Store
+	canForgetList []string
+}
+
+func (f *fakeAgentForgetChecker) SetMeta(store *wsmeta.Store, snap *wsmeta.Snapshot) {
+	f.meta = store
+	f.fakeAgentMetaHost.SetMeta(store, snap)
+}
+
+func (f *fakeAgentForgetChecker) CanForgetClosed(replyID string) bool {
+	f.canForgetList = append(f.canForgetList, replyID)
+	return f.forgetOK.Load()
+}
+
+func (f *fakeAgentForgetChecker) ForgetClosed(replyID string) bool {
+	if !f.fakeAgentMetaHost.ForgetClosed(replyID) {
+		return false
+	}
+	// Mirror wsagent.Runner.ForgetClosed: evict runner record and delete SQLite rows.
+	delete(f.records, replyID)
+	if f.meta != nil {
+		_ = f.meta.DeleteSession(context.Background(), replyID)
+	}
+	return true
+}
+
+// TestStartDaemonPruneRetainsMetaOnRemoveFailureAndRetries verifies that when
+// removing a closed hosted session directory fails (for example, a transient
+// Windows AV handle), runner state, SQLite rows, and dashboard caches remain
+// intact so a subsequent prune retry succeeds instead of stranding the dir.
+func TestStartDaemonPruneRetainsMetaOnRemoveFailureAndRetries(t *testing.T) {
+	dir := t.TempDir()
+	project := t.TempDir()
+	old := time.Now().Add(-RegistryRetention - 2*time.Hour)
+	const rid = "pruneretry01"
+
+	if err := WriteRegistration(dir, Registration{
+		SchemaVersion: 1, ReplyID: rid, Project: project, Harness: "claude",
+		Agent: true, Hosted: true,
+		RegisteredAt: stampFor(old), HeartbeatAt: stampFor(old), EndedAt: stampFor(old),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	checker := &fakeAgentForgetChecker{
+		fakeAgentMetaHost: &fakeAgentMetaHost{
+			dir: dir,
+			records: map[string]AgentRecordSnapshot{
+				rid: {ReplyID: rid, Lead: true, ClosedAt: "2026-10-01T00:00:00Z"},
+			},
+		},
+	}
+	checker.forgetOK.Store(true)
+	d, err := StartDaemon(DaemonOptions{
+		Dir:        dir,
+		Home:       t.TempDir(),
+		Version:    "0.53.1",
+		noGitBadge: true,
+		Agents:     checker,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	recRaw := []byte(`{"reply_id":"` + rid + `","ws_session_key":"k","root":"` + filepath.ToSlash(project) + `","lead":true,"closed_at":"2026-10-01T00:00:00Z"}`)
+	if err := d.meta.PutRecord(context.Background(), rid, project, recRaw); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.setSessionLabel(rid, "Retry Label"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.writeHiringMetadata(rid, HiringMetadata{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	d.inboxMu.Lock()
+	err = d.writeAckCheckLocked(rid, SessionDir(dir, rid), ackCheckRecord{Through: 77})
+	d.inboxMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origRemove := removeSessionDir
+	t.Cleanup(func() { removeSessionDir = origRemove })
+
+	// 1. Simulated os.RemoveAll failure must leave runner, SQLite, and dashboard
+	// caches intact so the directory is not stranded on subsequent passes.
+	removeSessionDir = func(string) error { return errors.New("simulated AV lock") }
+	if n := d.pruneRegistrationsInMeta(time.Now(), RegistryRetention); n != 0 {
+		t.Fatalf("pruned %d on failed remove, want 0", n)
+	}
+	if len(checker.canForgetList) != 1 || checker.canForgetList[0] != rid {
+		t.Fatalf("CanForgetClosed calls = %v, want [%s]", checker.canForgetList, rid)
+	}
+	if len(checker.forgotList) != 0 {
+		t.Fatalf("ForgetClosed must not run when RemoveAll fails; got %v", checker.forgotList)
+	}
+	if _, ok := checker.records[rid]; !ok {
+		t.Fatal("runner record was evicted despite RemoveAll failure")
+	}
+	if _, err := os.Stat(SessionDir(dir, rid)); err != nil {
+		t.Fatalf("session dir missing after failed remove: %v", err)
+	}
+	if d.sessionLabel(rid) != "Retry Label" {
+		t.Fatalf("dashboard label cache lost on failed remove: %q", d.sessionLabel(rid))
+	}
+	if got := d.readAckCheck(rid, SessionDir(dir, rid)); got.Through != 77 {
+		t.Fatalf("dashboard ack-check cache lost on failed remove: %+v", got)
+	}
+	if h, _ := d.readHiringMetadata(rid); !h.Enabled {
+		t.Fatalf("dashboard hiring cache lost on failed remove: %+v", h)
+	}
+	snap, err := d.meta.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := snap.Records[rid]; !ok {
+		t.Fatal("SQLite agent record deleted despite RemoveAll failure")
+	}
+	if _, ok := snap.Labels[rid]; !ok {
+		t.Fatal("SQLite label deleted despite RemoveAll failure")
+	}
+	if _, ok := snap.AckChecks[rid]; !ok {
+		t.Fatal("SQLite ack_check deleted despite RemoveAll failure")
+	}
+	if _, ok := snap.Hiring[rid]; !ok {
+		t.Fatal("SQLite hiring deleted despite RemoveAll failure")
+	}
+
+	// 2. Once removal is unblocked, retry prunes the directory and cleans up
+	// runner, SQLite, and dashboard caches cleanly.
+	removeSessionDir = origRemove
+	if n := d.pruneRegistrationsInMeta(time.Now(), RegistryRetention); n != 1 {
+		t.Fatalf("retry pruned %d, want 1", n)
+	}
+	if len(checker.forgotList) != 1 || checker.forgotList[0] != rid {
+		t.Fatalf("ForgetClosed calls after retry = %v, want [%s]", checker.forgotList, rid)
+	}
+	if _, ok := checker.records[rid]; ok {
+		t.Fatal("runner record survived successful retry prune")
+	}
+	if _, err := os.Stat(SessionDir(dir, rid)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("session dir survived successful retry prune: %v", err)
+	}
+	if d.sessionLabel(rid) != "" || d.readAckCheck(rid, SessionDir(dir, rid)) != (ackCheckRecord{}) {
+		t.Fatal("in-memory session caches were not cleared on retry prune")
+	}
+	if h, _ := d.readHiringMetadata(rid); h.Enabled || h.Hired {
+		t.Fatalf("hiring cache not cleared on retry prune: %+v", h)
+	}
+	snap2, err := d.meta.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := snap2.Records[rid]; ok {
+		t.Fatal("SQLite agent record survived retry prune")
+	}
+	if _, ok := snap2.Labels[rid]; ok {
+		t.Fatal("SQLite label survived retry prune")
+	}
+	if _, ok := snap2.AckChecks[rid]; ok {
+		t.Fatal("SQLite ack_check survived retry prune")
+	}
+	if _, ok := snap2.Hiring[rid]; ok {
+		t.Fatal("SQLite hiring survived retry prune")
+	}
+}

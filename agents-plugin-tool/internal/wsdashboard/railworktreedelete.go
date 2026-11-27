@@ -304,6 +304,7 @@ func (d *Daemon) purgeWorktreeSessions(target, realTarget string, before map[str
 	if d.index == nil {
 		return
 	}
+	checker, _ := d.agents.(AgentForgetChecker)
 	forgetter, _ := d.agents.(AgentForgetter)
 	for _, s := range d.index.Sessions() {
 		if s.Registration.Live(now) {
@@ -312,12 +313,19 @@ func (d *Daemon) purgeWorktreeSessions(target, realTarget string, before map[str
 		if !before[s.ReplyID] && !worktreeHolds(target, realTarget, s.Project) {
 			continue
 		}
-		if forgetter != nil && !forgetter.ForgetClosed(s.ReplyID) {
+		if checker != nil {
+			if !checker.CanForgetClosed(s.ReplyID) {
+				continue
+			}
+		} else if forgetter != nil && !forgetter.ForgetClosed(s.ReplyID) {
 			continue
 		}
 		if err := d.index.purge(s.ReplyID); err != nil {
 			fmt.Fprintf(d.log, "dashboard: remove session %s after deleting %s: %v\n", s.ReplyID, target, err)
 			continue
+		}
+		if checker != nil {
+			checker.ForgetClosed(s.ReplyID)
 		}
 		if err := d.deleteSessionMeta(s.ReplyID); err != nil {
 			fmt.Fprintf(d.log, "dashboard: delete session metadata %s after deleting %s: %v\n", s.ReplyID, target, err)

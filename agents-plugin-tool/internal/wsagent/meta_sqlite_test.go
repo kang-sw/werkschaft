@@ -467,3 +467,77 @@ func TestSupportSQLiteDeferLoadAndKeyedWrites(t *testing.T) {
 		t.Fatalf("alpha mapping remained in SQLite after CloseUnregistered")
 	}
 }
+
+func TestRunnerCanForgetClosedNonMutatingAndOpenGuard(t *testing.T) {
+	h := newLeadHarness(t)
+	store, snap := openCutoverTestMeta(t, h.dir)
+
+	r := NewRunner(h.opts)
+	r.SetMeta(store, snap)
+	r.Start(nil)
+	defer r.Close()
+
+	// Create an open lead and a closed lead with a live child descendant.
+	openLead, err := r.CreateLead(BackendClaude, h.root, LeadOptions{})
+	if err != nil {
+		t.Fatalf("CreateLead open: %v", err)
+	}
+	closedLead, err := r.CreateLead(BackendClaude, h.root, LeadOptions{})
+	if err != nil {
+		t.Fatalf("CreateLead closed: %v", err)
+	}
+	if _, err := r.CloseConversation(closedLead.ID); err != nil {
+		t.Fatalf("CloseConversation: %v", err)
+	}
+	// Attach an open child conversation to closedLead in runner state so
+	// live-descendant blocking is exercised.
+	childID := "livechild1"
+	r.mu.Lock()
+	r.convs[childID] = &conv{}
+	if r.childrenIndex == nil {
+		r.childrenIndex = map[ParentRef]map[string]bool{}
+	}
+	r.childrenIndex[safeStopParent(closedLead.ID, true)] = map[string]bool{childID: true}
+	r.mu.Unlock()
+
+	// With a live child descendant, CanForgetClosed must return false.
+	if r.CanForgetClosed(closedLead.ID) {
+		t.Fatal("CanForgetClosed = true while live child descendant exists")
+	}
+	// Drop the live child; CanForgetClosed must now return true without evicting
+	// r.closed or deleting the SQLite row.
+	r.mu.Lock()
+	delete(r.convs, childID)
+	delete(r.childrenIndex, safeStopParent(closedLead.ID, true))
+	r.mu.Unlock()
+
+	if !r.CanForgetClosed(closedLead.ID) {
+		t.Fatal("CanForgetClosed = false after live child cleared")
+	}
+	if _, ok := r.AgentRecord(closedLead.ID); !ok {
+		t.Fatal("CanForgetClosed mutated runner state and dropped closed lead record")
+	}
+	if _, ok, err := store.Record(context.Background(), closedLead.ID); err != nil || !ok {
+		t.Fatalf("CanForgetClosed deleted SQLite record: ok=%v err=%v", ok, err)
+	}
+
+	// ForgetClosed on an open conversation with no descendants must not wipe its
+	// SQLite record.
+	if !r.ForgetClosed(openLead.ID) {
+		t.Fatal("ForgetClosed(openLead) = false, want true")
+	}
+	if _, ok, err := store.Record(context.Background(), openLead.ID); err != nil || !ok {
+		t.Fatalf("ForgetClosed wiped SQLite record of open conversation: ok=%v err=%v", ok, err)
+	}
+
+	// ForgetClosed on the closed lead evicts runner state and deletes SQLite row.
+	if !r.ForgetClosed(closedLead.ID) {
+		t.Fatal("ForgetClosed(closedLead) = false, want true")
+	}
+	if _, ok := r.AgentRecord(closedLead.ID); ok {
+		t.Fatal("closed lead record remained in runner after ForgetClosed")
+	}
+	if _, ok, err := store.Record(context.Background(), closedLead.ID); err != nil || ok {
+		t.Fatalf("closed lead SQLite record remained after ForgetClosed: ok=%v err=%v", ok, err)
+	}
+}

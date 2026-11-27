@@ -597,6 +597,7 @@ func (s *Server) Close() {
 	if host := s.tracker.host; host != nil {
 		_ = host.Close()
 	}
+	s.closeMetaHTTPClient()
 }
 
 // debugRing is one server's recent debug events, mirrored to a log file

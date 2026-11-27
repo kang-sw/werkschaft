@@ -291,3 +291,41 @@ func TestMetaRoutesDrainOnCloseAndReject503(t *testing.T) {
 		t.Fatal("closeMeta did not return after in-flight request finished")
 	}
 }
+
+func TestMetaHTTPClientReusesLoopbackTransport(t *testing.T) {
+	c1 := newMetaHTTPClient(0)
+	c2 := newMetaHTTPClient(defaultMetaTimeout)
+	c3 := newMetaHTTPClient(5 * time.Second)
+
+	if c1 != c2 {
+		t.Fatal("newMetaHTTPClient(0) and newMetaHTTPClient(defaultMetaTimeout) did not reuse defaultMetaClient")
+	}
+	tr1, ok1 := c1.Transport.(*http.Transport)
+	tr3, ok3 := c3.Transport.(*http.Transport)
+	if !ok1 || !ok3 || tr1 == nil {
+		t.Fatalf("expected *http.Transport, got %T and %T", c1.Transport, c3.Transport)
+	}
+	if tr1 != tr3 || tr1 != defaultMetaTransport {
+		t.Fatal("newMetaHTTPClient did not reuse shared defaultMetaTransport")
+	}
+	if tr1.Proxy != nil {
+		t.Fatal("loopback meta transport must set Proxy: nil")
+	}
+	if tr1.IdleConnTimeout <= 0 || tr1.MaxIdleConnsPerHost <= 0 {
+		t.Fatalf("expected bounded idle pool on defaultMetaTransport, got IdleConnTimeout=%v MaxIdleConnsPerHost=%d", tr1.IdleConnTimeout, tr1.MaxIdleConnsPerHost)
+	}
+
+	host := &stubAgentMetaHost{
+		records: map[string]AgentRecordSnapshot{
+			"reuse001": {ReplyID: "reuse001", WSKey: "k-reuse", Backend: "claude"},
+		},
+	}
+	_, dir := startMetaTestDaemon(t, host)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		has, err := HasAgentRecord(ctx, nil, dir, "reuse001")
+		if err != nil || !has {
+			t.Fatalf("call %d HasAgentRecord = %v, %v; want true", i, has, err)
+		}
+	}
+}

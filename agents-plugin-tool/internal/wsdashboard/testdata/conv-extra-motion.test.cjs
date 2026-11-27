@@ -216,6 +216,16 @@ function createHarness(opts = {}) {
     doc.dispatchEvent(new CustomEventPolyfill("ws-extra-motion", { detail: { enabled: extraMotionState } }));
   }
 
+  const timerStats = { arms: 0, delays: [] };
+  const fakeSetTimeout = (fn, ms) => {
+    timerStats.arms++;
+    timerStats.delays.push(ms);
+    return setTimeout(fn, ms);
+  };
+  class FakeDate extends Date {
+    static now() { return nowMs; }
+  }
+
   const sandbox = {
     window: win,
     document: doc,
@@ -228,10 +238,10 @@ function createHarness(opts = {}) {
     setExtraMotion: setExtraMotionMock,
     wsT: k => ({ "js.motion.off": "모션 끄기", "js.motion.off.title": "Extra Motion 끄기" }[k] || k),
     CustomEvent: CustomEventPolyfill,
-    setTimeout,
+    setTimeout: fakeSetTimeout,
     clearTimeout,
     Math,
-    Date,
+    Date: FakeDate,
     parseInt,
     String,
     Object,
@@ -250,7 +260,7 @@ function createHarness(opts = {}) {
   assert.ok(canvas, "canvas mounted inside .d-conv-motion-overlay");
   canvas._rect = { left: 0, top: 0, width: 520, height: 320 };
 
-  function setLiveDOM({ phase = "idle", tool = "", done = 0, failed = 0, turn = "100", turnTokens = 0, estimated = false, activityAt = 100000, hasActivity = false, tokenX = 300, tokenWidth = 60, hasFails = false }) {
+  function setLiveDOM({ phase = "idle", tool = "", done = 0, failed = 0, turn = "100", turnTokens = 0, estimated = false, activityAt = nowMs, hasActivity = false, tokenX = 300, tokenWidth = 60, hasFails = false }) {
     convlive.children.length = 0;
     const clive = makeFakeElement("div", {
       classes: ["conv", "clive"],
@@ -323,7 +333,10 @@ function createHarness(opts = {}) {
     gmenuBtnOff,
     setExtraMotion: setExtraMotionMock,
     setLiveDOM,
+    convMotionSync: sandbox.convMotionSync,
+    timerStats,
     stepRaf,
+    now: () => nowMs,
     advanceNow(ms) { nowMs += ms; }
   };
 }
@@ -515,7 +528,7 @@ test("0 rAF enforced on hover mute, Settings OFF, visibilitychange hidden, prefe
     staleMs: 35
   });
   h2.engine.destroy();
-  staleEng.observe({ phase: "thinking", done: 0, failed: 0, turn: "t5", activityAt: 1000, hasActivity: true });
+  staleEng.observe({ phase: "thinking", done: 0, failed: 0, turn: "t5", activityAt: h2.now(), hasActivity: true });
   assert.equal(staleEng.getState().rafActive, true);
   await new Promise(r => setTimeout(r, 70));
   assert.equal(staleEng.getState().stale, true, "busy state marked stale after timeout");
@@ -634,4 +647,82 @@ test("overlay wrapper syncs visibility, observes convoEl via ResizeObserver, and
 
   h.engine.destroy();
   assert.equal(h.grid.children.includes(overlay), false, "destroy removes overlay wrapper from #grid");
+});
+
+test("already-stale data-activity-at enters stale immediately with 0 rAF and 0 stale timer armed", t => {
+  const h = createHarness();
+  t.after(() => h.engine.destroy());
+
+  // Advance simulated clock past default 90s staleMs, then load a DOM whose
+  // data-activity-at is already 120s old.
+  h.advanceNow(200000);
+  const oldActivityAt = h.now() - 120000;
+
+  h.setLiveDOM({ phase: "thinking", done: 0, failed: 0, turn: "s1", activityAt: oldActivityAt, hasActivity: true });
+  assert.equal(h.engine.getState().stale, true, "already-stale thinking state must enter stale immediately");
+  assert.equal(h.engine.getState().rafActive, false, "already-stale thinking state must not start rAF");
+  assert.equal(h.rafQueue.size, 0, "0 rAF frames queued for already-stale thinking state");
+  assert.equal(h.timerStats.arms, 0, "stale timer must not be armed when already stale");
+
+  // Switching to an already-stale tool phase also stays stale with 0 rAF / 0 timer arms.
+  h.setLiveDOM({ phase: "tool", tool: "ws/exec.shell", done: 1, failed: 0, turn: "s1", activityAt: oldActivityAt + 1000, hasActivity: true });
+  assert.equal(h.engine.getState().stale, true, "already-stale tool state must stay stale");
+  assert.equal(h.engine.getState().rafActive, false);
+  assert.equal(h.rafQueue.size, 0);
+  assert.equal(h.timerStats.arms, 0, "stale timer must remain unarmed for already-stale tool phase");
+
+  // Partially aged activity (60s old vs 90s staleMs) arms timer for remaining 30s, not full 90s.
+  h.setLiveDOM({ phase: "thinking", done: 1, failed: 0, turn: "s2", activityAt: h.now() - 60000, hasActivity: true });
+  assert.equal(h.engine.getState().stale, false, "partially aged activity is still fresh");
+  assert.equal(h.engine.getState().rafActive, true);
+  assert.equal(h.timerStats.arms, 1, "partially aged activity arms stale timer once");
+  assert.equal(h.timerStats.delays[0], 30000, "stale timer delay matches remaining window");
+});
+
+test("unchanged DOM syncs after stale timeout do not re-arm the stale timer", async t => {
+  const h = createHarness();
+  h.engine.destroy();
+  const eng = h.WsConvMotion.createEngine({
+    doc: h.doc, win: h.win, root: h.root, convo: h.convo, grid: h.grid, convlive: h.convlive, canvas: h.canvas,
+    staleMs: 30,
+    now: () => h.now()
+  });
+  t.after(() => eng.destroy());
+
+  const initialAt = h.now();
+  eng.observe({ phase: "thinking", done: 0, failed: 0, turn: "s3", activityAt: initialAt, hasActivity: true });
+  assert.equal(eng.getState().stale, false);
+  assert.equal(eng.getState().rafActive, true);
+  assert.equal(h.timerStats.arms, 1, "initial active observation arms stale timer once");
+
+  await new Promise(r => setTimeout(r, 60));
+  assert.equal(eng.getState().stale, true, "thinking state became stale after timeout");
+  assert.equal(eng.getState().rafActive, false);
+  assert.equal(h.rafQueue.size, 0);
+
+  // Repeated unchanged syncs while already stale must NOT re-arm the stale timer.
+  for (let i = 0; i < 4; i++) {
+    eng.observe({ phase: "thinking", done: 0, failed: 0, turn: "s3", activityAt: initialAt, hasActivity: true });
+  }
+  assert.equal(h.timerStats.arms, 1, "unchanged thinking syncs must not re-arm stale timer");
+  assert.equal(eng.getState().stale, true);
+  assert.equal(eng.getState().rafActive, false);
+
+  // Same guarantee for tool phase after stale timeout.
+  h.advanceNow(100);
+  const toolAt = h.now();
+  eng.observe({ phase: "tool", tool: "ws/git.diff", done: 1, failed: 0, turn: "s3", activityAt: toolAt, hasActivity: true });
+  assert.equal(eng.getState().stale, false, "fresh tool update exits stale");
+  assert.equal(eng.getState().rafActive, true);
+  assert.equal(h.timerStats.arms, 2, "fresh tool update arms stale timer once");
+
+  await new Promise(r => setTimeout(r, 60));
+  assert.equal(eng.getState().stale, true, "tool state became stale after timeout");
+  assert.equal(eng.getState().rafActive, false);
+  for (let i = 0; i < 4; i++) {
+    eng.observe({ phase: "tool", tool: "ws/git.diff", done: 1, failed: 0, turn: "s3", activityAt: toolAt, hasActivity: true });
+  }
+  assert.equal(h.timerStats.arms, 2, "unchanged tool syncs must not re-arm stale timer");
+  assert.equal(eng.getState().stale, true);
+  assert.equal(eng.getState().rafActive, false);
 });

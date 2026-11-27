@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -276,4 +277,60 @@ func TestMetaClientHTTPRoundTripsOverVerifiedDaemon(t *testing.T) {
 	if _, err := wsdashboard.RequestPruneRegistrations(context.Background(), nil, dir, wsdashboard.RegistryRetention); err != nil {
 		t.Fatalf("RequestPruneRegistrations: %v", err)
 	}
+}
+
+func TestServerMetaHTTPClientReusesTransportAndClosesIdle(t *testing.T) {
+	dir := dashboardSessionEnv(t)
+	root := dashboardGitRoot(t)
+
+	// Closing a server that never called metaHTTPClient must be safe.
+	unused := NewServerWithOptions(ServerOptions{Root: root, Version: "test"})
+	unused.Close()
+
+	daemon, err := wsdashboard.StartDaemon(wsdashboard.DaemonOptions{
+		Dir:  dir,
+		Home: root,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer daemon.Close()
+
+	s := NewServerWithOptions(ServerOptions{Root: root, Version: "test"})
+	c1 := s.metaHTTPClient()
+	c2 := s.metaHTTPClient()
+	if c1 != c2 {
+		s.Close()
+		t.Fatal("Server.metaHTTPClient did not reuse *http.Client across calls")
+	}
+	tr, ok := c1.Transport.(*http.Transport)
+	if !ok || tr == nil {
+		s.Close()
+		t.Fatalf("expected *http.Transport, got %T", c1.Transport)
+	}
+	if tr != s.metaTransport {
+		s.Close()
+		t.Fatal("Server.metaHTTPClient transport does not match Server.metaTransport")
+	}
+	if tr.Proxy != nil {
+		s.Close()
+		t.Fatal("Server.metaHTTPClient transport must set Proxy: nil")
+	}
+	if tr.IdleConnTimeout <= 0 || tr.MaxIdleConnsPerHost <= 0 {
+		s.Close()
+		t.Fatalf("expected bounded idle pool on Server.metaTransport, got IdleConnTimeout=%v MaxIdleConnsPerHost=%d", tr.IdleConnTimeout, tr.MaxIdleConnsPerHost)
+	}
+
+	for i := 0; i < 3; i++ {
+		has, err := s.lookupHasAgentRecord(dir, "absent99")
+		if err != nil || has {
+			s.Close()
+			t.Fatalf("call %d lookupHasAgentRecord = %v, %v; want false, nil", i, has, err)
+		}
+		if s.metaHTTPClient().Transport != tr {
+			s.Close()
+			t.Fatalf("call %d replaced metaHTTPClient transport", i)
+		}
+	}
+	s.Close()
 }
