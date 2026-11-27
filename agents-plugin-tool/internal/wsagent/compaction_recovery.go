@@ -10,11 +10,23 @@ import (
 // replayCompaction reconstructs only an unfinished lifecycle. Finished
 // historical compactions must not queue another restore on every rejoin.
 func (c *conv) replayCompaction(ev wslive.Event) {
+	c.replayCompactionSeq(ev, 0)
+}
+
+func (c *conv) replayCompactionSeq(ev wslive.Event, seq uint64) {
+	if pc := c.rec.PendingCompaction; pc != nil && pc.Stage == compactStageRunning && seq > 0 && seq <= pc.AfterSeq {
+		return
+	}
 	switch ev.Phase {
 	case wslive.CompactStart:
 		c.compacting = true
-	case wslive.CompactEnd, wslive.CompactFailed:
+		c.replayCompactEnded, c.replayCompactFailed = false, false
+	case wslive.CompactEnd:
 		c.compacting = false
+		c.replayCompactEnded, c.replayCompactFailed = !c.rec.Lead, false
+	case wslive.CompactFailed:
+		c.compacting = false
+		c.replayCompactFailed, c.replayCompactEnded = !c.rec.Lead, false
 	}
 }
 

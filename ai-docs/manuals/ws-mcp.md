@@ -71,7 +71,7 @@ bundled conventions rather than repository-local source paths.
 
 Mailbox state lives in memory, one store per cache root
 (`internal/wsmailbox/memstore.go`): every scope's presence and queues, the
-reply-id registry, each session's ten-entry history window, and the
+reply-id registry, each session's 100-entry history window, and the
 armed-wait listening markers. The daemon holds it for its life. A committed
 change (a send, a recv, a heartbeat) is one JSONL record appended to the
 restore ring `<cache root>/mailbox-ring/` before the call returns, so mail

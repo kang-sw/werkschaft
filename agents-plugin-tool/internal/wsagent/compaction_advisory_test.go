@@ -238,3 +238,30 @@ func TestCompactionRatioDefaultsAcrossContextWindows(t *testing.T) {
 		}
 	})
 }
+
+func TestAgyHardCompactionSteersOnceAcrossToolBoundaries(t *testing.T) {
+	p := fakeSteerProc{&fakeProc{}}
+	agyReg := BuiltinBackendRegistrations()[BackendAgy]
+	if !agyReg.Lifecycle.SingleHardCompactionSteer {
+		t.Fatal("AgyBackend registration must set SingleHardCompactionSteer")
+	}
+	c := &conv{
+		r: NewRunner(Options{Backends: map[string]BackendRegistration{BackendAgy: agyReg}}),
+		rec: Record{
+			Backend: BackendAgy,
+			Lead:    true,
+			WSKey:   "k-agy",
+		},
+		proc:        p,
+		turn:        true,
+		compactHard: wsconfig.Threshold{Percent: 80},
+	}
+	c.observeCompaction(*compactionUsage(90_000).Live)
+	c.steerCompaction(false)
+	c.steerCompaction(true)
+	c.steerCompaction(true)
+	c.steerCompaction(true)
+	if len(p.steers) != 1 || !strings.Contains(p.steers[0], "has reached the hard point") {
+		t.Fatalf("agy steers = %q, want single initial hard steer without boundary repeats", p.steers)
+	}
+}

@@ -77,7 +77,7 @@ func (c *conv) handle(ev Event) {
 			c.reply = ev.Live.Text
 		}
 		if quiet && c.replaying && ev.Live.Kind == wslive.KindCompact {
-			c.replayCompaction(*ev.Live)
+			c.replayCompactionSeq(*ev.Live, ev.Seq)
 		} else if !quiet {
 			c.compactEvent(*ev.Live)
 		}

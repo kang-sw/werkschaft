@@ -17,6 +17,7 @@ import (
 // historyOut is mailbox.history's JSON entry shape as a caller parses it;
 // Body is a pointer so a test can tell an omitted body from an empty one.
 type historyOut struct {
+	ID           string  `json:"id"`
 	Direction    string  `json:"direction"`
 	Counterparty string  `json:"counterparty"`
 	Time         string  `json:"time"`
@@ -157,7 +158,10 @@ func TestMailboxHistoryRecordsSendAndRecvFromBothQueues(t *testing.T) {
 	}
 
 	text := callToolWithKey(t, f.serverB, 9, f.keyB, "mailbox.history", nil)
-	want := "[" + t0.Format(time.RFC3339) + "] sent to alice@worktree: to the inbox\n"
+	want := "[" + t0.Format(time.RFC3339) + "] sent to alice@worktree (" + gotB[1].ID + "): to the inbox\n"
+	if gotB[1].ID == "" {
+		t.Fatalf("mailbox.history JSON omitted id: %#v", gotB[1])
+	}
 	if !strings.Contains(text, want) || strings.Contains(text, "second line") {
 		t.Fatalf("text history = %q, want it to contain %q and no body", text, want)
 	}
@@ -167,19 +171,23 @@ func TestMailboxHistoryRecordsSendAndRecvFromBothQueues(t *testing.T) {
 	}
 }
 
-// TestMailboxHistoryCapOrderAndArguments pins the ring's capacity and
-// order (one multi-message drain keeps queue order; only the newest 10
-// survive in the window) and the read arguments: body, direction, limit
-// (including below 1 and above the stored count), and that history
-// consumes and changes nothing.
+// TestMailboxHistoryCapOrderAndArguments pins the ring's capacity (100) and
+// default limit (10), order (one multi-message drain keeps queue order; only the
+// newest 100 survive in the window) and the read arguments: body, direction, limit
+// (including below 1 and above the stored count), and that history consumes and
+// changes nothing.
 func TestMailboxHistoryCapOrderAndArguments(t *testing.T) {
-	f := newHistoryFixture(t, time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC))
-	for i := 0; i < 12; i++ {
-		mustSend(t, f.serverB, 10+i, f.keyB, "alice@worktree", fmt.Sprintf("m%02d\nbody %02d", i, i))
+	if mailboxHistoryCap != 100 {
+		t.Fatalf("mailboxHistoryCap = %d, want 100", mailboxHistoryCap)
 	}
-	recv := callToolWithKey(t, f.serverA, 30, f.keyA, "mailbox.recv", nil)
-	if !strings.Contains(recv, "m00") || !strings.Contains(recv, "m11") {
-		t.Fatalf("A did not drain all 12: %s", recv)
+	f := newHistoryFixture(t, time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC))
+	totalSent := mailboxHistoryCap + 2
+	for i := 0; i < totalSent; i++ {
+		mustSend(t, f.serverB, 10+i, f.keyB, "alice@worktree", fmt.Sprintf("m%03d\nbody %03d", i, i))
+	}
+	recv := callToolWithKey(t, f.serverA, 300, f.keyA, "mailbox.recv", nil)
+	if !strings.Contains(recv, "m000") || !strings.Contains(recv, fmt.Sprintf("m%03d", totalSent-1)) {
+		t.Fatalf("A did not drain all %d: %s", totalSent, recv)
 	}
 
 	if names := historyEntryNames(t, f.keyA); len(names) != mailboxHistoryCap {
@@ -189,13 +197,13 @@ func TestMailboxHistoryCapOrderAndArguments(t *testing.T) {
 		t.Fatalf("B window = %d entries, want %d: %v", len(names), mailboxHistoryCap, names)
 	}
 
-	got := historyJSON(t, f.serverA, 31, f.keyA, nil)
-	if len(got) != mailboxHistoryCap {
-		t.Fatalf("history = %d entries, want %d", len(got), mailboxHistoryCap)
+	got := historyJSON(t, f.serverA, 310, f.keyA, nil)
+	if len(got) != mailboxHistoryDefaultLimit {
+		t.Fatalf("default history = %d entries, want default limit %d", len(got), mailboxHistoryDefaultLimit)
 	}
 	for i, e := range got {
-		want := fmt.Sprintf("m%02d", 11-i)
-		if e.Title != want || e.Direction != "recv" {
+		want := fmt.Sprintf("m%03d", totalSent-1-i)
+		if e.Title != want || e.Direction != "recv" || e.ID == "" {
 			t.Fatalf("history[%d] = %#v, want title %s (newest first, queue order kept)", i, e, want)
 		}
 		if e.Body != nil {
@@ -203,54 +211,54 @@ func TestMailboxHistoryCapOrderAndArguments(t *testing.T) {
 		}
 	}
 
-	withBody := historyJSON(t, f.serverA, 32, f.keyA, map[string]any{"body": true})
-	if withBody[0].Body == nil || !strings.HasSuffix(*withBody[0].Body, "\nm11\nbody 11") {
+	withBody := historyJSON(t, f.serverA, 320, f.keyA, map[string]any{"body": true})
+	if withBody[0].Body == nil || !strings.HasSuffix(*withBody[0].Body, fmt.Sprintf("\nm%03d\nbody %03d", totalSent-1, totalSent-1)) {
 		t.Fatalf("body:true did not return the full body: %#v", withBody[0])
 	}
 
-	if got := historyJSON(t, f.serverA, 33, f.keyA, map[string]any{"limit": 3}); len(got) != 3 || got[0].Title != "m11" || got[2].Title != "m09" {
+	if got := historyJSON(t, f.serverA, 330, f.keyA, map[string]any{"limit": 3}); len(got) != 3 || got[0].Title != fmt.Sprintf("m%03d", totalSent-1) || got[2].Title != fmt.Sprintf("m%03d", totalSent-3) {
 		t.Fatalf("limit 3 = %#v", got)
 	}
 	for i, limit := range []any{0, -4} {
-		if got := historyJSON(t, f.serverA, 34+i, f.keyA, map[string]any{"limit": limit}); len(got) != mailboxHistoryCap {
-			t.Fatalf("limit %v = %d entries, want the default %d", limit, len(got), mailboxHistoryCap)
+		if got := historyJSON(t, f.serverA, 340+i, f.keyA, map[string]any{"limit": limit}); len(got) != mailboxHistoryDefaultLimit {
+			t.Fatalf("limit %v = %d entries, want the default %d", limit, len(got), mailboxHistoryDefaultLimit)
 		}
 	}
-	if got := historyJSON(t, f.serverA, 36, f.keyA, map[string]any{"limit": 50}); len(got) != mailboxHistoryCap {
-		t.Fatalf("limit above the stored count = %d entries, want every entry", len(got))
+	if got := historyJSON(t, f.serverA, 360, f.keyA, map[string]any{"limit": 200}); len(got) != mailboxHistoryCap {
+		t.Fatalf("limit above the stored count = %d entries, want every entry (%d)", len(got), mailboxHistoryCap)
 	}
 
 	// direction: A has only recv entries; one send makes the filter visible.
-	mustSend(t, f.serverA, 37, f.keyA, wsmailbox.ReplyIDPrefix+wsmailbox.ReplyID(f.keyB), "reply\nmore")
-	if got := historyJSON(t, f.serverA, 38, f.keyA, map[string]any{"direction": "sent"}); len(got) != 1 || got[0].Title != "reply" {
+	mustSend(t, f.serverA, 370, f.keyA, wsmailbox.ReplyIDPrefix+wsmailbox.ReplyID(f.keyB), "reply\nmore")
+	if got := historyJSON(t, f.serverA, 380, f.keyA, map[string]any{"direction": "sent"}); len(got) != 1 || got[0].Title != "reply" {
 		t.Fatalf("direction sent = %#v", got)
 	}
-	recvOnly := historyJSON(t, f.serverA, 39, f.keyA, map[string]any{"direction": "recv"})
-	if len(recvOnly) != 9 {
-		t.Fatalf("direction recv = %d entries, want 9 (the send pushed one recv out): %#v", len(recvOnly), recvOnly)
+	recvOnly := historyJSON(t, f.serverA, 390, f.keyA, map[string]any{"direction": "recv", "limit": 200})
+	if len(recvOnly) != mailboxHistoryCap-1 {
+		t.Fatalf("direction recv = %d entries, want %d (the send pushed one recv out): %#v", len(recvOnly), mailboxHistoryCap-1, recvOnly)
 	}
 	for _, e := range recvOnly {
 		if e.Direction != "recv" {
 			t.Fatalf("direction recv returned %#v", e)
 		}
 	}
-	if got := historyJSON(t, f.serverA, 40, f.keyA, map[string]any{"direction": "all"}); len(got) != mailboxHistoryCap || got[0].Direction != "sent" {
+	if got := historyJSON(t, f.serverA, 400, f.keyA, map[string]any{"direction": "all", "limit": 200}); len(got) != mailboxHistoryCap || got[0].Direction != "sent" {
 		t.Fatalf("direction all = %#v", got)
 	}
-	if out := callToolWithKey(t, f.serverA, 41, f.keyA, "mailbox.history", map[string]any{"direction": "both"}); !strings.Contains(out, "direction must be") {
+	if out := callToolWithKey(t, f.serverA, 410, f.keyA, "mailbox.history", map[string]any{"direction": "both"}); !strings.Contains(out, "direction must be") {
 		t.Fatalf("an invalid direction was not refused: %s", out)
 	}
 
 	// Read-only: history neither drains a queue nor changes the ring.
-	mustSend(t, f.serverB, 42, f.keyB, "alice@worktree", "pending")
+	mustSend(t, f.serverB, 420, f.keyB, "alice@worktree", "pending")
 	before := historyEntryNames(t, f.keyA)
-	historyJSON(t, f.serverA, 43, f.keyA, map[string]any{"body": true})
-	callToolWithKey(t, f.serverA, 44, f.keyA, "mailbox.history", nil)
+	historyJSON(t, f.serverA, 430, f.keyA, map[string]any{"body": true})
+	callToolWithKey(t, f.serverA, 440, f.keyA, "mailbox.history", nil)
 	after := historyEntryNames(t, f.keyA)
 	if strings.Join(before, ",") != strings.Join(after, ",") {
 		t.Fatalf("history changed the ring: before %v after %v", before, after)
 	}
-	if recv := callToolWithKey(t, f.serverA, 45, f.keyA, "mailbox.recv", nil); !strings.Contains(recv, "pending") {
+	if recv := callToolWithKey(t, f.serverA, 450, f.keyA, "mailbox.recv", nil); !strings.Contains(recv, "pending") {
 		t.Fatalf("history consumed queued mail: %s", recv)
 	}
 }
@@ -428,5 +436,106 @@ func TestMailLineFlushesTheLeadsToolRowFirst(t *testing.T) {
 	mustSend(t, f.server, 4, f.keyA, wsmailbox.ReplyIDPrefix+f.replyB, "Second")
 	if ring := readLiveRing(t, f.sessionDir(f.replyA)); len(ring) != 3 || ring[2].Kind != wslive.RingMail {
 		t.Fatalf("ring after a second send = %+v", ring)
+	}
+}
+
+func TestMailboxHistoryFiltersAndRead(t *testing.T) {
+	t0 := time.Date(2026, 11, 6, 9, 0, 0, 0, time.UTC)
+	f := newHistoryFixture(t, t0)
+	replyB := wsmailbox.ReplyIDPrefix + wsmailbox.ReplyID(f.keyB)
+
+	// Send 3 messages at staggered timestamps with distinct bodies and peers.
+	setMailboxClock(t, t0)
+	mustSend(t, f.serverB, 10, f.keyB, "alice@worktree", "first title\nfirst full body line 2")
+	setMailboxClock(t, t0.Add(1*time.Hour))
+	mustSend(t, f.serverB, 11, f.keyB, "alice@worktree", "second title\nsecond full body </mail>")
+	setMailboxClock(t, t0.Add(24*time.Hour))
+	callToolWithKey(t, f.serverA, 12, f.keyA, "mailbox.recv", nil)
+
+	setMailboxClock(t, t0.Add(25*time.Hour))
+	mustSend(t, f.serverA, 13, f.keyA, replyB, "sent title\nsent full body")
+
+	all := historyJSON(t, f.serverA, 14, f.keyA, map[string]any{"limit": 50})
+	if len(all) != 3 {
+		t.Fatalf("A history count = %d, want 3: %#v", len(all), all)
+	}
+	for i, e := range all {
+		if e.ID == "" {
+			t.Fatalf("entry %d missing id: %#v", i, e)
+		}
+	}
+
+	// offset skips newest matching entries.
+	paged := historyJSON(t, f.serverA, 15, f.keyA, map[string]any{"offset": 1, "limit": 1})
+	if len(paged) != 1 || paged[0].Title != "second title" {
+		t.Fatalf("offset=1 limit=1 = %#v, want second title", paged)
+	}
+	if empty := historyJSON(t, f.serverA, 16, f.keyA, map[string]any{"offset": 10}); len(empty) != 0 {
+		t.Fatalf("offset past end = %#v, want empty", empty)
+	}
+	if neg := callToolWithKey(t, f.serverA, 17, f.keyA, "mailbox.history", map[string]any{"offset": -1}); !strings.Contains(neg, "offset must be 0 or greater") {
+		t.Fatalf("negative offset not refused: %s", neg)
+	}
+
+	// peer filters case-insensitively on counterparty.
+	peerFiltered := historyJSON(t, f.serverA, 18, f.keyA, map[string]any{"peer": strings.ToUpper(wsmailbox.ReplyID(f.keyB))})
+	if len(peerFiltered) != 3 {
+		t.Fatalf("peer filter count = %d, want 3: %#v", len(peerFiltered), peerFiltered)
+	}
+	if noPeer := historyJSON(t, f.serverA, 19, f.keyA, map[string]any{"peer": "nonexistent-peer"}); len(noPeer) != 0 {
+		t.Fatalf("unmatched peer = %#v, want empty", noPeer)
+	}
+
+	// since filters inclusively by YYYY-MM-DD and RFC3339, and rejects bad timestamps.
+	sinceDay := historyJSON(t, f.serverA, 20, f.keyA, map[string]any{"since": "2026-11-07"})
+	if len(sinceDay) != 3 {
+		t.Fatalf("since 2026-11-07 = %#v, want all 3 drained/sent on Nov 7", sinceDay)
+	}
+	sinceExact := historyJSON(t, f.serverA, 21, f.keyA, map[string]any{"since": t0.Add(25 * time.Hour).Format(time.RFC3339)})
+	if len(sinceExact) != 1 || sinceExact[0].Title != "sent title" {
+		t.Fatalf("since RFC3339 = %#v, want sent title only", sinceExact)
+	}
+	if badSince := callToolWithKey(t, f.serverA, 22, f.keyA, "mailbox.history", map[string]any{"since": "not-a-date"}); !strings.Contains(badSince, "since must be RFC3339 or YYYY-MM-DD") {
+		t.Fatalf("bad since not refused: %s", badSince)
+	}
+
+	// mailbox.read recovers verbatim body by exact id (with/without .json) and unambiguous prefix.
+	target := all[1] // second title
+	type readOut struct {
+		ID           string `json:"id"`
+		Direction    string `json:"direction"`
+		Counterparty string `json:"counterparty"`
+		Time         string `json:"time"`
+		Title        string `json:"title"`
+		Body         string `json:"body"`
+	}
+	for _, lookup := range []string{target.ID, target.ID + ".json", target.ID[:len(target.ID)-2]} {
+		raw := callToolWithKey(t, f.serverA, 23, f.keyA, "mailbox.read", map[string]any{"id": lookup, "format": "json"})
+		var got readOut
+		if err := json.Unmarshal([]byte(raw), &got); err != nil {
+			t.Fatalf("mailbox.read(%q) JSON: %v: %s", lookup, err, raw)
+		}
+		if got.ID != target.ID || !strings.Contains(got.Body, "second full body </mail>") || got.Direction != "recv" {
+			t.Fatalf("mailbox.read(%q) = %#v", lookup, got)
+		}
+	}
+	textRead := callToolWithKey(t, f.serverA, 24, f.keyA, "mailbox.read", map[string]any{"id": target.ID})
+	if !strings.Contains(textRead, "id: "+target.ID) || !strings.Contains(textRead, "second full body </mail>") {
+		t.Fatalf("mailbox.read text = %q", textRead)
+	}
+
+	// Prefix shared across all entries from same timestamp prefix must fail loud as ambiguous.
+	if ambig := callToolWithKey(t, f.serverA, 25, f.keyA, "mailbox.read", map[string]any{"id": "20261107"}); !strings.Contains(ambig, "ambiguous") {
+		t.Fatalf("ambiguous prefix not refused: %s", ambig)
+	}
+	if missing := callToolWithKey(t, f.serverA, 26, f.keyA, "mailbox.read", map[string]any{"id": "missing-id"}); !strings.Contains(missing, "not found") {
+		t.Fatalf("missing id not refused: %s", missing)
+	}
+	if emptyID := callToolWithKey(t, f.serverA, 27, f.keyA, "mailbox.read", map[string]any{"id": "  "}); !strings.Contains(emptyID, "id is required") {
+		t.Fatalf("empty id not refused: %s", emptyID)
+	}
+	// Cross-session isolation: B cannot read A's message id.
+	if cross := callToolWithKey(t, f.serverB, 28, f.keyB, "mailbox.read", map[string]any{"id": all[0].ID}); !strings.Contains(cross, "not found") {
+		t.Fatalf("cross-session mailbox.read unexpectedly succeeded: %s", cross)
 	}
 }

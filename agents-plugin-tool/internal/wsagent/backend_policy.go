@@ -136,6 +136,10 @@ type LifecyclePolicy struct {
 	LeadCompactionWSOnly bool
 	// WorkerCompactionWSOnly is the worker counterpart (werk).
 	WorkerCompactionWSOnly bool
+	// SingleHardCompactionSteer stops repeat ToolBoundary hard-compaction
+	// steers once compactHardSteered is set, for backends whose steer injects
+	// a full prompt turn instead of an in-turn steer RPC.
+	SingleHardCompactionSteer bool
 }
 
 // ExecOptIn names an exec-cutover opt-in: the config Key that must say on and

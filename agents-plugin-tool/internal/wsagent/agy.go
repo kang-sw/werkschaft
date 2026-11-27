@@ -68,7 +68,7 @@ func (b AgyBackend) registration() (string, BackendRegistration) {
 		CallFallback:    true,
 		DirectTools: []string{
 			"workflow_manual", "workflow_state", "agenda.set", "agenda.list", "agenda.clear",
-			"whiteboard.update", "whiteboard.query", "mailbox.send", "mailbox.recv", "mailbox.recipients",
+			"whiteboard.update", "whiteboard.query", "mailbox.send", "mailbox.recv", "mailbox.history", "mailbox.read", "mailbox.recipients",
 			"agent.spawn", "agent.interrupt", "agent.list", "playbook.read", "playbook.render",
 			"tickets.query", "tickets.move", "git.status", "git.log", "git.commit", "git.merge",
 			"worktree.acquire", "worktree.release", "note.query", "note.write",
@@ -94,10 +94,11 @@ func (b AgyBackend) registration() (string, BackendRegistration) {
 		Lifecycle: LifecyclePolicy{
 			ComposedLeadInstructions: true,
 			// No stdio fallback: an agy lead has no ws-mcp without the route.
-			LeadHTTPMCP:   true,
-			TurnActivity:  true,
-			InternalTurns: true,
-			WorkerLog:     true,
+			LeadHTTPMCP:               true,
+			TurnActivity:              true,
+			InternalTurns:             true,
+			WorkerLog:                 true,
+			SingleHardCompactionSteer: true,
 		},
 		// Native default mode asks before each run_command, and the daemon
 		// refuses it (agy 1.5.14 live probe: native auto and

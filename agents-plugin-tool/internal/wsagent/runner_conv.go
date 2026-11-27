@@ -182,6 +182,7 @@ type conv struct {
 	compactHardSteered, compactHardHandled, compactHardAtStart                                                     bool
 	compactHardSteerID                                                                                             string
 	compactContinueAtIdle, compactIdleInternal                                                                     bool
+	replayCompactEnded, replayCompactFailed                                                                        bool
 	compactStage1Active, compactStage1Resume, compactStage1Internal, compactStage1Auto, compactStage1UsageLimited  bool
 
 	// Agy model-wait watchdog state (loop-owned, in-memory only).
