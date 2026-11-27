@@ -366,7 +366,7 @@
         "email": "ki6080@gmail.com",
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
-        "phase": "active",
+        "phase": "closed",
         "touched_at": "2026-11-26T14:10:14Z",
         "impl": {
           "branch": "impl/develop/tweak-canon-owl"
@@ -481,19 +481,6 @@
     },
     "261126-research-ws-companion-hybrid-vrm-bust-spike": {
       "registered_at": "2026-11-26T08:34:43Z"
-    },
-    "261127-bug-ws-daemon-swap-child-env-and-detached-misreport": {
-      "registered_at": "2026-11-26T21:03:35Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-26T21:12:16Z",
-        "impl": {
-          "branch": "impl/develop/baton-nifty-food"
-        }
-      }
     }
   }
 }
