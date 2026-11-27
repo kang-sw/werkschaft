@@ -294,6 +294,297 @@ func TestCompanionVrmRailDockBrowser(t *testing.T) {
 	}
 }
 
+// TestCompanionVrmCoLeadBrowser verifies the Co-Lead seated laptop-typing FK
+// pose, beveled foreground laptop framing invariant (bottom <=19%, strictly
+// below chin), screen bounce glow modulation, and hover/periodic glance-up
+// choreography on both VRM 1.0 and VRM 0.x inside the 1680x960 left-rail dock.
+// Optional WS_COMPANION_COLEAD_QA_SHOTS (absolute dir) writes the 4 QA sheets.
+func TestCompanionVrmCoLeadBrowser(t *testing.T) {
+	if os.Getenv("WS_PLAYWRIGHT_MODULE") == "" {
+		t.Skip("set WS_PLAYWRIGHT_MODULE to use cached Chromium")
+	}
+	shots := os.Getenv("WS_COMPANION_COLEAD_QA_SHOTS")
+	if shots != "" && !filepath.IsAbs(shots) {
+		t.Fatal("WS_COMPANION_COLEAD_QA_SHOTS must be absolute")
+	}
+	if os.Getenv("PLAYWRIGHT_BROWSERS_PATH") == "" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			t.Setenv("PLAYWRIGHT_BROWSERS_PATH", filepath.Join(home, "Library", "Caches", "ms-playwright"))
+		}
+	}
+	home := t.TempDir()
+	cfgHome := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	t.Setenv("WS_CACHE_HOME", t.TempDir())
+	t.Setenv("WS_CONFIG_HOME", cfgHome)
+	SetDevAssets(nil)
+
+	backend := settingsTestBackend(t)
+	backend.LoadCompanion = func() (CompanionConfig, error) {
+		return CompanionConfig{
+			Enabled:              false,
+			Director:             "rules",
+			Pack:                 "default",
+			Preset:               "werkschaft-d1",
+			AgentCooldownSeconds: 30,
+			AgentHourlyCap:       20,
+		}, nil
+	}
+
+	paths, err := companionPaths(backend.Options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stageVrmPack := func(id, name, srcPath, wantVer string, fallback []byte) string {
+		var raw []byte
+		if srcPath != "" {
+			var err error
+			raw, err = os.ReadFile(srcPath)
+			if err != nil {
+				t.Fatalf("read VRM fixture %q: %v", srcPath, err)
+			}
+		} else {
+			raw = fallback
+		}
+		if ver, err := inspectCompanionVRM(raw); err != nil || ver != wantVer {
+			t.Fatalf("VRM fixture %q failed inspector: ver=%q want=%q err=%v", id, ver, wantVer, err)
+		}
+		dir := filepath.Join(paths.packs, id)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "model.vrm"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		manifest, err := json.Marshal(map[string]any{
+			"schema": "ws-companion-vrm/v1",
+			"id":     id,
+			"name":   name,
+			"model":  "model.vrm",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "pack.json"), manifest, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+
+	vrm0ID := stageVrmPack("vrm0-colead", "VRM 0 Fixture", os.Getenv("WS_VRM0_SAMPLE"), "0.x", buildRenderableSyntheticVRM(false))
+	vrm1ID := stageVrmPack("vrm1-colead", "VRM 1 Fixture", os.Getenv("WS_VRM1_SAMPLE"), "1.0", buildRenderableSyntheticVRM(true))
+
+	wsRoot := t.TempDir()
+	wsAlpha := mkDir(t, filepath.Join(wsRoot, "alpha-app"))
+	wsFile := filepath.Join(cfgHome, "dashboard", "workspaces.json")
+	if err := os.MkdirAll(filepath.Dir(wsFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wsDoc, err := json.Marshal(workspacesDoc{
+		Version:    workspacesSchemaVersion,
+		Workspaces: []workspaceRecord{{Path: wsAlpha}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(wsFile, wsDoc, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f := startPageFixture(t, func(o *DaemonOptions) {
+		o.Port = 0
+		o.LAN = false
+		o.bindHost = "127.0.0.1"
+		o.Config = backend
+		o.WorkspacesFile = wsFile
+	})
+
+	now := time.Now()
+	for i := 1; i <= 5; i++ {
+		rid := fmt.Sprintf("alpha%02d", i)
+		reg := Registration{
+			ReplyID:      rid,
+			Project:      wsAlpha,
+			Harness:      "claude",
+			RegisteredAt: stampFor(now.Add(-time.Duration(20-i) * time.Minute)),
+			HeartbeatAt:  stampFor(now),
+		}
+		if err := WriteRegistration(f.dir, reg); err != nil {
+			t.Fatal(err)
+		}
+		writeSnapshot(t, f.dir, rid, &wslive.Snapshot{
+			SchemaVersion: 1,
+			Adapter:       "claude",
+			UpdatedAt:     now.UnixMilli(),
+			HeartbeatMs:   30000,
+			Lead:          wslive.Lead{Activity: wslive.Activity{Phase: wslive.PhaseIdle}},
+		})
+		f.src.setPage(rid, PageContent{HasBoard: true, Seq: 1, Board: boardRegions(t, "active session board")})
+	}
+	f.d.Index().Refresh()
+	waitFor(t, "colead sessions indexed", func() bool {
+		_, ok := f.d.Index().Session("alpha05")
+		return ok
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "node", "testdata/companion-vrm-colead.browser.cjs", f.base, shots, vrm0ID, vrm1ID).CombinedOutput()
+	t.Log(string(out))
+	if err != nil {
+		t.Fatalf("Chromium VRM Co-Lead verification: %v", err)
+	}
+}
+
+// TestCompanionVrmSwapDizzyBrowser verifies Step 3 Gesture #2: live session-switch
+// laptop swap (deterministic 6-color palette, smooth tuck-out/slide-in, strict
+// bottom framing invariant) and rapid-switch dizzy easter egg (4 rapid clicks in
+// left rail -> cute sway + crisp 2D anime spiral/stars FX -> blink-shake & smile
+// recovery) on both VRM 1.0 and VRM 0.x inside the 1680x960 left-rail dock.
+// Optional WS_COMPANION_STEP3_QA_SHOTS (absolute dir) writes the 4 QA sheets.
+func TestCompanionVrmSwapDizzyBrowser(t *testing.T) {
+	if os.Getenv("WS_PLAYWRIGHT_MODULE") == "" {
+		t.Skip("set WS_PLAYWRIGHT_MODULE to use cached Chromium")
+	}
+	shots := os.Getenv("WS_COMPANION_STEP3_QA_SHOTS")
+	if shots != "" && !filepath.IsAbs(shots) {
+		t.Fatal("WS_COMPANION_STEP3_QA_SHOTS must be absolute")
+	}
+	if os.Getenv("PLAYWRIGHT_BROWSERS_PATH") == "" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			t.Setenv("PLAYWRIGHT_BROWSERS_PATH", filepath.Join(home, "Library", "Caches", "ms-playwright"))
+		}
+	}
+	home := t.TempDir()
+	cfgHome := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	t.Setenv("WS_CACHE_HOME", t.TempDir())
+	t.Setenv("WS_CONFIG_HOME", cfgHome)
+	SetDevAssets(nil)
+
+	backend := settingsTestBackend(t)
+	backend.LoadCompanion = func() (CompanionConfig, error) {
+		return CompanionConfig{
+			Enabled:              false,
+			Director:             "rules",
+			Pack:                 "default",
+			Preset:               "werkschaft-d1",
+			AgentCooldownSeconds: 30,
+			AgentHourlyCap:       20,
+		}, nil
+	}
+
+	paths, err := companionPaths(backend.Options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stageVrmPack := func(id, name, srcPath, wantVer string, fallback []byte) string {
+		var raw []byte
+		if srcPath != "" {
+			var err error
+			raw, err = os.ReadFile(srcPath)
+			if err != nil {
+				t.Fatalf("read VRM fixture %q: %v", srcPath, err)
+			}
+		} else {
+			raw = fallback
+		}
+		if ver, err := inspectCompanionVRM(raw); err != nil || ver != wantVer {
+			t.Fatalf("VRM fixture %q failed inspector: ver=%q want=%q err=%v", id, ver, wantVer, err)
+		}
+		dir := filepath.Join(paths.packs, id)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "model.vrm"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		manifest, err := json.Marshal(map[string]any{
+			"schema": "ws-companion-vrm/v1",
+			"id":     id,
+			"name":   name,
+			"model":  "model.vrm",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "pack.json"), manifest, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+
+	vrm0ID := stageVrmPack("vrm0-step3", "VRM 0 Fixture", os.Getenv("WS_VRM0_SAMPLE"), "0.x", buildRenderableSyntheticVRM(false))
+	vrm1ID := stageVrmPack("vrm1-step3", "VRM 1 Fixture", os.Getenv("WS_VRM1_SAMPLE"), "1.0", buildRenderableSyntheticVRM(true))
+
+	wsRoot := t.TempDir()
+	wsAlpha := mkDir(t, filepath.Join(wsRoot, "alpha-app"))
+	wsFile := filepath.Join(cfgHome, "dashboard", "workspaces.json")
+	if err := os.MkdirAll(filepath.Dir(wsFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wsDoc, err := json.Marshal(workspacesDoc{
+		Version:    workspacesSchemaVersion,
+		Workspaces: []workspaceRecord{{Path: wsAlpha}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(wsFile, wsDoc, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f := startPageFixture(t, func(o *DaemonOptions) {
+		o.Port = 0
+		o.LAN = false
+		o.bindHost = "127.0.0.1"
+		o.Config = backend
+		o.WorkspacesFile = wsFile
+	})
+
+	now := time.Now()
+	harnesses := []string{"claude", "codex", "pi"}
+	for i := 1; i <= 8; i++ {
+		rid := fmt.Sprintf("alpha%02d", i)
+		h := harnesses[i%len(harnesses)]
+		reg := Registration{
+			ReplyID:      rid,
+			Project:      wsAlpha,
+			Harness:      h,
+			RegisteredAt: stampFor(now.Add(-time.Duration(25-i) * time.Minute)),
+			HeartbeatAt:  stampFor(now),
+		}
+		if err := WriteRegistration(f.dir, reg); err != nil {
+			t.Fatal(err)
+		}
+		writeSnapshot(t, f.dir, rid, &wslive.Snapshot{
+			SchemaVersion: 1,
+			Adapter:       h,
+			UpdatedAt:     now.UnixMilli(),
+			HeartbeatMs:   30000,
+			Lead:          wslive.Lead{Activity: wslive.Activity{Phase: wslive.PhaseIdle}},
+		})
+		f.src.setPage(rid, PageContent{HasBoard: true, Seq: 1, Board: boardRegions(t, fmt.Sprintf("session %s board", rid))})
+	}
+	f.d.Index().Refresh()
+	waitFor(t, "step3 sessions indexed", func() bool {
+		_, ok := f.d.Index().Session("alpha08")
+		return ok
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "node", "testdata/companion-vrm-swap-dizzy.browser.cjs", f.base, shots, vrm0ID, vrm1ID).CombinedOutput()
+	t.Log(string(out))
+	if err != nil {
+		t.Fatalf("Chromium VRM Step 3 swap+dizzy verification: %v", err)
+	}
+}
+
 // buildRenderableSyntheticVRM builds a compact, spec-valid GLB v2 containing
 // stylized 3D bust meshes (dark hoodie torso, skin head with morph target,
 // dark hair cap, and sleeves) plus all 17 mandatory humanoid bones and valid

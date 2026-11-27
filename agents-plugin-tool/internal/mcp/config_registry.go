@@ -258,6 +258,19 @@ var keepAwakeDuringTurnsKey = declaredConfigKey{
 // keepAwakeDuringTurnsHelp is the knob's help text in config.list.
 const keepAwakeDuringTurnsHelp = "Keep this computer from idle system sleep while any hosted lead or spawned agent turn runs (builtin false). The dashboard daemon holds one idle-sleep assertion from the first live turn to the last, on macOS (the system caffeinate helper) and Windows; elsewhere it has no effect. Display sleep and sleep you ask for, including closing a laptop lid, stay under the operating system's control. Idle sessions, queued messages and background jobs outside a turn do not count. Applies at once to turns already running. Global-only."
 
+// tierRoutingDynamicKey types agent.tier_routing_dynamic as a boolean.
+var tierRoutingDynamicKey = declaredConfigKey{
+	Key:          wsconfig.ItemAgentTierRoutingDynamic,
+	Type:         declaredTypeBoolean,
+	Description:  tierRoutingDynamicHelp,
+	DefaultScope: wsconfig.ScopeGlobal,
+	Default:      "false",
+	DefaultValue: false,
+}
+
+// tierRoutingDynamicHelp is the knob's help text in config.list.
+const tierRoutingDynamicHelp = "Enable opt-in dynamic tier selection on agent.spawn using an ephemeral classifier call (builtin false). When true, agent.spawn asks the configured classifier to choose among the caller's allowed spawnable tiers and falls back deterministically to static tier resolution on timeout, error, or invalid output. Defaults to global scope."
+
 // configRegistry holds the static per-key entries. The dynamic prompt.*
 // family is not represented here — it is generated per discovered override
 // point by promptKnobEntry at catalog-build time (see buildTuningCatalog).
@@ -561,6 +574,46 @@ var configRegistry = []configKeyEntry{
 		}},
 		NoAgentVisible: true,
 		ResolverBacked: true,
+	},
+	{
+		Key:        wsconfig.ItemAgentTierRoutingDynamic,
+		WriterTool: "config.tune",
+		ResetTool:  "config.tune",
+		SelectorFields: []tuningField{{
+			Name:        "scope",
+			Description: "Storage scope. When omitted the write lands in the item's declared default scope (global).",
+			Enum:        wsconfig.ScopeSchemaEnum(),
+		}},
+		ValueFields: []tuningField{{
+			Name:        "value",
+			Description: "true or false. Omit when reset is true.",
+			Enum:        []string{"true", "false"},
+		}},
+		NoAgentVisible: true,
+		ResolverBacked: true,
+		Declared:       &tierRoutingDynamicKey,
+	},
+	{
+		Key:        wsconfig.ItemAgentTierRoutingDynamicClassifier,
+		WriterTool: "config.tune",
+		ResetTool:  "config.tune",
+		SelectorFields: []tuningField{{
+			Name:        "scope",
+			Description: "Storage scope. When omitted the write lands in the item's declared default scope (global).",
+			Enum:        wsconfig.ScopeSchemaEnum(),
+		}},
+		ValueFields: []tuningField{{
+			Name:        "value",
+			Description: "Classifier tier token resolved through the static tier resolver (for example small, claude.small, or werk.small). Omit when reset is true.",
+		}},
+		NoAgentVisible: true,
+		ResolverBacked: true,
+		Normalize: func(value string) (string, error) {
+			if strings.ContainsAny(value, " \t\r\n") {
+				return "", fmt.Errorf("%s must be a single tier token without whitespace; got %q", wsconfig.ItemAgentTierRoutingDynamicClassifier, value)
+			}
+			return value, nil
+		},
 	},
 	{
 		Key:        wsconfig.ItemAgentChildWaitingDays,

@@ -294,6 +294,20 @@ func (p *EphemeralPool) backendFor(harness string) (Backend, error) {
 	return nil, fmt.Errorf("ephemeral pool: unknown harness %q", harness)
 }
 
+// SupportsHarness reports from memory whether harness has a backend registered
+// in this pool or the built-in registrations.
+func (p *EphemeralPool) SupportsHarness(harness string) bool {
+	if p == nil {
+		return false
+	}
+	harness = strings.TrimSpace(harness)
+	if harness == "" {
+		return false
+	}
+	_, err := p.backendFor(harness)
+	return err == nil
+}
+
 func (p *EphemeralPool) ensureScratchCwd() (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -142,9 +142,26 @@ func dashboardCommand(args []string) {
 	// until then no held report is released and no session sleeps.
 	agents.ExpectExecJobs()
 	labels.agents.Store(agents)
+	poolBackends := make(map[string]wsagent.Backend)
+	for name, reg := range agents.BackendRegistrations() {
+		if reg.Backend != nil {
+			poolBackends[name] = reg.Backend
+		}
+	}
+	ephemeralPool := wsagent.NewEphemeralPool(wsagent.EphemeralPoolOptions{
+		Backends: poolBackends,
+	})
+	var closePoolOnce sync.Once
+	closePool := func() {
+		closePoolOnce.Do(func() {
+			if err := ephemeralPool.Close(); err != nil {
+				fmt.Fprintf(logw, "dashboard: ephemeral pool close: %v\n", err)
+			}
+		})
+	}
 	nudges := mcp.NewWhiteboardNudges(dir, agents, logw, boards)
 	userCmdsReady := make(chan struct{})
-	host := &proxyHost{userCmdsReady: userCmdsReady, credentials: credentials, notes: sessions.Notes, dir: dir, port: *port, lan: *lan, buildTime: *buildTime, contentHash: contentHash, logw: logw, configPath: filepath.Clean(configPath), agents: agents, boards: boards, mailLabels: labels.label}
+	host := &proxyHost{userCmdsReady: userCmdsReady, credentials: credentials, notes: sessions.Notes, dir: dir, port: *port, lan: *lan, buildTime: *buildTime, contentHash: contentHash, logw: logw, configPath: filepath.Clean(configPath), agents: agents, ephemeralPool: ephemeralPool, boards: boards, mailLabels: labels.label}
 	boards.SetChanged(func(root, key string) {
 		if d := host.live.Load(); d != nil {
 			d.Index().Reread(wsmailbox.ReplyID(key))
@@ -169,6 +186,7 @@ func dashboardCommand(args []string) {
 		fmt.Fprintln(logw, "dashboard: settings catalog unavailable:", packageErr)
 	}
 	if *preflight && !wsdashboard.AwaitDesktopPreflight(os.Stdin, os.Stdout) {
+		closePool()
 		closeTracker()
 		return
 	}
@@ -213,10 +231,9 @@ func dashboardCommand(args []string) {
 		// A session that left the index may have ended for good: its
 		// scheduled prompts go once the runner no longer knows it.
 		SessionForgotten: func(id string) { cron.sessionForgotten(agents, id) },
-		// The companion director's isolated one-shot call, dispatched
-		// through the harness's backend registration.
-		CompanionOneShot:     wsagent.RunOneShot,
-		CompanionHasOneShot:  wsagent.HasOneShot,
+		// The companion director's lightweight warm pool, shared across the
+		// daemon's registered harness backends.
+		CompanionPool:        companionPoolAdapter{pool: ephemeralPool},
 		AgentRecordValidator: wsagent.ValidateLegacyRecord,
 		OnMetaReady: func(d *wsdashboard.Daemon, _ *wsmeta.Store, _ *wsmeta.Snapshot) {
 			hiredFn := d.RecordHired
@@ -250,15 +267,20 @@ func dashboardCommand(args []string) {
 					}
 				}
 			})
+			// Terminate cached ephemeral processes and prune temp dirs before
+			// releasing the singleton lock.
+			run(closePool)
 			wg.Wait()
 		},
 	})
 	if errors.Is(err, wsdashboard.ErrLocked) {
+		closePool()
 		closeTracker()
 		fmt.Fprintln(os.Stderr, "ws-mcp dashboard: another dashboard daemon is running (it holds the lock); exiting")
 		os.Exit(3)
 	}
 	if err != nil {
+		closePool()
 		closeTracker()
 		fatal("dashboard", err)
 	}
@@ -394,7 +416,40 @@ func dashboardCommand(args []string) {
 	}
 	cron.close(logw)
 	stopAllTrackers()
+	closePool()
 	closeTracker()
+}
+
+// companionPoolAdapter bridges *wsagent.EphemeralPool to wsdashboard's
+// CompanionEphemeralRunner interface (wsdashboard cannot import wsagent).
+type companionPoolAdapter struct {
+	pool *wsagent.EphemeralPool
+}
+
+func (a companionPoolAdapter) SupportsHarness(harness string) bool {
+	return a.pool != nil && a.pool.SupportsHarness(harness)
+}
+
+func (a companionPoolAdapter) Execute(ctx context.Context, req wsdashboard.CompanionEphemeralRequest) (string, error) {
+	mode := wsagent.PureOneShot
+	if req.Mode == wsdashboard.CompanionModeBoundedRotation {
+		mode = wsagent.BoundedRotation
+	}
+	return a.pool.Execute(ctx, wsagent.EphemeralRequest{
+		Acquire: wsagent.AcquireSpec{
+			Harness:      req.Harness,
+			Model:        req.Model,
+			Effort:       req.Effort,
+			Provider:     req.Provider,
+			Mode:         mode,
+			MaxTurns:     req.MaxTurns,
+			MaxTokens:    req.MaxTokens,
+			SystemPrompt: req.SystemPrompt,
+			IdleTTL:      req.IdleTTL,
+		},
+		Prompt:  req.Prompt,
+		Timeout: req.Timeout,
+	})
 }
 
 // lateFunc is a callback bound after the code that calls it is built; a

@@ -72,6 +72,10 @@ type ServerOptions struct {
 	// Agents is the dashboard daemon's runner for spawning and reading
 	// conversations. It is nil on the direct path.
 	Agents AgentHost
+	// EphemeralPool is the dashboard daemon's shared lightweight ephemeral
+	// harness pool used by opt-in dynamic tier routing on agent.spawn. Nil
+	// leaves dynamic tier routing inert (static fallback).
+	EphemeralPool *wsagent.EphemeralPool
 	// AgentBackends exposes the dashboard daemon's registered backend
 	// descriptors without granting the lead runner handle (Agents). Set for
 	// every daemon-hosted connection, including token-forwarding workers, so
@@ -238,6 +242,7 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 		s.observeHarness("hello", opts.Harness)
 	}
 	s.agents = opts.Agents
+	s.ephemeralPool = opts.EphemeralPool
 	s.exec, s.conversation = opts.Exec, opts.Conversation
 	s.cron = opts.Cron
 	s.userCommands, s.userCommandsDiscovery = opts.UserCommands, opts.UserCommandsDiscovery
