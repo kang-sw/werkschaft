@@ -491,6 +491,9 @@
     "261127-feat-ws-ephemeral-lightweight-harness-pool": {
       "registered_at": "2026-11-27T04:05:01Z"
     },
+    "261127-feat-ws-pluggable-chat-mail-client": {
+      "registered_at": "2026-11-27T04:44:53Z"
+    },
     "261127-feat-ws-plugin-marketplace-python-ipc": {
       "registered_at": "2026-11-27T04:44:46Z"
     },
