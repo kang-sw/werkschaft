@@ -6,6 +6,7 @@ related:
   261126-feat-ws-chat-stream-interactive-question-cards: coexists in .wbupdate-topic cards inside the same single conversation view
   261126-feat-ws-unified-composer-input-component: preserves #csend and .cfoot placement beside the unified WsInput host
 sage-review-design: required
+completed: 2026-11-27
 ---
 
 # Dashboard Conversation UX Re-Style (Collapsed Tool Summary, Extra Motion, Whiteboard-Only Mode)
@@ -58,3 +59,13 @@ Approved visual reference: `ai-docs/assets/mockups/261125/whiteboard-chat-view/m
 - **Done:** All three child tickets (`261126-feat-ws-dashboard-conv-collapsed-tool-summary-tokens`, `261126-feat-ws-dashboard-conv-whiteboard-only-mode`, `261126-feat-ws-dashboard-conv-extra-motion-live-engine`) are implemented, verified (Go tests, Node DOM harnesses, Playwright dark/light visual captures matching `ai-docs/assets/mockups/261125/whiteboard-chat-view/mockup.html`), and closed to `.done/`.
 - **Dropped:** Owner cancels the conversation UX re-style initiative before child implementation.
 - **Deferred:** Additional bespoke `#r-convlive` Extra Motion choreography for `.permwait` / compaction / retry states (beyond the registry slot & calm fallback) and provider-side reasoning summary extraction (`261114-feat-ws-live-reasoning-summary`).
+
+
+## Resolution (2026-11-27)
+
+All three child tickets are completed, merged to `develop`, verified live, and closed in `.done/`:
+- Child 1: `261126-feat-ws-dashboard-conv-collapsed-tool-summary-tokens` (`c7e84b338`)
+- Child 2: `261126-feat-ws-dashboard-conv-whiteboard-only-mode` (`14fc53a49`)
+- Child 3: `261126-feat-ws-dashboard-conv-extra-motion-live-engine` (`171eda325`, test fixes `d21104bab` / `bae854ef2`)
+
+Post-merge live-feedback polish (`4b9191fdd`) and follow-ups (`cd4d87742` turn-summary token priority, `8cea0bbc2` I4 motion staleness, `50fe67a8e` session re-entry burst hotfix) have also landed on `develop`. Structural session re-entry freeze follow-up is tracked in `261127-bug-ws-dashboard-session-reentry-freeze`, and oversized-file splits (`runner_conv.go`, `dashboard-conv-motion.js`, `dashboard-conversation.{js,css}`) are consolidated in `261127-refactor-split-oversized-multi-responsibility-files`. Closed per owner decision `(33)=a`.
