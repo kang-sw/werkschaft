@@ -107,7 +107,7 @@ func (c *conv) compactDurableContinue() bool {
 		c.durableTurnError("acknowledge queued input", err)
 		return false
 	}
-	text := c.renderPendingNote(c.compactNote) + "\nContinue the work that was pending."
+	text := strings.TrimSpace(c.renderPendingNote(c.compactNote)) + "\n\nContinue the work that was pending."
 	start := c.r.opts.Now()
 	var committed bool
 	err := c.sendStandalonePrompt(true, func() error {
