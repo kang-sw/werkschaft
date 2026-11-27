@@ -167,7 +167,16 @@ type Index struct {
 
 	// loaded is set once a Refresh has read the whole registry (Loaded).
 	loaded atomic.Bool
+
+	// readSem caps concurrent disk reads across lanes, so a bulk sweep cannot
+	// park hundreds of OS threads inside a scanner-blocked file syscall. It is
+	// taken only around a lane's source read, with no lock held but that
+	// lane's own, so it cannot join a lock cycle.
+	readSem chan struct{}
 }
+
+// maxConcurrentReads bounds simultaneous session source reads.
+const maxConcurrentReads = 8
 
 // lane is one session's re-read state. Re-reads are serialized per session,
 // never across sessions, so a slow read of one session delays no other.
@@ -212,7 +221,7 @@ func NewIndex(opts IndexOptions) *Index {
 	if opts.Log == nil {
 		opts.Log = io.Discard
 	}
-	x := &Index{opts: opts, sessions: map[string]*indexEntry{}, lanes: map[string]*lane{}, readErrors: map[string]bool{}}
+	x := &Index{opts: opts, sessions: map[string]*indexEntry{}, lanes: map[string]*lane{}, readErrors: map[string]bool{}, readSem: make(chan struct{}, maxConcurrentReads)}
 	x.idle = sync.NewCond(&x.lanesMu)
 	return x
 }
@@ -444,9 +453,11 @@ func (x *Index) RefreshClock() {
 	for _, row := range rows {
 		id, s, stale := row.id, row.s, row.stale
 		s.Registration = x.effective(s.Registration, now)
-		// Keep checking already-stale, non-ended writers at the previous
-		// cadence too: a legacy writer may resume without sending a nudge.
-		if s.EndedAt == "" && (!s.Registration.Live(now) || stale || s.Live != s.Registration.Live(now) || s.Lifecycle != DeriveSessionLifecycle(s.Registration, s.Hidden, now) || stale != row.was) {
+		// Only a transition is due: a live entry that aged out, a lifecycle
+		// change, or a snapshot clock that crossed its stale deadline. An entry
+		// already read as stale and unchanged is cold; a writer that resumes
+		// rewrites its registration, which Refresh re-reads.
+		if s.EndedAt == "" && (s.Live != s.Registration.Live(now) || s.Lifecycle != DeriveSessionLifecycle(s.Registration, s.Hidden, now) || stale != row.was) {
 			due = append(due, id)
 		}
 	}
@@ -597,6 +608,10 @@ func (x *Index) readLane(replyID string, l *lane, full bool, stores LiveStores) 
 }
 
 func (x *Index) readLaneLocked(replyID string, full bool, stores LiveStores) {
+	if x.readSem != nil {
+		x.readSem <- struct{}{}
+		defer func() { <-x.readSem }()
+	}
 	reg, err := ReadRegistration(x.opts.Dir, replyID)
 	var changed bool
 	switch {
