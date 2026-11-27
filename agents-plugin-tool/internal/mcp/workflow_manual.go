@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wscompact"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsreview"
 	"github.com/kang-sw/devenv/internal/wswhiteboard"
@@ -181,42 +182,49 @@ func renderSessionStateBody(rec sessionRecord, includeWhiteboardQuickCard bool) 
 
 func renderHostedRestoreBundle(key, cause string, rec sessionRecord, children []wsagent.AgentChild, whiteboardQuickCard bool) string {
 	var sb strings.Builder
+	fmt.Fprintf(&sb, "<ws-restore cause=\"%s\">\n", wscompact.EscapeXMLAttr(cause))
 	sb.WriteString("## Hosted Session Restore\n\n")
-	fmt.Fprintf(&sb, "Your ws session key is `%s`. ", key)
+	fmt.Fprintf(&sb, "Your ws session key is `%s`. ", wscompact.EscapeFramingCloseTags(key))
 	if cause == "compaction" {
 		sb.WriteString("Context was compacted. ")
 	} else {
 		sb.WriteString("The daemon restarted. ")
 	}
 	sb.WriteString("This state was rendered immediately before delivery; keep using the same key.\n\n")
-	sb.WriteString(renderSessionStateBody(rec, whiteboardQuickCard))
-	sb.WriteString("\n## Work Target\n")
-	sb.WriteString(renderHostedWorkTarget(rec.Agenda["implement"]))
-	sb.WriteString("\n## Direct Children\n")
+	sb.WriteString("<session-state>\n")
+	sb.WriteString(strings.TrimRight(wscompact.EscapeFramingCloseTags(renderSessionStateBody(rec, whiteboardQuickCard)), "\n"))
+	sb.WriteString("\n</session-state>\n\n")
+	sb.WriteString("<work-target>\n## Work Target\n")
+	sb.WriteString(strings.TrimRight(wscompact.EscapeFramingCloseTags(renderHostedWorkTarget(rec.Agenda["implement"])), "\n"))
+	sb.WriteString("\n</work-target>\n\n")
+	sb.WriteString("<direct-children>\n## Direct Children\n")
+	var childBuf strings.Builder
 	if len(children) == 0 {
-		sb.WriteString("none\n")
+		childBuf.WriteString("none\n")
 	} else {
 		view := summarizeAgentChildren(children)
 		for _, child := range view.Active {
-			fmt.Fprintf(&sb, "- %s", child.Address)
+			fmt.Fprintf(&childBuf, "- %s", child.Address)
 			if child.Label != "" {
-				fmt.Fprintf(&sb, " (%s)", child.Label)
+				fmt.Fprintf(&childBuf, " (%s)", child.Label)
 			}
-			fmt.Fprintf(&sb, ": %s; tier=%s; authority=%s", child.State, child.Tier, child.Authority)
+			fmt.Fprintf(&childBuf, ": %s; tier=%s; authority=%s", child.State, child.Tier, child.Authority)
 			if child.LastReport != "" {
-				fmt.Fprintf(&sb, "; last=%s", child.LastReport)
+				fmt.Fprintf(&childBuf, "; last=%s", child.LastReport)
 			}
 			if child.Error != "" {
-				fmt.Fprintf(&sb, "; error=%s", child.Error)
+				fmt.Fprintf(&childBuf, "; error=%s", child.Error)
 			}
-			sb.WriteString("\n")
+			childBuf.WriteString("\n")
 		}
 		for _, name := range view.RecentInactive {
-			fmt.Fprintf(&sb, "- %s\n", name)
+			fmt.Fprintf(&childBuf, "- %s\n", name)
 		}
-		sb.WriteString(view.summary())
+		childBuf.WriteString(view.summary())
 	}
-	return strings.TrimSpace(sb.String()) + "\n"
+	sb.WriteString(strings.TrimRight(wscompact.EscapeFramingCloseTags(childBuf.String()), "\n"))
+	sb.WriteString("\n</direct-children>\n</ws-restore>\n")
+	return sb.String()
 }
 
 func renderHostedWorkTarget(raw json.RawMessage) string {

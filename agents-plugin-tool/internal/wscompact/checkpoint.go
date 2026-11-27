@@ -2,7 +2,6 @@ package wscompact
 
 import (
 	"fmt"
-	"html"
 	"regexp"
 	"slices"
 	"strings"
@@ -129,33 +128,50 @@ func FormatRereads(paths []string, files map[string]string, secrets ...string) s
 	var inlined, deferred strings.Builder
 	for _, item := range all {
 		if item.taken {
-			// A tag in file text must not terminate the enclosing record.
-			body := strings.ReplaceAll(item.body, "</file>", "&lt;/file&gt;")
-			fmt.Fprintf(&inlined, "<file path=%q>\n%s\n</file>\n", html.EscapeString(item.name), strings.TrimSuffix(body, "\n"))
+			// Escape closing framing tags so file contents cannot terminate the
+			// enclosing <file>, <rereads>, or checkpoint block.
+			body := EscapeFramingCloseTags(strings.TrimSuffix(item.body, "\n"))
+			fmt.Fprintf(&inlined, "<file path=\"%s\">\n%s\n</file>\n", EscapeXMLAttr(item.name), body)
 		} else {
-			fmt.Fprintf(&deferred, "- %s\n", item.name)
+			fmt.Fprintf(&deferred, "- %s\n", EscapeFramingCloseTags(item.name))
 		}
 	}
+	if inlined.Len() == 0 && deferred.Len() == 0 {
+		return ""
+	}
 	var out strings.Builder
+	out.WriteString("\n<rereads>\n")
 	if inlined.Len() > 0 {
-		out.WriteString("\n## Required re-reads (inlined)\n")
+		out.WriteString("## Required re-reads (inlined)\n")
 		out.WriteString(inlined.String())
 	}
 	if deferred.Len() > 0 {
-		out.WriteString("\n## Required re-reads (to read first)\n")
+		if inlined.Len() > 0 {
+			out.WriteString("\n")
+		}
+		out.WriteString("## Required re-reads (to read first)\n")
 		out.WriteString(deferred.String())
 	}
+	out.WriteString("</rereads>\n")
 	return out.String()
 }
 
-// BuildCheckpoint assembles the harness-agnostic compaction checkpoint markdown.
+// BuildCheckpoint assembles the harness-agnostic compaction checkpoint with
+// XML-framed provenance blocks so machine-generated state, agent-authored
+// summary prose, inlined files, and historical dialog cannot spoof boundaries.
 func BuildCheckpoint(in CheckpointInput) string {
 	var out strings.Builder
 	role := "worker"
+	proseTag := "worker-summary"
+	proseHeading := "Carried forward"
 	if in.Lead {
 		role = "lead"
+		proseTag = "lead-summary"
+		proseHeading = "Carried forward by the lead"
 	}
-	fmt.Fprintf(&out, "Compacted %s conversation. Use the ticket and ws tooling for durable state.\n\n## Session", role)
+	fmt.Fprintf(&out, "<compaction-checkpoint role=\"%s\">\n", role)
+	fmt.Fprintf(&out, "Compacted %s conversation. Use the ticket and ws tooling for durable state.\n\n", role)
+
 	ticket, playbook := in.Ticket, in.Playbook
 	if ticket == "" {
 		ticket = "(none recorded)"
@@ -166,22 +182,45 @@ func BuildCheckpoint(in CheckpointInput) string {
 	if playbook == "" {
 		playbook = "(none recorded)"
 	}
-	fmt.Fprintf(&out, "\n- Active ticket: %s\n- Active playbook: %s\n", ticket, playbook)
+	out.WriteString("<session>\n## Session\n")
+	fmt.Fprintf(&out, "- Active ticket: %s\n- Active playbook: %s\n", EscapeFramingCloseTags(ticket), EscapeFramingCloseTags(playbook))
+	out.WriteString("</session>\n\n")
+
+	fmt.Fprintf(&out, "<%s>\n## %s\n", proseTag, proseHeading)
 	for i, field := range ProseFields() {
 		body := ""
 		if i < len(in.Prose) {
-			body = in.Prose[i]
+			body = strings.TrimSpace(in.Prose[i])
 		}
-		fmt.Fprintf(&out, "\n## %s\n%s\n", field.Heading, body)
+		if body == "" {
+			body = "(none)"
+		} else {
+			body = EscapeFramingCloseTags(body)
+		}
+		fmt.Fprintf(&out, "\n### %s\n%s\n", field.Heading, body)
 	}
+	fmt.Fprintf(&out, "</%s>\n", proseTag)
+
 	if !in.OmitChildren {
+		out.WriteString("\n<children>")
 		writeCompactSection(&out, "Child agents in flight", in.State.ChildrenInFlight, in.Secrets)
 		writeCompactSection(&out, "Child agents finished since the previous compaction", in.State.ChildrenFinished, in.Secrets)
+		out.WriteString("</children>\n")
 	}
+	out.WriteString("\n<exec-jobs>")
 	writeCompactSection(&out, "Exec jobs", in.State.ExecJobs, in.Secrets)
-	out.WriteString(in.Rereads)
-	out.WriteString("\n")
-	out.WriteString(in.Dialog)
+	out.WriteString("</exec-jobs>\n")
+	if rereads := strings.TrimSpace(in.Rereads); rereads != "" {
+		out.WriteString("\n")
+		out.WriteString(rereads)
+		out.WriteString("\n")
+	}
+	if dialog := strings.TrimSpace(in.Dialog); dialog != "" {
+		out.WriteString("\n")
+		out.WriteString(dialog)
+		out.WriteString("\n")
+	}
+	out.WriteString("</compaction-checkpoint>\n")
 	return out.String()
 }
 
@@ -191,6 +230,6 @@ func writeCompactSection(out *strings.Builder, heading string, entries, secrets 
 		out.WriteString("(none)\n")
 	}
 	for _, entry := range entries[:min(len(entries), 32)] {
-		fmt.Fprintf(out, "- %s\n", BoundedText(Scrub(entry, secrets...), 256))
+		fmt.Fprintf(out, "- %s\n", EscapeFramingCloseTags(BoundedText(Scrub(entry, secrets...), 256)))
 	}
 }

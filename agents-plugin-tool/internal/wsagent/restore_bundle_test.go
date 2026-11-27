@@ -330,7 +330,7 @@ func TestRestoreProviderFailureInjectsKeyBearingDiagnostic(t *testing.T) {
 	compactBoundary(h, id, holder)
 	eventually(t, "provider failure diagnostic", func() bool { return len(h.userInputs(holder)) == 3 })
 	text := h.userInputs(holder)[2]
-	for _, want := range []string{key, "could not be rendered", "fixture provider unavailable", "workflow_state", "ordinary work"} {
+	for _, want := range []string{`<ws-restore cause="compaction" status="error">`, key, "could not be rendered", "fixture provider unavailable", "workflow_state", "</ws-restore>\n\n", "ordinary work"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("provider diagnostic lacks %q: %q", want, text)
 		}

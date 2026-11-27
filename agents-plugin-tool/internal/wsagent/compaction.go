@@ -706,7 +706,7 @@ postCompact:
 		if c.r.durableProcess(c.rec.Backend) {
 			return c.compactDurableContinue()
 		}
-		text := c.renderPendingNote(c.compactNote) + "\nContinue the work that was pending."
+		text := strings.TrimSpace(c.renderPendingNote(c.compactNote)) + "\n\nContinue the work that was pending."
 		c.compactResume = false
 		if err := c.sendStandalonePrompt(!c.compactResumeInternal, func() error { return c.proc.Send(text) }); err != nil {
 			c.compactResumeInternal = false
@@ -1248,7 +1248,7 @@ func (c *conv) queueRestore(cause RestoreCause) {
 	}
 	if c.r == nil || c.r.opts.RestoreBundle == nil {
 		if cause == RestoreCompaction {
-			c.compactNote = fmt.Sprintf("Your ws session key is `%s`. Context was compacted. Fresh session state is available through the lead-only ws workflow_state tool. Keep using this same key.\n", c.rec.WSKey)
+			c.compactNote = fmt.Sprintf("<ws-restore cause=\"compaction\">\nYour ws session key is `%s`. Context was compacted. Fresh session state is available through the lead-only ws workflow_state tool. Keep using this same key.\n</ws-restore>\n", wscompact.EscapeFramingCloseTags(c.rec.WSKey))
 		}
 		return
 	}
@@ -1286,7 +1286,7 @@ func (c *conv) renderPendingNote(note string) string {
 	bundle, err := c.r.opts.RestoreBundle(rec.Backend, rec.workDir(), rec.WSKey, cause, c.r.AgentList(caller))
 	if err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: restore bundle: %v\n", rec.ReplyID, err)
-		bundle = fmt.Sprintf("Your ws session key is `%s`. The hosted session-state restore bundle could not be rendered after %s: %v. Call workflow_state with this same key before continuing.", rec.WSKey, cause, err)
+		bundle = fmt.Sprintf("<ws-restore cause=\"%s\" status=\"error\">\nYour ws session key is `%s`. The hosted session-state restore bundle could not be rendered after %s: %s. Call workflow_state with this same key before continuing.\n</ws-restore>\n", wscompact.EscapeXMLAttr(string(cause)), wscompact.EscapeFramingCloseTags(rec.WSKey), wscompact.EscapeFramingCloseTags(string(cause)), wscompact.EscapeFramingCloseTags(err.Error()))
 	}
 	if strings.TrimSpace(tail) != "" {
 		bundle = strings.TrimSpace(bundle) + "\n\n" + strings.TrimSpace(tail)
