@@ -115,6 +115,7 @@ var allowedCSSOverlaps = map[string]string{
 	"stext dashboard,whiteboard":        "dashboard extends the whiteboard board vocabulary it is inlined after",
 	"sub dashboard,whiteboard":          "dashboard extends the whiteboard board vocabulary it is inlined after",
 	"tbar dashboard,whiteboard":         "dashboard extends the whiteboard board vocabulary it is inlined after",
+	"tname dashboard,whiteboard":        "overview dims closed topic title text, scoped to data-overview",
 	"tf dashboard,tracker":              "pre-existing dashboard and tracker overlap (host styles the tracker mount), grandfathered",
 	"title dashboard,whiteboard":        "dashboard extends the whiteboard board vocabulary it is inlined after",
 	"tk dashboard,tracker":              "pre-existing dashboard and tracker overlap (host styles the tracker mount), grandfathered",
