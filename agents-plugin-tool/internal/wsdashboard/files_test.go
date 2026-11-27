@@ -248,10 +248,12 @@ function check(what, got, want) { if (JSON.stringify(got) !== JSON.stringify(wan
 function names(list, view) { return list.filter(function (e) { return showsEntry(e, view); }).map(function (e) { return e.name; }); }
 var entries = [{ name: ".git", dir: true, ign: true }, { name: "build", dir: true, ign: true }, { name: ".github", dir: true },
   { name: "src", dir: true }, { name: ".env" }, { name: "noise.log", ign: true }, { name: "main.go" }];
-check("ignored entries are hidden by default, dot entries shown", names(entries, {}), [".github", "src", ".env", "main.go"]);
+check("ignored and dot entries are shown by default", names(entries, {}), [".git", "build", ".github", "src", ".env", "noise.log", "main.go"]);
+check("ignored and dot entries are shown when view is omitted", names(entries), [".git", "build", ".github", "src", ".env", "noise.log", "main.go"]);
+check("hide ignored", names(entries, { ign: false }), [".github", "src", ".env", "main.go"]);
 check("show ignored", names(entries, { ign: true }), [".git", "build", ".github", "src", ".env", "noise.log", "main.go"]);
-check("hide dot entries", names(entries, { dot: true }), ["src", "main.go"]);
-check("both", names(entries, { ign: true, dot: true }), ["build", "src", "noise.log", "main.go"]);
+check("hide dot entries", names(entries, { dot: true }), ["build", "src", "noise.log", "main.go"]);
+check("hide both ignored and dot entries", names(entries, { ign: false, dot: true }), ["src", "main.go"]);
 
 var lists = {
   "": { entries: [{ name: "docs", dir: true }, { name: "src", dir: true, st: "*" }, { name: "link", link: true }, { name: "old", dir: true, gone: true, st: "D" }, { name: "a.md" }] },

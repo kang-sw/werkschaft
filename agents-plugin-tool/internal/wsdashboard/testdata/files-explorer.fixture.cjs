@@ -181,13 +181,16 @@ async function sidebarToneChecks() {
   check('folder header is present while loading without a fabricated item count', [x.at('.ftree-head').textContent, x.all('.fcount').length], ['js.files.folders', 0]);
   var root = listing('/sidebar-tone', [{ name: 'src', dir: true }, { name: 'docs', dir: true }, { name: 'README.md' }, { name: '.env' }, { name: 'ignored', dir: true, ign: true }], true);
   await answer(take('sidebar-tone', 'list', ''), root);
-  check('localized count follows the last row and counts only visible entries', [x.at('.fcount').textContent, x.at('.fdirectory').children.slice(-1)[0] === x.at('.fcount'), x.at('.fcount').getAttribute('role'), x.all('.ftree-head').length], ['4 items', true, null, 1]);
+  check('localized count follows the last row and counts only visible entries', [x.at('.fcount').textContent, x.at('.fdirectory').children.slice(-1)[0] === x.at('.fcount'), x.at('.fcount').getAttribute('role'), x.all('.ftree-head').length], ['5 items', true, null, 1]);
   x.all('.fhd button')[2].click();
   var dot = x.all('.fpop input')[1], ign = x.all('.fpop input')[0];
+  check('view popover defaults to show ignored and show dot', [ign.checked, dot.checked], [true, false]);
   dot.checked = true; event(dot, 'change');
-  check('count tracks hidden-dot filtering', [x.at('.fcount').textContent, x.all('.fentry').length], ['3 items', 3]);
+  check('count tracks hidden-dot filtering', [x.at('.fcount').textContent, x.all('.fentry').length], ['4 items', 4]);
+  ign.checked = false; event(ign, 'change');
+  check('count tracks hide-ignored filtering', [x.at('.fcount').textContent, x.all('.fentry').length], ['3 items', 3]);
   ign.checked = true; event(ign, 'change');
-  check('count tracks show-ignored filtering', [x.at('.fcount').textContent, x.all('.fentry').length], ['4 items', 4]);
+  check('count tracks re-enabled show-ignored filtering', [x.at('.fcount').textContent, x.all('.fentry').length], ['4 items', 4]);
   key(x.at('.fpop'), 'Escape');
 
   x.instance.navigate('src/pkg/deep');
@@ -362,9 +365,9 @@ async function multiSelectChecks() {
   check('select all requires actual focus inside the instance', [!!unfocused.defaultPrevented, selected()], [false, []]);
   peer.el.setAttribute('data-max', '');
   check('Cmd A selects focused explorer even with peer maximized', shortcut(p.tree, 'a', { metaKey: true }), true);
-  var visible = entries.filter(e => !e.ign).map(e => e.name);
+  var visible = entries.map(e => e.name);
   check('select all selects visible rows and only its own instance', [selected(), peer.all('.fentry.sel').length, p.at('.fdirectory').getAttribute('aria-multiselectable')], [visible, 0, 'true']);
-  check('footer localizes the selection count', p.at('.fselection').textContent, '6 selected');
+  check('footer localizes the selection count', p.at('.fselection').textContent, '7 selected');
   var savedTab = JSON.parse(p.store['ws.dashboard.files.tabs.multi']).tabs[0];
   check('persisted selection stays a primary path without a selection set', [typeof savedTab.selection, Object.keys(savedTab).some(k => /sels|anchor|selections/.test(k))], ['string', false]);
   for (var tag of ['input', 'textarea', 'div']) {
@@ -373,7 +376,7 @@ async function multiSelectChecks() {
     p.el.removeChild(input);
   }
   check('peer focus does not select this explorer', shortcut(peer.tree, 'a', { ctrlKey: true }), true);
-  check('Escape clears only focused instance', [shortcut(p.tree, 'Escape'), selected(), peer.all('.fentry.sel').length], [true, [], 6]);
+  check('Escape clears only focused instance', [shortcut(p.tree, 'Escape'), selected(), peer.all('.fentry.sel').length], [true, [], 7]);
   peer.el.removeAttribute('data-max');
   click('c.txt'); click('a.txt', { ctrlKey: true }); click('folder', { ctrlKey: true });
   var batch = ['folder', 'a.txt', 'c.txt'];
@@ -466,8 +469,11 @@ async function multiSelectChecks() {
   event(a.at('[data-entry="src/a.go"]'), 'click');
   check('expansion and selection stay local', [a.instance.selection().path, b.instance.selection().path, b.at('[data-path="src"]').getAttribute('aria-expanded')], ['src/a.go', '.', 'false']);
   a.all('.fhd button')[2].click();
-  var ign = a.all('.fpop input')[0]; ign.checked = true; event(ign, 'change');
-  check('view and storage isolated', [!!a.at('[data-path="ignored"]'), !!b.at('[data-path="ignored"]'), Object.keys(a.store).length > 0, Object.keys(b.store).some(k => k.includes('.view'))], [true, false, true, false]);
+  var ign = a.all('.fpop input')[0];
+  check('ignored entries and checkbox default to shown', [!!a.at('[data-path="ignored"]'), !!b.at('[data-path="ignored"]'), ign.checked], [true, true, true]);
+  ign.checked = false; event(ign, 'change');
+  var alphaView = JSON.parse(a.store['ws.dashboard.files.view'] || '{}');
+  check('view and storage isolated', [!!a.at('[data-path="ignored"]'), !!b.at('[data-path="ignored"]'), alphaView['/alpha'].ign, Object.keys(b.store).some(k => k.includes('.view'))], [false, true, false, false]);
   key(a.at('.fpop'), 'Escape');
   check('popover Escape returns owner focus', doc.activeElement === a.all('.fhd button')[2], true);
   event(a.tree, 'contextmenu', { target: a.at('[data-path="src"]'), clientX: 20, clientY: 30 });
@@ -949,5 +955,61 @@ async function multiSelectChecks() {
   media.instance.destroy();
   await answer(destroyedPreview, { kind: 'none', reason_code: 'binary' });
   check('destroyed explorer cannot open a late preview or menu', [previewCards.length, !!doc.querySelector('.fmenu')], [0, false]);
+
+  // Default ign=true, explicit ign=false persistence across reload, untouched root fallback, and board card persistence.
+  var viewDef = explorer('view-def', true);
+  check('ui.vIgn.checked initializes to true on mount', viewDef.all('.fpop input')[0].checked, true);
+  viewDef.all('.fhd button')[2].click();
+  check('opening View popover before root load keeps ui.vIgn.checked true', viewDef.all('.fpop input')[0].checked, true);
+  key(viewDef.at('.fpop'), 'Escape');
+  viewDef.instance.shown();
+  await answer(take('view-def', 'list'), listing('/view-root-a', [{ name: 'src', dir: true }, { name: 'ignored.txt', ign: true }, { name: '.ign-dot', ign: true }, { name: 'main.go' }], true));
+  check('untouched root shows ignored entries and keeps ui.vIgn checked', [!!viewDef.at('[data-entry="ignored.txt"]'), !!viewDef.at('[data-entry=".ign-dot"]'), viewDef.all('.fpop input')[0].checked], [true, true, true]);
+  viewDef.all('.fhd button')[2].click();
+  var vIgn = viewDef.all('.fpop input')[0];
+  vIgn.checked = false; event(vIgn, 'change');
+  var persistedView = JSON.parse(viewDef.store['ws.dashboard.files.view'] || '{}');
+  check('toggling ui.vIgn off hides ignored entries and persists ign=false', [!!viewDef.at('[data-entry="ignored.txt"]'), !!viewDef.at('[data-entry=".ign-dot"]'), persistedView['/view-root-a'].ign], [false, false, false]);
+  var savedViewStore = JSON.parse(JSON.stringify(viewDef.store));
+  viewDef.instance.destroy();
+  var reloaded = explorer('view-def', true, { store: savedViewStore });
+  reloaded.instance.shown();
+  await answer(take('view-def', 'list'), listing('/view-root-a', [{ name: 'src', dir: true }, { name: 'ignored.txt', ign: true }, { name: 'main.go' }], true));
+  check('reloading root with saved ign=false keeps ignored entries hidden and checkbox unchecked', [!!reloaded.at('[data-entry="ignored.txt"]'), reloaded.all('.fpop input')[0].checked], [false, false]);
+  reloaded.all('.fhd button')[2].click();
+  check('reopening View popover after reload reflects saved ign=false', reloaded.all('.fpop input')[0].checked, false);
+  key(reloaded.at('.fpop'), 'Escape');
+  rootRequest(reloaded, '/view-root-b');
+  await answer(take('view-def', 'list'), listing('/view-root-b', [{ name: 'ignored-b.txt', ign: true }, { name: 'readme.md' }]));
+  check('switching to untouched root defaults ign=true and checks ui.vIgn', [!!reloaded.at('[data-entry="ignored-b.txt"]'), reloaded.all('.fpop input')[0].checked], [true, true]);
+  reloaded.instance.destroy();
+
+  var partialView = explorer('partial-view', true, { store: { 'ws.dashboard.files.view': JSON.stringify({ '/partial': { dot: true } }) } });
+  partialView.instance.shown();
+  await answer(take('partial-view', 'list'), listing('/partial', [{ name: 'ignored.txt', ign: true }, { name: '.env' }, { name: 'app.go' }], true));
+  check('partial stored view record without ign defaults ign to true while honoring dot', [!!partialView.at('[data-entry="ignored.txt"]'), !!partialView.at('[data-entry=".env"]'), partialView.all('.fpop input')[0].checked, partialView.all('.fpop input')[1].checked], [true, false, true, true]);
+  partialView.instance.destroy();
+
+  var cardKind = null, cardStore = {}, cardWin = {
+    WsCards: { icon: name => '<svg><use href="#l-' + name + '"/></svg>', register(name, kind) { if (name === 'explorer') cardKind = kind; }, open() {}, float() {} },
+    AbortController, innerWidth: 1200, innerHeight: 900, listeners: {}, addEventListener: El.prototype.addEventListener, removeEventListener: El.prototype.removeEventListener
+  };
+  new Function('document', 'window', 'wsT', 'wsTn', 'fetch', 'AbortController', 'setTimeout', 'clearTimeout', FILES)(doc, cardWin, k => k, k => k, fetchControlled, AbortController, later, cancel);
+  cardWin.WsFiles.setup({ rid: 'board-card', local: true, load: k => cardStore[k], save: (k, v) => { if (v == null) delete cardStore[k]; else cardStore[k] = v; } });
+  var card1 = { id: 'c1', data: {}, body: doc.body.appendChild(new El('div', doc)), title() {}, actions() {} };
+  cardKind.open(card1);
+  await answer(take('board-card', 'list'), listing('/card-root', [{ name: 'ignored-card.txt', ign: true }, { name: 'main.go' }], true));
+  check('board explorer card defaults to showing ignored entries', [!!card1.body.querySelector('[data-entry="ignored-card.txt"]'), card1.body.querySelectorAll('.fpop input')[0].checked], [true, true]);
+  var cardIgn = card1.body.querySelectorAll('.fpop input')[0];
+  cardIgn.checked = false; event(cardIgn, 'change');
+  var cardRecord = JSON.parse(cardStore['ws.dashboard.explorer.board-card.c1'] || '{}');
+  check('board explorer card hides ignored entries and persists ign=false under ws.dashboard.explorer.*', [!!card1.body.querySelector('[data-entry="ignored-card.txt"]'), JSON.parse(cardRecord['ws.dashboard.files.view'])['/card-root'].ign], [false, false]);
+  card1.explorer.destroy(); card1.body.parentNode.removeChild(card1.body);
+  var card2 = { id: 'c1', data: {}, body: doc.body.appendChild(new El('div', doc)), title() {}, actions() {} };
+  cardKind.open(card2);
+  await answer(take('board-card', 'list'), listing('/card-root', [{ name: 'ignored-card.txt', ign: true }, { name: 'main.go' }], true));
+  check('restored board explorer card keeps saved ign=false', [!!card2.body.querySelector('[data-entry="ignored-card.txt"]'), card2.body.querySelectorAll('.fpop input')[0].checked], [false, false]);
+  cardKind.close(card2); card2.body.parentNode.removeChild(card2.body);
+
   process.stdout.write(bad.join('\n'));
 })().catch(e => { console.error(e); process.exitCode = 1; });
