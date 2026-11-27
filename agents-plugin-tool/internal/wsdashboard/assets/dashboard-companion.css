@@ -72,11 +72,11 @@
   gap: 3px;
   padding: 5px;
   max-width: min(220px, calc(100vw - 12px));
-  border: 1px solid var(--wb-line);
+  border: 0;
   border-radius: 10px;
   background: var(--wb-card);
   color: var(--wb-fg);
-  box-shadow: var(--wb-shadow-hi);
+  box-shadow: inset 0 0 0 1px var(--wb-line), var(--wb-shadow-hi);
   font: 12px/1.4 var(--wb-sans, system-ui, sans-serif);
   pointer-events: auto;
 }

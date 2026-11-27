@@ -326,8 +326,21 @@
       schedule();
     }, () => notice("pack_failed"));
 
+    function placeMenu() {
+      if (menu.hidden) return;
+      controls.measure();
+      const charH = isVrm() ? vrmHeight : size;
+      const rightEdge = position.x + (bodyBox.width || size) / 2 + 6;
+      const bottomEdge = (Number.isFinite(bodyBox.y) ? bodyBox.y : position.y - charH) + (bodyBox.height || charH);
+      controls.place(rightEdge, bottomEdge, vw, vh);
+    }
+
     const controls = C.quickMenu(node, character, menu, options, {
       returnHome, resetSize, mute, applyPreset, notice, openSettings,
+      onOpen() {
+        placeMenu();
+        if (isVrm() && vrmRailVisible) { markVrmActivity(); schedule(); }
+      },
       presets: () => ({ available: Object.keys(model?.manifest.presets || {}), preset }),
       async reloadPack() {
         await loader.reload(cancel.signal);
@@ -514,12 +527,8 @@
     }
 
     function computeRailVrmHeight(railRect) {
-      const unregOpen = !!rail?.querySelector("details.rws-unreg[open]");
       const railH = Math.max(0, railRect?.height || vh);
       let targetH = clamp(Math.round(vh * 0.255), 184, 256);
-      if (unregOpen && railH > 0) {
-        targetH = Math.min(targetH, Math.max(164, Math.round(railH * 0.24)));
-      }
       if (railH > 0) {
         targetH = Math.min(targetH, Math.max(152, Math.round(railH * 0.34)));
       }
@@ -557,9 +566,12 @@
         setBeforeUnreg(null);
         if (slotEl.hidden) slotEl.hidden = false;
         const slotRect = slotEl.getBoundingClientRect();
-        const nextW = Math.max(160, Math.round(slotRect.width || Math.min(railRect.width, 340)));
+        const nextW = Math.max(160, Math.round(slotRect.width || railRect.width));
         const nextH = Math.max(140, Math.round(slotRect.height || targetH));
         const nextDpr = Math.min(dpr, 2);
+        const prevHomeX = home.x;
+        const prevHomeY = home.y;
+        let slotChanged = false;
         size = nextW;
         vrmHeight = nextH;
         if (nextW !== lastVrmW || nextH !== lastVrmH || nextDpr !== lastVrmDpr) {
@@ -567,15 +579,21 @@
           lastVrmH = nextH;
           lastVrmDpr = nextDpr;
           rig?.resize?.(size, vrmHeight, nextDpr);
+          slotChanged = true;
         }
         const anchorLeft = Number.isFinite(slotRect.left) && slotRect.width > 0 ? slotRect.left : railRect.left;
         const anchorBottom = Number.isFinite(slotRect.bottom) && slotRect.height > 0 ? slotRect.bottom : railRect.bottom;
         home = { x: anchorLeft + size / 2, y: anchorBottom, vrm: true, rail: true, hidden: false, avoiding: false };
+        if (Math.abs(home.x - prevHomeX) > 0.5 || Math.abs(home.y - prevHomeY) > 0.5) slotChanged = true;
         position.x = home.x;
         position.y = home.y;
         arrived = true;
         node.dataset.dock = "rail-slot";
         node.dataset.avoiding = "0";
+        if (slotChanged && wasVisible && !doc.hidden) {
+          markVrmActivity();
+          lastVrmRenderAt = -Infinity;
+        }
         if (!wasVisible) {
           hit.hidden = false;
           if (!doc.hidden) {
@@ -628,7 +646,21 @@
       dirty = true;
       if (isVrm() && !doc.hidden && !cancel.signal.aborted) {
         const wideNow = window.innerWidth >= RAIL_MIN_WIDTH && (!wideMq || wideMq.matches);
-        if (wideNow !== vrmRailVisible) layout();
+        if (wideNow !== vrmRailVisible) {
+          layout();
+        } else if (vrmRailVisible) {
+          const slotEl = rail?.querySelector("#rail-companion-slot");
+          const r = slotEl && !slotEl.hidden ? slotEl.getBoundingClientRect() : null;
+          if (r && r.width > 0 && r.height > 0) {
+            const w = Math.max(160, Math.round(r.width));
+            const h = Math.max(140, Math.round(r.height));
+            if (w !== lastVrmW || h !== lastVrmH ||
+                Math.abs(r.left + w / 2 - home.x) > 0.5 || Math.abs(r.bottom - home.y) > 0.5) {
+              markVrmActivity();
+              lastVrmRenderAt = -Infinity;
+            }
+          }
+        }
       }
       schedule();
     }
@@ -1157,13 +1189,6 @@
       invalidated();
     }
     for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) character.addEventListener(name, drop, options);
-    character.addEventListener("contextmenu", () => {
-      if (!menu.hidden) {
-        controls.measure();
-        controls.place(position.x + (bodyBox.width || size) / 2 + 6, (bodyBox.y || position.y - vrmHeight) + (bodyBox.height || vrmHeight), vw, vh);
-      }
-      if (isVrm() && vrmRailVisible) { markVrmActivity(); schedule(); }
-    }, options);
     character.addEventListener("click", () => { if (!suppressClick) { markVrmActivity(); fire("user.poke"); } suppressClick = false; }, options);
     character.addEventListener("dblclick", () => { markVrmActivity(); returnHome(); }, options);
 

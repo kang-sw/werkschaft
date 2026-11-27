@@ -434,13 +434,19 @@ test("stage drives both a fake adapter and makeVrmRig through rail-docking, narr
     slotEl.id = "rail-companion-slot";
     slotEl.className = "rail-companion-slot";
     slotEl.hidden = true;
+    let slotW = 340, unregOpen = false;
     slotEl.getBoundingClientRect = () => slotEl.hidden
       ? { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }
-      : { left: 12, top: 610, right: 352, bottom: 850, width: 340, height: 240 };
+      : { left: 12, top: vpH - 240, right: 12 + slotW, bottom: vpH, width: slotW, height: 240 };
+    const unregEl = makeFakeElement("details", doc);
     const railEl = makeFakeElement("aside", doc);
     railEl.id = "rail";
-    railEl.getBoundingClientRect = () => ({ left: 12, top: 12, right: 352, bottom: vpH - 12, width: 340, height: vpH - 24 });
-    railEl.querySelector = sel => sel === "#rail-companion-slot" ? slotEl : null;
+    railEl.getBoundingClientRect = () => ({ left: 12, top: 12, right: 12 + slotW, bottom: vpH, width: slotW, height: vpH - 12 });
+    railEl.querySelector = sel => {
+      if (sel === "#rail-companion-slot") return slotEl;
+      if (sel === "details.rws-unreg[open]") return unregOpen ? unregEl : null;
+      return null;
+    };
     railEl.querySelectorAll = sel => sel.includes("#rail-companion-slot") ? [slotEl] : [];
 
     let activePackMode = "vrm";
@@ -554,8 +560,28 @@ test("stage drives both a fake adapter and makeVrmRig through rail-docking, narr
     assert.equal(initial.size, 340);
     assert.equal(initial.vrmHeight, 240);
     assert.equal(initial.home.x, 182);
-    assert.equal(initial.home.y, 850);
+    assert.equal(initial.home.y, 960);
     assert.equal(initial.avoiding, false);
+
+    // Expanding details.rws-unreg must NOT shrink --companion-slot or shift home.y.
+    const slotVarBefore = railEl.style.getPropertyValue("--companion-slot");
+    unregOpen = true;
+    for (const fn of winListeners.resize || []) fn();
+    step();
+    assert.equal(railEl.style.getPropertyValue("--companion-slot"), slotVarBefore, "--companion-slot must remain invariant when details.rws-unreg opens");
+    assert.equal(stage.debugState().home.y, 960);
+    assert.equal(stage.debugState().vrmHeight, 240);
+    unregOpen = false;
+
+    // Resizing the left rail column (220px..360px) resizes the VRM slot width smoothly without a 340px cap.
+    slotW = 360;
+    for (const fn of winListeners.resize || []) fn();
+    step();
+    assert.equal(stage.debugState().size, 360);
+    slotW = 340;
+    for (const fn of winListeners.resize || []) fn();
+    step();
+    assert.equal(stage.debugState().size, 340);
 
     // Right-column hover does NOT slide the rail-docked VRM.
     stage.context({

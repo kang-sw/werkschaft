@@ -10,7 +10,7 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
   if (!outPath) return;
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
   const cols = opts.cols || panels.length;
-  const page = await browser.newPage({ viewport: { width: 2200, height: 1400 }, deviceScaleFactor: 1 });
+  const page = await browser.newPage({ viewport: { width: 2200, height: 1400 }, deviceScaleFactor: 2 });
   const imgData = panels.map(p => ({
     label: p.label,
     src: 'data:image/png;base64,' + p.buf.toString('base64'),
@@ -54,6 +54,7 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
   try {
     const context = await browser.newContext({
       viewport: { width: 1680, height: 960 },
+      deviceScaleFactor: 2,
       colorScheme: 'dark',
       locale: 'ko-KR',
       extraHTTPHeaders: { 'Accept-Language': 'ko-KR,ko;q=0.9' }
@@ -79,20 +80,65 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
       }, packId);
       await page.waitForFunction(id => {
         const st = window.WsCompanion?.debugStage?.();
-        return st && st.renderer === 'vrm' && st.pack === id && st.vrm?.loaded && st.vrm.framesRendered >= 4;
+        return st && st.renderer === 'vrm' && st.pack === id && st.vrm?.loaded && st.vrm.framesRendered >= 6;
       }, packId, { timeout: 30000 });
-      await page.waitForTimeout(250);
+      await page.waitForTimeout(260);
     };
+
+    const readLayout = async () => page.evaluate(() => {
+      const rail = document.getElementById('rail');
+      const panel = rail.querySelector('.rail-session-panel');
+      const slot = document.getElementById('rail-companion-slot');
+      const unreg = rail.querySelector('details.rws-unreg');
+      const rfoot = rail.querySelector('.rfoot');
+      const rlist = document.getElementById('rlist');
+      const hit = document.querySelector('.ws-companion-hit');
+      const slotStyle = getComputedStyle(slot);
+      const panelStyle = getComputedStyle(panel);
+      const railStyle = getComputedStyle(rail);
+      const rect = el => {
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
+      };
+      return {
+        vw: window.innerWidth,
+        vh: window.innerHeight,
+        theme: document.documentElement.dataset.theme || 'auto',
+        unregOpen: !!unreg?.open,
+        unregCount: unreg?.querySelector('.unreg-count')?.textContent?.trim() || '',
+        unregInsideRlist: !!(unreg && rlist && rlist.contains(unreg)),
+        unregInsidePanel: !!(unreg && panel && panel.contains(unreg)),
+        rfootInsidePanel: !!(rfoot && panel && panel.contains(rfoot)),
+        slotInsidePanel: !!(slot && panel && panel.contains(slot)),
+        slotHidden: slot.hidden,
+        slotDisplay: slotStyle.display,
+        slotBorderTopWidth: slotStyle.borderTopWidth,
+        slotBorderBottomWidth: slotStyle.borderBottomWidth,
+        slotBgImage: slotStyle.backgroundImage,
+        panelBg: panelStyle.backgroundColor,
+        railBg: railStyle.backgroundColor,
+        railRect: rect(rail),
+        panelRect: rect(panel),
+        rlistRect: rect(rlist),
+        unregRect: rect(unreg),
+        rfootRect: rect(rfoot),
+        slotRect: rect(slot),
+        hitRect: rect(hit),
+        stage: window.WsCompanion?.debugStage?.() || null
+      };
+    });
 
     const railBottomClip = async () => page.evaluate(() => {
       const rail = document.getElementById('rail').getBoundingClientRect();
+      const panel = document.querySelector('#rail .rail-session-panel').getBoundingClientRect();
       const slot = document.getElementById('rail-companion-slot').getBoundingClientRect();
-      const top = Math.max(0, Math.floor(slot.top - 92));
+      const top = Math.max(0, Math.floor(Math.min(slot.top - 128, panel.bottom - 120)));
       return {
         x: Math.max(0, Math.floor(rail.left - 8)),
         y: top,
         width: Math.ceil(rail.width + 18),
-        height: Math.min(window.innerHeight - top, Math.ceil(rail.bottom - top + 8))
+        height: Math.min(window.innerHeight - top, Math.ceil(window.innerHeight - top))
       };
     });
 
@@ -101,142 +147,217 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
       return { x: Math.max(0, Math.floor(r.left - 8)), y: 0, width: Math.ceil(r.width + 18), height: window.innerHeight };
     });
 
-    // 1. Load VRM 1.0 and VRM 0.x in 3-column (1680x960) rail dock directly above details.rws-unreg.
+    // 1. VRM 1.0 & VRM 0.x in 3-column (1680x960), Unregistered workspaces collapsed:
+    //    upper session panel (.rlist + details.rws-unreg + .rfoot) ends cleanly above #rail-companion-slot,
+    //    and #rail-companion-slot owns the true bottom-left corner flush to the viewport bottom.
     await applyPack(vrm1ID);
-    const vrm1Layout = await page.evaluate(() => {
-      const slot = document.getElementById('rail-companion-slot');
-      const unreg = document.querySelector('#rail details.rws-unreg');
-      const rlist = document.getElementById('rlist');
-      const hit = document.querySelector('.ws-companion-hit');
-      const s = slot.getBoundingClientRect();
-      const u = unreg.getBoundingClientRect();
-      const l = rlist.getBoundingClientRect();
-      const h = hit.getBoundingClientRect();
-      return {
-        unregText: unreg.querySelector('.unreg-lbl')?.textContent?.trim() || '',
-        unregCount: unreg.querySelector('.unreg-count')?.textContent?.trim() || '',
-        unregInsideRlist: rlist.contains(unreg),
-        slotTop: s.top, slotBottom: s.bottom, slotW: s.width, slotH: s.height,
-        unregTop: u.top, rlistBottom: l.bottom,
-        hitLeft: h.left, hitBottom: h.bottom, slotLeft: s.left
-      };
-    });
-    assert.equal(vrm1Layout.unregInsideRlist, false, 'details.rws-unreg must sit outside #rlist');
-    assert.ok(Number(vrm1Layout.unregCount) >= 3, `expected >= 3 pending unregistered workspaces, got ${vrm1Layout.unregCount}`);
-    assert.ok(vrm1Layout.slotTop >= vrm1Layout.rlistBottom - 1, 'slot must sit below #rlist');
-    assert.ok(vrm1Layout.slotBottom <= vrm1Layout.unregTop + 1, 'slot must sit directly above details.rws-unreg');
-    assert.ok(Math.abs(vrm1Layout.hitLeft - vrm1Layout.slotLeft) <= 2 && Math.abs(vrm1Layout.hitBottom - vrm1Layout.slotBottom) <= 2,
-      `VRM hit must align with #rail-companion-slot: ${JSON.stringify(vrm1Layout)}`);
+    const collapsed = await readLayout();
+    assert.equal(collapsed.unregInsideRlist, false, 'details.rws-unreg must sit outside #rlist');
+    assert.equal(collapsed.unregInsidePanel, true, 'details.rws-unreg must sit inside .rail-session-panel');
+    assert.equal(collapsed.rfootInsidePanel, true, '.rfoot must sit inside .rail-session-panel');
+    assert.equal(collapsed.slotInsidePanel, false, '#rail-companion-slot must sit outside .rail-session-panel as final sibling');
+    assert.ok(Number(collapsed.unregCount) >= 3, `expected >= 3 pending unregistered workspaces, got ${collapsed.unregCount}`);
+    assert.ok(collapsed.slotRect.top >= collapsed.panelRect.bottom - 1,
+      `slot (${JSON.stringify(collapsed.slotRect)}) must sit below .rail-session-panel (${JSON.stringify(collapsed.panelRect)})`);
+    assert.ok(collapsed.slotRect.top >= collapsed.unregRect.bottom - 1,
+      `slot (${JSON.stringify(collapsed.slotRect)}) must sit below details.rws-unreg (${JSON.stringify(collapsed.unregRect)})`);
+    assert.ok(collapsed.slotRect.top >= collapsed.rfootRect.bottom - 1,
+      `slot (${JSON.stringify(collapsed.slotRect)}) must sit below .rfoot (${JSON.stringify(collapsed.rfootRect)})`);
+    assert.ok(Math.abs(collapsed.slotRect.bottom - collapsed.railRect.bottom) <= 1,
+      `slot must be flush to #rail bottom: slot=${JSON.stringify(collapsed.slotRect)} rail=${JSON.stringify(collapsed.railRect)}`);
+    assert.ok(Math.abs(collapsed.slotRect.bottom - collapsed.vh) <= 1,
+      `slot must be flush to viewport bottom (0px gap): slotBottom=${collapsed.slotRect.bottom} vh=${collapsed.vh}`);
+    assert.equal(collapsed.slotBorderTopWidth, '0px', '#rail-companion-slot must be borderless');
+    assert.equal(collapsed.slotBorderBottomWidth, '0px', '#rail-companion-slot must be borderless');
+    assert.equal(collapsed.railBg, 'rgba(0, 0, 0, 0)', 'outer .rail must become transparent in rail-slot mode');
+    assert.ok(Math.abs(collapsed.hitRect.left - collapsed.slotRect.left) <= 2 &&
+      Math.abs(collapsed.hitRect.bottom - collapsed.slotRect.bottom) <= 2 &&
+      Math.abs(collapsed.hitRect.width - collapsed.slotRect.width) <= 2 &&
+      Math.abs(collapsed.hitRect.height - collapsed.slotRect.height) <= 2,
+      `VRM hit must align with #rail-companion-slot: hit=${JSON.stringify(collapsed.hitRect)} slot=${JSON.stringify(collapsed.slotRect)}`);
 
-    const vrm1Full = shots ? await page.screenshot() : null;
-    const vrm1Crop = shots ? await page.screenshot({ clip: await railBottomClip() }) : null;
+    const vrm1CollapsedFull = shots ? await page.screenshot() : null;
+    const vrm1CollapsedRail = shots ? await page.screenshot({ clip: await railFullClip() }) : null;
+    const vrm1CollapsedCrop = shots ? await page.screenshot({ clip: await railBottomClip() }) : null;
 
     await applyPack(vrm0ID);
-    const vrm0Full = shots ? await page.screenshot() : null;
-    const vrm0Crop = shots ? await page.screenshot({ clip: await railBottomClip() }) : null;
+    const vrm0Collapsed = await readLayout();
+    assert.ok(Math.abs(vrm0Collapsed.slotRect.bottom - vrm0Collapsed.vh) <= 1,
+      `VRM 0.x slot must be flush to viewport bottom: slotBottom=${vrm0Collapsed.slotRect.bottom} vh=${vrm0Collapsed.vh}`);
+    const vrm0CollapsedFull = shots ? await page.screenshot() : null;
+    const vrm0CollapsedCrop = shots ? await page.screenshot({ clip: await railBottomClip() }) : null;
 
     if (shots) {
-      await composeGrid(browser, path.join(shots, '01-rail-dock-3col.png'),
-        '01 · Left-Rail Bottom Dock (>= 1600px, 1680×960) — VRM 1.0 & VRM 0.x directly above 미등록 워크스페이스', [
-          { label: 'VRM 1.0 Fixture — Full 3-Column (1680×960)', buf: vrm1Full, maxW: 960 },
-          { label: 'VRM 1.0 — Rail Bottom Closeup', buf: vrm1Crop, maxW: 360 },
-          { label: 'VRM 0.x Fixture — Full 3-Column (1680×960)', buf: vrm0Full, maxW: 960 },
-          { label: 'VRM 0.x — Rail Bottom Closeup', buf: vrm0Crop, maxW: 360 }
+      await composeGrid(browser, path.join(shots, '01-rail-unreg-collapsed.png'),
+        '01 · Bottom-Left Companion Handover (1680×960, Unregistered Collapsed) — VRM 1.0 & VRM 0.x Flush to Viewport Bottom', [
+          { label: `VRM 1.0 — Full 3-Column (slot.bottom=${Math.round(collapsed.slotRect.bottom)} / vh=${collapsed.vh})`, buf: vrm1CollapsedFull, maxW: 960 },
+          { label: 'VRM 1.0 — Bottom-Left Handover Closeup', buf: vrm1CollapsedCrop, maxW: 360 },
+          { label: `VRM 0.x — Full 3-Column (slot.bottom=${Math.round(vrm0Collapsed.slotRect.bottom)} / vh=${vrm0Collapsed.vh})`, buf: vrm0CollapsedFull, maxW: 960 },
+          { label: 'VRM 0.x — Bottom-Left Handover Closeup', buf: vrm0CollapsedCrop, maxW: 360 }
         ], { cols: 2 });
     }
 
     await applyPack(vrm1ID);
 
-    // 2. Scroll long session list to the bottom -> zero dead-zone occlusion, then expand details.rws-unreg.
-    const scrollClosed = await page.evaluate(() => {
+    // 2. Zero vertical jitter invariant: scroll #rlist to bottom, toggle details.rws-unreg
+    //    open & closed, and assert strictly 0px shift on #rail-companion-slot (top, bottom, height).
+    const beforeExpand = await readLayout();
+    const scrollBefore = await page.evaluate(() => {
       const rlist = document.getElementById('rlist');
       rlist.scrollTop = rlist.scrollHeight;
       const rows = Array.from(rlist.querySelectorAll('.rs'));
       const last = rows[rows.length - 1];
       const lr = last.getBoundingClientRect();
-      const sr = document.getElementById('rail-companion-slot').getBoundingClientRect();
       const hitEl = document.elementFromPoint(Math.floor(lr.left + lr.width / 2), Math.floor(lr.top + lr.height / 2));
       return {
         overflows: rlist.scrollHeight > rlist.clientHeight,
         lastRid: last.dataset.rid,
-        gapToSlot: Math.round(sr.top - lr.bottom),
         clickable: !!(hitEl && last.contains(hitEl))
       };
     });
-    assert.equal(scrollClosed.overflows, true, '#rlist must overflow to test bottom scroll');
-    assert.equal(scrollClosed.clickable, true, 'last session row must be clickable above companion slot');
-    assert.ok(scrollClosed.gapToSlot >= 8, `expected bottom scroll clearance above slot, got ${scrollClosed.gapToSlot}px`);
-    const scrollClosedShot = shots ? await page.screenshot({ clip: await railFullClip() }) : null;
+    assert.equal(scrollBefore.overflows, true, '#rlist must overflow to verify bottom scroll');
+    assert.equal(scrollBefore.clickable, true, 'last session row must be clickable above unreg/footer');
 
     await page.locator('#rail details.rws-unreg > summary').click();
     await page.waitForTimeout(350);
-    const scrollOpen = await page.evaluate(() => {
+    const expanded = await readLayout();
+    assert.equal(expanded.unregOpen, true, 'details.rws-unreg must open');
+    const shiftOpen = {
+      top: expanded.slotRect.top - beforeExpand.slotRect.top,
+      bottom: expanded.slotRect.bottom - beforeExpand.slotRect.bottom,
+      height: expanded.slotRect.height - beforeExpand.slotRect.height
+    };
+    assert.equal(shiftOpen.top, 0, `slot top shifted on unreg expand: ${JSON.stringify(shiftOpen)}`);
+    assert.equal(shiftOpen.bottom, 0, `slot bottom shifted on unreg expand: ${JSON.stringify(shiftOpen)}`);
+    assert.equal(shiftOpen.height, 0, `slot height shifted on unreg expand: ${JSON.stringify(shiftOpen)}`);
+    assert.ok(expanded.slotRect.top >= expanded.panelRect.bottom - 1,
+      `expanded .rail-session-panel must not overlap #rail-companion-slot: panel=${JSON.stringify(expanded.panelRect)} slot=${JSON.stringify(expanded.slotRect)}`);
+    assert.ok(Math.abs(expanded.hitRect.bottom - expanded.slotRect.bottom) <= 1,
+      `VRM hit drifted after unreg expand: hit=${JSON.stringify(expanded.hitRect)} slot=${JSON.stringify(expanded.slotRect)}`);
+
+    const scrollAfterExpand = await page.evaluate(() => {
       const rlist = document.getElementById('rlist');
       rlist.scrollTop = rlist.scrollHeight;
       const rows = Array.from(rlist.querySelectorAll('.rs'));
       const last = rows[rows.length - 1];
       const lr = last.getBoundingClientRect();
-      const sr = document.getElementById('rail-companion-slot').getBoundingClientRect();
       const ur = document.querySelector('#rail details.rws-unreg').getBoundingClientRect();
-      const hr = document.querySelector('.ws-companion-hit').getBoundingClientRect();
       const hitEl = document.elementFromPoint(Math.floor(lr.left + lr.width / 2), Math.floor(lr.top + lr.height / 2));
       return {
-        unregOpen: document.querySelector('#rail details.rws-unreg').open,
         lastRid: last.dataset.rid,
-        gapToSlot: Math.round(sr.top - lr.bottom),
-        slotUnregOverlap: Math.round(sr.bottom - ur.top),
-        hitDrift: Math.round(Math.abs(hr.bottom - sr.bottom)),
-        clickable: !!(hitEl && last.contains(hitEl))
+        clickable: !!(hitEl && last.contains(hitEl)),
+        rowAboveUnreg: lr.bottom <= ur.top + 2
       };
     });
-    assert.equal(scrollOpen.unregOpen, true);
-    assert.equal(scrollOpen.clickable, true, 'last session row must stay clickable when .rws-unreg is expanded');
-    assert.ok(scrollOpen.slotUnregOverlap <= 1, `slot must not overlap expanded .rws-unreg (${scrollOpen.slotUnregOverlap}px)`);
-    assert.ok(scrollOpen.hitDrift <= 2, `VRM hit drifted after .rws-unreg expand (${scrollOpen.hitDrift}px)`);
-    const scrollOpenShot = shots ? await page.screenshot({ clip: await railFullClip() }) : null;
-    const scrollOpenFull = shots ? await page.screenshot() : null;
+    assert.equal(scrollAfterExpand.clickable, true, 'last session row must stay clickable when .rws-unreg is expanded');
+
+    const expandedRailShot = shots ? await page.screenshot({ clip: await railFullClip() }) : null;
+    const expandedFullShot = shots ? await page.screenshot() : null;
+
+    // Collapse back and verify strictly 0px shift on collapse as well.
+    await page.locator('#rail details.rws-unreg > summary').click();
+    await page.waitForTimeout(300);
+    const afterCollapse = await readLayout();
+    assert.equal(afterCollapse.unregOpen, false, 'details.rws-unreg must close');
+    const shiftClose = {
+      top: afterCollapse.slotRect.top - beforeExpand.slotRect.top,
+      bottom: afterCollapse.slotRect.bottom - beforeExpand.slotRect.bottom,
+      height: afterCollapse.slotRect.height - beforeExpand.slotRect.height
+    };
+    assert.equal(shiftClose.top, 0, `slot top shifted on unreg collapse: ${JSON.stringify(shiftClose)}`);
+    assert.equal(shiftClose.bottom, 0, `slot bottom shifted on unreg collapse: ${JSON.stringify(shiftClose)}`);
+    assert.equal(shiftClose.height, 0, `slot height shifted on unreg collapse: ${JSON.stringify(shiftClose)}`);
 
     if (shots) {
-      await composeGrid(browser, path.join(shots, '02-rail-scroll-no-deadzone.png'),
-        '02 · Long Session List Scrolled to Bottom — Zero Dead-Zone Occlusion & Clean Open 미등록 워크스페이스', [
-          { label: `Scrolled bottom (${scrollClosed.lastRid}, clickable=true, +${scrollClosed.gapToSlot}px clearance)`, buf: scrollClosedShot, maxW: 360 },
-          { label: `미등록 워크스페이스 expanded (${scrollOpen.lastRid} clickable=true, overlap=${scrollOpen.slotUnregOverlap}px)`, buf: scrollOpenShot, maxW: 360 },
-          { label: 'Full 3-Column Context with Expanded 미등록 워크스페이스', buf: scrollOpenFull, maxW: 920 }
+      await composeGrid(browser, path.join(shots, '02-rail-unreg-expanded-0px-shift.png'),
+        `02 · Zero Vertical Jitter — Unregistered Expanded (Δtop=${shiftOpen.top}px, Δbottom=${shiftOpen.bottom}px, Δheight=${shiftOpen.height}px)`, [
+          { label: `Collapsed (slot.top=${Math.round(beforeExpand.slotRect.top)}px, h=${Math.round(beforeExpand.slotRect.height)}px)`, buf: vrm1CollapsedRail, maxW: 360 },
+          { label: `Expanded (slot.top=${Math.round(expanded.slotRect.top)}px, Δ=0px, ${scrollAfterExpand.lastRid} clickable)`, buf: expandedRailShot, maxW: 360 },
+          { label: 'Full 3-Column Context — Expanded Unregistered Workspaces', buf: expandedFullShot, maxW: 920 }
         ], { cols: 3 });
     }
 
-    await page.locator('#rail details.rws-unreg > summary').click();
+    // 3. Dark & Light theme tonal separation (borderless Material surfaces).
+    const darkRailShot = shots ? await page.screenshot({ clip: await railFullClip() }) : null;
+    const darkCropShot = shots ? await page.screenshot({ clip: await railBottomClip() }) : null;
+
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+    await page.waitForTimeout(250);
+    const lightLayout = await readLayout();
+    assert.equal(lightLayout.slotBorderTopWidth, '0px', 'light theme slot must remain borderless');
+    assert.ok(lightLayout.slotBgImage && lightLayout.slotBgImage !== 'none', 'light theme slot must render tonal surface gradient');
+    const lightRailShot = shots ? await page.screenshot({ clip: await railFullClip() }) : null;
+    const lightCropShot = shots ? await page.screenshot({ clip: await railBottomClip() }) : null;
+
+    if (shots) {
+      await composeGrid(browser, path.join(shots, '03-dark-and-light-tonal-separation.png'),
+        '03 · Dark & Light Theme Tonal Separation — Borderless Material Upper Card & Bottom-Left Companion Stage', [
+          { label: 'Dark Theme — Full Left Rail', buf: darkRailShot, maxW: 360 },
+          { label: 'Dark Theme — Handover & Bottom Edge Closeup', buf: darkCropShot, maxW: 360 },
+          { label: 'Light Theme — Full Left Rail', buf: lightRailShot, maxW: 360 },
+          { label: 'Light Theme — Handover & Bottom Edge Closeup', buf: lightCropShot, maxW: 360 }
+        ], { cols: 4 });
+    }
+
+    // Restore dark theme for remaining checks.
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
     await page.waitForTimeout(200);
 
-    // 3. Narrow viewports (< 1600px): 1440x900 (2-col) and 720x900 (1-col) hide VRM & pause WebGL (0 fps).
+    // 4. Responsive rail width check (Variant D forward-compatibility: 240px and 360px).
+    for (const testW of [240, 360]) {
+      await page.evaluate(w => {
+        document.querySelector('.dbody').style.gridTemplateColumns = `${w}px minmax(0, 1fr)`;
+      }, testW);
+      await page.waitForTimeout(220);
+      const resized = await readLayout();
+      assert.ok(Math.abs(resized.slotRect.width - resized.railRect.width) <= 1,
+        `#rail-companion-slot must match .rail width (${resized.railRect.width}px), got ${resized.slotRect.width}`);
+      assert.ok(Math.abs(resized.slotRect.width - testW) <= 6,
+        `#rail-companion-slot must resize responsively near ${testW}px, got ${resized.slotRect.width}`);
+      assert.ok(Math.abs(resized.hitRect.width - resized.slotRect.width) <= 2,
+        `VRM hit must track resized slot width ${resized.slotRect.width}px, got ${resized.hitRect.width}`);
+    }
+    await page.evaluate(() => { document.querySelector('.dbody').style.gridTemplateColumns = ''; });
+    await page.waitForTimeout(220);
+
+    // 5. Narrow viewports (< 1600px): 1440x900 (2-col) and 720x900 (1-col) hide VRM & pause WebGL,
+    //    and .rail-session-panel expands smoothly to fill 100% of .rail height.
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.waitForFunction(() => window.WsCompanion?.debugStage?.()?.vrmRailVisible === false, null, { timeout: 5000 });
     await page.waitForTimeout(200);
     const narrow1440 = await page.evaluate(() => ({
       st: window.WsCompanion.debugStage(),
       hitHidden: document.querySelector('.ws-companion-hit')?.hidden,
-      slotDisplay: getComputedStyle(document.getElementById('rail-companion-slot')).display
+      slotDisplay: getComputedStyle(document.getElementById('rail-companion-slot')).display,
+      dockAttr: document.getElementById('rail').dataset.companionDock || ''
     }));
     assert.equal(narrow1440.hitHidden, true);
     assert.equal(narrow1440.slotDisplay, 'none');
+    assert.equal(narrow1440.dockAttr, '');
     assert.equal(narrow1440.st.vrm.paused, true);
     const framesA = narrow1440.st.vrm.framesRendered;
-    await page.waitForTimeout(450);
+    await page.waitForTimeout(420);
     const framesB = await page.evaluate(() => window.WsCompanion.debugStage().vrm.framesRendered);
     assert.equal(framesB, framesA, 'narrow 1440px viewport must render 0 frames');
-    const shot1440 = shots ? await page.screenshot() : null;
 
-    // Even when the slide-out rail drawer opens below 1600px, VRM and slot remain strictly hidden.
     await page.evaluate(() => document.documentElement.classList.add('rail-open'));
-    await page.waitForTimeout(200);
-    const drawerCheck = await page.evaluate(() => ({
-      hitHidden: document.querySelector('.ws-companion-hit')?.hidden,
-      slotDisplay: getComputedStyle(document.getElementById('rail-companion-slot')).display,
-      vrmRailVisible: window.WsCompanion.debugStage().vrmRailVisible
-    }));
+    await page.waitForTimeout(260);
+    const drawerCheck = await page.evaluate(() => {
+      const rail = document.getElementById('rail').getBoundingClientRect();
+      const panel = document.querySelector('#rail .rail-session-panel').getBoundingClientRect();
+      return {
+        hitHidden: document.querySelector('.ws-companion-hit')?.hidden,
+        slotDisplay: getComputedStyle(document.getElementById('rail-companion-slot')).display,
+        vrmRailVisible: window.WsCompanion.debugStage().vrmRailVisible,
+        panelFillsRail: Math.abs(panel.height - rail.height) <= 2
+      };
+    });
     assert.equal(drawerCheck.hitHidden, true, 'VRM must remain hidden even when narrow rail drawer opens');
     assert.equal(drawerCheck.slotDisplay, 'none', '#rail-companion-slot must remain display:none below 1600px');
     assert.equal(drawerCheck.vrmRailVisible, false);
+    assert.equal(drawerCheck.panelFillsRail, true, 'session rail must fill 100% height below 1600px');
     await page.evaluate(() => document.documentElement.classList.remove('rail-open'));
 
     await page.setViewportSize({ width: 720, height: 900 });
@@ -249,25 +370,43 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
     assert.equal(narrow720.hitHidden, true);
     assert.equal(narrow720.slotDisplay, 'none');
     assert.equal(narrow720.st.vrm.paused, true);
-    const shot720 = shots ? await page.screenshot() : null;
 
-    if (shots) {
-      await composeGrid(browser, path.join(shots, '03-narrow-hidden.png'),
-        '03 · Narrow Viewports (< 1600px) — VRM Companion Hidden & WebGL Render Loop Paused (0 fps)', [
-          { label: '2-Column Viewport (1440×900) — hidden=true, paused=true, slot=display:none', buf: shot1440, maxW: 960 },
-          { label: '1-Column Viewport (720×900) — hidden=true, paused=true, slot=display:none', buf: shot720, maxW: 480 }
-        ], { cols: 2 });
-    }
-
-    // 4. Widen back to 1680x960 -> verify FX badges (alert, sparkle, zzz) + right-click menu unclipped by .rail.
+    // 6. Widen back to 1680x960 -> verify hover gear button reachability, FX badges,
+    //    Co-Lead laptop bottom-flush framing, and quick menu clamping (right-click & keyboard).
     await page.setViewportSize({ width: 1680, height: 960 });
     await page.waitForFunction(() => {
       const st = window.WsCompanion?.debugStage?.();
       return st && st.vrmRailVisible === true && !st.hidden && st.vrm && !st.vrm.paused;
     }, null, { timeout: 8000 });
-    await page.waitForTimeout(250);
+    await page.waitForTimeout(280);
 
-    const fxShots = {};
+    // Hover over companion hit box -> gear button is unclipped and clickable inside #rail-companion-slot.
+    await page.locator('.ws-companion-hit').hover();
+    await page.waitForTimeout(180);
+    const hoverCheck = await page.evaluate(() => {
+      const gear = document.querySelector('.ws-companion-gear');
+      const slot = document.getElementById('rail-companion-slot').getBoundingClientRect();
+      const gr = gear.getBoundingClientRect();
+      const style = getComputedStyle(gear);
+      const hitEl = document.elementFromPoint(Math.floor(gr.left + gr.width / 2), Math.floor(gr.top + gr.height / 2));
+      return {
+        gearHidden: gear.hidden,
+        gearOpacity: parseFloat(style.opacity),
+        gearInsideSlot: gr.left >= slot.left - 1 && gr.right <= slot.right + 1 && gr.top >= slot.top - 1 && gr.bottom <= slot.bottom + 1,
+        gearReachable: !!(hitEl && (hitEl === gear || gear.contains(hitEl))),
+        slotBottom: slot.bottom,
+        vh: window.innerHeight,
+        laptopInfo: window.WsCompanion.debugStage()?.vrm?.colead || null
+      };
+    });
+    assert.equal(hoverCheck.gearHidden, false, 'gear control should be present');
+    assert.ok(hoverCheck.gearOpacity >= 0.5, `hovered gear button should be visible, got opacity=${hoverCheck.gearOpacity}`);
+    assert.equal(hoverCheck.gearInsideSlot, true, 'gear button must stay inside #rail-companion-slot');
+    assert.equal(hoverCheck.gearReachable, true, 'gear button must be directly clickable');
+    const hoverLaptopShot = shots ? await page.screenshot({ clip: await railBottomClip() }) : null;
+
+    // Trigger FX badges to verify they stay unclipped above/beside the bottom-left bust.
+    let fxAlertShot = null;
     for (const fx of ['alert', 'sparkle', 'zzz']) {
       const expr = fx === 'sparkle' ? 'happy' : (fx === 'zzz' ? 'idle_doze' : 'oo');
       await page.evaluate(([f, e]) => {
@@ -279,7 +418,7 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
         const el = document.querySelector('.ws-companion-fx');
         return el && !el.hidden && el.textContent.trim().length > 0;
       }, null, { timeout: 3000 });
-      await page.waitForTimeout(200);
+      await page.waitForTimeout(180);
       const fxBox = await page.evaluate(() => {
         const fxEl = document.querySelector('.ws-companion-fx');
         const root = document.querySelector('.ws-companion');
@@ -290,11 +429,26 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
         };
       });
       assert.equal(fxBox.inBody, true, `${fx} FX badge must live in document.body outside .rail`);
-      assert.ok(fxBox.fxRect.left >= fxBox.rootRect.left - 1 && fxBox.fxRect.top >= fxBox.rootRect.top - 1,
+      assert.ok(fxBox.fxRect.left >= fxBox.rootRect.left - 1 && fxBox.fxRect.top >= fxBox.rootRect.top - 1 &&
+        fxBox.fxRect.bottom <= fxBox.rootRect.bottom + 1,
         `${fx} FX badge clipped: ${JSON.stringify(fxBox)}`);
-      if (shots) fxShots[fx] = await page.screenshot({ clip: await railBottomClip() });
+      if (shots && fx === 'alert') fxAlertShot = await page.screenshot({ clip: await railBottomClip() });
     }
 
+    // Open quick menu via keyboard Shift+F10 first to verify immediate placement without mouse right-click.
+    await page.locator('.ws-companion-character').focus();
+    await page.keyboard.press('Shift+F10');
+    await page.locator('.ws-companion-menu:not([hidden])').waitFor({ timeout: 3000 });
+    const kbMenuBox = await page.evaluate(() => {
+      const mr = document.querySelector('.ws-companion-menu').getBoundingClientRect();
+      return { left: mr.left, top: mr.top, right: mr.right, bottom: mr.bottom, vw: window.innerWidth, vh: window.innerHeight };
+    });
+    assert.ok(kbMenuBox.left >= 6 && kbMenuBox.top >= 6 && kbMenuBox.right <= kbMenuBox.vw && kbMenuBox.bottom <= kbMenuBox.vh,
+      `keyboard quick menu clipped: ${JSON.stringify(kbMenuBox)}`);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(120);
+
+    // Open quick menu via right-click -> verify upward/rightward placement 100% inside viewport.
     await page.locator('.ws-companion-character').click({ button: 'right' });
     await page.locator('.ws-companion-menu:not([hidden])').waitFor({ timeout: 3000 });
     await page.waitForTimeout(180);
@@ -302,8 +456,10 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
       const rail = document.getElementById('rail').getBoundingClientRect();
       const menu = document.querySelector('.ws-companion-menu');
       const mr = menu.getBoundingClientRect();
+      const style = getComputedStyle(menu);
       return {
         inBody: document.body.contains(menu) && !document.getElementById('rail').contains(menu),
+        borderWidth: style.borderTopWidth,
         railRight: rail.right,
         menuLeft: mr.left,
         menuRight: mr.right,
@@ -314,37 +470,43 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
       };
     });
     assert.equal(menuBox.inBody, true, 'context menu must live in document.body outside .rail');
-    assert.ok(menuBox.menuLeft >= menuBox.railRight - 2 && menuBox.menuRight <= menuBox.vw && menuBox.menuBottom <= menuBox.vh,
+    assert.equal(menuBox.borderWidth, '0px', 'quick menu must use borderless whisper inset shadow');
+    assert.ok(menuBox.menuLeft >= menuBox.railRight - 2 && menuBox.menuLeft >= 6 &&
+      menuBox.menuRight <= menuBox.vw && menuBox.menuTop >= 6 && menuBox.menuBottom <= menuBox.vh,
       `context menu clipped or trapped inside .rail: ${JSON.stringify(menuBox)}`);
 
     if (shots) {
-      const fxMenuClip = await page.evaluate(() => {
+      const menuWideClip = await page.evaluate(() => {
         const rail = document.getElementById('rail').getBoundingClientRect();
         const slot = document.getElementById('rail-companion-slot').getBoundingClientRect();
-        const top = Math.max(0, Math.floor(slot.top - 70));
+        const top = Math.max(0, Math.floor(slot.top - 96));
         return {
           x: Math.max(0, Math.floor(rail.left - 8)),
           y: top,
           width: Math.min(window.innerWidth, Math.ceil(rail.width + 260)),
-          height: Math.min(window.innerHeight - top, Math.ceil(rail.bottom - top + 8))
+          height: Math.min(window.innerHeight - top, Math.ceil(window.innerHeight - top))
         };
       });
-      const menuShot = await page.screenshot({ clip: fxMenuClip });
-      await composeGrid(browser, path.join(shots, '04-rail-fx-and-menu.png'),
-        '04 · Rail-Docked VRM Overlays in document.body — FX Badges & Context Menu Unclipped by .rail { overflow: hidden }', [
-          { label: 'FX: alert (!)', buf: fxShots.alert, maxW: 360 },
-          { label: 'FX: sparkle (✦)', buf: fxShots.sparkle, maxW: 360 },
-          { label: 'FX: zzz (Zzz)', buf: fxShots.zzz, maxW: 360 },
-          { label: 'Context Menu (right-click) — Unclipped outside .rail', buf: menuShot, maxW: 580 }
-        ], { cols: 4 });
+      const menuShot = await page.screenshot({ clip: menuWideClip });
+      const menuFullShot = await page.screenshot();
+      await composeGrid(browser, path.join(shots, '04-quick-menu-and-laptop-bottom-flush.png'),
+        `04 · Quick Menu Clamping & Bottom-Flush Co-Lead Controls (menu.bottom=${Math.round(menuBox.menuBottom)} <= ${menuBox.vh}, slot.bottom=${Math.round(hoverCheck.slotBottom)})`, [
+          { label: 'Hover Gear Control & Bottom-Flush Laptop Edge', buf: hoverLaptopShot, maxW: 360 },
+          { label: 'FX Badge Unclipped in document.body', buf: fxAlertShot, maxW: 360 },
+          { label: `Quick Menu Unclipped (bottom=${Math.round(menuBox.menuBottom)}/${menuBox.vh})`, buf: menuShot, maxW: 540 },
+          { label: 'Full 3-Column Bottom-Left Context + Quick Menu', buf: menuFullShot, maxW: 920 }
+        ], { cols: 2 });
     }
 
     assert.deepEqual(pageErrors, [], `unexpected page errors: ${JSON.stringify(pageErrors)}`);
     console.log('companion vrm rail dock browser: ok', JSON.stringify({
-      unregCount: vrm1Layout.unregCount,
-      scrollClosed,
-      scrollOpen,
-      menuOutsideRail: menuBox.menuLeft >= menuBox.railRight - 2
+      unregCount: collapsed.unregCount,
+      slotBottom: Math.round(collapsed.slotRect.bottom),
+      vh: collapsed.vh,
+      shiftOpen,
+      shiftClose,
+      menuBottom: Math.round(menuBox.menuBottom),
+      gearReachable: hoverCheck.gearReachable
     }));
   } finally {
     await browser.close();
