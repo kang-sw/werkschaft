@@ -485,6 +485,9 @@
     "261127-feat-ws-companion-layered-agents-and-naming": {
       "registered_at": "2026-11-27T01:26:29Z"
     },
+    "261127-feat-ws-whiteboard-selected-topics-html-export": {
+      "registered_at": "2026-11-27T02:19:52Z"
+    },
     "261127-refactor-split-oversized-multi-responsibility-files": {
       "registered_at": "2026-11-27T01:26:05Z"
     }
