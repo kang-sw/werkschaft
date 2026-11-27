@@ -6,7 +6,7 @@ const vm = require("node:vm");
 
 function companion(globals = {}) {
   const context = vm.createContext({ window: {}, URLSearchParams, AbortController, ...globals });
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "sources", "settings", "vrm-colead", "vrm", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-colead", "vrm", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return context.window.WsCompanion;
@@ -732,7 +732,7 @@ test("companion stage creates an FX canvas for semantic-split FX and falls back 
     },
     createImageBitmap: async url => ({ id: path.basename(url.split("?")[0]), width: 128, height: 128, close() {} })
   });
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "sources", "settings", "vrm-colead", "vrm", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-colead", "vrm", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   const C = context.window.WsCompanion;
@@ -882,360 +882,104 @@ test("companion directed beats override the rules engine until the TTL, then the
   assert.equal(runner.tick(7000), null, "a missing TTL clamps to 1 s");
 });
 
-function modalDom() {
-  const listeners = new Map();
-  const on = (target, type, fn) => { (target.listeners[type] ||= []).push(fn); };
-  const fire = (target, type, event = {}) => { for (const fn of target.listeners[type] || []) fn({ preventDefault() {}, ...event }); };
-  const doc = { listeners: {}, activeElement: null };
-  function element(tag) {
+test("companion gear and quick menu delegate to openSettings without creating a floating modal", async () => {
+  let raf = null, now = 0;
+  const openedBy = [];
+  const makeElement = tag => {
     const el = {
-      tagName: tag.toUpperCase(), className: "", id: "", title: "", textContent: "", value: "", type: "", disabled: false,
-      children: [], attrs: {}, listeners: {}, style: {}, offsetWidth: 240, offsetHeight: 200, open: false,
-      setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return this.attrs[k] ?? null; },
-      addEventListener(type, fn) { on(this, type, fn); },
-      append(...items) { this.children.push(...items); },
-      replaceChildren(...items) { this.children = [...items]; },
-      focus() { doc.activeElement = this; },
+      tagName: tag.toUpperCase(), className: "", id: "", title: "", children: [], dataset: {}, attrs: {}, listeners: {}, value: "", disabled: false,
+      style: { setProperty() {}, removeProperty() {} }, hidden: false, textContent: "", offsetWidth: 240, offsetHeight: 200,
+      setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return this.attrs[k] ?? null; }, removeAttribute() {},
+      addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }, setPointerCapture() {}, remove() {}, focus() {},
+      getBoundingClientRect: () => ({ left: 0, right: 60, top: 0, bottom: 80, width: 60, height: 80 }),
+      append(...items) { this.children.push(...items.filter(item => item && typeof item === "object")); },
+      insertBefore(item) { this.append(item); },
+      replaceChildren(...items) { this.children = []; this.append(...items); },
       all() { return this.children.flatMap(child => [child, ...(child.all ? child.all() : [])]); },
       contains(other) { return other === this || this.all().includes(other); },
-      querySelector() { return this.all().find(c => ["SELECT", "INPUT", "BUTTON"].includes(c.tagName) && !c.disabled) || null; },
-      show() { this.open = true; }, close() { this.open = false; }
+      querySelector(sel) {
+        if (sel === "button") return this.all().find(c => c.tagName === "BUTTON") || null;
+        return null;
+      }
     };
+    if (tag === "canvas") {
+      el.width = 0; el.height = 0; el.drawn = [];
+      const ctx = { canvas: el, save() {}, restore() {}, clearRect() {}, setTransform() {}, translate() {}, rotate() {}, scale() {},
+        fillRect() {}, getImageData: () => ({ data: [] }), drawImage(image) { el.drawn.push(image); } };
+      el.getContext = () => ctx;
+    }
     return el;
+  };
+  class Canvas {
+    constructor(width, height) { this.width = width; this.height = height; this.drawn = []; }
+    getContext() {
+      return { canvas: this, save() {}, restore() {}, translate() {}, rotate() {}, scale() {}, fillRect() {}, getImageData: () => ({ data: [] }),
+        clearRect: () => { this.drawn.length = 0; }, drawImage: image => { this.drawn.push(image); } };
+    }
   }
-  class Option { constructor(text, value, _default, selected) { this.tagName = "OPTION"; this.textContent = text; this.value = value; this.selected = selected; } }
-  const sysopen = new Set(["data-sysopen"]);
-  Object.assign(doc, {
-    createElement: element, addEventListener(type, fn) { on(doc, type, fn); },
-    documentElement: { hasAttribute: name => sysopen.has(name) }
-  });
-  // frames records the resize observers and queued animation frames the modal uses.
-  const frames = { observers: [], queued: new Map(), next: 0 };
-  frames.globals = {
-    ResizeObserver: class {
-      constructor(callback) { this.callback = callback; this.targets = []; frames.observers.push(this); }
-      observe(target) { this.targets.push(target); }
-      disconnect() { this.targets = []; }
+  const body = makeElement("body");
+  const doc = {
+    documentElement: { dataset: { rid: "" }, classList: { contains: () => false }, hasAttribute: name => name === "data-sysopen" },
+    body, hidden: false, activeElement: null, getElementById: () => null,
+    createElement: makeElement, createElementNS: (ns, tag) => makeElement(tag), addEventListener() {}
+  };
+  const win = {
+    WsCompanion: {},
+    WsShell: { companionContext: routeKind => ({ routeKind: routeKind || "session", activity: "idle", landmarks: {}, events: [] }) },
+    addEventListener() {}, innerWidth: 1200, innerHeight: 800, devicePixelRatio: 1
+  };
+  const manifestData = { id: "default", schema: "ws-companion/v1", canvas: [128, 128], poses: { stand: { layers: [{ file: "stand.png" }] } } };
+  const packs = { resolvedAuto: { packId: "default" }, packs: [{ id: "default", rev: "r1" }] };
+  const C = companion({
+    window: win, document: doc, OffscreenCanvas: Canvas,
+    ResizeObserver: class { observe() {} disconnect() {} }, MutationObserver: class { observe() {} disconnect() {} },
+    performance: { now: () => now }, wsT: key => key,
+    requestAnimationFrame: fn => { raf = fn; return 1; }, cancelAnimationFrame: () => { raf = null; },
+    fetch: async url => {
+      if (url.includes("/pack.json?")) return { ok: true, json: async () => manifestData };
+      if (url === "/api/companion/packs" || url.startsWith("/api/companion/packs?")) return { ok: true, json: async () => packs };
+      return { ok: true, blob: async () => url };
     },
-    requestAnimationFrame: fn => { frames.queued.set(++frames.next, fn); return frames.next; },
-    cancelAnimationFrame: id => { frames.queued.delete(id); }
-  };
-  frames.run = () => { const due = [...frames.queued.values()]; frames.queued.clear(); for (const fn of due) fn(); return due.length; };
-  return { doc, element, fire, Option, sysopen, frames };
-}
-
-test("companion settings modal opens, writes typed global values, reverts refused input and closes", async () => {
-  const { doc, element, fire, Option, sysopen, frames } = modalDom();
-  const writes = [], notices = [];
-  let fail = false, resets = 0;
-  const fetch = async (url, init) => {
-    if (url === "/api/companion/packs") return { ok: true, json: async () => ({ packs: [{ id: "default" }, { id: "fox" }] }) };
-    writes.push(JSON.parse(init.body));
-    return { ok: !fail };
-  };
-  const C = companion({ document: doc, Option, fetch, wsT: key => key, ...frames.globals,
-    window: { innerWidth: 1200, innerHeight: 800, addEventListener() {} } });
-  const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
-  // The Sources section renders dashboard.companion_sources; the row loop skips it.
-  const rows = catalog.filter(row => row.surface === "companion-modal" && row.key !== "dashboard.companion_sources");
-  const config = { pack: "default", preset: "werkschaft-d1", agentCooldownSeconds: 30, agentHourlyCap: 20 };
-  const node = element("div"), gear = element("button");
-  const modal = C.settingsModal(node, gear, { signal: new AbortController().signal }, {
-    rows: () => rows, config: () => config, persona: () => ({ name: "Fixture Fox", voice: "Short lines." }),
-    presets: () => ({ available: ["werkschaft-d1", "werkschaft-d2"] }),
-    anchor: () => ({ left: 100, right: 160, top: 400, bottom: 480 }),
-    resetSize: () => { resets++; }, applyPreset() {}, notice: key => notices.push(key), packsChanged() {}
+    createImageBitmap: async url => ({ id: path.basename(url.split("?")[0]), width: 128, height: 128, close() {} })
   });
-  const dialog = node.children[0];
-  const find = (cls) => dialog.all().filter(c => c.className === cls);
-  const control = key => {
-    const row = dialog.all().filter(c => c.className === "ws-companion-settings-row")[rows.findIndex(r => r.key === key)];
-    return row.all().find(c => c.tagName === "SELECT" || c.tagName === "INPUT");
-  };
+  assert.equal(C.settingsModal, undefined, "retired floating settings modal is no longer registered");
 
-  fire(gear, "click");
-  assert.equal(modal.open, true);
-  assert.equal(gear.getAttribute("aria-expanded"), "true");
-  assert.deepEqual(find("ws-companion-settings-label").map(c => c.textContent), rows.map(r => r.label));
-  assert.equal(find("ws-companion-settings-name")[0].textContent, "Fixture Fox");
-  assert.equal(dialog.style.left, "168px", "placed to the right of the character");
+  const stage = C.mount({ pack: "default", preset: "" }, () => {}, opener => openedBy.push(opener));
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(control("dashboard.companion_pack").children.map(o => o.value), ["default", "auto", "fox"]);
+  const node = body.children[0], hit = node.children[0], menu = node.children[1];
+  const character = hit.children.find(c => c.className === "ws-companion-character");
+  const gear = hit.children.find(c => c.className === "ws-companion-gear");
+  assert.equal(node.all().filter(c => c.tagName === "DIALOG").length, 0, "stage mounts no floating <dialog>");
+  assert.equal(gear.hidden, false);
 
-  const cooldown = control("dashboard.companion_agent_cooldown_seconds");
-  cooldown.value = "45";
-  fire(cooldown, "change");
-  await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(writes.at(-1), { scope: "global", key: "dashboard.companion_agent_cooldown_seconds", value: 45 });
-  cooldown.focus();
-  cooldown.value = "4.5";
-  fire(cooldown, "change");
-  assert.equal(writes.length, 1, "a non-integer is never written");
-  assert.equal(cooldown.value, "30", "and the focused input reverts to the live value");
+  // Clicking the gear closes any open quick menu and routes to openSettings(gear).
+  menu.hidden = false;
+  for (const fn of gear.listeners.click) fn({});
+  assert.equal(menu.hidden, true, "gear click closes the quick menu");
+  assert.deepEqual(openedBy, [gear]);
 
-  // A config push spares the focused select; a failed write reverts and notices.
-  const pack = control("dashboard.companion_pack");
-  pack.focus();
-  const before = pack.children;
-  modal.refresh();
-  assert.equal(pack.children, before, "a focused select is not refilled by a config push");
-  fail = true;
-  pack.value = "fox";
-  fire(pack, "change");
-  await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(writes.at(-1), { scope: "global", key: "dashboard.companion_pack", value: "fox" });
-  assert.deepEqual(notices, ["settings_failed"]);
-  assert.notEqual(pack.children, before, "the failed write refills the select from the live config");
+  // Opening the quick menu includes the Settings action, which closes the menu and routes to openSettings(character).
+  for (const fn of character.listeners.contextmenu || []) fn({ preventDefault() {} });
+  assert.equal(menu.hidden, false);
+  const settingsBtn = menu.children.find(c => c.tagName === "BUTTON" && c.textContent === "js.companion.settings");
+  assert.ok(settingsBtn, "quick menu includes a Settings button");
+  for (const fn of settingsBtn.listeners.click) fn({});
+  assert.equal(menu.hidden, true);
+  assert.deepEqual(openedBy, [gear, character]);
 
-  fire(find("ws-companion-settings-action")[0], "click");
-  assert.equal(resets, 1);
-  fire(doc, "keydown", { key: "Escape" });
-  assert.equal(modal.open, false, "Escape closes");
-  assert.equal(doc.activeElement, gear);
-  fire(gear, "click");
-  fire(gear, "click");
-  assert.equal(modal.open, false, "a second gear click closes");
-  fire(gear, "click");
-  fire(find("ws-companion-settings-close")[0], "click");
-  assert.equal(modal.open, false, "the close button closes");
+  stage.dispose();
 
-  sysopen.clear();
-  fire(gear, "click");
-  assert.ok(dialog.all().filter(c => c.tagName === "SELECT" || c.tagName === "INPUT").every(c => c.disabled), "read-only pages disable every control");
-  assert.equal(find("ws-companion-settings-muted").at(-1).textContent, "js.companion.settings_readonly");
+  // Without an openSettings callback, the gear button stays hidden.
+  body.children = [];
+  const stageNoSettings = C.mount({ pack: "default", preset: "" }, () => {});
+  const hiddenGear = body.children[0].all().find(c => c.className === "ws-companion-gear");
+  assert.equal(hiddenGear.hidden, true);
+  stageNoSettings.dispose();
 });
 
-test("companion settings modal re-places itself whenever it resizes, once per frame, only while open", () => {
-  const { doc, element, fire, Option, frames } = modalDom();
-  const fetch = async () => ({ ok: true, json: async () => ({ packs: [{ id: "default" }] }) });
-  const C = companion({ document: doc, Option, fetch, wsT: key => key, ...frames.globals,
-    window: { innerWidth: 1200, innerHeight: 800, addEventListener() {} } });
-  const node = element("div"), gear = element("button"), cancel = new AbortController();
-  C.settingsModal(node, gear, { signal: cancel.signal }, {
-    rows: () => [], config: () => ({}), persona: () => null, presets: () => ({ available: [] }),
-    anchor: () => ({ left: 100, right: 160, top: 400, bottom: 480 }),
-    resetSize() {}, applyPreset() {}, notice() {}, packsChanged() {}
-  });
-  const dialog = node.children[0];
-  const [observer] = frames.observers;
-  assert.equal(frames.observers.length, 1, "one observer for the dialog");
-  assert.deepEqual(observer.targets, [], "nothing is observed while closed");
-
-  fire(gear, "click");
-  assert.equal(dialog.style.top, "280px", "opening places the dialog at once");
-  assert.deepEqual(observer.targets, [dialog], "the open dialog is observed");
-  // Content that grows the dialog (a Sources preview) re-places it on the next frame.
-  dialog.offsetHeight = 520;
-  observer.callback([]);
-  observer.callback([]);
-  observer.callback([]);
-  assert.equal(dialog.style.top, "280px", "no placement before the frame");
-  assert.equal(frames.run(), 1, "resizes within a frame coalesce into one placement");
-  assert.equal(dialog.style.top, "6px", "the grown dialog moves up inside the viewport");
-  assert.equal(frames.run(), 0, "the placement queues nothing further");
-
-  // Closing disconnects and drops a pending placement; reopening observes again.
-  observer.callback([]);
-  fire(doc, "keydown", { key: "Escape" });
-  assert.deepEqual(observer.targets, [], "closing disconnects");
-  assert.equal(frames.queued.size, 0, "closing cancels the pending placement");
-  fire(gear, "click");
-  assert.deepEqual(observer.targets, [dialog]);
-
-  // Teardown disconnects too.
-  observer.callback([]);
-  cancel.abort();
-  assert.deepEqual(observer.targets, [], "teardown disconnects");
-  assert.equal(frames.queued.size, 0, "teardown cancels the pending placement");
-});
-
-// wardrobeModal opens the companion modal over a mutable config and a
-// hooks.wardrobe() fixture, and records every config write.
-function wardrobeModal({ config = {}, wardrobe, picks = null, rows, hook = true } = {}) {
-  const { doc, element, fire, Option, sysopen, frames } = modalDom();
-  const writes = [], notices = [];
-  const fetch = async (url, init) => {
-    if (url === "/api/companion/packs") return { ok: true, json: async () => ({ packs: [{ id: "default" }] }) };
-    writes.push(JSON.parse(init.body));
-    return { ok: true };
-  };
-  const C = companion({ document: doc, Option, fetch, wsT: key => key, ...frames.globals,
-    window: { innerWidth: 1200, innerHeight: 800, addEventListener() {} } });
-  const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
-  const all = rows || catalog.filter(row => row.surface === "companion-modal");
-  const node = element("div"), gear = element("button");
-  const state = { config, wardrobe, picks };
-  const hooks = {
-    rows: () => all, config: () => state.config, persona: () => null,
-    presets: () => ({ available: [] }),
-    anchor: () => ({ left: 100, right: 160, top: 400, bottom: 480 }),
-    resetSize() {}, applyPreset() {}, notice: key => notices.push(key)
-  };
-  if (hook) hooks.wardrobe = () => state.wardrobe;
-  hooks.picks = () => state.picks;
-  const modal = C.settingsModal(node, gear, { signal: new AbortController().signal }, hooks);
-  const dialog = node.children[0];
-  fire(gear, "click");
-  const row = key => dialog.all().filter(c => c.className === "ws-companion-settings-row")[all.findIndex(r => r.key === key)];
-  const subs = key => row(key).all().filter(c => c.className === "ws-companion-settings-sub")
-    .map(sub => ({ name: sub.children[0].textContent, input: sub.children[1] }));
-  const select = key => row(key).all().find(c => c.tagName === "SELECT");
-  const values = input => input.children.map(o => o.value);
-  const pick = async (input, value) => {
-    input.value = value;
-    fire(input, "change");
-    await new Promise(resolve => setImmediate(resolve));
-    return writes.at(-1);
-  };
-  return { C, modal, dialog, state, writes, notices, row, subs, select, values, pick, fire, sysopen, Option };
-}
-
-const wardrobeFixture = () => ({
-  outfits: ["gown", "street"], hairs: ["bob", "bun"], eyesets: ["round"],
-  slots: { headdress: ["cap"], tail: ["tail", "tail2"] }, channels: ["hair", "skin", "trim"]
-});
-
-test("companion wardrobe pickers list the active pack and each pick posts its global payload", async () => {
-  const m = wardrobeModal({
-    config: { pack: "default", preset: "", outfit: "", hair: "gone", eyes: "", attachments: "ears=ears tail=tail", palette: "skin=#AABBCC" },
-    wardrobe: wardrobeFixture(), picks: { palette: { skin: "#ddeeff", hair: "#112233" } }
-  });
-  const label = "js.companion.follow_preset";
-  assert.deepEqual(m.values(m.select("dashboard.companion_outfit")), ["", "gown", "street"]);
-  assert.equal(m.select("dashboard.companion_outfit").children[0].textContent, label, "follow preset comes first");
-  assert.equal(m.select("dashboard.companion_outfit").children[0].selected, true);
-  assert.deepEqual(m.values(m.select("dashboard.companion_hair")), ["", "bob", "bun", "gone"], "a stored ID the pack lacks stays visible");
-  assert.equal(m.select("dashboard.companion_hair").children[3].selected, true);
-  assert.deepEqual(m.values(m.select("dashboard.companion_eyes")), ["", "round"]);
-
-  const slots = m.subs("dashboard.companion_attachments");
-  assert.deepEqual(slots.map(s => s.name), ["headdress", "tail", "ears"], "pack slots, then the slots only the config names");
-  const [headdress, tail, ears] = slots.map(s => s.input);
-  assert.deepEqual(m.values(headdress), ["", "none", "cap"]);
-  assert.deepEqual(m.values(tail), ["", "none", "tail", "tail2"]);
-  assert.deepEqual(m.values(ears), ["", "none", "ears"]);
-  assert.deepEqual(tail.children.slice(0, 2).map(o => o.textContent), [label, "js.companion.attachment_none"]);
-  assert.deepEqual([headdress, tail, ears].map(s => s.children.find(o => o.selected).value), ["", "tail", "ears"]);
-
-  const channels = m.subs("dashboard.companion_palette");
-  assert.deepEqual(channels.map(c => c.name), ["hair", "skin", "trim"]);
-  assert.deepEqual(channels.map(c => [c.input.type, c.input.value]),
-    [["color", "#112233"], ["color", "#ddeeff"], ["color", "#000000"]], "effective pick, else the config pair, else black");
-
-  const key = name => "dashboard.companion_" + name;
-  assert.deepEqual(await m.pick(m.select(key("outfit")), "gown"), { scope: "global", key: key("outfit"), value: "gown" });
-  assert.deepEqual(await m.pick(m.select(key("outfit")), ""), { scope: "global", key: key("outfit"), value: "" }, "follow preset writes empty");
-  assert.deepEqual(await m.pick(m.select(key("eyes")), "round"), { scope: "global", key: key("eyes"), value: "round" });
-  assert.deepEqual(await m.pick(headdress, "cap"), { scope: "global", key: key("attachments"), value: "ears=ears headdress=cap tail=tail" },
-    "a slot pick composes the whole string in sorted order");
-  assert.deepEqual(await m.pick(tail, "none"), { scope: "global", key: key("attachments"), value: "ears=ears tail=none" });
-  assert.deepEqual(await m.pick(tail, ""), { scope: "global", key: key("attachments"), value: "ears=ears" }, "follow preset drops the slot");
-  assert.deepEqual(await m.pick(ears, ""), { scope: "global", key: key("attachments"), value: "tail=tail" });
-  assert.deepEqual(await m.pick(channels[0].input, "#AABB11"), { scope: "global", key: key("palette"), value: "hair=#aabb11 skin=#aabbcc" },
-    "colors write lowercase");
-  const before = m.writes.length;
-  await m.pick(channels[2].input, "red");
-  assert.equal(m.writes.length, before, "a non-#rrggbb value is never written");
-
-  const reset = m.row(key("palette")).all().find(c => c.tagName === "BUTTON");
-  assert.equal(reset.textContent, "js.companion.reset_colors");
-  m.fire(reset, "click");
-  await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(m.writes.at(-1), { scope: "global", key: key("palette"), value: "" });
-
-  // With the last slot cleared the config is empty, which writes "".
-  m.state.config = { ...m.state.config, attachments: "ears=ears" };
-  assert.deepEqual(await m.pick(m.subs(key("attachments")).find(s => s.name === "ears").input, ""),
-    { scope: "global", key: key("attachments"), value: "" });
-});
-
-test("companion wardrobe pickers write at most 16 pairs, keep the changed one and match the server patterns", async () => {
-  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "../../../agents-plugin/dashboard-config-manifest.json"), "utf8"));
-  const pattern = key => new RegExp(manifest.keys.find(k => k.key === key).pattern);
-  const names = prefix => Array.from({ length: 20 }, (_, i) => prefix + String(i).padStart(2, "0"));
-  const first16 = list => list.slice(0, 16);
-  const m = wardrobeModal({
-    config: {
-      attachments: first16(names("s")).map(n => n + "=a").join(" "),
-      palette: first16(names("c")).map(n => n + "=#000000").join(" ")
-    },
-    wardrobe: { outfits: [], hairs: [], eyesets: [], slots: Object.fromEntries(names("s").map(n => [n, ["a", "b"]])), channels: names("c") }
-  });
-  const slots = m.subs("dashboard.companion_attachments"), channels = m.subs("dashboard.companion_palette");
-  assert.equal(slots.length, 20, "every slot is listed");
-  assert.equal(channels.length, 20, "every channel is listed");
-
-  const wrote = await m.pick(slots[19].input, "b");
-  assert.equal(wrote.key, "dashboard.companion_attachments");
-  assert.match(wrote.value, pattern("dashboard.companion_attachments"));
-  const pairs = wrote.value.split(" ");
-  assert.equal(pairs.length, 16);
-  assert.deepEqual(pairs, [...first16(names("s")).slice(0, 15).map(n => n + "=a"), "s19=b"], "the changed slot stays, the last sorted other drops");
-
-  const palette = await m.pick(channels[19].input, "#FFAA00");
-  assert.match(palette.value, pattern("dashboard.companion_palette"));
-  assert.equal(palette.value.split(" ").length, 16);
-  assert.ok(palette.value.endsWith(" c19=#ffaa00"));
-  assert.ok(!palette.value.includes("c15="));
-
-  // Changing a slot the config already has never grows the string.
-  const same = await m.pick(slots[0].input, "b");
-  assert.equal(same.value.split(" ").length, 16);
-  assert.ok(same.value.startsWith("s00=b s01=a"));
-});
-
-test("companion wardrobe pickers render pack strings as text and read-only pages disable them", async () => {
-  const hostile = "<img src=x onerror=alert(1)>";
-  const m = wardrobeModal({
-    config: {}, wardrobe: { outfits: [hostile, "a-b_c"], hairs: [], eyesets: [], slots: { [hostile]: [hostile, "x-1"] }, channels: [hostile] }
-  });
-  const everything = m.dialog.all();
-  assert.ok(everything.every(c => c.innerHTML === undefined), "no element takes innerHTML");
-  assert.deepEqual(m.select("dashboard.companion_outfit").children.map(o => o.textContent), ["js.companion.follow_preset", hostile, "a-b_c"]);
-  assert.equal(m.subs("dashboard.companion_attachments")[0].name, hostile);
-  assert.equal(m.subs("dashboard.companion_palette")[0].name, hostile);
-  assert.deepEqual(m.subs("dashboard.companion_attachments")[0].input.children.map(o => o.textContent),
-    ["js.companion.follow_preset", "js.companion.attachment_none", hostile, "x-1"]);
-
-  m.modal.hide();
-  m.sysopen.clear();
-  m.modal.show();
-  const wardrobeRows = ["outfit", "hair", "eyes", "attachments", "palette"].map(name => m.row("dashboard.companion_" + name));
-  const controls = wardrobeRows.flatMap(r => r.all().filter(c => ["SELECT", "INPUT", "BUTTON"].includes(c.tagName)));
-  assert.ok(controls.length >= 6);
-  assert.ok(controls.every(c => c.disabled), "read-only pages disable every wardrobe control");
-  const writesBefore = m.writes.length;
-  await m.pick(m.select("dashboard.companion_outfit"), "a-b_c");
-  assert.equal(m.writes.length, writesBefore, "and a forced change event writes nothing");
-});
-
-test("companion wardrobe rows stay usable without pack options and follow config and pack changes", async () => {
-  const m = wardrobeModal({ config: { outfit: "kept", attachments: "tail=tail", palette: "skin=#010203" } });
-  assert.deepEqual(m.values(m.select("dashboard.companion_outfit")), ["", "kept"]);
-  assert.deepEqual(m.values(m.select("dashboard.companion_hair")), [""]);
-  assert.deepEqual(m.subs("dashboard.companion_attachments").map(s => s.name), ["tail"]);
-  assert.deepEqual(m.subs("dashboard.companion_palette").map(s => [s.name, s.input.value]), [["skin", "#010203"]]);
-
-  const empty = wardrobeModal({ config: {}, hook: false });
-  assert.deepEqual(empty.subs("dashboard.companion_palette"), [], "no channels shows only the reset");
-  assert.ok(empty.row("dashboard.companion_palette").all().some(c => c.tagName === "BUTTON"));
-  assert.deepEqual(empty.subs("dashboard.companion_attachments"), []);
-
-  // A live config push refreshes the pickers; a pack change redraws them.
-  m.state.config = { outfit: "gown", attachments: "ears=ears", palette: "skin=#0a0b0c hair=#ffffff" };
-  m.modal.refresh(null);
-  assert.equal(m.select("dashboard.companion_outfit").children.find(o => o.selected).value, "gown");
-  assert.deepEqual(m.subs("dashboard.companion_attachments").map(s => s.name), ["ears"]);
-  assert.deepEqual(m.subs("dashboard.companion_palette").map(s => [s.name, s.input.value]), [["hair", "#ffffff"], ["skin", "#0a0b0c"]]);
-  m.state.wardrobe = wardrobeFixture();
-  m.modal.rebuild();
-  assert.deepEqual(m.values(m.select("dashboard.companion_outfit")), ["", "gown", "street"]);
-  assert.deepEqual(m.subs("dashboard.companion_attachments").map(s => s.name), ["headdress", "tail", "ears"]);
-});
-
-test("companion live config broadcast re-dresses the mounted stage and refreshes the open modal without a reload", async () => {
+test("companion live config broadcast re-dresses the mounted stage without a reload", async () => {
   let raf = null, now = 0;
-  const packFetches = [], listeners = new Map();
+  const packFetches = [], openedBy = [];
   const makeElement = tag => {
     const el = {
       tagName: tag.toUpperCase(), className: "", id: "", children: [], dataset: {}, attrs: {}, listeners: {}, value: "", disabled: false,
@@ -1248,8 +992,7 @@ test("companion live config broadcast re-dresses the mounted stage and refreshes
       replaceChildren(...items) { this.children = []; this.append(...items); },
       all() { return this.children.flatMap(child => [child, ...(child.all ? child.all() : [])]); },
       contains(other) { return other === this || this.all().includes(other); },
-      querySelector() { return this.all().find(c => ["SELECT", "INPUT", "BUTTON"].includes(c.tagName) && !c.disabled) || null; },
-      show() { this.open = true; }, close() { this.open = false; }
+      querySelector() { return this.all().find(c => ["SELECT", "INPUT", "BUTTON"].includes(c.tagName) && !c.disabled) || null; }
     };
     if (tag === "canvas") {
       el.width = 0; el.height = 0; el.drawn = [];
@@ -1273,9 +1016,8 @@ test("companion live config broadcast re-dresses the mounted stage and refreshes
     body, hidden: false, activeElement: null, getElementById: () => null,
     createElement: makeElement, createElementNS: (ns, tag) => makeElement(tag), addEventListener() {}
   };
-  const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
   const win = {
-    WsCompanion: {}, wsCompanionModalRows: catalog.filter(row => row.surface === "companion-modal"),
+    WsCompanion: {},
     WsShell: { companionContext: routeKind => ({ routeKind: routeKind || "session", activity: "idle", landmarks: {}, events: [] }) },
     addEventListener() {}, innerWidth: 1200, innerHeight: 800, devicePixelRatio: 1
   };
@@ -1301,14 +1043,14 @@ test("companion live config broadcast re-dresses the mounted stage and refreshes
     },
     createImageBitmap: async url => ({ id: path.basename(url.split("?")[0]), width: 128, height: 128, close() {} })
   });
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "sources", "settings", "vrm-colead", "vrm", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-colead", "vrm", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   const C = win.WsCompanion;
   C.quickMenu = () => ({ rebuild() {}, measure() {}, place() {}, close() {} });
   const config = { pack: "default", preset: "", outfit: "", hair: "", eyes: "", attachments: "", palette: "" };
 
-  const stage = C.mount(config, () => {});
+  const stage = C.mount(config, () => {}, opener => openedBy.push(opener));
   await new Promise(resolve => setImmediate(resolve));
   const node = body.children[0], hit = node.children[0];
   const step = () => { const fn = raf; raf = null; assert.ok(fn, "expected scheduled animation frame"); now += 16; fn(now); };
@@ -1322,17 +1064,11 @@ test("companion live config broadcast re-dresses the mounted stage and refreshes
 
   const gear = hit.children.find(c => c.className === "ws-companion-gear");
   for (const fn of gear.listeners.click) fn({});
-  const dialog = node.children.find(c => c.tagName === "DIALOG");
-  assert.equal(dialog.open, true);
-  const outfitSelect = () => dialog.all().filter(c => c.className === "ws-companion-settings-row")
-    [win.wsCompanionModalRows.findIndex(r => r.key === "dashboard.companion_outfit")].all().find(c => c.tagName === "SELECT");
-  assert.deepEqual(outfitSelect().children.map(o => o.value), ["", "gown", "street"], "the modal lists the loaded pack's outfits");
-  assert.equal(outfitSelect().children.find(o => o.selected).value, "");
+  assert.deepEqual(openedBy, [gear], "gear routes to Dashboard Settings");
 
   stage.apply({ ...config, outfit: "gown" });
   assert.deepEqual(drawn().filter(f => /-stand\.png$/.test(f)), ["gown-stand.png"], "the next frame draws the new outfit with no stale stack");
   assert.equal(packFetches.length, 1, "no pack is fetched again");
-  assert.equal(outfitSelect().children.find(o => o.selected).value, "gown", "the open modal shows the broadcast value");
 
   stage.apply({ ...config, outfit: "gown", palette: "skin=#112233" });
   assert.equal(packFetches.length, 1, "a palette broadcast does not reload the pack either");

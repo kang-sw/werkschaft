@@ -2,6 +2,15 @@
   "use strict";
 
   var MAX_CUSTOM_SOURCES = 16;
+  var MAX_WARDROBE_PAIRS = 16;
+  var BUILTIN_PALETTE_DEFAULTS = {
+    eye: "#dfa040",
+    hair: "#ec8468",
+    outfitAccent: "#e6aa34",
+    outfitPrimary: "#f2e5d4",
+    skin: "#f4cdb4"
+  };
+  var HEX_COLOR_RE = /^#[0-9a-f]{6}$/i;
   var CORE_KEYS = [
     "dashboard.companion_enabled",
     "dashboard.companion_director",
@@ -65,12 +74,35 @@
     return map;
   }
 
-  function formatPairs(map) {
-    return Array.from(map.entries())
+  function formatPairs(map, keepKey) {
+    var entries = Array.from(map.entries())
       .filter(function (pair) { return pair[0] && pair[1]; })
-      .sort(function (a, b) { return a[0].localeCompare(b[0]); })
-      .map(function (pair) { return pair[0] + "=" + pair[1]; })
-      .join(" ");
+      .sort(function (a, b) { return a[0].localeCompare(b[0]); });
+    if (entries.length > MAX_WARDROBE_PAIRS) {
+      var kept = entries.slice(0, MAX_WARDROBE_PAIRS);
+      if (keepKey && !kept.some(function (pair) { return pair[0] === keepKey; })) {
+        var target = entries.find(function (pair) { return pair[0] === keepKey; });
+        if (target) kept[kept.length - 1] = target;
+        kept.sort(function (a, b) { return a[0].localeCompare(b[0]); });
+      }
+      entries = kept;
+    }
+    return entries.map(function (pair) { return pair[0] + "=" + pair[1]; }).join(" ");
+  }
+
+  function isBuiltinPack(pack) {
+    return !!(pack && (pack.builtin === true || pack.source === "builtin" || pack.source === "embedded"));
+  }
+
+  function packVersion(pack) {
+    if (!pack) return "";
+    return pack.version || (pack.origin && pack.origin.version) || "";
+  }
+
+  function ownerLabel(owner) {
+    if (!owner) return "";
+    if (typeof owner === "string") return owner;
+    return owner.name || "";
   }
 
   function parseHttpsOrigin(raw) {
@@ -123,23 +155,79 @@
   }
 
   function wardrobeOptions(manifest) {
-    var layers = manifest && manifest.layers && typeof manifest.layers === "object" ? manifest.layers : {};
-    var keys = function (obj) { return obj && typeof obj === "object" ? Object.keys(obj) : []; };
+    var m = manifest && typeof manifest === "object" ? manifest : {};
+    var sortedKeys = function (obj) {
+      return obj && typeof obj === "object" && !Array.isArray(obj) ? Object.keys(obj).sort() : [];
+    };
     var slots = {};
-    var attachments = layers.attachments && typeof layers.attachments === "object" ? layers.attachments : {};
-    for (var slot of Object.keys(attachments)) {
-      var ids = keys(attachments[slot]);
-      if (ids.length) slots[slot] = ids;
+    var attachments = m.attachments && typeof m.attachments === "object" ? m.attachments : {};
+    for (var attId of sortedKeys(attachments)) {
+      var att = attachments[attId];
+      if (!att || typeof att !== "object" || attId === "none") continue;
+      if (typeof att.slot === "string" && att.slot) {
+        if (!Object.prototype.hasOwnProperty.call(slots, att.slot)) slots[att.slot] = [];
+        slots[att.slot].push(attId);
+      }
     }
-    var palette = manifest && manifest.palette && typeof manifest.palette === "object" ? manifest.palette : {};
+    // Collect built-in channels plus any pack/preset/outfit/layer-fill palette channels.
+    var paletteDefaults = Object.assign({}, BUILTIN_PALETTE_DEFAULTS);
+    var channelSet = new Set(Object.keys(BUILTIN_PALETTE_DEFAULTS));
+    function collectPalette(obj) {
+      if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
+      for (var k of Object.keys(obj)) {
+        channelSet.add(k);
+        if (typeof obj[k] === "string" && HEX_COLOR_RE.test(obj[k])) paletteDefaults[k] = obj[k].toLowerCase();
+      }
+    }
+    function collectLayer(item) {
+      if (!item || typeof item !== "object") return;
+      collectPalette(item.fills);
+      if (Array.isArray(item.frames)) {
+        for (var f of item.frames) if (f && typeof f === "object") collectPalette(f.fills);
+      }
+    }
+    function collectLayers(list) {
+      if (Array.isArray(list)) for (var item of list) collectLayer(item);
+    }
+    collectPalette(m.palette);
+    for (var preset of Object.values(m.presets && typeof m.presets === "object" ? m.presets : {})) {
+      if (preset && typeof preset === "object") collectPalette(preset.palette);
+    }
+    for (var outfit of Object.values(m.outfits && typeof m.outfits === "object" ? m.outfits : {})) {
+      if (!outfit || typeof outfit !== "object") continue;
+      collectPalette(outfit.palette);
+      for (var sec of ["poses", "gestures"]) {
+        for (var col of Object.values(outfit[sec] && typeof outfit[sec] === "object" ? outfit[sec] : {})) {
+          if (col) collectLayers(col.layers);
+        }
+      }
+    }
+    for (var attObj of Object.values(attachments)) {
+      if (!attObj || typeof attObj !== "object") continue;
+      collectLayers(attObj.layers);
+      for (var acol of Object.values(attObj.columns && typeof attObj.columns === "object" ? attObj.columns : {})) {
+        if (acol) collectLayers(acol.layers);
+      }
+    }
+    for (var topSec of ["poses", "gestures"]) {
+      for (var topEntry of Object.values(m[topSec] && typeof m[topSec] === "object" ? m[topSec] : {})) {
+        if (topEntry) collectLayers(topEntry.layers);
+      }
+    }
+    for (var hair of Object.values(m.hairs && typeof m.hairs === "object" ? m.hairs : {})) {
+      if (hair && typeof hair === "object") {
+        for (var part of ["back", "front", "acc"]) collectLayer(hair[part]);
+      }
+    }
+    if (m.head && m.head.egg) collectLayer(m.head.egg);
     return {
-      presets: keys(manifest && manifest.presets),
-      outfit: keys(layers.outfit),
-      hair: keys(layers.hair),
-      eyes: keys(layers.eyes),
+      presets: sortedKeys(m.presets),
+      outfit: sortedKeys(m.outfits),
+      hair: sortedKeys(m.hairs),
+      eyes: sortedKeys(m.eyesets),
       attachments: slots,
-      palette: Object.keys(palette),
-      paletteDefaults: palette
+      palette: Array.from(channelSet).sort(),
+      paletteDefaults: paletteDefaults
     };
   }
 
@@ -184,24 +272,26 @@
   function resolveActivePack(ctx) {
     var rawPack = String(effectiveValue(ctx, "dashboard.companion_pack") || "auto").trim() || "auto";
     var packs = state.catalog && Array.isArray(state.catalog.packs) ? state.catalog.packs : [];
+    var ra = state.catalog && state.catalog.resolvedAuto;
+    var autoId = typeof ra === "string" ? ra : (ra && ra.packId) || "";
     var targetId = rawPack === "auto"
-      ? (state.catalog && state.catalog.resolvedAuto) || (packs[0] && packs[0].id) || "default"
+      ? autoId || (packs[0] && packs[0].id) || "default"
       : rawPack;
     var active = packs.find(function (p) { return p.id === targetId; }) ||
       packs.find(function (p) { return p.id === "default"; }) ||
       packs[0] ||
-      { id: targetId, name: targetId, renderer: "2d", builtin: targetId === "default", rev: "" };
+      { id: targetId, name: targetId, renderer: "2d", source: targetId === "default" ? "builtin" : "local", rev: "" };
     return { configured: rawPack, isAuto: rawPack === "auto", active: active, packs: packs };
   }
 
   function packOriginText(tr, pack) {
-    if (pack.builtin) return tr("js.settings.companion.packs.origin_builtin");
+    if (isBuiltinPack(pack)) return tr("js.settings.companion.packs.origin_builtin");
     var origin = pack.origin;
-    if (!origin) return pack.id;
+    if (!origin) return tr("js.settings.companion.badge.local");
     if (origin.official) return tr("js.settings.companion.packs.origin_official");
     if (origin.kind === "local") return tr("js.settings.companion.packs.origin_local", origin.source || pack.id);
     if (origin.source) return tr("js.settings.companion.packs.origin_remote", origin.source);
-    return pack.id;
+    return tr("js.settings.companion.badge.local");
   }
 
   function groupMatchesFilter(ctx, keys, extraTerms) {
@@ -224,7 +314,7 @@
   }
 
   function ensureCatalog(rerender) {
-    if (state.catalog || state.catalogLoading) return;
+    if (state.catalog || state.catalogLoading || state.catalogError) return;
     state.catalogLoading = true;
     state.catalogError = "";
     fetchJson("/api/companion/packs").then(function (res) {
@@ -251,10 +341,12 @@
     var q = pack.rev ? "?rev=" + encodeURIComponent(pack.rev) : "";
     fetchJson("/api/companion/packs/" + encodeURIComponent(pack.id) + "/pack.json" + q).then(function (res) {
       state.manifestInFlight.delete(key);
-      if (res.ok && res.data) state.manifests.set(key, res.data);
+      state.manifests.set(key, res.ok && res.data ? res.data : {});
       rerender();
     }).catch(function () {
       state.manifestInFlight.delete(key);
+      state.manifests.set(key, {});
+      rerender();
     });
     return null;
   }
@@ -284,7 +376,8 @@
         .join(" ").toLocaleLowerCase().includes(ctx.searchTerm));
     if (!visibleKeys.length && !showStageReset) return null;
 
-    var enabledVal = effectiveValue(ctx, "dashboard.companion_enabled") === true;
+    var rawEnabled = effectiveValue(ctx, "dashboard.companion_enabled");
+    var enabledVal = rawEnabled === true || rawEnabled === "true";
     var statusPill = ctx.el("span", "cs-pill " + (enabledVal ? "ok" : "warn"),
       ctx.tr(enabledVal ? "js.settings.companion.status.on" : "js.settings.companion.status.off"));
     statusPill.dataset.companionStatusPill = enabledVal ? "on" : "off";
@@ -362,7 +455,7 @@
       packProv = ctx.renderKeyProvenance(packEntry, packSpec);
     }
 
-    var group = makeGroup(ctx, "avatar", "i-star",
+    var group = makeGroup(ctx, "avatar", "i-person",
       "js.settings.companion.group.avatar.title",
       "js.settings.companion.group.avatar.sub",
       packProv ? packProv.node : null);
@@ -386,8 +479,9 @@
     if (resolved.isAuto) {
       titleRow.append(ctx.el("span", "cs-pill ok", ctx.tr("js.settings.companion.badge.auto")));
     }
-    if (active.version) {
-      titleRow.append(ctx.el("span", "cs-pill", "v" + active.version));
+    var activeVer = packVersion(active);
+    if (activeVer) {
+      titleRow.append(ctx.el("span", "cs-pill", "v" + activeVer));
     }
 
     var info = ctx.append(ctx.el("div", "cs-avatar-info"), titleRow);
@@ -516,7 +610,7 @@
     pickBtn.dataset.companionVrmChoose = "1";
 
     var dropMain = ctx.append(ctx.el("div", "cs-vrm-drop-main"),
-      ctx.append(ctx.el("div", "cs-vrm-drop-icon"), ctx.svgIcon("i-star")),
+      ctx.append(ctx.el("div", "cs-vrm-drop-icon"), ctx.svgIcon("i-archive-restore")),
       ctx.append(ctx.el("div", "cs-vrm-drop-copy"),
         ctx.el("strong", "", ctx.tr("js.settings.companion.vrm.drop_title")),
         ctx.el("p", "", ctx.tr("js.settings.companion.vrm.drop_desc"))),
@@ -570,6 +664,7 @@
   function renderInstalledPackRow(ctx, pack, active, packEntry, canWritePackKey, canManagePacks) {
     var isActive = active && active.id === pack.id;
     var isVrm = pack.renderer === "vrm";
+    var builtin = isBuiltinPack(pack);
     var li = ctx.el("li", "cs-pack-row" + (isActive ? " is-active" : ""));
     li.dataset.companionPackRow = pack.id;
 
@@ -578,12 +673,13 @@
       ctx.el("span", "cs-pill " + (isVrm ? "vrm" : ""),
         ctx.tr(isVrm ? "js.settings.companion.badge.vrm" : "js.settings.companion.badge.2d")));
     if (isActive) title.append(ctx.el("span", "cs-pill ok", ctx.tr("js.settings.companion.badge.active")));
-    if (pack.builtin) title.append(ctx.el("span", "cs-pill", ctx.tr("js.settings.companion.badge.builtin")));
+    if (builtin) title.append(ctx.el("span", "cs-pill", ctx.tr("js.settings.companion.badge.builtin")));
     else if (pack.origin && pack.origin.official) title.append(ctx.el("span", "cs-pill official", ctx.tr("js.settings.companion.badge.official")));
     else if (pack.origin && pack.origin.kind === "local") title.append(ctx.el("span", "cs-pill", ctx.tr("js.settings.companion.badge.local")));
 
     var metaParts = [pack.id];
-    if (pack.version) metaParts.push("v" + pack.version);
+    var ver = packVersion(pack);
+    if (ver) metaParts.push("v" + ver);
     metaParts.push(packOriginText(ctx.tr, pack));
     var main = ctx.append(ctx.el("div", "cs-pack-main"), title, ctx.el("span", "cs-pack-meta", metaParts.join(" · ")));
 
@@ -603,7 +699,7 @@
     actions.append(applyBtn);
 
     // Update check / update for remote or official non-builtin packs
-    var originSource = !pack.builtin && pack.origin && (pack.origin.official ? "official" : (pack.origin.kind !== "local" ? pack.origin.source : ""));
+    var originSource = !builtin && pack.origin && (pack.origin.official ? "official" : (pack.origin.kind !== "local" ? pack.origin.source : ""));
     if (originSource && canManagePacks) {
       var up = state.updateStatus.get(pack.id);
       if (up && up.state === "update") {
@@ -628,7 +724,7 @@
     }
 
     // Inline 2-step delete (no window.confirm) for non-builtin packs
-    if (!pack.builtin && canManagePacks) {
+    if (!builtin && canManagePacks) {
       if (state.pendingDeletePack === pack.id) {
         var confirmBox = ctx.el("span", "cs-confirm-inline");
         confirmBox.dataset.companionPackConfirm = pack.id;
@@ -751,6 +847,9 @@
       if (res.ok && res.data) {
         if (res.data.catalog && Array.isArray(res.data.catalog.packs)) {
           state.catalog = res.data.catalog;
+        } else {
+          var fresh = await fetchJson("/api/companion/packs");
+          if (fresh.ok && fresh.data && Array.isArray(fresh.data.packs)) state.catalog = fresh.data;
         }
         if (res.data.listing) {
           state.sourceListings.set(source, {
@@ -761,9 +860,15 @@
             installingId: ""
           });
         }
-        state.updateStatus.delete(packId);
-        state.sourceFeedback = { kind: "ok", text: ctx.tr("js.settings.companion.sources.install_done", packId) };
-        ctx.notifyPacksChanged();
+        var failed = ((res.data.listing && res.data.listing.packs) || []).filter(function (p) { return p.error && p.error.message; });
+        if (failed.length) {
+          var detail = failed.map(function (p) { return p.id + ": " + p.error.message; }).join("; ");
+          state.sourceFeedback = { kind: "err", text: detail };
+        } else {
+          state.updateStatus.delete(packId);
+          state.sourceFeedback = { kind: "ok", text: ctx.tr("js.settings.companion.sources.install_done", packId) };
+          ctx.notifyPacksChanged();
+        }
       } else {
         state.sourceListings.set(source, Object.assign({}, prev, { installingId: "" }));
         state.sourceFeedback = { kind: "err", text: extractErrorMessage(res, ctx.tr("js.settings.error.config_error")) };
@@ -788,7 +893,7 @@
     var customSources = splitTokens(effectiveValue(ctx, "dashboard.companion_sources"));
 
     var prov = sourcesEntry && sourcesSpec ? ctx.renderKeyProvenance(sourcesEntry, sourcesSpec) : null;
-    var group = makeGroup(ctx, "sources", "i-book",
+    var group = makeGroup(ctx, "sources", "i-fetch",
       "js.settings.companion.group.sources.title",
       "js.settings.companion.group.sources.sub",
       prov ? prov.node : null);
@@ -953,7 +1058,8 @@
       if (entry.listing) {
         var metaParts = [];
         if (entry.listing.name) metaParts.push(entry.listing.name);
-        if (entry.listing.owner) metaParts.push(entry.listing.owner);
+        var owner = ownerLabel(entry.listing.owner);
+        if (owner) metaParts.push(owner);
         if (entry.listing.commit) metaParts.push(ctx.tr("js.settings.companion.sources.commit", entry.listing.commit.slice(0, 10)));
         if (metaParts.length) {
           cat.append(ctx.el("div", "cs-catalog-meta", metaParts.join(" · ")));
@@ -978,7 +1084,7 @@
   function renderCatalogCard(ctx, source, item, busy, canInstall) {
     var card = ctx.el("div", "cs-catalog-card");
     card.dataset.companionCatalogPack = item.id;
-    var isVrm = item.renderer === "vrm";
+    var isVrm = item.renderer === "vrm" || item.format === "vrm";
     var head = ctx.append(ctx.el("div", "cs-catalog-card-head"),
       ctx.el("strong", "", item.name || item.id),
       ctx.el("span", "cs-pill " + (isVrm ? "vrm" : ""),
@@ -998,14 +1104,17 @@
       foot.append(ctx.el("span", "cs-pill", ctx.tr("js.settings.companion.badge.builtin")));
     } else if (status === "installed") {
       foot.append(ctx.el("span", "cs-pill ok", ctx.tr("js.settings.companion.sources.installed")));
+    } else if (status === "manual") {
+      foot.append(ctx.el("span", "cs-pill", ctx.tr("js.settings.companion.badge.local")));
     } else if (!item.error) {
+      var isReplace = status === "replace" || status === "other";
       var labelKey = status === "update"
         ? "js.settings.companion.packs.update"
-        : status === "replace"
+        : isReplace
           ? "js.settings.companion.sources.replace"
           : "js.settings.companion.sources.install";
       var btn = ctx.button(
-        "cs-btn sm " + (status === "replace" ? "" : "pri"),
+        "cs-btn sm " + (isReplace ? "" : "pri"),
         busy ? ctx.tr("js.settings.companion.sources.installing") : ctx.tr(labelKey),
         function () { installFromSource(ctx, source, item.id); }
       );
@@ -1050,7 +1159,7 @@
             ctx.notifyPacksChanged();
           });
         });
-        swBtn.dataset.companionSwitch2d = "1";
+        swBtn.setAttribute("data-companion-switch-2d", "1");
         note.append(swBtn);
       }
       body.append(note);
@@ -1108,11 +1217,14 @@
     // Attachments (slot=id pairs)
     var attEntry = ctx.byKey.get("dashboard.companion_attachments");
     var attSpec = ctx.specFor("dashboard.companion_attachments");
+    var attMap = parsePairs(effectiveValue(ctx, "dashboard.companion_attachments"));
     var slotNames = Object.keys(opts.attachments);
+    for (var cfgSlot of attMap.keys()) {
+      if (!slotNames.includes(cfgSlot)) slotNames.push(cfgSlot);
+    }
     if (attEntry && attSpec && ctx.matches(attEntry, attSpec) && slotNames.length) {
       added++;
       var attEditable = ctx.editable(attEntry, attSpec);
-      var attMap = parsePairs(effectiveValue(ctx, "dashboard.companion_attachments"));
       var attField = ctx.el("div", "cs-wardrobe-field full");
       attField.dataset.configKey = "dashboard.companion_attachments";
       var attProv = ctx.renderKeyProvenance(attEntry, attSpec);
@@ -1129,7 +1241,9 @@
           var cur = attMap.get(slotName) || "";
           sel.add(new Option(ctx.tr("js.settings.companion.wardrobe.follow_preset"), "", false, cur === ""));
           sel.add(new Option(ctx.tr("js.settings.companion.wardrobe.attachment_none"), "none", false, cur === "none"));
-          for (var optId of opts.attachments[slotName]) {
+          var choices = (opts.attachments[slotName] || []).slice();
+          if (cur && cur !== "none" && !choices.includes(cur)) choices.push(cur);
+          for (var optId of choices) {
             sel.add(new Option(optId, optId, false, cur === optId));
           }
           sel.addEventListener("change", function () {
@@ -1137,7 +1251,7 @@
             var next = new Map(attMap);
             if (sel.value) next.set(slotName, sel.value);
             else next.delete(slotName);
-            var serialized = formatPairs(next);
+            var serialized = formatPairs(next, slotName);
             ctx.submitConfig(attEntry, serialized ? "set" : "reset", serialized);
           });
           item.append(sel);
@@ -1152,10 +1266,14 @@
     // Palette swatches + Reset colors
     var palEntry = ctx.byKey.get("dashboard.companion_palette");
     var palSpec = ctx.specFor("dashboard.companion_palette");
-    if (palEntry && palSpec && ctx.matches(palEntry, palSpec) && opts.palette.length) {
+    var palMap = parsePairs(effectiveValue(ctx, "dashboard.companion_palette"));
+    var palChannels = opts.palette.slice();
+    for (var cfgCh of palMap.keys()) {
+      if (!palChannels.includes(cfgCh)) palChannels.push(cfgCh);
+    }
+    if (palEntry && palSpec && ctx.matches(palEntry, palSpec) && palChannels.length) {
       added++;
       var palEditable = ctx.editable(palEntry, palSpec);
-      var palMap = parsePairs(effectiveValue(ctx, "dashboard.companion_palette"));
       var palField = ctx.el("div", "cs-wardrobe-field full");
       palField.dataset.configKey = "dashboard.companion_palette";
       var palProv = ctx.renderKeyProvenance(palEntry, palSpec);
@@ -1172,10 +1290,10 @@
         ctx.el("span", "cs-wlbl", ctx.tr(palSpec.label)), palRight));
 
       var bar = ctx.el("div", "cs-palette-bar");
-      for (var channel of opts.palette) {
+      for (var channel of palChannels) {
         (function (ch) {
           var rawHex = palMap.get(ch) || opts.paletteDefaults[ch] || "#888888";
-          var hex = /^#[0-9a-f]{6}$/i.test(rawHex) ? rawHex : "#888888";
+          var hex = HEX_COLOR_RE.test(rawHex) ? rawHex.toLowerCase() : "#888888";
           var chip = ctx.el("label", "cs-swatch-chip");
           var picker = ctx.el("input");
           picker.type = "color";
@@ -1185,10 +1303,12 @@
           var hexText = ctx.el("span", "cs-swatch-hex", hex);
           picker.addEventListener("change", function () {
             if (!palEditable) return;
+            var picked = String(picker.value || "").toLowerCase();
+            if (!HEX_COLOR_RE.test(picked)) return;
             var next = new Map(palMap);
-            next.set(ch, picker.value);
-            hexText.textContent = picker.value;
-            ctx.submitConfig(palEntry, "set", formatPairs(next));
+            next.set(ch, picked);
+            hexText.textContent = picked;
+            ctx.submitConfig(palEntry, "set", formatPairs(next, ch));
           });
           chip.append(picker, ctx.append(ctx.el("span", "cs-swatch-meta"),
             ctx.el("span", "cs-swatch-name", ch), hexText));
@@ -1302,12 +1422,18 @@
 
     if (state.zipFeedback) {
       var zfb = ctx.el("div", "cs-feedback " + state.zipFeedback.kind, state.zipFeedback.text);
-      zfb.setAttribute("role", "status");
+      zfb.setAttribute("role", state.zipFeedback.kind === "err" ? "alert" : "status");
       zipCard.append(zfb);
     }
 
     if (state.zipListing && Array.isArray(state.zipListing.packs) && state.zipListing.packs.length) {
       var preview = ctx.el("div", "cs-zip-preview");
+      var zipMetaParts = [];
+      if (state.zipListing.name) zipMetaParts.push(state.zipListing.name);
+      if (state.zipListing.source) zipMetaParts.push(state.zipListing.source);
+      if (zipMetaParts.length) {
+        preview.append(ctx.el("div", "cs-catalog-meta", zipMetaParts.join(" · ")));
+      }
       var zlist = ctx.el("ul", "cs-zip-list");
       for (var zp of state.zipListing.packs) {
         (function (packItem) {
@@ -1326,7 +1452,7 @@
           row.append(lbl);
           if (packItem.error && packItem.error.message) {
             row.append(ctx.el("span", "cs-pill fail", packItem.error.message));
-          } else if (packItem.renderer === "vrm") {
+          } else if (packItem.renderer === "vrm" || packItem.format === "vrm") {
             row.append(ctx.el("span", "cs-pill vrm", ctx.tr("js.settings.companion.badge.vrm")));
           }
           zlist.append(row);
@@ -1352,11 +1478,22 @@
             if (res.ok && res.data) {
               if (res.data.catalog && Array.isArray(res.data.catalog.packs)) {
                 state.catalog = res.data.catalog;
+              } else {
+                var freshCat = await fetchJson("/api/companion/packs");
+                if (freshCat.ok && freshCat.data && Array.isArray(freshCat.data.packs)) state.catalog = freshCat.data;
               }
+              var listingPacks = (res.data.listing && res.data.listing.packs) || [];
+              var failedPacks = listingPacks.filter(function (p) { return p.error && p.error.message; });
+              var writtenCount = listingPacks.filter(function (p) { return p.installed; }).length;
               state.zipListing = null;
               state.zipFile = null;
               state.zipSelected = new Set();
-              state.zipFeedback = { kind: "ok", text: ctx.tr("js.settings.companion.advanced.zip_imported", ids.length) };
+              if (failedPacks.length) {
+                var errDetail = failedPacks.map(function (p) { return p.id + ": " + p.error.message; }).join("; ");
+                state.zipFeedback = { kind: "err", text: writtenCount + "/" + ids.length + " — " + errDetail };
+              } else {
+                state.zipFeedback = { kind: "ok", text: ctx.tr("js.settings.companion.advanced.zip_imported", writtenCount || ids.length) };
+              }
               ctx.notifyPacksChanged();
             } else {
               state.zipFeedback = { kind: "err", text: extractErrorMessage(res, ctx.tr("js.settings.error.config_error")) };
@@ -1385,7 +1522,7 @@
       a.href = doc.href;
       a.target = "_blank";
       a.rel = "noopener noreferrer";
-      a.append(ctx.svgIcon("i-book"), ctx.el("span", "", ctx.tr(doc.key)));
+      a.append(ctx.svgIcon("i-repo"), ctx.el("span", "", ctx.tr(doc.key)));
       links.append(a);
     }
     docsCard.append(links);

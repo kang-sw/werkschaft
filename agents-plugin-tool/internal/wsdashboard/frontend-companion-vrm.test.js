@@ -15,7 +15,7 @@ function loadCompanion(globals = {}) {
     ...globals
   });
   context.window = context.window || {};
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "sources", "settings", "vrm-colead", "vrm", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-colead", "vrm", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return { C: context.window.WsCompanion, context };
@@ -42,6 +42,19 @@ function makeFakeElement(tag, doc) {
     dataset: {},
     attrs: {},
     listeners: {},
+    classList: {
+      add(...names) {
+        const cur = new Set(el.className.split(/\s+/).filter(Boolean));
+        names.forEach(n => n && cur.add(n));
+        el.className = [...cur].join(" ");
+      },
+      remove(...names) {
+        const cur = new Set(el.className.split(/\s+/).filter(Boolean));
+        names.forEach(n => cur.delete(n));
+        el.className = [...cur].join(" ");
+      },
+      contains(n) { return el.className.split(/\s+/).includes(n); }
+    },
     ownerDocument: doc,
     style: {
       setProperty(k, v) { this[k] = v; },
@@ -76,6 +89,7 @@ function makeFakeElement(tag, doc) {
       for (const fn of [...(this.listeners[event.type] || [])]) fn(event);
     },
     append(...items) { this.children.push(...items); },
+    prepend(...items) { this.children.unshift(...items); },
     insertBefore(item) { this.children.push(item); },
     replaceChildren(...items) { this.children = [...items]; },
     remove() { this.removed = true; },
@@ -639,57 +653,109 @@ test("stage drives both a fake adapter and makeVrmRig through rail-docking, narr
   await runStageScenario(false);
 });
 
-test("settings modal hides 2D paper-doll wardrobe controls when active pack is VRM", () => {
-  let currentRenderer = "vrm";
+test("companion settings section hides 2D paper-doll wardrobe controls when active pack is VRM", async () => {
   const doc = {
     documentElement: { hasAttribute: () => true },
-    activeElement: null,
     createElement: tag => makeFakeElement(tag, doc),
+    createElementNS: (_ns, tag) => makeFakeElement(tag, doc),
+    querySelector: () => null,
     addEventListener() {}
   };
-  const { C } = loadCompanion({
-    document: doc,
-    window: { innerWidth: 1200, innerHeight: 800, addEventListener() {} },
-    ResizeObserver: class { observe() {} disconnect() {} },
-    Option: class { constructor(text, value, _ds, sel) { this.text = text; this.value = value; this.selected = sel; } },
-    wsT: k => k,
-    fetch: async () => ({ ok: true, json: async () => ({ packs: [{ id: "vrm1", renderer: "vrm" }] }) })
+  const win = { innerWidth: 1200, innerHeight: 800, addEventListener() {} };
+  const catalogPacks = {
+    resolvedAuto: { packId: "vrm1" },
+    packs: [
+      { id: "vrm1", name: "Studio VRM", rev: "rv1", renderer: "vrm", source: "local" },
+      { id: "default", name: "Default 2D", rev: "d1", renderer: "2d", source: "builtin", builtin: true }
+    ]
+  };
+  const manifest2d = {
+    id: "default",
+    presets: { day: {} },
+    outfits: { street: {} },
+    hairs: { bob: {} },
+    eyesets: { round: {} },
+    attachments: { tail1: { slot: "tail" } },
+    palette: { hair: "#112233" }
+  };
+  const ctx = vm.createContext({
+    window: win, document: doc, URL, URLSearchParams,
+    Option: class { constructor(text, value, _ds, sel) { this.tagName = "OPTION"; this.textContent = text; this.value = value; this.selected = sel; } },
+    fetch: async url => {
+      if (url === "/api/companion/packs") return { ok: true, status: 200, json: async () => catalogPacks };
+      if (String(url).includes("/default/pack.json")) return { ok: true, status: 200, json: async () => manifest2d };
+      return { ok: true, status: 200, json: async () => ({}) };
+    }
   });
-  const node = makeFakeElement("div", doc);
-  const gear = makeFakeElement("button", doc);
-  const rows = [
-    { key: "dashboard.companion_pack", label: "pack", description: "d", control: "select" },
-    { key: "dashboard.companion_preset", label: "preset", description: "d", control: "select" },
-    { key: "dashboard.companion_outfit", label: "outfit", description: "d", control: "select" },
-    { key: "dashboard.companion_hair", label: "hair", description: "d", control: "select" },
-    { key: "dashboard.companion_eyes", label: "eyes", description: "d", control: "select" },
-    { key: "dashboard.companion_attachments", label: "attachments", description: "d", control: "text" },
-    { key: "dashboard.companion_palette", label: "palette", description: "d", control: "text" },
-    { key: "dashboard.companion_agent_cooldown_seconds", label: "cooldown", description: "d", control: "number" }
-  ];
-  const modal = C.settingsModal(node, gear, { signal: new AbortController().signal }, {
-    rows: () => rows,
-    config: () => ({ pack: "vrm1", preset: "", outfit: "", hair: "", eyes: "", attachments: "", palette: "", agentCooldownSeconds: 15 }),
-    renderer: () => currentRenderer,
-    persona: () => null,
-    presets: () => ({ available: ["day"], preset: "" }),
-    wardrobe: () => ({ outfits: ["street"], hairs: ["bob"], eyesets: ["round"], slots: { tail: ["t"] }, channels: ["hair"] }),
-    picks: () => null,
-    anchor: () => ({ left: 100, top: 100, right: 200, bottom: 200 }),
-    resetSize() {},
-    packsChanged() {},
-    applyPreset() {},
-    notice() {}
-  });
-  gear.dispatchEvent({ type: "click" });
-  const labels = () => node.all().filter(el => el.className === "ws-companion-settings-label").map(el => el.textContent);
-  assert.deepEqual(labels(), ["pack", "cooldown"], "VRM mode must hide all 2D wardrobe rows");
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-companion.js"), "utf8"), ctx);
 
-  currentRenderer = "2d";
-  modal.rebuild();
-  const labels2d = labels();
-  for (const want of ["pack", "preset", "outfit", "hair", "eyes", "attachments", "palette", "cooldown"]) {
-    assert.ok(labels2d.includes(want), `2D mode should include wardrobe row ${want}`);
+  const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
+  const specs = new Map(catalog.map(s => [s.key, s]));
+  let activePack = "vrm1";
+  const makeEntries = () => catalog
+    .filter(s => s.section === "companion" && (!s.surface || s.surface === "settings"))
+    .map(s => ({
+      key: s.key,
+      value: s.key === "dashboard.companion_pack" ? activePack : (s.key === "dashboard.companion_enabled" ? true : (s.key === "dashboard.companion_director" ? "rules" : "")),
+      default: "",
+      editable: true
+    }));
+
+  const el = (tag, cls, text) => {
+    const node = makeFakeElement(tag, doc);
+    if (cls) node.className = cls;
+    if (text !== undefined && text !== "") node.textContent = String(text);
+    if (tag === "select") node.add = opt => node.children.push(opt);
+    return node;
+  };
+  const append = (parent, ...kids) => { parent.append(...kids.filter(Boolean)); return parent; };
+  const button = (cls, text, onClick) => {
+    const btn = el("button", cls, text);
+    if (onClick) btn.addEventListener("click", onClick);
+    return btn;
+  };
+  const renderOpts = () => ({
+    entries: makeEntries(),
+    scope: "global",
+    filter: "all",
+    searchTerm: "",
+    tr: k => k,
+    el, append, button,
+    svgIcon: () => el("svg"),
+    specFor: k => specs.get(k),
+    selected: e => e.value,
+    editable: () => true,
+    matches: () => true,
+    renderRow: e => { const r = el("article", "krow"); r.dataset.configKey = e.key; return r; },
+    renderKeyProvenance: () => ({ node: el("span"), drawer: null }),
+    submitConfig: async (e, _a, v) => { if (e.key === "dashboard.companion_pack") activePack = v; return true; },
+    rerender() {},
+    notifyPacksChanged() {},
+    notifyStageAction() {}
+  });
+
+  // Initial render fetches /api/companion/packs, second render reads cached catalog.
+  win.WsSettingsCompanion.render(renderOpts());
+  await new Promise(r => setImmediate(r));
+  const vrmPanel = win.WsSettingsCompanion.render(renderOpts());
+  assert.ok(vrmPanel.all().some(n => n.dataset && n.dataset.companionWardrobeVrmNote === "1"),
+    "VRM mode must show the VRM appearance note instead of 2D wardrobe controls");
+  assert.equal(vrmPanel.all().some(n => n.dataset && n.dataset.companionWardrobeGrid === "1"), false,
+    "VRM mode must hide 2D paper-doll wardrobe grid");
+  assert.ok(vrmPanel.all().some(n => (n.dataset && n.dataset.companionSwitch2d === "1") || n.getAttribute("data-companion-switch-2d") === "1"),
+    "VRM note provides a quick switch-to-2D button");
+
+  // Switching to 2D fetches pack.json and renders 2D wardrobe controls.
+  activePack = "default";
+  win.WsSettingsCompanion.render(renderOpts());
+  await new Promise(r => setImmediate(r));
+  const panel2d = win.WsSettingsCompanion.render(renderOpts());
+  assert.equal(panel2d.all().some(n => n.dataset && n.dataset.companionWardrobeVrmNote === "1"), false);
+  const grid = panel2d.all().find(n => n.dataset && n.dataset.companionWardrobeGrid === "1");
+  assert.ok(grid, "2D mode renders the 2D wardrobe grid");
+  const keys = grid.all().map(n => n.dataset && n.dataset.configKey).filter(Boolean);
+  for (const want of ["dashboard.companion_preset", "dashboard.companion_outfit", "dashboard.companion_hair", "dashboard.companion_eyes", "dashboard.companion_attachments", "dashboard.companion_palette"]) {
+    assert.ok(keys.includes(want), `2D mode should include wardrobe field ${want}`);
   }
 });
 

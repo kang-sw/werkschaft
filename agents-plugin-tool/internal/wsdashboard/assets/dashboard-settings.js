@@ -625,7 +625,7 @@ var wsSettingsChoiceLabels = {
           var affected = new Map((result.affected_entries || [result.entry]).map(item => [entryID(item), item]));
           snapshot.entries = snapshot.entries.map(item => affected.get(entryID(item)) || item);
           warnings.set(id, result.warnings || []);
-          if (entry.key === "dashboard.companion_enabled" && activeSection === "companion") {
+          if ((entry.key === "dashboard.companion_enabled" || entry.key === "dashboard.companion_director") && activeSection === "companion") {
             renderCounts();
             renderContent();
           } else {

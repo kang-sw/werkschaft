@@ -59,6 +59,15 @@
   color: var(--wb-muted-fg);
   word-break: keep-all;
 }
+.cs-group-head > .kprov,
+.cs-wardrobe-head .kprov {
+  flex: 0 0 auto;
+}
+.cs-group-head .origin-pill,
+.cs-wardrobe-head .origin-pill {
+  flex: 0 1 auto;
+  padding: 0 10px;
+}
 .cs-group-body {
   padding: 14px 16px 16px;
   display: flex;
@@ -149,7 +158,7 @@
   text-decoration: none;
   transition: background .12s, filter .12s, opacity .12s;
 }
-.cs-btn:hover:not(:disabled) {
+:where(.cs-btn):hover:not(:disabled) {
   background: color-mix(in srgb, var(--wb-fg) 10%, var(--wb-muted));
   text-decoration: none;
 }
@@ -159,7 +168,10 @@
   background: var(--wb-primary);
   color: var(--wb-primary-fg, #ffffff);
 }
-.cs-btn.pri:hover:not(:disabled) { filter: brightness(1.08); }
+.cs-btn.pri:hover:not(:disabled) {
+  background: var(--wb-primary);
+  filter: brightness(1.08);
+}
 .cs-btn.soft-pri {
   background: color-mix(in srgb, var(--wb-primary) 15%, var(--wb-card));
   color: var(--wb-primary);
@@ -185,6 +197,10 @@
 .cs-btn.danger-solid {
   background: var(--wb-fail);
   color: #ffffff;
+}
+.cs-btn.danger-solid:hover:not(:disabled) {
+  background: var(--wb-fail);
+  filter: brightness(1.08);
 }
 :root[data-theme="dark"] .cs-btn.danger-solid { color: #1c0b0c; }
 .cs-btn.sm {
@@ -567,6 +583,10 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.cs-source-add-row .inp {
+  flex: 1 1 220px;
+  min-width: 0;
 }
 .cs-source-preview {
   font-family: var(--wb-mono);

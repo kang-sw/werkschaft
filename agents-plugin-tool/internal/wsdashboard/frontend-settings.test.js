@@ -135,7 +135,7 @@ test("companion labels are present in every supported locale", () => {
   assert.equal(readLocale("ko")[modeKeys[1]], "에이전트");
 });
 
-test("settings panel skips companion-modal and deprecated rows and keeps enabled and director", () => {
+test("settings panel includes all active companion keys and skips deprecated rows", () => {
   const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
   const specs = new Map(catalog.map(spec => [spec.key, spec]));
   const method = read("dashboard-settings.js").match(/\n  function sectionEntries\(name\) \{[\s\S]*?\n  \}/)[0];
@@ -146,20 +146,21 @@ test("settings panel skips companion-modal and deprecated rows and keeps enabled
     adapters: ["claude", "pi", "agy", "dashboard"]
   });
   const shown = sectionEntries("companion").map(entry => entry.key).sort();
-  assert.deepEqual(shown, ["dashboard.companion_director", "dashboard.companion_enabled"]);
-  const hidden = catalog.filter(spec => spec.surface === "companion-modal").map(spec => spec.key).sort();
-  assert.deepEqual(hidden, [
+  assert.deepEqual(shown, [
     "dashboard.companion_agent_cooldown_seconds", "dashboard.companion_agent_hourly_cap",
-    "dashboard.companion_attachments", "dashboard.companion_eyes", "dashboard.companion_hair",
+    "dashboard.companion_attachments", "dashboard.companion_director",
+    "dashboard.companion_enabled", "dashboard.companion_eyes", "dashboard.companion_hair",
     "dashboard.companion_outfit", "dashboard.companion_pack", "dashboard.companion_palette",
     "dashboard.companion_preset", "dashboard.companion_sources"
   ]);
+  const legacyModal = catalog.filter(spec => spec.surface === "companion-modal");
+  assert.deepEqual(legacyModal, [], "retired companion-modal surface has no remaining rows");
   // The 0.51.0 companion_mode alias and the agent.tier_aliases key that
   // agent.tier_routing replaces stay declared, but no panel row renders them.
   const deprecated = catalog.filter(spec => spec.surface === "deprecated").map(spec => spec.key);
   assert.deepEqual(deprecated, ["agent.tier_aliases", "dashboard.companion_mode"]);
   const companionDeprecated = deprecated.filter(key => key.startsWith("dashboard.companion_"));
-  assert.equal(keys.length, shown.length + hidden.length + companionDeprecated.length);
+  assert.equal(keys.length, shown.length + companionDeprecated.length);
 });
 
 test("settings links and frames keep the exact inspection identifiers", () => {
@@ -252,14 +253,232 @@ test("project rail target survives standalone scope traversal without becoming i
   assert.equal(shell.settingsScopeHref("project", unbound, () => "", remembered), "/settings?scope=project&target=project-a");
 });
 
-test("the companion modal maps every companion-modal catalog row to a live config field", () => {
-  const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
-  const context = vm.createContext({window: {WsCompanion: {}}});
-  vm.runInContext(read("dashboard-companion-settings.js"), context);
-  const fields = context.window.WsCompanion.companionConfigFields;
-  const modal = catalog.filter(spec => spec.surface === "companion-modal").map(spec => spec.key).sort();
-  assert.deepEqual(Object.keys(fields).sort(), modal);
-  assert.deepEqual(Object.values(fields).sort(), ["agentCooldownSeconds", "agentHourlyCap", "attachments", "eyes", "hair", "outfit", "pack", "palette", "preset", "sources"]);
+test("companion settings section supports ?section=companion, agent gating, disabled-but-editable packs, 2-step delete, sources, wardrobe, and shell bridge", async () => {
+  const catalog = JSON.parse(read("dashboard-settings-catalog.json"));
+  const settingsSource = read("dashboard-settings.js");
+  const companionSource = read("dashboard-settings-companion.js");
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+
+  const { doc, win, FakeEvent } = createFakeDOM();
+  doc.createElementNS = (_ns, tag) => doc.createElement(tag);
+  const origCreate = doc.createElement.bind(doc);
+  doc.createElement = tag => {
+    const el = origCreate(tag);
+    if (tag === "select") {
+      el.add = opt => el.appendChild(opt);
+    }
+    return el;
+  };
+  class Option {
+    constructor(text, value, _defaultSelected, selected) {
+      const opt = origCreate("option");
+      opt.textContent = text;
+      opt.value = value;
+      opt.selected = !!selected;
+      return opt;
+    }
+  }
+
+  const view = doc.createElement("main");
+  view.setAttribute("data-settings-view", "1");
+  const search = doc.createElement("input");
+  search.setAttribute("data-settings-search", "1");
+  const count = doc.createElement("span");
+  count.setAttribute("data-settings-count", "1");
+  const targetDisplay = doc.createElement("div");
+  targetDisplay.setAttribute("data-settings-target-display", "1");
+  targetDisplay.append(doc.createElement("span"), doc.createElement("code"));
+  const precedence = doc.createElement("div");
+  precedence.setAttribute("data-settings-precedence", "1");
+  const sectionsNav = doc.createElement("nav");
+  sectionsNav.setAttribute("data-settings-sections", "1");
+  const filtersBar = doc.createElement("div");
+  filtersBar.setAttribute("data-settings-filters", "1");
+  const content = doc.createElement("div");
+  content.setAttribute("data-settings-content", "1");
+  view.append(search, count, targetDisplay, precedence, sectionsNav, filtersBar, content);
+  doc.body.appendChild(view);
+
+  const values = {
+    "dashboard.companion_enabled": false,
+    "dashboard.companion_director": "rules",
+    "dashboard.companion_agent_cooldown_seconds": 30,
+    "dashboard.companion_agent_hourly_cap": 20,
+    "dashboard.companion_pack": "studio-vrm",
+    "dashboard.companion_preset": "",
+    "dashboard.companion_outfit": "",
+    "dashboard.companion_hair": "",
+    "dashboard.companion_eyes": "",
+    "dashboard.companion_attachments": "",
+    "dashboard.companion_palette": "",
+    "dashboard.companion_sources": "https://example.invalid/packs.git"
+  };
+  const makeEntry = key => {
+    const spec = catalog.find(s => s.key === key);
+    const val = values[key];
+    return {
+      key,
+      value: val,
+      default: key === "dashboard.companion_enabled" ? false : (key === "dashboard.companion_director" ? "rules" : ""),
+      type: spec?.control === "toggle" ? "boolean" : (spec?.control === "number" ? "integer" : "string"),
+      enum: key === "dashboard.companion_director" ? ["rules", "agent"] : undefined,
+      editable: true,
+      selectors: {},
+      layers: [{ scope: "builtin", value: "" }, { scope: "global", value: val, selected: val }]
+    };
+  };
+  const makeEntries = () => Object.keys(values).map(makeEntry);
+
+  let packsCatalog = {
+    resolvedAuto: { packId: "studio-vrm" },
+    packs: [
+      { id: "default", name: "Default 2D", renderer: "2d", rev: "d1", builtin: true, source: "builtin" },
+      { id: "studio-vrm", name: "Studio Avatar", renderer: "vrm", rev: "v1", version: "1.2.0", source: "local", origin: { kind: "local", source: "studio.vrm" } }
+    ]
+  };
+  const manifest2d = {
+    id: "default",
+    presets: { day: {} },
+    outfits: { street: {}, gown: {} },
+    hairs: { bob: {} },
+    eyesets: { round: {} },
+    attachments: { cap: { slot: "headdress" } },
+    palette: { skin: "#f4cdb4", trim: "#123456" }
+  };
+
+  const postedMessages = [], apiCalls = [], configWrites = [];
+  win.window = win;
+  win.wsT = key => key;
+  win.localStorage = { removeItem() {}, getItem: () => null, setItem() {} };
+  win.parent = {
+    location: { hash: "" },
+    document: { querySelectorAll: () => [] },
+    postMessage(msg) { postedMessages.push(msg); }
+  };
+  win.WsShell = shell;
+  win.WsSettingsCatalog = catalog;
+  win.WsSettingsExtension = {};
+
+  const ctx = vm.createContext({
+    window: win, document: doc, location: new URL("http://localhost:19544/settings?scope=global&section=companion&frame=1"),
+    URL, URLSearchParams, Map, Set, Option, Event: FakeEvent,
+    fetch: async (reqUrl, opts = {}) => {
+      const url = String(reqUrl);
+      apiCalls.push({ url, method: opts.method || "GET", body: opts.body });
+      if (url.startsWith("/api/config/snapshot")) {
+        return { ok: true, status: 200, json: async () => ({ scope: "global", target: "", context: { worktree: "", session: "" }, entries: makeEntries() }) };
+      }
+      if (url === "/api/config/set" || url === "/api/config/reset") {
+        const body = JSON.parse(opts.body);
+        configWrites.push({ op: url.endsWith("/reset") ? "reset" : "set", ...body });
+        values[body.key] = url.endsWith("/reset") ? "" : body.value;
+        return { ok: true, status: 200, json: async () => ({ entry: makeEntry(body.key) }) };
+      }
+      if (url === "/api/companion/packs") {
+        return { ok: true, status: 200, json: async () => packsCatalog };
+      }
+      if (url.includes("/default/pack.json")) {
+        return { ok: true, status: 200, json: async () => manifest2d };
+      }
+      if (url === "/api/companion/packs/studio-vrm/uninstall") {
+        packsCatalog = { resolvedAuto: { packId: "default" }, packs: [packsCatalog.packs[0]] };
+        return { ok: true, status: 200, json: async () => packsCatalog };
+      }
+      if (url === "/api/companion/sources/fetch") {
+        return {
+          ok: true, status: 200, json: async () => ({
+            listing: {
+              source: "official", official: true, name: "Official Packs", owner: { name: "WS" },
+              packs: [{ id: "fox-vrm", name: "Fox VRM", version: "1.0.0", renderer: "vrm", status: "available" }],
+              errors: []
+            }
+          })
+        };
+      }
+      if (url === "/api/companion/sources/install") {
+        packsCatalog.packs.push({ id: "fox-vrm", name: "Fox VRM", renderer: "vrm", rev: "f1", origin: { official: true } });
+        return {
+          ok: true, status: 200, json: async () => ({
+            catalog: packsCatalog,
+            listing: {
+              source: "official", official: true, name: "Official Packs", owner: { name: "WS" },
+              packs: [{ id: "fox-vrm", name: "Fox VRM", version: "1.0.0", renderer: "vrm", status: "installed", installed: true }],
+              errors: []
+            }
+          })
+        };
+      }
+      throw new Error("unexpected fetch " + url);
+    }
+  });
+  vm.runInContext(companionSource, ctx);
+  vm.runInContext(settingsSource, ctx);
+  await flush();
+  await flush();
+
+  // 1. ?section=companion deep-link selects Companion immediately, and companion_enabled=false keeps packs editable.
+  const panel = content.querySelector("[data-companion-settings-panel]");
+  assert.ok(panel, "?section=companion renders WsSettingsCompanion directly");
+  assert.ok(content.querySelector("[data-companion-disabled-banner]"), "companion_enabled=false shows disabled-but-editable banner");
+  assert.equal(content.querySelector("[data-companion-vrm-choose]").disabled, false, "VRM dropzone stays editable while companion is disabled");
+
+  // 2. requires_companion_agent_director disables agent cooldown/hourly cap in rules mode and enables them in agent mode.
+  const cooldownRow = content.querySelector('.krow[data-config-key="dashboard.companion_agent_cooldown_seconds"]');
+  const capRow = content.querySelector('.krow[data-config-key="dashboard.companion_agent_hourly_cap"]');
+  assert.equal(cooldownRow.querySelector("input").disabled, true, "cooldown disabled in rules mode");
+  assert.equal(capRow.querySelector("input").disabled, true, "hourly cap disabled in rules mode");
+
+  // 3. Stage reset buttons emit companion-stage-action postMessages.
+  content.querySelector('[data-companion-action="reset-size"]').click();
+  content.querySelector('[data-companion-action="return-home"]').click();
+  assert.ok(postedMessages.some(m => m.wsShell === "companion-stage-action" && m.action === "reset-size"));
+  assert.ok(postedMessages.some(m => m.wsShell === "companion-stage-action" && m.action === "return-home"));
+
+  // 4. Active VRM pack hides 2D wardrobe controls and shows VRM note + switch-to-2D button.
+  assert.ok(content.querySelector("[data-companion-wardrobe-vrm-note]"), "VRM active shows VRM wardrobe note");
+  assert.equal(content.querySelector("[data-companion-wardrobe-grid]"), null);
+
+  // 5. Built-in default has no delete button; custom pack uses inline 2-step delete confirmation.
+  const defaultRow = content.querySelector('[data-companion-pack-row="default"]');
+  assert.equal(defaultRow.querySelector("[data-companion-pack-delete]"), null, "built-in pack cannot be deleted");
+  const delBtn = content.querySelector('[data-companion-pack-delete="studio-vrm"]');
+  assert.ok(delBtn, "non-builtin pack offers inline delete");
+  delBtn.click();
+  assert.ok(content.querySelector('[data-companion-pack-confirm="studio-vrm"]'), "first click reveals inline 2-step confirmation");
+  content.querySelector('[data-companion-pack-confirm-yes="studio-vrm"]').click();
+  await flush();
+  await flush();
+  assert.ok(apiCalls.some(c => c.url === "/api/companion/packs/studio-vrm/uninstall" && c.method === "POST"));
+  assert.ok(postedMessages.some(m => m.wsShell === "companion-packs-changed"), "uninstall notifies shell via companion-packs-changed");
+  assert.ok(configWrites.some(w => w.key === "dashboard.companion_pack" && w.value === "auto"), "deleting active pack resets to auto");
+
+  // 6. Now active pack fell back to default (2D), so 2D wardrobe grid renders with palette swatches.
+  await flush();
+  assert.ok(content.querySelector("[data-companion-wardrobe-grid]"), "2D fallback shows wardrobe controls");
+  const colorInputs = content.querySelectorAll("input").filter(el => el.type === "color");
+  assert.ok(colorInputs.length >= 5, "palette swatches render color inputs");
+
+  // 7. Pack Sources: browse official source -> install pack -> updates catalog & notifies shell.
+  content.querySelector('[data-companion-source-fetch="official"]').click();
+  await flush();
+  await flush();
+  assert.ok(content.querySelector('[data-companion-catalog-pack="fox-vrm"]'));
+  content.querySelector('[data-companion-source-install="fox-vrm"]').click();
+  await flush();
+  await flush();
+  assert.ok(apiCalls.some(c => c.url === "/api/companion/sources/install" && c.method === "POST"));
+  assert.ok(content.querySelector('[data-companion-pack-row="fox-vrm"]'), "installed pack appears in installed list");
+
+  // 8. Advanced accordion toggles open to reveal .zip bundle import & 3 authoring docs.
+  assert.equal(content.querySelector("[data-companion-zip-choose]"), null, "Advanced accordion starts collapsed");
+  content.querySelector("[data-companion-advanced-toggle]").click();
+  assert.ok(content.querySelector("[data-companion-zip-choose]"), "expanding Advanced reveals styled .zip picker");
+  const docLinks = content.querySelectorAll(".cs-doc-link").map(a => a.href);
+  assert.deepEqual(docLinks, [
+    "/api/companion/authoring/guide.md",
+    "/api/companion/authoring/pack.schema.json",
+    "/api/companion/authoring/marketplace.schema.json"
+  ]);
 });
 
 function createFakeDOM() {
@@ -339,6 +558,14 @@ function createFakeDOM() {
     }
     append(...nodes) {
       nodes.forEach(n => this.appendChild(n));
+    }
+    prepend(...nodes) {
+      for (let i = nodes.length - 1; i >= 0; i--) {
+        const child = typeof nodes[i] === "string" ? this.ownerDocument.createTextNode(nodes[i]) : nodes[i];
+        if (child.parentNode) child.parentNode.removeChild(child);
+        child.parentNode = this;
+        this.children.unshift(child);
+      }
     }
     remove() {
       if (this.parentNode) this.parentNode.removeChild(this);

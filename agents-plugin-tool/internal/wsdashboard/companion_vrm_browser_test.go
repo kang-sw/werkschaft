@@ -43,17 +43,14 @@ func TestCompanionVrmBrowser(t *testing.T) {
 	t.Setenv("WS_CONFIG_HOME", cfgHome)
 	SetDevAssets(nil)
 
-	backend := settingsTestBackend(t)
-	backend.LoadCompanion = func() (CompanionConfig, error) {
-		return CompanionConfig{
-			Enabled:              false,
-			Director:             "rules",
-			Pack:                 "default",
-			Preset:               "werkschaft-d1",
-			AgentCooldownSeconds: 30,
-			AgentHourlyCap:       20,
-		}, nil
-	}
+	backend := companionSettingsBackend(t, CompanionConfig{
+		Enabled:              false,
+		Director:             "rules",
+		Pack:                 "default",
+		Preset:               "werkschaft-d1",
+		AgentCooldownSeconds: 30,
+		AgentHourlyCap:       20,
+	})
 
 	paths, err := companionPaths(backend.Options)
 	if err != nil {
@@ -155,17 +152,14 @@ func TestCompanionVrmRailDockBrowser(t *testing.T) {
 	t.Setenv("WS_CONFIG_HOME", cfgHome)
 	SetDevAssets(nil)
 
-	backend := settingsTestBackend(t)
-	backend.LoadCompanion = func() (CompanionConfig, error) {
-		return CompanionConfig{
-			Enabled:              false,
-			Director:             "rules",
-			Pack:                 "default",
-			Preset:               "werkschaft-d1",
-			AgentCooldownSeconds: 30,
-			AgentHourlyCap:       20,
-		}, nil
-	}
+	backend := companionSettingsBackend(t, CompanionConfig{
+		Enabled:              false,
+		Director:             "rules",
+		Pack:                 "default",
+		Preset:               "werkschaft-d1",
+		AgentCooldownSeconds: 30,
+		AgentHourlyCap:       20,
+	})
 
 	paths, err := companionPaths(backend.Options)
 	if err != nil {
@@ -321,17 +315,14 @@ func TestCompanionVrmCoLeadBrowser(t *testing.T) {
 	t.Setenv("WS_CONFIG_HOME", cfgHome)
 	SetDevAssets(nil)
 
-	backend := settingsTestBackend(t)
-	backend.LoadCompanion = func() (CompanionConfig, error) {
-		return CompanionConfig{
-			Enabled:              false,
-			Director:             "rules",
-			Pack:                 "default",
-			Preset:               "werkschaft-d1",
-			AgentCooldownSeconds: 30,
-			AgentHourlyCap:       20,
-		}, nil
-	}
+	backend := companionSettingsBackend(t, CompanionConfig{
+		Enabled:              false,
+		Director:             "rules",
+		Pack:                 "default",
+		Preset:               "werkschaft-d1",
+		AgentCooldownSeconds: 30,
+		AgentHourlyCap:       20,
+	})
 
 	paths, err := companionPaths(backend.Options)
 	if err != nil {
@@ -466,17 +457,14 @@ func TestCompanionVrmSwapDizzyBrowser(t *testing.T) {
 	t.Setenv("WS_CONFIG_HOME", cfgHome)
 	SetDevAssets(nil)
 
-	backend := settingsTestBackend(t)
-	backend.LoadCompanion = func() (CompanionConfig, error) {
-		return CompanionConfig{
-			Enabled:              false,
-			Director:             "rules",
-			Pack:                 "default",
-			Preset:               "werkschaft-d1",
-			AgentCooldownSeconds: 30,
-			AgentHourlyCap:       20,
-		}, nil
-	}
+	backend := companionSettingsBackend(t, CompanionConfig{
+		Enabled:              false,
+		Director:             "rules",
+		Pack:                 "default",
+		Preset:               "werkschaft-d1",
+		AgentCooldownSeconds: 30,
+		AgentHourlyCap:       20,
+	})
 
 	paths, err := companionPaths(backend.Options)
 	if err != nil {
