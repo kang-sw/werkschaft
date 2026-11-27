@@ -170,6 +170,7 @@
           if (taken && taken.answers) writeAnswers(n, taken.answers);
           writeAnswers(n, answers);
           if (taken && taken.scrollTop) n.scrollTop = taken.scrollTop;
+          if (window.WsCards && window.WsCards.decorate) window.WsCards.decorate(n);
           // A placeholder a swap brought (the viewport bands mount it later)
           // takes the mark too, and its frame takes it once mounted.
           q(".doc-frame", n).forEach(function (f) { f.wbKeep = true; });
@@ -507,6 +508,7 @@
         mountFrames(n);
         if (window.wbBindBoard) window.wbBindBoard(n);
         if (window.wbAgo) window.wbAgo(n);
+        if (window.WsCards && window.WsCards.decorate) window.WsCards.decorate(n);
         if (window.WsPanelCard && window.WsPanelCard.sync) window.WsPanelCard.sync();
         mermaid([n]);
       },
