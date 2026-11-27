@@ -152,7 +152,7 @@ func TestCompactionHardNativeCompletionHandlesQueuedCrossing(t *testing.T) {
 		for _, phase := range []string{wslive.CompactStart, wslive.CompactEnd} {
 			c.handle(Event{Live: &wslive.Event{Kind: wslive.KindCompact, Phase: phase, Trigger: wslive.TriggerAuto}})
 		}
-		if c.compactPending != nil || !c.compactHardHandled || c.compactResume {
+		if c.compactPending != nil || c.compactNoShrink != 1 || c.compactResume {
 			t.Error("native completion did not handle the crossing exactly once")
 		}
 		c.endTurn("", false)

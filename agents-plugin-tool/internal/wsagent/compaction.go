@@ -347,6 +347,7 @@ func (c *conv) loadCompaction() {
 	c.compactPrevTokens, c.compactPrevWindow = 0, 0
 	c.compactHardIssued, c.compactHardSteered, c.compactHardHandled, c.compactHardAtStart = false, false, false, false
 	c.compactHardSteerID = ""
+	c.resetHardOverflow()
 	c.compactAdvised, c.compactM1Issued, c.compactM2Issued = false, false, false
 	c.compactNudge = compactionNudge{}
 	c.compactOrigin = ""
@@ -538,7 +539,7 @@ func (c *conv) disarmCompactionLatches() {
 		c.compactM1Issued, c.compactM2Issued = false, false
 	}
 	if c.compactTokens < c.compactHard.Point(c.compactWindow) {
-		c.compactHardIssued, c.compactHardSteered, c.compactHardHandled = false, false, false
+		c.resetHardOverflow()
 		c.clearCompactionSteerReplies()
 	}
 }
@@ -563,6 +564,7 @@ func (c *conv) observeCompaction(ev wslive.Event) {
 	if ev.Kind == wslive.KindTurnStart {
 		c.compactUsageFresh, c.compactAwaitTurn = false, false
 		c.compactContinueAtIdle = false
+		c.compactHardInterrupt, c.compactHardBoundaries = false, 0
 		c.clearCompactionSteerReplies()
 	}
 	if ev.Kind != wslive.KindStatus || ev.Context == nil || c.compactAwaitTurn {
@@ -917,17 +919,67 @@ func (c *conv) stageHardCompaction(resume, internal bool) {
 		}
 		return
 	}
-	// Only leads auto-resume after crossing hard compaction: workers report
+	// Only leads auto-resume after a natural-end crossing: workers report
 	// their finished turn to their parent and compact without reopening it.
+	// A Stage 2 forced interrupt aborted the worker mid-work, so it must
+	// resume (its report is held by compactHoldsReport) instead of settling.
 	// Explicit ws/compact calls already returned above via c.compactPending != nil.
-	resume = resume && c.rec.Lead
-	req := &compactRequest{resume: resume, internal: internal, auto: true, crossing: true, stage1: c.wsManagedLeadCompaction()}
-	if c.wsManagedWorkerCompaction() {
+	resume = (resume && c.rec.Lead) || c.compactHardForce
+	req := &compactRequest{resume: resume, internal: internal, auto: true, crossing: true, stage1: c.wsManagedLeadCompaction() && !c.compactHardForce}
+	if c.wsManagedWorkerCompaction() || c.compactHardForce && c.wsManagedLeadCompaction() {
 		// No Stage 1 prose round trip for a worker: rotate from the ring dialog.
 		req.lead = emptyWorkerSummary()
 	}
 	c.compactPending = req
 	c.publishCompaction(false)
+}
+
+// compactNoShrinkCap bounds consecutive hard-crossing compactions that left
+// usage at or above hard, so a compaction that frees nothing cannot loop.
+const compactNoShrinkCap = 2
+
+// resetHardOverflow clears every hard-cap latch and Stage 2 counter: usage
+// fell below hard, or a fresh session replaced the overflowed one.
+func (c *conv) resetHardOverflow() {
+	c.compactHardIssued, c.compactHardSteered, c.compactHardHandled, c.compactHardAtStart = false, false, false, false
+	c.compactHardBoundaries, c.compactNoShrink = 0, 0
+	c.compactHardInterrupt, c.compactHardForce = false, false
+}
+
+// escalateHardOverflow is Stage 2 of hard-cap enforcement. At a tool boundary
+// (never mid-tool, never during compaction) a turn that ignored the Stage 1
+// steer, or that reached 120% of hard, is interrupted so endTurn can compact
+// and resume it. A worker whose harness takes no compaction steer escalates
+// on the 120% ceiling alone, leaving the harness's own auto-compaction room.
+func (c *conv) escalateHardOverflow() {
+	if !c.turn || c.proc == nil || c.quitting || c.replaying || c.wrapHold || c.closed || c.hidden ||
+		c.compacting || c.compactCommand || c.compactPending != nil || c.compactInternalTurn ||
+		c.compactHardInterrupt || c.compactNoShrink >= compactNoShrinkCap ||
+		c.caps != nil && !c.caps.Allows(ItemInterrupt) {
+		return
+	}
+	c.refreshCompaction()
+	if !c.aboveCompactHard() {
+		return
+	}
+	over := c.compactTokens >= c.compactHard.Point(c.compactWindow)*120/100
+	trigger := false
+	switch {
+	case c.compactHardSteered:
+		c.compactHardBoundaries++
+		trigger = over || c.compactHardBoundaries >= 3
+	case !c.rec.Lead && c.r.lifecycle(c.rec.Backend).NoWorkerCompactionSteer:
+		trigger = over
+	}
+	if !trigger {
+		return
+	}
+	c.compactHardInterrupt, c.compactHardBoundaries = true, 0
+	c.disarmModelWait()
+	if err := c.proc.Interrupt(); err != nil {
+		c.compactHardInterrupt = false
+		fmt.Fprintf(c.r.opts.Log, "agent %s: hard-cap interrupt: %v\n", c.rec.ReplyID, err)
+	}
 }
 
 func stage1CompactionPrompt() string {
@@ -1024,6 +1076,8 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 		c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd, Trigger: trigger})
 		c.compactRotated = false
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd, Trigger: trigger})
+		// The replacement session starts with a clean hard-cap slate.
+		c.resetHardOverflow()
 		if strings.TrimSpace(c.compactNote) != "" {
 			c.compactNote += "\n\n" + checkpoint
 		} else {
@@ -1317,7 +1371,13 @@ func (c *conv) compactEvent(ev wslive.Event) {
 			}
 			c.compactStage1Active, c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited = false, false, false, false, false
 		}
-		c.compactHardHandled = c.compactHardHandled || c.compactHardAtStart || c.aboveCompactHard()
+		// A compaction that began at or above hard counts as no-shrink until a
+		// later sample drops below hard (disarmCompactionLatches resets it).
+		// Only a bounded run of them disarms overflow protection.
+		if c.compactHardAtStart || c.aboveCompactHard() {
+			c.compactNoShrink++
+			c.compactHardHandled = c.compactNoShrink >= compactNoShrinkCap
+		}
 		c.compactHardAtStart = false
 		// A stats answer queued before compaction may still carry old tokens.
 		// Only the next model turn can produce a fresh post-compaction sample.

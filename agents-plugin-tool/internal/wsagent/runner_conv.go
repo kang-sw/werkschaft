@@ -181,6 +181,12 @@ type conv struct {
 	compactAwaitTurn                                                                                               bool
 	compactHardSteered, compactHardHandled, compactHardAtStart                                                     bool
 	compactHardSteerID                                                                                             string
+	// Stage 2 hard-cap overflow: boundaries seen since the first hard steer,
+	// the daemon-initiated interrupt (distinct from interruptAsked), the
+	// direct-rotation request for the compaction it stages, and consecutive
+	// compactions that left usage at or above hard.
+	compactHardBoundaries, compactNoShrink int
+	compactHardInterrupt, compactHardForce bool
 	compactContinueAtIdle, compactIdleInternal                                                                     bool
 	replayCompactEnded, replayCompactFailed                                                                        bool
 	compactStage1Active, compactStage1Resume, compactStage1Internal, compactStage1Auto, compactStage1UsageLimited  bool
