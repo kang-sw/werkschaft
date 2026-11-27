@@ -172,7 +172,9 @@
       if (!this.vrm?.expressionManager) return;
       const overlay = this.coLeadOverlay;
       const sleepyOverride = overlay?.mode === "sleepy";
-      const allowBlink = !sleepyOverride && (!BLINK_SUPPRESSED.has(this.currentState) || !!overlay?.allowBlink);
+      const dizzyOverride = overlay?.mode === "dizzy" || overlay?.mode === "dizzy-shake" || overlay?.mode === "dizzy-recover";
+      const explicitBlink = sleepyOverride || overlay?.mode === "dizzy" || overlay?.mode === "dizzy-shake";
+      const allowBlink = !explicitBlink && (!BLINK_SUPPRESSED.has(this.currentState) || !!overlay?.allowBlink);
       let autoBlink = 0;
       if (allowBlink) {
         if (this.blinkProgress >= 0) {
@@ -235,6 +237,33 @@
       if (sleepyOverride) {
         setTarget(kBlink, overlay.blink ?? 0.92);
         setTarget(kRelaxed, overlay.relaxed ?? 0.44);
+      } else if (dizzyOverride) {
+        if (overlay.mode === "dizzy") {
+          const surp = overlay.surprised ?? 0.36;
+          if (kSurprised) {
+            setTarget(kSurprised, surp);
+          } else if (kOh) {
+            setTarget(kOh, Math.min(0.32, surp * 0.72));
+          }
+          if ((overlay.sad ?? 0) > 0.005) setTarget(kSad, overlay.sad);
+          if ((overlay.relaxed ?? 0) > 0.005) setTarget(kRelaxed, overlay.relaxed);
+          setTarget(kNeutral, Math.max(0.28, 1.0 - surp * 0.65 - (overlay.sad ?? 0) * 0.4));
+          setTarget(kBlink, overlay.blink ?? 0.18);
+        } else if (overlay.mode === "dizzy-shake") {
+          setTarget(kBlink, overlay.blink ?? 0.78);
+          if ((overlay.sad ?? 0) > 0.005) setTarget(kSad, overlay.sad);
+          if ((overlay.relaxed ?? 0) > 0.005) setTarget(kRelaxed, overlay.relaxed);
+          if ((overlay.happy ?? 0) > 0.005) setTarget(kHappy, overlay.happy);
+          setTarget(kNeutral, 0.45);
+        } else {
+          // dizzy-recover: adorable warm sheepish smile with sparkling open eyes.
+          const h = overlay.happy ?? 0.44;
+          const r = overlay.relaxed ?? 0.18;
+          setTarget(kNeutral, Math.max(0.28, 1.0 - h * 0.55 - r * 0.35));
+          if (h > 0.005) setTarget(kHappy, h);
+          if (r > 0.005) setTarget(kRelaxed, r);
+          setTarget(kBlink, autoBlink);
+        }
       } else if (overrideTarget) {
         setTarget(overrideTarget, overrideWeight);
         if (allowBlink) setTarget(kBlink, autoBlink);
@@ -380,9 +409,9 @@
 
   function makeVrmRig(pack, options = {}) {
     let mounted = false, disposed = false, paused = false, contextLost = false;
-    let container = null, canvasWrap = null, canvas = null, dissolveGrid = null, overlay = null;
+    let container = null, canvasWrap = null, canvas = null, dissolveGrid = null, fxCanvas = null, fxCtx = null, overlay = null;
     let runtime = null, renderer = null, scene = null, camera = null, vrm = null, coLead = null;
-    let isVrm0 = false, lookTarget = null, headPosVec = null, mixer = null, activeVrmaAction = null, activeVrmaKey = "";
+    let isVrm0 = false, lookTarget = null, headPosVec = null, projHeadVec = null, mixer = null, activeVrmaAction = null, activeVrmaKey = "";
     let vrmaClips = new Map(), vrmaLoading = new Set(), vrmaFailed = new Set();
     let width = LOGICAL_W, height = LOGICAL_H, dpr = 1;
     let cachedModel = null; // { key, buffer } retained across WebGL context loss
@@ -393,6 +422,8 @@
     let rawPose = "stand", rawGesture = null;
     let activeBeatMeta = null;
     let pendingAccent = null, pendingCoLeadBeat = null, pendingHover = null;
+    let pendingInitialRid = "", pendingSessionSwitch = null;
+    let ridObserver = null;
     let gaze = { x: 0, y: 0 }, smoothedLook = { yaw: 0, pitch: 0 }, smoothedHead = { yaw: 0, pitch: 0 };
     const boneRotations = new Map();
     const exprCtrl = new VrmExpressionController(pack?.expressionMap);
@@ -449,6 +480,7 @@
       camera = null;
       lookTarget = null;
       headPosVec = null;
+      projHeadVec = null;
     }
 
     function initSceneAndRenderer(rt) {
@@ -458,6 +490,7 @@
       camera.position.set(0, 1.38, 1.85);
       lookTarget = new THREE.Object3D();
       headPosVec = new THREE.Vector3();
+      projHeadVec = new THREE.Vector3();
       scene.add(lookTarget);
 
       renderer = new THREE.WebGLRenderer({
@@ -482,6 +515,11 @@
 
       if (typeof C.createVrmCoLead === "function") {
         coLead = C.createVrmCoLead({ THREE, scene, camera });
+        if (pendingInitialRid) coLead.syncInitialSession(pendingInitialRid);
+        if (pendingSessionSwitch) {
+          coLead.onSessionSwitch(pendingSessionSwitch.rid, pendingSessionSwitch.meta);
+          pendingSessionSwitch = null;
+        }
         if (pendingAccent !== null) coLead.setLaptopAccent(pendingAccent);
         if (pendingCoLeadBeat !== null) coLead.setCoLeadBeat(pendingCoLeadBeat);
         if (pendingHover !== null) coLead.setHover(pendingHover);
@@ -490,7 +528,21 @@
       applyResize();
     }
 
+    function syncFxCanvasSize() {
+      if (!fxCanvas) return;
+      const clampedDpr = Math.min(Math.max(dpr || 1, 1), 2);
+      const w = Math.max(64, Math.round(width));
+      const h = Math.max(64, Math.round(height));
+      const pxW = Math.round(w * clampedDpr);
+      const pxH = Math.round(h * clampedDpr);
+      if (fxCanvas.width !== pxW || fxCanvas.height !== pxH) {
+        fxCanvas.width = pxW;
+        fxCanvas.height = pxH;
+      }
+    }
+
     function applyResize() {
+      syncFxCanvasSize();
       if (!renderer || !camera) return;
       const clampedDpr = Math.min(Math.max(dpr || 1, 1), 2);
       const w = Math.max(64, Math.round(width));
@@ -763,10 +815,96 @@
       node.rotation.set(cx, cy, cz, "XYZ");
     }
 
+    function renderDizzyFxOverlay(coState) {
+      if (!fxCanvas || !fxCtx || !C.vrmDizzyFx) return;
+      const alpha = coState && Number.isFinite(coState.dizzyFxAlpha) ? coState.dizzyFxAlpha : 0;
+      if (alpha <= 0.002) {
+        if (!fxCanvas.hidden) {
+          fxCtx.setTransform?.(1, 0, 0, 1, 0, 0);
+          fxCtx.clearRect?.(0, 0, fxCanvas.width || width, fxCanvas.height || height);
+          fxCanvas.hidden = true;
+        }
+        return;
+      }
+      syncFxCanvasSize();
+      if (fxCanvas.hidden) fxCanvas.hidden = false;
+
+      const clampedDpr = Math.min(Math.max(dpr || 1, 1), 2);
+      const w = Math.max(64, Math.round(width));
+      const h = Math.max(64, Math.round(height));
+      let headX = w * 0.5;
+      let headY = h * 0.42;
+      let headRadius = Math.min(w, h) * 0.19;
+      let crownY = headY - headRadius * 1.28;
+
+      if (vrm && camera && projHeadVec && typeof projHeadVec.project === "function") {
+        const headNode = vrm.humanoid?.getNormalizedBoneNode("head");
+        const bustSpan = Math.max(0.18, cameraFraming.bustSpan || 0.27);
+        projHeadVec.set(cameraFraming.centerX || 0, cameraFraming.headY || 1.45, cameraFraming.headZ || 0);
+        if (headNode) headNode.getWorldPosition(projHeadVec);
+        // Aim near upper face / temple level (slightly above neck-to-head pivot).
+        projHeadVec.y += bustSpan * 0.24;
+        const worldY = projHeadVec.y;
+        const worldX = projHeadVec.x;
+        const worldZ = projHeadVec.z;
+        projHeadVec.project(camera);
+        if (Number.isFinite(projHeadVec.x) && Number.isFinite(projHeadVec.y)) {
+          headX = (projHeadVec.x * 0.5 + 0.5) * w;
+          headY = (-projHeadVec.y * 0.5 + 0.5) * h;
+        }
+        // Estimate projected head radius in CSS px for proportionate halo & spiral sizing.
+        projHeadVec.set(worldX, worldY + bustSpan * 0.42, worldZ).project(camera);
+        if (Number.isFinite(projHeadVec.y)) {
+          const topPx = (-projHeadVec.y * 0.5 + 0.5) * h;
+          const est = Math.abs(headY - topPx);
+          if (Number.isFinite(est) && est > 12) headRadius = est;
+        }
+        // Project crown top (using Box3 hair/ear topY when available) so orbiting stars float cleanly above hair!
+        const crownWorldY = Math.max(worldY + bustSpan * 0.58, (cameraFraming.topY || 0) - bustSpan * 0.08);
+        projHeadVec.set(worldX, crownWorldY, worldZ).project(camera);
+        if (Number.isFinite(projHeadVec.y)) {
+          crownY = (-projHeadVec.y * 0.5 + 0.5) * h;
+        }
+      }
+
+      fxCtx.setTransform?.(clampedDpr, 0, 0, clampedDpr, 0, 0);
+      C.vrmDizzyFx.drawDizzyFx(fxCtx, {
+        width: w,
+        height: h,
+        headX,
+        headY,
+        headRadius,
+        crownY,
+        alpha,
+        time: Number.isFinite(coState.dizzyTime) ? coState.dizzyTime : elapsed
+      });
+    }
+
+    function readDocRid() {
+      const rootEl = container?.ownerDocument?.documentElement;
+      if (!rootEl) return "";
+      const fromData = rootEl.dataset?.rid;
+      if (typeof fromData === "string" && fromData.trim()) return fromData.trim();
+      if (typeof rootEl.getAttribute === "function") {
+        const attr = rootEl.getAttribute("data-rid");
+        if (typeof attr === "string" && attr.trim()) return attr.trim();
+      }
+      return "";
+    }
+
     function updatePoseAndLook(dt, currentGaze, physics, extra) {
-      if (!vrm || !runtime) return;
+      if (!vrm || !runtime) return null;
       const { THREE } = runtime;
       elapsed += dt;
+
+      if (coLead) {
+        const domRid = readDocRid();
+        if (domRid) {
+          const curRid = coLead.getCoLeadState().activeSessionId;
+          if (!curRid) coLead.syncInitialSession(domRid);
+          else if (domRid !== curRid) coLead.onSessionSwitch(domRid, { source: "shell-rid" });
+        }
+      }
 
       const gx = C.clamp(Number.isFinite(currentGaze?.x) ? currentGaze.x : gaze.x, -1, 1);
       const gy = C.clamp(Number.isFinite(currentGaze?.y) ? currentGaze.y : gaze.y, -1, 1);
@@ -887,15 +1025,17 @@
           headPos.z + Math.cos(smoothedLook.yaw) * Math.cos(smoothedLook.pitch) * dist
         );
       }
+      return coState;
     }
 
     function renderTick(dt, currentGaze, physics, extra) {
       if (disposed || paused || contextLost || !renderer || !scene || !camera || !vrm) return;
       const clampedDt = Math.min(Math.max(dt, 0.001), 0.1);
-      updatePoseAndLook(clampedDt, currentGaze, physics, extra);
+      const coState = updatePoseAndLook(clampedDt, currentGaze, physics, extra);
       exprCtrl.update(clampedDt);
       vrm.update(clampedDt);
       renderer.render(scene, camera);
+      renderDizzyFxOverlay(coState);
       framesRendered++;
     }
 
@@ -919,11 +1059,45 @@
       dissolveGrid.className = "ws-dissolve-grid";
       dissolveGrid.setAttribute("aria-hidden", "true");
 
+      fxCanvas = doc.createElement("canvas");
+      fxCanvas.className = "ws-companion-vrm-fx";
+      fxCanvas.setAttribute("aria-hidden", "true");
+      fxCanvas.hidden = true;
+      if (fxCanvas.style) {
+        fxCanvas.style.position = "absolute";
+        fxCanvas.style.inset = "0";
+        fxCanvas.style.width = "100%";
+        fxCanvas.style.height = "100%";
+        fxCanvas.style.pointerEvents = "none";
+        fxCanvas.style.zIndex = "1";
+      }
+      fxCtx = typeof fxCanvas.getContext === "function" ? fxCanvas.getContext("2d") : null;
+      syncFxCanvasSize();
+
       overlay = doc.createElement("div");
       overlay.className = "ws-companion-vrm-overlay";
       overlay.hidden = true;
 
-      container.replaceChildren(canvasWrap, dissolveGrid, overlay);
+      container.replaceChildren(canvasWrap, dissolveGrid, fxCanvas, overlay);
+
+      // Sync initial session ID silently (no swap animation) and observe shell data-rid changes.
+      const initialRid = readDocRid();
+      if (initialRid) {
+        pendingInitialRid = initialRid;
+        coLead?.syncInitialSession(initialRid);
+      }
+      if (typeof MutationObserver === "function" && doc?.documentElement) {
+        try {
+          ridObserver = new MutationObserver(() => {
+            if (disposed) return;
+            const nextRid = readDocRid();
+            if (nextRid) rigApi.onSessionSwitch(nextRid, { source: "shell-rid" });
+          });
+          ridObserver.observe(doc.documentElement, { attributes: true, attributeFilter: ["data-rid"] });
+        } catch (_) {
+          ridObserver = null;
+        }
+      }
 
       async function ensureCachedModel() {
         const cacheKey = (pack?.id || "") + ":" + (pack?.rev || "");
@@ -1037,6 +1211,23 @@
         pendingAccent = hex;
         return coLead ? coLead.setLaptopAccent(hex) : (C.vrmCoLeadMath?.normalizeHexColor(hex) || null);
       },
+      onSessionSwitch(sessionId, meta) {
+        const rid = typeof sessionId === "string" ? sessionId.trim() : "";
+        if (!rid) return coLead ? coLead.getCoLeadState() : null;
+        if (!coLead) {
+          pendingSessionSwitch = { rid, meta };
+          return {
+            activeSessionId: rid,
+            laptopAccent: C.vrmCoLeadMath?.sessionAccentForKey?.(rid)?.hex || null,
+            swapped: false,
+            dizzyTriggered: false
+          };
+        }
+        return coLead.onSessionSwitch(rid, meta);
+      },
+      getCoLeadState() {
+        return coLead ? coLead.getCoLeadState() : null;
+      },
       setCoLeadBeat(beat) {
         pendingCoLeadBeat = beat;
         return coLead ? coLead.setCoLeadBeat(beat) : String(beat || "auto");
@@ -1092,11 +1283,13 @@
         loadCancel.abort();
         listenersCancel?.abort();
         listenersCancel = null;
+        ridObserver?.disconnect();
+        ridObserver = null;
         disposeRendererOnly(true);
         cachedModel = null;
         modelFetchPromise = null;
         if (container) container.replaceChildren();
-        container = canvasWrap = canvas = dissolveGrid = overlay = null;
+        container = canvasWrap = canvas = dissolveGrid = fxCanvas = fxCtx = overlay = null;
       }
     };
     return rigApi;
@@ -1108,6 +1301,8 @@
     registerVrmGesture,
     unregisterVrmGesture,
     setLaptopAccent(hex) { return activeVrmRig?.setLaptopAccent?.(hex) ?? null; },
+    onSessionSwitch(sessionId, meta) { return activeVrmRig?.onSessionSwitch?.(sessionId, meta) ?? null; },
+    getCoLeadState() { return activeVrmRig?.getCoLeadState?.() ?? null; },
     setCoLeadBeat(beat) { return activeVrmRig?.setCoLeadBeat?.(beat) ?? null; },
     setVrmHover(flag) { activeVrmRig?.setHover?.(flag); },
     VrmExpressionController,

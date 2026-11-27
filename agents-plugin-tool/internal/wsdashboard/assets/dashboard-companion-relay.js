@@ -5,6 +5,7 @@
     var tokens = new Set(), pending = [], agents = new Map(), completed = 0, newest = "", liveAbsorbed = new Set();
     var boardInput = boardLatest?.html, parsedBoard, canonicalAsks = null;
     var lastActivity = "", lastRoot = "", lastStreaming = false, failures = 0, previousPermissions = new Set();
+    var lastNotifiedSessionId = "";
     var observer = new MutationObserver(queue);
     var resize = new ResizeObserver(queue);
     var activityEvents = { idle: "session.idle", thinking: "session.thinking", tool: "session.tool", replying: "session.replying", typing_user: "user.typing" };
@@ -334,11 +335,27 @@
       return payload;
     }
 
+    function notifyParentSessionSwitch(payload) {
+      if (!active || disposed || pageHidden() || !rid || rid === lastNotifiedSessionId) return;
+      lastNotifiedSessionId = rid;
+      try {
+        var parentWin = window.parent;
+        if (parentWin && parentWin !== window && typeof parentWin.WsCompanion?.onSessionSwitch === "function") {
+          parentWin.WsCompanion.onSessionSwitch(rid, {
+            harness: payload?.harness || "",
+            model: payload?.model || "",
+            source: "relay"
+          });
+        }
+      } catch (_) { /* Cross-origin or detached parent. */ }
+    }
+
     function publish() {
       timer = 0;
       if (!active) return;
       last = performance.now();
       var payload = collect(), next = JSON.stringify(payload);
+      notifyParentSessionSwitch(payload);
       payload.events = pending.splice(0);
       if (next !== serialized || payload.events.length) shPost("companion-context", payload);
       serialized = next;
@@ -403,6 +420,7 @@
       if (disposed) return;
       if (pageHidden()) {
         active = false;
+        lastNotifiedSessionId = "";
         observer.disconnect();
         resize.disconnect();
         clearReveal();

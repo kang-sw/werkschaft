@@ -12,10 +12,294 @@
 
   const DEG = Math.PI / 180;
   const DEFAULT_ACCENT = "#7aa2ff";
-  const VALID_BEATS = new Set(["auto", "typing", "glance-up", "working", "sleepy", "reading-left", "reading-right"]);
+  const VALID_BEATS = new Set([
+    "auto", "typing", "glance-up", "working", "sleepy", "reading-left", "reading-right",
+    "swap-out", "swap-in", "dizzy", "dizzy-shake", "dizzy-recover"
+  ]);
+
+  // Curated 6-color tasteful dark-UI-friendly session laptop palette.
+  const SESSION_ACCENT_PALETTE = Object.freeze([
+    Object.freeze({ id: "sapphire",  hex: "#5b9eff", rim: "#a5cbff" }),
+    Object.freeze({ id: "lavender",  hex: "#a78bfa", rim: "#d2c3ff" }),
+    Object.freeze({ id: "mint-teal", hex: "#34d399", rim: "#96f0ce" }),
+    Object.freeze({ id: "amber",     hex: "#f59e0b", rim: "#fcd37a" }),
+    Object.freeze({ id: "coral",     hex: "#fb7185", rim: "#ffb3bf" }),
+    Object.freeze({ id: "ice-cyan",  hex: "#38bdf8", rim: "#9be3ff" })
+  ]);
+
+  const SWAP_OUT_DURATION = 0.30;
+  const SWAP_IN_DURATION = 0.35;
+  const SWAP_SETTLE_DURATION = 0.20;
+  const SWAP_TOTAL_DURATION = SWAP_OUT_DURATION + SWAP_IN_DURATION + SWAP_SETTLE_DURATION; // 0.85s
+
+  const DIZZY_WINDOW_SEC = 2.8;
+  const DIZZY_TRIGGER_COUNT = 4;
+  const DIZZY_SWAY_DURATION = 2.85;
+  const DIZZY_RECOVER_DURATION = 0.75;
+  const DIZZY_TOTAL_DURATION = DIZZY_SWAY_DURATION + DIZZY_RECOVER_DURATION; // 3.60s
+  const DIZZY_COOLDOWN_SEC = 1.2;
+
+  const DIZZY_STAR_COLORS = Object.freeze(["#fde68a", "#7dd3fc", "#fbcfe8"]);
 
   function clamp(v, lo, hi) {
     return v < lo ? lo : (v > hi ? hi : v);
+  }
+
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
+  }
+
+  function easeInCubic(t) {
+    const u = clamp(t, 0, 1);
+    return u * u * u;
+  }
+
+  function easeOutCubic(t) {
+    const u = 1 - clamp(t, 0, 1);
+    return 1 - u * u * u;
+  }
+
+  function easeInOutCubic(t) {
+    const u = clamp(t, 0, 1);
+    return u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
+  }
+
+  // Deterministic FNV-1a 32-bit hash mapping each distinct session ID to one of
+  // the 6 curated laptop accents (sequential IDs spread cleanly across all 6).
+  function sessionAccentForKey(sessionKey) {
+    const raw = typeof sessionKey === "string" ? sessionKey.trim() : "";
+    if (!raw) return SESSION_ACCENT_PALETTE[0];
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < raw.length; i++) {
+      h ^= raw.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return SESSION_ACCENT_PALETTE[(h >>> 0) % SESSION_ACCENT_PALETTE.length];
+  }
+
+  function findPaletteEntryByHex(hex) {
+    const norm = normalizeHexColor(hex);
+    if (!norm) return null;
+    for (const entry of SESSION_ACCENT_PALETTE) {
+      if (entry.hex === norm) return entry;
+    }
+    return null;
+  }
+
+  // ============================================================================
+  // Crisp 2D Anime Dizzy FX (Spiral Swirls + Orbiting Pastel Stars)
+  // ============================================================================
+  // Computes safe, strictly-clamped 2D anchor positions inside the rail dock so
+  // spirals and orbiting stars never clip against canvas edges or cover eyes.
+  function computeDizzyLayout(opts = {}) {
+    const w = Math.max(80, Number.isFinite(opts.width) ? opts.width : 340);
+    const h = Math.max(80, Number.isFinite(opts.height) ? opts.height : 240);
+    const headX = Number.isFinite(opts.headX) ? opts.headX : w * 0.5;
+    const headY = Number.isFinite(opts.headY) ? opts.headY : h * 0.42;
+    const headR = clamp(Number.isFinite(opts.headRadius) ? opts.headRadius : Math.min(w, h) * 0.19, 26, Math.min(w, h) * 0.28);
+
+    const padX = 20;
+    const padTop = 16;
+    const padBottom = 30;
+    const rightR = clamp(headR * 0.36, 13.5, 19);
+    const leftR = clamp(headR * 0.26, 9.5, 14);
+
+    // Float anime spirals cleanly beside & slightly above her temples (clear of cheeks & hair!).
+    const rightSpiral = {
+      x: clamp(headX + headR * 1.62, padX + rightR, w - padX - rightR),
+      y: clamp(headY - headR * 0.62, padTop + rightR, h - padBottom - rightR),
+      radius: rightR
+    };
+    const leftSpiral = {
+      x: clamp(headX - headR * 1.58, padX + leftR, w - padX - leftR),
+      y: clamp(headY - headR * 0.44, padTop + leftR, h - padBottom - leftR),
+      radius: leftR
+    };
+
+    // Float orbiting star halo gracefully ABOVE her crown/hairline (never over forehead or eyes!).
+    const rawCrownY = Number.isFinite(opts.crownY) ? opts.crownY : (headY - headR * 1.28);
+    const haloCy = clamp(Math.min(rawCrownY - 6, headY - headR * 1.24), padTop + 11, h * 0.36);
+    const maxRx = Math.max(32, Math.min(headX - 18, w - headX - 18));
+    const haloRx = clamp(headR * 1.48, 42, Math.min(maxRx, w * 0.36));
+    const haloRy = clamp(headR * 0.24, 9, Math.min(16, Math.max(9, haloCy - 10)));
+    const haloCx = clamp(headX, haloRx + 14, w - haloRx - 14);
+
+    return {
+      width: w,
+      height: h,
+      rightSpiral,
+      leftSpiral,
+      halo: { cx: haloCx, cy: haloCy, rx: haloRx, ry: haloRy }
+    };
+  }
+
+  function strokeAnimeSpiral(ctx, cx, cy, maxR, phaseRad, strokeColor, glowColor, lineWidth) {
+    const turns = 2.35;
+    const steps = 44;
+    const maxTheta = turns * Math.PI * 2;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(phaseRad);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    const tracePath = () => {
+      ctx.beginPath();
+      for (let i = 0; i <= steps; i++) {
+        const u = i / steps;
+        const theta = u * maxTheta;
+        const r = 1.6 + u * (maxR - 1.6);
+        const px = Math.cos(theta) * r;
+        const py = Math.sin(theta) * r;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+    };
+
+    // Soft pastel outer glow pass.
+    tracePath();
+    ctx.strokeStyle = glowColor;
+    ctx.lineWidth = lineWidth * 2.55;
+    ctx.stroke();
+
+    // Crisp luminous anime core stroke.
+    tracePath();
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = lineWidth;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawFourPointStar(ctx, x, y, outerR, innerR, rot, fill, glow) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rot);
+
+    // Subtle soft bloom disc behind the star.
+    ctx.beginPath();
+    ctx.arc(0, 0, outerR * 1.18, 0, Math.PI * 2);
+    ctx.fillStyle = glow;
+    ctx.fill();
+
+    // Crisp 4-point anime sparkle star.
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const r = i % 2 === 0 ? outerR : innerR;
+      const a = (i * Math.PI) / 4;
+      const px = Math.cos(a) * r;
+      const py = Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.fill();
+
+    // Tiny bright ivory center dot.
+    ctx.beginPath();
+    ctx.arc(0, 0, Math.max(1.2, innerR * 0.65), 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.92)";
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawDizzyFx(ctx, opts = {}) {
+    if (!ctx || typeof ctx.beginPath !== "function" || typeof ctx.translate !== "function") return null;
+    const alpha = clamp(Number.isFinite(opts.alpha) ? opts.alpha : 0, 0, 1);
+    const layout = computeDizzyLayout(opts);
+    const t = Number.isFinite(opts.time) ? opts.time : 0;
+    const w = layout.width;
+    const h = layout.height;
+
+    if (typeof ctx.clearRect === "function") ctx.clearRect(0, 0, w, h);
+    if (alpha <= 0.002) return layout;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+
+    // 1. Delicate elliptical orbit swoosh arcs above her crown.
+    const { cx, cy, rx, ry } = layout.halo;
+    const orbitRot = t * 2.55;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(-0.07);
+    ctx.lineCap = "round";
+    for (let k = 0; k < 2; k++) {
+      const a0 = orbitRot + k * Math.PI + 0.15;
+      const a1 = a0 + 1.25;
+      ctx.beginPath();
+      if (typeof ctx.ellipse === "function") {
+        ctx.ellipse(0, 0, rx, ry, 0, a0, a1);
+      } else {
+        for (let s = 0; s <= 12; s++) {
+          const a = lerp(a0, a1, s / 12);
+          const px = Math.cos(a) * rx;
+          const py = Math.sin(a) * ry;
+          if (s === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+      }
+      ctx.strokeStyle = k === 0 ? "rgba(253, 230, 138, 0.34)" : "rgba(125, 211, 252, 0.30)";
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // 2. Primary pastel-gold/cyan anime spiral beside her upper-right temple.
+    const pulseR = 1 + Math.sin(t * 5.0) * 0.07;
+    strokeAnimeSpiral(
+      ctx,
+      layout.rightSpiral.x,
+      layout.rightSpiral.y,
+      layout.rightSpiral.radius * pulseR,
+      t * 4.2,
+      "#fde68a",
+      "rgba(125, 211, 252, 0.34)",
+      2.3
+    );
+
+    // 3. Smaller counter-rotating pastel-rose/lavender companion swirl on upper-left temple.
+    const pulseL = 1 + Math.cos(t * 4.6 + 0.7) * 0.07;
+    strokeAnimeSpiral(
+      ctx,
+      layout.leftSpiral.x,
+      layout.leftSpiral.y,
+      layout.leftSpiral.radius * pulseL,
+      -t * 3.6 + 1.1,
+      "#fbcfe8",
+      "rgba(167, 139, 250, 0.32)",
+      1.85
+    );
+
+    // 4. Three twinkling 4-point pastel stars orbiting her crown halo.
+    const starGlows = [
+      "rgba(253, 230, 138, 0.28)",
+      "rgba(125, 211, 252, 0.28)",
+      "rgba(251, 207, 232, 0.28)"
+    ];
+    for (let i = 0; i < 3; i++) {
+      const a = orbitRot + (i * Math.PI * 2) / 3;
+      const cosA = Math.cos(a);
+      const sinA = Math.sin(a);
+      const depthScale = 0.78 + (sinA + 1) * 0.22; // Slightly larger in front, softer behind
+      const twinkle = 0.88 + Math.sin(t * 7.4 + i * 2.1) * 0.16;
+      const sx = clamp(cx + cosA * rx, 14, w - 14);
+      const sy = clamp(cy + sinA * ry - cosA * rx * 0.07, 14, h - 18);
+      const outerR = (6.8 - i * 0.45) * depthScale * twinkle;
+      drawFourPointStar(
+        ctx,
+        sx,
+        sy,
+        outerR,
+        outerR * 0.34,
+        t * 1.9 + i * 0.8,
+        DIZZY_STAR_COLORS[i],
+        starGlows[i]
+      );
+    }
+
+    ctx.restore();
+    return layout;
   }
 
   function dampAlpha(rate, dt) {
@@ -208,7 +492,7 @@
     return shape;
   }
 
-  // Pure-FK Co-Lead bone pose calculator in VRM 1.0 normalized coordinates.
+    // Pure-FK Co-Lead bone pose calculator in VRM 1.0 normalized coordinates.
   function computeCoLeadTargets(params) {
     const t = params.elapsed || 0;
     const typingW = clamp(params.typingWeight || 0, 0, 1);
@@ -216,6 +500,11 @@
     const sleepyW = clamp(params.sleepyWeight || 0, 0, 1);
     const reactionW = clamp(params.reactionWeight || 0, 0, 1);
     const workingW = clamp(params.workingWeight || 0, 0, 1);
+    const swapSweep = clamp(Number.isFinite(params.swapSweep) ? params.swapSweep : 0, -1, 1);
+    const swapActiveW = clamp(params.swapWeight || 0, 0, 1);
+    const dizzyW = clamp(params.dizzyWeight || 0, 0, 1);
+    const dizzyPhaseT = Number.isFinite(params.dizzyTime) ? params.dizzyTime : t;
+    const extraHeadRoll = Number.isFinite(params.extraHeadRoll) ? params.extraHeadRoll : 0;
     const tiltDir = params.tiltDir >= 0 ? 1 : -1;
     const headYaw = Number.isFinite(params.headYaw) ? params.headYaw : 0;
     const headPitch = Number.isFinite(params.headPitch) ? params.headPitch : 0;
@@ -224,7 +513,7 @@
     // Gentle alive breathing (slower and deeper when sleepy).
     const breathFreq = 1.42 - sleepyW * 0.42 + workingW * 0.14;
     const breath = Math.sin(t * breathFreq);
-    const sway = Math.sin(t * 0.68) * (1 - workingW * 0.45 - sleepyW * 0.3);
+    const sway = Math.sin(t * 0.68) * (1 - workingW * 0.45 - sleepyW * 0.3 - dizzyW * 0.8);
 
     // Organic multi-harmonic alternating left/right keystroke cadence (zero metronome feel).
     const rate = 6.2 + workingW * 3.4;
@@ -233,64 +522,81 @@
     const wristL = Math.sin(t * rate * 1.15 + 0.4) * typingW;
     const wristR = Math.sin(t * rate * 1.15 + 3.4) * typingW;
 
-    // Cozy forward seated lean while typing; relaxes slightly upright when glancing up.
-    const leanScale = (1 - glanceW * 0.65 - reactionW * 0.45);
+    // Cozy forward seated lean while typing; relaxes slightly upright when glancing up or dizzy.
+    const leanScale = clamp(1 - glanceW * 0.65 - reactionW * 0.45 - dizzyW * 0.50, 0.15, 1);
+    const dizzySpineYaw = Math.sin(dizzyPhaseT * 3.6) * 2.6 * DEG * dizzyW;
+    const dizzySpineRoll = Math.cos(dizzyPhaseT * 3.6) * 2.4 * DEG * dizzyW;
+    const swapTorsoYaw = swapSweep * 3.4 * DEG;
     const spinePitch = (0.036 + workingW * 0.014) * leanScale + sleepyW * 0.030 + breath * 0.010;
     const chestPitch = (0.028 + workingW * 0.012) * leanScale + sleepyW * 0.022 + breath * 0.015;
     const upperChestPitch = 0.014 * leanScale + breath * 0.008;
 
-    // Charming anime head-tilt on glance-up (+/-7.6 deg) + tiny reading tilt while typing.
+    // Charming anime head-tilt on glance-up (+/-7.6 deg), figure-eight sway when dizzy,
+    // plus gentle follow-through roll during laptop swaps.
     const glanceRoll = tiltDir * 0.132 * glanceW;
     const idleRoll = sway * 0.016 * (1 - glanceW) + Math.sin(t * 0.48) * 0.014 * workingW * (1 - glanceW);
     const sleepyNod = sleepyW * (0.125 + Math.sin(t * 0.82) * 0.035);
 
     const totalPitch = headPitch + headPitchCue + sleepyNod;
+    const totalRoll = glanceRoll + extraHeadRoll;
     const neckPitch = totalPitch * 0.40;
     const craniumPitch = totalPitch * 0.60;
     const neckYaw = headYaw * 0.36;
-    const craniumYaw = headYaw * 0.64 + sway * 0.012 * (1 - glanceW);
-    const neckRoll = glanceRoll * 0.34;
-    const craniumRoll = glanceRoll * 0.66 + idleRoll;
+    const craniumYaw = headYaw * 0.64 + sway * 0.012 * (1 - glanceW - dizzyW * 0.8);
+    const neckRoll = totalRoll * 0.35;
+    const craniumRoll = totalRoll * 0.65 + idleRoll * (1 - dizzyW);
 
-    // Relaxed lowered shoulders rolled subtly forward toward her desk.
-    const shForward = 0.048 * (1 - sleepyW * 0.45);
+    // Relaxed lowered shoulders rolled subtly forward toward her desk, with subtle
+    // sweep follow-through during laptop swap and soft bobbing wave during dizzy.
+    const shForward = 0.048 * (1 - sleepyW * 0.45 - dizzyW * 0.28);
     const shDrop = 0.046 + sleepyW * 0.018;
-    const lSh = [0.012 + tapL * 0.006, -shForward, -shDrop + breath * 0.012 + tapL * 0.007];
-    const rSh = [0.012 + tapR * 0.006, shForward, shDrop - breath * 0.012 - tapR * 0.007];
+    const dizzyShWave = Math.sin(dizzyPhaseT * 3.6 + 0.6) * 0.034 * dizzyW;
+    const swapShLiftL = swapSweep * 0.032;
+    const swapShLiftR = -swapSweep * 0.032;
+    const lSh = [
+      0.012 + tapL * 0.006,
+      -shForward + swapSweep * 0.030,
+      -shDrop + breath * 0.012 + tapL * 0.007 + dizzyShWave + swapShLiftL
+    ];
+    const rSh = [
+      0.012 + tapR * 0.006,
+      shForward + swapSweep * 0.030,
+      shDrop - breath * 0.012 - tapR * 0.007 + dizzyShWave + swapShLiftR
+    ];
 
-    // Upper arms stay naturally lowered along her sides (|z| >= 1.20) and swing
+    // Upper arms stay naturally lowered along her sides (|z| >= 1.18) and swing
     // gently forward so elbows clear the ribcage and hands stay strictly behind the lid.
-    const activePoseBlend = 1 - sleepyW * 0.55;
-    const uPitch = -0.17 * activePoseBlend - workingW * 0.025 + glanceW * 0.03;
+    const activePoseBlend = clamp(1 - sleepyW * 0.55 - dizzyW * 0.25, 0.35, 1);
+    const uPitch = -0.17 * activePoseBlend - workingW * 0.025 + glanceW * 0.03 + dizzyW * 0.05;
     const uYaw = 0.12 * activePoseBlend;
-    const uDrop = 1.22 + sleepyW * 0.06;
+    const uDrop = 1.22 + sleepyW * 0.06 + dizzyW * 0.03;
 
     const lUpper = [
-      uPitch + tapL * 0.015,
-      -uYaw + tapL * 0.010,
-      -uDrop - breath * 0.008
+      uPitch + tapL * 0.015 - Math.max(0, swapSweep) * 0.05,
+      -uYaw + tapL * 0.010 + swapSweep * 0.09,
+      -uDrop - breath * 0.008 + swapActiveW * 0.02
     ];
     const rUpper = [
-      uPitch + tapR * 0.015,
-      uYaw - tapR * 0.010,
-      uDrop + breath * 0.008
+      uPitch + tapR * 0.015 - Math.max(0, -swapSweep) * 0.05,
+      uYaw - tapR * 0.010 + swapSweep * 0.09,
+      uDrop + breath * 0.008 - swapActiveW * 0.02
     ];
 
     // Forearms flex cleanly forward (Ry negative on left, positive on right)
     // and angle gently inward onto the unseen laptop keyboard strictly behind the lid.
-    const fFlex = 1.12 * activePoseBlend + sleepyW * 0.28 - glanceW * 0.10;
+    const fFlex = 1.12 * activePoseBlend + sleepyW * 0.28 - glanceW * 0.10 - dizzyW * 0.16 - swapActiveW * 0.08;
     const fInward = 0.28 * activePoseBlend + sleepyW * 0.06;
     const fTwist = 0.16 * activePoseBlend;
 
     const lLower = [
       fTwist + tapL * 0.030,
       -(fFlex + tapL * 0.045),
-      -(fInward + tapL * 0.018)
+      -(fInward + tapL * 0.018 - swapSweep * 0.06)
     ];
     const rLower = [
       fTwist + tapR * 0.030,
       fFlex + tapR * 0.045,
-      fInward + tapR * 0.018
+      fInward + tapR * 0.018 + swapSweep * 0.06
     ];
 
     // Delicate alternating wrist/hand key-tap articulation angled downward onto keys.
@@ -298,8 +604,8 @@
     const rHand = [0.08 + wristR * 0.055, -(0.05 + tapR * 0.035), -(0.10 + wristR * 0.04)];
 
     return {
-      spine: [spinePitch, sway * 0.009 * (1 - glanceW * 0.5), 0],
-      chest: [chestPitch, 0, 0],
+      spine: [spinePitch, sway * 0.009 * (1 - glanceW * 0.5) + dizzySpineYaw + swapTorsoYaw, dizzySpineRoll],
+      chest: [chestPitch, swapTorsoYaw * 0.65, dizzySpineRoll * 0.55],
       upperChest: [upperChestPitch, 0, 0],
       neck: [neckPitch, neckYaw, neckRoll],
       head: [craniumPitch, craniumYaw, craniumRoll],
@@ -320,8 +626,17 @@
     const camera = opts.camera || null;
 
     let accentHex = DEFAULT_ACCENT;
+    let targetAccentHex = DEFAULT_ACCENT;
+    let accentId = "sapphire";
+    let activeSessionId = "";
+    let activeSessionMeta = null;
     let overrideBeat = "auto";
     let explicitHover = null;
+
+    // Monotonic clock bridging simulated step(dt) and live browser wall time.
+    let simClockSec = 0;
+    let lastStepWallMs = 0;
+    let lastObservedSec = 0;
 
     // Rhythm state machine.
     let phase = "typing"; // 'typing' | 'reading' | 'glance-up'
@@ -332,13 +647,32 @@
     let glanceTiltDir = 1;
     let lastActivity = "idle";
 
+    // Session-switch laptop swap choreography (~0.85s, smoothly interruptible).
+    let swapActive = false;
+    let swapElapsed = 0;
+    let swapOutDuration = SWAP_OUT_DURATION;
+    let swapDir = 1; // alternates +1 / -1 per swap
+    let swapSwitchedColor = false;
+    let swapStartPose = { dx: 0, dy: 0, dz: 0, rx: 0, ry: 0, rz: 0 };
+    let liveLaptopOffset = { dx: 0, dy: 0, dz: 0, rx: 0, ry: 0, rz: 0 };
+
+    // Rapid-switch sliding-window dizzy easter egg (>=4 distinct switches within 2.8s).
+    const switchTimestamps = [];
+    let dizzyPhase = "none"; // 'none' | 'sway' | 'recover'
+    let dizzyElapsed = 0;
+    let dizzyCooldownUntil = -Infinity;
+    let dizzyFxAlpha = 0;
+
     // Smoothly damped blending weights (all frame-rate independent).
     let typingWeight = 1.0;
     let glanceWeight = 0.0;
     let sleepyWeight = 0.0;
     let reactionWeight = 0.0;
     let workingWeight = 0.0;
+    let swapWeight = 0.0;
+    let dizzyWeight = 0.0;
     let screenGlow = 0.13;
+    let bounceColorRgb = hexToRgb(DEFAULT_ACCENT);
 
     // 3D foreground laptop prop + soft upward screen bounce light.
     let laptopGroup = null;
@@ -352,8 +686,11 @@
     const materials = [];
     const textures = [];
 
-    // Cached framing & telemetry measurements (zero per-frame allocations).
+    // Cached resting prop transform & framing telemetry (zero per-frame allocations).
     let lastFraming = null;
+    let basePos = { x: 0, y: 0, z: 0 };
+    let baseScale = 0.4;
+    let baseVisH = 0.85;
     let lidTopWorldY = 0;
     let lidTopWorldZ = 0;
     let lidTopViewportPct = 0;
@@ -362,6 +699,38 @@
     const scratchVec = THREE && typeof THREE.Vector3 === "function" ? new THREE.Vector3() : null;
 
     const LID_TILT_RAD = 11 * DEG; // Top of open lid tilts gently toward viewer (+Z).
+
+    function readWallMs() {
+      if (typeof performance !== "undefined" && typeof performance.now === "function") {
+        const ms = performance.now();
+        if (Number.isFinite(ms) && ms > 0) return ms;
+      }
+      return 0;
+    }
+
+    function currentClockSec(overrideMs) {
+      if (Number.isFinite(overrideMs)) {
+        const sec = overrideMs / 1000;
+        lastObservedSec = Math.max(lastObservedSec, sec);
+        return lastObservedSec;
+      }
+      const wallMs = readWallMs();
+      let wallDelta = 0;
+      if (wallMs > 0 && lastStepWallMs > 0 && wallMs > lastStepWallMs) {
+        wallDelta = Math.min((wallMs - lastStepWallMs) / 1000, 5.0);
+      } else if (wallMs > 0 && lastStepWallMs === 0 && simClockSec === 0) {
+        lastStepWallMs = wallMs;
+      }
+      const next = simClockSec + wallDelta;
+      lastObservedSec = Math.max(lastObservedSec, next);
+      return lastObservedSec;
+    }
+
+    function pruneSwitchWindow(nowSec) {
+      while (switchTimestamps.length && nowSec - switchTimestamps[0] > DIZZY_WINDOW_SEC) {
+        switchTimestamps.shift();
+      }
+    }
 
     function canBuild3DProp() {
       return !!(
@@ -375,16 +744,42 @@
       );
     }
 
-    function applyAccentVisuals() {
+    function applyAccentVisuals(immediateBounce = true) {
       const rgb = hexToRgb(accentHex);
       if (emblemMesh?.material?.color?.setRGB) {
         emblemMesh.material.color.setRGB(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
       }
+      if (rimMesh?.material?.color?.setHex) {
+        // Sleek 58% session accent tint blended over machined cool silver rim catchlight.
+        rimMesh.material.color.setHex(mixRgbToHex([192, 206, 228], rgb, 0.58));
+      }
+      if (lidMesh?.material?.emissive?.setHex) {
+        // Subtle 13% anodized session sheen over dark slate #0b0e14 so lid stays classy yet distinct.
+        lidMesh.material.emissive.setHex(mixRgbToHex([11, 14, 20], rgb, 0.13));
+      }
+      if (immediateBounce) {
+        bounceColorRgb = rgb;
+      }
       if (screenLight?.color?.setHex) {
-        // Blend only 22% of accent tint over flattering anime cool-ivory so skin stays rosy & cute.
-        const bounceHex = mixRgbToHex([222, 236, 255], rgb, 0.22);
+        // Blend 26% of session accent over flattering cool-ivory so anime skin stays rosy & cute.
+        const bounceHex = mixRgbToHex([224, 236, 255], bounceColorRgb, 0.26);
         screenLight.color.setHex(bounceHex);
       }
+    }
+
+    function applyLaptopTransform() {
+      if (!laptopGroup) return;
+      laptopGroup.position.set(
+        basePos.x + liveLaptopOffset.dx,
+        basePos.y + liveLaptopOffset.dy,
+        basePos.z + liveLaptopOffset.dz
+      );
+      laptopGroup.rotation.set(
+        LID_TILT_RAD + liveLaptopOffset.rx,
+        liveLaptopOffset.ry,
+        liveLaptopOffset.rz,
+        "XYZ"
+      );
     }
 
     function buildPropIfNeeded() {
@@ -447,11 +842,11 @@
 
       // Subtle machined anodized top-edge catchlight trim so silhouette reads crisply on dark rail.
       if (typeof THREE.PlaneGeometry === "function" && typeof THREE.MeshBasicMaterial === "function") {
-        const rimGeo = new THREE.PlaneGeometry(0.91, 0.010);
+        const rimGeo = new THREE.PlaneGeometry(0.92, 0.013);
         const rimMat = new THREE.MeshBasicMaterial({
           color: 0xb6c8e8,
           transparent: true,
-          opacity: 0.46,
+          opacity: 0.68,
           depthWrite: false
         });
         geometries.push(rimGeo);
@@ -461,22 +856,22 @@
         rimMesh.frustumCulled = false;
         laptopGroup.add(rimMesh);
 
-        // Minimalist center-upper soft-glowing accent emblem pill (Step 3 themeable!).
+        // Minimalist center-upper soft-glowing accent emblem pill (per-session themed!).
         emblemTexture = makeEmblemGlowTexture(THREE);
         if (emblemTexture) textures.push(emblemTexture);
-        const emblemGeo = new THREE.PlaneGeometry(0.125, 0.056);
+        const emblemGeo = new THREE.PlaneGeometry(0.168, 0.072);
         const emblemMat = new THREE.MeshBasicMaterial({
           color: 0x7aa2ff,
           map: emblemTexture || null,
           transparent: true,
-          opacity: 0.88,
+          opacity: 0.96,
           depthWrite: false
         });
         geometries.push(emblemGeo);
         materials.push(emblemMat);
         emblemMesh = new THREE.Mesh(emblemGeo, emblemMat);
         // Positioned in the upper bezel zone so it stays crisply visible above the bottom dissolve mask on all avatars.
-        emblemMesh.position.set(0, 0.252, 0.0145);
+        emblemMesh.position.set(0, 0.266, 0.0145);
         emblemMesh.frustumCulled = false;
         laptopGroup.add(emblemMesh);
       }
@@ -539,11 +934,13 @@
 
       lidTopWorldY = lidTopY;
       lidTopWorldZ = laptopZ + topOffsetZ;
+      basePos = { x: centerX, y: centerY, z: laptopZ };
+      baseScale = lidScale;
+      baseVisH = visH;
 
       if (laptopGroup) {
-        laptopGroup.position.set(centerX, centerY, laptopZ);
         laptopGroup.scale.set(lidScale, lidScale, lidScale);
-        laptopGroup.rotation.set(LID_TILT_RAD, 0, 0, "XYZ");
+        applyLaptopTransform();
       }
 
       // Position soft upward screen bounce light with gentle distance so it bathes chin &
@@ -676,35 +1073,96 @@
       const elapsed = Number.isFinite(ctx.elapsed) ? ctx.elapsed : 0;
       const hovered = explicitHover !== null ? explicitHover : !!ctx.hover;
 
+      simClockSec += dt;
+      const wallMs = readWallMs();
+      if (wallMs > 0) lastStepWallMs = wallMs;
+      lastObservedSec = Math.max(lastObservedSec, simClockSec);
+      pruneSwitchWindow(lastObservedSec);
+
       let activity = classifyActivity(ctx);
       if (overrideBeat === "working") activity = "working";
       else if (overrideBeat === "sleepy") activity = "sleepy";
-      else if (overrideBeat === "typing" || overrideBeat === "glance-up" || overrideBeat === "reading-left" || overrideBeat === "reading-right") {
+      else if (
+        overrideBeat === "typing" || overrideBeat === "glance-up" ||
+        overrideBeat === "reading-left" || overrideBeat === "reading-right" ||
+        overrideBeat === "swap-out" || overrideBeat === "swap-in" ||
+        overrideBeat === "dizzy" || overrideBeat === "dizzy-shake" || overrideBeat === "dizzy-recover"
+      ) {
         activity = "idle";
       }
 
-      advanceRhythm(dt, activity, hovered);
+      // Advance active dizzy easter egg or laptop swap timelines when in auto mode.
+      if (overrideBeat === "auto") {
+        if (dizzyPhase !== "none") {
+          dizzyElapsed += dt;
+          if (dizzyPhase === "sway" && dizzyElapsed >= DIZZY_SWAY_DURATION) {
+            dizzyPhase = "recover";
+            dizzyElapsed = 0;
+            // Ensure active session's accent is applied cleanly for recovery.
+            if (accentHex !== targetAccentHex) {
+              accentHex = targetAccentHex;
+              applyAccentVisuals(false);
+            }
+          } else if (dizzyPhase === "recover" && dizzyElapsed >= DIZZY_RECOVER_DURATION) {
+            dizzyPhase = "none";
+            dizzyElapsed = 0;
+            dizzyCooldownUntil = lastObservedSec + DIZZY_COOLDOWN_SEC;
+            phase = "typing";
+            phaseTimer = 1.8;
+          }
+        } else if (swapActive) {
+          swapElapsed += dt;
+          if (!swapSwitchedColor && swapElapsed >= swapOutDuration) {
+            swapSwitchedColor = true;
+            accentHex = targetAccentHex;
+            applyAccentVisuals(false);
+          }
+          const totalDur = swapOutDuration + SWAP_IN_DURATION + SWAP_SETTLE_DURATION;
+          if (swapElapsed >= totalDur) {
+            swapActive = false;
+            swapElapsed = 0;
+            swapOutDuration = SWAP_OUT_DURATION;
+            phase = "typing";
+            phaseTimer = 1.8;
+          }
+        }
+      }
 
-      const wantGlance = overrideBeat === "glance-up" || (overrideBeat === "auto" && activity === "idle" && (hovered || phase === "glance-up"));
-      const wantSleepy = activity === "sleepy";
-      const wantReaction = activity === "reaction";
-      const wantWorking = activity === "working";
-      const wantTyping = !wantGlance && !wantSleepy && !wantReaction && (
+      const forcedSwapOut = overrideBeat === "swap-out";
+      const forcedSwapIn = overrideBeat === "swap-in";
+      const forcedDizzy = overrideBeat === "dizzy";
+      const forcedDizzyShake = overrideBeat === "dizzy-shake";
+      const forcedDizzyRecover = overrideBeat === "dizzy-recover";
+
+      const inDizzySway = forcedDizzy || (overrideBeat === "auto" && dizzyPhase === "sway");
+      const inDizzyShake = forcedDizzyShake || (overrideBeat === "auto" && dizzyPhase === "recover" && dizzyElapsed < DIZZY_RECOVER_DURATION * 0.48);
+      const inDizzyRecover = forcedDizzyRecover || (overrideBeat === "auto" && dizzyPhase === "recover" && dizzyElapsed >= DIZZY_RECOVER_DURATION * 0.48);
+      const inAnyDizzy = inDizzySway || inDizzyShake || inDizzyRecover;
+      const inSwap = !inAnyDizzy && (forcedSwapOut || forcedSwapIn || (overrideBeat === "auto" && swapActive));
+
+      if (!inAnyDizzy && !inSwap) {
+        advanceRhythm(dt, activity, hovered);
+      }
+
+      const wantGlance = !inAnyDizzy && !inSwap && (overrideBeat === "glance-up" || (overrideBeat === "auto" && activity === "idle" && (hovered || phase === "glance-up")));
+      const wantSleepy = !inAnyDizzy && !inSwap && activity === "sleepy";
+      const wantReaction = !inAnyDizzy && !inSwap && activity === "reaction";
+      const wantWorking = !inAnyDizzy && !inSwap && activity === "working";
+      const wantTyping = !inAnyDizzy && !inSwap && !wantGlance && !wantSleepy && !wantReaction && (
         overrideBeat === "typing" ||
         overrideBeat === "working" ||
         (overrideBeat === "auto" && phase === "typing")
       );
 
-      typingWeight = damp(typingWeight, wantTyping ? 1 : 0, wantTyping ? 6.5 : 8.5, dt);
-      glanceWeight = damp(glanceWeight, wantGlance ? 1 : 0, wantGlance ? 5.8 : 4.8, dt);
+      typingWeight = damp(typingWeight, wantTyping ? 1 : 0, wantTyping ? 6.5 : 10.0, dt);
+      glanceWeight = damp(glanceWeight, wantGlance ? 1 : 0, wantGlance ? 5.8 : 5.2, dt);
       sleepyWeight = damp(sleepyWeight, wantSleepy ? 1 : 0, 3.6, dt);
       reactionWeight = damp(reactionWeight, wantReaction ? 1 : 0, 8.0, dt);
       workingWeight = damp(workingWeight, wantWorking ? 1 : 0, 5.2, dt);
+      swapWeight = damp(swapWeight, inSwap ? 1 : 0, inSwap ? 11.0 : 8.5, dt);
+      dizzyWeight = damp(dizzyWeight, inDizzySway ? 1 : 0, inDizzySway ? 7.5 : 9.0, dt);
 
-      // Compute charming head & eye gaze choreography:
-      //  - Typing / reading: gentle pitch down toward screen (+5.5 deg) + soft horizontal reading scan.
-      //  - Glance-up / hover: head lifts straight to camera with warm eye contact and +/-6 deg tilt.
-      //  - Sleepy: soft lowered head nod.
+      // Compute laptop animated offset, head/eye choreography, and expression overlays.
       const gx = clamp(Number.isFinite(ctx.gazeX) ? ctx.gazeX : 0, -1, 1);
       const gy = clamp(Number.isFinite(ctx.gazeY) ? ctx.gazeY : 0, -1, 1);
 
@@ -722,6 +1180,8 @@
 
       let wantHeadYaw = screenYaw * (1 - glanceWeight) + glanceYaw * glanceWeight;
       let wantHeadPitch = screenPitch * (1 - glanceWeight) + glancePitch * glanceWeight;
+      let extraHeadRoll = 0;
+      let swapSweep = 0;
       if (reactionWeight > 0.01) {
         wantHeadYaw = wantHeadYaw * (1 - reactionWeight) + reactionYaw * reactionWeight;
         wantHeadPitch = wantHeadPitch * (1 - reactionWeight) + reactionPitch * reactionWeight;
@@ -731,8 +1191,6 @@
         wantHeadPitch *= (1 - sleepyWeight * 0.85);
       }
 
-      // Eye LookAt yaw/pitch (in radians): looks down-scan at screen while typing,
-      // locks warmly onto the camera during glance-up!
       const eyeYawScreen = readingScan * 13.0 * DEG + gx * 6 * DEG;
       const eyePitchScreen = -9.5 * DEG;
       const eyeYawGlance = gx * 8 * DEG;
@@ -751,39 +1209,281 @@
         eyePitch = eyePitch * (1 - sleepyWeight) + (-12 * DEG) * sleepyWeight;
       }
 
+      // Compute swap / dizzy target laptop offset, head choreography, FX alpha, & expression overlay.
+      let targetOffset = { dx: 0, dy: 0, dz: 0, rx: 0, ry: 0, rz: 0 };
+      let immediateOffset = false;
+      let swapStage = "none"; // 'none' | 'swap-out' | 'swap-in' | 'swap-settle'
+      let swapProgress = 0;
+      let dizzyTime = elapsed;
+      let targetDizzyFxAlpha = 0;
+      let exprOverlay = null;
+      let glowMultiplier = 1.0;
+
+      if (inAnyDizzy) {
+        if (inDizzySway) {
+          dizzyTime = forcedDizzy ? (elapsed > 0.01 ? elapsed : 0.65) : dizzyElapsed;
+          const env = forcedDizzy ? 1.0 : clamp(dizzyElapsed / 0.28, 0, 1);
+          const swayYaw = Math.sin(dizzyTime * 3.6) * 8.8 * DEG * env;
+          const swayRoll = Math.cos(dizzyTime * 3.6) * 8.5 * DEG * env;
+          const swayPitch = (3.4 + Math.sin(dizzyTime * 7.2) * 3.0) * DEG * env;
+          wantHeadYaw = swayYaw;
+          wantHeadPitch = swayPitch;
+          extraHeadRoll = swayRoll;
+          eyeYaw = Math.sin(dizzyTime * 4.4) * 11.5 * DEG * env;
+          eyePitch = (2.0 + Math.cos(dizzyTime * 4.4) * 5.8) * DEG * env;
+          targetOffset = {
+            dx: -baseScale * 0.03 * env,
+            dy: -baseVisH * 0.062 * env,
+            dz: -baseScale * 0.01 * env,
+            rx: 3.5 * DEG * env,
+            ry: 0,
+            rz: -5.2 * DEG * env
+          };
+          targetDizzyFxAlpha = env;
+          glowMultiplier = 0.48;
+          // Adorable flustered anime blend: gentle surprised + worried eyebrows + soft flutter blink.
+          const flutter = 0.14 + 0.14 * (0.5 + 0.5 * Math.sin(dizzyTime * 5.2));
+          exprOverlay = {
+            mode: "dizzy",
+            surprised: 0.36 * env,
+            sad: 0.22 * env,
+            relaxed: 0.10 * env,
+            blink: flutter * env,
+            allowBlink: false
+          };
+        } else {
+          // Recovery beat: Phase 1 (0..0.48) cute double-blink + brisk head-shake;
+          // Phase 2 (0.48..1.0) sheepish warm smile + laptop rises back smoothly!
+          let r;
+          if (forcedDizzyShake) r = 0.24;
+          else if (forcedDizzyRecover) r = 0.78;
+          else r = clamp(dizzyElapsed / DIZZY_RECOVER_DURATION, 0, 1);
+
+          const liftE = easeOutCubic(clamp(r / 0.78, 0, 1));
+          targetOffset = {
+            dx: lerp(-baseScale * 0.03, 0, liftE),
+            dy: lerp(-baseVisH * 0.062, 0, liftE),
+            dz: lerp(-baseScale * 0.01, 0, liftE),
+            rx: lerp(3.5 * DEG, 0, liftE),
+            ry: 0,
+            rz: lerp(-5.2 * DEG, 0, liftE)
+          };
+          targetDizzyFxAlpha = clamp(1 - r / 0.34, 0, 1);
+
+          if (r < 0.48) {
+            // Quick cute double-blink + brisk little head-shake to clear her head!
+            const u = r / 0.48;
+            const shakeYaw = Math.sin(u * Math.PI * 2.5) * 8.2 * DEG * (1 - u * 0.35);
+            const shakeRoll = Math.sin(u * Math.PI * 2.0) * 3.8 * DEG * (1 - u * 0.4);
+            const blink1 = Math.exp(-Math.pow((u - 0.26) / 0.14, 2));
+            const blink2 = Math.exp(-Math.pow((u - 0.72) / 0.14, 2));
+            const dblBlink = forcedDizzyShake ? 0.78 : clamp(Math.max(blink1, blink2) * 0.88, 0, 0.9);
+            wantHeadYaw = forcedDizzyShake ? 7.4 * DEG : shakeYaw;
+            wantHeadPitch = 2.5 * DEG;
+            extraHeadRoll = forcedDizzyShake ? -4.2 * DEG : shakeRoll;
+            eyeYaw = 0;
+            eyePitch = 0;
+            glowMultiplier = lerp(0.52, 0.92, u);
+            exprOverlay = {
+              mode: "dizzy-shake",
+              blink: dblBlink,
+              sad: 0.14 * (1 - u),
+              relaxed: 0.18 + 0.12 * u,
+              happy: 0.14 * u,
+              allowBlink: false
+            };
+          } else {
+            // Adorable sheepish warm smile with subtle head tilt looking warmly toward user!
+            const u = (r - 0.48) / 0.52;
+            const smileEnv = forcedDizzyRecover ? 1.0 : Math.sin(clamp(u, 0, 1) * Math.PI * 0.85 + 0.15);
+            wantHeadYaw = gx * 3.0 * DEG;
+            wantHeadPitch = lerp(0.5 * DEG, 4.2 * DEG, forcedDizzyRecover ? 0.22 : u);
+            extraHeadRoll = 7.5 * DEG * smileEnv;
+            eyeYaw = gx * 5 * DEG;
+            eyePitch = lerp(1.8 * DEG, -6.5 * DEG, forcedDizzyRecover ? 0.12 : u);
+            glowMultiplier = 1.0;
+            exprOverlay = {
+              mode: "dizzy-recover",
+              happy: 0.54 * smileEnv,
+              relaxed: 0.22 * smileEnv,
+              allowBlink: true
+            };
+          }
+        }
+      } else if (inSwap) {
+        const outDur = forcedSwapOut || forcedSwapIn ? SWAP_OUT_DURATION : swapOutDuration;
+        const totalDur = outDur + SWAP_IN_DURATION + SWAP_SETTLE_DURATION;
+        const tSwap = forcedSwapOut ? outDur * 0.54
+          : forcedSwapIn ? outDur + SWAP_IN_DURATION * 0.34
+            : clamp(swapElapsed, 0, totalDur);
+        swapProgress = clamp(tSwap / totalDur, 0, 1);
+
+        const troughOut = {
+          dx: swapDir * baseScale * 0.24,
+          dy: -baseVisH * 0.25,
+          dz: -baseScale * 0.04,
+          rx: 6.0 * DEG,
+          ry: -swapDir * 10.0 * DEG,
+          rz: -swapDir * 8.5 * DEG
+        };
+        const troughIn = {
+          dx: -swapDir * baseScale * 0.21,
+          dy: -baseVisH * 0.24,
+          dz: -baseScale * 0.03,
+          rx: 5.0 * DEG,
+          ry: swapDir * 8.5 * DEG,
+          rz: swapDir * 7.5 * DEG
+        };
+
+        if (tSwap < outDur) {
+          // Phase A — Tuck Away: smooth glide downward & sideways, eyes & shoulders follow.
+          swapStage = "swap-out";
+          const u = clamp(tSwap / Math.max(0.05, outDur), 0, 1);
+          const e = easeInOutCubic(u);
+          const sp = forcedSwapOut ? { dx: 0, dy: 0, dz: 0, rx: 0, ry: 0, rz: 0 } : swapStartPose;
+          targetOffset = {
+            dx: lerp(sp.dx, troughOut.dx, e),
+            dy: lerp(sp.dy, troughOut.dy, e),
+            dz: lerp(sp.dz, troughOut.dz, e),
+            rx: lerp(sp.rx, troughOut.rx, e),
+            ry: lerp(sp.ry, troughOut.ry, e),
+            rz: lerp(sp.rz, troughOut.rz, e)
+          };
+          immediateOffset = true;
+          const follow = Math.sin(u * Math.PI * 0.85);
+          swapSweep = swapDir * follow * 0.85;
+          wantHeadYaw = swapDir * 9.5 * DEG * follow;
+          wantHeadPitch = (6.8 + 3.2 * follow) * DEG;
+          extraHeadRoll = swapDir * 4.2 * DEG * follow;
+          eyeYaw = swapDir * 14.0 * DEG * follow;
+          eyePitch = -11.5 * DEG;
+          glowMultiplier = lerp(1.0, 0.25, e);
+          exprOverlay = {
+            mode: "swap-out",
+            happy: 0.16,
+            relaxed: 0.10,
+            allowBlink: true
+          };
+        } else if (tSwap < outDur + SWAP_IN_DURATION) {
+          // Phase B — Fresh Laptop Enters: smooth slide up from opposite slight angle with tiny settle.
+          swapStage = "swap-in";
+          const v = clamp((tSwap - outDur) / SWAP_IN_DURATION, 0, 1);
+          const e = easeOutCubic(v);
+          // Delicate tactile overshoot (+0.6% viewport max — always strictly <= 18.2% viewport height).
+          const settleOvershoot = Math.sin(v * Math.PI) * v * v * (1 - v) * baseVisH * 0.05;
+          targetOffset = {
+            dx: lerp(troughIn.dx, 0, e),
+            dy: lerp(troughIn.dy, 0, e) + settleOvershoot,
+            dz: lerp(troughIn.dz, 0, e),
+            rx: lerp(troughIn.rx, 0, e),
+            ry: lerp(troughIn.ry, 0, e),
+            rz: lerp(troughIn.rz, 0, e)
+          };
+          immediateOffset = true;
+          const sweepIn = (1 - e);
+          swapSweep = -swapDir * sweepIn * 0.72;
+          wantHeadYaw = -swapDir * 7.8 * DEG * sweepIn;
+          wantHeadPitch = (5.8 + 2.4 * sweepIn) * DEG;
+          extraHeadRoll = -swapDir * 3.4 * DEG * sweepIn;
+          eyeYaw = -swapDir * 11.5 * DEG * sweepIn;
+          eyePitch = -9.8 * DEG;
+          glowMultiplier = lerp(0.28, 1.08, e);
+          exprOverlay = {
+            mode: "swap-in",
+            happy: 0.22 + 0.08 * e,
+            relaxed: 0.12,
+            allowBlink: true
+          };
+        } else {
+          // Phase C — Attentive Settle: crisp resting lid, gentle micro-nod & warm micro-smile.
+          swapStage = "swap-settle";
+          const w = clamp((tSwap - outDur - SWAP_IN_DURATION) / SWAP_SETTLE_DURATION, 0, 1);
+          const nodPulse = Math.sin(w * Math.PI);
+          targetOffset = { dx: 0, dy: 0, dz: 0, rx: 0, ry: 0, rz: 0 };
+          immediateOffset = true;
+          swapSweep = 0;
+          wantHeadYaw = gx * 2.5 * DEG;
+          wantHeadPitch = (5.4 + 3.2 * nodPulse) * DEG;
+          extraHeadRoll = 2.4 * DEG * nodPulse;
+          eyeYaw = gx * 4.5 * DEG;
+          eyePitch = -9.2 * DEG;
+          glowMultiplier = 1.05;
+          exprOverlay = {
+            mode: "swap-settle",
+            happy: 0.16 + 0.18 * nodPulse,
+            relaxed: 0.09 + 0.08 * nodPulse,
+            allowBlink: true
+          };
+        }
+      }
+
+      // Smoothly update laptop 3D transform (direct eased curve during swap for crisp tactile arc,
+      // exponentially damped during dizzy/recovery/rest for zero snapping).
+      if (immediateOffset) {
+        liveLaptopOffset.dx = targetOffset.dx;
+        liveLaptopOffset.dy = targetOffset.dy;
+        liveLaptopOffset.dz = targetOffset.dz;
+        liveLaptopOffset.rx = targetOffset.rx;
+        liveLaptopOffset.ry = targetOffset.ry;
+        liveLaptopOffset.rz = targetOffset.rz;
+      } else {
+        const la = dampAlpha(9.5, dt);
+        liveLaptopOffset.dx += (targetOffset.dx - liveLaptopOffset.dx) * la;
+        liveLaptopOffset.dy += (targetOffset.dy - liveLaptopOffset.dy) * la;
+        liveLaptopOffset.dz += (targetOffset.dz - liveLaptopOffset.dz) * la;
+        liveLaptopOffset.rx += (targetOffset.rx - liveLaptopOffset.rx) * la;
+        liveLaptopOffset.ry += (targetOffset.ry - liveLaptopOffset.ry) * la;
+        liveLaptopOffset.rz += (targetOffset.rz - liveLaptopOffset.rz) * la;
+      }
+      applyLaptopTransform();
+
+      // Smoothly interpolate screen bounce color toward active displayed accent.
+      const goalRgb = hexToRgb(accentHex);
+      const colA = dampAlpha(9.0, dt);
+      bounceColorRgb = [
+        bounceColorRgb[0] + (goalRgb[0] - bounceColorRgb[0]) * colA,
+        bounceColorRgb[1] + (goalRgb[1] - bounceColorRgb[1]) * colA,
+        bounceColorRgb[2] + (goalRgb[2] - bounceColorRgb[2]) * colA
+      ];
+      if (screenLight?.color?.setHex) {
+        screenLight.color.setHex(mixRgbToHex([224, 236, 255], bounceColorRgb, 0.26));
+      }
+
+      // Smoothly damp 2D anime dizzy FX alpha.
+      dizzyFxAlpha = forcedDizzy ? 1.0 : damp(dizzyFxAlpha, targetDizzyFxAlpha, targetDizzyFxAlpha > dizzyFxAlpha ? 10.0 : 12.0, dt);
+      if (dizzyFxAlpha < 0.002) dizzyFxAlpha = 0;
+
       // Subtle soft screen bounce light modulation (flattering luminous focus when working,
-      // calm ambient on idle, softly dimmed on sleepy — calibrated for MToon skin).
+      // calm ambient on idle, softly dimmed on sleepy or dizzy — calibrated for MToon skin).
       const keyFlicker = (Math.sin(elapsed * 9.3) * 0.5 + Math.sin(elapsed * 15.7 + 1.2) * 0.5) * 0.016 * typingWeight;
       let targetGlow = 0.13 + keyFlicker * 0.5;
       if (wantSleepy) targetGlow = 0.03;
       else if (wantWorking) targetGlow = 0.24 + keyFlicker;
       else if (wantGlance) targetGlow = 0.12;
       else if (wantReaction) targetGlow = 0.11;
+      targetGlow *= glowMultiplier;
 
-      screenGlow = damp(screenGlow, targetGlow, 5.5, dt);
+      screenGlow = damp(screenGlow, targetGlow, 6.0, dt);
       if (screenLight) screenLight.intensity = screenGlow;
       if (emblemMesh?.material) {
-        const emblemTarget = wantSleepy ? 0.26 : (wantWorking ? 0.96 : 0.78);
-        emblemMesh.material.opacity = damp(emblemMesh.material.opacity ?? emblemTarget, emblemTarget, 5.0, dt);
+        const emblemTarget = wantSleepy ? 0.26 : (inDizzySway ? 0.42 : (wantWorking ? 0.96 : 0.88));
+        emblemMesh.material.opacity = damp(emblemMesh.material.opacity ?? emblemTarget, emblemTarget, 6.0, dt);
       }
 
-      // Cute expression overlay:
-      //  - Glance-up: warm adorable smile (happy ~ 0.42, relaxed ~ 0.14) keeping eyes sparkling open.
-      //  - Idle typing/reading: subtle warm content micro-smile (happy ~ 0.14, relaxed ~ 0.08).
-      //  - Working: gentle focused softness (subtle happy ~ 0.08, soft blink alive).
-      //  - Sleepy: cozy doze (handled cleanly when overridden to sleepy too).
-      let exprOverlay = null;
-      if (overrideBeat === "sleepy") {
-        exprOverlay = { mode: "sleepy", blink: 0.92, relaxed: 0.44, happy: 0.0 };
-      } else if (activity === "idle" || activity === "working") {
-        const baseHappy = activity === "working" ? 0.08 : 0.15;
-        const baseRelaxed = activity === "working" ? 0.06 : 0.08;
-        exprOverlay = {
-          mode: wantGlance ? "glance-up" : activity,
-          happy: baseHappy * (1 - glanceWeight) + 0.42 * glanceWeight,
-          relaxed: baseRelaxed * (1 - glanceWeight) + 0.14 * glanceWeight,
-          allowBlink: true
-        };
+      // Cute expression overlay (fallback to Step 2 rules when not in swap/dizzy).
+      if (!exprOverlay) {
+        if (overrideBeat === "sleepy") {
+          exprOverlay = { mode: "sleepy", blink: 0.92, relaxed: 0.44, happy: 0.0 };
+        } else if (activity === "idle" || activity === "working") {
+          const baseHappy = activity === "working" ? 0.08 : 0.15;
+          const baseRelaxed = activity === "working" ? 0.06 : 0.08;
+          exprOverlay = {
+            mode: wantGlance ? "glance-up" : activity,
+            happy: baseHappy * (1 - glanceWeight) + 0.42 * glanceWeight,
+            relaxed: baseRelaxed * (1 - glanceWeight) + 0.14 * glanceWeight,
+            allowBlink: true
+          };
+        }
       }
 
       const boneTargets = computeCoLeadTargets({
@@ -793,22 +1493,31 @@
         sleepyWeight,
         reactionWeight,
         workingWeight,
+        swapSweep,
+        swapWeight,
+        dizzyWeight,
+        dizzyTime,
+        extraHeadRoll,
         tiltDir: glanceTiltDir,
         headYaw: wantHeadYaw,
         headPitch: wantHeadPitch,
         headPitchCue: ctx.headPitchCue || 0
       });
 
-      const activeBeat = overrideBeat !== "auto"
+      const activeMode = overrideBeat !== "auto"
         ? overrideBeat
-        : wantSleepy ? "sleepy"
-          : wantReaction ? "reaction"
-            : wantGlance ? "glance-up"
-              : wantWorking ? (wantTyping ? "working" : "working-read")
-                : (wantTyping ? "typing" : "reading");
+        : inDizzySway ? "dizzy"
+          : (inDizzyShake || inDizzyRecover) ? "dizzy-recover"
+            : swapStage !== "none" ? swapStage
+              : wantSleepy ? "sleepy"
+                : wantReaction ? "reaction"
+                  : wantGlance ? "glance-up"
+                    : wantWorking ? (wantTyping ? "working" : "working-read")
+                      : (wantTyping ? "typing" : "reading");
 
       return {
-        beat: activeBeat,
+        beat: activeMode,
+        mode: activeMode,
         activity,
         boneTargets,
         eyeYaw,
@@ -817,6 +1526,11 @@
         screenGlow,
         typing: typingWeight > 0.35,
         glanceUp: glanceWeight > 0.35,
+        swapActive: inSwap,
+        swapProgress,
+        dizzyActive: inAnyDizzy,
+        dizzyFxAlpha,
+        dizzyTime,
         hover: hovered
       };
     }
@@ -829,8 +1543,84 @@
       const norm = normalizeHexColor(hex);
       if (!norm) return accentHex;
       accentHex = norm;
-      applyAccentVisuals();
+      targetAccentHex = norm;
+      accentId = findPaletteEntryByHex(norm)?.id || "custom";
+      applyAccentVisuals(true);
       return accentHex;
+    }
+
+    // Adopt the initial session ID on mount silently (no swap animation).
+    function syncInitialSession(sessionId, meta) {
+      const rid = typeof sessionId === "string" ? sessionId.trim() : "";
+      if (!rid || activeSessionId) return getCoLeadState();
+      activeSessionId = rid;
+      activeSessionMeta = meta && typeof meta === "object" ? { ...meta } : null;
+      const entry = sessionAccentForKey(rid);
+      accentHex = entry.hex;
+      targetAccentHex = entry.hex;
+      accentId = entry.id;
+      applyAccentVisuals(true);
+      return getCoLeadState();
+    }
+
+    // Handle a real or QA session switch: deterministic palette, idempotency,
+    // smooth interruptible laptop swap, and sliding-window rapid-switch dizzy egg.
+    function onSessionSwitch(sessionId, meta) {
+      const rid = typeof sessionId === "string" ? sessionId.trim() : "";
+      if (!rid) return { ...getCoLeadState(), swapped: false, dizzyTriggered: false };
+      if (!activeSessionId) {
+        syncInitialSession(rid, meta);
+        return { ...getCoLeadState(), swapped: false, dizzyTriggered: false };
+      }
+      if (rid === activeSessionId) {
+        if (meta && typeof meta === "object") {
+          activeSessionMeta = { ...(activeSessionMeta || {}), ...meta };
+        }
+        return { ...getCoLeadState(), swapped: false, dizzyTriggered: false };
+      }
+
+      const nowSec = currentClockSec(meta?.nowMs);
+      activeSessionId = rid;
+      activeSessionMeta = meta && typeof meta === "object" ? { ...meta } : null;
+      const entry = sessionAccentForKey(rid);
+      targetAccentHex = entry.hex;
+      accentId = entry.id;
+
+      // Update sliding window for rapid distinct switches.
+      pruneSwitchWindow(nowSec);
+      switchTimestamps.push(nowSec);
+
+      // Trigger cute dizzy easter egg when >=4 distinct switches land inside 2.8s.
+      let dizzyTriggered = false;
+      if (switchTimestamps.length >= DIZZY_TRIGGER_COUNT && dizzyPhase === "none" && nowSec >= dizzyCooldownUntil) {
+        dizzyTriggered = true;
+        switchTimestamps.length = 0;
+        swapActive = false;
+        swapElapsed = 0;
+        swapOutDuration = SWAP_OUT_DURATION;
+        dizzyPhase = "sway";
+        dizzyElapsed = 0;
+        accentHex = targetAccentHex;
+        applyAccentVisuals(false);
+        return { ...getCoLeadState(), swapped: false, dizzyTriggered: true };
+      }
+
+      // If already dizzy, just update target session accent so she recovers onto it.
+      if (dizzyPhase !== "none") {
+        accentHex = targetAccentHex;
+        applyAccentVisuals(false);
+        return { ...getCoLeadState(), swapped: false, dizzyTriggered: false };
+      }
+
+      // Smoothly start or interrupt a laptop swap from the live visual offset (zero snap!).
+      swapStartPose = { ...liveLaptopOffset };
+      const depthRatio = clamp(Math.abs(liveLaptopOffset.dy) / Math.max(0.05, baseVisH * 0.25), 0, 0.85);
+      swapOutDuration = SWAP_OUT_DURATION * (1 - depthRatio * 0.45);
+      swapDir = -swapDir;
+      swapActive = true;
+      swapElapsed = 0;
+      swapSwitchedColor = false;
+      return { ...getCoLeadState(), swapped: true, dizzyTriggered: false };
     }
 
     function setCoLeadBeat(beat) {
@@ -841,31 +1631,68 @@
       const key = String(beat).trim().toLowerCase();
       if (!VALID_BEATS.has(key)) return overrideBeat;
       overrideBeat = key;
-      if (key === "glance-up") {
+      if (key === "auto") {
+        // Leave live state clean when returning to auto from deterministic QA beats.
+        dizzyFxAlpha = dizzyPhase === "sway" ? 1 : 0;
+      } else if (key === "glance-up") {
         glanceTiltDir = 1;
         glanceWeight = 1;
         typingWeight = 0;
         sleepyWeight = 0;
         workingWeight = 0;
+        dizzyWeight = 0;
+        dizzyFxAlpha = 0;
       } else if (key === "typing") {
         typingWeight = 1;
         glanceWeight = 0;
         sleepyWeight = 0;
         workingWeight = 0;
+        dizzyWeight = 0;
+        dizzyFxAlpha = 0;
       } else if (key === "working") {
         typingWeight = 1;
         workingWeight = 1;
         glanceWeight = 0;
         sleepyWeight = 0;
+        dizzyWeight = 0;
+        dizzyFxAlpha = 0;
       } else if (key === "sleepy") {
         sleepyWeight = 1;
         typingWeight = 0;
         glanceWeight = 0;
         workingWeight = 0;
+        dizzyWeight = 0;
+        dizzyFxAlpha = 0;
       } else if (key === "reading-left" || key === "reading-right") {
         typingWeight = 0.85;
         glanceWeight = 0;
         sleepyWeight = 0;
+        dizzyWeight = 0;
+        dizzyFxAlpha = 0;
+      } else if (key === "swap-out" || key === "swap-in") {
+        typingWeight = 0;
+        glanceWeight = 0;
+        sleepyWeight = 0;
+        workingWeight = 0;
+        dizzyWeight = 0;
+        swapWeight = 1;
+        dizzyFxAlpha = 0;
+      } else if (key === "dizzy") {
+        typingWeight = 0;
+        glanceWeight = 0;
+        sleepyWeight = 0;
+        workingWeight = 0;
+        swapWeight = 0;
+        dizzyWeight = 1;
+        dizzyFxAlpha = 1;
+      } else if (key === "dizzy-shake" || key === "dizzy-recover") {
+        typingWeight = 0;
+        glanceWeight = 0;
+        sleepyWeight = 0;
+        workingWeight = 0;
+        swapWeight = 0;
+        dizzyWeight = 0;
+        dizzyFxAlpha = key === "dizzy-shake" ? 0.30 : 0;
       }
       return overrideBeat;
     }
@@ -874,11 +1701,36 @@
       explicitHover = flag === null || flag === undefined ? null : !!flag;
     }
 
-    function debugState() {
+    function currentModeName() {
+      if (overrideBeat !== "auto") return overrideBeat;
+      if (dizzyPhase === "sway") return "dizzy";
+      if (dizzyPhase === "recover") return "dizzy-recover";
+      if (swapActive) {
+        if (swapElapsed < swapOutDuration) return "swap-out";
+        if (swapElapsed < swapOutDuration + SWAP_IN_DURATION) return "swap-in";
+        return "swap-settle";
+      }
+      return phase;
+    }
+
+    function getCoLeadState() {
+      const mode = currentModeName();
+      const totalSwapDur = swapOutDuration + SWAP_IN_DURATION + SWAP_SETTLE_DURATION;
+      const swapProg = overrideBeat === "swap-out" ? 0.22
+        : overrideBeat === "swap-in" ? 0.56
+          : swapActive ? clamp(swapElapsed / Math.max(0.05, totalSwapDur), 0, 1) : 0;
+      const dizzyActiveNow = overrideBeat === "dizzy" || overrideBeat === "dizzy-shake" || overrideBeat === "dizzy-recover" || dizzyPhase !== "none";
+      const dizzyProg = overrideBeat === "dizzy" ? 0.45
+        : overrideBeat === "dizzy-shake" ? 0.84
+          : overrideBeat === "dizzy-recover" ? 0.94
+            : dizzyPhase === "sway" ? clamp(dizzyElapsed / DIZZY_TOTAL_DURATION, 0, 1)
+              : dizzyPhase === "recover" ? clamp((DIZZY_SWAY_DURATION + dizzyElapsed) / DIZZY_TOTAL_DURATION, 0, 1) : 0;
       return {
-        beat: overrideBeat !== "auto" ? overrideBeat : phase,
+        mode,
+        beat: mode,
         overrideBeat,
         activity: lastActivity,
+        activeSessionId,
         typing: typingWeight > 0.35,
         typingWeight: Number(typingWeight.toFixed(3)),
         glanceUp: glanceWeight > 0.35,
@@ -887,12 +1739,29 @@
         workingWeight: Number(workingWeight.toFixed(3)),
         hover: explicitHover === true,
         laptopAccent: accentHex,
+        targetLaptopAccent: targetAccentHex,
+        laptopAccentId: accentId,
+        swapActive: overrideBeat === "swap-out" || overrideBeat === "swap-in" || swapActive,
+        swapProgress: Number(swapProg.toFixed(3)),
+        liveLaptopOffsetY: Number(liveLaptopOffset.dy.toFixed(4)),
+        liveLaptopOffsetX: Number(liveLaptopOffset.dx.toFixed(4)),
+        dizzyActive: dizzyActiveNow,
+        dizzyPhase: overrideBeat === "dizzy" ? "sway"
+          : (overrideBeat === "dizzy-shake" || overrideBeat === "dizzy-recover") ? "recover"
+            : dizzyPhase,
+        dizzyProgress: Number(dizzyProg.toFixed(3)),
+        dizzyFxAlpha: Number(dizzyFxAlpha.toFixed(3)),
+        recentSwitchCount: switchTimestamps.length,
         screenGlow: Number(screenGlow.toFixed(3)),
         hasLaptopProp: !!laptopGroup,
         laptopTopViewportPct: Number(lidTopViewportPct.toFixed(2)),
         chinViewportPct: Number(chinViewportPct.toFixed(2)),
         headViewportPct: Number(headViewportPct.toFixed(2))
       };
+    }
+
+    function debugState() {
+      return getCoLeadState();
     }
 
     function dispose() {
@@ -912,8 +1781,11 @@
       layoutProp,
       step,
       setLaptopAccent,
+      syncInitialSession,
+      onSessionSwitch,
       setCoLeadBeat,
       setHover,
+      getCoLeadState,
       debugState,
       dispose
     };
@@ -921,7 +1793,15 @@
 
   Object.assign(C, {
     createVrmCoLead,
+    sessionAccentForKey,
+    vrmDizzyFx: {
+      computeDizzyLayout,
+      drawDizzyFx,
+      DIZZY_STAR_COLORS
+    },
     vrmCoLeadMath: {
+      SESSION_ACCENT_PALETTE,
+      sessionAccentForKey,
       computeCoLeadTargets,
       classifyActivity,
       mirrorLR,
