@@ -88,6 +88,7 @@ var allowedCSSOverlaps = map[string]string{
 	"mh dashboard,tracker":              "pre-existing dashboard and tracker overlap (host styles the tracker mount), grandfathered",
 	"mini dashboard,whiteboard":         "dashboard extends the whiteboard board vocabulary it is inlined after",
 	"mk dashboard,tracker":              "pre-existing dashboard and tracker overlap (host styles the tracker mount), grandfathered",
+	"mockup-wrap dashboard,whiteboard":  "dashboard overrides whiteboard .mockup-wrap height/resize/border inside pinned .bcard[data-kind=\"panel\"] cards",
 	"more dashboard,whiteboard":         "dashboard extends the whiteboard board vocabulary it is inlined after",
 	"msep dashboard,tracker":            "pre-existing dashboard and tracker overlap (host styles the tracker mount), grandfathered",
 	"msg dashboard,whiteboard":          "dashboard extends the whiteboard board vocabulary it is inlined after",
