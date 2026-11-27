@@ -434,6 +434,345 @@
     g.style.setProperty("--gal-height", (bottom - top) + "px");
   }
   function queueGallery() { if (galNarrow && !galFrame) galFrame = requestAnimationFrame(placeGallery); }
+  // --- board export menu & handoff prompt ------------------------------------
+  function bexpToast(msg, kind) {
+    if (window.WsToast && typeof window.WsToast.show === "function") {
+      window.WsToast.show(msg, kind ? { kind: kind } : undefined);
+    } else if (typeof toast === "function") {
+      toast(msg);
+    }
+  }
+  function xmlEscapeAttr(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function xmlEscapeText(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function normExportPath(p) {
+    var s = String(p || "").replace(/[\\/]+$/, "");
+    if (/^[A-Za-z]:|^\\\\/.test(s)) s = s.toLowerCase();
+    return s;
+  }
+  function cleanExportReplyId(v) {
+    var s = String(v || "").trim();
+    return s.indexOf("id:") === 0 ? s.slice(3).trim() : s;
+  }
+  function buildMailboxTag(meta) {
+    var m = meta && typeof meta === "object" ? meta : {};
+    var replyIdVal = cleanExportReplyId(m.reply_id || m.id || "");
+    if (!replyIdVal) return "";
+    var dir = String(m.dir || "");
+    var rootDir = String(m.root || "");
+    var branch = String(m.branch || "");
+    var harness = String(m.harness || "");
+    var label = String(m.label || "");
+    var open = '<mailbox id="' + xmlEscapeAttr("id:" + replyIdVal) + '" dir="' + xmlEscapeAttr(dir) + '"';
+    if (rootDir && normExportPath(rootDir) !== normExportPath(dir)) {
+      open += ' root="' + xmlEscapeAttr(rootDir) + '"';
+    }
+    if (branch) open += ' branch="' + xmlEscapeAttr(branch) + '"';
+    if (harness) open += ' harness="' + xmlEscapeAttr(harness) + '"';
+    return label ? open + ">" + xmlEscapeText(label) + "</mailbox>" : open + "/>";
+  }
+  // Always keep this prompt in English regardless of dashboard UI locale.
+  function buildBoardHandoffPrompt(data) {
+    var d = data && typeof data === "object" ? data : {};
+    var archivePath = String(d.path || "").trim();
+    var m = d.mailbox && typeof d.mailbox === "object" ? d.mailbox : {};
+    var replyIdVal = cleanExportReplyId(d.reply_id || m.reply_id || m.id || "");
+    var mailboxTag = "";
+    if (replyIdVal) {
+      if (typeof d.mailbox_ref === "string" && d.mailbox_ref.indexOf("<mailbox ") === 0) {
+        mailboxTag = d.mailbox_ref;
+      } else {
+        mailboxTag = buildMailboxTag({
+          reply_id: replyIdVal,
+          dir: m.dir || d.dir || "",
+          root: m.root || "",
+          branch: m.branch || "",
+          harness: m.harness || "",
+          label: m.label || ""
+        });
+      }
+    }
+    var targetId = replyIdVal ? "id:" + replyIdVal : "";
+    var lines = [
+      "Continue this task using the exported whiteboard archive from the previous session:",
+      "- Whiteboard archive path: " + archivePath
+    ];
+    if (mailboxTag) lines.push("- Previous session mailbox: " + mailboxTag);
+    lines.push(
+      "",
+      "Steps:",
+      "1. First, load the exported whiteboard archive using `whiteboard.load` with `" + archivePath + "`."
+    );
+    if (targetId) {
+      lines.push(
+        "2. Next, send a message to the previous session (`" + targetId + "`) via `mailbox.send` stating that the whiteboard has already been handed over, and ask for any unrecorded working context, caveats, decisions, or remaining tasks.",
+        "3. If the previous session has already closed or does not respond, proceed using the loaded whiteboard."
+      );
+    } else {
+      lines.push("2. Proceed with the work using the loaded whiteboard.");
+    }
+    return lines.join("\n");
+  }
+  var bexpMenu = null, bexpTrigger = null, bexpFallback = null, bexpFallbackTrigger = null, bexpBusy = false;
+  function dismissBoardExportFallback(refocus) {
+    if (!bexpFallback) return;
+    if (bexpFallback.parentNode) bexpFallback.parentNode.removeChild(bexpFallback);
+    bexpFallback = null;
+    if (refocus && bexpFallbackTrigger && bexpFallbackTrigger.isConnected) bexpFallbackTrigger.focus();
+    bexpFallbackTrigger = null;
+  }
+  function showBoardExportFallback(promptText, trigger) {
+    dismissBoardExportFallback(false);
+    var box = doc.createElement("div");
+    box.className = "d-bexp-fallback";
+    box.setAttribute("role", "region");
+    box.setAttribute("aria-label", wsT("js.board.export.prompt_label"));
+    var head = doc.createElement("div");
+    head.className = "d-bexp-fb-head";
+    var msg = doc.createElement("div");
+    msg.className = "d-bexp-fb-msg";
+    msg.textContent = wsT("js.board.export.copy_denied");
+    var closeBtn = doc.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "d-bexp-fb-close";
+    closeBtn.textContent = "\u00d7";
+    closeBtn.setAttribute("aria-label", wsT("js.board.export.close"));
+    closeBtn.addEventListener("click", function () { dismissBoardExportFallback(true); });
+    head.appendChild(msg);
+    head.appendChild(closeBtn);
+    var ta = doc.createElement("textarea");
+    ta.className = "d-bexp-fb-text";
+    ta.readOnly = true;
+    ta.rows = 6;
+    ta.value = promptText;
+    ta.setAttribute("aria-label", wsT("js.board.export.prompt_label"));
+    var acts = doc.createElement("div");
+    acts.className = "d-bexp-fb-acts";
+    var copyBtn = doc.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "btn pr d-bexp-fb-copy";
+    copyBtn.textContent = wsT("js.board.export.copy_retry");
+    copyBtn.addEventListener("click", function () {
+      writeExportClipboardText(promptText).then(function (ok) {
+        if (ok) {
+          dismissBoardExportFallback(true);
+          bexpToast(wsT("js.board.export.copied"), "info");
+        } else {
+          ta.focus();
+          ta.select();
+        }
+      });
+    });
+    acts.appendChild(copyBtn);
+    box.appendChild(head);
+    box.appendChild(ta);
+    box.appendChild(acts);
+    doc.body.appendChild(box);
+    bexpFallback = box;
+    bexpFallbackTrigger = trigger || bexpFallbackTrigger;
+    ta.focus();
+    ta.select();
+  }
+  function execCommandCopyText(text) {
+    var prev = doc.activeElement;
+    var ta = doc.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0";
+    doc.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    var ok = false;
+    try { ok = !!(doc.execCommand && doc.execCommand("copy")); } catch (e) { ok = false; }
+    if (ta.parentNode) ta.parentNode.removeChild(ta);
+    if (prev && prev.isConnected && typeof prev.focus === "function") prev.focus();
+    return ok;
+  }
+  function writeExportClipboardText(text) {
+    var nav = typeof navigator !== "undefined" ? navigator : null;
+    if (nav && nav.clipboard && typeof nav.clipboard.writeText === "function" && window.isSecureContext) {
+      return nav.clipboard.writeText(text).then(function () { return true; }, function () { return execCommandCopyText(text); });
+    }
+    return Promise.resolve(execCommandCopyText(text));
+  }
+  function fetchBoardExport() {
+    var sessionRid = (typeof rid === "string" && rid) || (root && root.getAttribute && root.getAttribute("data-rid")) || "";
+    if (!sessionRid || typeof window.fetch !== "function") {
+      return Promise.reject(new Error(wsT("js.post.nobrowser")));
+    }
+    return window.fetch("/s/" + sessionRid + "/board-export", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: "{}"
+    }).then(function (r) {
+      return r.text().then(function (body) {
+        if (!r.ok) throw new Error((body && body.trim()) || ("HTTP " + r.status));
+        try { return JSON.parse(body || "{}"); } catch (e) { return {}; }
+      });
+    });
+  }
+  function startBoardExportHandoff(trigger) {
+    if (bexpBusy) return;
+    bexpBusy = true;
+    var nav = typeof navigator !== "undefined" ? navigator : null;
+    var exportReq = fetchBoardExport().then(function (data) {
+      return buildBoardHandoffPrompt(data);
+    });
+    var writeSettled = null;
+    if (nav && nav.clipboard && typeof nav.clipboard.write === "function" && typeof window.ClipboardItem === "function" && typeof window.Blob === "function" && window.isSecureContext) {
+      var item = new window.ClipboardItem({
+        "text/plain": exportReq.then(function (text) {
+          return new window.Blob([text], { type: "text/plain" });
+        })
+      });
+      writeSettled = nav.clipboard.write([item]).then(function () { return true; }, function () { return false; });
+    }
+    return exportReq.then(function (text) {
+      var finishCopy = function (ok) {
+        bexpBusy = false;
+        if (ok) {
+          dismissBoardExportFallback(false);
+          bexpToast(wsT("js.board.export.copied"), "info");
+        } else {
+          showBoardExportFallback(text, trigger);
+        }
+      };
+      if (writeSettled) {
+        return writeSettled.then(function (ok) {
+          if (ok) { finishCopy(true); return; }
+          return writeExportClipboardText(text).then(finishCopy);
+        });
+      }
+      return writeExportClipboardText(text).then(finishCopy);
+    }, function (err) {
+      bexpBusy = false;
+      bexpToast(wsT("js.board.export.fail", (err && err.message) || String(err || "")), "warn");
+    });
+  }
+  function closeBoardExportMenu(refocus) {
+    if (!bexpMenu || bexpMenu.hidden) return;
+    bexpMenu.hidden = true;
+    if (bexpTrigger) bexpTrigger.setAttribute("aria-expanded", "false");
+    var back = bexpTrigger;
+    bexpTrigger = null;
+    if (refocus && back && back.isConnected) back.focus();
+  }
+  function placeBoardExportMenu(pop, trigger) {
+    if (!pop || !trigger || !trigger.getBoundingClientRect) return;
+    var r = trigger.getBoundingClientRect();
+    var vw = window.innerWidth || 1024, vh = window.innerHeight || 768;
+    var w = pop.offsetWidth || 240, h = pop.offsetHeight || 80;
+    var left = Math.max(8, Math.min(r.left, vw - w - 8));
+    var top = r.bottom + 6;
+    if (top + h + 8 > vh && r.top - h - 6 >= 8) top = r.top - h - 6;
+    top = Math.max(8, Math.min(top, vh - h - 8));
+    pop.style.left = left + "px";
+    pop.style.top = top + "px";
+  }
+  function openBoardExportMenu(trigger, downloadFn) {
+    closeBoardExportMenu(false);
+    var pop = bexpMenu;
+    if (!pop || !pop.isConnected) {
+      pop = doc.createElement("div");
+      pop.className = "tpop d-bexp-pop";
+      pop.setAttribute("role", "menu");
+      pop.hidden = true;
+      doc.body.appendChild(pop);
+      bexpMenu = pop;
+    }
+    pop.innerHTML = "";
+    pop.setAttribute("aria-label", wsT("js.board.export.menu.label"));
+    [
+      [wsT("js.board.export.handoff"), function (btn) { var p = startBoardExportHandoff(btn); closeBoardExportMenu(true); return p; }],
+      [wsT("js.board.export.download"), function () { closeBoardExportMenu(true); if (downloadFn) downloadFn(); }]
+    ].forEach(function (spec) {
+      var item = doc.createElement("button");
+      item.type = "button";
+      item.className = "d-bexp-opt";
+      item.setAttribute("role", "menuitem");
+      item.textContent = spec[0];
+      item.addEventListener("click", function (e) {
+        e.stopPropagation();
+        spec[1](trigger);
+      });
+      pop.appendChild(item);
+    });
+    bexpTrigger = trigger || null;
+    if (bexpTrigger) bexpTrigger.setAttribute("aria-expanded", "true");
+    pop.hidden = false;
+    placeBoardExportMenu(pop, bexpTrigger);
+    if (pop.firstElementChild && typeof pop.firstElementChild.focus === "function") pop.firstElementChild.focus();
+  }
+  function toggleBoardExportMenu(ev, trigger, downloadFn) {
+    var btn = trigger || (ev && ev.currentTarget) || doc.querySelector(".board-download");
+    if (bexpMenu && !bexpMenu.hidden && (!btn || bexpTrigger === btn)) {
+      closeBoardExportMenu(false);
+      return;
+    }
+    openBoardExportMenu(btn, downloadFn);
+  }
+  if (typeof window !== "undefined") {
+    window.WsBoardExport = {
+      buildMailboxTag: buildMailboxTag,
+      buildPrompt: buildBoardHandoffPrompt,
+      toggle: toggleBoardExportMenu,
+      close: closeBoardExportMenu,
+      handoff: startBoardExportHandoff
+    };
+  }
+  doc.addEventListener("click", function (e) {
+    if (!bexpMenu || bexpMenu.hidden) return;
+    var t = e.target;
+    if (t && ((bexpMenu.contains(t)) || (bexpTrigger && (t === bexpTrigger || bexpTrigger.contains(t))))) return;
+    closeBoardExportMenu(false);
+  }, true);
+  doc.addEventListener("keydown", function (e) {
+    if (bexpMenu && !bexpMenu.hidden) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeBoardExportMenu(true);
+        return;
+      }
+      if (e.key === "Tab") {
+        closeBoardExportMenu(false);
+        return;
+      }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Home" || e.key === "End") {
+        var opts = Array.prototype.slice.call(bexpMenu.querySelectorAll('[role="menuitem"]'));
+        if (!opts.length) return;
+        e.preventDefault();
+        var idx = opts.indexOf(doc.activeElement);
+        if (e.key === "Home") idx = 0;
+        else if (e.key === "End") idx = opts.length - 1;
+        else if (e.key === "ArrowDown") idx = idx < 0 ? 0 : (idx + 1) % opts.length;
+        else idx = idx < 0 ? opts.length - 1 : (idx - 1 + opts.length) % opts.length;
+        opts[idx].focus();
+      }
+      return;
+    }
+    if (bexpFallback && !bexpFallback.hidden && e.key === "Escape" && bexpFallback.contains(doc.activeElement)) {
+      e.preventDefault();
+      dismissBoardExportFallback(true);
+    }
+  }, true);
+  doc.addEventListener("wheel", function (e) {
+    if (bexpMenu && !bexpMenu.hidden && !(e.target && bexpMenu.contains(e.target))) closeBoardExportMenu(false);
+  }, { capture: true, passive: true });
+  doc.addEventListener("touchmove", function (e) {
+    if (bexpMenu && !bexpMenu.hidden && !(e.target && bexpMenu.contains(e.target))) closeBoardExportMenu(false);
+  }, { capture: true, passive: true });
+  window.addEventListener("resize", function () {
+    if (bexpMenu && !bexpMenu.hidden) closeBoardExportMenu(false);
+  });
+  window.addEventListener("blur", function () {
+    if (bexpMenu && !bexpMenu.hidden) closeBoardExportMenu(false);
+  });
+
   if (cardBoard) {
     if (window.WsPreview) window.WsPreview.setup({ renderDiff: gwRender, post: worktree ? browsePost : post, toast: toast });
     if (window.WsPanelCard) window.WsPanelCard.setup({ mountFrames: mountFrames, boardBoxes: boardBoxes });
@@ -467,9 +806,11 @@
         overview: function () { if (window.WsOverview) window.WsOverview.toggle(); },
         filter: function (run) { if (window.WsOverview) window.WsOverview.filter(run); else run(); },
         download: worktree ? null : function () {
-          var a = doc.createElement("a");
-          a.href = "/s/" + rid + "/board.zip"; a.download = "";
-          doc.body.appendChild(a); a.click(); a.remove();
+          toggleBoardExportMenu(arguments[0], arguments[1], function () {
+            var a = doc.createElement("a");
+            a.href = "/s/" + rid + "/board.zip"; a.download = "";
+            doc.body.appendChild(a); a.click(); a.remove();
+          });
         },
         files: worktree ? null : filesSheet,
         stageFill: toggleStageFill

@@ -282,6 +282,11 @@ type Daemon struct {
 	config    *ConfigBackend
 	audit     *auditState
 	companion companionState
+
+	// Board export serialization and test hooks.
+	boardExportMu       sync.Mutex
+	boardExportNow      func() time.Time
+	boardExportMaxBytes int64
 	// companionCommands broadcasts agent-director commands to rail streams.
 	companionCommands companionCommandHub
 	// director is the companion agent director (companion_director.go).

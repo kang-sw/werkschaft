@@ -133,28 +133,11 @@ func (d *Daemon) handleClosedTopics(w http.ResponseWriter, r *http.Request, repl
 // folder as a zip download, named by boardArchiveName. A session without a
 // board answers not found.
 func (d *Daemon) handleBoardArchive(w http.ResponseWriter, r *http.Request, replyID string) {
-	src, has := d.source.(BoardArchiveSource)
-	var s Session
-	ok := has && d.index != nil && ValidReplyID(replyID)
-	if ok {
-		s, ok = d.index.Session(replyID)
-	}
-	var data []byte
-	if ok {
-		var err error
-		data, ok, err = src.BoardArchive(s.Registration)
-		if err != nil {
-			http.Error(w, "board unavailable: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-	if !ok {
-		http.Error(w, "no board", http.StatusNotFound)
+	s, root, branch, data, status, msg := d.resolveBoardArchive(replyID)
+	_ = root
+	if status != http.StatusOK {
+		http.Error(w, msg, status)
 		return
-	}
-	var branch string
-	if b := d.git.badge(s.Project); b != nil && b.State == gitOK && !b.Detached {
-		branch = b.Branch
 	}
 	name := boardArchiveName(s, branch, time.Now())
 	w.Header().Set("Content-Type", "application/zip")
@@ -162,6 +145,33 @@ func (d *Daemon) handleBoardArchive(w http.ResponseWriter, r *http.Request, repl
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write(data)
+}
+
+func (d *Daemon) resolveBoardArchive(replyID string) (s Session, root, branch string, data []byte, status int, msg string) {
+	src, has := d.source.(BoardArchiveSource)
+	ok := has && d.index != nil && ValidReplyID(replyID)
+	if ok {
+		s, ok = d.index.Session(replyID)
+	}
+	if ok {
+		var err error
+		data, ok, err = src.BoardArchive(s.Registration)
+		if err != nil {
+			return s, "", "", nil, http.StatusInternalServerError, "board unavailable: " + err.Error()
+		}
+	}
+	if !ok {
+		return s, "", "", nil, http.StatusNotFound, "no board"
+	}
+	if d.git != nil {
+		if b := d.git.badge(s.Project); b != nil {
+			root = b.TopLevel
+			if b.State == gitOK && !b.Detached {
+				branch = b.Branch
+			}
+		}
+	}
+	return s, root, branch, data, http.StatusOK, ""
 }
 
 // boardArchiveName is whiteboard_<repository>_<branch>_<label>_<YYMMDD_hhmm>.zip:

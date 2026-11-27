@@ -125,7 +125,7 @@
       b.appendChild(mk("span", "board-label", label));
       b.title = label;
       b.setAttribute("aria-label", label);
-      b.addEventListener("click", function (e) { if (run) run(e); });
+      b.addEventListener("click", function (e) { if (run) run(e, b); });
       parent.appendChild(b);
       return b;
     }
@@ -143,6 +143,8 @@
     if (actions.download) {
       var download = action(acts, "board-download", "download", wsT("js.board.toolbar.download"), actions.download);
       download.title = wsT("js.board.toolbar.download.title");
+      download.setAttribute("aria-haspopup", "menu");
+      download.setAttribute("aria-expanded", "false");
     }
     if (actions.files) {
       var files = action(acts, "board-files", "folder-open", wsT("js.board.toolbar.files"), function () {
