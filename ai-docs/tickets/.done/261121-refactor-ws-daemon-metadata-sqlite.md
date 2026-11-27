@@ -10,6 +10,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 7d176a5cf8df70fa
 sage-review-completeness-reviewed: 7d176a5cf8df70fa
+completed: 2026-11-27
 ---
 
 # Move daemon metadata stores to SQLite
@@ -1545,3 +1546,125 @@ Verification (macOS arm64):
   paths. Verify the two cursor-driven whole-file writes are absent in the
   traced cases. Record requested exceptions and their measured costs for the
   owner.
+
+### Result (faab517c0) - 2026-11-27
+
+Phase 3 Windows heavy-AV before/after measurement completed on the target office
+PC under live AhnLab V3 (`ASDSvc`, `V3UI`, `n6agent`, `PFDlpMon`), and the
+owner approved all 4 `ai-docs/manuals/performance.md` Rule 8 exceptions and
+ticket closure (`(1715)=a`, 2026-11-27).
+
+Environment and methodology:
+
+- **Host:** Microsoft Windows 11 Pro `10.0.26200`, 13th Gen Intel Core
+  i7-13620H (10C/16T), `D:` NTFS (`90.45 GB` free); temporary fixtures under
+  `D:\Temp\wsmeta-phase3` (deleted after measurement).
+- **Active security processes (identical pre/post):** `ASDSvc` (`5500`),
+  `n6agent` (`20216`), `PFDlpMon` (`19832`), `V3UI` (`20132`).
+- **Pinned commits:** Before `b118102abfcaddf0e27615f1957621ca773eb60e` vs
+  After `faab517c0df42c7df71ce7d4eb374f0eaafea4f1` (`CGO_ENABLED=0 GOOS=windows
+  GOARCH=amd64` cross-built on `w5090`; zero local `go build`/`go test`, zero
+  touches to live cache root, zero external agent spawns).
+- **Instrumentation:** Win32 `QueryPerformanceCounter` (sub-µs wall clock) +
+  `GetProcessIoCounters` (`TotalOp = Read+Write+Other`, transfer bytes;
+  overhead `N=1000`: Before `+14.84 µs`, After `+4.10 µs`) +
+  `wsstate.FileIOCounters()`.
+- **Seed dataset (identical on Before and After):** 20 leads + 5 children
+  (25 agent records/permissions/labels/hiring rows), 20 ack checks, 5 rail
+  workspaces, 5 memos, 5 support mappings, 3 tracker hook stores, 2 usage
+  latest + 3 usage history (200-sample baseline), 2 Pi probes. Cutover verified
+  `meta_active=true`, `import_issues_count=0`, `conv_count=20`. Excluded stores
+  (`workspaces.json`, `ui-seen.json`, `registration.json`, etc.) stayed files.
+
+Measured Before vs After summary:
+
+- **Cold start / cutover & steady cold open:**
+  - Cold #1 (1-time cutover + 4 fences): `2676.42 ms -> 2656.15 ms` (`-0.8%`),
+    kernel ops `11170 -> 18121` (`+62.2%`, 1-time import/fences; close drained
+    `1.53 MB` WAL in `74.55 ms`).
+  - Cold #2 (steady startup): `2161.59 ms -> 538.24 ms` (**4.02x faster**,
+    `-75.1%`), kernel ops `7709 -> 6653` (`-13.7%`, read bytes `3.14 MB ->
+    536 KB`, `-82.9%`). Standalone `wsmeta.Open`: `4.41 ms` (`52` ops);
+    `Open + Close`: `10.80 ms` (`74` ops); `makePrivate` DACL (`N=10`): p50
+    `0.887 ms` / mean `1.076 ms` (`27.4` ops).
+- **Held ring lines & heartbeats (cursor whole-file writes eliminated):**
+  - Held ring line, first post-Send (`N=20`): p50 `2.234 -> 0.255 ms`
+    (**8.8x**), kernel ops `48 -> 6` (`-87.5%`).
+  - Held ring line, steady (`N=50`): p50 `2.009 -> 0.403 ms` (**5.0x**), kernel
+    ops `48 -> 2` (`-95.8%`). Whole-file `agent.json` mutations (SHA-256 +
+    mtime + size): **Before `50/50` -> After `0/50`**.
+  - Dirty heartbeat (`N=50`): p50 `4.175 -> 1.297 ms` (**3.2x**, p95 `13.446 ->
+    1.624 ms`, **8.3x**), kernel ops `65 -> 19.38` (`-70.2%`). Whole-file
+    `agent.json` mutations: **Before `50/50` -> After `0/50`**.
+  - Clean heartbeat (`N=50`): `17 -> 17` ops (`0` SQLite I/O, excluded
+    registration only).
+- **Permissions, UI stores & tracker hooks:**
+  - Permission present/absent revalidate (`N=50`): p50 `0.050/0.065 ms ->
+    0.0006 ms` (**84x / 108x**), `2 -> 0` ops (`-100%`). Permission change
+    (`N=30`): p50 `13.160 -> 0.261 ms` (**50.4x**), `63 -> 2` ops (`-96.8%`).
+  - Rail render (`N=50`): p50 `2.554 -> 0.445 ms` (**5.7x**, p95 `64.661 ->
+    3.124 ms`, **20.7x**), `37 -> 0` ops (`-100%`). `POST /rail/layout`
+    (`N=30`): p50 `22.166 -> 1.752 ms` (**12.7x**), `64 -> 6` ops (`-90.6%`).
+  - Memos edit/add: p50 `8.214/10.396 -> 0.702/0.899 ms` (**11.7x / 11.6x**),
+    `-93.5% / -88.9%` ops; `GET /rail/memos`: `8 -> 2` ops (`0 B` read; 2 ops
+    are excluded `localhost_auth.go` cookie stat).
+  - Labels read (`N=50`): p50 `0.177 -> 0.0002 ms` (**887x**), `6 -> 0` ops;
+    set/clear (`N=30`): p50 `3.001 -> 0.748 ms` (**4.0x**), `-79.5%` ops.
+  - Answer check commit (`N=30`): p50 `8.368 -> 0.161 ms` (**52.0x**), `65 ->
+    3` ops (`-95.4%`).
+  - Hiring raw read/write: p50 `0.153 -> 0.0003 ms` (**508x**, `6 -> 0` ops) /
+    `7.336 -> 0.108 ms` (**67.9x**, `58.33 -> 2` ops); HTTP GET/POST `14 -> 8`
+    and `66.97 -> 10.03` ops (remaining `6` ops are excluded `ReadRegistration`
+    in `session_hire_routes.go:164` + `2` cookie auth stat; recorded as future
+    improvement candidate outside this ticket).
+  - Plan usage latest (`N=30`): p50 `2.660 -> 0.159 ms` (**16.7x**), `51 -> 2`
+    ops (`-96.1%`); history append 200-sample (`N=30`): p50 `4.405 -> 0.701 ms`
+    (**6.3x**), `55 -> 7.53` ops (`-86.3%`, `-43.2%` write bytes).
+  - Support set/replace (`N=30`): p50 `2.063/4.011 -> 0.096/0.263 ms`
+    (**21.5x / 15.2x**), `48 -> 2` / `96 -> 8` ops (`-95.8% / -91.7%`).
+  - Tracker hook scan (`N=30`): no-event p50 `6.053 -> 0.009 ms` (**651x**),
+    `53 -> 0` ops (`-100%`); with-event p50 `6.815 -> 0.366 ms` (**18.6x**),
+    `53.03 -> 6.07` ops (`-88.6%`).
+- **WAL, SHM, sync, checkpoint, shutdown & replacement:**
+  - `metadata.sqlite-shm`: **absent (`ERROR_FILE_NOT_FOUND`) at 11/11 lifecycle
+    checkpoints** plus Cold #1/#2 (`locking_mode=EXCLUSIVE` + WAL).
+  - `PRAGMA synchronous=NORMAL` vs `FULL`: `SetHolderCursor` p50 `0.364 vs
+    2.995 ms` (**8.2x**, p95 `0.572 vs 15.574 ms`, **27.2x**); `PatchRecord`
+    p50 `0.183 vs 2.720 ms` (**14.9x**, p95 `0.590 vs 10.292 ms`, **17.4x**).
+  - First write after idle `TRUNCATE` vs steady WAL write (`N=10` pairs): p50
+    `2.779 vs 0.586 ms` (`+2.19 ms` on WAL header reset; `4.8` vs `2.2` ops).
+  - Idle `PRAGMA wal_checkpoint(TRUNCATE)` (`wsmeta/store.go:583`): after 50
+    writes `4.503 ms` (`206 KB -> 0 B`, `8` ops); after 500 writes `7.591 ms`
+    (`2.06 MB -> 0 B`, `8` ops).
+  - Graceful `Daemon.Close()` after 100 dirty writes: `151.61 -> 38.30 ms`
+    (**4.0x**), `1418 -> 1156` ops (`-18.5%`, `-wal` `412 KB -> removed`).
+  - Full daemon replacement (`Close -> Unlock -> Start`): `2526.01 -> 526.63 ms`
+    (**4.80x**, `-79.2%`), `9370 -> 7991` ops (`-14.7%`, read bytes `5.93 MB ->
+    576 KB`, `-90.3%`).
+
+Owner-approved `ai-docs/manuals/performance.md` Rule 8 exceptions (`(1715)=a`,
+2026-11-27):
+
+1. **Rule 5 — Synchronous `PRAGMA synchronous=NORMAL` WAL commits on
+   interactive mutations** (`wsmeta/store.go:148`, `wsmeta/live.go`,
+   `wsmeta/records.go`): preserves immediate crash durability and monotonic
+   commit order without `FlushFileBuffers` (`0.10–0.40 ms` p50, `2–6` ops vs
+   `2.0–22.2 ms` / `48–96` ops Before; `+2.19 ms` on first write post-idle
+   `TRUNCATE`; `synchronous=FULL` restricted to non-interactive cross-file
+   ordering boundaries at `wsmeta/store.go:502-507`).
+2. **Rule 2 & Rule 5 — One-time cutover import and legacy fences under
+   `dashboard.lock`** (`(2125)`/`(2135)`/`(2136)`, `wsmeta/import*.go`):
+   amortized once per cache root (`2656.15 ms`, `18,121` ops on Cold #1;
+   steady Cold #2 drops to `538.24 ms`, 4.02x faster than Before).
+3. **Rule 4 & Rule 5 — Startup `makePrivate` DACL + 0-byte `-journal`
+   pre-creation** (`wsmeta/private_windows.go:23-62`): prevents Windows ACL
+   inheritance leaks (`0.887 ms` p50 / `27.4` ops inside `wsmeta.Open`'s
+   `4.41 ms`; zero interactive cost).
+4. **Rule 2 & Rule 5 — `wal_autocheckpoint=0` with idle `TRUNCATE` checkpoint
+   and shutdown drain** (`wsmeta/store.go:583`): keeps checkpoint flushes off
+   interactive actions (`4.50–7.59 ms` / `8` ops idle; `38.30 ms` dirty close).
+
+
+## Resolution (2026-11-27)
+
+All three phases complete. Phase 3 Windows AhnLab V3 before/after measurements verified 3x-887x speedups and 70%-100% kernel I/O reductions across bundled hot paths, zero whole-file agent.json writes on held ring lines and dirty heartbeats (0/50 vs 50/50 Before), zero metadata.sqlite-shm creation (11/11 checkpoints), 4.02x faster steady cold start, and 4.80x faster daemon replacement. Owner approved all 4 performance.md Rule 8 exceptions ((1715)=a, 2026-11-27).
