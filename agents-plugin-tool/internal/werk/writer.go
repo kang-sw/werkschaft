@@ -21,7 +21,7 @@ import (
 // flushed where the log must be whole: the end of a turn (also after an
 // interrupt), shutdown, and Close.
 type writer struct {
-	store *Store
+	store conversationStore
 	// before runs ahead of each append (a seam for a test to delay or fail
 	// the write); an error from it is a failed write, and the item is not
 	// appended.
@@ -44,7 +44,7 @@ type logAppend struct {
 	barrier  any
 }
 
-func newWriter(store *Store, before func(json.RawMessage) error, onErr func(error)) *writer {
+func newWriter(store conversationStore, before func(json.RawMessage) error, onErr func(error)) *writer {
 	w := &writer{store: store, before: before, onErr: onErr, done: make(chan struct{})}
 	w.cond = sync.NewCond(&w.mu)
 	go w.run()

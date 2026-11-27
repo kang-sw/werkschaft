@@ -264,16 +264,16 @@ func (a *Agent) recoverToolCalls(ctx, host context.Context, turn int, journal *t
 			panicked = a.runCall(ctx, host, turn, journal.response.ID, tools, call)
 			continue
 		}
-		if a.cfg.Approve != nil && a.store.pendingApproval[call.CallID] && ctx.Err() == nil && !panicked {
+		if a.cfg.Approve != nil && a.store.isPendingApproval(call.CallID) && ctx.Err() == nil && !panicked {
 			call.reask = true
 			panicked = a.runCall(ctx, host, turn, journal.response.ID, tools, call)
 			continue
 		}
 		output := "Error: the previous tool call's outcome is unknown. It was not run again; check the current state before repeating it."
-		if intent, ok := a.store.fileIntents[call.CallID]; ok && canonicalFileTool(call.Name) != "" {
+		if intent, ok := a.store.fileIntent(call.CallID); ok && canonicalFileTool(call.Name) != "" {
 			output = "Recovered file mutation: " + intent.Outcome() + ". The tool was not run again."
 		}
-		if job := a.store.execJobs[call.CallID]; job != "" && canonicalExecLaunch(call.Name) != "" && a.cfg.RecoverExec != nil {
+		if job := a.store.execJob(call.CallID); job != "" && canonicalExecLaunch(call.Name) != "" && a.cfg.RecoverExec != nil {
 			if text, err := a.cfg.RecoverExec(ctx, job); err == nil {
 				output = "Recovered exec launch:\n" + text
 			}

@@ -80,6 +80,25 @@ type execJobLine struct {
 	JobID  string `json:"job_id"`
 }
 
+// conversationStore is the persistence seam used by Agent and writer.
+// *Store is the append-only disk implementation; *memoryStore is the
+// zero-disk-I/O implementation used when Config.Ephemeral is true.
+type conversationStore interface {
+	Append(item json.RawMessage) error
+	AppendResponse(response *Response) error
+	appendBarrier(record any) error
+	Close() error
+	sessionID() string
+	initialJournal() turnJournal
+	checkpointLine() *checkpointLine
+	setCheckpoint(c *checkpointLine)
+	replayCompaction(archive *compactArchive) (prior *checkpointLine, reference string, err error)
+	isPendingApproval(callID string) bool
+	fileIntent(callID string) (wsfs.FileIntent, bool)
+	execJob(callID string) string
+	reset()
+}
+
 // Store is one session's conversation file.
 type Store struct {
 	mu              sync.Mutex
@@ -404,4 +423,112 @@ func (s *Store) Close() error {
 		s.lock = nil
 	}
 	return err
+}
+
+func (s *Store) sessionID() string               { return s.session }
+func (s *Store) initialJournal() turnJournal     { return s.turnJournal }
+func (s *Store) checkpointLine() *checkpointLine { return s.checkpoint }
+func (s *Store) setCheckpoint(c *checkpointLine) { s.checkpoint = c }
+func (s *Store) isPendingApproval(callID string) bool {
+	return s.pendingApproval[callID]
+}
+func (s *Store) fileIntent(callID string) (wsfs.FileIntent, bool) {
+	v, ok := s.fileIntents[callID]
+	return v, ok
+}
+func (s *Store) execJob(callID string) string { return s.execJobs[callID] }
+
+func (s *Store) replayCompaction(archive *compactArchive) (*checkpointLine, string, error) {
+	// Replay the full raw log for references and dialog. Use independent
+	// replay state so the open store's recovery evidence is untouched.
+	reader := &Store{
+		path: s.path, session: s.session,
+		fileIntents: make(map[string]wsfs.FileIntent), execJobs: make(map[string]string),
+	}
+	if _, _, err := reader.readSegment(archive); err != nil {
+		return nil, "", fmt.Errorf("read compaction history: %w", err)
+	}
+	return reader.checkpoint, filepath.ToSlash(segmentPath("", s.session)), nil
+}
+
+func (s *Store) reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.checkpoint = nil
+	s.turnJournal = turnJournal{}
+	clear(s.fileIntents)
+	clear(s.execJobs)
+	clear(s.pendingApproval)
+}
+
+// memoryStore is a zero-disk-I/O conversationStore for Config.Ephemeral.
+// It satisfies the same store contract as *Store without creating directories,
+// conversation segments, or file locks.
+type memoryStore struct {
+	mu         sync.Mutex
+	session    string
+	closed     bool
+	checkpoint *checkpointLine
+}
+
+func newMemoryStore(session string) *memoryStore {
+	return &memoryStore{session: session}
+}
+
+func (m *memoryStore) Append(json.RawMessage) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return errors.New("the conversation store is closed")
+	}
+	return nil
+}
+
+func (m *memoryStore) AppendResponse(*Response) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return errors.New("the conversation store is closed")
+	}
+	return nil
+}
+
+func (m *memoryStore) appendBarrier(any) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return errors.New("the conversation store is closed")
+	}
+	return nil
+}
+
+func (m *memoryStore) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.closed = true
+	return nil
+}
+
+func (m *memoryStore) sessionID() string           { return m.session }
+func (m *memoryStore) initialJournal() turnJournal { return turnJournal{} }
+func (m *memoryStore) checkpointLine() *checkpointLine {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.checkpoint
+}
+func (m *memoryStore) setCheckpoint(c *checkpointLine) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.checkpoint = c
+}
+func (m *memoryStore) replayCompaction(*compactArchive) (*checkpointLine, string, error) {
+	return nil, "", errors.New("compaction is not supported on ephemeral conversations")
+}
+func (m *memoryStore) isPendingApproval(string) bool            { return false }
+func (m *memoryStore) fileIntent(string) (wsfs.FileIntent, bool) { return wsfs.FileIntent{}, false }
+func (m *memoryStore) execJob(string) string                    { return "" }
+func (m *memoryStore) reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.checkpoint = nil
 }

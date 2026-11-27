@@ -5,12 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wscompact"
-	"github.com/kang-sw/devenv/internal/wsfs"
 )
 
 const dialogBytes = wscompact.DialogBytes
@@ -61,20 +59,14 @@ func (a *Agent) compactWithSummary(ctx context.Context, lead *wscompact.LeadSumm
 		return err
 	}
 	archive := compactArchive{secrets: a.cfg.SummarySecrets}
-	// Replay the full raw log for references and dialog. Use independent
-	// replay state so the open store's recovery evidence is untouched.
-	reader := &Store{
-		path: a.store.path, session: a.store.session,
-		fileIntents: make(map[string]wsfs.FileIntent), execJobs: make(map[string]string),
+	prior, reference, err := a.store.replayCompaction(&archive)
+	if err != nil {
+		return err
 	}
-	if _, _, err := reader.readSegment(&archive); err != nil {
-		return fmt.Errorf("read compaction history: %w", err)
-	}
-	reference := filepath.ToSlash(segmentPath("", a.store.session))
 	dialog := archive.dialog(reference)
 	var evidence string
 	var since time.Time
-	if prior := reader.checkpoint; prior != nil {
+	if prior != nil {
 		evidence = "Previous checkpoint (background only):\n" + boundedText(Scrub(prior.Summary, a.cfg.SummarySecrets...), 16<<10) + "\n\n"
 		since = time.UnixMilli(prior.At)
 	}
@@ -104,7 +96,7 @@ func (a *Agent) compactWithSummary(ctx context.Context, lead *wscompact.LeadSumm
 		state = a.cfg.CompactionState(since)
 	}
 	checkpoint := &checkpointLine{
-		K: "checkpoint", ID: NewSessionID(), At: a.now().UnixMilli(), Sequence: a.store.checkpoint.next(),
+		K: "checkpoint", ID: NewSessionID(), At: a.now().UnixMilli(), Sequence: a.store.checkpointLine().next(),
 		Summary: archive.summary(state, prose, dialog, a.cfg.Lead, rereads),
 	}
 	if err := a.log.commit(checkpoint); err != nil {
@@ -114,7 +106,7 @@ func (a *Agent) compactWithSummary(ctx context.Context, lead *wscompact.LeadSumm
 	a.transcript = []json.RawMessage{userItem(checkpoint.Summary)}
 	a.journal.selectCheckpoint()
 	a.mu.Unlock()
-	a.store.checkpoint = checkpoint
+	a.store.setCheckpoint(checkpoint)
 	a.out.line(checkpoint.event(false))
 	return nil
 }
