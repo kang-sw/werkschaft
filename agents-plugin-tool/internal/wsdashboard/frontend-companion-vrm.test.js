@@ -45,12 +45,25 @@ function makeFakeElement(tag, doc) {
     ownerDocument: doc,
     style: {
       setProperty(k, v) { this[k] = v; },
+      getPropertyValue(k) { return this[k] || ""; },
       removeProperty(k) { delete this[k]; }
     },
-    setAttribute(k, v) { this.attrs[k] = String(v); },
+    setAttribute(k, v) {
+      this.attrs[k] = String(v);
+      if (k.startsWith("data-")) {
+        const key = k.slice(5).replace(/-([a-z])/g, (_, ch) => ch.toUpperCase());
+        this.dataset[key] = String(v);
+      }
+    },
     getAttribute(k) { return this.attrs[k] ?? null; },
     hasAttribute(k) { return Object.hasOwn(this.attrs, k); },
-    removeAttribute(k) { delete this.attrs[k]; },
+    removeAttribute(k) {
+      delete this.attrs[k];
+      if (k.startsWith("data-")) {
+        const key = k.slice(5).replace(/-([a-z])/g, (_, ch) => ch.toUpperCase());
+        delete this.dataset[key];
+      }
+    },
     addEventListener(type, fn, opts) {
       (this.listeners[type] ||= []).push(fn);
       if (opts && opts.signal) {
@@ -377,21 +390,34 @@ test("VrmExpressionController covers all 7 expressions, VRM 0.x fallbacks, expre
   assert.ok(Math.abs(mCustom.vals.get("sorrow") - 0.8) < 0.01, "preset alias 'sad' resolves to VRM 0.x 'sorrow'");
 });
 
-test("stage drives both a fake adapter and makeVrmRig through the same lifecycle, avoidance, context-loss, and disposal", async () => {
+test("stage drives both a fake adapter and makeVrmRig through rail-docking, narrow hide/pause, context-loss, and disposal", async () => {
   async function runStageScenario(useFakeAdapter) {
     let now = 0, raf = null, rafId = 0, hidden = false;
+    let vpW = 1680, vpH = 960;
     const storage = new Map();
-    const docListeners = {};
+    const docListeners = {}, winListeners = {};
     const doc = {
       get hidden() { return hidden; },
       documentElement: { dataset: { rid: "s1" }, classList: { contains: () => false }, hasAttribute: () => true },
       body: null,
-      getElementById: () => null,
+      getElementById: id => id === "rail" ? railEl : null,
       createElement: tag => makeFakeElement(tag, doc),
       createElementNS: (_ns, tag) => makeFakeElement(tag, doc),
       addEventListener: (type, fn) => { (docListeners[type] ||= []).push(fn); }
     };
     doc.body = makeFakeElement("body", doc);
+    const slotEl = makeFakeElement("div", doc);
+    slotEl.id = "rail-companion-slot";
+    slotEl.className = "rail-companion-slot";
+    slotEl.hidden = true;
+    slotEl.getBoundingClientRect = () => slotEl.hidden
+      ? { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }
+      : { left: 12, top: 610, right: 352, bottom: 850, width: 340, height: 240 };
+    const railEl = makeFakeElement("aside", doc);
+    railEl.id = "rail";
+    railEl.getBoundingClientRect = () => ({ left: 12, top: 12, right: 352, bottom: vpH - 12, width: 340, height: vpH - 24 });
+    railEl.querySelector = sel => sel === "#rail-companion-slot" ? slotEl : null;
+    railEl.querySelectorAll = sel => sel.includes("#rail-companion-slot") ? [slotEl] : [];
 
     let activePackMode = "vrm";
     let vrmAssetFetches = 0;
@@ -406,16 +432,21 @@ test("stage drives both a fake adapter and makeVrmRig through the same lifecycle
 
     const { C } = loadCompanion({
       document: doc,
+      getComputedStyle: () => ({ visibility: "visible", display: "flex" }),
       window: {
-        innerWidth: 1400,
-        innerHeight: 900,
+        get innerWidth() { return vpW; },
+        get innerHeight() { return vpH; },
         devicePixelRatio: 2,
+        matchMedia: q => ({
+          get matches() { return q.includes("1600") ? vpW >= 1600 : false; },
+          addEventListener(type, fn) { (winListeners["mq:" + type] ||= []).push(fn); }
+        }),
         localStorage: {
           getItem: k => storage.has(k) ? storage.get(k) : null,
           setItem: (k, v) => storage.set(k, String(v)),
           removeItem: k => storage.delete(k)
         },
-        addEventListener() {},
+        addEventListener: (type, fn) => { (winListeners[type] ||= []).push(fn); },
         WsShell: { companionContext: (routeKind = "home") => ({ routeKind, activity: "idle", landmarks: {}, events: [], rightColActive: false, drawerOpen: false }) },
         wsCompanionModalRows: []
       },
@@ -489,31 +520,53 @@ test("stage drives both a fake adapter and makeVrmRig through the same lifecycle
       if (fn) { now += dt; fn(now); }
     };
     step();
-    assert.equal(stage.debugState().renderer, "vrm");
-    assert.equal(stage.debugState().size, 240);
-    assert.equal(stage.debugState().vrmHeight, 280);
-    const homeBefore = stage.debugState().home.x;
+    const initial = stage.debugState();
+    assert.equal(initial.renderer, "vrm");
+    assert.equal(initial.dock, "rail-slot");
+    assert.equal(initial.vrmRailVisible, true);
+    assert.equal(initial.hidden, false);
+    assert.equal(slotEl.hidden, false);
+    assert.equal(railEl.dataset.companionDock, "rail-slot");
+    assert.equal(initial.size, 340);
+    assert.equal(initial.vrmHeight, 240);
+    assert.equal(initial.home.x, 182);
+    assert.equal(initial.home.y, 850);
+    assert.equal(initial.avoiding, false);
 
-    // Right-column hover/focus triggers horizontal slide avoidance to clear #bcol/#bgal.
+    // Right-column hover does NOT slide the rail-docked VRM.
     stage.context({
       routeKind: "session", activity: "idle", sessionId: "s1", events: [],
       rightColActive: true, drawerOpen: false,
-      landmarks: { "right-col": { x: 1050, y: 0, width: 350, height: 900 } }
-    }, { left: 0, top: 0, width: 1400, height: 900 });
-    step();
-    const avoidingState = stage.debugState();
-    assert.equal(avoidingState.avoiding, true);
-    assert.ok(avoidingState.home.x + avoidingState.size / 2 <= 1050, "VRM dock must clear right-col left edge");
-
-    // Hover ends -> returns home.
-    stage.context({
-      routeKind: "session", activity: "idle", sessionId: "s1", events: [],
-      rightColActive: false, drawerOpen: false,
-      landmarks: { "right-col": { x: 1050, y: 0, width: 350, height: 900 } }
-    }, { left: 0, top: 0, width: 1400, height: 900 });
+      landmarks: { "right-col": { x: 1250, y: 0, width: 350, height: 960 } }
+    }, { left: 356, top: 0, width: 1324, height: 960 });
     step();
     assert.equal(stage.debugState().avoiding, false);
-    assert.equal(stage.debugState().home.x, homeBefore);
+    assert.equal(stage.debugState().home.x, 182);
+
+    // Narrow viewport (< 1600px) hides VRM, hides rail slot, and pauses WebGL rendering cleanly.
+    vpW = 1440;
+    vpH = 900;
+    for (const fn of winListeners.resize || []) fn();
+    assert.equal(stage.debugState().vrmRailVisible, false);
+    assert.equal(stage.debugState().hidden, true);
+    assert.equal(stage.debugState().dock, "hidden");
+    assert.equal(slotEl.hidden, true);
+    assert.equal(railEl.dataset.companionDock, undefined);
+    assert.equal(raf, null, "narrow viewport must pause rAF loop");
+    const rendersWhileNarrow = fakeThree.stats.renders;
+    step();
+    assert.equal(fakeThree.stats.renders, rendersWhileNarrow, "narrow viewport must render 0 frames");
+
+    // Widening back to >= 1600px resumes VRM in the left rail slot seamlessly.
+    vpW = 1680;
+    vpH = 960;
+    for (const fn of winListeners.resize || []) fn();
+    assert.equal(stage.debugState().vrmRailVisible, true);
+    assert.equal(stage.debugState().hidden, false);
+    assert.equal(stage.debugState().dock, "rail-slot");
+    assert.equal(slotEl.hidden, false);
+    assert.notEqual(raf, null, "widening to >= 1600px must resume rAF loop");
+    step();
 
     // Directed VRM expression command succeeds using VRM vocabulary.
     assert.equal(stage.command({ sessionId: "s1", expression: "happy", ttl_ms: 2000 }), true);
@@ -555,6 +608,7 @@ test("stage drives both a fake adapter and makeVrmRig through the same lifecycle
     stage.apply({ pack: "default", preset: "" });
     for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r));
     assert.equal(stage.debugState().renderer, "2d");
+    assert.equal(slotEl.hidden, true);
     assert.equal(storage.has("ws.companion.size"), false);
 
     if (useFakeAdapter) {
@@ -824,8 +878,9 @@ test("THREE.Box3 bust framing includes tall hair/ears with headroom, and gesture
   rig.dispose();
 });
 
-test("VRM hover freeze prevents right-col ping-pong, zeroes vertical lift/hop, and clamps FX badges inside bounds", async () => {
+test("VRM rail dock disables dragging, zeroes vertical lift/hop, survives rail DOM swaps, and renders FX inside viewport bounds", async () => {
   let now = 0, raf = null, rafId = 0;
+  let mutationCb = null;
   const storage = new Map();
   const docListeners = {};
   const doc = {
@@ -837,20 +892,33 @@ test("VRM hover freeze prevents right-col ping-pong, zeroes vertical lift/hop, a
       addEventListener() {}
     },
     body: null,
-    getElementById: () => null,
+    getElementById: id => id === "rail" ? railEl : null,
     createElement: tag => makeFakeElement(tag, doc),
     createElementNS: (_ns, tag) => makeFakeElement(tag, doc),
     addEventListener: (type, fn) => { (docListeners[type] ||= []).push(fn); }
   };
   doc.body = makeFakeElement("body", doc);
+  let slotEl = makeFakeElement("div", doc);
+  slotEl.id = "rail-companion-slot";
+  slotEl.hidden = true;
+  slotEl.getBoundingClientRect = () => slotEl.hidden
+    ? { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }
+    : { left: 12, top: 610, right: 352, bottom: 850, width: 340, height: 240 };
+  const railEl = makeFakeElement("aside", doc);
+  railEl.id = "rail";
+  railEl.getBoundingClientRect = () => ({ left: 12, top: 12, right: 352, bottom: 948, width: 340, height: 936 });
+  railEl.querySelector = sel => sel === "#rail-companion-slot" ? slotEl : null;
+  railEl.querySelectorAll = sel => sel.includes("#rail-companion-slot") ? [slotEl] : [];
 
   const fakeThree = makeFakeVrmRuntime("1");
   const { C } = loadCompanion({
     document: doc,
+    getComputedStyle: () => ({ visibility: "visible", display: "flex" }),
     window: {
-      innerWidth: 1400,
-      innerHeight: 900,
+      innerWidth: 1680,
+      innerHeight: 960,
       devicePixelRatio: 1,
+      matchMedia: q => ({ matches: q.includes("1600"), addEventListener() {} }),
       localStorage: {
         getItem: k => storage.has(k) ? storage.get(k) : null,
         setItem: (k, v) => storage.set(k, String(v)),
@@ -861,7 +929,11 @@ test("VRM hover freeze prevents right-col ping-pong, zeroes vertical lift/hop, a
       wsCompanionModalRows: []
     },
     ResizeObserver: class { observe() {} disconnect() {} },
-    MutationObserver: class { observe() {} disconnect() {} },
+    MutationObserver: class {
+      constructor(cb) { mutationCb = cb; }
+      observe() {}
+      disconnect() {}
+    },
     performance: { now: () => now },
     wsT: k => k,
     requestAnimationFrame: fn => { raf = fn; return ++rafId; },
@@ -889,46 +961,23 @@ test("VRM hover freeze prevents right-col ping-pong, zeroes vertical lift/hop, a
 
   const rootNode = doc.body.children[0];
   const hitEl = rootNode.all().find(el => el.className === "ws-companion-hit");
-  const gearEl = rootNode.all().find(el => el.className === "ws-companion-gear");
-  const homeX = stage.debugState().home.x;
+  const charEl = rootNode.all().find(el => el.className === "ws-companion-character");
+  const startPos = { ...stage.debugState().position };
 
-  // Hover #bcol -> VRM slides left.
-  stage.context({
-    routeKind: "session", activity: "idle", sessionId: "s1", events: [],
-    rightColActive: true, drawerOpen: false,
-    landmarks: { "right-col": { x: 1050, y: 0, width: 350, height: 900 } }
-  }, { left: 0, top: 0, width: 1400, height: 900 });
-  for (let i = 0; i < 12; i++) step(40);
-  const shiftedX = stage.debugState().position.x;
-  assert.ok(shiftedX < homeX - 100, "VRM should slide left when right-col is hovered");
+  // Attempting to drag the rail-docked VRM must NOT detach it from its rail slot.
+  charEl.dispatchEvent({ type: "pointerdown", button: 0, pointerId: 1, clientX: 180, clientY: 720 });
+  charEl.dispatchEvent({ type: "pointermove", pointerId: 1, clientX: 600, clientY: 400 });
+  charEl.dispatchEvent({ type: "pointerup", pointerId: 1, clientX: 600, clientY: 400 });
+  step(40);
+  assert.equal(stage.debugState().position.x, startPos.x, "rail-docked VRM must not drag horizontally");
+  assert.equal(stage.debugState().position.y, startPos.y, "rail-docked VRM must not drag vertically");
 
-  // Pointer moves onto companion gear -> companionHover freezes horizontal avoidance even if rightColActive drops!
-  rootNode.dispatchEvent({ type: "pointerover", target: gearEl });
-  assert.equal(stage.debugState().companionHover, true);
-  assert.equal(stage.debugState().avoidanceFrozen, true);
-  stage.context({
-    routeKind: "session", activity: "idle", sessionId: "s1", events: [],
-    rightColActive: false, drawerOpen: false,
-    landmarks: { "right-col": { x: 1050, y: 0, width: 350, height: 900 } }
-  }, { left: 0, top: 0, width: 1400, height: 900 });
-  for (let i = 0; i < 8; i++) step(40);
-  assert.ok(Math.abs(stage.debugState().position.x - shiftedX) < 1.5,
-    `companion fled while hovered: was ${shiftedX}, moved to ${stage.debugState().position.x}`);
-
-  // Pointer leaves companion and moves far left to (120, 120) -> smoothly returns home.
-  rootNode.dispatchEvent({ type: "pointerout", target: gearEl, relatedTarget: null });
-  for (const fn of docListeners.pointermove || []) fn({ clientX: 120, clientY: 120, target: doc.body });
-  for (let i = 0; i < 20; i++) step(40);
-  assert.equal(stage.debugState().avoiding, false);
-  assert.ok(Math.abs(stage.debugState().position.x - homeX) < 4, "VRM must return home once pointer leaves companion and right-col");
-
-  // Trigger hop-bounce scenario (e.g. celebrate / ask_open) -> VRM must have ZERO vertical lift/hop.
-  const baseTransform = hitEl.style.transform;
+  // Trigger hop-bounce scenario (e.g. celebrate) -> VRM must have ZERO vertical lift/hop.
   const parseY = tf => {
     const m = /translate3d\([^,]+,\s*([-\d.]+)px/.exec(tf || "");
     return m ? Number(m[1]) : NaN;
   };
-  const baseY = parseY(baseTransform);
+  const baseY = parseY(hitEl.style.transform);
   assert.equal(stage.command({ sessionId: "s1", scenario: "celebrate", fx: "alert", ttl_ms: 3000 }), true);
   for (let i = 0; i < 15; i++) {
     step(40);
@@ -936,11 +985,26 @@ test("VRM hover freeze prevents right-col ping-pong, zeroes vertical lift/hop, a
     assert.ok(Math.abs(curY - baseY) < 0.01, `VRM must not hop vertically during celebrate (baseY=${baseY}, curY=${curY})`);
   }
 
-  // FX badge must be clamped inside visible container & viewport bounds (never above bodyBox top).
+  // FX badge must be visible and inside viewport bounds (in document.body, outside rail clip).
   const fxEl = rootNode.all().find(el => el.className === "ws-companion-fx");
   assert.ok(fxEl && !fxEl.hidden, "FX badge should be visible");
   const fxY = parseY(fxEl.style.transform);
-  assert.ok(fxY >= baseY + 8 && fxY < 900 - 8, `FX badge Y (${fxY}) escaped VRM container/viewport bounds (baseY=${baseY})`);
+  assert.ok(fxY >= 8 && fxY < 960 - 8, `FX badge Y (${fxY}) escaped viewport bounds`);
+
+  // Simulate #r-rail innerHTML swap replacing #rail-companion-slot with a fresh hidden node:
+  // WebGL context survives (still 1 renderer) and the new slot is immediately synced visible.
+  const nextSlot = makeFakeElement("div", doc);
+  nextSlot.id = "rail-companion-slot";
+  nextSlot.hidden = true;
+  nextSlot.getBoundingClientRect = () => nextSlot.hidden
+    ? { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }
+    : { left: 12, top: 620, right: 352, bottom: 860, width: 340, height: 240 };
+  slotEl = nextSlot;
+  mutationCb?.();
+  step(40);
+  assert.equal(nextSlot.hidden, false, "new #rail-companion-slot after rail swap must become visible");
+  assert.equal(stage.debugState().home.y, 860, "stage must re-anchor to swapped slot rect");
+  assert.equal(fakeThree.stats.renderersCreated, 1, "rail swap must never recreate WebGL context");
 
   stage.dispose();
 });

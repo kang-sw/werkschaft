@@ -1,9 +1,9 @@
 (function (C) {
   "use strict";
   const { clamp, mix, finite } = C;
-  const landmarks = ["composer-top", "whiteboard-ask", "hud-roster", "right-col"];
+  const landmarks = ["composer-top", "whiteboard-ask", "hud-roster"];
   const dragSnapLandmarks = ["composer-top", "whiteboard-ask", "hud-roster"];
-  const VRM_ASPECT = 280 / 240;
+  const RAIL_MIN_WIDTH = 1600;
   const VRM_ACTIVE_FPS = 30;
   const VRM_IDLE_FPS = 6;
   const VRM_IDLE_AFTER_MS = 5000;
@@ -221,11 +221,13 @@
     let currentConfig = config, preset = config.preset;
     let frame = 0, idleTimer = 0, last = 0, now = 0, viewStart = 0, lastBusy = 0, nextIdle = 45000;
     let lastVrmRenderAt = -Infinity, lastVrmActivityAt = 0, vrmIdleMode = false, lastVrmGazeX = 0, lastVrmGazeY = 0;
+    let vrmRailVisible = false, cursorSeen = false, lastVrmW = 0, lastVrmH = 0, lastVrmDpr = 0;
     let beat = null, viewBeat, viewPlaying, prop, fx, propCanvas, propCtx, decoration, quip, quipWidth = 0, quipHeight = 28, fxWidth = 36, fxHeight = 24, lastCount;
-    let size = 96, vrmHeight = 280, dpr = 1, vw = 0, vh = 0, dirty = true;
+    let size = 96, vrmHeight = 240, dpr = 1, vw = 0, vh = 0, dirty = true;
     let frameElement = null, frameInput = null, frameBox = null;
     let home = { x: 60, y: 96 }, arrived = false, custom = null, drag = null, suppressClick = false;
-    let companionHover = false, lastAvoidFrozen = false;
+    let companionHover = false;
+    const wideMq = typeof window.matchMedia === "function" ? window.matchMedia("(min-width: 1600px)") : null;
     const physics = { swing: 0, swingVel: 0 };
     const beatOrigin = { x: 0, y: 0 };
     const position = { x: 0, y: 0 }, cursor = { x: 0, y: 0 }, gaze = { x: 0, y: 0, prop: false };
@@ -251,7 +253,11 @@
       const nextIsVrm = pack.renderer === "vrm";
       const makeAdapter = C.makeVrmAdapter || C.makeVrmRig;
       const next = nextIsVrm ? makeAdapter(pack, {
-        onReady: () => { markVrmActivity(); invalidated(); },
+        onReady: () => {
+          if (!vrmRailVisible) { next.pause?.(); return; }
+          markVrmActivity();
+          invalidated();
+        },
         onContextLost: () => {
           cancelAnimationFrame(frame);
           if (idleTimer) { clearTimeout(idleTimer); idleTimer = 0; }
@@ -259,7 +265,11 @@
           last = 0;
           lastVrmRenderAt = -Infinity;
         },
-        onContextRestored: () => { markVrmActivity(); invalidated(); }
+        onContextRestored: () => {
+          if (!vrmRailVisible) { next.pause?.(); return; }
+          markVrmActivity();
+          invalidated();
+        }
       }) : C.makeRig(pack, shared, preset, currentConfig);
       // Prepare the neutral body and its tint cache before replacing the active rig.
       next.view("stand", null, "idle", []);
@@ -284,15 +294,25 @@
       canvas.hidden = nextIsVrm;
       vrmContainer.hidden = !nextIsVrm;
       if (propCanvas && nextIsVrm) propCanvas.hidden = true;
+      vrmRailVisible = false;
+      lastVrmW = 0;
+      lastVrmH = 0;
+      lastVrmDpr = 0;
+      clearRailDock();
       if (nextIsVrm) {
-        rail?.removeAttribute("data-companion-dock");
-        setBeforeUnreg(null);
-        rail?.style.removeProperty("--companion-slot");
         layout();
-        markVrmActivity();
-        next.mount?.(vrmContainer, { width: size, height: vrmHeight, dpr: Math.min(dpr, 2) });
+        next.mount?.(vrmContainer, { width: Math.max(160, size), height: Math.max(140, vrmHeight), dpr: Math.min(dpr, 2) });
+        if (vrmRailVisible) {
+          markVrmActivity();
+          hit.hidden = false;
+        } else {
+          next.pause?.();
+          hit.hidden = true;
+        }
+      } else {
+        layout();
+        hit.hidden = false;
       }
-      hit.hidden = false;
       reportFocus();
       if (!menu.hidden) controls.rebuild();
       settings?.rebuild();
@@ -372,8 +392,6 @@
     function context(payload, frameRect) {
       const previous = state.activity;
       const previousComposer = marks["composer-top"];
-      const previousRightCol = marks["right-col"];
-      const previousRightActive = !!state.rightColActive;
       state = payload.activity === "streaming" ? { ...payload, activity: "replying" } : payload;
       frameBox = frameRect;
       marks = Object.create(null);
@@ -385,12 +403,8 @@
         marks[id] = { left, top, right: left + m.width, bottom: top + m.height, width: m.width, height: m.height, x: left + m.width / 2, y: top };
       }
       const composer = marks["composer-top"];
-      const rightCol = marks["right-col"];
-      if (composer?.left !== previousComposer?.left || composer?.y !== previousComposer?.y ||
-          rightCol?.left !== previousRightCol?.left || rightCol?.width !== previousRightCol?.width ||
-          !!state.rightColActive !== previousRightActive) {
+      if (composer?.left !== previousComposer?.left || composer?.y !== previousComposer?.y) {
         dirty = true;
-        markVrmActivity();
       }
       requestPack();
       if (previous === "replying" && state.activity !== "replying") runner.endReply();
@@ -438,13 +452,9 @@
     }
 
     const sizing = resizeControl(grip, options, () => size, invalidated, { active: () => !isVrm() });
-    const vrmSizing = resizeControl(grip, options, () => size, invalidated, {
-      key: "ws.companion.vrmSize", min: 180, max: 340, invertX: true, active: () => isVrm()
-    });
 
     function resetSize() {
-      if (isVrm()) vrmSizing.reset();
-      else sizing.reset();
+      if (!isVrm()) sizing.reset();
       controls.close();
     }
 
@@ -457,7 +467,7 @@
       wardrobe: () => C.wardrobeOptions(model?.manifest),
       picks: () => rig?.wardrobe() || null,
       anchor: () => hit.getBoundingClientRect(),
-      resetSize() { if (isVrm()) vrmSizing.reset(); else sizing.reset(); },
+      resetSize() { if (!isVrm()) sizing.reset(); },
       // A pack install, update, uninstall or import already reloaded the daemon's store.
       packsChanged() { requestPack(true); },
       applyPreset, notice
@@ -467,30 +477,12 @@
       return !!(el && el !== node && node.contains(el));
     }
 
-    function avoidanceFrozen() {
-      return companionHover || !menu.hidden || !!settings?.open || !!drag || vrmSizing.isActive() || sizing.isActive();
-    }
-
-    function inAvoidCorridor() {
-      const rc = marks["right-col"];
-      if (!home.avoiding || !rc) return false;
-      const leftEdge = Math.min(position.x, home.x) - size / 2 - 20;
-      const topEdge = (home.y || vh - 16) - vrmHeight - 20;
-      return cursor.x >= leftEdge && cursor.x <= rc.right && cursor.y >= topEdge && cursor.y <= vh;
-    }
-
     function setCompanionHover(next) {
       const flag = !!next;
       if (companionHover === flag) return;
       companionHover = flag;
       node.dataset.hover = flag ? "1" : "0";
-      if (isVrm()) {
-        if (flag && arrived && !custom && !drag) {
-          const margin = 16;
-          const defaultX = clamp(vw - margin - size / 2, margin + size / 2, Math.max(margin + size / 2, vw - margin - size / 2));
-          home = { ...home, x: clamp(position.x, margin + size / 2, defaultX) };
-        }
-        dirty = true;
+      if (isVrm() && vrmRailVisible) {
         markVrmActivity();
         schedule();
       }
@@ -504,6 +496,43 @@
       beforeUnreg?.setAttribute("data-companion-before-unreg", "");
     }
 
+    function clearRailDock() {
+      rail?.removeAttribute("data-companion-dock");
+      setBeforeUnreg(null);
+      rail?.style.removeProperty("--companion-slot");
+      const slotEl = rail?.querySelector("#rail-companion-slot");
+      if (slotEl) slotEl.hidden = true;
+    }
+
+    function hideVrmForNarrow() {
+      clearRailDock();
+      vrmRailVisible = false;
+      node.dataset.dock = "hidden";
+      node.dataset.avoiding = "0";
+      hit.hidden = true;
+      controls.close();
+      if (decoration) decoration.hidden = true;
+      if (quip) quip.hidden = true;
+      if (frame) { cancelAnimationFrame(frame); frame = 0; }
+      if (idleTimer) { clearTimeout(idleTimer); idleTimer = 0; }
+      last = 0;
+      lastVrmRenderAt = -Infinity;
+      rig?.pause?.();
+    }
+
+    function computeRailVrmHeight(railRect) {
+      const unregOpen = !!rail?.querySelector("details.rws-unreg[open]");
+      const railH = Math.max(0, railRect?.height || vh);
+      let targetH = clamp(Math.round(vh * 0.255), 184, 256);
+      if (unregOpen && railH > 0) {
+        targetH = Math.min(targetH, Math.max(164, Math.round(railH * 0.24)));
+      }
+      if (railH > 0) {
+        targetH = Math.min(targetH, Math.max(152, Math.round(railH * 0.34)));
+      }
+      return Math.round(targetH);
+    }
+
     function layout() {
       dirty = false;
       markedRid = undefined;
@@ -513,44 +542,65 @@
       frameBox = frameElement?.getBoundingClientRect();
       if (!menu.hidden) controls.measure();
       if (isVrm()) {
-        rail?.removeAttribute("data-companion-dock");
+        const wide = vw >= RAIL_MIN_WIDTH && (!wideMq || wideMq.matches);
+        const railRect = rail?.getBoundingClientRect();
+        const slotEl = rail?.querySelector("#rail-companion-slot");
+        const railStyle = rail && typeof getComputedStyle === "function" ? getComputedStyle(rail) : null;
+        const railShown = !!(wide && rail && slotEl && railRect && railRect.width > 0 && railRect.height > 0 &&
+          (!railStyle || (railStyle.visibility !== "hidden" && railStyle.display !== "none")));
+        if (!railShown) {
+          hideVrmForNarrow();
+          home = { x: 0, y: 0, vrm: true, rail: false, hidden: true, avoiding: false };
+          return;
+        }
+        const wasVisible = vrmRailVisible;
+        vrmRailVisible = true;
+        custom = null;
+        drag = null;
+        const targetH = computeRailVrmHeight(railRect);
+        const slotCss = targetH + "px";
+        if (rail.style.getPropertyValue("--companion-slot") !== slotCss) rail.style.setProperty("--companion-slot", slotCss);
+        if (rail.dataset.companionDock !== "rail-slot") rail.dataset.companionDock = "rail-slot";
         setBeforeUnreg(null);
-        const maxWidthForHeight = Math.max(120, Math.floor((vh - 24) / VRM_ASPECT));
-        size = vrmSizing.value(240, Math.min(vw, maxWidthForHeight + 24), vh);
-        vrmHeight = Math.round(size * VRM_ASPECT);
-        rig?.resize?.(size, vrmHeight, Math.min(dpr, 2));
-        const margin = 16;
-        const defaultX = clamp(vw - margin - size / 2, margin + size / 2, Math.max(margin + size / 2, vw - margin - size / 2));
-        const defaultY = clamp(vh - margin, vrmHeight + 8, vh - 8);
-        const rc = marks["right-col"];
-        const frozen = avoidanceFrozen();
-        const prevAvoiding = !!home.avoiding;
-        const corridorHold = !state.rightColActive && inAvoidCorridor();
-        let homeX = defaultX, avoiding = false;
-        if (frozen && !custom && !drag) {
-          // Freeze horizontal avoidance while hovering or interacting with the
-          // companion, its menu, settings modal, or resize handle so it never flees.
-          const currentX = arrived && Number.isFinite(position.x) ? position.x : (Number.isFinite(home.x) ? home.x : defaultX);
-          homeX = clamp(currentX, margin + size / 2, defaultX);
-          avoiding = prevAvoiding || (defaultX - homeX > 1);
-        } else if ((state.rightColActive || corridorHold) && rc && !custom && !drag) {
-          const defaultLeft = defaultX - size / 2;
-          const defaultRight = defaultX + size / 2;
-          if (defaultRight > rc.left && defaultLeft < rc.right) {
-            const shiftedX = rc.left - 12 - size / 2;
-            homeX = clamp(shiftedX, margin + size / 2, defaultX);
-            avoiding = true;
+        if (slotEl.hidden) slotEl.hidden = false;
+        const slotRect = slotEl.getBoundingClientRect();
+        const nextW = Math.max(160, Math.round(slotRect.width || Math.min(railRect.width, 340)));
+        const nextH = Math.max(140, Math.round(slotRect.height || targetH));
+        const nextDpr = Math.min(dpr, 2);
+        size = nextW;
+        vrmHeight = nextH;
+        if (nextW !== lastVrmW || nextH !== lastVrmH || nextDpr !== lastVrmDpr) {
+          lastVrmW = nextW;
+          lastVrmH = nextH;
+          lastVrmDpr = nextDpr;
+          rig?.resize?.(size, vrmHeight, nextDpr);
+        }
+        const anchorLeft = Number.isFinite(slotRect.left) && slotRect.width > 0 ? slotRect.left : railRect.left;
+        const anchorBottom = Number.isFinite(slotRect.bottom) && slotRect.height > 0 ? slotRect.bottom : railRect.bottom;
+        home = { x: anchorLeft + size / 2, y: anchorBottom, vrm: true, rail: true, hidden: false, avoiding: false };
+        position.x = home.x;
+        position.y = home.y;
+        arrived = true;
+        node.dataset.dock = "rail-slot";
+        node.dataset.avoiding = "0";
+        if (!wasVisible) {
+          hit.hidden = false;
+          if (!doc.hidden) {
+            rig?.resume?.();
+            markVrmActivity();
           }
         }
-        node.dataset.avoiding = avoiding ? "1" : "0";
-        home = { x: homeX, y: defaultY, vrm: true, avoiding };
         return;
       }
       node.dataset.avoiding = "0";
+      const slotEl = rail?.querySelector("#rail-companion-slot");
+      if (slotEl && !slotEl.hidden) slotEl.hidden = true;
       const rect = rail?.getBoundingClientRect();
-      const open = vw >= 1600 || root.classList.contains("rail-open");
-      const docked = rect && open && rect.right > 0 && getComputedStyle(rail).visibility !== "hidden";
+      const open = vw >= RAIL_MIN_WIDTH || root.classList.contains("rail-open");
+      const railStyle = rail && typeof getComputedStyle === "function" ? getComputedStyle(rail) : null;
+      const docked = rect && open && rect.right > 0 && (!railStyle || railStyle.visibility !== "hidden");
       if (!docked) {
+        node.dataset.dock = "viewport";
         rail?.removeAttribute("data-companion-dock");
         setBeforeUnreg(null);
         size = sizing.value(clamp(Math.min(vw - 24, vh - 24), 48, 104), vw, vh);
@@ -562,37 +612,37 @@
         return;
       }
 
+      node.dataset.dock = "rail-2d";
       size = sizing.value(clamp(Math.min(rect.width * 0.44, rect.height * 0.36), 88, 152), vw, vh);
-      const list = rail.querySelector(".rlist");
-      const unreg = list?.querySelector(":scope > .rws-unreg");
+      const unreg = rail.querySelector(".rws-unreg");
       const footer = rail.querySelector(".rfoot, .r-config-global");
       const reserve = !custom && !drag;
-      const current = rail.dataset.companionDock;
-      const box = unreg?.getBoundingClientRect(), scroller = list?.getBoundingClientRect();
+      const box = unreg?.getBoundingClientRect();
       const slot = Math.ceil(size) + 4;
-      const previous = unreg?.previousElementSibling?.getBoundingClientRect();
-      // The sibling's margin fills any clearance the flex auto margin has not already supplied.
-      const gap = previous ? box.top - previous.bottom : slot;
-      const unregTop = box?.top + (reserve ? Math.max(0, slot - gap) : 0);
-      const listBottom = scroller?.bottom + (current === "footer" ? slot : 0);
-      const visible = box?.height > 0 && unregTop - size >= scroller?.top && unregTop < listBottom;
+      const hasUnreg = !!(unreg && box && box.height > 0);
       rail.style.setProperty("--companion-slot", slot + "px");
+      setBeforeUnreg(null);
       if (reserve) {
-        rail.dataset.companionDock = visible ? "unregistered" : "footer";
-        setBeforeUnreg(visible ? unreg?.previousElementSibling : null);
+        rail.dataset.companionDock = hasUnreg ? "unregistered" : "footer";
       } else {
         rail.removeAttribute("data-companion-dock");
-        setBeforeUnreg(null);
       }
-      const divider = (visible ? unreg : footer)?.getBoundingClientRect().top ?? rect.bottom;
+      const divider = (hasUnreg ? unreg : footer)?.getBoundingClientRect().top ?? rect.bottom;
       home = { x: rect.left + rect.width / 2, y: divider - 2, rail: true };
     }
 
-    function invalidated() { dirty = true; schedule(); }
+    function invalidated() {
+      dirty = true;
+      if (isVrm() && !doc.hidden && !cancel.signal.aborted) {
+        const wideNow = window.innerWidth >= RAIL_MIN_WIDTH && (!wideMq || wideMq.matches);
+        if (wideNow !== vrmRailVisible) layout();
+      }
+      schedule();
+    }
     const railResize = new ResizeObserver(invalidated);
     let observed = [];
     function observeRailLayout() {
-      const nodes = rail ? [rail, ...rail.querySelectorAll(".rlist, .rfoot, .rws-unreg")] : [];
+      const nodes = rail ? [rail, ...rail.querySelectorAll(".rlist, .rfoot, .rws-unreg, #rail-companion-slot")] : [];
       if (nodes.length === observed.length && nodes.every((item, i) => item === observed[i])) return;
       railResize.disconnect();
       nodes.forEach(el => railResize.observe(el));
@@ -607,6 +657,7 @@
     }
     railChanges.observe(root, { attributes: true, attributeFilter: ["class"] });
     window.addEventListener("resize", invalidated, options);
+    wideMq?.addEventListener?.("change", invalidated, options);
 
     function target() {
       return custom?.mark ? marks[custom.mark] || custom : custom || home;
@@ -835,13 +886,13 @@
         const fxH = fxHeight || 24;
         let fxX, fxY;
         if (isVrm()) {
-          // Keep FX badges neatly near the upper side of the bust, clamped
-          // inside both visible viewport and companion container bounds.
-          const minX = Math.max(padX, bodyBox.x + 8);
-          const maxX = Math.max(minX, Math.min(vw - fxW - padX, bodyBox.x + bodyBox.width - fxW - 26));
-          fxX = clamp(position.x + size * 0.22, minX, maxX);
-          const rawY = bodyBox.y + Math.round(charH * 0.16) - Math.round(Math.min(24, charH * 0.09) * progress);
-          const minY = Math.max(padTop, bodyBox.y + 8);
+          // Keep FX badges neatly perched near the upper-right of the bust,
+          // anchored in document.body so .rail { overflow: hidden } never clips them.
+          const minX = Math.max(padX, bodyBox.x + 12);
+          const maxX = Math.max(minX, Math.min(vw - fxW - padX, bodyBox.x + bodyBox.width + 24));
+          fxX = clamp(position.x + size * 0.24, minX, maxX);
+          const rawY = bodyBox.y + Math.round(charH * 0.14) - Math.round(Math.min(24, charH * 0.09) * progress);
+          const minY = Math.max(padTop, bodyBox.y - 12);
           const maxY = Math.max(minY, Math.min(vh - fxH - 8, bodyBox.y + bodyBox.height - fxH - 8));
           fxY = clamp(rawY, minY, maxY);
         } else {
@@ -862,7 +913,9 @@
       if (quip && !quip.hidden) {
         const charH = isVrm() ? vrmHeight : size;
         const left = clamp(position.x - quipWidth / 2, 6, Math.max(6, vw - quipWidth - 6));
-        const top = clamp(position.y - charH * 0.95, 6, Math.max(6, vh - (quipHeight || 28) - 6));
+        const top = isVrm()
+          ? clamp(bodyBox.y - (quipHeight || 28) - 4, 6, Math.max(6, vh - (quipHeight || 28) - 6))
+          : clamp(position.y - charH * 0.95, 6, Math.max(6, vh - (quipHeight || 28) - 6));
         quip.style.transform = "translate3d(" + Math.round(left) + "px," + Math.round(top) + "px,0)";
       }
     }
@@ -870,7 +923,8 @@
     function look(age, dt, playing) {
       const key = beat.gaze;
       const charH = isVrm() ? vrmHeight : size;
-      let x = (cursor.x - position.x) / 150, y = (cursor.y - position.y + charH * 0.6) / 120;
+      let x = isVrm() && home.rail && !cursorSeen ? 0.24 : (cursor.x - position.x) / 150;
+      let y = isVrm() && home.rail && !cursorSeen ? -0.06 : (cursor.y - position.y + charH * 0.6) / 120;
       const mark = gazeMark(key, playing);
       gaze.prop = !!prop && key === "prop:" + propAction(beat.prop);
       if (gaze.prop) {
@@ -890,6 +944,8 @@
       frame = 0;
       if (doc.hidden || cancel.signal.aborted || rig?.isContextLost?.()) return;
       if (!rig) return;
+      if (dirty) layout();
+      if (isVrm() && !vrmRailVisible) return;
       if (isVrm()) {
         const activeNow = !!viewPlaying || !!drag?.moving || posture.activity !== "idle" ||
           Math.abs(position.x - target().x) > 0.5 || Math.abs(position.y - target().y) > 0.5;
@@ -907,12 +963,6 @@
       const dt = last ? clamp(stamp - last, 0, isVrm() && vrmIdleMode ? 200 : 50) : 16;
       now += dt;
       last = stamp;
-      const frozenNow = isVrm() && avoidanceFrozen();
-      if (frozenNow !== lastAvoidFrozen) {
-        lastAvoidFrozen = frozenNow;
-        dirty = true;
-      }
-      if (dirty) layout();
       if (posture.activity !== "idle" || drag) nextIdle = now + 45000;
       else if (now >= nextIdle) { fire("idle.long"); nextIdle = now + 45000; }
       const playing = runner.tick(now, !!drag?.moving);
@@ -925,7 +975,6 @@
       const rest = target();
       let x = rest.x, y = rest.y;
       if (rest.corner) x = 12 + ((view.bounds[2] - view.bounds[0]) * size) / 2;
-      if (frozenNow && arrived && !drag?.moving && !custom) x = position.x;
       if (drag?.moving) { x = drag.x; y = drag.y; }
       const age = (now - viewStart) / 1000;
       const progress = playing?.beat.ms ? clamp((now - playing.start) / playing.beat.ms, 0, 1) : playing ? 0 : age % 2.3 / 2.3;
@@ -935,7 +984,7 @@
         x = mix(beatOrigin.x, clamp(mark.x, size / 2, vw - size / 2), toward);
         y = mix(beatOrigin.y, clamp(mark.y, size, vh - 12), toward);
       }
-      const amount = arrived && !drag?.moving ? 1 - Math.exp(-dt / 85) : 1;
+      const amount = arrived && !drag?.moving && !(isVrm() && home.rail) ? 1 - Math.exp(-dt / 85) : 1;
       position.x = mix(position.x, x, amount);
       position.y = mix(position.y, y, amount);
       arrived = true;
@@ -985,7 +1034,7 @@
     }
 
     function schedule(stamp) {
-      if (frame || idleTimer || !rig || doc.hidden || cancel.signal.aborted || rig?.isContextLost?.()) return;
+      if (frame || idleTimer || !rig || doc.hidden || cancel.signal.aborted || rig?.isContextLost?.() || (isVrm() && !vrmRailVisible)) return;
       if (isVrm() && vrmIdleMode) {
         const nowMs = typeof stamp === "number" ? stamp : performance.now();
         const elapsedSinceRender = lastVrmRenderAt > -Infinity ? Math.max(0, nowMs - lastVrmRenderAt) : 1000 / VRM_IDLE_FPS;
@@ -997,7 +1046,7 @@
         const delay = Math.max(16, Math.round(remaining - 10));
         idleTimer = setTimeout(() => {
           idleTimer = 0;
-          if (!frame && rig && !doc.hidden && !cancel.signal.aborted) frame = requestAnimationFrame(animate);
+          if (!frame && rig && !doc.hidden && !cancel.signal.aborted && (!isVrm() || vrmRailVisible)) frame = requestAnimationFrame(animate);
         }, delay);
         return;
       }
@@ -1010,11 +1059,11 @@
       if (doc.hidden || !body) return;
       frameInput = new AbortController();
       body.addEventListener("pointermove", event => {
+        cursorSeen = true;
         cursor.x = event.clientX + (frameBox?.left || 0);
         cursor.y = event.clientY + (frameBox?.top || 0);
         setCompanionHover(false);
-        if (isVrm()) {
-          if (home.avoiding && !state.rightColActive && !inAvoidCorridor()) dirty = true;
+        if (isVrm() && vrmRailVisible) {
           markVrmActivity();
           schedule();
         }
@@ -1035,8 +1084,10 @@
         lastVrmRenderAt = -Infinity;
         rig?.pause?.();
       } else {
-        rig?.resume?.();
-        markVrmActivity();
+        if (!isVrm() || vrmRailVisible) {
+          rig?.resume?.();
+          markVrmActivity();
+        }
         invalidated();
       }
     }, options);
@@ -1047,11 +1098,11 @@
       if (!isCompanionTarget(event.relatedTarget)) setCompanionHover(false);
     }, { ...options, passive: true });
     doc.addEventListener("pointermove", event => {
+      cursorSeen = true;
       cursor.x = event.clientX;
       cursor.y = event.clientY;
       setCompanionHover(isCompanionTarget(event.target));
-      if (isVrm()) {
-        if (home.avoiding && !state.rightColActive && !inAvoidCorridor()) dirty = true;
+      if (isVrm() && vrmRailVisible) {
         markVrmActivity();
         schedule();
       }
@@ -1071,6 +1122,7 @@
       if (event.button !== 0) return;
       controls.close();
       suppressClick = false;
+      if (isVrm() && home.rail) return;
       drag = { id: event.pointerId, startX: event.clientX, startY: event.clientY, x: position.x, y: position.y, lastX: event.clientX };
       character.setPointerCapture(event.pointerId);
     }, options);
@@ -1112,6 +1164,13 @@
       invalidated();
     }
     for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) character.addEventListener(name, drop, options);
+    character.addEventListener("contextmenu", () => {
+      if (!menu.hidden) {
+        controls.measure();
+        controls.place(position.x + (bodyBox.width || size) / 2 + 6, (bodyBox.y || position.y - vrmHeight) + (bodyBox.height || vrmHeight), vw, vh);
+      }
+      if (isVrm() && vrmRailVisible) { markVrmActivity(); schedule(); }
+    }, options);
     character.addEventListener("click", () => { if (!suppressClick) { markVrmActivity(); fire("user.poke"); } suppressClick = false; }, options);
     character.addEventListener("dblclick", () => { markVrmActivity(); returnHome(); }, options);
 
@@ -1121,16 +1180,21 @@
     const api = {
       apply, reset, context, trackFrame, command, closeMenu: controls.close,
       debugState() {
+        const slotEl = rail?.querySelector("#rail-companion-slot");
+        const slotRect = slotEl && !slotEl.hidden ? slotEl.getBoundingClientRect() : null;
         return {
           renderer: rig?.renderer || "2d",
           pack: model?.id || "",
+          dock: node.dataset.dock || "",
+          hidden: hit.hidden,
+          vrmRailVisible,
           size,
           vrmHeight,
           home: { ...home },
           position: { ...position },
-          avoiding: !!home.avoiding,
+          railSlotRect: slotRect ? { left: slotRect.left, top: slotRect.top, right: slotRect.right, bottom: slotRect.bottom, width: slotRect.width, height: slotRect.height } : null,
+          avoiding: false,
           companionHover,
-          avoidanceFrozen: avoidanceFrozen(),
           vrmIdleMode,
           vrm: rig?.debugState?.() || null,
           projectedBounds: null
@@ -1147,9 +1211,7 @@
         rig = null;
         railChanges.disconnect();
         railResize.disconnect();
-        rail?.removeAttribute("data-companion-dock");
-        setBeforeUnreg(null);
-        rail?.style.removeProperty("--companion-slot");
+        clearRailDock();
         loader.dispose();
         node.remove();
         C.focus?.show("", "");

@@ -257,7 +257,7 @@
 .rail .rref:disabled { cursor: default; color: var(--wb-muted-fg); background: transparent; }
 .rail .rref:disabled > .i { opacity: .4; }
 html:not([data-sysopen]) .rail .rsleep { display: none; }
-.rail .rlist { flex: 1 1 auto; min-height: 0; overflow: auto; padding-bottom: 6px; display: flex; flex-direction: column; }
+.rail .rlist { flex: 1 1 auto; min-height: 0; overflow: auto; padding-bottom: 12px; scroll-padding-bottom: 12px; display: flex; flex-direction: column; }
 .rail .rlist > .empty { padding: 10px 12px; font-size: 12.5px; color: var(--wb-muted-fg); }
 .rail .rws + .rws { margin-top: 8px; }
 .rail .wsbar { display: flex; align-items: center; gap: 8px; padding: 3px 12px; min-height: 28px; background: var(--wb-topic); color: var(--wb-on-topic); cursor: pointer; user-select: none; }
@@ -994,10 +994,44 @@ button.bgbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-o
 .rail .rfoot > .btn.gear .i { width: 14px; height: 14px; flex: none; }
 .rail .rfoot > .btn.gear:hover { background: var(--wb-muted); color: var(--wb-fg); }
 
+/* ===== Bottom Dock Slot for VRM Companion (>= 1600px) ===== */
+.rail .rail-companion-slot {
+  flex: none;
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+  display: none;
+  overflow: hidden;
+  pointer-events: none;
+  border-top: 1px solid color-mix(in srgb, var(--wb-line) 75%, transparent);
+  background:
+    radial-gradient(
+      110% 85% at 50% 92%,
+      color-mix(in srgb, var(--wb-primary) 9%, transparent) 0%,
+      transparent 72%
+    ),
+    linear-gradient(
+      to bottom,
+      transparent 0%,
+      color-mix(in srgb, var(--wb-muted) 22%, transparent) 100%
+    );
+}
+@media (min-width: 1600px) {
+  .rail[data-companion-dock="rail-slot"] .rail-companion-slot {
+    display: block;
+    height: var(--companion-slot, 240px);
+  }
+  .rail[data-companion-dock="rail-slot"] .unreg-list {
+    max-height: min(220px, max(110px, calc(100vh - 540px)));
+  }
+}
+@media (max-width: 1599.98px) {
+  .rail .rail-companion-slot { display: none !important; }
+}
+
 /* ===== Bottom Collapsible Unregistered Workspace Admission Panel ===== */
 .rail details.rws-unreg {
   flex: none;
-  margin-top: auto;
   border-top: 1px solid var(--wb-line);
   background: color-mix(in srgb, var(--wb-muted) 26%, var(--wb-card));
 }
