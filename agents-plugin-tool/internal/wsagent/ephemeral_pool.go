@@ -66,7 +66,7 @@ type EphemeralRequest struct {
 	Acquire        AcquireSpec
 	Prompt         string
 	ResponseSchema json.RawMessage // optional structured JSON output contract
-	Timeout        time.Duration   // bounded wait; caller falls back on timeout
+	Timeout        time.Duration   // bounded wait (0 -> DefaultEphemeralTimeout); caller falls back on timeout
 }
 
 // EphemeralPoolOptions configures an EphemeralPool. Zero values use package
@@ -81,6 +81,9 @@ type EphemeralPoolOptions struct {
 	ScratchRoot string
 	// IdleTTL overrides DefaultEphemeralIdleTTL when positive.
 	IdleTTL time.Duration
+	// DefaultTimeout overrides DefaultEphemeralTimeout when positive. Applied
+	// whenever an EphemeralRequest leaves Timeout <= 0.
+	DefaultTimeout time.Duration
 	// SweepInterval controls how often idle slots are checked for eviction.
 	// Zero derives a sensible interval from IdleTTL; negative disables the
 	// background ticker (callers or tests can call SweepIdle explicitly).
@@ -185,11 +188,10 @@ type ephemeralSlot struct {
 	lifecycle   LifecyclePolicy
 	statePruner ephemeralStatePruner
 	turns       int
-	tokens    int64
-	resets    int
-	dirty     bool
-	sessionID string
-	stateDir  string
+	tokens      int64
+	resets      int
+	sessionID   string
+	stateDir    string
 }
 
 // EphemeralPool caches warm, non-persistent wsagent.Process slots keyed by
@@ -200,6 +202,7 @@ type EphemeralPool struct {
 	backends         map[string]Backend
 	scratchRoot      string
 	defaultIdleTTL   time.Duration
+	defaultTimeout   time.Duration
 	maxStateSessions int
 	now              func() time.Time
 
@@ -222,6 +225,10 @@ func NewEphemeralPool(opts EphemeralPoolOptions) *EphemeralPool {
 	if idleTTL <= 0 {
 		idleTTL = DefaultEphemeralIdleTTL
 	}
+	defaultTimeout := opts.DefaultTimeout
+	if defaultTimeout <= 0 {
+		defaultTimeout = DefaultEphemeralTimeout
+	}
 	maxState := opts.MaxStateSessions
 	if maxState <= 0 {
 		maxState = DefaultEphemeralMaxStateSessions
@@ -241,6 +248,7 @@ func NewEphemeralPool(opts EphemeralPoolOptions) *EphemeralPool {
 		backends:         backends,
 		scratchRoot:      opts.ScratchRoot,
 		defaultIdleTTL:   idleTTL,
+		defaultTimeout:   defaultTimeout,
 		maxStateSessions: maxState,
 		now:              nowFn,
 		ctx:              ctx,
@@ -378,7 +386,11 @@ func (p *EphemeralPool) Execute(ctx context.Context, req EphemeralRequest) (stri
 		}
 	}()
 
-	callCtx, cancel := p.deriveCallContext(ctx, req.Timeout)
+	timeout := req.Timeout
+	if timeout <= 0 {
+		timeout = p.defaultTimeout
+	}
+	callCtx, cancel := p.deriveCallContext(ctx, timeout)
 	defer cancel()
 
 	if err := slot.gate.acquire(callCtx); err != nil {
@@ -391,9 +403,6 @@ func (p *EphemeralPool) Execute(ctx context.Context, req EphemeralRequest) (stri
 		}
 	}()
 
-	if slot.dirty {
-		slot.closeProcess()
-	}
 	if slot.proc != nil && slot.shouldReset(req.Acquire) {
 		if err := slot.resetOrRestart(callCtx, p.maxStateSessions); err != nil {
 			return "", err
@@ -403,6 +412,11 @@ func (p *EphemeralPool) Execute(ctx context.Context, req EphemeralRequest) (stri
 		if err := p.startSlot(callCtx, slot, backend); err != nil {
 			return "", err
 		}
+	}
+	if err := callCtx.Err(); err != nil {
+		// Context expired before Send: the warm process was not touched, so
+		// keep it alive for the next caller instead of tearing it down.
+		return "", err
 	}
 
 	reply, timedOut, err := p.runTurn(callCtx, slot, req.Prompt)
@@ -416,7 +430,6 @@ func (p *EphemeralPool) Execute(ctx context.Context, req EphemeralRequest) (stri
 		slot.controls = processControls{}
 		slot.turns = 0
 		slot.tokens = 0
-		slot.dirty = false
 		slot.sessionID = ""
 		slot.stateDir = ""
 		handedOff = true
@@ -479,7 +492,11 @@ func (p *EphemeralPool) Reset(ctx context.Context, spec AcquireSpec) error {
 		p.wg.Done()
 	}()
 
-	callCtx, cancel := p.deriveCallContext(ctx, 0)
+	resetTimeout := time.Duration(0)
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		resetTimeout = p.defaultTimeout
+	}
+	callCtx, cancel := p.deriveCallContext(ctx, resetTimeout)
 	defer cancel()
 	if err := slot.gate.acquire(callCtx); err != nil {
 		return err
@@ -549,25 +566,31 @@ func (s *ephemeralSlot) resetOrRestart(ctx context.Context, maxStateSessions int
 	s.resets++
 	// Drain any buffered post-reset session id events without blocking so
 	// isolated state-dir pruning preserves the newly opened session id.
+	s.drainPendingEvents()
+	if s.statePruner != nil && s.stateDir != "" && maxStateSessions > 0 && s.resets%maxStateSessions == 0 {
+		s.statePruner.pruneEphemeralStateDir(s.stateDir, s.sessionID, maxStateSessions)
+	}
+	return nil
+}
+
+func (s *ephemeralSlot) drainPendingEvents() {
+	if s.proc == nil {
+		return
+	}
 	events := s.proc.Events()
-drain:
 	for {
 		select {
 		case ev, ok := <-events:
 			if !ok {
-				break drain
+				return
 			}
 			if ev.SessionID != "" {
 				s.sessionID = ev.SessionID
 			}
 		default:
-			break drain
+			return
 		}
 	}
-	if s.statePruner != nil && s.stateDir != "" && maxStateSessions > 0 && s.resets%maxStateSessions == 0 {
-		s.statePruner.pruneEphemeralStateDir(s.stateDir, s.sessionID, maxStateSessions)
-	}
-	return nil
 }
 
 func (s *ephemeralSlot) closeProcess() {
@@ -578,7 +601,6 @@ func (s *ephemeralSlot) closeProcess() {
 	s.controls = processControls{}
 	s.turns = 0
 	s.tokens = 0
-	s.dirty = false
 	s.sessionID = ""
 	if s.stateDir != "" {
 		_ = os.RemoveAll(s.stateDir)
@@ -660,7 +682,6 @@ func (p *EphemeralPool) startSlot(ctx context.Context, slot *ephemeralSlot, back
 		slot.controls = controlsFor(res.proc)
 		slot.turns = 0
 		slot.tokens = 0
-		slot.dirty = false
 		slot.resets = 0
 		return nil
 	case <-ctx.Done():
@@ -685,6 +706,9 @@ func (p *EphemeralPool) runTurn(ctx context.Context, slot *ephemeralSlot, prompt
 	if err := ctx.Err(); err != nil {
 		return "", false, err
 	}
+	// Clear any trailing buffered events from a prior turn (including
+	// BoundedRotation turns where Reset did not run) before sending.
+	slot.drainPendingEvents()
 	if err := slot.proc.Send(prompt); err != nil {
 		return "", false, err
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -136,9 +137,24 @@ func (b CodexBackend) Start(_ context.Context, spec StartSpec) (Process, error) 
 	if err != nil {
 		return nil, fmt.Errorf("codex backend: %w", err)
 	}
-	cmd := exec.Command(command, append(pre, "app-server")...)
+	env := codexEnv(spec)
+	args := append(pre, "app-server")
+	var disableMCP []string
+	if spec.Ephemeral {
+		// Disable plugin MCP servers, codex_apps connectors, and every user
+		// MCP server declared in $CODEX_HOME/config.toml before app-server
+		// initialization so none connect or expose tools to ephemeral turns.
+		disableMCP = codexUserMCPServerNames(env)
+		args = append(args, "-c", "features.apps=false", "-c", "features.plugins=false")
+		for _, name := range disableMCP {
+			if isCodexBareTOMLKey(name) {
+				args = append(args, "-c", "mcp_servers."+name+".enabled=false")
+			}
+		}
+	}
+	cmd := exec.Command(command, args...)
 	cmd.Dir = spec.workDir()
-	cmd.Env = codexEnv(spec)
+	cmd.Env = env
 	mapper := newCodexMapper(spec.SessionID)
 	mapper.readOnlyWorker = spec.Lead == nil && policy == "never"
 	mapper.worker = spec.Lead == nil
@@ -163,7 +179,7 @@ func (b CodexBackend) Start(_ context.Context, spec StartSpec) (Process, error) 
 	p := &codexProcess{
 		streamProcess: stream, m: mapper, epoch: newMCPToken(),
 		model: spec.Model, effort: spec.Effort, mode: mode, policy: policy, worker: spec.Lead == nil,
-		ephemeral: spec.Ephemeral, ephemeralSpec: spec,
+		ephemeral: spec.Ephemeral, ephemeralSpec: spec, ephemeralDisableMCP: disableMCP,
 	}
 	holder, pid, _ := stream.HolderInfo()
 	if p.worker && cmd.Process != nil {
@@ -214,8 +230,9 @@ type codexProcess struct {
 	// worker marks a spawned child, whose sandbox follows its authority.
 	worker bool
 	// ephemeral marks an EphemeralPool slot that can reset via warm thread/start.
-	ephemeral     bool
-	ephemeralSpec StartSpec
+	ephemeral           bool
+	ephemeralSpec       StartSpec
+	ephemeralDisableMCP []string
 }
 
 func (p *codexProcess) processControls() processControls {
@@ -241,7 +258,7 @@ func (p *codexProcess) callContext(ctx context.Context, kind, method string, par
 func (p *codexProcess) threadParams(spec StartSpec) (map[string]any, error) {
 	params := map[string]any{
 		"cwd":    spec.workDir(),
-		"config": codexThreadConfig(spec),
+		"config": codexThreadConfigWithDisabledMCP(spec, p.ephemeralDisableMCP),
 	}
 	if spec.Ephemeral {
 		params["ephemeral"] = true
@@ -319,17 +336,24 @@ func (p *codexProcess) open(spec StartSpec) error {
 }
 
 // Reset starts a fresh ephemeral thread on the resident codex app-server
-// process, clearing conversation context without restarting the CLI.
+// process, clearing conversation context without restarting the CLI, and
+// best-effort unsubscribes the superseded thread so resident memory stays bounded.
 func (p *codexProcess) Reset(ctx context.Context) error {
 	if !p.ephemeral {
 		return ErrUnsupported
 	}
+	prevThread := p.m.session()
 	params, err := p.threadParams(p.ephemeralSpec)
 	if err != nil {
 		return err
 	}
 	if _, err := p.callContext(ctx, "open", "thread/start", params); err != nil {
 		return fmt.Errorf("thread/start: %w", err)
+	}
+	if prevThread != "" && prevThread != p.m.session() {
+		unsubCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		_, _ = p.callContext(unsubCtx, "unsub", "thread/unsubscribe", map[string]any{"threadId": prevThread})
+		cancel()
 	}
 	return nil
 }
@@ -346,19 +370,32 @@ func (p *codexProcess) Reset(ctx context.Context) error {
 // fs.* tools are pre-approved too, for leads and workers, and
 // features.shell_tool is false.
 func codexThreadConfig(spec StartSpec) map[string]any {
+	return codexThreadConfigWithDisabledMCP(spec, nil)
+}
+
+func codexThreadConfigWithDisabledMCP(spec StartSpec, disableMCP []string) map[string]any {
 	if spec.Ephemeral {
-		// Ephemeral launches attach no ws-mcp and shadow bundled plugin MCP
-		// servers as disabled (with a placeholder URL, since Codex rejects
-		// enabled=false without a transport), while disabling subagents,
-		// shell_tool, and web search.
+		// Ephemeral launches attach no ws-mcp and disable bundled plugin MCP
+		// servers, codex_apps connectors, plugins, subagents, shell_tool, web
+		// search, and any user-configured MCP servers read from CODEX_HOME/config.toml.
+		mcpServers := map[string]any{
+			"ws":     map[string]any{"url": "http://127.0.0.1:0/disabled", "enabled": false},
+			"wsflow": map[string]any{"url": "http://127.0.0.1:0/disabled", "enabled": false},
+		}
+		for _, name := range disableMCP {
+			if _, exists := mcpServers[name]; !exists {
+				mcpServers[name] = map[string]any{"enabled": false}
+			}
+		}
 		return map[string]any{
 			"agents":     map[string]any{"enabled": false},
 			"web_search": "disabled",
-			"features":   map[string]any{"shell_tool": false},
-			"mcp_servers": map[string]any{
-				"ws":     map[string]any{"url": "http://127.0.0.1:0/disabled", "enabled": false},
-				"wsflow": map[string]any{"url": "http://127.0.0.1:0/disabled", "enabled": false},
+			"features": map[string]any{
+				"shell_tool": false,
+				"apps":       false,
+				"plugins":    false,
 			},
+			"mcp_servers": mcpServers,
 		}
 	}
 	server := map[string]any{
@@ -418,6 +455,139 @@ func codexMode(mode string) (sandbox, policy string, err error) {
 // codexWorkerClientVersion is the initialize clientInfo version of a worker
 // start, which has no lead spec to read the daemon's version from.
 const codexWorkerClientVersion = "worker"
+
+// codexUserMCPServerNames reads $CODEX_HOME/config.toml (default ~/.codex/config.toml)
+// once per ephemeral slot start and returns the sorted names of user-configured
+// [mcp_servers.<name>] tables so ephemeral launches can disable them explicitly.
+func codexUserMCPServerNames(env []string) []string {
+	var codexHome string
+	for _, entry := range env {
+		if k, v, ok := strings.Cut(entry, "="); ok && k == "CODEX_HOME" {
+			codexHome = strings.TrimSpace(v)
+		}
+	}
+	if codexHome == "" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			codexHome = filepath.Join(home, ".codex")
+		}
+	}
+	if codexHome == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(filepath.Join(codexHome, "config.toml"))
+	if err != nil {
+		return nil
+	}
+	return parseCodexConfigMCPServers(string(raw))
+}
+
+func parseCodexConfigMCPServers(raw string) []string {
+	seen := map[string]struct{}{}
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "[") || strings.HasPrefix(line, "[[") {
+			continue
+		}
+		header, ok := extractTOMLTableHeader(line)
+		if !ok {
+			continue
+		}
+		rest, ok := strings.CutPrefix(header, "mcp_servers.")
+		if !ok {
+			continue
+		}
+		name := parseFirstTOMLKeySegment(strings.TrimSpace(rest))
+		if name != "" {
+			seen[name] = struct{}{}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func extractTOMLTableHeader(line string) (string, bool) {
+	inQuote := byte(0)
+	escaped := false
+	for i := 1; i < len(line); i++ {
+		c := line[i]
+		if inQuote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if inQuote == '"' && c == '\\' {
+				escaped = true
+				continue
+			}
+			if c == inQuote {
+				inQuote = 0
+			}
+			continue
+		}
+		if c == '"' || c == '\'' {
+			inQuote = c
+			continue
+		}
+		if c == ']' {
+			return strings.TrimSpace(line[1:i]), true
+		}
+	}
+	return "", false
+}
+
+func parseFirstTOMLKeySegment(s string) string {
+	if s == "" {
+		return ""
+	}
+	if s[0] == '"' || s[0] == '\'' {
+		q := s[0]
+		var b strings.Builder
+		escaped := false
+		for i := 1; i < len(s); i++ {
+			c := s[i]
+			if escaped {
+				b.WriteByte(c)
+				escaped = false
+				continue
+			}
+			if q == '"' && c == '\\' {
+				escaped = true
+				continue
+			}
+			if c == q {
+				return strings.TrimSpace(b.String())
+			}
+			b.WriteByte(c)
+		}
+		return ""
+	}
+	if dot := strings.IndexByte(s, '.'); dot >= 0 {
+		s = s[:dot]
+	}
+	return strings.TrimSpace(s)
+}
+
+func isCodexBareTOMLKey(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		isLetter := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+		isDigit := c >= '0' && c <= '9'
+		if !isLetter && !isDigit && c != '_' && c != '-' {
+			return false
+		}
+	}
+	return true
+}
 
 // codexWorkerMode maps a spawned child's authority to a sandbox and an
 // approval policy. Workdir-write runs in the workspace-write sandbox with

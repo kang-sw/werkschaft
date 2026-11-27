@@ -404,6 +404,72 @@ func TestEphemeralPoolTimeoutInterruptAndRestart(t *testing.T) {
 	}
 }
 
+func TestEphemeralPoolDefaultTimeoutAndPreSendExpiry(t *testing.T) {
+	// Zero DefaultTimeout uses documented DefaultEphemeralTimeout (30s).
+	defaultPool := NewEphemeralPool(EphemeralPoolOptions{SweepInterval: -1})
+	defer defaultPool.Close()
+	if defaultPool.defaultTimeout != DefaultEphemeralTimeout {
+		t.Fatalf("defaultTimeout = %v, want %v", defaultPool.defaultTimeout, DefaultEphemeralTimeout)
+	}
+
+	// Zero req.Timeout falls back to DefaultTimeout and interrupts a hung process.
+	fake := &fakeEphemeralBackend{
+		newProc: func(_ StartSpec, idx int) *fakeEphemeralProcess {
+			p := newFakeEphemeralProcess(idx, true)
+			if idx == 1 {
+				p.onSend = func(_ *fakeEphemeralProcess, _ string) {
+					// Hang without TurnEnd to verify zero-Timeout fallback bounds the wait.
+				}
+			}
+			return p
+		},
+	}
+	pool := NewEphemeralPool(EphemeralPoolOptions{
+		Backends:       map[string]Backend{BackendClaude: fake},
+		ScratchRoot:    t.TempDir(),
+		DefaultTimeout: 40 * time.Millisecond,
+		SweepInterval:  -1,
+	})
+	defer pool.Close()
+
+	spec := AcquireSpec{Harness: BackendClaude, Model: "haiku", Mode: BoundedRotation}
+	_, err := pool.Execute(context.Background(), EphemeralRequest{
+		Acquire: spec,
+		Prompt:  "hang-with-zero-timeout",
+		Timeout: 0,
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("zero-Timeout err = %v, want DeadlineExceeded", err)
+	}
+
+	// Warm slot recovers on next call.
+	reply, err := pool.Execute(context.Background(), EphemeralRequest{
+		Acquire: spec,
+		Prompt:  "healthy",
+		Timeout: time.Second,
+	})
+	if err != nil || reply != "p2:healthy" {
+		t.Fatalf("recovery call = (%q, %v), want p2:healthy", reply, err)
+	}
+
+	// A pre-cancelled ctx must not tear down the healthy warm process.
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := pool.Execute(cancelled, EphemeralRequest{Acquire: spec, Prompt: "cancelled"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled call err = %v, want context.Canceled", err)
+	}
+	if fake.procs[1].closed {
+		t.Fatal("pre-send cancelled context closed a healthy warm process")
+	}
+	reply, err = pool.Execute(context.Background(), EphemeralRequest{Acquire: spec, Prompt: "still-warm", Timeout: time.Second})
+	if err != nil || reply != "p2:still-warm" {
+		t.Fatalf("post-cancel warm call = (%q, %v), want p2:still-warm", reply, err)
+	}
+	if fake.startCount() != 2 {
+		t.Fatalf("starts = %d, want 2 (no unnecessary restart)", fake.startCount())
+	}
+}
+
 func TestEphemeralPoolFIFOSerializationSameKey(t *testing.T) {
 	var inFlight atomic.Int32
 	var maxConcurrent atomic.Int32
@@ -766,8 +832,29 @@ func writeFakeCLIScript(t *testing.T, body string) string {
 }
 
 func TestCodexEphemeralBackendAndReset(t *testing.T) {
+	codexHome := t.TempDir()
+	configTOML := `
+[mcp_servers.user_http]
+url = "http://127.0.0.1:1/nope"
+
+[mcp_servers.user_stdio]
+command = "/nonexistent-user-mcp"
+
+[mcp_servers.user_stdio.env]
+FOO = "bar"
+
+[mcp_servers."dotted.srv"]
+url = "http://127.0.0.1:1/dotted"
+`
+	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(configTOML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", codexHome)
+
+	argvFile := filepath.Join(t.TempDir(), "codex-argv.txt")
 	logFile := filepath.Join(t.TempDir(), "codex-in.jsonl")
 	script := writeFakeCLIScript(t, fmt.Sprintf(`
+printf '%%s\n' "$@" > %q
 thread_n=0
 turn_n=0
 while IFS= read -r line; do
@@ -782,6 +869,10 @@ while IFS= read -r line; do
       id=$(printf '%%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
       printf '{"id":"%%s","result":{"thread":{"id":"th-%%d","cliVersion":"0.170.0","model":"o3"},"approvalPolicy":"never","sandbox":{"type":"readOnly"}}}\n' "$id" "$thread_n"
       ;;
+    *'"method":"thread/unsubscribe"'*)
+      id=$(printf '%%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+      printf '{"id":"%%s","result":{"status":"unsubscribed"}}\n' "$id"
+      ;;
     *'"method":"turn/start"'*)
       turn_n=$((turn_n + 1))
       id=$(printf '%%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
@@ -793,7 +884,7 @@ while IFS= read -r line; do
       ;;
   esac
 done
-`, logFile))
+`, argvFile, logFile))
 
 	pool := NewEphemeralPool(EphemeralPoolOptions{
 		Backends:      map[string]Backend{BackendCodex: CodexBackend{Command: script}},
@@ -812,12 +903,29 @@ done
 		t.Fatalf("codex call 2 = (%q, %v), want reply-th-2", r2, err)
 	}
 
+	argvRaw, err := os.ReadFile(argvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Split(strings.TrimSpace(string(argvRaw)), "\n")
+	for _, want := range []string{
+		"app-server",
+		"features.apps=false",
+		"features.plugins=false",
+		"mcp_servers.user_http.enabled=false",
+		"mcp_servers.user_stdio.enabled=false",
+	} {
+		if !slices.Contains(args, want) {
+			t.Fatalf("codex argv missing %q: %v", want, args)
+		}
+	}
+
 	raw, err := os.ReadFile(logFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
-	var initCount, threadStartCount int
+	var initCount, threadStartCount, unsubCount int
 	for _, line := range lines {
 		var msg map[string]any
 		if json.Unmarshal([]byte(line), &msg) != nil {
@@ -826,6 +934,12 @@ done
 		switch msg["method"] {
 		case "initialize":
 			initCount++
+		case "thread/unsubscribe":
+			unsubCount++
+			params, _ := msg["params"].(map[string]any)
+			if params["threadId"] != "th-1" {
+				t.Fatalf("thread/unsubscribe threadId = %v, want th-1", params["threadId"])
+			}
 		case "thread/start":
 			threadStartCount++
 			params, _ := msg["params"].(map[string]any)
@@ -840,13 +954,20 @@ done
 			}
 			cfg, _ := params["config"].(map[string]any)
 			feats, _ := cfg["features"].(map[string]any)
-			if feats["shell_tool"] != false {
-				t.Fatalf("features.shell_tool = %v, want false", feats["shell_tool"])
+			if feats["shell_tool"] != false || feats["apps"] != false || feats["plugins"] != false {
+				t.Fatalf("features = %v, want shell_tool/apps/plugins all false", feats)
+			}
+			mcps, _ := cfg["mcp_servers"].(map[string]any)
+			for _, srv := range []string{"ws", "wsflow", "user_http", "user_stdio", "dotted.srv"} {
+				entry, _ := mcps[srv].(map[string]any)
+				if entry["enabled"] != false {
+					t.Fatalf("mcp_servers[%q] = %v, want enabled=false", srv, entry)
+				}
 			}
 		}
 	}
-	if initCount != 1 || threadStartCount != 2 {
-		t.Fatalf("codex init=%d thread/start=%d, want 1 and 2 (warm reset on resident process)", initCount, threadStartCount)
+	if initCount != 1 || threadStartCount != 2 || unsubCount != 1 {
+		t.Fatalf("codex init=%d thread/start=%d thread/unsubscribe=%d, want 1, 2, 1", initCount, threadStartCount, unsubCount)
 	}
 }
 

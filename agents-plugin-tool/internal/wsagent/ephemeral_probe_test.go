@@ -42,6 +42,8 @@ func TestEphemeralPoolRealCLIProbe(t *testing.T) {
 
 	schema := json.RawMessage(`{"type":"object","required":["ok"],"properties":{"ok":{"type":"boolean"}}}`)
 	jsonPrompt := `Reply with ONLY this exact JSON object and nothing else: {"ok": true}`
+	toolListSchema := json.RawMessage(`{"type":"object","required":["tools"],"properties":{"tools":{"type":"array"}}}`)
+	toolListPrompt := `List the exact names of all tools and MCP tools currently available to you as JSON {"tools": ["..."]}. If none are available, return {"tools": []}. Output JSON only.`
 
 	if wantHarness(BackendClaude) {
 		t.Run("claude", func(t *testing.T) {
@@ -82,6 +84,26 @@ func TestEphemeralPoolRealCLIProbe(t *testing.T) {
 					t.Fatalf("claude call %d: %v", i+1, err)
 				}
 				t.Logf("claude call %d reply: %s", i+1, reply)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			toolReply, err := pool.Execute(ctx, EphemeralRequest{
+				Acquire:        spec,
+				Prompt:         toolListPrompt,
+				ResponseSchema: toolListSchema,
+				Timeout:        45 * time.Second,
+			})
+			cancel()
+			if err != nil {
+				t.Fatalf("claude tool isolation probe: %v", err)
+			}
+			var claudeTools struct {
+				Tools []string `json:"tools"`
+			}
+			if err := json.Unmarshal([]byte(toolReply), &claudeTools); err != nil {
+				t.Fatalf("claude tool reply decode: %v (%s)", err, toolReply)
+			}
+			if len(claudeTools.Tools) != 0 {
+				t.Fatalf("claude ephemeral session exposed tools: %v", claudeTools.Tools)
 			}
 			if err := pool.Reset(context.Background(), spec); err != nil {
 				t.Fatalf("claude reset: %v", err)
@@ -135,6 +157,31 @@ func TestEphemeralPoolRealCLIProbe(t *testing.T) {
 					t.Fatalf("codex call %d: %v", i+1, err)
 				}
 				t.Logf("codex call %d reply: %s", i+1, reply)
+			}
+			// Verify no MCP tools (ws/wsflow/user/apps) are reachable beyond the
+			// documented confined residual built-ins.
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			toolReply, err := pool.Execute(ctx, EphemeralRequest{
+				Acquire:        spec,
+				Prompt:         toolListPrompt,
+				ResponseSchema: toolListSchema,
+				Timeout:        60 * time.Second,
+			})
+			cancel()
+			if err != nil {
+				t.Fatalf("codex tool isolation probe: %v", err)
+			}
+			var codexTools struct {
+				Tools []string `json:"tools"`
+			}
+			if err := json.Unmarshal([]byte(toolReply), &codexTools); err != nil {
+				t.Fatalf("codex tool reply decode: %v (%s)", err, toolReply)
+			}
+			for _, name := range codexTools.Tools {
+				low := strings.ToLower(name)
+				if strings.Contains(low, "mcp__") || strings.HasPrefix(low, "ws_") || strings.HasPrefix(low, "ws/") || strings.Contains(low, "codex_apps") {
+					t.Fatalf("codex ephemeral session leaked MCP/connector tool %q (all=%v)", name, codexTools.Tools)
+				}
 			}
 			if err := pool.Reset(context.Background(), spec); err != nil {
 				t.Fatalf("codex reset: %v", err)
@@ -200,6 +247,32 @@ func TestEphemeralPoolRealCLIProbe(t *testing.T) {
 			cancel()
 			if permErr != nil {
 				t.Fatalf("agy permission-confinement turn stalled or failed: %v", permErr)
+			}
+
+			// Verify no user/ws MCP tools are reachable beyond the documented
+			// confined residual built-ins.
+			ctx, cancel = context.WithTimeout(context.Background(), 60*time.Second)
+			toolReply, err := pool.Execute(ctx, EphemeralRequest{
+				Acquire:        spec,
+				Prompt:         toolListPrompt,
+				ResponseSchema: toolListSchema,
+				Timeout:        60 * time.Second,
+			})
+			cancel()
+			if err != nil {
+				t.Fatalf("agy tool isolation probe: %v", err)
+			}
+			var agyTools struct {
+				Tools []string `json:"tools"`
+			}
+			if err := json.Unmarshal([]byte(toolReply), &agyTools); err != nil {
+				t.Fatalf("agy tool reply decode: %v (%s)", err, toolReply)
+			}
+			for _, name := range agyTools.Tools {
+				low := strings.ToLower(name)
+				if strings.HasPrefix(low, "mcp_") || strings.HasPrefix(low, "ws_") || strings.HasPrefix(low, "ws/") {
+					t.Fatalf("agy ephemeral session leaked MCP tool %q (all=%v)", name, agyTools.Tools)
+				}
 			}
 
 			if err := pool.Reset(context.Background(), spec); err != nil {
