@@ -189,7 +189,7 @@ func (d *Daemon) handleHiringFlag(w http.ResponseWriter, r *http.Request, replyI
 		http.Error(w, "session index is not ready", http.StatusServiceUnavailable)
 		return
 	}
-	if *req.Enabled && (!reg.Live(d.hireClock()) || meta.Hired || d.hireParent(replyID) != "") {
+	if *req.Enabled && (!d.regLive(reg, d.hireClock()) || meta.Hired || d.hireParent(replyID) != "") {
 		http.Error(w, "hiring cannot be enabled for an ended, nested, or hired session", 409)
 		return
 	}

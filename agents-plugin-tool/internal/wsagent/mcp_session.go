@@ -315,7 +315,7 @@ func (r *Runner) ResolveCredentialToken(token string) (wsdashboard.CredentialSes
 	}
 	reg, known := r.opts.Backends[hello.Harness]
 	session := wsdashboard.CredentialSession{Conversation: hello.Conversation, Harness: hello.Harness, Permitted: known && reg.ProcessKind != ProcessDurable && reg.ProviderCredentials}
-	if c := r.conv(hello.Conversation); c != nil {
+	if c := r.resident(hello.Conversation); c != nil {
 		c.mu.Lock()
 		session.Lead = c.rec.Lead
 		c.mu.Unlock()

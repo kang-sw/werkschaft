@@ -320,6 +320,11 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		if d.meta != nil {
 			idxOpts.LabelLookup = d.sessionLabel
 		}
+		if h, ok := opts.Agents.(interface{ OwnsLive(replyID string) bool }); ok {
+			// The runner's sessions never rewrite their heartbeat on disk:
+			// their liveness is its memory.
+			idxOpts.OwnedLive = h.OwnsLive
+		}
 		d.index = NewIndex(idxOpts)
 	}
 	d.openAudit(logw)

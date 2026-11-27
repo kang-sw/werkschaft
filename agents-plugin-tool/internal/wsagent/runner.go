@@ -272,6 +272,9 @@ type Options struct {
 	CheckoutReleased func(from, id, checkout, reason string)
 	// ChildWaitingDays overrides agent.child_waiting_days; 0 reads it.
 	ChildWaitingDays int
+	// ParkIdleChildren lets a waiting spawned child leave memory until a
+	// message, mail or control wakes it (runner_park.go). The daemon sets it.
+	ParkIdleChildren bool
 	// keepAwake replaces the platform's idle-sleep backend in tests.
 	keepAwake wsawake.Backend
 	// spawnListed observes global spawn-projection listings in tests.
@@ -366,6 +369,14 @@ type Runner struct {
 	// closedRows caches immutable closed states under mu, until reopened.
 	// Handed-off snapshots still belong to a terminal and are not cached.
 	closedRows map[string]State
+	// parked marks the ids of closed that are open, waiting spawned
+	// children with no loop (runner_park.go): their record stays in closed
+	// so every read of a record sees them, and a wake path rehydrates the
+	// conversation (unpark). parkStop holds each one's mail watch stop and
+	// unparking the rehydrations under way. All under mu.
+	parked    map[string]bool
+	parkStop  map[string]func()
+	unparking map[string]chan struct{}
 	// Retired Pi process bindings are independent of the ended history rows.
 	// The holder manager supplies their liveness. Guarded by mu.
 	retiredPiBindings map[string]retiredPiBinding

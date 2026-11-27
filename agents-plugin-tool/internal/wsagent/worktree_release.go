@@ -472,7 +472,9 @@ func (r *Runner) boundConvs(target string) []*conv {
 			out = append(out, c)
 		}
 	}
-	return out
+	// A parked child is open: it is rehydrated so the release (or the
+	// reservation) meets it as it meets a resident one.
+	return append(out, r.boundParkedConvs(target)...)
 }
 
 // tellRefused tells from that conversation id's start was refused: by

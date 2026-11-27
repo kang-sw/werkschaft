@@ -577,6 +577,9 @@ func newAgentRunnerWithHired(dir string, logw io.Writer, trackerChanged, agyActi
 		// session's mail, each submission with its sender legend.
 		Mail:       mail,
 		MailLegend: mail.Legend,
+		// A waiting child holds no loop: its record stays and a send or its
+		// mail rehydrates it (the idle-child I/O storm fix).
+		ParkIdleChildren: true,
 		WSMCP: func(root string) (wsagent.MCPCommand, error) {
 			return agentMCPCommand(root, version)
 		},

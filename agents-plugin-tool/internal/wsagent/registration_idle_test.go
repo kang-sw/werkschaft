@@ -72,17 +72,19 @@ func TestRegistrationHeartbeatFailureAndLiveness(t *testing.T) {
 			t.Fatalf("%s reservation: %+v %v", broken, row, err)
 		}
 	}
+	// An idle heartbeat interval rewrites nothing: liveness is memory.
+	before, err := wsdashboard.ReadRegistration(dir, "idle")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for range 4 {
 		now = now.Add(wsdashboard.HeartbeatInterval)
 		if !c.writeRegistration() {
-			t.Fatal("heartbeat write failed")
+			t.Fatal("unchanged write failed")
 		}
 		row, err := wsdashboard.ReadRegistration(dir, "idle")
-		if err != nil || !row.Live(now.Add(wsdashboard.HeartbeatInterval)) {
-			t.Fatalf("legacy registration reader lost liveness: %+v, %v", row, err)
-		}
-		if row.Live(now.Add(wsdashboard.LiveWindow + time.Second)) {
-			t.Fatal("stopped registration did not go stale")
+		if err != nil || row.HeartbeatAt != before.HeartbeatAt {
+			t.Fatalf("idle interval rewrote the row: %+v, %v", row, err)
 		}
 	}
 	row, err = wsdashboard.ReadRegistration(dir, "idle")
@@ -95,58 +97,5 @@ func TestRegistrationHeartbeatFailureAndLiveness(t *testing.T) {
 	}
 	if c.writeRegistration() || !c.isForeign() {
 		t.Fatal("terminal handoff was overwritten")
-	}
-}
-
-func TestHeartbeatRegistrationPrecedesBlockedSnapshot(t *testing.T) {
-	base := t.TempDir()
-	now := time.Unix(1000, 0).UTC()
-	r := NewRunner(Options{Dir: base, Now: func() time.Time { return now }, Log: io.Discard})
-	rec := Record{
-		ReplyID: "hosted",
-		Root:    t.TempDir(),
-		Backend: BackendPi,
-		Lead:    true,
-		HostPID: 42,
-	}
-	c := &conv{r: r, rec: rec}
-	c.live = newLiveWriter(wsdashboard.SessionDir(base, rec.ReplyID), rec.ReplyID, rec.Backend, r.opts.Now, io.Discard)
-	c.live.setSlot(&idleSnapshotSlot{})
-	c.live.owner = c.lockSummaryWriter
-	r.setSummaryOwner(rec.ReplyID, c)
-
-	snapshotStarted := make(chan struct{})
-	c.live.beforeSnapshot = func() { close(snapshotStarted) }
-	summaryLock := r.summaryLock(rec.ReplyID)
-	summaryLock.Lock()
-	locked := true
-	defer func() {
-		if locked {
-			summaryLock.Unlock()
-		}
-	}()
-	done := make(chan struct{})
-	go func() {
-		c.heartbeat()
-		close(done)
-	}()
-	select {
-	case <-snapshotStarted:
-	case <-time.After(5 * time.Second):
-		t.Fatal("heartbeat did not reach snapshot publication")
-	}
-	row, err := wsdashboard.ReadRegistration(base, rec.ReplyID)
-	summaryLock.Unlock()
-	locked = false
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("heartbeat did not finish after summary writer was released")
-	}
-	if err != nil {
-		t.Fatalf("registration was not refreshed before blocked snapshot publication: %v", err)
-	}
-	if row.HeartbeatAt != now.Format(time.RFC3339) {
-		t.Fatalf("registration heartbeat = %q, want %q", row.HeartbeatAt, now.Format(time.RFC3339))
 	}
 }

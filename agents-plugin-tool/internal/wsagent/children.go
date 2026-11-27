@@ -840,10 +840,17 @@ func (r *Runner) releaseLater(id string) {
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
-		if c := r.conv(id); c != nil {
+		if c := r.resident(id); c != nil {
 			c.do(c.releaseHeld)
 		}
 	}()
+}
+
+// descendsFrom reports whether a record with parent p is a descendant edge of
+// the walk below.
+// Retained name check: legacy Pi history and wire tool names (TestRetiredPiListUsesCallerOwnership).
+func descendsFrom(p *ParentRef, backend, profile string) bool {
+	return p != nil && (p.Kind == ParentConversation || p.Kind == ParentLead && (backend == BackendPi || isAgentWorkerProfile(profile)))
 }
 
 // descendants are conversation id's open descendants through
@@ -857,8 +864,14 @@ func (r *Runner) descendants(id string) []string {
 		c.mu.Lock()
 		p, backend, profile := c.rec.Parent, c.rec.Backend, c.rec.Profile
 		c.mu.Unlock()
-		if p != nil && (p.Kind == ParentConversation || p.Kind == ParentLead && (backend == BackendPi || isAgentWorkerProfile(profile))) {
+		if descendsFrom(p, backend, profile) {
 			byParent[p.ReplyID] = append(byParent[p.ReplyID], cid)
+		}
+	}
+	for cid := range r.parked {
+		rec := r.closed[cid]
+		if descendsFrom(rec.Parent, rec.Backend, rec.Profile) {
+			byParent[rec.Parent.ReplyID] = append(byParent[rec.Parent.ReplyID], cid)
 		}
 	}
 	r.mu.Unlock()
@@ -876,6 +889,8 @@ func (r *Runner) descendants(id string) []string {
 		}
 	}
 	walk(id)
+	// A parked descendant is closed through its loop: rehydrate it.
+	r.unparkIDs(out)
 	return out
 }
 
@@ -890,6 +905,9 @@ var waitChecked func()
 // A turn whose report the runner already handed to the parent answers
 // such a wait with its status alone, marked Delivered.
 func (r *Runner) wait(ctx context.Context, id string, timeout time.Duration, asParent bool) (TurnResult, error) {
+	if r.isParked(id) {
+		r.unpark(id)
+	}
 	r.mu.Lock()
 	c, open := r.convs[id]
 	rec, closed := r.closed[id]

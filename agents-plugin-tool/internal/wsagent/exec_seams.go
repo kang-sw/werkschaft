@@ -434,7 +434,7 @@ func (r *Runner) MCPCallBegin(token string) (end func()) {
 	if t == nil {
 		return func() {}
 	}
-	c := r.conv(t.id)
+	c := r.resident(t.id)
 	if c == nil {
 		return func() {}
 	}

@@ -41,10 +41,24 @@ func (r *Runner) InboxChanged(replyID string) {
 	}
 }
 
-func (r *Runner) conv(replyID string) *conv {
+// resident is the open conversation replyID with a loop now, never waking a
+// parked one: for status reads and bookkeeping that need no loop.
+func (r *Runner) resident(replyID string) *conv {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.convs[replyID]
+}
+
+// conv is the open conversation replyID, rehydrating a parked child: for an
+// action that needs its loop.
+func (r *Runner) conv(replyID string) *conv {
+	r.mu.Lock()
+	c, parked := r.convs[replyID], r.parked[replyID]
+	r.mu.Unlock()
+	if c == nil && parked {
+		return r.unpark(replyID)
+	}
+	return c
 }
 
 // summaryLock returns replyID's summary writer mutex, the same one for
@@ -290,6 +304,7 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 	r.indexChildLocked(rec)
 	delete(r.closed, rec.ReplyID)
 	delete(r.closedRows, rec.ReplyID)
+	delete(r.parked, rec.ReplyID)
 	if claimWidth != nil {
 		claimWidth()
 	}
