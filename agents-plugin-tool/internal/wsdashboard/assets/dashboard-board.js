@@ -1326,15 +1326,21 @@
     if (boardApplyPending(boardReturnApply) && boardReturnFresh && !Object.keys(boardPending).length) boardReturnEnd();
   }
   function boardFlash(names, inView) {
+    if (typeof boardReturnTimer !== "undefined" && boardReturnTimer) return;
+    var targets = [];
     boardBoxes().forEach(function (box) {
       q('section.topic[data-topic]', box).forEach(function (n) {
         if (names.indexOf(topicKey(n)) < 0 || (inView && !boardExposed(n))) return;
-        n.classList.remove('board-fresh');
-        void n.offsetWidth;
-        n.classList.add('board-fresh');
-        clearTimeout(n.wbFreshTimer);
-        n.wbFreshTimer = setTimeout(function () { n.classList.remove('board-fresh'); }, 650);
+        targets.push(n);
       });
+    });
+    if (!targets.length) return;
+    targets.forEach(function (n) { n.classList.remove('board-fresh'); });
+    void targets[0].offsetWidth;
+    targets.forEach(function (n) {
+      n.classList.add('board-fresh');
+      clearTimeout(n.wbFreshTimer);
+      n.wbFreshTimer = setTimeout(function () { n.classList.remove('board-fresh'); }, 650);
     });
   }
   // The up-arrow applies the current card's pending updates, then selects the

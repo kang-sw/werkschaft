@@ -1,7 +1,7 @@
   // A framed view creates its observer only while the outer shell opts in.
   function startCompanionRelay() {
-    var timer = 0, typedTimer = 0, typedUntil = 0, last = -Infinity, serialized = "";
-    var active = false, baseline = true, listened = new AbortController();
+    var timer = 0, typedTimer = 0, typedUntil = 0, revealRaf = 0, revealTimer = 0, last = -Infinity, serialized = "";
+    var active = false, baseline = true, disposed = false, listened = new AbortController();
     var tokens = new Set(), pending = [], agents = new Map(), completed = 0, newest = "", liveAbsorbed = new Set();
     var boardInput = boardLatest?.html, parsedBoard, canonicalAsks = null;
     var lastActivity = "", lastRoot = "", lastStreaming = false, failures = 0, previousPermissions = new Set();
@@ -340,7 +340,28 @@
       queue();
     }
 
+    function clearReveal() {
+      if (revealRaf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(revealRaf);
+      if (revealTimer) clearTimeout(revealTimer);
+      revealRaf = 0;
+      revealTimer = 0;
+    }
+
+    function scheduleReveal() {
+      clearReveal();
+      var run = function () {
+        revealRaf = 0;
+        revealTimer = 0;
+        if (disposed || !active || pageHidden()) return;
+        reconcile(true);
+      };
+      if (typeof requestAnimationFrame === "function") revealRaf = requestAnimationFrame(run);
+      else revealTimer = setTimeout(run, 0);
+    }
+
     function reconcile(ready) {
+      if (disposed) return;
+      clearReveal();
       if (!ready) {
         baseline = true;
         pending.length = 0;
@@ -363,10 +384,12 @@
     }
 
     function visible() {
+      if (disposed) return;
       if (pageHidden()) {
         active = false;
         observer.disconnect();
         resize.disconnect();
+        clearReveal();
         clearTimeout(timer);
         clearTimeout(typedTimer);
         timer = typedTimer = typedUntil = 0;
@@ -384,7 +407,7 @@
           attributeFilter: ["class", "hidden", "data-phase", "data-assumed", "open", "data-companion-model"] });
         resize.observe(el);
       }
-      if (!rid || companionStreamReady) reconcile(true);
+      if (!rid || companionStreamReady) scheduleReveal();
       else queue();
     }
 
@@ -405,9 +428,11 @@
         queue();
       },
       dispose() {
+        disposed = true;
         listened.abort();
         observer.disconnect();
         resize.disconnect();
+        clearReveal();
         clearTimeout(timer);
         clearTimeout(typedTimer);
         active = false;

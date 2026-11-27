@@ -545,6 +545,8 @@
       var reducedMotion = !!(mql && mql.matches);
       var enabled = opts.enabled !== undefined ? !!opts.enabled : (typeof extraMotion !== "undefined" ? !!extraMotion : true);
       var hidden = opts.hidden !== undefined ? !!opts.hidden : (!!(d && d.hidden) || (typeof shHidden !== "undefined" && !!shHidden));
+      var returnSettleMs = typeof opts.returnSettleMs === "number" && opts.returnSettleMs >= 0 ? opts.returnSettleMs : 1500;
+      var returnQuietUntil = 0;
       var stale = false;
       var staleTimer = 0;
       var pulseTimer = 0;
@@ -693,7 +695,7 @@
         }
       }
 
-      function stopAllMotion() {
+      function clearTransientParticles() {
         state.flights.length = 0;
         state.impacts.length = 0;
         state.popups.length = 0;
@@ -702,6 +704,19 @@
         state.swayTrail.length = 0;
         state.swayWeave.length = 0;
         state.popIn = null;
+      }
+
+      function isReturnSettling(now) {
+        if (!returnQuietUntil) return false;
+        if (now >= returnQuietUntil) {
+          returnQuietUntil = 0;
+          return false;
+        }
+        return true;
+      }
+
+      function stopAllMotion() {
+        clearTransientParticles();
         stopLoop();
       }
 
@@ -797,6 +812,7 @@
 
       function pulseTargetEl(mode) {
         if (!activeTokEl || !activeTokEl.classList) return;
+        if (isReturnSettling(nowFn())) return;
         var cls = mode === "fail" ? "d-motion-tok-shake" : "d-motion-tok-flash";
         activeTokEl.classList.remove("d-motion-tok-flash", "d-motion-tok-shake");
         if (typeof activeTokEl.offsetWidth === "number") { void activeTokEl.offsetWidth; }
@@ -1236,6 +1252,7 @@
         var hasActivity = !!snap.hasActivity;
 
         var now = nowFn();
+        var settling = isReturnSettling(now);
         var age = activityAt > 0 ? Math.max(0, now - activityAt) : 0;
         var isAlreadyStale = activityAt > 0 && age >= staleMs;
         var remainingStaleMs = activityAt > 0 ? Math.max(0, staleMs - age) : staleMs;
@@ -1255,7 +1272,7 @@
         }
 
         var completedCount = 0;
-        if (!seeded || (turn && turn !== lastTurn) || done < lastDone || failed < lastFailed) {
+        if (!seeded || settling || (turn && turn !== lastTurn) || done < lastDone || failed < lastFailed) {
           seeded = true;
           lastTurn = turn;
           lastDone = done;
@@ -1307,7 +1324,7 @@
             state.lastStepFrame = -1;
             state.swayTrail.length = 0;
             state.swayWeave.length = 0;
-            if (canAnimate()) {
+            if (canAnimate() && !settling) {
               measureGeometry();
               spawnPopIn(getPalette()[nextCat] || getPalette().file, prevMode === "thinking");
             }
@@ -1372,8 +1389,15 @@
         var next = !!isHidden;
         if (next === hidden) return;
         hidden = next;
-        if (hidden) stopLoop();
-        else ensureLoop();
+        if (hidden) {
+          returnQuietUntil = 0;
+          stopAllMotion();
+        } else {
+          clearTransientParticles();
+          seeded = false;
+          returnQuietUntil = returnSettleMs > 0 ? nowFn() + returnSettleMs : 0;
+          ensureLoop();
+        }
       }
 
       function setReducedMotion(isReduced) {

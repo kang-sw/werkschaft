@@ -54,6 +54,7 @@
       // (wbKeep, wbGrow) stay on a frame unmounted before that height.
       if (!p.style.height || p.wbUnmounted) f.wbFirst = true;
     }
+    if (p.wbUnmounted) f.wbUnmounted = true;
     if (p.wbKeep) f.wbKeep = true;
     if (p.wbGrow) f.wbGrow = true;
     if (p.parentNode) p.parentNode.replaceChild(f, p);
@@ -519,6 +520,8 @@
       var from = parseFloat(f.style.height) || 0, to = Math.ceil(h);
       f.style.height = to + "px";
       if (from !== to && typeof freePin !== "undefined" && freePin && freePin.col.contains(f)) pinLayout = true;
+      var wbUnmounted = !!f.wbUnmounted;
+      if (wbUnmounted) f.wbUnmounted = false;
       // A frame the bands mounted (wbFirst, mountFrame) resizes its topic
       // by the bands' doing once, when its first height changes it.
       if (f.wbFirst) {
@@ -529,9 +532,10 @@
       // from the height the frame stood at (board motion, slideBoard).
       if (f.wbGrow) {
         f.wbGrow = false;
+        var suppressGrow = wbUnmounted || (typeof boardReturnTimer !== "undefined" && !!boardReturnTimer);
         // Resolve before the batch writes, through boardKeep's shared lookup.
         // A capture:false keep here used to re-read layout after each height.
-        var s = kept && kept.scroller && kept.scroller(f);
+        var s = !suppressGrow && kept && kept.scroller && kept.scroller(f);
         if (s && !s.wbScrollOwner && f.animate && Math.abs(to - from) >= 1) f.animate([{ height: from + "px" }, { height: to + "px" }], { duration: 200, easing: "ease-out" });
       }
       // A frame rendered before a theme switch (a board swap on a stream
