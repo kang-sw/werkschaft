@@ -33,15 +33,52 @@ import (
 // Only the focused session's triggers count.
 //
 // Cost per trigger (performance.md): a dropped trigger (cooldown, cap, busy,
-// unfocused) touches no file. A spawned call reads the global config once for
-// workflow.lang and the agent tier config once for the small-tier model
-// (wsconfig), reads the pinned conversation ring from RAM, and spawns one
-// harness process (CompanionOneShotFunc).
+// unfocused) touches no file. An admitted call reads the global config once
+// for workflow.lang and the agent tier config once for the small-tier model
+// (wsconfig), reads the pinned conversation ring from RAM, and runs one turn
+// on the daemon's warm ephemeral pool (CompanionEphemeralRunner) in bounded
+// rotation mode (no per-tick process spawn or session files).
 
-// CompanionOneShotFunc runs one isolated single-prompt call on harness at
-// model and effort and returns the reply text. It must stop the process tree
-// when ctx ends. It returns an error when the harness has no one-shot mode.
-type CompanionOneShotFunc func(ctx context.Context, harness, model, effort, prompt string) (string, error)
+// CompanionEphemeralMode selects how the companion pool manages conversation
+// context across consecutive calls on the same slot.
+type CompanionEphemeralMode int
+
+const (
+	// CompanionModeOneShot resets conversation context before every subsequent
+	// call on the slot.
+	CompanionModeOneShot CompanionEphemeralMode = iota
+	// CompanionModeBoundedRotation keeps warm context across up to MaxTurns /
+	// MaxTokens before resetting the slot.
+	CompanionModeBoundedRotation
+)
+
+// CompanionEphemeralRequest is one lightweight companion call dispatched
+// through CompanionEphemeralRunner.
+type CompanionEphemeralRequest struct {
+	Harness      string
+	Model        string
+	Effort       string
+	Provider     string
+	Mode         CompanionEphemeralMode
+	MaxTurns     int
+	MaxTokens    int64
+	SystemPrompt string
+	IdleTTL      time.Duration
+	Timeout      time.Duration
+	Prompt       string
+}
+
+// CompanionEphemeralRunner executes lightweight companion calls through an
+// injected ephemeral harness pool (wsdashboard cannot import wsagent).
+type CompanionEphemeralRunner interface {
+	// SupportsHarness reports from memory whether harness has a backend in the
+	// ephemeral pool. A trigger on an unsupported harness drops before the
+	// limiter charges it.
+	SupportsHarness(harness string) bool
+	// Execute runs req and returns the raw reply text. It must honour ctx and
+	// req.Timeout.
+	Execute(ctx context.Context, req CompanionEphemeralRequest) (string, error)
+}
 
 const (
 	companionFocusRoute = "/api/companion/focus"
@@ -49,6 +86,8 @@ const (
 
 	companionDirectorTier    = "small"
 	companionDirectorTimeout = 20 * time.Second
+	companionPoolMaxTurns    = 20
+	companionPoolIdleTTL     = 5 * time.Minute
 	companionIdleAfter       = 10 * time.Minute
 	companionCapWindow       = time.Hour
 	companionDefaultTTL      = 6000
@@ -117,9 +156,7 @@ type companionWatch struct {
 }
 
 type companionDirector struct {
-	oneShot CompanionOneShotFunc
-	// hasOneShot reports a harness's one-shot mode; nil is always true.
-	hasOneShot func(harness string) bool
+	pool CompanionEphemeralRunner
 	// now is a test clock; nil is time.Now.
 	now func() time.Time
 	// idleAfter replaces companionIdleAfter in tests; zero is the default.
@@ -219,7 +256,7 @@ func (c *companionDirector) dropLocked(reason string) {
 
 // directorActive is the one check every hook makes first: an in-memory read.
 func (d *Daemon) directorActive() bool {
-	if d.director.oneShot == nil {
+	if d.director.pool == nil {
 		return false
 	}
 	cfg := d.companion.current().config
@@ -421,8 +458,8 @@ func (d *Daemon) directorFire(sessionID, kind string) {
 		reason = "unfocused"
 	case harness == "":
 		reason = "no-harness"
-	case c.hasOneShot != nil && !c.hasOneShot(harness):
-		reason = "no-oneshot"
+	case !c.pool.SupportsHarness(harness):
+		reason = "no-ephemeral"
 	default:
 		reason = c.admitLocked(c.clock(), cooldown, limit)
 	}
@@ -512,14 +549,18 @@ func (d *Daemon) directorRun(call companionCall) (string, bool) {
 	c := &d.director
 	harness := call.harness
 	opts := d.companionOptions()
-	backend, model, effort, _, err := wsconfig.ResolveAgentTierForHarness(opts, companionDirectorTier, harness)
+	tiers, err := wsconfig.HarnessTiers(opts, harness)
 	if err != nil {
 		return "tier-error", false
 	}
-	if backend != harness {
+	slot, ok := tiers[companionDirectorTier]
+	if !ok || slot.Model == "" {
 		// No fallback to another harness's account.
 		return "tier-other-harness", false
 	}
+	model := slot.Model
+	effort := slot.Effort
+	provider := slot.Provider
 	pack := d.companionPackFor(call.pack)
 	allowed := companionAllowedIDs(pack)
 	lang := ""
@@ -547,7 +588,17 @@ func (d *Daemon) directorRun(call companionCall) (string, bool) {
 		case <-ctx.Done():
 		}
 	}()
-	reply, err := c.oneShot(ctx, harness, model, effort, prompt)
+	reply, err := c.pool.Execute(ctx, CompanionEphemeralRequest{
+		Harness:  harness,
+		Model:    model,
+		Effort:   effort,
+		Provider: provider,
+		Mode:     CompanionModeBoundedRotation,
+		MaxTurns: companionPoolMaxTurns,
+		IdleTTL:  companionPoolIdleTTL,
+		Timeout:  companionDirectorTimeout,
+		Prompt:   prompt,
+	})
 	if err != nil {
 		return "call: " + err.Error(), true
 	}

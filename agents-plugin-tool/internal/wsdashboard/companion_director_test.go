@@ -4,10 +4,14 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -406,14 +410,32 @@ func TestCompanionFocusFollowsRailStream(t *testing.T) {
 	}
 }
 
+type fakeCompanionPool struct {
+	supports func(harness string) bool
+	exec     func(ctx context.Context, req CompanionEphemeralRequest) (string, error)
+}
+
+func (f fakeCompanionPool) SupportsHarness(harness string) bool {
+	if f.supports != nil {
+		return f.supports(harness)
+	}
+	return true
+}
+
+func (f fakeCompanionPool) Execute(ctx context.Context, req CompanionEphemeralRequest) (string, error) {
+	return f.exec(ctx, req)
+}
+
 // TestCompanionDirectorInertOutsideAgentMode: disabled and rules mode build
 // no digest, keep no trigger state, and spawn nothing, even with a focus.
 func TestCompanionDirectorInertOutsideAgentMode(t *testing.T) {
 	var spawned atomic.Int32
 	d := authFixture(t)
-	d.director.oneShot = func(context.Context, string, string, string, string) (string, error) {
-		spawned.Add(1)
-		return `{"quip":"hi"}`, nil
+	d.director.pool = fakeCompanionPool{
+		exec: func(context.Context, CompanionEphemeralRequest) (string, error) {
+			spawned.Add(1)
+			return `{"quip":"hi"}`, nil
+		},
 	}
 	token := d.director.openStream()
 	d.director.report(token, "sessionone", "default")
@@ -467,15 +489,17 @@ func TestCompanionDirectorInertOutsideAgentMode(t *testing.T) {
 }
 
 // TestCompanionDirectorPublishes runs one trigger end to end with a fake
-// one-shot: the session's harness at the small tier, the pinned ring in the
-// digest, and the reply broadcast as a companion-command for the session.
+// ephemeral pool: the session's harness at the small tier in BoundedRotation
+// mode, the pinned ring in the digest, and the reply broadcast as a
+// companion-command for the session.
 func TestCompanionDirectorPublishes(t *testing.T) {
-	type call struct{ harness, model, prompt string }
-	calls := make(chan call, 4)
+	calls := make(chan CompanionEphemeralRequest, 4)
 	f := startPageFixture(t, func(o *DaemonOptions) {
-		o.CompanionOneShot = func(_ context.Context, harness, model, _ string, prompt string) (string, error) {
-			calls <- call{harness, model, prompt}
-			return `{"scenario":"celebrate_done","fx":"sparkle","expression":"happy","gesture":"no-such","quip":"Done!","ttl_ms":3000}`, nil
+		o.CompanionPool = fakeCompanionPool{
+			exec: func(_ context.Context, req CompanionEphemeralRequest) (string, error) {
+				calls <- req
+				return `{"scenario":"celebrate_done","fx":"sparkle","expression":"happy","gesture":"no-such","quip":"Done!","ttl_ms":3000}`, nil
+			},
 		}
 	})
 	f.d.config = &ConfigBackend{Options: wsconfig.Options{ConfigHome: t.TempDir()}}
@@ -490,17 +514,20 @@ func TestCompanionDirectorPublishes(t *testing.T) {
 	seq, _, _ := f.d.companionCommands.current()
 	slot.Publish(wslive.Snapshot{SchemaVersion: 1, UpdatedAt: 1, Lead: wslive.Lead{TurnStartedAt: 5}})
 	slot.Publish(wslive.Snapshot{SchemaVersion: 1, UpdatedAt: 2})
-	var got call
+	var got CompanionEphemeralRequest
 	select {
 	case got = <-calls:
 	case <-time.After(10 * time.Second):
 		t.Fatal("the turn end spawned no call")
 	}
-	if got.harness != "claude" || got.model == "" {
-		t.Fatalf("call on %q model %q", got.harness, got.model)
+	if got.Harness != "claude" || got.Model == "" {
+		t.Fatalf("call on %q model %q", got.Harness, got.Model)
 	}
-	if !strings.Contains(got.prompt, "The session's turn just ended.") || !strings.Contains(between(t, got.prompt, "<<<SESSION\n", "SESSION>>>"), "[") {
-		t.Fatalf("prompt lacks the trigger or ring entries:\n%s", got.prompt)
+	if got.Mode != CompanionModeBoundedRotation || got.MaxTurns != companionPoolMaxTurns || got.IdleTTL != companionPoolIdleTTL {
+		t.Fatalf("pool request mode=%v maxTurns=%d idleTTL=%v, want BoundedRotation/%d/%v", got.Mode, got.MaxTurns, got.IdleTTL, companionPoolMaxTurns, companionPoolIdleTTL)
+	}
+	if !strings.Contains(got.Prompt, "The session's turn just ended.") || !strings.Contains(between(t, got.Prompt, "<<<SESSION\n", "SESSION>>>"), "[") {
+		t.Fatalf("prompt lacks the trigger or ring entries:\n%s", got.Prompt)
 	}
 	for start := time.Now(); ; time.Sleep(10 * time.Millisecond) {
 		next, payload, _ := f.d.companionCommands.current()
@@ -525,7 +552,7 @@ func TestCompanionDirectorPublishes(t *testing.T) {
 	slot.Publish(wslive.Snapshot{SchemaVersion: 1, UpdatedAt: 4})
 	select {
 	case extra := <-calls:
-		t.Fatalf("a trigger inside the cooldown spawned a call: %+v", extra.harness)
+		t.Fatalf("a trigger inside the cooldown spawned a call: %+v", extra.Harness)
 	case <-time.After(300 * time.Millisecond):
 	}
 	f.d.director.mu.Lock()
@@ -535,17 +562,19 @@ func TestCompanionDirectorPublishes(t *testing.T) {
 	f.d.director.mu.Unlock()
 }
 
-// TestCompanionDirectorNoOneShotChargesNothing: a trigger on a harness with
-// no one-shot mode drops from memory before the limiter, so it spawns
+// TestCompanionDirectorNoOneShotChargesNothing: a trigger on a harness without
+// ephemeral pool support drops from memory before the limiter, so it spawns
 // nothing, builds no digest, and charges neither the cooldown nor the cap.
 func TestCompanionDirectorNoOneShotChargesNothing(t *testing.T) {
 	var spawned atomic.Int32
 	f := startPageFixture(t, func(o *DaemonOptions) {
-		o.CompanionOneShot = func(context.Context, string, string, string, string) (string, error) {
-			spawned.Add(1)
-			return `{"quip":"hi"}`, nil
+		o.CompanionPool = fakeCompanionPool{
+			supports: func(harness string) bool { return harness != "claude" },
+			exec: func(context.Context, CompanionEphemeralRequest) (string, error) {
+				spawned.Add(1)
+				return `{"quip":"hi"}`, nil
+			},
 		}
-		o.CompanionHasOneShot = func(harness string) bool { return harness != "claude" }
 	})
 	f.d.config = &ConfigBackend{Options: wsconfig.Options{ConfigHome: t.TempDir()}}
 	setCompanionConfig(f.d, agentCompanion())
@@ -567,7 +596,7 @@ func TestCompanionDirectorNoOneShotChargesNothing(t *testing.T) {
 		c.watch.idle.Stop()
 	}
 	c.mu.Unlock()
-	if !maps.Equal(dropped, map[string]int{"no-oneshot": 3}) || calls != 0 || !last.IsZero() || digests != 0 || spawns != 0 || running || spawned.Load() != 0 {
+	if !maps.Equal(dropped, map[string]int{"no-ephemeral": 3}) || calls != 0 || !last.IsZero() || digests != 0 || spawns != 0 || running || spawned.Load() != 0 {
 		t.Fatalf("drops %v calls %d last %v digests %d spawns %d running %v spawned %d", dropped, calls, last, digests, spawns, running, spawned.Load())
 	}
 }
@@ -629,5 +658,194 @@ func TestCompanionPackForRendererAndPersona(t *testing.T) {
 	fallback := d.companionPackFor("missing-pack")
 	if fallback.renderer != companionPackRenderer2D {
 		t.Fatalf("fallback renderer = %q, want %q", fallback.renderer, companionPackRenderer2D)
+	}
+}
+
+// TestCompanionDirector20ConsecutiveBoundedRotationZeroPollution verifies
+// measurable pass condition (a) at the daemon/director layer: 20 consecutive
+// companion reactions through CompanionPool in BoundedRotation mode publish 20
+// commands and create zero new wsmeta rows, zero new SessionDir/wsholder
+// entries, and zero new wslive ring entries.
+func TestCompanionDirector20ConsecutiveBoundedRotationZeroPollution(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		requests []CompanionEphemeralRequest
+	)
+	doneCh := make(chan int, 25)
+	f := startPageFixture(t, func(o *DaemonOptions) {
+		o.CompanionPool = fakeCompanionPool{
+			exec: func(_ context.Context, req CompanionEphemeralRequest) (string, error) {
+				mu.Lock()
+				requests = append(requests, req)
+				n := len(requests)
+				mu.Unlock()
+				doneCh <- n
+				return fmt.Sprintf(`{"scenario":"celebrate_done","quip":"Reaction %d","ttl_ms":2000}`, n), nil
+			},
+		}
+	})
+	f.d.config = &ConfigBackend{Options: wsconfig.Options{ConfigHome: t.TempDir()}}
+	setCompanionConfig(f.d, CompanionConfig{
+		Enabled:              true,
+		Director:             "agent",
+		Pack:                 "default",
+		AgentCooldownSeconds: 10,
+		AgentHourlyCap:       60,
+	})
+	var clockMu sync.Mutex
+	now := time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC)
+	f.d.director.now = func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return now
+	}
+
+	slot, ok := f.d.OpenHostedSlot(SessionDir(f.dir, "livesession"))
+	if !ok {
+		t.Fatal("no hosted slot")
+	}
+	defer slot.Close()
+	token := f.d.director.openStream()
+	f.d.director.report(token, "livesession", "default")
+
+	// Seed the watch once before taking baseline counts.
+	slot.Publish(wslive.Snapshot{SchemaVersion: 1, UpdatedAt: 1})
+
+	snapshotMeta := func() (records, perms, labels, hiring int) {
+		if f.d.Meta() == nil {
+			return 0, 0, 0, 0
+		}
+		snap, err := f.d.Meta().Load(context.Background())
+		if err != nil {
+			t.Fatalf("wsmeta snapshot: %v", err)
+		}
+		return len(snap.Records), len(snap.Permissions), len(snap.Labels), len(snap.Hiring)
+	}
+	listDirNames := func(dir string) []string {
+		entries, err := os.ReadDir(dir)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			t.Fatalf("readdir %s: %v", dir, err)
+		}
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		return names
+	}
+
+	baseRecs, basePerms, baseLabels, baseHiring := snapshotMeta()
+	sessionsRoot := filepath.Join(f.dir, "sessions")
+	holdersRoot := filepath.Join(f.dir, "holders")
+	ringDir := wslive.RingDir(SessionDir(f.dir, "livesession"))
+	baseSessions := listDirNames(sessionsRoot)
+	baseHolders := listDirNames(holdersRoot)
+	baseRing := listDirNames(ringDir)
+
+	const totalReactions = 20
+	for i := 1; i <= totalReactions; i++ {
+		prevSeq, _, _ := f.d.companionCommands.current()
+		clockMu.Lock()
+		now = now.Add(time.Minute)
+		clockMu.Unlock()
+		slot.Publish(wslive.Snapshot{SchemaVersion: 1, UpdatedAt: int64(2*i + 1), Lead: wslive.Lead{TurnStartedAt: int64(100 + i)}})
+		slot.Publish(wslive.Snapshot{SchemaVersion: 1, UpdatedAt: int64(2*i + 2)})
+
+		select {
+		case got := <-doneCh:
+			if got != i {
+				t.Fatalf("reaction seq = %d, want %d", got, i)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("reaction %d did not invoke CompanionPool", i)
+		}
+		waitFor(t, fmt.Sprintf("reaction %d publish and slot release", i), func() bool {
+			nextSeq, _, _ := f.d.companionCommands.current()
+			f.d.director.mu.Lock()
+			running := f.d.director.running
+			f.d.director.mu.Unlock()
+			return nextSeq != prevSeq && !running
+		})
+	}
+
+	f.d.director.mu.Lock()
+	if w := f.d.director.watch.idle; w != nil {
+		w.Stop()
+	}
+	f.d.director.mu.Unlock()
+
+	mu.Lock()
+	gotReqs := slices.Clone(requests)
+	mu.Unlock()
+	if len(gotReqs) != totalReactions {
+		t.Fatalf("pool calls = %d, want %d", len(gotReqs), totalReactions)
+	}
+	for i, req := range gotReqs {
+		if req.Mode != CompanionModeBoundedRotation || req.MaxTurns != companionPoolMaxTurns || req.IdleTTL != companionPoolIdleTTL {
+			t.Fatalf("reaction %d request = %+v, want BoundedRotation/%d/%v", i+1, req, companionPoolMaxTurns, companionPoolIdleTTL)
+		}
+	}
+
+	afterRecs, afterPerms, afterLabels, afterHiring := snapshotMeta()
+	if afterRecs != baseRecs || afterPerms != basePerms || afterLabels != baseLabels || afterHiring != baseHiring {
+		t.Fatalf("wsmeta mutated across 20 companion reactions: before=(%d,%d,%d,%d) after=(%d,%d,%d,%d)",
+			baseRecs, basePerms, baseLabels, baseHiring, afterRecs, afterPerms, afterLabels, afterHiring)
+	}
+	if afterSessions := listDirNames(sessionsRoot); !slices.Equal(afterSessions, baseSessions) {
+		t.Fatalf("SessionDir mutated across 20 companion reactions: before=%v after=%v", baseSessions, afterSessions)
+	}
+	if afterHolders := listDirNames(holdersRoot); !slices.Equal(afterHolders, baseHolders) {
+		t.Fatalf("wsholder dir mutated across 20 companion reactions: before=%v after=%v", baseHolders, afterHolders)
+	}
+	if afterRing := listDirNames(ringDir); !slices.Equal(afterRing, baseRing) {
+		t.Fatalf("wslive ring dir mutated across 20 companion reactions: before=%v after=%v", baseRing, afterRing)
+	}
+}
+
+func TestCompanionDirectorWerkSmallTierResolvesOpenRouterSlug(t *testing.T) {
+	var gotReq CompanionEphemeralRequest
+	d := authFixture(t)
+	d.director.pool = fakeCompanionPool{
+		exec: func(_ context.Context, req CompanionEphemeralRequest) (string, error) {
+			gotReq = req
+			return `{"scenario":"celebrate_done","quip":"Nice!","ttl_ms":2000}`, nil
+		},
+	}
+	opts := wsconfig.Options{ConfigHome: t.TempDir()}
+	d.config = &ConfigBackend{Options: opts}
+
+	// Unconfigured werk small tier must not fall back to another harness.
+	if outcome, spawned := d.directorRun(companionCall{
+		sessionID: "werksession",
+		pack:      "default",
+		kind:      companionTriggerTurnEnd,
+		harness:   "werk",
+	}); outcome != "tier-other-harness" || spawned {
+		t.Fatalf("unconfigured werk directorRun = (%q, %v), want (tier-other-harness, false)", outcome, spawned)
+	}
+
+	// Configured werk small tier with an OpenRouter model slug that contains
+	// "claude"/"haiku" (which InferBackend guesses as "claude") must still
+	// resolve through werk's own bucket and forward Model, Effort, and Provider.
+	if _, err := wsconfig.SetAgentTierValue(opts, true, "small", "werk", wsconfig.AgentTier{
+		Model:    "anthropic/claude-haiku-4.5",
+		Effort:   "low",
+		Provider: "openrouter",
+	}); err != nil {
+		t.Fatalf("SetAgentTierValue werk small: %v", err)
+	}
+	outcome, spawned := d.directorRun(companionCall{
+		sessionID: "werksession",
+		pack:      "default",
+		kind:      companionTriggerTurnEnd,
+		harness:   "werk",
+	})
+	if outcome != "published" || !spawned {
+		t.Fatalf("configured werk directorRun = (%q, %v), want (published, true)", outcome, spawned)
+	}
+	if gotReq.Harness != "werk" || gotReq.Model != "anthropic/claude-haiku-4.5" || gotReq.Effort != "low" || gotReq.Provider != "openrouter" {
+		t.Fatalf("werk CompanionEphemeralRequest = %+v, want harness=werk model=anthropic/claude-haiku-4.5 effort=low provider=openrouter", gotReq)
 	}
 }

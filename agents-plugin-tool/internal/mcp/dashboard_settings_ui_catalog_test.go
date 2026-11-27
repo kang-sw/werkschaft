@@ -116,6 +116,8 @@ func TestDashboardSettingsUICatalogTierRoutingSection(t *testing.T) {
 	want := []string{
 		wsconfig.ItemAgentTierRoutingExpose + "/toggle/",
 		wsconfig.ItemAgentTierRoutingGuidance + "/textarea/",
+		wsconfig.ItemAgentTierRoutingDynamic + "/toggle/",
+		wsconfig.ItemAgentTierRoutingDynamicClassifier + "/text/",
 		wsconfig.ItemAgentTierRouting + "/tier_routing/",
 		wsconfig.ItemAgentTierAliases + "/text/deprecated",
 	}
@@ -141,6 +143,12 @@ func TestDashboardSettingsUICatalogTierRoutingSection(t *testing.T) {
 	}
 	if guidance, ok := entries[wsconfig.ItemAgentTierRoutingGuidance]; !ok || len(guidance.Enum) != 0 {
 		t.Fatalf("%s entry = %+v, want free-form text", wsconfig.ItemAgentTierRoutingGuidance, guidance)
+	}
+	if dynamic, ok := entries[wsconfig.ItemAgentTierRoutingDynamic]; !ok || dynamic.Default != false || dynamic.Type != "boolean" {
+		t.Fatalf("%s entry = %+v, want default false boolean", wsconfig.ItemAgentTierRoutingDynamic, dynamic)
+	}
+	if classifier, ok := entries[wsconfig.ItemAgentTierRoutingDynamicClassifier]; !ok || len(classifier.Enum) != 0 {
+		t.Fatalf("%s entry = %+v, want free-form text", wsconfig.ItemAgentTierRoutingDynamicClassifier, classifier)
 	}
 }
 

@@ -1146,6 +1146,8 @@ test("tier routing is its own settings page with the expose toggle and guidance 
   assert.deepEqual(rows, [
     ["agent.tier_routing_expose", "toggle", ""],
     ["agent.tier_routing_guidance", "textarea", ""],
+    ["agent.tier_routing_dynamic", "toggle", ""],
+    ["agent.tier_routing_dynamic_classifier", "text", ""],
     ["agent.tier_routing", "tier_routing", ""],
     ["agent.tier_aliases", "text", "deprecated"]
   ]);
@@ -1159,6 +1161,10 @@ test("tier routing is its own settings page with the expose toggle and guidance 
     "js.settings.key.agent.tier_routing_expose.description",
     "js.settings.key.agent.tier_routing_guidance.label",
     "js.settings.key.agent.tier_routing_guidance.description",
+    "js.settings.key.agent.tier_routing_dynamic.label",
+    "js.settings.key.agent.tier_routing_dynamic.description",
+    "js.settings.key.agent.tier_routing_dynamic_classifier.label",
+    "js.settings.key.agent.tier_routing_dynamic_classifier.description",
     "js.settings.tier_routing.aliases_banner",
     "js.settings.tier_routing.aliases_clear"
   ];
@@ -1214,6 +1220,8 @@ test("tier routing page hides agent.tier_aliases and offers a clear banner only 
     const entries = [
       entry("agent.tier_routing_expose", "off", { enum: ["on", "off"] }),
       entry("agent.tier_routing_guidance", ""),
+      entry("agent.tier_routing_dynamic", false, { type: "boolean" }),
+      entry("agent.tier_routing_dynamic_classifier", ""),
       entry("agent.tier_routing", {}, { type: "object" }),
       aliasEntry(aliases),
       entry("agent.child_waiting_days", 15, { type: "integer" })
@@ -1257,7 +1265,7 @@ test("tier routing page hides agent.tier_aliases and offers a clear banner only 
   const order = unset.sectionsNav.querySelectorAll("[data-settings-section]").map(b => b.dataset.settingsSection);
   assert.equal(order[order.indexOf("agents") + 1], "tier_routing");
   unset.open("tier_routing");
-  assert.deepEqual(unset.rowKeys(), ["agent.tier_routing_expose", "agent.tier_routing_guidance"]);
+  assert.deepEqual(unset.rowKeys(), ["agent.tier_routing_expose", "agent.tier_routing_guidance", "agent.tier_routing_dynamic", "agent.tier_routing_dynamic_classifier"]);
   assert.ok(unset.content.querySelector("[data-tier-routing-editor]"), "the graph editor renders below the knobs");
   assert.equal(unset.banner(), null);
   unset.open("agents");

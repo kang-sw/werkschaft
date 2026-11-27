@@ -86,6 +86,9 @@ func (s *Server) handleAgentTool(ctx context.Context, id json.RawMessage, tool s
 		if err != nil {
 			return toolTextResponse(id, "", err)
 		}
+		req.Tier = s.maybeRouteDynamicTier(ctx, key, caller.Harness, caller.Config, req, func() (wsagent.AgentTiers, error) {
+			return runner.AgentTiers(caller)
+		})
 		res, err := runner.AgentSpawn(caller, req)
 		if err != nil {
 			return agentFailure(id, tool, err)
@@ -157,6 +160,14 @@ func (s *Server) handleAgentForward(ctx context.Context, id json.RawMessage, too
 		if err != nil {
 			return toolTextResponse(id, "", err)
 		}
+		trimmedKey := strings.TrimSpace(key)
+		req.Tier = s.maybeRouteDynamicTier(ctx, trimmedKey, s.playbookHarness(), s.sessionConfigOptions(trimmedKey), req, func() (wsagent.AgentTiers, error) {
+			var tiers wsagent.AgentTiers
+			if err := s.workerCall(ctx, "agent.tiers", map[string]any{}, workerForwardTimeout, &tiers); err != nil {
+				return wsagent.AgentTiers{}, err
+			}
+			return tiers, nil
+		})
 		body := map[string]any{"prompt": req.Prompt, "tier": req.Tier, "authority": req.Authority,
 			"system_prompt": req.SystemPrompt, "system_prompt_path": req.SystemPromptPath,
 			"cwd": req.Cwd, "worktree": req.Worktree, "label": req.Label}
