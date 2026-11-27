@@ -2,6 +2,7 @@ package wsdashboard
 
 import (
 	"encoding/hex"
+	"html/template"
 	"regexp"
 	"strconv"
 	"strings"
@@ -105,6 +106,7 @@ func (e ConvEntry) MailPreview() string {
 type conversationEffectRow struct {
 	Kind, Target, ID, Text string
 	Parts                  []conversationBoardText
+	PreviewHTML            template.HTML
 }
 
 type conversationEffectTopic struct {
@@ -121,8 +123,8 @@ var conversationEntryID = regexp.MustCompile(`^e[1-9][0-9]*$`)
 var conversationPanelID = regexp.MustCompile(`^p[1-9][0-9]*$`)
 
 // WhiteboardCard uses only the committed projection, never current board text.
-// Missing item fields are not reconstructed. Panels expose recaps only, not
-// their payloads, even as an in-chat escaped preview.
+// Missing item fields are not reconstructed. Panels render recaps alongside a
+// bounded, sanitized content preview derived from committed payload effects.
 func (e ConvEntry) WhiteboardCard() conversationEffectCard {
 	changes := e.WhiteboardChanges()
 	card := conversationEffectCard{}
@@ -162,8 +164,11 @@ func (e ConvEntry) WhiteboardCard() conversationEffectCard {
 			if conversationPanelID.MatchString(effect.PanelID) {
 				row.Target = effect.PanelID
 			}
-			if effect.Field == "recap" {
+			switch effect.Field {
+			case "recap":
 				row.Text = firstEffectLine(effect.After)
+			case "payload":
+				row.PreviewHTML = whiteboardPanelPreview(effect.After, e.Lang)
 			}
 		case "item":
 			row := effectRow(topic, "item", strconv.Itoa(effect.ID))
