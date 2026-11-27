@@ -175,7 +175,9 @@ function makeTurnSummaryEl({ entry, key, rev = "1:7:0:11400:2800:0:2", at = "202
   const failsSpan = new FakeEl("span", { class: "d-turn-fails", "data-conv-turn-fails": true, hidden: failed === 0 });
   failsSpan.textContent = failed > 0 ? `${failed} failed` : "";
   const auditCounts = new FakeEl("span", { class: "turn-audit-counts" });
-  const mainChildren = [countSpan, failsSpan, auditCounts];
+  const metaSpan = new FakeEl("span", { class: "d-turn-meta" }, [failsSpan, auditCounts]);
+  const headSpan = new FakeEl("span", { class: "d-turn-head" }, [countSpan, metaSpan]);
+  const mainChildren = [headSpan];
   if (tokens) {
     const tokAttrs = { class: "d-turn-tok" + (est ? " d-turn-est" : ""), "data-conv-turn-tokens": true };
     if (est) tokAttrs["data-estimated"] = "1";
@@ -433,9 +435,13 @@ test("template and CSS expose the shared DOM contract and reduced-motion guard",
     "data-conv-turn-tokens",
     "data-estimated=\"1\"",
     "data-turn-rev=\"{{.TurnRev}}\"",
+    "class=\"d-turn-meta\"",
   ]) {
     assert.ok(tmplSrc.includes(attr), `dashboard.tmpl missing ${attr}`);
   }
   assert.ok(convCss.includes(".d-turn"), "dashboard-conversation.css missing .d-turn styles");
+  assert.ok(convCss.includes(".d-turn-main > .d-turn-head"), "dashboard-conversation.css missing .d-turn-head rule");
+  assert.ok(convCss.includes(".d-turn-head > .d-turn-meta"), "dashboard-conversation.css missing .d-turn-meta rule");
+  assert.ok(convCss.includes(".toolsline .tsum > .tsn"), "dashboard-conversation.css missing .toolsline .tsn flex-shrink rule");
   assert.ok(convCss.includes("prefers-reduced-motion: reduce"), "dashboard-conversation.css missing reduced-motion rule");
 });
