@@ -131,6 +131,14 @@ type Record struct {
 	// one-line name its spawner gave it.
 	Parent *ParentRef `json:"parent,omitempty"`
 	Label  string     `json:"label,omitempty"`
+	// InitialPrompt is a spawned worker's bounded original prompt, persisted
+	// once at creation so ws-managed compaction preserves the task brief
+	// across any number of rotations. Additive top-level member (T0).
+	InitialPrompt string `json:"initial_prompt,omitempty"`
+	// LatestInstruction is the bounded text of the latest non-empty parent or
+	// user instruction sent to a worker after InitialPrompt (when different),
+	// riding existing turn/steer record writes. Additive top-level member (T0).
+	LatestInstruction string `json:"latest_instruction,omitempty"`
 	// SpawnerBackend is the verified backend of the session that spawned
 	// the conversation (AgentCaller.VerifiedBackend), stamped once at
 	// spawn: empty when the spawner had no verified binding, or for a

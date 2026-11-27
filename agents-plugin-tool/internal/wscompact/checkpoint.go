@@ -15,6 +15,9 @@ const (
 	DialogBytes = 40 << 10
 	// RereadBytes bounds the total inlined worktree text files in a checkpoint.
 	RereadBytes = 40 << 10
+	// WorkerTaskBytes bounds each preserved worker task prompt (original prompt
+	// and latest parent instruction) carried across ws-managed compactions.
+	WorkerTaskBytes = 16 << 10
 )
 
 // CompactionState describes current scheduler state supplied by the owner at
@@ -27,16 +30,18 @@ type CompactionState struct {
 
 // CheckpointInput supplies the harness-agnostic inputs for BuildCheckpoint.
 type CheckpointInput struct {
-	Lead         bool
-	Ticket       string
-	Phase        string
-	Playbook     string
-	State        CompactionState
-	OmitChildren bool
-	Prose        []string
-	Rereads      string
-	Dialog       string
-	Secrets      []string
+	Lead              bool
+	Ticket            string
+	Phase             string
+	Playbook          string
+	InitialPrompt     string
+	LatestInstruction string
+	State             CompactionState
+	OmitChildren      bool
+	Prose             []string
+	Rereads           string
+	Dialog            string
+	Secrets           []string
 }
 
 // TicketRefRE extracts a ticket path or stem reference from text or tool args.
@@ -184,22 +189,52 @@ func BuildCheckpoint(in CheckpointInput) string {
 	}
 	out.WriteString("<session>\n## Session\n")
 	fmt.Fprintf(&out, "- Active ticket: %s\n- Active playbook: %s\n", EscapeFramingCloseTags(ticket), EscapeFramingCloseTags(playbook))
-	out.WriteString("</session>\n\n")
+	out.WriteString("</session>\n")
 
-	fmt.Fprintf(&out, "<%s>\n## %s\n", proseTag, proseHeading)
-	for i, field := range ProseFields() {
-		body := ""
-		if i < len(in.Prose) {
-			body = strings.TrimSpace(in.Prose[i])
+	if !in.Lead {
+		initial := strings.TrimSpace(in.InitialPrompt)
+		latest := strings.TrimSpace(in.LatestInstruction)
+		if initial != "" || latest != "" {
+			if initial != "" {
+				initial = EscapeFramingCloseTags(BoundedText(Scrub(initial, in.Secrets...), WorkerTaskBytes))
+			}
+			if latest != "" {
+				latest = EscapeFramingCloseTags(BoundedText(Scrub(latest, in.Secrets...), WorkerTaskBytes))
+			}
+			out.WriteString("\n<task>\n## Task\n")
+			if initial != "" {
+				fmt.Fprintf(&out, "\n### Original prompt\n%s\n", initial)
+			}
+			if latest != "" && latest != initial {
+				fmt.Fprintf(&out, "\n### Latest instruction\n%s\n", latest)
+			}
+			out.WriteString("</task>\n")
 		}
-		if body == "" {
-			body = "(none)"
-		} else {
-			body = EscapeFramingCloseTags(body)
-		}
-		fmt.Fprintf(&out, "\n### %s\n%s\n", field.Heading, body)
 	}
-	fmt.Fprintf(&out, "</%s>\n", proseTag)
+
+	hasProse := false
+	for _, text := range in.Prose {
+		if strings.TrimSpace(text) != "" {
+			hasProse = true
+			break
+		}
+	}
+	if in.Lead || hasProse {
+		fmt.Fprintf(&out, "\n<%s>\n## %s\n", proseTag, proseHeading)
+		for i, field := range ProseFields() {
+			body := ""
+			if i < len(in.Prose) {
+				body = strings.TrimSpace(in.Prose[i])
+			}
+			if body == "" {
+				body = "(none)"
+			} else {
+				body = EscapeFramingCloseTags(body)
+			}
+			fmt.Fprintf(&out, "\n### %s\n%s\n", field.Heading, body)
+		}
+		fmt.Fprintf(&out, "</%s>\n", proseTag)
+	}
 
 	if !in.OmitChildren {
 		out.WriteString("\n<children>")

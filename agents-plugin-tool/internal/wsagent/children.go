@@ -585,7 +585,21 @@ func (c *conv) steerWorker() {
 		return
 	}
 	c.drained = covered
-	c.update(func(rec *Record) { rec.Drained = covered })
+	var workerInstructionParts []string
+	if !c.rec.Lead {
+		for _, p := range parts {
+			if !p.Exec {
+				if t := strings.TrimSpace(p.Text); t != "" {
+					workerInstructionParts = append(workerInstructionParts, t)
+				}
+			}
+		}
+	}
+	workerInstruction := strings.Join(workerInstructionParts, "\n\n")
+	c.update(func(rec *Record) {
+		rec.Drained = covered
+		recordWorkerInstruction(rec, workerInstruction)
+	})
 	c.takeSteerLive(partsText(parts), covered, liveEvents(parts))
 }
 

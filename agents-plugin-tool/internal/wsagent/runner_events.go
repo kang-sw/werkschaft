@@ -435,27 +435,42 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 	}
 	if ran && !compactCommand && !c.replaying {
 		c.clearCompactionSteerReplies()
-		// A daemon hard-cap interrupt aborts the turn yet still resumes it.
+		// A daemon hard-cap interrupt aborts the turn yet still resumes it,
+		// unless the per-turn auto-rotation cap fired (hardAbort).
 		hardInt := c.compactHardInterrupt
+		hardAbort := c.compactHardAbort
 		c.compactHardInterrupt = false
-		c.compactContinueAtIdle = turnErr == "" && (c.summaryReason != wslive.TurnAborted || hardInt)
-		c.compactIdleInternal = c.compactInternalTurn
-		if c.compactStage1Active {
-			resume, internal, auto, usageLimited := c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited
-			c.compactStage1Active, c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited = false, false, false, false, false
-			if c.compactPending != nil {
-				// Lead queued ws/compact during Stage 1; kick() below runs it.
-			} else if usageLimited {
-				// Quota exhausted during Stage 1: suppress immediate Stage 2
-				// native /compact so quota continuation can recover cleanly.
-			} else if c.proc != nil {
-				c.compactPending = &compactRequest{resume: resume, internal: internal, auto: auto, crossing: auto}
-				c.publishCompaction(false)
+		c.compactHardAbort = false
+		if hardAbort {
+			if turnErr == "" {
+				turnErr = fmt.Sprintf("compaction rotation cap reached (%d automatic compactions in one turn); stopped to prevent compaction loop", compactTurnRotationCap)
 			}
+			c.compactContinueAtIdle = false
+			c.compactIdleInternal = false
+			c.compactTurnRotations = 0
 		} else {
-			c.compactHardForce = hardInt
-			c.stageHardCompaction(c.compactContinueAtIdle, c.compactIdleInternal)
-			c.compactHardForce = false
+			c.compactContinueAtIdle = turnErr == "" && (c.summaryReason != wslive.TurnAborted || hardInt)
+			c.compactIdleInternal = c.compactInternalTurn
+			if c.compactStage1Active {
+				resume, internal, auto, usageLimited := c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited
+				c.compactStage1Active, c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited = false, false, false, false, false
+				if c.compactPending != nil {
+					// Lead queued ws/compact during Stage 1; kick() below runs it.
+				} else if usageLimited {
+					// Quota exhausted during Stage 1: suppress immediate Stage 2
+					// native /compact so quota continuation can recover cleanly.
+				} else if c.proc != nil {
+					c.compactPending = &compactRequest{resume: resume, internal: internal, auto: auto, crossing: auto, triggerPath: "stage1_fallback"}
+					c.publishCompaction(false)
+				}
+			} else {
+				c.compactHardForce = hardInt
+				c.stageHardCompaction(c.compactContinueAtIdle, c.compactIdleInternal)
+				c.compactHardForce = false
+			}
+		}
+		if !c.compacting && !c.compactCommand && c.compactPending == nil && !c.compactResume && !c.compactStage1Active {
+			c.compactTurnRotations = 0
 		}
 	}
 	// Observers must see the terminal diagnostic in the same emission as
@@ -777,6 +792,9 @@ func (c *conv) processExited() {
 	c.compactPending, c.compactCommand, c.compactResume = nil, false, false
 	c.compactStage1Active, c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited = false, false, false, false, false
 	c.compactOrigin = ""
+	c.compactTurnRotations = 0
+	c.compactHardAbort, c.compactHardStepPending = false, false
+	c.compactPostRotationCheck, c.compactPostRotationNoShrink = false, 0
 	c.publishCompaction(false)
 	c.compactResumeInternal = false
 	if !c.quitting {
@@ -1000,6 +1018,9 @@ func (c *conv) stopProcess(reason string) {
 	c.compactPending, c.compactCommand, c.compactResume = nil, false, false
 	c.compactStage1Active, c.compactStage1Resume, c.compactStage1Internal, c.compactStage1Auto, c.compactStage1UsageLimited = false, false, false, false, false
 	c.compactOrigin = ""
+	c.compactTurnRotations = 0
+	c.compactHardAbort, c.compactHardStepPending = false, false
+	c.compactPostRotationCheck, c.compactPostRotationNoShrink = false, 0
 	c.publishCompaction(false)
 	c.compactResumeInternal = false
 	if !c.quitting {

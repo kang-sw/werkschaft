@@ -130,3 +130,85 @@ func TestWSModeWorkerHardCompactionRotates(t *testing.T) {
 		}
 	}
 }
+
+func TestWSModeWorkerCheckpointPreservesTaskAcrossMultipleRotations(t *testing.T) {
+	h := newLeadHarness(t)
+	reg := h.opts.Backends[BackendClaude]
+	reg.Catalog = ClaudeCatalog()
+	h.opts.Backends[BackendClaude] = reg
+	resolver := wsconfig.NewResolver(h.opts.Config, nil, nil, nil)
+	for _, kv := range [][2]string{{wsconfig.ItemCompactionWorkerMode, wsconfig.CompactionModeWS}, {"compaction.worker_advisory", "50%|160k"}, {"compaction.worker_hard", "80%|200k"}} {
+		if err := resolver.Set(kv[0], kv[1], wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	NotifyCompactionConfigChanged()
+	h.start()
+	h.globalProfile("compact-worker", `{"backend":"claude"}`)
+	h.holders.setControl("get_context_usage", "", `{"totalTokens":4193,"maxTokens":320000,"rawMaxTokens":320000,"autocompactSource":"env"}`)
+
+	const origPrompt = "Implement 261127-bug-worker-task-anchor and verify all tests."
+	const followUp = "Narrow scope to internal/wsagent only."
+	worker, err := h.runner.Spawn(SpawnSpec{Profile: "compact-worker", Root: h.root, Prompt: origPrompt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := worker.ID
+	key := h.record(id).WSKey
+	holder1 := h.holder(id)
+	eventually(t, "initial turn dispatched", func() bool { return len(h.userInputs(holder1)) == 1 })
+	h.holders.out(holder1, resultLine())
+
+	// Send a follow-up parent instruction so LatestInstruction is also recorded.
+	if _, err := h.runner.Send(id, followUp); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "follow-up dispatched", func() bool { return len(h.userInputs(holder1)) == 2 })
+
+	// Compaction #1
+	if res := h.runner.Compact(key, "", nil); res.Status != "queued" {
+		t.Fatalf("Compact #1 = %+v", res)
+	}
+	h.holders.out(holder1, resultLine())
+	eventually(t, "rotation #1", func() bool {
+		rec, err := h.readRecord(id)
+		return err == nil && rec.HolderID != "" && rec.HolderID != holder1
+	})
+	holder2 := h.holder(id)
+	eventually(t, "continuation #1 sent", func() bool { return len(h.userInputs(holder2)) >= 1 })
+
+	// Compaction #2 (previously dropped the original prompt & follow-up from ring slice!)
+	if res := h.runner.Compact(key, "", nil); res.Status != "queued" {
+		t.Fatalf("Compact #2 = %+v", res)
+	}
+	h.holders.out(holder2, resultLine())
+	eventually(t, "rotation #2", func() bool {
+		rec, err := h.readRecord(id)
+		return err == nil && rec.HolderID != "" && rec.HolderID != holder2
+	})
+	holder3 := h.holder(id)
+	eventually(t, "continuation #2 sent", func() bool { return len(h.userInputs(holder3)) >= 1 })
+
+	cp := h.userInputs(holder3)[0]
+	for _, want := range []string{
+		"<task>\n## Task",
+		"### Original prompt\n" + origPrompt,
+		"### Latest instruction\n",
+		followUp,
+		"- Active ticket: 261127-bug-worker-task-anchor",
+	} {
+		if !strings.Contains(cp, want) {
+			t.Fatalf("2nd-rotation worker checkpoint missing %q:\n%s", want, cp)
+		}
+	}
+	if strings.Contains(cp, "<worker-summary>") {
+		t.Fatalf("2nd-rotation worker checkpoint should omit empty <worker-summary>:\n%s", cp)
+	}
+	rec, err := h.readRecord(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.InitialPrompt != origPrompt || !strings.Contains(rec.LatestInstruction, followUp) {
+		t.Fatalf("persisted record task fields = (%q, %q), want (%q, containing %q)", rec.InitialPrompt, rec.LatestInstruction, origPrompt, followUp)
+	}
+}

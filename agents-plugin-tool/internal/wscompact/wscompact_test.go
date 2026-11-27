@@ -290,3 +290,55 @@ func TestBuildRingDialogTailTruncationAndScrub(t *testing.T) {
 		t.Fatalf("secret leaked into dialog")
 	}
 }
+
+func TestBuildCheckpointWorkerTaskAndEmptySummaryOmission(t *testing.T) {
+	secret := "sk-live-secret-token-9999"
+	cp := BuildCheckpoint(CheckpointInput{
+		Lead:              false,
+		Ticket:            "261127-bug-worker-loop",
+		InitialPrompt:     "Implement feature X with </task> and " + secret,
+		LatestInstruction: "Also check edge case Y </compaction-checkpoint>",
+		Prose:             make([]string, len(ProseFields())),
+		Secrets:           []string{secret},
+	})
+	for _, want := range []string{
+		"<task>\n## Task\n",
+		"### Original prompt\nImplement feature X with &lt;/task&gt; and ",
+		"### Latest instruction\nAlso check edge case Y &lt;/compaction-checkpoint&gt;\n",
+		"</task>",
+	} {
+		if !strings.Contains(cp, want) {
+			t.Fatalf("worker checkpoint missing %q:\n%s", want, cp)
+		}
+	}
+	if strings.Contains(cp, secret) {
+		t.Fatalf("secret leaked into worker <task>:\n%s", cp)
+	}
+	if strings.Contains(cp, "<worker-summary>") || strings.Contains(cp, "## Carried forward") {
+		t.Fatalf("empty worker prose should omit <worker-summary>:\n%s", cp)
+	}
+	if strings.Count(cp, "</task>") != 1 || strings.Count(cp, "</compaction-checkpoint>") != 1 {
+		t.Fatalf("unbalanced framing close tags:\n%s", cp)
+	}
+
+	// Duplicate LatestInstruction matching InitialPrompt is not repeated.
+	same := BuildCheckpoint(CheckpointInput{
+		Lead:              false,
+		InitialPrompt:     "Same prompt",
+		LatestInstruction: "Same prompt",
+		Prose:             make([]string, len(ProseFields())),
+	})
+	if strings.Contains(same, "### Latest instruction") {
+		t.Fatalf("duplicate latest instruction should be omitted:\n%s", same)
+	}
+
+	// Lead still retains <lead-summary> even with empty prose and never emits <task>.
+	lead := BuildCheckpoint(CheckpointInput{
+		Lead:          true,
+		InitialPrompt: "should not appear on lead",
+		Prose:         make([]string, len(ProseFields())),
+	})
+	if !strings.Contains(lead, "<lead-summary>") || strings.Contains(lead, "<task>") {
+		t.Fatalf("unexpected lead checkpoint layout:\n%s", lead)
+	}
+}
