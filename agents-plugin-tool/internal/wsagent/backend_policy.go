@@ -134,6 +134,8 @@ type LifecyclePolicy struct {
 	// LeadCompactionWSOnly marks a backend whose hosted leads always run
 	// ws-managed compaction and have no native compaction fallback (werk).
 	LeadCompactionWSOnly bool
+	// WorkerCompactionWSOnly is the worker counterpart (werk).
+	WorkerCompactionWSOnly bool
 }
 
 // ExecOptIn names an exec-cutover opt-in: the config Key that must say on and
@@ -249,6 +251,32 @@ func LeadCompactionWSOnly(harness string, registries ...map[string]BackendRegist
 		return reg.Lifecycle.LeadCompactionWSOnly
 	}
 	return false
+}
+
+// WorkerCompactionWSOnly reports whether harness's backend descriptor forces
+// ws-managed worker compaction (no native compaction mode).
+func WorkerCompactionWSOnly(harness string, registries ...map[string]BackendRegistration) bool {
+	for _, regs := range registries {
+		if reg, ok := regs[harness]; ok {
+			return reg.Lifecycle.WorkerCompactionWSOnly
+		}
+	}
+	if reg, ok := BuiltinBackendRegistrations()[harness]; ok {
+		return reg.Lifecycle.WorkerCompactionWSOnly
+	}
+	return false
+}
+
+// EffectiveWorkerCompactionMode normalizes a resolved compaction.worker_mode
+// value against the descriptor's WorkerCompactionWSOnly capability.
+func EffectiveWorkerCompactionMode(harness, raw string, registries ...map[string]BackendRegistration) string {
+	if WorkerCompactionWSOnly(harness, registries...) {
+		return wsconfig.CompactionModeWS
+	}
+	if raw == wsconfig.CompactionModeNative || raw == wsconfig.CompactionModeWS {
+		return raw
+	}
+	return wsconfig.CompactionDefaults[wsconfig.ItemCompactionWorkerMode]
 }
 
 // EffectiveLeadCompactionMode normalizes a resolved compaction.lead_mode value

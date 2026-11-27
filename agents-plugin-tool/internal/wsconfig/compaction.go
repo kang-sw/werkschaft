@@ -11,13 +11,17 @@ import (
 const (
 	// ItemCompactionLeadMode selects whether hosted leads use native or ws-managed compaction.
 	ItemCompactionLeadMode = "compaction.lead_mode"
-	CompactionModeNative   = "native"
-	CompactionModeWS       = "ws"
+	// ItemCompactionWorkerMode is the worker counterpart: native or ws-managed
+	// compaction for hosted non-lead workers.
+	ItemCompactionWorkerMode = "compaction.worker_mode"
+	CompactionModeNative     = "native"
+	CompactionModeWS         = "ws"
 )
 
 // CompactionDefaults are shared by every hosted harness and both readers.
 var CompactionDefaults = map[string]string{
 	ItemCompactionLeadMode:       CompactionModeWS,
+	ItemCompactionWorkerMode:     CompactionModeWS,
 	"compaction.lead_advisory":   "60%|180k",
 	"compaction.lead_hard":       "80%|230k",
 	"compaction.worker_advisory": "60%|180k",

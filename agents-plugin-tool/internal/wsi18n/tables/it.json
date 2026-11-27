@@ -3288,6 +3288,8 @@
   "js.settings.key.agent.werk_web_search_siwc.description": "Attiva opzionalmente la ricerca web lato server sugli account OpenAI Sign in with ChatGPT. Senza un limite per richiesta su SIWC, il budget per turno è best-effort tra una richiesta e l’altra.",
   "js.settings.key.compaction.lead_mode.label": "Modalità di compattazione del responsabile",
   "js.settings.key.compaction.lead_mode.description": "Sceglie se i responsabili ospitati usano la compattazione nativa dell'harness (native) o checkpoint e rotazione di sessione gestiti da ws (ws).",
+  "js.settings.key.compaction.worker_mode.label": "Modalità di compattazione del worker",
+  "js.settings.key.compaction.worker_mode.description": "Sceglie se i worker ospitati usano la compattazione nativa dell'harness (native) o checkpoint e rotazione di sessione gestiti da ws (ws).",
   "js.settings.key.compaction.lead_advisory.label": "Soglia di avviso di compattazione del responsabile",
   "js.settings.key.compaction.lead_advisory.description": "Uso del contesto oltre il quale si consiglia di compattare a un punto sicuro.",
   "js.settings.key.compaction.lead_hard.label": "Soglia di compattazione forzata del responsabile",

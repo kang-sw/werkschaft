@@ -181,7 +181,8 @@ func (r *Runner) CompactWithSummary(callerKey, target string, resume *bool, lead
 	}
 	out := CompactResult{"error", "session closed"}
 	dest.do(func() {
-		if why := dest.compactUnsupported(); why != "" {
+		wsWorker := dest.wsManagedWorkerCompaction()
+		if why := dest.compactUnsupported(); why != "" && !wsWorker {
 			out = CompactResult{"unsupported", why}
 			return
 		}
@@ -190,10 +191,13 @@ func (r *Runner) CompactWithSummary(callerKey, target string, resume *bool, lead
 			return
 		}
 		if lead != nil {
-			if dest != own || !dest.rec.Lead {
-				out = CompactResult{"error", "lead_summary is only available for a hosted lead compacting itself"}
+			if dest != own || !(dest.rec.Lead || wsWorker) {
+				out = CompactResult{"error", "lead_summary is only available for a hosted lead or ws-mode worker compacting itself"}
 				return
 			}
+		}
+		if wsWorker && lead == nil {
+			lead = emptyWorkerSummary()
 		}
 		if dest.compactPending != nil || dest.compacting || dest.compactCommand {
 			out = CompactResult{"queued", "compaction already pending"}
@@ -242,6 +246,13 @@ func (r *Runner) compactDescendant(own, child Record) bool {
 }
 
 func (c *conv) compactUnsupported() string {
+	if c.wsManagedWorkerCompaction() {
+		// Rotation needs no native command or lifecycle detection.
+		if c.caps != nil && !c.caps.Allows(ItemCompaction) {
+			return "the session catalog reports compaction unsupported"
+		}
+		return ""
+	}
 	p := c.r.opts.Backends[c.rec.Backend].CompactionProtocol()
 	if !p.DetectsLifecycle() {
 		return "native compaction lifecycle is unsupported by this harness descriptor"
@@ -283,6 +294,52 @@ func (c *conv) loadCompaction() {
 
 func (c *conv) wsManagedLeadCompaction() bool {
 	return c.rec.Lead && !c.r.durableProcess(c.rec.Backend) && c.leadCompactionMode(c.record()) == wsconfig.CompactionModeWS
+}
+
+// wsManagedWorkerCompaction reports a non-durable hosted worker whose effective
+// compaction.worker_mode is ws: it compacts by ws-managed session rotation.
+func (c *conv) wsManagedWorkerCompaction() bool {
+	return !c.rec.Lead && !c.r.durableProcess(c.rec.Backend) && c.workerCompactionMode(c.record()) == wsconfig.CompactionModeWS
+}
+
+// WorkerCompactionMode reports the effective mode of an open hosted worker.
+func (r *Runner) WorkerCompactionMode(conversation string) string {
+	c := r.conv(conversation)
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	rec, openWorker := c.rec, !c.rec.Lead && !c.closed
+	c.mu.Unlock()
+	if !openWorker {
+		return ""
+	}
+	return c.workerCompactionMode(rec)
+}
+
+func (c *conv) workerCompactionMode(rec Record) string {
+	c.compactModeMu.Lock()
+	defer c.compactModeMu.Unlock()
+	gen := compactionConfigGen.Load()
+	if c.compactWorkerMode != "" && c.compactWorkerModeGen == gen {
+		return c.compactWorkerMode
+	}
+	var raw string
+	if !WorkerCompactionWSOnly(rec.Backend, c.r.opts.Backends) {
+		resolver := c.compactionResolver(rec)
+		if value, _, err := resolver.Compaction(rec.WSKey, wsconfig.ItemCompactionWorkerMode, rec.Backend, ""); err == nil {
+			raw = value.Value
+		}
+	}
+	c.compactWorkerMode = EffectiveWorkerCompactionMode(rec.Backend, raw, c.r.opts.Backends)
+	c.compactWorkerModeGen = gen
+	return c.compactWorkerMode
+}
+
+// emptyWorkerSummary asks a ws-managed rotation to rebuild the checkpoint from
+// the ring dialog alone, so a worker that supplies no prose never stalls.
+func emptyWorkerSummary() *wscompact.LeadSummary {
+	return &wscompact.LeadSummary{Prose: make([]string, len(wscompact.ProseFields()))}
 }
 
 // LeadCompactionMode reports the effective mode of an authenticated open
@@ -611,7 +668,7 @@ func (c *conv) compactIdle() bool {
 		c.compactOrigin = trigger
 		_, acceptsSummary := c.proc.(leadSummaryCompactor)
 		if req.lead != nil && !acceptsSummary {
-			rotated, err := c.rotateExternalLead(req, trigger)
+			rotated, err := c.rotateExternalSession(req, trigger)
 			if checkout, ok := releasedInput(err); ok {
 				req.err = err
 				c.compactOrigin = ""
@@ -635,7 +692,7 @@ func (c *conv) compactIdle() bool {
 				return false
 			}
 			if rotated {
-				// CompactEnd already ran synchronously inside rotateExternalLead;
+				// CompactEnd already ran synchronously inside rotateExternalSession;
 				// fall through so compactResume opens the continuation turn now.
 				goto postCompact
 			}
@@ -783,7 +840,12 @@ func (c *conv) stageHardCompaction(resume, internal bool) {
 	// checkpoint. Automatically compact its next input without extending
 	// the finished turn. An explicit resume request still opens new input.
 	resume = resume && (c.rec.Lead || !c.r.durableProcess(c.rec.Backend))
-	c.compactPending = &compactRequest{resume: resume, internal: internal, auto: true, crossing: true, stage1: c.wsManagedLeadCompaction()}
+	req := &compactRequest{resume: resume, internal: internal, auto: true, crossing: true, stage1: c.wsManagedLeadCompaction()}
+	if c.wsManagedWorkerCompaction() {
+		// No Stage 1 prose round trip for a worker: rotate from the ring dialog.
+		req.lead = emptyWorkerSummary()
+	}
+	c.compactPending = req
 	c.publishCompaction(false)
 }
 
@@ -797,10 +859,10 @@ func stage1CompactionPrompt() string {
 		"; use empty strings for sections with nothing to carry forward), optional reread (up to 12 worktree text file paths), and optional agenda_updates if your agenda needs updating so ws can rotate the session with your checkpoint. End your turn after calling ws/compact."
 }
 
-// rotateExternalLead executes ws-managed compaction for an external hosted lead:
-// builds the checkpoint, replaces the holder, and records the explicit audit
-// cut before sending any input to the replacement.
-func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, error) {
+// rotateExternalSession executes ws-managed compaction for an external hosted
+// lead or ws-mode worker: builds the checkpoint, replaces the holder, and
+// records the explicit audit cut before sending any input to the replacement.
+func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool, error) {
 	rec := c.record()
 	rp, err := c.r.resolve(rec.Profile, rec.Root)
 	if err != nil {
@@ -824,11 +886,11 @@ func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, er
 	}
 	state := c.r.compactionState(rec.ReplyID)(dialogRes.LastCompactAt)
 	checkpoint := wscompact.BuildCheckpoint(wscompact.CheckpointInput{
-		Lead:         true,
+		Lead:         rec.Lead,
 		Ticket:       dialogRes.Ticket,
 		Playbook:     dialogRes.Playbook,
 		State:        state,
-		OmitChildren: c.r.opts.RestoreBundle != nil,
+		OmitChildren: rec.Lead && c.r.opts.RestoreBundle != nil,
 		Prose:        prose,
 		Rereads:      rereads,
 		Dialog:       dialogRes.Dialog,
@@ -859,7 +921,11 @@ func (c *conv) rotateExternalLead(req *compactRequest, trigger string) (bool, er
 		fresh := c.record()
 		fresh.SessionID, fresh.SessionFile = "", ""
 		noteBefore := c.compactNote
-		if err := c.startLead(fresh, rp.Definition, false); err != nil {
+		start := c.startLead
+		if !rec.Lead {
+			start = c.startWorker
+		}
+		if err := start(fresh, rp.Definition, false); err != nil {
 			return fmt.Errorf("start fresh session: %w", err)
 		}
 

@@ -3288,6 +3288,8 @@
   "js.settings.key.agent.werk_web_search_siwc.description": "Ativa opcionalmente a busca na web em contas OpenAI Sign in with ChatGPT. Como o SIWC não possui teto por requisição, o orçamento por turno é best-effort entre requisições.",
   "js.settings.key.compaction.lead_mode.label": "Modo de compactação do líder",
   "js.settings.key.compaction.lead_mode.description": "Define se líderes hospedados usam a compactação nativa do harness (native) ou checkpoints e rotação de sessão gerenciados pelo ws (ws).",
+  "js.settings.key.compaction.worker_mode.label": "Modo de compactação do worker",
+  "js.settings.key.compaction.worker_mode.description": "Define se workers hospedados usam a compactação nativa do harness (native) ou checkpoints e rotação de sessão gerenciados pelo ws (ws).",
   "js.settings.key.compaction.lead_advisory.label": "Limite do aviso de compactação do líder",
   "js.settings.key.compaction.lead_advisory.description": "Uso do contexto a partir do qual se recomenda compactar em um ponto seguro.",
   "js.settings.key.compaction.lead_hard.label": "Limite de compactação forçada do líder",

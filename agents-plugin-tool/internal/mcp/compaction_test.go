@@ -77,7 +77,7 @@ func TestCompactionRegistryManifestParity(t *testing.T) {
 		if builtinConfigDefaults()[key] != def {
 			t.Fatal(key)
 		}
-		if key == wsconfig.ItemCompactionLeadMode {
+		if key == wsconfig.ItemCompactionLeadMode || key == wsconfig.ItemCompactionWorkerMode {
 			if def != wsconfig.CompactionModeWS {
 				t.Fatalf("%s default = %q, want %q", key, def, wsconfig.CompactionModeWS)
 			}

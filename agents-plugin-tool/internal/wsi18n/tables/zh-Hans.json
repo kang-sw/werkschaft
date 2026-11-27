@@ -3288,6 +3288,8 @@
   "js.settings.key.agent.werk_web_search_siwc.description": "为 OpenAI Sign in with ChatGPT 账号选择性启用服务端网络搜索。由于 SIWC 没有单次请求上限，每轮预算仅在请求之间尽力（best-effort）控制。",
   "js.settings.key.compaction.lead_mode.label": "主会话压缩模式",
   "js.settings.key.compaction.lead_mode.description": "选择托管主会话使用宿主原生压缩（native）还是由 ws 管理的检查点与会话轮换（ws）。",
+  "js.settings.key.compaction.worker_mode.label": "工作者压缩模式",
+  "js.settings.key.compaction.worker_mode.description": "选择托管工作者会话使用宿主原生压缩（native）还是由 ws 管理的检查点与会话轮换（ws）。",
   "js.settings.key.compaction.lead_advisory.label": "主会话压缩建议阈值",
   "js.settings.key.compaction.lead_advisory.description": "建议主会话在安全节点压缩的上下文用量。",
   "js.settings.key.compaction.lead_hard.label": "主会话强制压缩阈值",

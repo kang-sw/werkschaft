@@ -78,6 +78,7 @@ func (b WerkBackend) registration() (string, BackendRegistration) {
 			WebFetchTool:             true,
 			ReadOnlyNoExec:           true,
 			LeadCompactionWSOnly:     true,
+			WorkerCompactionWSOnly:   true,
 		},
 		// The harness has no native process tools: shell goes through the
 		// ws exec tools, so every worker runs under the exec cutover (which

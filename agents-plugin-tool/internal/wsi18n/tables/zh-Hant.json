@@ -3288,6 +3288,8 @@
   "js.settings.key.agent.werk_web_search_siwc.description": "為 OpenAI Sign in with ChatGPT 帳號選擇性啟用伺服器端網路搜尋。由於 SIWC 沒有單次請求上限，每輪預算僅在請求之間盡力（best-effort）控制。",
   "js.settings.key.compaction.lead_mode.label": "主工作階段壓縮模式",
   "js.settings.key.compaction.lead_mode.description": "選擇託管主工作階段使用宿主原生壓縮（native）或由 ws 管理的檢查點與工作階段輪換（ws）。",
+  "js.settings.key.compaction.worker_mode.label": "工作者壓縮模式",
+  "js.settings.key.compaction.worker_mode.description": "選擇託管工作者工作階段使用宿主原生壓縮（native）或由 ws 管理的檢查點與工作階段輪換（ws）。",
   "js.settings.key.compaction.lead_advisory.label": "主工作階段壓縮建議臨界值",
   "js.settings.key.compaction.lead_advisory.description": "建議主工作階段在安全節點壓縮的內容用量。",
   "js.settings.key.compaction.lead_hard.label": "主工作階段強制壓縮臨界值",

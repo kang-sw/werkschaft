@@ -3288,6 +3288,8 @@
   "js.settings.key.agent.werk_web_search_siwc.description": "Дополнительно включает серверный веб-поиск для аккаунтов OpenAI Sign in with ChatGPT. Поскольку SIWC не ограничивает число поисков внутри запроса, бюджет за ход применяется по принципу best-effort между запросами.",
   "js.settings.key.compaction.lead_mode.label": "Режим сжатия ведущего",
   "js.settings.key.compaction.lead_mode.description": "Определяет, используют ли размещённые ведущие встроенное сжатие среды (native) или управляемые ws контрольные точки с ротацией сессии (ws).",
+  "js.settings.key.compaction.worker_mode.label": "Режим сжатия исполнителя",
+  "js.settings.key.compaction.worker_mode.description": "Определяет, используют ли размещённые исполнители встроенное сжатие среды (native) или управляемые ws контрольные точки с ротацией сессии (ws).",
   "js.settings.key.compaction.lead_advisory.label": "Порог рекомендации сжатия ведущему",
   "js.settings.key.compaction.lead_advisory.description": "Объём контекста, при котором ведущему рекомендуют сжать его на безопасной границе.",
   "js.settings.key.compaction.lead_hard.label": "Порог принудительного сжатия ведущего",

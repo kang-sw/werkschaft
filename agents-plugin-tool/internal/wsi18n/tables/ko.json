@@ -3288,6 +3288,8 @@
   "js.settings.key.agent.werk_web_search_siwc.description": "OpenAI Sign in with ChatGPT 계정에서 서버 측 웹 검색을 선택적으로 활성화합니다. SIWC는 요청 단위 제한이 없어 턴 예산은 요청 간 최선 노력(best-effort)으로 적용됩니다.",
   "js.settings.key.compaction.lead_mode.label": "리드 컴팩션 모드",
   "js.settings.key.compaction.lead_mode.description": "호스트된 리드 세션이 하네스 기본 컴팩션(native)을 사용할지, ws 관리 체크포인트와 세션 회전(ws)을 사용할지 선택합니다.",
+  "js.settings.key.compaction.worker_mode.label": "워커 컴팩션 모드",
+  "js.settings.key.compaction.worker_mode.description": "호스트된 워커 세션이 하네스 기본 컴팩션(native)을 사용할지, ws 관리 체크포인트와 세션 회전(ws)을 사용할지 선택합니다.",
   "js.settings.key.compaction.lead_advisory.label": "리드 컴팩션 권고 임계치",
   "js.settings.key.compaction.lead_advisory.description": "리드 세션이 다음 안전한 경계에서 compact 호출을 권고받는 컨텍스트 사용량(퍼센트, 토큰, 또는 | 조합).",
   "js.settings.key.compaction.lead_hard.label": "리드 강제 컴팩션 임계치",
