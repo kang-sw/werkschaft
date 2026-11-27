@@ -20,7 +20,7 @@ function readAsset(dir, name) {
   return fs.readFileSync(path.join(dir, name), 'utf8');
 }
 
-function buildFixtureHtml() {
+function buildFixtureHtml(opts = {}) {
   const css = [
     readAsset(WSW, 'page.css'),
     readAsset(WSW, 'page-items.css'),
@@ -114,13 +114,15 @@ section.topic > .tbody { padding: 6px 14px 10px; }
     <main id="grid" class="dgrid live">
       <div id="bcol" class="bcol">
         <div id="r-board" class="r-board" data-region="board">
-          ${topicHtml(1, 'Topic 1: Initial Open Question', { ask: true, tall: true, summary: 'Has unanswered policy item for top ↑ pill' })}
-          ${topicHtml(2, 'Topic 2: Short Folded Card', { fold: true })}
-          ${topicHtml(3, 'Topic 3: Post-Fold Target Card', { tall: true, summary: 'Should never snap back to Topic 2 on cap click' })}
-          ${topicHtml(4, 'Topic 4: Iframe Doc + Tall Body', { iframe: true, summary: '2-row top rail + iframe wheel chaining + bottom rail clearance' })}
-          ${topicHtml(5, 'Topic 5: Follow-up Implementation', { tall: true })}
-          ${topicHtml(6, 'Topic 6: Non-current Mutation Target', { tall: true })}
-          ${topicHtml(7, 'Topic 7: Trailing Board Card', { tall: true })}
+          ${typeof opts.buildBoard === 'function' ? opts.buildBoard({ topicHtml, makeLines }) : [
+            topicHtml(1, 'Topic 1: Initial Open Question', { ask: true, tall: true, summary: 'Has unanswered policy item for top ↑ pill' }),
+            topicHtml(2, 'Topic 2: Short Folded Card', { fold: true }),
+            topicHtml(3, 'Topic 3: Post-Fold Target Card', { tall: true, summary: 'Should never snap back to Topic 2 on cap click' }),
+            topicHtml(4, 'Topic 4: Iframe Doc + Tall Body', { iframe: true, summary: '2-row top rail + iframe wheel chaining + bottom rail clearance' }),
+            topicHtml(5, 'Topic 5: Follow-up Implementation', { tall: true }),
+            topicHtml(6, 'Topic 6: Non-current Mutation Target', { tall: true }),
+            topicHtml(7, 'Topic 7: Trailing Board Card', { tall: true }),
+          ].join('\n          ')}
         </div>
       </div>
     </main>
@@ -588,6 +590,129 @@ test('Chromium integration: all 4 board-scroll Phase 1 fixes + LOOK captures + z
     });
     assert.equal(jumped.key, 't:topic-1', 'offscreen .oq-pill jump selects target card first');
     assert.equal(jumped.visible, true, 'offscreen .oq-pill jump reveals target #item-1 inside card');
+  } finally {
+    await browser.close();
+  }
+});
+
+test('Chromium free-canvas virtual scroll: tall uncached and lazy-expanded cards never overlap mounted siblings', async () => {
+  let executablePath;
+  if (!fs.existsSync(chromium.executablePath())) {
+    const fallback = 'C:\\Users\\user\\AppData\\Local\\ms-playwright\\chromium_headless_shell-1248\\chrome-headless-shell-win64\\chrome-headless-shell.exe';
+    if (fs.existsSync(fallback)) executablePath = fallback;
+  }
+  const browser = await chromium.launch({ headless: true, executablePath });
+  try {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', err => errors.push(`pageerror: ${err.message}`));
+    const html = buildFixtureHtml({
+      buildBoard: ({ topicHtml }) => {
+        const items = [];
+        for (let i = 1; i <= 22; i++) {
+          if (i >= 9 && i <= 16) {
+            items.push(topicHtml(i, `Topic ${i}: Tall Uncached History`, { tall: true }));
+          } else if (i >= 18) {
+            items.push(topicHtml(i, `Topic ${i}: Trailing Tall Card`, { tall: true }));
+          } else {
+            items.push(topicHtml(i, `Topic ${i}: Compact Card`, {}));
+          }
+        }
+        return items.join('\n          ');
+      },
+    });
+    await page.setContent(html, { waitUntil: 'load' });
+    for (const content of buildBootstrapScript()) {
+      await page.addScriptTag({ content });
+    }
+    await waitFrames(page, 6);
+
+    const startup = await page.evaluate(() => {
+      const info = window.WsBoardAnchor.windowInfo();
+      return {
+        active: info.active,
+        start: info.start,
+        end: info.end,
+        hasAttr: document.getElementById('bcol').hasAttribute('data-board-free'),
+      };
+    });
+    assert.equal(startup.active && startup.hasAttr, true, 'expected free-canvas mode');
+    assert.ok(startup.end < 10, `expected trailing tall cards to start off-window/uncached (end=${startup.end})`);
+
+    const checkMountedOrder = async phase => {
+      const report = await page.evaluate(() => {
+        const board = document.getElementById('r-board');
+        const info = window.WsBoardAnchor.windowInfo();
+        const cards = Array.from(board.querySelectorAll('section.topic'))
+          .filter(el => !el.hasAttribute('data-wb-offwindow'));
+        const rows = cards.map(el => {
+          const r = el.getBoundingClientRect();
+          return { id: el.id, top: r.top, bottom: r.bottom, height: r.height, styleTop: el.style.top };
+        });
+        return { info: { active: info.active, start: info.start, end: info.end, anchorIdx: info.anchorIdx }, rows };
+      });
+      assert.ok(report.rows.length >= 2, `${phase}: expected mounted cards, got ${report.rows.length}`);
+      for (let i = 0; i < report.rows.length - 1; i++) {
+        const a = report.rows[i];
+        const b = report.rows[i + 1];
+        assert.ok(
+          b.top >= a.bottom,
+          `${phase}: card overlap between ${a.id} (bottom=${a.bottom}, h=${a.height}, top=${a.styleTop}) and ${b.id} (top=${b.top}, styleTop=${b.styleTop})`
+        );
+      }
+      return report;
+    };
+
+    // Scroll down incrementally via scrollTick into tall uncached cards (topic-9..topic-17).
+    let reached17 = false;
+    for (let step = 0; step < 35; step++) {
+      await page.evaluate(() => {
+        const bcol = document.getElementById('bcol');
+        bcol.scrollTop += 420;
+      });
+      await waitFrames(page, 4);
+      const rep = await checkMountedOrder(`scroll-step-${step}`);
+      if (rep.info.end >= 17 && rep.rows.some(r => r.id === 'topic-17')) {
+        reached17 = true;
+        const tallCount = rep.rows.filter(r => r.height > 320).length;
+        assert.ok(tallCount >= 2, `expected mounted >320px tall uncached cards, saw ${tallCount}`);
+        break;
+      }
+    }
+    assert.equal(reached17, true, 'scrolled into lazy target card topic-17');
+
+    // Simulate lazy/closed content expanding topic-17 past 320px without calling anchorSettle().
+    const t17Height = await page.evaluate(() => {
+      const tlog = document.querySelector('#topic-17 .tlog');
+      for (let k = 1; k <= 40; k++) {
+        const d = document.createElement('div');
+        d.className = 'log-line';
+        d.textContent = `Lazy closed item ${k} — tall card must push trailing siblings down`;
+        tlog.appendChild(d);
+      }
+      return document.getElementById('topic-17').getBoundingClientRect().height;
+    });
+    assert.ok(t17Height > 700, `expanded #topic-17 height (${t17Height}) must exceed 700px`);
+    await waitFrames(page, 6);
+    await waitForScrollSettle(page, 2500);
+    await checkMountedOrder('after-lazy-expand-topic-17');
+
+    // Scroll all the way to trailing uncached cards (topic-18..topic-22) and verify settled layout.
+    for (let step = 0; step < 30; step++) {
+      const endReached = await page.evaluate(() => window.WsBoardAnchor.windowInfo().end >= 21);
+      if (endReached) break;
+      await page.evaluate(() => {
+        const bcol = document.getElementById('bcol');
+        bcol.scrollTop += 480;
+      });
+      await waitFrames(page, 4);
+      await checkMountedOrder(`tail-step-${step}`);
+    }
+    await waitForScrollSettle(page, 2500);
+    const tailReport = await checkMountedOrder('settled-tail');
+    assert.equal(tailReport.info.end, 21, 'reached final card index 21');
+    assert.deepEqual(errors, [], `unexpected browser errors: ${errors.join('; ')}`);
   } finally {
     await browser.close();
   }
