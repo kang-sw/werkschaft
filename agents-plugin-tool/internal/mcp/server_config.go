@@ -24,6 +24,7 @@ func builtinConfigDefaults() map[string]string {
 		wsconfig.ItemExecNativeToolRemoval:     "on",
 		wsconfig.ItemAgentQuotaContinuation:    "off",
 		wsconfig.ItemAgentTierRoutingExpose:    "off",
+		wsconfig.ItemAgentTierRoutingDynamic:   tierRoutingDynamicKey.Default,
 		wsconfig.ItemWorkflowProfile:           "direct",
 		wsconfig.ItemSageReview:                "auto",
 		wsconfig.ItemSageReviewDesign:          "off",
@@ -502,6 +503,36 @@ func buildTuningCatalog(rsrcRoot fs.FS, resolver *wsconfig.Resolver, sessionKey,
 		SelectorFields: guidanceEntry.SelectorFields,
 		ValueFields:    guidanceEntry.ValueFields,
 		Current:        currentWorkflowPreference(resolver, sessionKey, guidanceEntry.Key),
+	})
+
+	dynamicEntry := registryEntryByKey(wsconfig.ItemAgentTierRoutingDynamic)
+	appendKnob(dynamicEntry, tuningKnob{
+		ID:          dynamicEntry.Key,
+		Kind:        "workflow_preference",
+		Description: tierRoutingDynamicHelp,
+		Writer:      tuningWriter{Tool: dynamicEntry.WriterTool, FixedArguments: map[string]string{"key": dynamicEntry.Key}},
+		Reset: &tuningWriter{
+			Tool:           dynamicEntry.ResetTool,
+			FixedArguments: map[string]string{"key": dynamicEntry.Key, "reset": "true"},
+		},
+		SelectorFields: dynamicEntry.SelectorFields,
+		ValueFields:    dynamicEntry.ValueFields,
+		Current:        currentWorkflowPreference(resolver, sessionKey, dynamicEntry.Key),
+	})
+
+	classifierEntry := registryEntryByKey(wsconfig.ItemAgentTierRoutingDynamicClassifier)
+	appendKnob(classifierEntry, tuningKnob{
+		ID:          classifierEntry.Key,
+		Kind:        "workflow_preference",
+		Description: "Classifier tier token used when agent.tier_routing_dynamic is true (for example small, claude.small, or werk.small). Resolved through the static tier resolver; unset (builtin) defaults to small. Defaults to global scope.",
+		Writer:      tuningWriter{Tool: classifierEntry.WriterTool, FixedArguments: map[string]string{"key": classifierEntry.Key}},
+		Reset: &tuningWriter{
+			Tool:           classifierEntry.ResetTool,
+			FixedArguments: map[string]string{"key": classifierEntry.Key, "reset": "true"},
+		},
+		SelectorFields: classifierEntry.SelectorFields,
+		ValueFields:    classifierEntry.ValueFields,
+		Current:        currentWorkflowPreference(resolver, sessionKey, classifierEntry.Key),
 	})
 
 	{

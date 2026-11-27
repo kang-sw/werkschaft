@@ -1135,3 +1135,304 @@ done
 		t.Fatalf("agy geminiDir %q remained after pool.Close(): %v", geminiDir, err)
 	}
 }
+
+// TestEphemeralPoolWarmTurnFasterThanColdRunOneShot verifies measurable pass
+// condition (b): on the same fake Claude CLI (carrying a realistic one-time
+// process boot delay), warm EphemeralPool turns in both BoundedRotation and
+// PureOneShot modes are measurably faster than cold RunOneShot spawns measured
+// in the same test.
+func TestEphemeralPoolWarmTurnFasterThanColdRunOneShot(t *testing.T) {
+	script := writeFakeCLIScript(t, `
+# Simulate realistic CLI process startup / runtime initialization cost once per launch.
+sleep 0.08
+oneshot=0
+for arg in "$@"; do
+  if [ "$arg" = "text" ]; then
+    oneshot=1
+  fi
+done
+if [ "$oneshot" = "1" ]; then
+  cat >/dev/null
+  printf 'oneshot-reply\n'
+  exit 0
+fi
+turn=0
+while IFS= read -r line; do
+  case "$line" in
+    *'"content":"/clear"'*)
+      printf '{"type":"system","subtype":"init","session_id":"s-clear","model":"haiku","tools":[],"mcp_servers":[],"plugins":[],"permissionMode":"dontAsk","slash_commands":["clear"]}\n'
+      printf '{"type":"result","subtype":"success","is_error":false,"local_command":"clear","duration_api_ms":0,"result":""}\n'
+      ;;
+    *'"type":"user"'*)
+      turn=$((turn + 1))
+      printf '{"type":"system","subtype":"init","session_id":"s-warm","model":"haiku","tools":[],"mcp_servers":[],"plugins":[],"permissionMode":"dontAsk","slash_commands":["clear"]}\n'
+      printf '{"type":"assistant","message":{"id":"m-%d","model":"haiku","content":[{"type":"text","text":"warm-%d"}]}}\n' "$turn" "$turn"
+      printf '{"type":"result","subtype":"success","is_error":false,"result":"warm-%d"}\n' "$turn"
+      ;;
+  esac
+done
+`)
+	reg := builtinRegistration(BackendClaude)
+	reg.Backend = ClaudeBackend{Command: script}
+
+	const samples = 3
+	var coldTotal time.Duration
+	for i := range samples {
+		start := time.Now()
+		reply, err := runOneShot(context.Background(), reg, BackendClaude, "haiku", "low", fmt.Sprintf("cold-%d", i))
+		coldTotal += time.Since(start)
+		if err != nil || reply != "oneshot-reply" {
+			t.Fatalf("cold runOneShot %d = (%q, %v)", i, reply, err)
+		}
+	}
+	coldAvg := coldTotal / samples
+
+	pool := NewEphemeralPool(EphemeralPoolOptions{
+		Backends:      map[string]Backend{BackendClaude: ClaudeBackend{Command: script}},
+		ScratchRoot:   t.TempDir(),
+		SweepInterval: -1,
+	})
+	defer pool.Close()
+
+	// Warm bounded-rotation turns (companion reaction path).
+	boundedSpec := AcquireSpec{Harness: BackendClaude, Model: "haiku", Effort: "low", Mode: BoundedRotation, MaxTurns: 20}
+	if _, err := pool.Execute(context.Background(), EphemeralRequest{Acquire: boundedSpec, Prompt: "prime", Timeout: 5 * time.Second}); err != nil {
+		t.Fatalf("prime bounded slot: %v", err)
+	}
+	var warmBoundedTotal time.Duration
+	for i := range samples {
+		start := time.Now()
+		reply, err := pool.Execute(context.Background(), EphemeralRequest{Acquire: boundedSpec, Prompt: fmt.Sprintf("warm-b-%d", i), Timeout: 5 * time.Second})
+		warmBoundedTotal += time.Since(start)
+		if err != nil || !strings.HasPrefix(reply, "warm-") {
+			t.Fatalf("warm bounded turn %d = (%q, %v)", i, reply, err)
+		}
+	}
+	warmBoundedAvg := warmBoundedTotal / samples
+
+	// Warm pure one-shot turns with in-stream /clear (dynamic tier router path).
+	oneShotSpec := AcquireSpec{Harness: BackendClaude, Model: "haiku", Effort: "low", Mode: PureOneShot}
+	if _, err := pool.Execute(context.Background(), EphemeralRequest{Acquire: oneShotSpec, Prompt: "prime", Timeout: 5 * time.Second}); err != nil {
+		t.Fatalf("prime oneshot slot: %v", err)
+	}
+	var warmOneShotTotal time.Duration
+	for i := range samples {
+		start := time.Now()
+		reply, err := pool.Execute(context.Background(), EphemeralRequest{Acquire: oneShotSpec, Prompt: fmt.Sprintf("warm-o-%d", i), Timeout: 5 * time.Second})
+		warmOneShotTotal += time.Since(start)
+		if err != nil || !strings.HasPrefix(reply, "warm-") {
+			t.Fatalf("warm oneshot turn %d = (%q, %v)", i, reply, err)
+		}
+	}
+	warmOneShotAvg := warmOneShotTotal / samples
+
+	t.Logf("latency comparison (n=%d): cold RunOneShot=%v, warm BoundedRotation=%v, warm PureOneShot=%v", samples, coldAvg, warmBoundedAvg, warmOneShotAvg)
+	if warmBoundedAvg >= coldAvg {
+		t.Fatalf("warm BoundedRotation (%v) was not faster than cold RunOneShot (%v)", warmBoundedAvg, coldAvg)
+	}
+	if warmOneShotAvg >= coldAvg {
+		t.Fatalf("warm PureOneShot (%v) was not faster than cold RunOneShot (%v)", warmOneShotAvg, coldAvg)
+	}
+}
+
+// TestEphemeralPool20ConsecutiveBoundedRotationNoNativeSessionFiles verifies
+// measurable pass condition (a) at the harness layer: 20 consecutive companion
+// reactions in BoundedRotation mode reuse one warm process (rotating on turn
+// 21) and create zero files in harness-native session directories (for agy,
+// artifacts stay strictly inside the pool's isolated --gemini-dir and are
+// removed on pool.Close()).
+func TestEphemeralPool20ConsecutiveBoundedRotationNoNativeSessionFiles(t *testing.T) {
+	t.Run("claude", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		claudeConfig := filepath.Join(fakeHome, ".claude")
+		if err := os.MkdirAll(claudeConfig, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("HOME", fakeHome)
+		t.Setenv("CLAUDE_CONFIG_DIR", claudeConfig)
+
+		startsFile := filepath.Join(t.TempDir(), "starts.log")
+		clearsFile := filepath.Join(t.TempDir(), "clears.log")
+		script := writeFakeCLIScript(t, fmt.Sprintf(`
+printf 'start\n' >> %q
+turn=0
+while IFS= read -r line; do
+  case "$line" in
+    *'"content":"/clear"'*)
+      printf 'clear\n' >> %q
+      printf '{"type":"system","subtype":"init","session_id":"s-clear","model":"haiku","tools":[],"mcp_servers":[],"plugins":[],"permissionMode":"dontAsk","slash_commands":["clear"]}\n'
+      printf '{"type":"result","subtype":"success","is_error":false,"local_command":"clear","duration_api_ms":0,"result":""}\n'
+      ;;
+    *'"type":"user"'*)
+      turn=$((turn + 1))
+      printf '{"type":"system","subtype":"init","session_id":"s-1","model":"haiku","tools":[],"mcp_servers":[],"plugins":[],"permissionMode":"dontAsk","slash_commands":["clear"]}\n'
+      printf '{"type":"assistant","message":{"id":"m-%%d","model":"haiku","content":[{"type":"text","text":"{\\"quip\\":\\"tick-%%d\\"}"}]}}\n' "$turn" "$turn"
+      printf '{"type":"result","subtype":"success","is_error":false,"result":"{\\"quip\\":\\"tick-%%d\\"}"}\n' "$turn"
+      ;;
+  esac
+done
+`, startsFile, clearsFile))
+
+		pool := NewEphemeralPool(EphemeralPoolOptions{
+			Backends:      map[string]Backend{BackendClaude: ClaudeBackend{Command: script}},
+			ScratchRoot:   t.TempDir(),
+			SweepInterval: -1,
+		})
+		defer pool.Close()
+
+		spec := AcquireSpec{Harness: BackendClaude, Model: "haiku", Effort: "low", Mode: BoundedRotation, MaxTurns: 20}
+		for i := 1; i <= 20; i++ {
+			reply, err := pool.Execute(context.Background(), EphemeralRequest{
+				Acquire: spec,
+				Prompt:  fmt.Sprintf("reaction-%d", i),
+				Timeout: 5 * time.Second,
+			})
+			if err != nil {
+				t.Fatalf("turn %d: %v", i, err)
+			}
+			want := fmt.Sprintf(`{"quip":"tick-%d"}`, i)
+			if reply != want {
+				t.Fatalf("turn %d reply = %q, want %q", i, reply, want)
+			}
+		}
+		if _, err := os.Stat(clearsFile); !os.IsNotExist(err) {
+			t.Fatalf("expected zero /clear resets during 20-turn BoundedRotation window")
+		}
+		// Turn 21 triggers rotation via /clear on the same warm process.
+		if _, err := pool.Execute(context.Background(), EphemeralRequest{Acquire: spec, Prompt: "reaction-21", Timeout: 5 * time.Second}); err != nil {
+			t.Fatalf("turn 21: %v", err)
+		}
+		startsRaw, err := os.ReadFile(startsFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := len(strings.Split(strings.TrimSpace(string(startsRaw)), "\n")); got != 1 {
+			t.Fatalf("process starts = %d, want 1 (warm reuse across 21 turns)", got)
+		}
+		clearsRaw, err := os.ReadFile(clearsFile)
+		if err != nil {
+			t.Fatalf("expected /clear on turn 21: %v", err)
+		}
+		if got := len(strings.Split(strings.TrimSpace(string(clearsRaw)), "\n")); got != 1 {
+			t.Fatalf("/clear count = %d, want 1", got)
+		}
+		entries, err := os.ReadDir(claudeConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("native claude dir polluted with %d entries: %v", len(entries), entries)
+		}
+	})
+
+	t.Run("agy", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		nativeGemini := filepath.Join(fakeHome, ".gemini")
+		if err := os.MkdirAll(nativeGemini, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("HOME", fakeHome)
+
+		startsFile := filepath.Join(t.TempDir(), "starts.log")
+		gdirFile := filepath.Join(t.TempDir(), "gemini-dir.txt")
+		script := writeFakeCLIScript(t, fmt.Sprintf(`
+printf 'start\n' >> %q
+gdir=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--gemini-dir" ]; then
+    gdir="$arg"
+  fi
+  prev="$arg"
+done
+printf '%%s' "$gdir" > %q
+sess=0
+turn=0
+while IFS= read -r line; do
+  id=$(printf '%%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":"%%s","result":{"protocolVersion":1,"agentInfo":{"version":"1.5.15"}}}\n' "$id"
+      ;;
+    *'"method":"session/new"'*)
+      sess=$((sess + 1))
+      if [ -n "$gdir" ]; then
+        mkdir -p "$gdir/antigravity/conversations" "$gdir/antigravity/brain/agy-s$sess"
+        printf 'db' > "$gdir/antigravity/conversations/agy-s$sess.pb"
+      fi
+      printf '{"jsonrpc":"2.0","id":"%%s","result":{"sessionId":"agy-s%%d","modes":{"currentModeId":"default","availableModes":[{"id":"default"}]},"configOptions":[{"id":"model","currentValue":"flash","options":[{"value":"flash"}]},{"id":"thought_level","currentValue":"low","options":[{"value":"low"}]}]}}\n' "$id" "$sess"
+      ;;
+    *'"method":"session/close"'*)
+      printf '{"jsonrpc":"2.0","id":"%%s","result":{}}\n' "$id"
+      ;;
+    *'"method":"session/set_config_option"'*)
+      printf '{"jsonrpc":"2.0","id":"%%s","result":{"configOptions":[{"id":"model","currentValue":"flash","options":[{"value":"flash"}]},{"id":"thought_level","currentValue":"low","options":[{"value":"low"}]}]}}\n' "$id"
+      ;;
+    *'"method":"session/prompt"'*)
+      turn=$((turn + 1))
+      sid=$(printf '%%s' "$line" | sed -n 's/.*"sessionId":"\([^"]*\)".*/\1/p')
+      printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%%s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"{\\"quip\\":\\"agy-%%s-%%d\\"}"}}}}\n' "$sid" "$sid" "$turn"
+      printf '{"jsonrpc":"2.0","id":"%%s","result":{"stopReason":"end_turn"}}\n' "$id"
+      ;;
+  esac
+done
+`, startsFile, gdirFile))
+
+		scratch := t.TempDir()
+		pool := NewEphemeralPool(EphemeralPoolOptions{
+			Backends:      map[string]Backend{BackendAgy: AgyBackend{Command: script}},
+			ScratchRoot:   scratch,
+			SweepInterval: -1,
+		})
+
+		spec := AcquireSpec{Harness: BackendAgy, Model: "flash", Effort: "low", Mode: BoundedRotation, MaxTurns: 20}
+		for i := 1; i <= 20; i++ {
+			reply, err := pool.Execute(context.Background(), EphemeralRequest{
+				Acquire: spec,
+				Prompt:  fmt.Sprintf("reaction-%d", i),
+				Timeout: 5 * time.Second,
+			})
+			if err != nil {
+				t.Fatalf("agy turn %d: %v", i, err)
+			}
+			want := fmt.Sprintf(`{"quip":"agy-agy-s1-%d"}`, i)
+			if reply != want {
+				t.Fatalf("agy turn %d reply = %q, want %q", i, reply, want)
+			}
+		}
+		// Turn 21 rotates to agy-s2 on the same shared acp process.
+		r21, err := pool.Execute(context.Background(), EphemeralRequest{Acquire: spec, Prompt: "reaction-21", Timeout: 5 * time.Second})
+		if err != nil || r21 != `{"quip":"agy-agy-s2-21"}` {
+			t.Fatalf("agy turn 21 = (%q, %v), want agy-s2-21", r21, err)
+		}
+		startsRaw, err := os.ReadFile(startsFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := len(strings.Split(strings.TrimSpace(string(startsRaw)), "\n")); got != 1 {
+			t.Fatalf("agy process starts = %d, want 1", got)
+		}
+		// Native ~/.gemini must remain untouched.
+		nativeEntries, err := os.ReadDir(nativeGemini)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(nativeEntries) != 0 {
+			t.Fatalf("native ~/.gemini polluted with %d entries: %v", len(nativeEntries), nativeEntries)
+		}
+		isolatedDirRaw, err := os.ReadFile(gdirFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		isolatedDir := strings.TrimSpace(string(isolatedDirRaw))
+		if isolatedDir == "" || !strings.HasPrefix(isolatedDir, scratch) {
+			t.Fatalf("agy isolated gemini dir = %q, want prefix %q", isolatedDir, scratch)
+		}
+		if err := pool.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(isolatedDir); !os.IsNotExist(err) {
+			t.Fatalf("isolated agy gemini dir %q survived pool.Close(): %v", isolatedDir, err)
+		}
+	})
+}

@@ -168,6 +168,18 @@ const (
 	// Builtin default: empty, which adds nothing.
 	ItemAgentTierRoutingGuidance = "agent.tier_routing_guidance"
 
+	// ItemAgentTierRoutingDynamic enables opt-in dynamic tier selection on
+	// agent.spawn using an ephemeral classifier call. Values: "true" or
+	// "false" (builtin default: false, which uses static tier resolution with
+	// no extra model call).
+	ItemAgentTierRoutingDynamic = "agent.tier_routing_dynamic"
+
+	// ItemAgentTierRoutingDynamicClassifier names the tier token (for example
+	// "small" or "claude.small") resolved through the static tier resolver to
+	// run the dynamic tier classifier call when agent.tier_routing_dynamic is
+	// true. Builtin default: empty (defaults to "small").
+	ItemAgentTierRoutingDynamicClassifier = "agent.tier_routing_dynamic_classifier"
+
 	// ItemAgentChildWaitingDays is how many days a spawned child agent may
 	// sit in the child-agent-waiting state (asleep, no turn) after its last
 	// activity before the daemon deletes it and its descendants. A positive
@@ -326,6 +338,8 @@ func init() {
 	// project can carry its own routing guidance.
 	RegisterDefaultScope(ItemAgentTierRoutingExpose, ScopeGlobal)
 	RegisterDefaultScope(ItemAgentTierRoutingGuidance, ScopeGlobal)
+	RegisterDefaultScope(ItemAgentTierRoutingDynamic, ScopeGlobal)
+	RegisterDefaultScope(ItemAgentTierRoutingDynamicClassifier, ScopeGlobal)
 	// agent.werk_web_search* keys default to global scope (cross-project user
 	// preference for the builtin harness's search behavior) while resolving
 	// through session > project > repo > global > builtin so a project or

@@ -69,6 +69,8 @@ type proxyHost struct {
 	// tools spawn its Pi subagents (mcp.ServerOptions.Agents); nil leaves
 	// them refusing.
 	agents mcp.AgentHost
+	// ephemeralPool is the daemon's shared lightweight ephemeral harness pool.
+	ephemeralPool *wsagent.EphemeralPool
 	// exec is the daemon's hosted exec jobs, bound after StartDaemon; nil
 	// keeps every connection on the legacy exec path.
 	exec atomic.Pointer[execjob.Hosted]
@@ -208,6 +210,7 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 		// Only a token-resolved hello names its conversation: the binding
 		// that owns hosted exec jobs.
 		opts.Exec = h.exec.Load
+		opts.EphemeralPool = h.ephemeralPool
 		opts.Cron = h.cron.Load
 		opts.UserCommands = h.userCommandsNow
 		opts.UserCommandsDiscovery = h.userCommandsFor(hello.Conversation)

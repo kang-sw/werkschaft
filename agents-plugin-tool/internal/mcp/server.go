@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"github.com/kang-sw/devenv/internal/mcpframe"
+	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsdoc"
 	"github.com/kang-sw/devenv/internal/wsindex"
 	"github.com/kang-sw/devenv/internal/wslive"
@@ -62,6 +63,7 @@ type Server struct {
 	tracker trackerLink
 	// agents is the dashboard daemon's runner.
 	agents          AgentHost
+	ephemeralPool   *wsagent.EphemeralPool
 	stopWorkerWatch func()
 	workerRowKeys   struct {
 		mu   sync.Mutex
