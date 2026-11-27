@@ -917,25 +917,30 @@
     if (on) item.setAttribute("data-no", ""); else item.removeAttribute("data-no");
   }
   function writeAnswers(el, saved) {
-    q(".card[data-id], .arow[data-id], .ckrow[data-id], .srow[data-id]", el).forEach(function (item) {
-      var s = saved[item.getAttribute("data-id")];
-      if (!s) return;
-      var note = item.querySelector("textarea.note"), box = item.querySelector("label.ack > input, label.ck > input");
-      if (s.pick) q(".opt[data-opt], .btn[data-v]", item).forEach(function (b) { if (pickKey(b) === s.pick) b.setAttribute("aria-pressed", "true"); });
-      if (note && (s.note || s.noteOpen)) openNote(note, s);
-      if (box && s.checked) box.checked = true;
-      if (s.no) setCheckNo(item, true);
-    });
-    q(".tnote[data-topic]", el).forEach(function (note) {
-      var s = saved["t:" + note.getAttribute("data-topic")];
-      // A note a send closed (closeTopicNotes) keeps its text closed.
-      if (s && s.noteOpen) openNote(note, s);
-      else if (s) {
-        note.value = s.note || "";
-        if (s.capsules && window.WsCapsules) window.WsCapsules.attach(note).restore(s.capsules);
-      }
-    });
-    if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("dash", "writeAnswers") : null;
+    try {
+      q(".card[data-id], .arow[data-id], .ckrow[data-id], .srow[data-id]", el).forEach(function (item) {
+        var s = saved[item.getAttribute("data-id")];
+        if (!s) return;
+        var note = item.querySelector("textarea.note"), box = item.querySelector("label.ack > input, label.ck > input");
+        if (s.pick) q(".opt[data-opt], .btn[data-v]", item).forEach(function (b) { if (pickKey(b) === s.pick) b.setAttribute("aria-pressed", "true"); });
+        if (note && (s.note || s.noteOpen)) openNote(note, s);
+        if (box && s.checked) box.checked = true;
+        if (s.no) setCheckNo(item, true);
+      });
+      q(".tnote[data-topic]", el).forEach(function (note) {
+        var s = saved["t:" + note.getAttribute("data-topic")];
+        // A note a send closed (closeTopicNotes) keeps its text closed.
+        if (s && s.noteOpen) openNote(note, s);
+        else if (s) {
+          note.value = s.note || "";
+          if (s.capsules && window.WsCapsules) window.WsCapsules.attach(note).restore(s.capsules);
+        }
+      });
+      if (typeof syncWbUpdateItems === "function") syncWbUpdateItems();
+    } finally {
+      if (jTok) WsJank.end(jTok);
+    }
   }
   // A board swap waits while the user is typing in the answer form, and
   // lands when the focus leaves it.

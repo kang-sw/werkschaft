@@ -97,7 +97,9 @@
     files: {},
     menu: {},
     "rail-open": {},
-    sync: {}
+    sync: {},
+    "jank-stall": { stall: "record" },
+    "jank-minor": { durMs: "number", topInvoker: "string" }
   };
 
   // message returns m when it is a shell message of a known kind whose

@@ -34,38 +34,44 @@
   // stay put unless their mail-wake presentation changes: a hidden mail
   // marker must replace its row (and restore it when the association expires).
   function mergeEntries(box, src, changed) {
-    var have = entryKeys(box), added = [];
-    Array.prototype.slice.call(src.children).forEach(function (n) {
-      var k = n.getAttribute("data-entry");
-      if (!k) return;
-      var old = have[k];
-      if (old) {
-        if (!(changed && changed[k]) &&
-            old.getAttribute("data-mail-wake") === n.getAttribute("data-mail-wake") &&
-            old.getAttribute("data-turn-absorbed") === n.getAttribute("data-turn-absorbed") &&
-            old.getAttribute("data-turn-live-absorbed") === n.getAttribute("data-turn-live-absorbed") &&
-            old.getAttribute("data-conv-turn") === n.getAttribute("data-conv-turn") &&
-            old.getAttribute("data-turn-rev") === n.getAttribute("data-turn-rev")) return;
-        box.replaceChild(n, old);
-      } else {
-        // New entries are usually the newest (live) or the oldest (history),
-        // so walk back from the end strictly over [data-entry] siblings.
-        var c = box.lastElementChild;
-        while (c && (!c.getAttribute || !c.getAttribute("data-entry"))) c = c.previousElementSibling;
-        while (c && c.getAttribute("data-entry") > k) {
-          var prev = c.previousElementSibling;
-          while (prev && (!prev.getAttribute || !prev.getAttribute("data-entry"))) prev = prev.previousElementSibling;
-          c = prev;
+    var added = [];
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("convo", "mergeEntries") : null;
+    try {
+      var have = entryKeys(box);
+      Array.prototype.slice.call(src.children).forEach(function (n) {
+        var k = n.getAttribute("data-entry");
+        if (!k) return;
+        var old = have[k];
+        if (old) {
+          if (!(changed && changed[k]) &&
+              old.getAttribute("data-mail-wake") === n.getAttribute("data-mail-wake") &&
+              old.getAttribute("data-turn-absorbed") === n.getAttribute("data-turn-absorbed") &&
+              old.getAttribute("data-turn-live-absorbed") === n.getAttribute("data-turn-live-absorbed") &&
+              old.getAttribute("data-conv-turn") === n.getAttribute("data-conv-turn") &&
+              old.getAttribute("data-turn-rev") === n.getAttribute("data-turn-rev")) return;
+          box.replaceChild(n, old);
+        } else {
+          // New entries are usually the newest (live) or the oldest (history),
+          // so walk back from the end strictly over [data-entry] siblings.
+          var c = box.lastElementChild;
+          while (c && (!c.getAttribute || !c.getAttribute("data-entry"))) c = c.previousElementSibling;
+          while (c && c.getAttribute("data-entry") > k) {
+            var prev = c.previousElementSibling;
+            while (prev && (!prev.getAttribute || !prev.getAttribute("data-entry"))) prev = prev.previousElementSibling;
+            c = prev;
+          }
+          box.insertBefore(n, c ? c.nextSibling : box.firstChild);
         }
-        box.insertBefore(n, c ? c.nextSibling : box.firstChild);
-      }
-      have[k] = n;
-      added.push(n);
-      restoreOpen(n);
-      fmtTimes(n);
-      if (typeof hydrateWbUpdateItems === "function") hydrateWbUpdateItems(n);
-    });
-    return added;
+        have[k] = n;
+        added.push(n);
+        restoreOpen(n);
+        fmtTimes(n);
+        if (typeof hydrateWbUpdateItems === "function") hydrateWbUpdateItems(n);
+      });
+      return added;
+    } finally {
+      if (jTok) WsJank.end(jTok, { count: added.length });
+    }
   }
   // gapped reports a newest window (nbox) that does not reach what box
   // holds: its oldest entry is newer than box's newest, so entries between
@@ -134,42 +140,47 @@
   // entries past the cap. Either way the older history is loaded again from
   // what the box then holds.
   function mergeEntriesRegion(el, html, pin, previous) {
-    var next = typeof html === "string" ? null : html, box = entriesBox(), changed = Object.create(null);
-    // Without a rendered baseline, the differing full's same-key rows may
-    // have changed since page render (or an unparseable full). The swap owner
-    // already bypasses this merge for equal hashes, preserving no-remount.
-    if (next) next.order.forEach(function (key) {
-      if (!previous || (previous.rows[key] && previous.rows[key].html !== next.rows[key].html)) changed[key] = true;
-    });
-    if (box && next && previous && next.shell === previous.shell && keyedSame(next.order, previous.order)) {
-      var incoming = doc.createElement("div"), have = entryKeys(box);
-      next.order.forEach(function (key) {
-        if (!have[key] || changed[key]) incoming.appendChild(entryRowNode(next.rows[key].html, key));
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("convo", "mergeEntriesRegion") : null;
+    try {
+      var next = typeof html === "string" ? null : html, box = entriesBox(), changed = Object.create(null);
+      // Without a rendered baseline, the differing full's same-key rows may
+      // have changed since page render (or an unparseable full). The swap owner
+      // already bypasses this merge for equal hashes, preserving no-remount.
+      if (next) next.order.forEach(function (key) {
+        if (!previous || (previous.rows[key] && previous.rows[key].html !== next.rows[key].html)) changed[key] = true;
       });
-      var inserted = mergeEntries(box, incoming, changed);
-      inserted.forEach(sweepOutImgs); mermaid(inserted);
+      if (box && next && previous && next.shell === previous.shell && keyedSame(next.order, previous.order)) {
+        var incoming = doc.createElement("div"), have = entryKeys(box);
+        next.order.forEach(function (key) {
+          if (!have[key] || changed[key]) incoming.appendChild(entryRowNode(next.rows[key].html, key));
+        });
+        var inserted = mergeEntries(box, incoming, changed);
+        inserted.forEach(sweepOutImgs); mermaid(inserted);
+        if (pin && evictEntries(box)) histReset();
+        var oldestA = firstEntryEl(box);
+        emitAuditEvent("ws-entries-merged", { oldestAt: oldestA ? (oldestA.getAttribute("data-at") || "") : "", empty: !oldestA });
+        return;
+      }
+      html = next ? entryInputHTML(next) : html;
+      var src = frag(html), head = el.querySelector(".thead"), nhead = src.querySelector(".thead");
+      var nbox = src.querySelector(".centries");
+      if (!box || !nbox) {
+        el.innerHTML = html; restoreOpen(el); fmtTimes(el); sweepOutImgs(el); mermaid(el); if (typeof hydrateWbUpdateItems === "function") hydrateWbUpdateItems(el); histReset();
+        var freshBox = entriesBox(), freshOld = firstEntryEl(freshBox);
+        emitAuditEvent("ws-entries-merged", { oldestAt: freshOld ? (freshOld.getAttribute("data-at") || "") : "", empty: !freshOld });
+        return;
+      }
+      if (head && nhead) { head.parentNode.replaceChild(nhead, head); fmtTimes(nhead); }
+      if (gapped(box, nbox)) { resetEntries(box); histReset(); }
+      var added = mergeEntries(box, nbox, changed);
+      added.forEach(sweepOutImgs);
+      mermaid(added);
       if (pin && evictEntries(box)) histReset();
-      var oldestA = firstEntryEl(box);
-      emitAuditEvent("ws-entries-merged", { oldestAt: oldestA ? (oldestA.getAttribute("data-at") || "") : "", empty: !oldestA });
-      return;
+      var oldestB = firstEntryEl(box);
+      emitAuditEvent("ws-entries-merged", { oldestAt: oldestB ? (oldestB.getAttribute("data-at") || "") : "", empty: !oldestB });
+    } finally {
+      if (jTok) WsJank.end(jTok);
     }
-    html = next ? entryInputHTML(next) : html;
-    var src = frag(html), head = el.querySelector(".thead"), nhead = src.querySelector(".thead");
-    var nbox = src.querySelector(".centries");
-    if (!box || !nbox) {
-      el.innerHTML = html; restoreOpen(el); fmtTimes(el); sweepOutImgs(el); mermaid(el); if (typeof hydrateWbUpdateItems === "function") hydrateWbUpdateItems(el); histReset();
-      var freshBox = entriesBox(), freshOld = firstEntryEl(freshBox);
-      emitAuditEvent("ws-entries-merged", { oldestAt: freshOld ? (freshOld.getAttribute("data-at") || "") : "", empty: !freshOld });
-      return;
-    }
-    if (head && nhead) { head.parentNode.replaceChild(nhead, head); fmtTimes(nhead); }
-    if (gapped(box, nbox)) { resetEntries(box); histReset(); }
-    var added = mergeEntries(box, nbox, changed);
-    added.forEach(sweepOutImgs);
-    mermaid(added);
-    if (pin && evictEntries(box)) histReset();
-    var oldestB = firstEntryEl(box);
-    emitAuditEvent("ws-entries-merged", { oldestAt: oldestB ? (oldestB.getAttribute("data-at") || "") : "", empty: !oldestB });
   }
 
   // Model history is a click-only popover sourced by the entries title bar.
@@ -1329,6 +1340,7 @@
     if (!box || !box.querySelectorAll) return;
     var qApi = wbUpdateQueryBoard();
     if (qApi && qApi.beginPass) qApi.beginPass(region("board"));
+    var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("convo", "syncWbUpdateItems") : null;
     try {
       if (!ids || !ids.length) {
         hydrateWbUpdateItems(box);
@@ -1352,6 +1364,7 @@
       }
     } finally {
       if (qApi && qApi.endPass) qApi.endPass();
+      if (jTok) WsJank.end(jTok);
     }
   }
 

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf16"
 
 	"github.com/kang-sw/devenv/internal/wsdevassets"
 	"github.com/kang-sw/devenv/internal/wsi18n"
@@ -34,6 +35,7 @@ var dashboardFS embed.FS
 // declaration hoisting, initialization order, CSS cascade and asset identity.
 var dashboardScriptFiles = []string{
 	"dashboard.js",
+	"dashboard-jank.js",
 	"dashboard-animation.js",
 	"dashboard-board.js",
 	"dashboard-board-anchor.js",
@@ -120,6 +122,7 @@ var dashboardStyleFiles = []string{
 	"dashboard-composer-ucmd.css",
 	"dashboard-composer-ucmd-editor.css",
 	"dashboard-voice.css",
+	"dashboard-jank.css",
 }
 
 var trackerScriptFiles = []string{
@@ -164,6 +167,108 @@ func readDashboardSource(read func(string) ([]byte, error), name string) ([]byte
 	return source.Bytes(), nil
 }
 
+type scriptFileRange struct {
+	File      string `json:"file"`
+	StartChar int    `json:"startChar"`
+	EndChar   int    `json:"endChar"`
+	StartLine int    `json:"startLine"`
+	EndLine   int    `json:"endLine"`
+}
+
+type scriptSourceMapData struct {
+	ScriptFile      string            `json:"scriptFile,omitempty"`
+	FrameScriptFile string            `json:"frameScriptFile,omitempty"`
+	TermFile        string            `json:"termFile,omitempty"`
+	WebFile         string            `json:"webFile,omitempty"`
+	SelectFile      string            `json:"selectFile,omitempty"`
+	TotalChars      int               `json:"totalChars"`
+	TotalLines      int               `json:"totalLines"`
+	Files           []scriptFileRange `json:"files"`
+	FrameFiles      []scriptFileRange `json:"frameFiles,omitempty"`
+}
+
+type scriptPart struct {
+	file    string
+	content string
+}
+
+func assembleScriptParts(parts []scriptPart) ([]byte, []scriptFileRange, int, int) {
+	var source bytes.Buffer
+	ranges := make([]scriptFileRange, 0, len(parts))
+	charPos := 0
+	lineNum := 1
+	for _, part := range parts {
+		startChar := charPos
+		startLine := lineNum
+		for _, r := range part.content {
+			n := utf16.RuneLen(r)
+			if n < 0 {
+				n = 1
+			}
+			charPos += n
+			if r == '\n' {
+				lineNum++
+			}
+		}
+		if part.file != "" {
+			endLine := lineNum
+			if len(part.content) > 0 && part.content[len(part.content)-1] == '\n' && endLine > startLine {
+				endLine--
+			}
+			ranges = append(ranges, scriptFileRange{
+				File:      part.file,
+				StartChar: startChar,
+				EndChar:   charPos,
+				StartLine: startLine,
+				EndLine:   endLine,
+			})
+		}
+		source.WriteString(part.content)
+	}
+	totalLines := lineNum
+	b := source.Bytes()
+	if len(b) == 0 {
+		totalLines = 0
+	} else if b[len(b)-1] == '\n' && totalLines > 1 {
+		totalLines--
+	}
+	return b, ranges, charPos, totalLines
+}
+
+func readNamedScriptParts(read func(string) ([]byte, error), names []string, sep string) ([]scriptPart, string, error) {
+	parts := make([]scriptPart, 0, len(names)*2)
+	var buf strings.Builder
+	for i, name := range names {
+		if i > 0 && sep != "" {
+			parts = append(parts, scriptPart{content: sep})
+			buf.WriteString(sep)
+		}
+		raw, err := read(name)
+		if err != nil {
+			return nil, "", err
+		}
+		s := string(raw)
+		parts = append(parts, scriptPart{file: name, content: s})
+		buf.WriteString(s)
+	}
+	return parts, buf.String(), nil
+}
+
+// assembleDashboardScripts joins dashboardScriptFiles without separators while
+// computing exact UTF-16 character and 1-based line spans for each fragment.
+func assembleDashboardScripts(read func(string) ([]byte, error)) ([]byte, scriptSourceMapData, error) {
+	parts, _, err := readNamedScriptParts(read, dashboardScriptFiles, "")
+	if err != nil {
+		return nil, scriptSourceMapData{}, err
+	}
+	b, ranges, totalChars, totalLines := assembleScriptParts(parts)
+	return b, scriptSourceMapData{
+		TotalChars: totalChars,
+		TotalLines: totalLines,
+		Files:      ranges,
+	}, nil
+}
+
 // Region names. The session page's regions in order; the index page has one.
 //
 // The conversation is two regions inside one scroll wrapper: entries (the
@@ -206,10 +311,15 @@ type dashboardAssets struct {
 	// tmpl is the default language's template set; tmpls holds one per
 	// language, each parsed with the translation funcs bound to it, since a
 	// parsed set's FuncMap is fixed (templateFor picks).
-	tmpl  *template.Template
-	tmpls map[string]*template.Template
-	data  pageAssetsData
-	files map[string]dashboardFile
+	tmpl          *template.Template
+	tmpls         map[string]*template.Template
+	data          pageAssetsData
+	files         map[string]dashboardFile
+	wbFormParts   []scriptPart
+	wbViewerParts []scriptPart
+	trackerParts  []scriptPart
+	mentionParts  []scriptPart
+	cardsParts    []scriptPart
 }
 
 type dashboardFile struct {
@@ -230,7 +340,9 @@ func (a *dashboardAssets) templateFor(lang string) *template.Template {
 type pageAssetsData struct {
 	CSS                 template.CSS
 	Script              template.JS
+	ScriptSourceMap     template.JS
 	ScriptFile          string // Content-addressed page script for fresh session frames.
+	FrameSourceMapFile  string
 	FrameWhiteboardFile string
 	FrameCSSFile        string
 	FrameScriptFile     string
@@ -387,49 +499,88 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 	if werr != nil {
 		return nil, werr
 	}
+	wbFormFrags, wbViewerFrags, wferr := wswhiteboard.PageScriptFragments()
+	if wferr != nil {
+		return nil, wferr
+	}
 	mermaidName, _ := wswhiteboard.MermaidAsset()
 	lucide, lerr := lucideSprite()
 	if lerr != nil {
 		return nil, lerr
 	}
-	a := &dashboardAssets{data: pageAssetsData{
-		CSS:               template.CSS(get("dashboard.css") + "\n" + get("memo.css") + "\n" + get("usage.css")),
-		Script:            template.JS(get("dashboard.js")),
-		Sprite:            template.HTML(strings.TrimSpace(get("sprite.svg"))),
-		TrackerCSS:        template.CSS(get("tracker.css")),
-		TrackerScript:     template.JS(get("tracker.js")),
-		MentionScript:     template.JS(get("mention.js") + "\n" + get("capsules.js") + "\n" + get("md-parser.js") + "\n" + get("md-editor.js") + "\n" + get("ws-input.js")),
-		ToastScript:       template.JS(get("toast.js")),
-		ConfirmScript:     template.JS(get("confirm.js")),
-		HoldConfirmScript: template.JS(get("hold-confirm.js")),
-		RailScript:        template.JS(get("rail.js")),
-		MemoScript:        template.JS(get("memo.js")),
-		UsageScript:       template.JS(get("usage.js")),
-		ShellScript:       template.JS(get("shell.js")),
-		CompanionScript:   template.JS(get("dashboard-companion.js")),
-		CompanionCSS:      template.CSS(get("dashboard-companion.css")),
-		SettingsCSS:       template.CSS(get("dashboard-settings.css") + "\n" + optional("dashboard-settings-extras.css") + "\n" + get("dashboard-settings-tiers.css") + "\n" + get("dashboard-settings-preferences.css") + "\n" + get("dashboard-settings-account.css")),
-		SettingsScript:    template.JS(get("hold-confirm.js") + "\n;\n" + optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings-combobox.js") + "\n;\n" + get("dashboard-settings-tiers.js") + "\n;\n" + get("dashboard-settings-preferences.js") + "\n;\n" + get("dashboard-settings-account.js") + "\n;\n" + get("dashboard-settings.js")),
-		SettingsCatalog:   template.JS(get("dashboard-settings-catalog.json")),
-		OverviewScript:    template.JS(get("overview.js")),
-		CardsScript:       template.JS(get("gallery.js") + "\n;\n" + get("gal-rail-preview.js") + "\n;\n" + get("cards.js")),
-		PreviewScript:     template.JS(get("preview.js")),
-		PanelScript:       template.JS(get("panelcard.js")),
-		FilesScript:       template.JS(get("files.js")),
-		TerminalScript:    template.JS(get("terminal.js")),
-		WebScript:         template.JS(get("webcard.js")),
-		XtermCSS:          xtermStyle(),
-		LucideSprite:      lucide,
-		Logo:              template.HTML(`<span class="dlogo-d">` + strings.TrimSpace(get("brand/werkschaft-dark.svg")) + `</span><span class="dlogo-l">` + strings.TrimSpace(get("brand/werkschaft-light.svg")) + `</span>`),
-		WhiteboardCSS:     wb.CSS,
-		WhiteboardSprite:  wb.Sprite,
-		FormScript:        wb.FormScript,
-		AnswersScript:     wb.AnswersScript,
-		MermaidInit:       wb.MermaidInit,
-		MermaidFile:       mermaidName,
-		ViewerScript:      wb.ViewerScript,
-		SelectAllScript:   wb.SelectAllScript,
-	}}
+	scriptBytes, sourceMap, smErr := assembleDashboardScripts(read)
+	if smErr != nil {
+		return nil, smErr
+	}
+	sourceMapJSON, smMarshalErr := json.Marshal(sourceMap)
+	if smMarshalErr != nil {
+		return nil, smMarshalErr
+	}
+	trackerParts, trackerJoined, tErr := readNamedScriptParts(read, trackerScriptFiles, "")
+	if tErr != nil {
+		return nil, tErr
+	}
+	mentionParts, mentionJoined, mErr := readNamedScriptParts(read, []string{"mention.js", "capsules.js", "md-parser.js", "md-editor.js", "ws-input.js"}, "\n")
+	if mErr != nil {
+		return nil, mErr
+	}
+	cardsParts, cardsJoined, cErr := readNamedScriptParts(read, []string{"gallery.js", "gal-rail-preview.js", "cards.js"}, "\n;\n")
+	if cErr != nil {
+		return nil, cErr
+	}
+	wbFormParts := make([]scriptPart, len(wbFormFrags))
+	for i, frag := range wbFormFrags {
+		wbFormParts[i] = scriptPart{file: frag.File, content: frag.Body}
+	}
+	wbViewerParts := make([]scriptPart, len(wbViewerFrags))
+	for i, frag := range wbViewerFrags {
+		wbViewerParts[i] = scriptPart{file: frag.File, content: frag.Body}
+	}
+	a := &dashboardAssets{
+		wbFormParts:   wbFormParts,
+		wbViewerParts: wbViewerParts,
+		trackerParts:  trackerParts,
+		mentionParts:  mentionParts,
+		cardsParts:    cardsParts,
+		data: pageAssetsData{
+			CSS:               template.CSS(get("dashboard.css") + "\n" + get("memo.css") + "\n" + get("usage.css")),
+			Script:            template.JS(scriptBytes),
+			ScriptSourceMap:   template.JS(sourceMapJSON),
+			Sprite:            template.HTML(strings.TrimSpace(get("sprite.svg"))),
+			TrackerCSS:        template.CSS(get("tracker.css")),
+			TrackerScript:     template.JS(trackerJoined),
+			MentionScript:     template.JS(mentionJoined),
+			ToastScript:       template.JS(get("toast.js")),
+			ConfirmScript:     template.JS(get("confirm.js")),
+			HoldConfirmScript: template.JS(get("hold-confirm.js")),
+			RailScript:        template.JS(get("rail.js")),
+			MemoScript:        template.JS(get("memo.js")),
+			UsageScript:       template.JS(get("usage.js")),
+			ShellScript:       template.JS(get("shell.js")),
+			CompanionScript:   template.JS(get("dashboard-companion.js")),
+			CompanionCSS:      template.CSS(get("dashboard-companion.css")),
+			SettingsCSS:       template.CSS(get("dashboard-settings.css") + "\n" + optional("dashboard-settings-extras.css") + "\n" + get("dashboard-settings-tiers.css") + "\n" + get("dashboard-settings-preferences.css") + "\n" + get("dashboard-settings-account.css")),
+			SettingsScript:    template.JS(get("hold-confirm.js") + "\n;\n" + optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings-combobox.js") + "\n;\n" + get("dashboard-settings-tiers.js") + "\n;\n" + get("dashboard-settings-preferences.js") + "\n;\n" + get("dashboard-settings-account.js") + "\n;\n" + get("dashboard-settings.js")),
+			SettingsCatalog:   template.JS(get("dashboard-settings-catalog.json")),
+			OverviewScript:    template.JS(get("overview.js")),
+			CardsScript:       template.JS(cardsJoined),
+			PreviewScript:     template.JS(get("preview.js")),
+			PanelScript:       template.JS(get("panelcard.js")),
+			FilesScript:       template.JS(get("files.js")),
+			TerminalScript:    template.JS(get("terminal.js")),
+			WebScript:         template.JS(get("webcard.js")),
+			XtermCSS:          xtermStyle(),
+			LucideSprite:      lucide,
+			Logo:              template.HTML(`<span class="dlogo-d">` + strings.TrimSpace(get("brand/werkschaft-dark.svg")) + `</span><span class="dlogo-l">` + strings.TrimSpace(get("brand/werkschaft-light.svg")) + `</span>`),
+			WhiteboardCSS:     wb.CSS,
+			WhiteboardSprite:  wb.Sprite,
+			FormScript:        wb.FormScript,
+			AnswersScript:     wb.AnswersScript,
+			MermaidInit:       wb.MermaidInit,
+			MermaidFile:       mermaidName,
+			ViewerScript:      wb.ViewerScript,
+			SelectAllScript:   wb.SelectAllScript,
+		}}
 	source := get("dashboard.tmpl")
 	if err != nil {
 		return nil, err
