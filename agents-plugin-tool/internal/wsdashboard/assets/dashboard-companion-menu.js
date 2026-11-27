@@ -1,7 +1,7 @@
 (function (C) {
   "use strict";
 
-  function quickMenu(node, hit, menu, options, { returnHome, resetSize, mute, applyPreset, presets, reloadPack, notice, openSettings }) {
+  function quickMenu(node, hit, menu, options, { returnHome, resetSize, mute, applyPreset, presets, reloadPack, notice, openSettings, onOpen }) {
     const doc = document, signal = options.signal;
     let width = 0, height = 0;
     function canWrite() { return doc.documentElement.hasAttribute("data-sysopen"); }
@@ -12,6 +12,7 @@
       rebuild();
       menu.hidden = false;
       measure();
+      onOpen?.();
       hit.setAttribute("aria-expanded", "true");
       menu.querySelector("button")?.focus({ preventScroll: true });
     }

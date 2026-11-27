@@ -123,13 +123,15 @@ func TestCompanionVrmBrowser(t *testing.T) {
 	}
 }
 
-// TestCompanionVrmRailDockBrowser verifies the left-rail bottom VRM dock
+// TestCompanionVrmRailDockBrowser verifies the bottom-left dedicated VRM dock
 // layout with a long scrollable session list and pending unregistered
-// workspaces: zero dead-zone occlusion at the bottom of #rlist, clean layout
-// when details.rws-unreg opens below #rail-companion-slot, complete hide+pause
-// below 1600px (1440px 2-col and 720px 1-col), and unclipped FX badges and
-// context menu in document.body. Optional WS_COMPANION_RAIL_QA_SHOTS (absolute
-// dir) writes the 4 visual QA PNGs.
+// workspaces: .rail-session-panel terminates cleanly above #rail-companion-slot,
+// #rail-companion-slot sits flush at the bottom-left viewport edge with 0px
+// vertical shift when details.rws-unreg opens/closes, dark and light tonal
+// separation stays borderless, complete hide+pause below 1600px (1440px 2-col
+// and 720px 1-col), responsive slot width resizing (220px-360px), and unclipped
+// FX badges, hover gear control, and quick menu in document.body. Optional
+// WS_COMPANION_RAIL_QA_SHOTS (absolute dir) writes the 4 visual QA PNGs.
 func TestCompanionVrmRailDockBrowser(t *testing.T) {
 	if os.Getenv("WS_PLAYWRIGHT_MODULE") == "" {
 		t.Skip("set WS_PLAYWRIGHT_MODULE to use cached Chromium")

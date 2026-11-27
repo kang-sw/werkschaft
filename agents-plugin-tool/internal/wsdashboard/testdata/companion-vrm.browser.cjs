@@ -205,7 +205,9 @@ async function saveDockShot(page, name) {
           slotRect: rectOf(slot),
           hitRect: rectOf(hit),
           rlistRect: rectOf(rlist),
-          belowRect: rectOf(unreg || rfoot),
+          railRect: rectOf(document.getElementById('rail')),
+          panelRect: rectOf(document.querySelector('#rail .rail-session-panel')),
+          aboveRect: rectOf(rfoot || unreg),
           unregInsideRlist: !!(unreg && rlist && rlist.contains(unreg)),
           stage: window.WsCompanion.debugStage()
         };
@@ -225,8 +227,12 @@ async function saveDockShot(page, name) {
         `unexpected rail slot rect: ${JSON.stringify(visuals.slotRect)}`);
       assert.ok(visuals.slotRect.top >= visuals.rlistRect.bottom - 1,
         `slot (${JSON.stringify(visuals.slotRect)}) must sit below #rlist (${JSON.stringify(visuals.rlistRect)})`);
-      assert.ok(visuals.slotRect.bottom <= visuals.belowRect.top + 1,
-        `slot (${JSON.stringify(visuals.slotRect)}) must sit above unreg/footer (${JSON.stringify(visuals.belowRect)})`);
+      assert.ok(visuals.panelRect && visuals.slotRect.top >= visuals.panelRect.bottom - 1,
+        `slot (${JSON.stringify(visuals.slotRect)}) must sit below .rail-session-panel (${JSON.stringify(visuals.panelRect)})`);
+      assert.ok(visuals.aboveRect && visuals.slotRect.top >= visuals.aboveRect.bottom - 1,
+        `slot (${JSON.stringify(visuals.slotRect)}) must sit below unreg/footer (${JSON.stringify(visuals.aboveRect)})`);
+      assert.ok(visuals.railRect && Math.abs(visuals.slotRect.bottom - visuals.railRect.bottom) <= 1,
+        `slot (${JSON.stringify(visuals.slotRect)}) must sit flush at #rail bottom (${JSON.stringify(visuals.railRect)})`);
       assert.ok(Math.abs(visuals.hitRect.left - visuals.slotRect.left) <= 2 &&
         Math.abs(visuals.hitRect.bottom - visuals.slotRect.bottom) <= 2 &&
         Math.abs(visuals.hitRect.width - visuals.slotRect.width) <= 2 &&
