@@ -62,6 +62,9 @@ type LeadOptions struct {
 	Effort          string
 	PermissionMode  string
 	PluginIsolation string
+	// AccountSlotID selects the harness account slot for the new lead (empty
+	// uses the harness's active default slot). Additive T0 field.
+	AccountSlotID string
 	// Common intent is transient; selection is stored separately from Record.
 	PermissionLevel   PermissionLevel
 	PermissionFullAck bool

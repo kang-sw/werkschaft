@@ -81,6 +81,16 @@ type Record struct {
 	// Additive top-level member on Record; preserved as unknown by older
 	// daemons (T0).
 	PendingCompaction *PendingCompaction `json:"pending_compaction,omitempty"`
+	// AccountSlotID is the account slot bound to this conversation's process
+	// launches (empty normalizes to the harness's implicit default slot).
+	// Additive top-level member on Record; preserved as unknown by older
+	// daemons (T0).
+	AccountSlotID string `json:"account_slot_id,omitempty"`
+	// PendingAccountSlotID queues a deferred account slot switch applied at
+	// the next compaction or /clear boundary via forced cold-restart (D6).
+	// Additive top-level member on Record; preserved as unknown by older
+	// daemons (T0).
+	PendingAccountSlotID string `json:"pending_account_slot,omitempty"`
 	// PermissionMode is the permission mode the next process launches in.
 	PermissionMode string `json:"permission_mode,omitempty"`
 	// AgyBypass is ws-side approval intent; PermissionMode stays native.

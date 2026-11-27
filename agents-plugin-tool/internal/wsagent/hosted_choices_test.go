@@ -17,8 +17,8 @@ import (
 func emptyHostedChoices(t *testing.T) {
 	t.Helper()
 	codexChoices.Lock()
-	cm, ce := codexChoices.models, codexChoices.efforts
-	codexChoices.models, codexChoices.efforts = nil, nil
+	savedCodex := codexChoices.byHome
+	codexChoices.byHome = nil
 	codexChoices.Unlock()
 	agyChoices.mu.Lock()
 	am, ae := agyChoices.models, agyChoices.efforts
@@ -26,12 +26,21 @@ func emptyHostedChoices(t *testing.T) {
 	agyChoices.mu.Unlock()
 	t.Cleanup(func() {
 		codexChoices.Lock()
-		codexChoices.models, codexChoices.efforts = cm, ce
+		codexChoices.byHome = savedCodex
 		codexChoices.Unlock()
 		agyChoices.mu.Lock()
 		agyChoices.models, agyChoices.efforts = am, ae
 		agyChoices.mu.Unlock()
 	})
+}
+
+func expireCodexChoicesForTest() {
+	codexChoices.Lock()
+	defer codexChoices.Unlock()
+	for k, entry := range codexChoices.byHome {
+		entry.at = time.Now().Add(-choicesTTL)
+		codexChoices.byHome[k] = entry
+	}
 }
 
 const syntheticCodexCache = `{
@@ -290,9 +299,7 @@ func TestHostedCodexSessionReportExpiresAndIsReplaced(t *testing.T) {
 	if got := first(); got != "report-two" {
 		t.Fatalf("a newer report replaces it: %s", got)
 	}
-	codexChoices.Lock()
-	codexChoices.at = time.Now().Add(-choicesTTL)
-	codexChoices.Unlock()
+	expireCodexChoicesForTest()
 	if got := first(); got != "file-model" {
 		t.Fatalf("an expired report answers nothing: %s", got)
 	}
@@ -313,9 +320,7 @@ func TestHostedCodexChoicesFollowTheCacheFile(t *testing.T) {
 	if h := harnessByName(t, s.Choices(context.Background()), BackendCodex); len(h.Models) != 1 || h.Models[0].ID != "old-report" {
 		t.Fatalf("fresh report: %+v", h)
 	}
-	codexChoices.Lock()
-	codexChoices.at = time.Now().Add(-choicesTTL)
-	codexChoices.Unlock()
+	expireCodexChoicesForTest()
 	if h := harnessByName(t, s.Choices(context.Background()), BackendCodex); h.Error != "" || len(h.Models) != 1 || h.Models[0].ID != "new-cli" {
 		t.Fatalf("expired report must show the rewritten file: %+v", h)
 	}

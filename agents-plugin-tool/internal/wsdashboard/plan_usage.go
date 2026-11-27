@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsmeta"
 )
@@ -43,9 +44,11 @@ type planUsageEntry struct {
 type planUsageStore struct {
 	mu          sync.Mutex
 	queryMu     sync.Mutex
-	dir, home   string
-	meta        *wsmeta.Store
-	getenv      func(string) string
+	dir, home    string
+	explicitHome string
+	accountSlots *wscred.AccountSlotRegistry
+	meta         *wsmeta.Store
+	getenv       func(string) string
 	claude, gpt planUsageEntry
 	lastQuery   time.Time
 	// lastSaved holds the last successfully written cache bytes (legacy JSON),
@@ -382,8 +385,32 @@ func readUsageJSON(path string, out any) bool {
 	return err == nil && json.Unmarshal(raw, out) == nil
 }
 func (s *planUsageStore) configHome(key, fallback string) string {
-	if p := s.getenv(key); p != "" {
-		return p
+	harness := ""
+	switch key {
+	case "CODEX_HOME":
+		harness = "codex"
+	case "CLAUDE_CONFIG_DIR":
+		harness = "claude"
+	}
+	if harness != "" {
+		var slotDir string
+		if s.accountSlots != nil {
+			slotDir = s.accountSlots.ActiveSlot(harness).ConfigDir
+		}
+		if resolved := wscred.ResolveHarnessHome(wscred.HarnessHomeOptions{
+			Harness:       harness,
+			ExplicitHome:  s.explicitHome,
+			SlotConfigDir: slotDir,
+			Getenv:        s.getenv,
+			UserHomeDir:   func() (string, error) { return s.home, nil },
+		}); resolved != "" {
+			return resolved
+		}
+	}
+	if s.getenv != nil {
+		if p := s.getenv(key); p != "" {
+			return p
+		}
 	}
 	return filepath.Join(s.home, fallback)
 }

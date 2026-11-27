@@ -23,8 +23,52 @@ type codexWire struct {
 }
 
 type codexError struct {
+	Code    *int            `json:"code,omitempty"`
 	Message string          `json:"message"`
 	Info    json.RawMessage `json:"codexErrorInfo"`
+}
+
+// CodexRPCError preserves a Codex app-server JSON-RPC error's numeric code and
+// codexErrorInfo alongside its message so callers (such as 2a -> 2b fallback
+// triggers) can match exact error signatures rather than message substrings.
+type CodexRPCError struct {
+	Code    int
+	HasCode bool
+	Message string
+	Info    string
+	RawInfo json.RawMessage
+}
+
+func (e *CodexRPCError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Message != "" {
+		return e.Message
+	}
+	if e.Info != "" {
+		return e.Info
+	}
+	if e.HasCode {
+		return fmt.Sprintf("codex rpc error %d", e.Code)
+	}
+	return "codex rpc error"
+}
+
+func codexErrorToRPC(err *codexError) *CodexRPCError {
+	if err == nil {
+		return nil
+	}
+	out := &CodexRPCError{
+		Message: err.Message,
+		Info:    rawString(err.Info),
+		RawInfo: slices.Clone(err.Info),
+	}
+	if err.Code != nil {
+		out.Code = *err.Code
+		out.HasCode = true
+	}
+	return out
 }
 
 type codexTurn struct {
@@ -145,6 +189,8 @@ type codexMapper struct {
 	limits  []wslive.UsageLimit
 	// now overrides wall time (epoch ms) for deterministic tests; nil uses time.Now.
 	now func() int64
+	// codexHome scopes model/list reports to the process's resolved CODEX_HOME.
+	codexHome string
 }
 
 // codexNativeSeenCap bounds the remembered subAgentActivity ids; an id
@@ -331,6 +377,7 @@ func (m *codexMapper) response(msg codexWire, replies lineReplies, now int64) []
 	answer := controlAnswer{ok: msg.Error == nil, body: msg.Result}
 	if msg.Error != nil {
 		answer.err = msg.Error.Message
+		answer.errVal = codexErrorToRPC(msg.Error)
 	}
 	var out []Event
 	if answer.ok {
@@ -377,7 +424,7 @@ func (m *codexMapper) response(msg codexWire, replies lineReplies, now int64) []
 				out = append(out, Event{PermissionMode: mode})
 			}
 		case "models":
-			codexModels(msg.Result)
+			codexModelsForHome(m.codexHome, msg.Result)
 		case "recover":
 			out = m.recover(msg.Result, now)
 		case "control":
@@ -581,8 +628,11 @@ func (m *codexMapper) endTurn(turn codexTurn, now int64) []Event {
 		end.TurnReason = wslive.TurnAborted
 	case "failed":
 		end.TurnError = "Codex turn failed"
-		if turn.Error != nil && turn.Error.Message != "" {
-			end.TurnError = turn.Error.Message
+		if turn.Error != nil {
+			end.TurnErrorVal = codexErrorToRPC(turn.Error)
+			if turn.Error.Message != "" {
+				end.TurnError = turn.Error.Message
+			}
 		}
 	}
 	if m.compact {
@@ -740,10 +790,15 @@ func (m *codexMapper) codexAlert(err *codexError, now int64) []Event {
 	return []Event{{Alert: &wslive.Notice{Kind: kind, Text: err.Message, ResetsAt: resetsAt}}}
 }
 
-// codexModels keeps only the harness's advertised choices, including the
-// union of visible models' effort values. Opening a dashboard never probes
-// an account or creates a thread just to populate these lists.
+// codexModels keeps only the harness's advertised choices for the default
+// resolved CODEX_HOME, including the union of visible models' effort values.
+// Opening a dashboard never probes an account or creates a thread just to
+// populate these lists.
 func codexModels(raw json.RawMessage) {
+	codexModelsForHome("", raw)
+}
+
+func codexModelsForHome(home string, raw json.RawMessage) {
 	var r struct {
 		Data []struct {
 			Model   string `json:"model"`
@@ -770,9 +825,13 @@ func codexModels(raw json.RawMessage) {
 			}
 		}
 	}
+	key := normalizeCodexHomeKey(home)
 	codexChoices.Lock()
 	defer codexChoices.Unlock()
-	codexChoices.models, codexChoices.efforts, codexChoices.at = models, efforts, time.Now()
+	if codexChoices.byHome == nil {
+		codexChoices.byHome = map[string]codexChoiceEntry{}
+	}
+	codexChoices.byHome[key] = codexChoiceEntry{models: models, efforts: efforts, at: time.Now()}
 }
 
 func codexUsage(raw json.RawMessage) *wslive.UsageContext {

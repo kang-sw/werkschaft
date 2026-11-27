@@ -72,6 +72,9 @@ func discoverWerkSkills(spec StartSpec) []werk.Skill {
 		home, _ = os.UserHomeDir()
 	}
 	home = werkSkillAnchor(home)
+	// Intentionally ambient/default-home only: werk discovers user skills from
+	// the process's ambient CODEX_HOME / CLAUDE_CONFIG_DIR rather than external
+	// CLI account slots.
 	codex := werkSkillConfigDir(vars["CODEX_HOME"], ".codex", home, cwd)
 	plugins, bundled := readWerkCodexConfig(codex.join("config.toml"))
 	bundledRoot := werkSkillRoot{codex.join("skills", ".system"), "", false}

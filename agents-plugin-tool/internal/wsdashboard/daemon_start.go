@@ -235,6 +235,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		} else {
 			d.planUsage = newPlanUsageStore(opts.Dir, home, getenv)
 		}
+		d.planUsage.explicitHome = opts.Home
 		d.planUsage.resolveAgy = opts.AgyCommand
 		d.planUsage.harnesses = opts.Harnesses
 	}

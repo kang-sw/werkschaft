@@ -489,11 +489,12 @@ func TestCodexCompactionRequiresNativeCompletion(t *testing.T) {
 
 func TestCodexModelsSyntheticAdvertisedEfforts(t *testing.T) {
 	codexChoices.Lock()
-	models, efforts := codexChoices.models, codexChoices.efforts
+	saved := codexChoices.byHome
+	codexChoices.byHome = nil
 	codexChoices.Unlock()
 	t.Cleanup(func() {
 		codexChoices.Lock()
-		codexChoices.models, codexChoices.efforts = models, efforts
+		codexChoices.byHome = saved
 		codexChoices.Unlock()
 	})
 	codexModels(json.RawMessage(`{"data":[{"model":"visible-a","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}]},{"model":"hidden","hidden":true,"supportedReasoningEfforts":[{"reasoningEffort":"hidden-only"}]},{"model":"visible-b","supportedReasoningEfforts":[{"reasoningEffort":"high"},{"reasoningEffort":"xhigh"},{"reasoningEffort":""}]},{"model":"plain"},{"model":"","supportedReasoningEfforts":[{"reasoningEffort":"invalid"}]}]}`))

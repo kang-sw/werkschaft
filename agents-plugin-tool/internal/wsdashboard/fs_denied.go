@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
@@ -56,6 +57,9 @@ func deniedBasePaths(homes []string) []string {
 		for _, base := range providerCredentialBases(filepath.Join(home, ".cache", wsstate.DefaultCacheDirName)) {
 			add(base)
 		}
+		if slotsRoot, err := wscred.DefaultSlotsRoot(filepath.Join(home, ".cache", wsstate.DefaultCacheDirName)); err == nil {
+			add(slotsRoot)
+		}
 	}
 	// Use the daemon's own resolver, including WS_CACHE_HOME relocation.
 	if dir, err := Dir(""); err == nil {
@@ -63,6 +67,17 @@ func deniedBasePaths(homes []string) []string {
 	}
 	for _, base := range providerCredentialBases("") {
 		add(base)
+	}
+	if slotsRoot, err := wscred.DefaultSlotsRoot(""); err == nil {
+		add(slotsRoot)
+	}
+	// Every registered account slot config_dir (including user-supplied paths
+	// outside the managed slots root) and its credential files are blocked from
+	// child fs.* access. Served from memory (zero disk I/O).
+	for _, slotDir := range wscred.RegisteredSlotDirs() {
+		add(slotDir)
+		add(filepath.Join(slotDir, "auth.json"))
+		add(filepath.Join(slotDir, ".credentials.json"))
 	}
 	for _, key := range []string{"GH_CONFIG_DIR", "AWS_SHARED_CREDENTIALS_FILE", "AWS_CONFIG_FILE"} {
 		add(os.Getenv(key))
