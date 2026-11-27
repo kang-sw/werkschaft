@@ -387,7 +387,7 @@ func (c *conv) maybePark() bool {
 		r.mu.Unlock()
 		return false
 	}
-	if !c.parkEligibleLocked() || r.convs[c.rec.ReplyID] != c || r.hasOpenChildLocked(c.rec.ReplyID) {
+	if !c.parkEligibleLocked() || r.convs[c.rec.ReplyID] != c || r.unparking[c.rec.ReplyID] != nil || r.hasOpenChildLocked(c.rec.ReplyID) {
 		c.mu.Unlock()
 		r.mu.Unlock()
 		return false

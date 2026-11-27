@@ -121,6 +121,23 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 	if info, err := wsstate.Stat(root); err != nil || !info.IsDir() {
 		return State{}, badRequest("root %s is not a directory", root)
 	}
+	// For direct Runner.Spawn with a parent (not already width-reserved by
+	// AgentSpawn), reserve the parent's in-flight spawn slot before taking
+	// worktree reservations or holdParentAdmission (selection.admission.RLock):
+	// waiting on <-r.expiring[parent] while holding selection.admission.RLock
+	// would deadlock against a concurrent SetPermissionLevel on the expiring
+	// parent's loop.
+	var releaseDirectParent func()
+	var claimParent func()
+	if spawn != nil && spawn.Parent != nil && spawn.claimWidth == nil {
+		claim, release, err := r.reserveParentSpawn(*spawn.Parent)
+		if err != nil {
+			return State{}, err
+		}
+		claimParent = claim
+		releaseDirectParent = release
+		defer releaseDirectParent()
+	}
 	// Every path that opens a conversation (agent.spawn, pi.spawn, a lead)
 	// holds the worktree's shared release reservation until the conversation
 	// is registered, so worktree.release cannot check for bound children in
@@ -216,17 +233,6 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		if err := authorizePermission(r.legacyLeadPermission(base), lead.PermissionLevel, lead.permissionUser, lead.PermissionFullAck); err != nil {
 			return State{}, err
 		}
-	}
-	var releaseDirectParent func()
-	var claimParent func()
-	if spawn != nil && spawn.Parent != nil && spawn.claimWidth == nil {
-		claim, release, err := r.reserveParentSpawn(*spawn.Parent)
-		if err != nil {
-			return State{}, err
-		}
-		claimParent = claim
-		releaseDirectParent = release
-		defer releaseDirectParent()
 	}
 	releaseDurableCreation := func() {}
 	if r.durableProcess(rp.Definition.Backend) {

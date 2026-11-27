@@ -893,7 +893,7 @@ func TestResidentMailWatchDoesNotLeakOnRapidCloseOrPark(t *testing.T) {
 		}
 	})
 
-	t.Run("rapid maybePark while Mail.Watch is in flight during unpark", func(t *testing.T) {
+	t.Run("maybePark defers while unparkWithGen is in flight so re-park installs working parked watch", func(t *testing.T) {
 		watchEntered := make(chan struct{})
 		watchRelease := make(chan struct{})
 		var watchCount atomic.Int32
@@ -918,23 +918,160 @@ func TestResidentMailWatchDoesNotLeakOnRapidCloseOrPark(t *testing.T) {
 			return rec.LastTurn != nil && !rec.TurnOpen
 		})
 		h.asleep(a)
+		eventually(t, "child parked", func() bool {
+			active, _, _ := mail.counts()
+			return h.runner.isParked(a) && !h.runner.residentConv(a) && active == 1
+		})
+
+		unparkDone := make(chan *conv, 1)
+		go func() { unparkDone <- h.runner.unpark(a) }()
+
+		wait(t, "unpark resident Mail.Watch entered", watchEntered)
+		// While unparkWithGen holds r.unparking[a], maybePark must NOT park the
+		// child prematurely (which would cause watchParked to skip watch install).
+		time.Sleep(60 * time.Millisecond)
+		if h.runner.isParked(a) || !h.runner.residentConv(a) {
+			t.Fatal("child re-parked while unparkWithGen still held r.unparking[a]")
+		}
+		close(watchRelease)
+		if got := <-unparkDone; got == nil {
+			t.Fatal("unpark returned nil")
+		}
+
+		// Once unparkWithGen clears r.unparking[a], the idle child parks cleanly,
+		// stops its resident Mail.Watch, and installs a working parked watch.
+		eventually(t, "child re-parked with working parked watch", func() bool {
+			parkedActive, _, cbs := mail.counts()
+			return h.runner.isParked(a) && !h.runner.residentConv(a) && parkedActive == 1 && len(cbs) >= 2
+		})
+		resActive, resStopped := mail.residentCounts()
+		if resActive != 0 || resStopped < 2 {
+			t.Fatalf("resident watches after deferred re-park: active=%d stopped=%d, want active=0 stopped>=2", resActive, resStopped)
+		}
+
+		// Firing the newly installed parked watch must wake the child back to resident.
+		_, _, cbs := mail.counts()
+		cbs[len(cbs)-1]()
+		eventually(t, "parked watch woke re-parked child", func() bool {
+			return h.runner.residentConv(a) && !h.runner.isParked(a)
+		})
+	})
+
+	t.Run("rapid Close while unpark Mail.Watch is in flight", func(t *testing.T) {
+		watchEntered := make(chan struct{})
+		watchRelease := make(chan struct{})
+		var watchCount atomic.Int32
+
+		mail := &fakeParkedMailWatcher{
+			onWatch: func() {
+				if watchCount.Add(1) == 2 {
+					close(watchEntered)
+					<-watchRelease
+				}
+			},
+		}
+		h, _ := agentHarness(t, func(o *Options) {
+			o.ParkIdleChildren = true
+			o.Mail = mail
+		})
+		a, ap := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "work", Tier: "small", Authority: "read-only"})
+		ap.reply("done 1")
+		eventually(t, "turn 1 settled", func() bool {
+			rec := h.record(a)
+			return rec.LastTurn != nil && !rec.TurnOpen
+		})
+		h.asleep(a)
 		eventually(t, "child parked", func() bool { return h.runner.isParked(a) && !h.runner.residentConv(a) })
 
 		unparkDone := make(chan *conv, 1)
 		go func() { unparkDone <- h.runner.unpark(a) }()
 
 		wait(t, "unpark resident Mail.Watch entered", watchEntered)
-		// While unpark's Watch is blocked, the child is already idle and eligible
-		// to park again on the next heartbeat.
-		eventually(t, "child re-parked before Watch returned", func() bool {
-			return h.runner.isParked(a) && !h.runner.residentConv(a)
-		})
+		if _, err := h.runner.CloseConversation(a); err != nil {
+			t.Fatal(err)
+		}
 		close(watchRelease)
 		<-unparkDone
 
 		active, stopped := mail.residentCounts()
-		if active != 0 || stopped < 2 {
-			t.Fatalf("resident watches after rapid park: active=%d stopped=%d, want active=0 stopped>=2", active, stopped)
+		if active != 0 || stopped != 2 {
+			t.Fatalf("resident watches after rapid unpark+close: active=%d stopped=%d, want active=0 stopped=2", active, stopped)
 		}
 	})
+}
+
+// TestDirectSpawnSetPermissionLevelAndExpiryNoDeadlock verifies that direct
+// Runner.Spawn reserves its parent slot (waiting on <-r.expiring[parent])
+// BEFORE acquiring holdParentAdmission (selection.admission.RLock). Otherwise
+// a concurrent SetPermissionLevel on the expiring parent's loop blocks on
+// selection.admission.Lock while expiry waits for the parent's loop to close
+// the barrier — a 3-way deadlock.
+func TestDirectSpawnSetPermissionLevelAndExpiryNoDeadlock(t *testing.T) {
+	clk := newTestClock()
+	var ranOnce atomic.Bool
+	var h *harness
+	var rootID string
+	spawnEntered := make(chan struct{})
+	spawnErr := make(chan error, 1)
+	setPermErr := make(chan error, 1)
+
+	h, _ = agentHarness(t, func(o *Options) {
+		o.Now = clk.Now
+		o.ChildWaitingDays = 2
+		o.beforeExpiryNodeClose = func(nodeID string) {
+			if nodeID == rootID && ranOnce.CompareAndSwap(false, true) {
+				parentRec := h.record(rootID)
+				parentRef := ParentRef{Kind: ParentConversation, ReplyID: rootID}
+				go func() {
+					close(spawnEntered)
+					_, err := h.runner.Spawn(SpawnSpec{
+						Profile:         parentRec.Profile,
+						Root:            parentRec.Root,
+						Prompt:          "raced direct spawn",
+						Parent:          &parentRef,
+						PermissionLevel: PermissionReadOnly,
+					})
+					spawnErr <- err
+				}()
+				wait(t, "raced direct Spawn started", spawnEntered)
+				// Let direct Spawn enter reserveParentSpawn and block on r.expiring[rootID].
+				time.Sleep(25 * time.Millisecond)
+
+				// Run SetPermissionLevel synchronously while r.expiring[rootID] is held
+				// and direct Spawn is blocked waiting for it. If direct Spawn held
+				// selection.admission.RLock across <-r.expiring[rootID], this would
+				// deadlock permanently against rootID's loop.
+				setPermDone := make(chan struct{})
+				go func() {
+					_, err := h.runner.SetPermissionLevel(rootID, PermissionReadOnly)
+					setPermErr <- err
+					close(setPermDone)
+				}()
+				wait(t, "SetPermissionLevel completed while expiry barrier held", setPermDone)
+			}
+		}
+	})
+
+	a, ap := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "work", Tier: "small", Authority: "workdir-write"})
+	ap.reply("done")
+	eventually(t, "turn settled", func() bool {
+		rec := h.record(a)
+		return rec.LastTurn != nil && !rec.TurnOpen
+	})
+	h.asleep(a)
+	rootID = a
+	clk.advance(3 * day)
+
+	if deleted := h.runner.expire(a); !deleted {
+		t.Fatal("expected expiry to complete after SetPermissionLevel")
+	}
+	if err := <-setPermErr; err != nil {
+		t.Fatalf("SetPermissionLevel during expiry barrier: %v", err)
+	}
+	if err := <-spawnErr; !errors.Is(err, errClosed) {
+		t.Fatalf("raced direct Runner.Spawn error = %v, want errClosed", err)
+	}
+	if kids := h.runner.descendants(a); len(kids) != 0 {
+		t.Fatalf("closed parent %s has live descendants: %v", a, kids)
+	}
 }
