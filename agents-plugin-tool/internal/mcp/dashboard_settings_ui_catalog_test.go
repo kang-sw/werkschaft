@@ -146,13 +146,13 @@ func TestDashboardSettingsUICatalogTierRoutingSection(t *testing.T) {
 
 // catalogSurfaces lists the values a catalog row's optional surface field may
 // take. An absent surface means the settings panel.
-var catalogSurfaces = []string{"companion-modal", "deprecated"}
+var catalogSurfaces = []string{"deprecated"}
 
 func validCatalogSurface(surface string) bool { return slices.Contains(catalogSurfaces, surface) }
 
 func TestDashboardSettingsUICatalogSurface(t *testing.T) {
-	if !validCatalogSurface("companion-modal") || !validCatalogSurface("deprecated") || validCatalogSurface("") || validCatalogSurface("panel") || validCatalogSurface("Companion-Modal") {
-		t.Fatal("surface validation must accept only companion-modal and deprecated")
+	if !validCatalogSurface("deprecated") || validCatalogSurface("companion-modal") || validCatalogSurface("") || validCatalogSurface("panel") || validCatalogSurface("Deprecated") {
+		t.Fatal("surface validation must accept only deprecated")
 	}
 	raw, err := os.ReadFile("../wsdashboard/assets/dashboard-settings-catalog.json")
 	if err != nil {
@@ -162,38 +162,33 @@ func TestDashboardSettingsUICatalogSurface(t *testing.T) {
 	if err := json.Unmarshal(raw, &ui); err != nil {
 		t.Fatal(err)
 	}
-	var modal []string
+	var panelCompanion []string
 	for _, row := range ui {
-		if row.Surface == "companion-modal" {
-			modal = append(modal, row.Key)
-			if row.Section != "companion" {
-				t.Errorf("%s: companion-modal row left the companion section: %s", row.Key, row.Section)
-			}
-		} else if row.Key == "dashboard.companion_mode" || row.Key == wsconfig.ItemAgentTierAliases {
+		if row.Key == "dashboard.companion_mode" || row.Key == wsconfig.ItemAgentTierAliases {
 			if row.Surface != "deprecated" {
 				t.Errorf("%s is a deprecated alias and must be hidden from the panel, surface %q", row.Key, row.Surface)
 			}
 		} else if row.Surface == "deprecated" {
 			t.Errorf("%s: unexpected deprecated surface", row.Key)
-		} else if strings.HasPrefix(row.Key, "dashboard.companion_") && row.Surface != "" {
-			t.Errorf("%s: unexpected surface %q", row.Key, row.Surface)
+		} else if strings.HasPrefix(row.Key, "dashboard.companion_") {
+			if row.Surface != "" {
+				t.Errorf("%s: companion settings must render on the settings panel, surface %q", row.Key, row.Surface)
+			}
+			if row.Section != "companion" {
+				t.Errorf("%s: companion row left the companion section: %s", row.Key, row.Section)
+			}
+			panelCompanion = append(panelCompanion, row.Key)
 		}
 	}
 	want := []string{
 		"dashboard.companion_agent_cooldown_seconds", "dashboard.companion_agent_hourly_cap",
-		"dashboard.companion_attachments", "dashboard.companion_eyes", "dashboard.companion_hair",
-		"dashboard.companion_outfit", "dashboard.companion_pack", "dashboard.companion_palette",
-		"dashboard.companion_preset", "dashboard.companion_sources",
+		"dashboard.companion_attachments", "dashboard.companion_director", "dashboard.companion_enabled",
+		"dashboard.companion_eyes", "dashboard.companion_hair", "dashboard.companion_outfit",
+		"dashboard.companion_pack", "dashboard.companion_palette", "dashboard.companion_preset",
+		"dashboard.companion_sources",
 	}
-	slices.Sort(modal)
-	if !slices.Equal(modal, want) {
-		t.Fatalf("companion-modal rows = %v, want %v", modal, want)
-	}
-	for _, key := range []string{"dashboard.companion_enabled", "dashboard.companion_director"} {
-		for _, row := range ui {
-			if row.Key == key && row.Surface != "" {
-				t.Errorf("%s must stay on the settings panel, surface %q", key, row.Surface)
-			}
-		}
+	slices.Sort(panelCompanion)
+	if !slices.Equal(panelCompanion, want) {
+		t.Fatalf("panel companion rows = %v, want %v", panelCompanion, want)
 	}
 }

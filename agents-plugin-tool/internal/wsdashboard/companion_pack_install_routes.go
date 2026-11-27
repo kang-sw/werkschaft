@@ -185,11 +185,8 @@ func (d *Daemon) handleCompanionImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// An import click may download the external packs its marketplace lists,
-	// but nothing is fetched while the companion is off.
+	// even while companion display is off so users can prepare packs beforehand.
 	plan.external = func(entry companionMarketplaceEntry, inflate *companionInflate) (*companionArchive, error) {
-		if !d.companion.current().config.Enabled {
-			return nil, errors.New("turn the companion on to download external packs")
-		}
 		return d.companionFetch.fetchPack(r.Context(), entry, inflate)
 	}
 	result, err := d.companionPacks.install(d.companionOptions(), plan, ids, false)

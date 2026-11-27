@@ -1,7 +1,7 @@
 (function (C) {
   "use strict";
 
-  function quickMenu(node, hit, menu, options, { returnHome, resetSize, mute, applyPreset, presets, reloadPack, notice }) {
+  function quickMenu(node, hit, menu, options, { returnHome, resetSize, mute, applyPreset, presets, reloadPack, notice, openSettings }) {
     const doc = document, signal = options.signal;
     let width = 0, height = 0;
     function canWrite() { return doc.documentElement.hasAttribute("data-sysopen"); }
@@ -61,6 +61,7 @@
       action("js.companion.return_home", returnHome);
       action("js.companion.reset_size", resetSize);
       action("js.companion.hide", mute);
+      if (openSettings) action("js.companion.settings", () => { close(); openSettings(hit); });
       if (canWrite()) action("js.companion.reload", reload);
       const { available, preset } = presets();
       if (available.length > 1) {

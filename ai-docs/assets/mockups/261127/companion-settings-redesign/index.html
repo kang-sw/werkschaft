@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>워크플로 설정 · 컴패니언 — Werkschaft Mockup</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <!-- Inline SVG icon sprite (self-contained, zero external requests) -->
+  <svg xmlns="http://www.w3.org/2000/svg" hidden aria-hidden="true">
+    <symbol id="i-gear" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24">
+      <path d="M12 3l2.2 5.8L20 11l-5.8 2.2L12 19l-2.2-5.8L4 11l5.8-2.2z"/>
+    </symbol>
+    <symbol id="i-cube" viewBox="0 0 24 24">
+      <path d="M12 2.8 4 7.2v9.6l8 4.4 8-4.4V7.2z"/>
+      <path d="M4 7.2 12 11.6l8-4.4"/>
+      <path d="M12 11.6v9.6"/>
+    </symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24">
+      <path d="M12 16V4"/>
+      <path d="m7 9 5-5 5 5"/>
+      <path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>
+    </symbol>
+    <symbol id="i-download" viewBox="0 0 24 24">
+      <path d="M12 4v12"/>
+      <path d="m7 11 5 5 5-5"/>
+      <path d="M4 17v1a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1"/>
+    </symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9"/>
+      <path d="M3 12h18"/>
+      <path d="M12 3a14 14 0 0 1 3.5 9 14 14 0 0 1-3.5 9 14 14 0 0 1-3.5-9A14 14 0 0 1 12 3z"/>
+    </symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24">
+      <path d="M12 3 5 6v6c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6z"/>
+      <path d="M12 9v4"/>
+      <circle cx="12" cy="16" r=".6" fill="currentColor"/>
+    </symbol>
+    <symbol id="i-palette" viewBox="0 0 24 24">
+      <path d="M12 3a9 9 0 0 0 0 18h1.5a2.5 2.5 0 0 0 0-5H12a1.5 1.5 0 0 1 0-3h4a5 5 0 0 0 5-5 5 5 0 0 0-9-5z"/>
+      <circle cx="7.5" cy="10.5" r="1" fill="currentColor"/>
+      <circle cx="10.5" cy="7.5" r="1" fill="currentColor"/>
+      <circle cx="15" cy="7.5" r="1" fill="currentColor"/>
+    </symbol>
+    <symbol id="i-archive" viewBox="0 0 24 24">
+      <rect x="3" y="4" width="18" height="4" rx="1"/>
+      <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/>
+      <path d="M10 12h4"/>
+    </symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24">
+      <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/>
+      <path d="M3 3v5h5"/>
+    </symbol>
+    <symbol id="i-home" viewBox="0 0 24 24">
+      <path d="M3 10.5 12 3l9 7.5"/>
+      <path d="M5 9.5V20h14V9.5"/>
+    </symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24">
+      <path d="M21 12a9 9 0 0 0-15.5-6.3L3 8"/>
+      <path d="M3 3v5h5"/>
+      <path d="M3 12a9 9 0 0 0 15.5 6.3L21 16"/>
+      <path d="M16 16h5v5"/>
+    </symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24">
+      <path d="M3 6h18"/>
+      <path d="M8 6V4h8v2"/>
+      <path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/>
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 24 24">
+      <path d="M5 13l4 4L19 7"/>
+    </symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24">
+      <path d="m6 9 6 6 6-6"/>
+    </symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24">
+      <path d="M4 7h16"/>
+      <path d="M4 17h16"/>
+      <circle cx="9" cy="7" r="2.2" fill="var(--wb-card)"/>
+      <circle cx="15" cy="17" r="2.2" fill="var(--wb-card)"/>
+    </symbol>
+    <symbol id="i-book" viewBox="0 0 24 24">
+      <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v18H6.5A2.5 2.5 0 0 1 4 18.5z"/>
+      <path d="M4 18.5A2.5 2.5 0 0 1 6.5 16H20"/>
+    </symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="4"/>
+      <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>
+    </symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24">
+      <path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>
+    </symbol>
+    <symbol id="i-info" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9"/>
+      <path d="M12 10v6"/>
+      <circle cx="12" cy="7.2" r=".7" fill="currentColor"/>
+    </symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24">
+      <rect x="5" y="11" width="14" height="9" rx="2"/>
+      <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+    </symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24">
+      <path d="M12 5v14M5 12h14"/>
+    </symbol>
+  </svg>
+
+  <div class="mock-shell">
+    <!-- Subtle Preview Control Bar (for reviewers testing states & themes) -->
+    <div class="preview-bar" role="region" aria-label="목업 프리뷰 제어">
+      <div class="preview-left">
+        <span class="preview-tag">INTERACTIVE MOCKUP</span>
+        <span class="preview-title">컴패니언 설정 통합 리디자인</span>
+      </div>
+      <div class="preview-controls">
+        <div class="seg preview-seg" role="group" aria-label="초기 상태 시나리오" data-preview-scenario>
+          <button type="button" data-scenario="vrm-installed" aria-pressed="true">VRM 설치됨</button>
+          <button type="button" data-scenario="fresh-no-vrm" aria-pressed="false">VRM 미설치 초기 상태</button>
+        </div>
+        <div class="seg preview-seg" role="group" aria-label="테마 전환" data-preview-theme>
+          <button type="button" data-theme-choice="dark" aria-pressed="true">
+            <svg class="i" aria-hidden="true"><use href="#i-moon"/></svg>
+            <span>다크</span>
+          </button>
+          <button type="button" data-theme-choice="light" aria-pressed="false">
+            <svg class="i" aria-hidden="true"><use href="#i-sun"/></svg>
+            <span>라이트</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Realistic Werkschaft Dashboard Settings Frame -->
+    <main class="stage" data-settings-view aria-labelledby="settings-title">
+      <header class="shd">
+        <div class="shd-top">
+          <div class="shd-title">
+            <svg class="i" aria-hidden="true"><use href="#i-gear"/></svg>
+            <h1 id="settings-title">워크플로 설정</h1>
+            <span class="route-pill">/settings?section=companion</span>
+          </div>
+          <div class="scope-target-pill scope-global" data-settings-target-display>
+            <span>전역</span>
+            <code title="~/.ws/config.json">~/.ws/config.json</code>
+          </div>
+        </div>
+        <nav class="prec-strip" aria-label="우선순위">
+          <strong class="prec-lbl">우선순위</strong>
+          <button type="button" class="prec-node" disabled>내장 기본값</button>
+          <span class="prec-arrow" aria-hidden="true">→</span>
+          <button type="button" class="prec-node synced" disabled>동기화 <span class="sub">예정</span></button>
+          <span class="prec-arrow" aria-hidden="true">→</span>
+          <button type="button" class="prec-node active global-mode" aria-current="page">전역</button>
+          <span class="prec-arrow" aria-hidden="true">→</span>
+          <button type="button" class="prec-node" disabled>저장소</button>
+          <span class="prec-arrow" aria-hidden="true">→</span>
+          <button type="button" class="prec-node" disabled>프로젝트</button>
+          <span class="prec-arrow" aria-hidden="true">→</span>
+          <button type="button" class="prec-node" disabled>세션</button>
+          <span class="prec-hint">컴패니언 설정은 전역 레이어에 저장됩니다</span>
+        </nav>
+      </header>
+
+      <div class="filter-bar">
+        <div class="search-wrap">
+          <input class="search-input" type="search" data-settings-search placeholder="설정 검색… (예: VRM, 디렉터, 쿨다운, 팔레트)" aria-label="설정 검색">
+        </div>
+        <div class="fchips" role="group" aria-label="설정 필터" data-settings-filters>
+          <button type="button" class="fchip" data-filter="all" aria-pressed="true">전체</button>
+          <button type="button" class="fchip" data-filter="overridden" aria-pressed="false">이 스코프의 오버라이드</button>
+          <button type="button" class="fchip" data-filter="editable" aria-pressed="false">편집 가능</button>
+        </div>
+        <span class="ov-counter" data-settings-count></span>
+      </div>
+
+      <div class="sbody">
+        <nav class="snav" data-settings-sections aria-label="설정 카테고리"></nav>
+        <section class="scontent" data-settings-content aria-live="polite"></section>
+      </div>
+    </main>
+  </div>
+
+  <!-- Toast region for non-blocking feedback -->
+  <div class="toast-region" data-toast-region aria-live="polite" aria-atomic="true"></div>
+
+  <script src="./mock-api.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

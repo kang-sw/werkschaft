@@ -89,24 +89,29 @@ func TestCompanionPackSourceRoutesGate(t *testing.T) {
 			}
 		}
 	})
-	t.Run("disabled companion fetches nothing", func(t *testing.T) {
-		f := companionSourceFixture(t, srv, false, source)
-		for _, body := range [][]byte{companionSourceBody(source), companionSourceBody(companionOfficialSource)} {
-			if w := f.post(companionSourcesRoute+"/fetch", body); w.Code != http.StatusConflict {
-				t.Errorf("fetch while disabled = %d %s, want 409", w.Code, w.Body)
+	t.Run("disabled companion allows explicit source fetch and install", func(t *testing.T) {
+		// Users can prepare packs from Dashboard Settings before enabling the companion.
+		disabledSrv := newCompanionSourceServer(t)
+		disabledSource := disabledSrv.srv.URL + "/packs.zip"
+		disabledSrv.serve("/packs.zip", companionTestZip(t, companionTestBundle(t, "", "alpha")...))
+		farZip := companionTestZip(t,
+			companionZipEntry{name: "pack.json", data: companionTestManifest("far", "stand.png", "")},
+			companionZipEntry{name: "stand.png", data: companionTestPNG(t, 8, 8)})
+		disabledSrv.serve("/far.zip", farZip)
+		f := companionSourceFixture(t, disabledSrv, false, disabledSource)
+		for _, body := range [][]byte{companionSourceBody(disabledSource), companionSourceBody(companionOfficialSource)} {
+			if w := f.post(companionSourcesRoute+"/fetch", body); w.Code != http.StatusOK {
+				t.Errorf("fetch while disabled = %d %s, want 200", w.Code, w.Body)
 			}
 		}
-		if w := f.post(companionSourcesRoute+"/install", companionSourceBody(source, "alpha")); w.Code != http.StatusConflict {
-			t.Errorf("install while disabled = %d, want 409", w.Code)
+		if w := f.post(companionSourcesRoute+"/install", companionSourceBody(disabledSource, "alpha")); w.Code != http.StatusOK {
+			t.Errorf("install while disabled = %d %s, want 200", w.Code, w.Body)
 		}
-		// A local import whose marketplace lists an external pack downloads
-		// nothing while the companion is off.
 		external := companionTestZip(t, companionZipEntry{name: "marketplace.json", data: companionTestMarket(
-			fmt.Sprintf(`{"id":"far","name":"Far","version":"1.0.0","url":%q,"sha256":%q}`, srv.srv.URL+"/far.zip", strings.Repeat("a", 64)))})
+			fmt.Sprintf(`{"id":"far","name":"Far","version":"1.0.0","url":%q,"sha256":%q}`, disabledSrv.srv.URL+"/far.zip", companionSum(farZip)))})
 		w := f.post(companionPacksRoute+"/import?name=m.zip&id=far", external)
 		result := companionRouteDecode[companionInstallResult](t, w)
-		if far := companionListed(result, "far"); w.Code != http.StatusOK || far == nil || far.Error == nil ||
-			!strings.Contains(far.Error.Message, "turn the companion on") {
+		if far := companionListed(result, "far"); w.Code != http.StatusOK || far == nil || far.Error != nil || !far.Installed {
 			t.Errorf("import of an external pack while disabled = %d %s", w.Code, w.Body)
 		}
 	})

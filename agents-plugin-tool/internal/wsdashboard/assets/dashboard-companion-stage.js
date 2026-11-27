@@ -170,7 +170,7 @@
     return svg;
   }
 
-  function mount(config, mute) {
+  function mount(config, mute, openSettings) {
     const doc = document, root = doc.documentElement, rail = doc.getElementById("rail");
     const cancel = new AbortController(), options = { signal: cancel.signal };
     const node = doc.createElement("div");
@@ -203,6 +203,14 @@
     gear.title = wsT("js.companion.settings");
     gear.setAttribute("aria-label", gear.title);
     gear.append(gearIcon(doc));
+    if (openSettings) {
+      gear.addEventListener("click", () => {
+        controls.close();
+        openSettings(gear);
+      }, options);
+    } else {
+      gear.hidden = true;
+    }
     hit.append(character, grip, gear);
     hit.hidden = true;
     const ctx = canvas.getContext("2d");
@@ -315,12 +323,11 @@
       }
       reportFocus();
       if (!menu.hidden) controls.rebuild();
-      settings?.rebuild();
       schedule();
     }, () => notice("pack_failed"));
 
     const controls = C.quickMenu(node, character, menu, options, {
-      returnHome, resetSize, mute, applyPreset, notice,
+      returnHome, resetSize, mute, applyPreset, notice, openSettings,
       presets: () => ({ available: Object.keys(model?.manifest.presets || {}), preset }),
       async reloadPack() {
         await loader.reload(cancel.signal);
@@ -341,7 +348,6 @@
         schedule();
       }
       requestPack();
-      settings.refresh();
     }
 
     // command plays an agent-director command for the shown session over the
@@ -458,20 +464,7 @@
       controls.close();
     }
 
-    const settings = C.settingsModal(node, gear, options, {
-      rows: () => window.wsCompanionModalRows,
-      config: () => currentConfig,
-      renderer: () => model?.renderer || "2d",
-      persona: () => model?.persona || null,
-      presets: () => ({ available: Object.keys(model?.manifest.presets || {}), preset }),
-      wardrobe: () => C.wardrobeOptions(model?.manifest),
-      picks: () => rig?.wardrobe() || null,
-      anchor: () => hit.getBoundingClientRect(),
-      resetSize() { if (!isVrm()) sizing.reset(); },
-      // A pack install, update, uninstall or import already reloaded the daemon's store.
-      packsChanged() { requestPack(true); },
-      applyPreset, notice
-    });
+    function packsChanged() { requestPack(true); }
 
     function isCompanionTarget(el) {
       return !!(el && el !== node && node.contains(el));
@@ -1179,6 +1172,7 @@
     requestPack();
     const api = {
       apply, reset, context, trackFrame, command, closeMenu: controls.close,
+      packsChanged, resetSize, returnHome,
       debugState() {
         const slotEl = rail?.querySelector("#rail-companion-slot");
         const slotRect = slotEl && !slotEl.hidden ? slotEl.getBoundingClientRect() : null;

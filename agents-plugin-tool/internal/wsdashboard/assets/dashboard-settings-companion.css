@@ -1,0 +1,897 @@
+/* ==========================================================================
+   Dashboard Settings: Companion Section — Borderless Material Tonal Surfaces
+   Zero 1px solid or 1px dashed borders on cards, rows, inputs, buttons,
+   badges, or dropzones. Hierarchy via canonical --wb-* tonal surfaces & soft
+   elevation washes. Supports dark & light themes.
+   ========================================================================== */
+
+.cs-panel {
+  --cs-well: color-mix(in srgb, var(--wb-muted) 60%, var(--wb-bg));
+  --cs-surface-2: color-mix(in srgb, var(--wb-muted) 32%, var(--wb-card));
+  --cs-surface-3: color-mix(in srgb, var(--wb-muted) 50%, var(--wb-card));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.cs-panel [hidden] { display: none; }
+
+/* Group cards — borderless tonal elevation */
+[data-settings-view] .cs-panel .cs-group {
+  border: 0;
+  border-radius: var(--wb-radius, 12px);
+  background: var(--wb-card);
+  box-shadow: var(--wb-shadow);
+  overflow: hidden;
+}
+
+.cs-group-head {
+  padding: 11px 16px;
+  background: color-mix(in srgb, var(--wb-muted) 26%, var(--wb-card));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+}
+.cs-group-head-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.cs-group-head-left > .i {
+  width: 15px;
+  height: 15px;
+  color: var(--wb-primary);
+  flex: none;
+}
+.cs-group-head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: -.01em;
+  color: var(--wb-fg);
+}
+.cs-group-sub {
+  font-size: 11.5px;
+  color: var(--wb-muted-fg);
+  word-break: keep-all;
+}
+.cs-group-body {
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+/* Override default settings borders inside Companion section */
+[data-settings-view] .cs-panel .srow {
+  border: 0;
+  padding: 11px 16px;
+}
+[data-settings-view] .cs-panel .srow + .srow {
+  border-top: 0;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--wb-fg) 6%, transparent);
+}
+[data-settings-view] .cs-panel .srow.overridden {
+  box-shadow: inset 3px 0 0 var(--wb-primary), inset 0 1px 0 color-mix(in srgb, var(--wb-fg) 6%, transparent);
+}
+[data-settings-view] .cs-panel .srow:first-child.overridden {
+  box-shadow: inset 3px 0 0 var(--wb-primary);
+}
+[data-settings-view] .cs-panel .srow.cs-coupled {
+  padding-left: 26px;
+  position: relative;
+}
+[data-settings-view] .cs-panel .srow.cs-coupled::before {
+  content: "";
+  position: absolute;
+  left: 16px;
+  top: 10px;
+  bottom: 10px;
+  width: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--wb-primary) 34%, transparent);
+}
+[data-settings-view] .cs-panel .srow.cs-coupled.disabled::before {
+  background: color-mix(in srgb, var(--wb-fg) 14%, transparent);
+}
+
+[data-settings-view] .cs-panel .inp,
+[data-settings-view] .cs-panel .sel {
+  border: 0;
+  border-radius: 8px;
+  background: var(--cs-well);
+  color: var(--wb-fg);
+  height: 31px;
+  padding: 0 10px;
+}
+[data-settings-view] .cs-panel .inp:hover:not(:disabled),
+[data-settings-view] .cs-panel .sel:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-fg) 4%, var(--cs-well));
+}
+[data-settings-view] .cs-panel .origin-pill,
+[data-settings-view] .cs-panel .lchip,
+[data-settings-view] .cs-panel .layer-drawer,
+[data-settings-view] .cs-panel .seg,
+[data-settings-view] .cs-panel .inline-warn {
+  border: 0;
+}
+[data-settings-view] .cs-panel .layer-drawer {
+  background: color-mix(in srgb, var(--wb-muted) 38%, var(--wb-bg));
+}
+[data-settings-view] .cs-panel .lchip {
+  background: var(--wb-card);
+}
+[data-settings-view] .cs-panel .lchip.is-winner {
+  background: color-mix(in srgb, var(--wb-ok) 15%, var(--wb-card));
+}
+
+/* Borderless tonal buttons & pills */
+.cs-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--wb-muted);
+  color: var(--wb-fg);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  word-break: keep-all;
+  text-decoration: none;
+  transition: background .12s, filter .12s, opacity .12s;
+}
+.cs-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-fg) 10%, var(--wb-muted));
+  text-decoration: none;
+}
+.cs-btn:disabled { opacity: .46; cursor: not-allowed; }
+.cs-btn .i { width: 13px; height: 13px; flex: none; }
+.cs-btn.pri {
+  background: var(--wb-primary);
+  color: var(--wb-primary-fg, #ffffff);
+}
+.cs-btn.pri:hover:not(:disabled) { filter: brightness(1.08); }
+.cs-btn.soft-pri {
+  background: color-mix(in srgb, var(--wb-primary) 15%, var(--wb-card));
+  color: var(--wb-primary);
+}
+.cs-btn.soft-pri:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-primary) 22%, var(--wb-card));
+}
+.cs-btn.ghost {
+  background: transparent;
+  color: var(--wb-muted-fg);
+}
+.cs-btn.ghost:hover:not(:disabled) {
+  background: var(--wb-wash);
+  color: var(--wb-fg);
+}
+.cs-btn.danger {
+  background: color-mix(in srgb, var(--wb-fail) 14%, transparent);
+  color: var(--wb-fail);
+}
+.cs-btn.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-fail) 24%, transparent);
+}
+.cs-btn.danger-solid {
+  background: var(--wb-fail);
+  color: #ffffff;
+}
+:root[data-theme="dark"] .cs-btn.danger-solid { color: #1c0b0c; }
+.cs-btn.sm {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  border-radius: 7px;
+}
+
+.cs-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 21px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  background: var(--wb-muted);
+  color: var(--wb-muted-fg);
+  white-space: nowrap;
+}
+.cs-pill.vrm {
+  background: color-mix(in srgb, var(--wb-primary) 16%, var(--wb-card));
+  color: var(--wb-primary);
+}
+.cs-pill.ok {
+  background: color-mix(in srgb, var(--wb-ok) 16%, var(--wb-card));
+  color: var(--wb-ok);
+}
+.cs-pill.warn {
+  background: color-mix(in srgb, var(--wb-warn) 18%, var(--wb-card));
+  color: var(--wb-warn-ink);
+}
+.cs-pill.fail {
+  background: color-mix(in srgb, var(--wb-fail) 16%, var(--wb-card));
+  color: var(--wb-fail);
+}
+.cs-pill.official {
+  background: color-mix(in srgb, var(--wb-primary) 14%, var(--wb-card));
+  color: var(--wb-primary);
+}
+
+/* Group 1: Disabled calm banner & stage actions */
+.cs-disabled-banner {
+  margin: 10px 16px 2px;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-warn) 13%, var(--wb-card));
+  color: var(--wb-warn-ink);
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  word-break: keep-all;
+}
+.cs-action-pair {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+/* Group 2: Active Avatar Hero */
+.cs-avatar-hero {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  gap: 12px 14px;
+  align-items: center;
+  padding: 13px 15px;
+  border: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-muted) 42%, var(--wb-card));
+}
+.cs-avatar-emblem {
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wb-primary) 13%, var(--wb-card));
+  color: var(--wb-primary);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.cs-avatar-emblem.is-2d {
+  background: var(--wb-muted);
+  color: var(--wb-muted-fg);
+}
+.cs-avatar-emblem svg { width: 34px; height: 34px; }
+.cs-avatar-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cs-avatar-title-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.cs-avatar-name {
+  font-size: 14.5px;
+  font-weight: 800;
+  letter-spacing: -.01em;
+}
+.cs-avatar-persona {
+  margin: 2px 0 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-card) 74%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cs-avatar-persona-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--wb-fg);
+}
+.cs-avatar-persona-voice {
+  font-size: 11.5px;
+  color: var(--wb-muted-fg);
+  line-height: 1.4;
+  white-space: pre-line;
+  word-break: keep-all;
+}
+.cs-avatar-hero-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+/* Official VRM Download Banner */
+.cs-official-vrm-banner {
+  padding: 13px 15px;
+  border: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-primary) 11%, var(--wb-card));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  flex-wrap: wrap;
+}
+.cs-official-vrm-copy {
+  flex: 1 1 280px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.cs-official-vrm-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.cs-official-vrm-head strong { font-size: 13px; font-weight: 800; }
+.cs-official-vrm-copy p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--wb-muted-fg);
+  line-height: 1.42;
+  word-break: keep-all;
+}
+
+/* Borderless Tonal .vrm Dropzone (ZERO 1px dashed border) */
+.cs-vrm-dropzone {
+  padding: 16px 18px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--wb-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: background .15s, box-shadow .15s;
+}
+.cs-vrm-dropzone:hover {
+  background: color-mix(in srgb, var(--wb-primary) 8%, var(--wb-muted));
+}
+.cs-vrm-dropzone[data-drag="over"] {
+  background: color-mix(in srgb, var(--wb-primary) 16%, var(--wb-card));
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--wb-primary) 42%, transparent);
+}
+.cs-vrm-drop-main {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  flex-wrap: wrap;
+}
+.cs-vrm-drop-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-primary) 15%, var(--wb-card));
+  color: var(--wb-primary);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.cs-vrm-drop-icon .i { width: 18px; height: 18px; }
+.cs-vrm-drop-copy {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.cs-vrm-drop-copy strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 800;
+  margin-bottom: 2px;
+}
+.cs-vrm-drop-copy p {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--wb-muted-fg);
+  line-height: 1.4;
+  word-break: keep-all;
+}
+.cs-vrm-drop-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cs-vrm-drop-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--wb-muted-fg);
+}
+.cs-inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 600;
+  color: var(--wb-fg);
+}
+.cs-inline-check input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--wb-primary);
+  margin: 0;
+  cursor: pointer;
+}
+.cs-feedback {
+  padding: 7px 11px;
+  border: 0;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--wb-wash);
+  color: var(--wb-fg);
+}
+.cs-feedback.ok {
+  background: color-mix(in srgb, var(--wb-ok) 15%, var(--wb-card));
+  color: var(--wb-ok);
+}
+.cs-feedback.err {
+  background: color-mix(in srgb, var(--wb-fail) 15%, var(--wb-card));
+  color: var(--wb-fail);
+}
+
+/* Installed Packs List */
+.cs-sub-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cs-sub-heading h4 {
+  margin: 0;
+  font-size: 11.5px;
+  font-weight: 800;
+  color: var(--wb-muted-fg);
+  letter-spacing: .02em;
+}
+.cs-sub-heading span {
+  font-size: 11px;
+  color: var(--wb-muted-fg);
+  font-variant-numeric: tabular-nums;
+}
+.cs-pack-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cs-pack-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  padding: 9px 13px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--cs-surface-2);
+  transition: background .12s;
+}
+.cs-pack-row:hover { background: var(--cs-surface-3); }
+.cs-pack-row.is-active {
+  background: color-mix(in srgb, var(--wb-primary) 10%, var(--wb-card));
+  box-shadow: inset 3px 0 0 var(--wb-primary);
+}
+.cs-pack-main {
+  flex: 1 1 240px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cs-pack-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cs-pack-title strong { font-size: 13px; font-weight: 700; }
+.cs-pack-meta {
+  font-size: 11.5px;
+  color: var(--wb-muted-fg);
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+.cs-pack-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cs-confirm-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 4px 2px 9px;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-fail) 12%, var(--wb-card));
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--wb-fail);
+}
+
+/* Group 3: Pack Sources & Store */
+.cs-trust-notice {
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-warn) 11%, var(--wb-card));
+  color: var(--wb-warn-ink);
+  font-size: 11.5px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  word-break: keep-all;
+}
+.cs-source-add-box {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.cs-source-add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cs-source-preview {
+  font-family: var(--wb-mono);
+  font-size: 11px;
+  color: var(--wb-muted-fg);
+  word-break: break-all;
+}
+.cs-source-preview:empty { display: none; }
+.cs-source-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cs-source-item {
+  border: 0;
+  border-radius: 10px;
+  background: var(--cs-surface-2);
+  overflow: hidden;
+}
+.cs-source-head {
+  padding: 10px 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+}
+.cs-source-info {
+  flex: 1 1 240px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cs-source-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cs-source-title strong { font-size: 12.5px; font-weight: 700; }
+.cs-source-url {
+  font-family: var(--wb-mono);
+  font-size: 11px;
+  color: var(--wb-primary);
+  word-break: break-all;
+}
+.cs-source-catalog {
+  padding: 11px 13px 13px;
+  background: color-mix(in srgb, var(--cs-well) 62%, var(--wb-card));
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.cs-catalog-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--wb-muted-fg);
+}
+.cs-catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 9px;
+}
+.cs-catalog-card {
+  padding: 11px 13px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--wb-card);
+  box-shadow: var(--wb-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.cs-catalog-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cs-catalog-card-head strong { font-size: 12.5px; font-weight: 700; }
+.cs-catalog-card-meta { font-size: 11px; color: var(--wb-muted-fg); }
+.cs-catalog-card-desc {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--wb-muted-fg);
+  line-height: 1.4;
+  flex: 1 1 auto;
+  word-break: keep-all;
+}
+.cs-catalog-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 3px;
+}
+
+/* Group 4: Contextual 2D Wardrobe */
+.cs-vrm-note {
+  padding: 11px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-muted) 40%, var(--wb-card));
+  color: var(--wb-muted-fg);
+  font-size: 12px;
+  line-height: 1.45;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  flex-wrap: wrap;
+  word-break: keep-all;
+}
+.cs-vrm-note-copy {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+.cs-vrm-note-copy strong {
+  display: block;
+  color: var(--wb-fg);
+  margin-bottom: 2px;
+}
+.cs-wardrobe-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+.cs-wardrobe-field {
+  padding: 10px 13px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--cs-surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cs-wardrobe-field.full { grid-column: 1 / -1; }
+.cs-wardrobe-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cs-wardrobe-head label,
+.cs-wardrobe-head .cs-wlbl {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--wb-fg);
+}
+.cs-slot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
+  gap: 8px 10px;
+}
+.cs-slot-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cs-slot-item span {
+  font-family: var(--wb-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--wb-muted-fg);
+}
+.cs-palette-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cs-swatch-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 9px 4px 5px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--wb-card);
+  cursor: pointer;
+}
+.cs-swatch-chip input[type="color"] {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+.cs-swatch-chip input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+.cs-swatch-chip input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 6px; }
+.cs-swatch-meta {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+.cs-swatch-name { font-size: 11px; font-weight: 700; }
+.cs-swatch-hex { font-family: var(--wb-mono); font-size: 10px; color: var(--wb-muted-fg); }
+
+/* Group 5: Advanced / Authoring (Borderless Tonal Disclosure) */
+.cs-disclosure-trigger {
+  width: 100%;
+  border: 0;
+  padding: 11px 16px;
+  background: color-mix(in srgb, var(--wb-muted) 24%, var(--wb-card));
+  color: var(--wb-fg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  text-align: left;
+  transition: background .12s;
+}
+.cs-disclosure-trigger:hover {
+  background: color-mix(in srgb, var(--wb-muted) 42%, var(--wb-card));
+}
+.cs-disclosure-chev {
+  font-size: 12px;
+  color: var(--wb-muted-fg);
+  transition: transform .14s ease;
+}
+.cs-disclosure-trigger[aria-expanded="true"] .cs-disclosure-chev {
+  transform: rotate(180deg);
+}
+.cs-adv-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 11px;
+}
+.cs-adv-card {
+  padding: 13px 15px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--cs-surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cs-adv-card h4 { margin: 0; font-size: 12.5px; font-weight: 800; }
+.cs-adv-card p {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--wb-muted-fg);
+  line-height: 1.42;
+  word-break: keep-all;
+}
+.cs-doc-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.cs-doc-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--wb-card);
+  color: var(--wb-primary);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: background .12s;
+}
+.cs-doc-link:hover {
+  background: color-mix(in srgb, var(--wb-primary) 13%, var(--wb-card));
+  text-decoration: none;
+}
+.cs-zip-preview {
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--cs-well) 65%, var(--wb-card));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cs-zip-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.cs-zip-row {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--wb-card);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cs-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 820px) {
+  .cs-avatar-hero { grid-template-columns: 52px minmax(0, 1fr); }
+  .cs-avatar-emblem { width: 52px; height: 52px; }
+  .cs-avatar-emblem svg { width: 28px; height: 28px; }
+  .cs-avatar-hero-right { grid-column: 1 / -1; flex-direction: row; align-items: center; justify-content: flex-start; }
+  .cs-wardrobe-grid, .cs-adv-grid { grid-template-columns: minmax(0, 1fr); }
+}

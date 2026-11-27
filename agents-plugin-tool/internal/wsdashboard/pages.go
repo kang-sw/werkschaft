@@ -97,8 +97,6 @@ var companionScriptFiles = []string{
 	"dashboard-companion-compositor.js",
 	"dashboard-companion-scenarios.js",
 	"dashboard-companion-menu.js",
-	"dashboard-companion-sources.js",
-	"dashboard-companion-settings.js",
 	"dashboard-companion-vrm.js",
 	"dashboard-companion-stage.js",
 }
@@ -400,9 +398,6 @@ type pageAssetsData struct {
 	// CompanionVrmFile is the content-hashed filename of the lazy-loaded pure-VRM
 	// runtime ES module (/s/<CompanionVrmFile>); never inlined into dashboard.tmpl.
 	CompanionVrmFile string
-	// CompanionModalRows is the settings catalog's companion-modal rows as
-	// a JSON array: the shell loads no settings catalog of its own.
-	CompanionModalRows template.JS
 	// CardsScript is the board card framework (cards.js, window.WsCards),
 	// led by its paged docking gallery's pure model (gallery.js,
 	// window.WsGallery),
@@ -565,8 +560,8 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 			CompanionScript:   template.JS(get("dashboard-companion.js")),
 			CompanionCSS:      template.CSS(get("dashboard-companion.css")),
 			CompanionVrmFile:  companionVrmName,
-			SettingsCSS:       template.CSS(get("dashboard-settings.css") + "\n" + optional("dashboard-settings-extras.css") + "\n" + get("dashboard-settings-tiers.css") + "\n" + get("dashboard-settings-preferences.css") + "\n" + get("dashboard-settings-account.css")),
-			SettingsScript:    template.JS(get("hold-confirm.js") + "\n;\n" + optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings-combobox.js") + "\n;\n" + get("dashboard-settings-tiers.js") + "\n;\n" + get("dashboard-settings-preferences.js") + "\n;\n" + get("dashboard-settings-account.js") + "\n;\n" + get("dashboard-settings.js")),
+			SettingsCSS:       template.CSS(get("dashboard-settings.css") + "\n" + optional("dashboard-settings-extras.css") + "\n" + get("dashboard-settings-tiers.css") + "\n" + get("dashboard-settings-preferences.css") + "\n" + get("dashboard-settings-account.css") + "\n" + get("dashboard-settings-companion.css")),
+			SettingsScript:    template.JS(get("hold-confirm.js") + "\n;\n" + optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings-combobox.js") + "\n;\n" + get("dashboard-settings-tiers.js") + "\n;\n" + get("dashboard-settings-preferences.js") + "\n;\n" + get("dashboard-settings-account.js") + "\n;\n" + get("dashboard-settings-companion.js") + "\n;\n" + get("dashboard-settings.js")),
 			SettingsCatalog:   template.JS(get("dashboard-settings-catalog.json")),
 			OverviewScript:    template.JS(get("overview.js")),
 			CardsScript:       template.JS(cardsJoined),
@@ -591,11 +586,6 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 	if err != nil {
 		return nil, err
 	}
-	modalRows, err := companionModalRows([]byte(a.data.SettingsCatalog))
-	if err != nil {
-		return nil, err
-	}
-	a.data.CompanionModalRows = template.JS(modalRows)
 	icons := map[string]bool{}
 	for _, sprite := range []string{string(a.data.Sprite), string(wb.Sprite)} {
 		for _, m := range symbolPattern.FindAllStringSubmatch(sprite, -1) {

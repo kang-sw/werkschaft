@@ -86,10 +86,6 @@ func (d *Daemon) companionSourceGate(w http.ResponseWriter, r *http.Request) (co
 		return req, false
 	}
 	config := d.companion.current().config
-	if !config.Enabled {
-		companionWriteError(w, http.StatusConflict, "turn the companion on to use pack sources")
-		return req, false
-	}
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
 	if err != nil || json.Unmarshal(raw, &req) != nil {
 		companionWriteError(w, http.StatusBadRequest, "the request body must be a JSON object")

@@ -83,7 +83,8 @@ var wsSettingsChoiceLabels = {
     repo_read_only: "js.settings.disabled.repo_read_only",
     scope_unsupported: "js.settings.disabled.scope_unsupported",
     dependency_unmet: "js.settings.disabled.dependency_unmet",
-    requires_native_subagent_off: "js.settings.disabled.requires_native_subagent_off"
+    requires_native_subagent_off: "js.settings.disabled.requires_native_subagent_off",
+    requires_companion_agent_director: "js.settings.disabled.requires_companion_agent_director"
   };
   var errors = {
     invalid_request: "js.settings.error.invalid_request",
@@ -100,7 +101,7 @@ var wsSettingsChoiceLabels = {
     target: query.get("target") || "",
     context: {worktree: query.get("worktree") || "", session: query.get("session") || ""}
   };
-  var snapshot = null, failure = "", activeSection = requestedSection === "account" || requestedSection === "tier_routing" ? requestedSection : "workflow";
+  var snapshot = null, failure = "", activeSection = requestedSection === "account" || requestedSection === "tier_routing" || requestedSection === "companion" ? requestedSection : "workflow";
   var adapter = "claude", filter = "all", focusedTierProvider = "";
   var buckets = new Map(), warnings = new Map(), openLayers = new Set();
   var catalog = window.WsSettingsCatalog;
@@ -624,9 +625,14 @@ var wsSettingsChoiceLabels = {
           var affected = new Map((result.affected_entries || [result.entry]).map(item => [entryID(item), item]));
           snapshot.entries = snapshot.entries.map(item => affected.get(entryID(item)) || item);
           warnings.set(id, result.warnings || []);
-          if (row.isConnected) replace(result.entry, hadFocus);
-          refreshDependentRows(entry.key);
-          renderCounts();
+          if (entry.key === "dashboard.companion_enabled" && activeSection === "companion") {
+            renderCounts();
+            renderContent();
+          } else {
+            if (row.isConnected) replace(result.entry, hadFocus);
+            refreshDependentRows(entry.key);
+            renderCounts();
+          }
           if (extension.onMutate) extension.onMutate({
             section: activeSection,
             list: content.querySelector(".klist"),
@@ -1521,9 +1527,8 @@ var wsSettingsChoiceLabels = {
     return true;
   }
 
-  // Rows with a surface other than the panel (the companion modal, or the
-  // deprecated aliases no UI renders) stay in the catalog for inspection but
-  // are not rendered here.
+  // Rows with a surface other than the panel (the deprecated aliases no UI
+  // renders) stay in the catalog for inspection but are not rendered here.
   function sectionEntries(name) {
     return snapshot ? snapshot.entries.filter(function (entry) {
       var spec = specFor(entry.key);
@@ -1584,6 +1589,61 @@ var wsSettingsChoiceLabels = {
       append(el("div", "sync-card-title"), cloudIcon(), el("strong", "", tr("js.settings.sync.title")), el("span", "tag", tr("js.settings.sync.planned"))),
       el("div", "sync-card-desc", tr("js.settings.sync.description"))),
       append(el("div", "settings-sync-actions"), toggle, sync));
+  }
+
+  async function submitConfig(entry, action, value) {
+    var operation = { key: entry.key, selectors: entry.selectors || {}, action: action };
+    if (action === "set") operation.value = value;
+    var pending = extension.submit && extension.submit(operation, selection);
+    var result = pending ? await pending :
+      await request("/api/config/" + action, Object.assign({}, selection, {
+        key: operation.key, selectors: operation.selectors, value: operation.value
+      }));
+    if (result && result.entry) {
+      var affected = new Map((result.affected_entries || [result.entry]).map(function (item) { return [entryID(item), item]; }));
+      snapshot.entries = snapshot.entries.map(function (item) { return affected.get(entryID(item)) || item; });
+      warnings.set(entryID(entry), result.warnings || []);
+      renderCounts();
+      renderContent();
+      if (extension.onMutate) extension.onMutate({
+        section: activeSection,
+        list: content.querySelector(".klist"),
+        entries: sectionEntries(activeSection),
+        bucketState: bucketState,
+        bucketTitle: bucketTitle
+      });
+    }
+    return result;
+  }
+
+  function renderKeyProvenance(entry, spec) {
+    var canEdit = editable(entry, spec);
+    var drawerNode = null;
+    function syncDrawer(expanded, drawerId) {
+      prov.pill.querySelector(".chev").textContent = expanded ? "▴" : "▾";
+      if (expanded) {
+        if (!drawerNode) drawerNode = buildLayerDrawer(entry, spec, drawerId);
+        drawerNode.hidden = false;
+        if (!drawerNode.isConnected) {
+          var host = prov.node.closest("[data-config-key], .cs-wardrobe-field, .cs-group");
+          if (host) {
+            var groupHead = host.classList.contains("cs-group") ? host.querySelector(":scope > .cs-group-head") : null;
+            if (groupHead) groupHead.after(drawerNode);
+            else host.append(drawerNode);
+          }
+        }
+      } else if (drawerNode) {
+        drawerNode.hidden = true;
+      }
+    }
+    var prov = provenance(entry, spec, canEdit, function () {
+      submitConfig(entry, "reset", "");
+    }, syncDrawer);
+    if (prov.isOpen) {
+      drawerNode = buildLayerDrawer(entry, spec, prov.drawerId);
+      drawerNode.hidden = false;
+    }
+    return { node: prov.node, drawer: drawerNode };
   }
 
   function renderContent() {
@@ -1649,6 +1709,24 @@ var wsSettingsChoiceLabels = {
       byKey.get(entry.key).push(entry);
     }
     var list = el("div", "klist");
+    if (activeSection === "companion" && window.WsSettingsCompanion) {
+      var companionPanel = window.WsSettingsCompanion.render({
+        el: el, button: button, append: append, svgIcon: svgIcon, tr: tr,
+        scope: scope, entries: entries, specFor: specFor,
+        matches: matches, editable: editable, selected: selected,
+        filter: filter, searchTerm: search.value.trim().toLocaleLowerCase(),
+        renderRow: renderRow,
+        renderKeyProvenance: renderKeyProvenance,
+        submitConfig: submitConfig,
+        rerender: renderContent,
+        notifyPacksChanged: function () { send("companion-packs-changed", {}); },
+        notifyStageAction: function (action) { send("companion-stage-action", { action: action }); }
+      });
+      if (companionPanel) list.append(companionPanel);
+      if (extension.afterRender) extension.afterRender({section: activeSection, list: list, entries: entries, bucketState: bucketState, bucketTitle: bucketTitle});
+      content.append(list.children.length ? list : el("p", "info-note", tr("js.settings.no_results")));
+      return;
+    }
     if (activeSection === "prompts" && preferences) {
       preferenceEditor = preferences.render({
         selection, entries: () => sectionEntries("prompts"),
