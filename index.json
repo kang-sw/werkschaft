@@ -481,6 +481,12 @@
     },
     "261126-research-ws-companion-hybrid-vrm-bust-spike": {
       "registered_at": "2026-11-26T08:34:43Z"
+    },
+    "261127-feat-ws-companion-layered-agents-and-naming": {
+      "registered_at": "2026-11-27T01:26:29Z"
+    },
+    "261127-refactor-split-oversized-multi-responsibility-files": {
+      "registered_at": "2026-11-27T01:26:05Z"
     }
   }
 }
