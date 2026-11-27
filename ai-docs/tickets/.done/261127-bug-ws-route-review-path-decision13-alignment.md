@@ -4,6 +4,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: d36fd91a0af06196
 sage-review-completeness-reviewed: d36fd91a0af06196
+completed: 2026-11-27
 ---
 
 # Align route.resolve_implement review instructions and docs with path.write Decision 13
@@ -91,3 +92,17 @@ A repository-wide audit identified the sole conflicting instruction: `implementR
    - `cd agents-plugin-tool && go test -race -count=1 ./internal/mcp -run 'Test.*(RouteResolveImplement|DeriveImplementTodo|ImplementReview|GeneratedPathWrite|Playbook|Schema|Wording|Mirror|Skill|Wsflow|Golden)'` (and any other affected test targets in `internal/mcp` or `agents-plugin-wsflow` / `agents-plugin`).
    - `cd agents-plugin-tool && GOOS=windows go vet ./...`
    - `diff -ru agents-plugin/rsrc agents-plugin-wsflow/rsrc` returns empty (exit 0).
+
+### Result (e5e9e1d38) - 2026-11-27
+
+- `implementReviewInstruction` now drops the pre-generated findings path in all four branches and adds `implementReviewOwnArtifactClause`. Each reviewer generates its own artifact and returns its path.
+- Added `TestImplementReviewInstructionReviewerOwnsArtifact` and updated the route test.
+- Added the no-pre-generation bullet to `worker-stop-protocol.md` in both rsrc trees (byte-identical) and a note to the `path.generate` description.
+- Both `manifest.json` hashes for `worker-stop-protocol.md` were regenerated. The ticket did not list them, but `TestShippedPlaybookFrontmatterRecommendations` fails on a hash mismatch without this.
+- Verification:
+  - `diff -ru` of the two rsrc trees: exit 0.
+  - `GOOS=windows go vet ./...`: exit 0.
+  - The targeted `go test ./internal/mcp -run '<ticket regex plus Manifest|Shipped>'` passes (without `-race`).
+  - Lite review is clean.
+- Not clean: the full `go test -race ./internal/mcp` times out after 600s in a tracker test. The earlier `-race` run of the targeted regex flagged a race in `TestServeStdioDoesNotBlockToolsListBehindLongCall`. I did not investigate either; neither touches the changed code.
+- Decision: stayed on the lead-named branch instead of the route's suggested rename, because the lead vouched for it.
