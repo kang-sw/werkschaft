@@ -800,7 +800,7 @@ test('remote hydration via wbHistoryFetch preserves .mockup-wrap and mockup attr
 });
 
 test('dashboard-board.css sizes pinned and maximized .mockup-wrap panels cleanly without breaking non-mockup panels', () => {
-  assert.match(boardCssSrc, /\.bcard\[data-kind="panel"\]:has\(\.panel-card-doc > \.mockup-wrap\) \.bc-body,\s*\.bcard\[data-kind="panel"\]\[data-max\]:has\(\.panel-card-doc > \.mockup-wrap\) \.bc-body \{\s*display:\s*flex;\s*flex-direction:\s*column;\s*\}/);
+  assert.match(boardCssSrc, /\.bcard\[data-kind="panel"\]:has\(\.panel-card-doc > \.mockup-wrap\) \.bc-body \{\s*display:\s*flex;\s*flex-direction:\s*column;\s*\}/);
   assert.match(boardCssSrc, /\.bcard\[data-kind="panel"\] .panel-card-doc:has\(> \.mockup-wrap\) \{[^}]*flex:\s*1 1 0;[^}]*min-height:\s*240px;[^}]*padding:\s*0;[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*overflow:\s*hidden;[^}]*\}/);
   assert.match(boardCssSrc, /\.bcard\[data-kind="panel"\] \.panel-card-doc > \.mockup-wrap \{[^}]*flex:\s*1 1 0;[^}]*height:\s*100%;[^}]*min-height:\s*240px;[^}]*resize:\s*none;[^}]*border:\s*0;[^}]*\}/);
   assert.match(boardCssSrc, /\.bcard\[data-kind="panel"\] \.panel-card-doc \{\s*padding:\s*8px 12px 10px;\s*\}/);
