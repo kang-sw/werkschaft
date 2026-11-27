@@ -435,6 +435,7 @@ function relayFixture() {
 function relayRow(key, classes, {childId, ms, cause, child, label} = {}) {
   const names = new Set(classes.split(" "));
   return {dataset: {entry: key, childId, wakeCause: cause},
+    hasAttribute: () => false,
     matches(selector) {
       return selector.split(", ").some(part => {
         const negative = [...part.matchAll(/:not\(([^)]+)\)/g)].map(x => x[1]);

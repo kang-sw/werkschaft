@@ -110,7 +110,7 @@ async function shotDialog(page, name) {
 
     // Local import preview of a generated zip, then the import itself.
     const zipBytes = bundle();
-    await section.locator('input[type="file"]').setInputFiles({ name: 'fan-pack.zip', mimeType: 'application/zip', buffer: zipBytes });
+    await section.locator('input[type="file"][accept*="zip"]').setInputFiles({ name: 'fan-pack.zip', mimeType: 'application/zip', buffer: zipBytes });
     await panel.locator('input[type="checkbox"]').first().waitFor();
     assert.equal(importCalls.length, 1);
     assert.equal(importCalls[0].path, '/api/companion/packs/validate?name=fan-pack.zip');
@@ -153,7 +153,7 @@ async function shotDialog(page, name) {
       listing: { source: 'fan-pack.zip', kind: 'local', official: false, name: 'Fan', packs: [
         { id: 'alpha', name: 'Pack alpha', version: '1.0.0', status: 'available', installed: true },
         { id: 'beta', name: 'Pack beta', version: '1.0.0', status: 'available', error: { id: 'beta', path: '', message: 'cannot move the staged pack into place' } }], errors: [] } }) }));
-    await section.locator('input[type="file"]').setInputFiles({ name: 'fan-pack.zip', mimeType: 'application/zip', buffer: zipBytes });
+    await section.locator('input[type="file"][accept*="zip"]').setInputFiles({ name: 'fan-pack.zip', mimeType: 'application/zip', buffer: zipBytes });
     await panel.locator('input[type="checkbox"]').first().waitFor();
     await panel.getByRole('button', { name: /^import/i }).click();
     const alert = section.locator('.ws-companion-sources-error[role="alert"]');
