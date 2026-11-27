@@ -263,6 +263,7 @@ const keepAwakeDuringTurnsHelp = "Keep this computer from idle system sleep whil
 // point by promptKnobEntry at catalog-build time (see buildTuningCatalog).
 var configRegistry = []configKeyEntry{
 	compactionLeadModeEntry(),
+	compactionWorkerModeEntry(),
 	compactionKeyEntry("compaction.lead_advisory"),
 	compactionKeyEntry("compaction.lead_hard"),
 	compactionKeyEntry("compaction.worker_advisory"),

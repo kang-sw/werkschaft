@@ -3279,6 +3279,8 @@
   "js.settings.key.agent.werk_web_search_siwc.description": "Opt in to server-side web search on OpenAI Sign in with ChatGPT accounts. Because SIWC has no per-request cap, the per-turn budget is best-effort between requests.",
   "js.settings.key.compaction.lead_mode.label": "Lead compaction mode",
   "js.settings.key.compaction.lead_mode.description": "Whether hosted leads compact with the harness's native compaction (native) or ws-managed checkpoints and session rotation (ws).",
+  "js.settings.key.compaction.worker_mode.label": "Worker compaction mode",
+  "js.settings.key.compaction.worker_mode.description": "Whether hosted workers compact with the harness's native compaction (native) or ws-managed checkpoints and session rotation (ws).",
   "js.settings.key.compaction.lead_advisory.label": "Lead compaction advisory threshold",
   "js.settings.key.compaction.lead_advisory.description": "Context usage at which the lead is advised to compact at a safe boundary.",
   "js.settings.key.compaction.lead_hard.label": "Lead hard compaction threshold",

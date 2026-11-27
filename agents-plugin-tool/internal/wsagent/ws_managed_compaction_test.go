@@ -1278,7 +1278,7 @@ func TestWSManagedLeadRotationRealProtocolRestartAndAuditStore(t *testing.T) {
 		})
 		h.quiesce(id)
 
-		// Simulate a crash right after rotateExternalLead persisted
+		// Simulate a crash right after rotateExternalSession persisted
 		// PendingCompaction{Resume: true} and before compactIdle dispatched the
 		// standalone continuation.
 		h.runner.Close()

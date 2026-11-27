@@ -3279,6 +3279,8 @@
   "js.settings.key.agent.werk_web_search_siwc.description": "Aktiviert optional die serverseitige Websuche für OpenAI Sign in with ChatGPT-Konten. Da SIWC kein Limit pro Anfrage kennt, gilt das Zugbudget best-effort zwischen Anfragen.",
   "js.settings.key.compaction.lead_mode.label": "Lead-Kompaktierungsmodus",
   "js.settings.key.compaction.lead_mode.description": "Legt fest, ob gehostete Leads die native Kompaktierung des Harness (native) oder von ws verwaltete Checkpoints mit Sitzungsrotation (ws) nutzen.",
+  "js.settings.key.compaction.worker_mode.label": "Worker-Kompaktierungsmodus",
+  "js.settings.key.compaction.worker_mode.description": "Legt fest, ob gehostete Worker die native Kompaktierung des Harness (native) oder von ws verwaltete Checkpoints mit Sitzungsrotation (ws) nutzen.",
   "js.settings.key.compaction.lead_advisory.label": "Schwelle für Lead-Kompaktierungshinweis",
   "js.settings.key.compaction.lead_advisory.description": "Kontextverbrauch, ab dem dem Lead eine Kompaktierung an einem sicheren Übergang empfohlen wird.",
   "js.settings.key.compaction.lead_hard.label": "Schwelle für erzwungene Lead-Kompaktierung",

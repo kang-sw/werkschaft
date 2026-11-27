@@ -3279,6 +3279,8 @@
   "js.settings.key.agent.werk_web_search_siwc.description": "Active en option la recherche web côté serveur pour les comptes OpenAI Sign in with ChatGPT. Sans plafond par requête sur SIWC, le budget par tour est appliqué au mieux entre les requêtes.",
   "js.settings.key.compaction.lead_mode.label": "Mode de compactage du responsable",
   "js.settings.key.compaction.lead_mode.description": "Détermine si les responsables hébergés utilisent le compactage natif du harnais (native) ou les points de contrôle et la rotation de session gérés par ws (ws).",
+  "js.settings.key.compaction.worker_mode.label": "Mode de compactage du travailleur",
+  "js.settings.key.compaction.worker_mode.description": "Détermine si les travailleurs hébergés utilisent le compactage natif du harnais (native) ou les points de contrôle et la rotation de session gérés par ws (ws).",
   "js.settings.key.compaction.lead_advisory.label": "Seuil d’avis de compactage du responsable",
   "js.settings.key.compaction.lead_advisory.description": "Utilisation du contexte à partir de laquelle un compactage est conseillé à un point sûr.",
   "js.settings.key.compaction.lead_hard.label": "Seuil de compactage forcé du responsable",

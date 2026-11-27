@@ -51,6 +51,28 @@ func compactionLeadModeEntry() configKeyEntry {
 	}
 }
 
+func compactionWorkerModeEntry() configKeyEntry {
+	e := compactionLeadModeEntry()
+	e.Key = wsconfig.ItemCompactionWorkerMode
+	e.ValueFields = []tuningField{
+		{Name: "value", Description: "Hosted worker compaction mode: native (harness-native compaction) or ws (ws-managed checkpoint and session rotation).", Enum: compactionLeadModeEnum},
+	}
+	return e
+}
+
+func validateCompactionWorkerModeTarget(key, harness, value string, registries ...map[string]wsagent.BackendRegistration) error {
+	if key != wsconfig.ItemCompactionWorkerMode || value != wsconfig.CompactionModeNative {
+		return nil
+	}
+	if harness == "" || harness == "*" || harness == "all" {
+		return nil
+	}
+	if wsagent.WorkerCompactionWSOnly(harness, registries...) {
+		return fmt.Errorf("config.tune: %s.%s cannot be set to native because %s only supports ws-managed worker compaction", key, harness, harness)
+	}
+	return nil
+}
+
 func validateCompactionLeadModeTarget(key, harness, value string, registries ...map[string]wsagent.BackendRegistration) error {
 	if key != wsconfig.ItemCompactionLeadMode || value != wsconfig.CompactionModeNative {
 		return nil
@@ -85,6 +107,9 @@ func resolveCompactionValue(r *wsconfig.Resolver, key, item, harness string, reg
 	rv, answered, err := r.Compaction(key, item, harness, p.LegacyKey(item))
 	if err == nil && item == wsconfig.ItemCompactionLeadMode {
 		rv.Value = wsagent.EffectiveLeadCompactionMode(harness, rv.Value, registries...)
+	}
+	if err == nil && item == wsconfig.ItemCompactionWorkerMode {
+		rv.Value = wsagent.EffectiveWorkerCompactionMode(harness, rv.Value, registries...)
 	}
 	return rv, answered, err
 }

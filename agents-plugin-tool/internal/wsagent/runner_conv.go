@@ -151,7 +151,7 @@ type conv struct {
 	// failure; empty while none runs or the harness compacts on its own. It is
 	// loop-owned.
 	compactOrigin string
-	// compactRotated is true while rotateExternalLead dispatches CompactEnd
+	// compactRotated is true while rotateExternalSession dispatches CompactEnd
 	// for a freshly started process that already received composed instructions.
 	compactRotated bool
 	// cmpActive, cmpCount and cmpLast mirror the compaction state State shows
@@ -167,8 +167,11 @@ type conv struct {
 
 	compactAdvisory, compactHard wsconfig.Threshold
 	// Lead mode is also read by MCP discovery, outside the conversation loop.
-	compactModeMu                                                                                                  sync.Mutex
-	compactModeGen                                                                                                 uint64
+	compactModeMu  sync.Mutex
+	compactModeGen uint64
+	// compactWorkerMode caches compaction.worker_mode under its own generation.
+	compactWorkerMode                                                                                              string
+	compactWorkerModeGen                                                                                           uint64
 	compactLeadMode                                                                                                string
 	compactTokens, compactWindow                                                                                   float64
 	compactPrevTokens, compactPrevWindow                                                                           int64

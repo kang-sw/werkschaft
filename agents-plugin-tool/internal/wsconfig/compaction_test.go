@@ -122,3 +122,40 @@ func TestCompactionLayerMajorAndLegacyRoundTrip(t *testing.T) {
 		t.Fatalf("worker inherited lead legacy: %+v %v", got, err)
 	}
 }
+
+func TestCompactionWorkerModeDefaultAndHarnessResolution(t *testing.T) {
+	opts := Options{CacheHome: t.TempDir(), ConfigHome: t.TempDir(), RepoRoot: t.TempDir()}
+	r := NewResolver(opts, nil, compactionSession{}, nil)
+	if CompactionDefaults[ItemCompactionWorkerMode] != CompactionModeWS {
+		t.Fatalf("default = %q, want ws", CompactionDefaults[ItemCompactionWorkerMode])
+	}
+	got, _, err := r.Compaction("", ItemCompactionWorkerMode, "claude", "")
+	if err != nil || got.Value != CompactionModeWS || got.Scope != ScopeBuiltin {
+		t.Fatalf("builtin = %+v %v", got, err)
+	}
+	set := func(k, v string, scope Scope) {
+		t.Helper()
+		if err := r.Set(k, v, SetOptions{ExplicitScope: scope}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set(ItemCompactionWorkerMode, CompactionModeNative, ScopeGlobal)
+	set(ItemCompactionWorkerMode+".claude", CompactionModeWS, ScopeGlobal)
+	for harness, want := range map[string]string{"claude": CompactionModeWS, "codex": CompactionModeNative, "": CompactionModeNative} {
+		got, _, err := r.Compaction("", ItemCompactionWorkerMode, harness, "")
+		if err != nil || got.Value != want {
+			t.Fatalf("harness %q = %+v %v, want %s", harness, got, err, want)
+		}
+	}
+	// Layer-major: a project wildcard shadows a global per-harness value.
+	set(ItemCompactionWorkerMode, CompactionModeNative, ScopeProject)
+	got, _, err = r.Compaction("", ItemCompactionWorkerMode, "claude", "")
+	if err != nil || got.Value != CompactionModeNative || got.Scope != ScopeProject {
+		t.Fatalf("project wildcard = %+v %v", got, err)
+	}
+	// Independent of the lead key.
+	got, _, err = r.Compaction("", ItemCompactionLeadMode, "claude", "")
+	if err != nil || got.Value != CompactionModeWS {
+		t.Fatalf("lead mode leaked = %+v %v", got, err)
+	}
+}

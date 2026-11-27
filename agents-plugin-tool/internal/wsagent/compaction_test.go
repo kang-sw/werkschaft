@@ -524,7 +524,7 @@ func TestCompactionUnsupportedNudgesStayOnOrdinaryInput(t *testing.T) {
 		{"lifecycle-unavailable-hard", BackendCodex, CompactionProtocol{LeadCommand: true}, true, 90000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := NewRunner(Options{Backends: map[string]BackendRegistration{tc.backend: {NativeCompaction: &tc.compaction}}})
+			r := NewRunner(Options{Config: testConfig(t), Backends: map[string]BackendRegistration{tc.backend: {NativeCompaction: &tc.compaction}}})
 			c := &conv{
 				r:                      r,
 				rec:                    Record{Backend: tc.backend, Lead: tc.lead, WSKey: "k"},
