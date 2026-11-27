@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"os"
 	"errors"
 	"fmt"
 	"reflect"
@@ -44,6 +45,9 @@ type conv struct {
 	closed        bool
 	held          int // inbox messages, maintained at inbox changes/drains under mu
 	hidden        bool
+	// parkedOut is set under mu when the conversation left memory for the
+	// runner's parked set (runner_park.go); its loop ends right after.
+	parkedOut     bool
 	contextTokens *float64
 	// contextWindow and contextCompaction are the context scale of the
 	// latest status that knew its window, kept while a later one does not
@@ -252,8 +256,12 @@ type conv struct {
 	reconcileMode bool
 	// regMu is leaf-only: it guards the timestamp in memory and is never held
 	// across a registration lock or file I/O.
-	regMu   sync.Mutex
-	lastReg time.Time
+	regMu       sync.Mutex
+	lastReg     time.Time
+	lastWritten wsdashboard.Registration
+	haveWritten bool
+	rowStampSet bool
+	rowStampV   rowStamp
 
 	// A lead's or spawned child's own, loop-owned. mailC (one slot) tells
 	// the loop the mailbox may hold mail (signalMail); stopMail ends the
@@ -1016,21 +1024,19 @@ func (c *conv) loop() {
 	}
 }
 
+// heartbeat runs each interval in the loop. Liveness of an in-daemon session
+// is memory (Runner.OwnsLive, read by the index), so it never rewrites
+// registration.json: that file is written only when its content changes.
 func (c *conv) heartbeat() {
-	registrationDue := c.regDue(c.r.opts.Now())
-	if registrationDue {
-		c.writeRegistration()
-	}
 	c.live.heartbeatSnapshot()
 	c.persistSeq()
 	if c.replaying {
 		// A holder that attached late (a rescan) is found here.
 		c.checkReattach()
 	}
-	if !registrationDue {
-		c.checkRow()
-	}
+	c.checkRow()
 	c.expireIfDue()
+	c.maybePark()
 }
 
 // settle follows each step of the loop: a session whose row a terminal
@@ -1040,7 +1046,10 @@ func (c *conv) settle() bool {
 	if c.isForeign() && !c.closed {
 		c.release()
 	}
-	if !c.closed {
+	c.mu.Lock()
+	ended := c.closed || c.parkedOut
+	c.mu.Unlock()
+	if !ended {
 		return false
 	}
 	if c.stopMail != nil {
@@ -1260,11 +1269,17 @@ func (c *conv) writeRegistration() bool {
 	}
 	// Reuse only the row already read under the lead's ownership lock, not
 	// process-local evidence: a spawn needs a real reservation on disk.
-	if previousRow != nil && !c.regDue(now) {
+	if previousRow != nil {
 		previous := *previousRow
 		previous.HeartbeatAt = reg.HeartbeatAt
 		if previous == reg {
-			return true // no semantic change; leave the scheduled heartbeat due
+			c.setLastRow(reg)
+			return true // no semantic change: nothing to write or announce
+		}
+	} else if last, ok := c.lastRow(); ok && !rec.Lead {
+		last.HeartbeatAt = reg.HeartbeatAt
+		if last == reg {
+			return true
 		}
 	}
 	err := wsdashboard.WriteRegistration(c.r.opts.Dir, reg)
@@ -1273,8 +1288,23 @@ func (c *conv) writeRegistration() bool {
 		return false
 	}
 	c.setLastReg(now)
+	c.setLastRow(reg)
 	c.r.notify(rec.ReplyID, rec.Root)
 	return true
+}
+
+// lastRow is the row this conversation last wrote or found equal on disk; a
+// write of a row equal to it (heartbeat aside) is skipped.
+func (c *conv) lastRow() (wsdashboard.Registration, bool) {
+	c.regMu.Lock()
+	defer c.regMu.Unlock()
+	return c.lastWritten, c.haveWritten
+}
+
+func (c *conv) setLastRow(reg wsdashboard.Registration) {
+	c.regMu.Lock()
+	c.lastWritten, c.haveWritten = reg, true
+	c.regMu.Unlock()
 }
 
 func (c *conv) isForeign() bool { return c.foreignRow.Load() }
@@ -1363,9 +1393,36 @@ func (c *conv) lockRowRead() (unlock func(), row *wsdashboard.Registration, ok b
 // lock, and the row leaves the daemon only through a terminal login, which
 // never gives it back.
 func (c *conv) checkRow() {
-	if c.rec.Lead && !c.isForeign() && rowForeign(c.r.opts.Dir, c.rec.ReplyID) {
-		c.markForeign()
+	if !c.rec.Lead || c.isForeign() {
+		return
 	}
+	// One stat, not a read: the daemon owns the row and writes it only on a
+	// change it records (setRowStamp). A different mtime or size means another
+	// writer (a terminal login) replaced it, and only then is it read.
+	path := wsdashboard.RegistrationPath(c.r.opts.Dir, c.rec.ReplyID)
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	stamp := rowStamp{mod: info.ModTime().UnixNano(), size: info.Size()}
+	c.regMu.Lock()
+	known, same := c.rowStampSet, c.rowStampV == stamp
+	c.regMu.Unlock()
+	if known && same {
+		return
+	}
+	if rowForeign(c.r.opts.Dir, c.rec.ReplyID) {
+		c.markForeign()
+		return
+	}
+	c.regMu.Lock()
+	c.rowStampSet, c.rowStampV = true, stamp
+	c.regMu.Unlock()
+}
+
+type rowStamp struct {
+	mod  int64
+	size int64
 }
 
 // release lets a lead session go to the terminal harness that took its

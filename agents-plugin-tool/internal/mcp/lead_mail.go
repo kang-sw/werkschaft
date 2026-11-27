@@ -29,6 +29,12 @@ type LeadMailbox struct {
 
 	mu      sync.Mutex
 	watches map[*leadMailWatch]struct{}
+
+	// pmu guards the parked children's shared wake (WatchParked).
+	pmu      sync.Mutex
+	parkedW  map[*parkedMailWatch]struct{}
+	pkick    chan struct{}
+	pRunning bool
 }
 
 // leadMailWatch is one Watch call. claimed receives after a Drain took its

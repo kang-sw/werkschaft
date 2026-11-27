@@ -190,7 +190,9 @@ func (c *conv) expireIfDue() {
 	if !c.r.startupReady() {
 		return
 	}
+	c.mu.Lock()
 	c.expiring = true
+	c.mu.Unlock()
 	c.r.expireLater(rec.ReplyID)
 }
 
@@ -207,10 +209,13 @@ func (r *Runner) expireLater(id string) {
 
 // expire is expireLater's body; it reports whether id was deleted.
 func (r *Runner) expire(id string) bool {
-	c := r.conv(id)
+	c := r.conv(id) // rehydrates a parked child: its own loop closes it
 	if c == nil {
 		return false
 	}
+	c.mu.Lock()
+	c.expiring = true // not parked again meanwhile
+	c.mu.Unlock()
 	if hook := r.opts.beforeExpiryClose; hook != nil {
 		hook()
 	}
@@ -260,6 +265,10 @@ func (r *Runner) liveExpiryDescendants(root ParentRef) ([]string, bool) {
 			}
 		}
 		if rec, ok := r.closed[id]; ok {
+			if r.parked[id] {
+				// Open and quiet by construction; the cascade rehydrates it.
+				return expiryNode{parent: safeStopParent(id, rec.Lead), quiet: true}
+			}
 			return expiryNode{parent: safeStopParent(id, rec.Lead), closed: true}
 		}
 		return expiryNode{}
@@ -368,6 +377,7 @@ func (r *Runner) dropClosed(id string) (Record, bool) {
 	delete(r.closed, id)
 	delete(r.closedRows, id)
 	delete(r.deadRefusals, id)
+	r.dropParkedLocked(id)
 	if ok {
 		r.unindexChildLocked(rec)
 	}
@@ -398,7 +408,7 @@ func (r *Runner) hasLiveDescendantsLocked(root ParentRef, startupOpen map[string
 				continue
 			}
 			visited[id] = true
-			if _, pending := startupOpen[id]; pending || r.convs[id] != nil {
+			if _, pending := startupOpen[id]; pending || r.convs[id] != nil || r.parked[id] {
 				return true
 			}
 			if child, ok := r.closed[id]; ok {

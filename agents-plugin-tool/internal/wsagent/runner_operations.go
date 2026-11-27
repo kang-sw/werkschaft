@@ -96,8 +96,15 @@ func (r *Runner) sendFrom(id, text string, operator bool, sender string) (State,
 		r.opts.sendAdmitting(id)
 	}
 	c.wmu.Lock()
-	defer c.wmu.Unlock()
 	c.mu.Lock()
+	if c.parkedOut {
+		// Parked after open returned (maybePark holds wmu while it parks):
+		// open rehydrates it, and the send goes to the new conversation.
+		c.mu.Unlock()
+		c.wmu.Unlock()
+		return r.sendFrom(id, text, operator, sender)
+	}
+	defer c.wmu.Unlock()
 	if c.closed {
 		err := endedError(c.rec)
 		c.mu.Unlock()
@@ -646,7 +653,18 @@ func (r *Runner) open(id string) (*conv, error) {
 	r.mu.Lock()
 	c, open := r.convs[id]
 	rec, closed := r.closed[id]
+	parked := r.parked[id]
 	r.mu.Unlock()
+	if !open && parked {
+		// A parked child is open: rehydrate it from its record.
+		if c := r.unpark(id); c != nil {
+			return c, nil
+		}
+		r.mu.Lock()
+		c, open = r.convs[id]
+		rec, closed = r.closed[id]
+		r.mu.Unlock()
+	}
 	switch {
 	case open:
 		return c, nil
@@ -669,6 +687,9 @@ func (r *Runner) act(id string, fn func(c *conv) error) (State, error) {
 		}
 		err = fn(c)
 	}) {
+		if c.isParkedOut() {
+			return r.act(id, fn)
+		}
 		return State{}, endedError(c.record())
 	}
 	if err != nil {

@@ -87,7 +87,7 @@ func (d *Daemon) deliverConfigProposal(root, body string) configError {
 	// A lead can end between the index lookup and the mailbox append. Read
 	// its current registration under the same lock used by its writers.
 	current, err := ReadRegistration(d.dir, chosen.ReplyID)
-	if errors.Is(err, fs.ErrNotExist) || (err == nil && (!current.Live(time.Now()) || !configLeadCandidate(current, root))) {
+	if errors.Is(err, fs.ErrNotExist) || (err == nil && (!d.regLive(current, time.Now()) || !configLeadCandidate(current, root))) {
 		return configNoLead
 	}
 	if err != nil {
@@ -99,7 +99,7 @@ func (d *Daemon) deliverConfigProposal(root, body string) configError {
 	}
 	defer unlock()
 	current, err = ReadRegistration(d.dir, chosen.ReplyID)
-	if errors.Is(err, fs.ErrNotExist) || (err == nil && (!current.Live(time.Now()) ||
+	if errors.Is(err, fs.ErrNotExist) || (err == nil && (!d.regLive(current, time.Now()) ||
 		!configLeadCandidate(current, root) || (d.config.IsLead != nil && !d.config.IsLead(current)))) {
 		return configNoLead
 	}

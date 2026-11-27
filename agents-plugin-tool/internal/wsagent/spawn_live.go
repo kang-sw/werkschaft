@@ -193,7 +193,7 @@ func (c *conv) seedSpawnRows() {
 			// restart) has no count of its own to publish, and the zero would
 			// overwrite the row's: it republishes the row's.
 			if row, held := rows["pi:"+st.ID]; held && row.Compactions > st.Compactions {
-				if child := c.r.conv(st.ID); child != nil {
+				if child := c.r.resident(st.ID); child != nil {
 					child.seedCompactions(row.Compactions, row.CompactOrigin)
 					st.Compactions, st.CompactOrigin = child.compactionCount()
 				} else {
@@ -217,7 +217,7 @@ func (r *Runner) wakeSpawnParents(st State) {
 			return
 		}
 		seen[p.ReplyID] = true
-		if c := r.conv(p.ReplyID); c != nil {
+		if c := r.resident(p.ReplyID); c != nil {
 			select {
 			case c.spawnC <- struct{}{}:
 			default:

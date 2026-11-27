@@ -197,9 +197,16 @@ func (r *Runner) startWithServing(notify func(replyID, project string), serving 
 	open = r.expireBeforeServing(open, dead)
 	orphans := r.orphansAtStart(open)
 	startup := make([]*conv, 0, len(open))
+	cold := r.coldParkable(open, dead, orphans)
 	for _, rec := range open {
 		binding := bindings[rec.ReplyID]
 		refusal := dead[rec.ReplyID]
+		if cold[rec.ReplyID] {
+			// A waiting child with nothing pending holds no loop: its mail
+			// or a send rehydrates it (unpark).
+			r.loadParked(rec)
+			continue
+		}
 		// A cross-harness worker must finish the existing rejoin and
 		// retirement path, including settlement of a cut-off turn.
 		if refusal != nil && r.admitWorkerRecord(rec) == nil {
@@ -249,7 +256,7 @@ func (r *Runner) startWithServing(notify func(replyID, project string), serving 
 	}
 	// A child loaded before its parent found no parent to report to.
 	r.deliverPending()
-	r.startHeartbeatSweeper()
+	r.startParkSweeper()
 	if r.opts.Holders == nil {
 		// No holder to wait for.
 		r.markScanned()

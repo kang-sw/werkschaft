@@ -152,6 +152,14 @@ func (r *Runner) Compact(callerKey, target string, resume *bool) CompactResult {
 func (r *Runner) CompactWithSummary(callerKey, target string, resume *bool, lead *wscompact.LeadSummary) CompactResult {
 	target = strings.TrimSpace(target)
 	var own, dest *conv
+	if target != "" {
+		// A parked target is rehydrated first: only open sessions compact.
+		for _, rec := range r.parkedRecords() {
+			if rec.WSKey == target || AgentAddress(rec.ReplyID) == target {
+				r.unpark(rec.ReplyID)
+			}
+		}
+	}
 	r.mu.Lock()
 	for _, c := range r.convs {
 		rec := c.record()
@@ -304,7 +312,7 @@ func (c *conv) wsManagedWorkerCompaction() bool {
 
 // WorkerCompactionMode reports the effective mode of an open hosted worker.
 func (r *Runner) WorkerCompactionMode(conversation string) string {
-	c := r.conv(conversation)
+	c := r.resident(conversation)
 	if c == nil {
 		return ""
 	}
@@ -345,7 +353,7 @@ func emptyWorkerSummary() *wscompact.LeadSummary {
 // LeadCompactionMode reports the effective mode of an authenticated open
 // hosted lead. Discovery needs only the in-memory binding and mode cache.
 func (r *Runner) LeadCompactionMode(conversation string) string {
-	c := r.conv(conversation)
+	c := r.resident(conversation)
 	if c == nil {
 		return ""
 	}

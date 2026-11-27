@@ -117,7 +117,7 @@ func (d *Daemon) hiringEligible(replyID string) (Registration, error) {
 	if err != nil {
 		return reg, err
 	}
-	if !reg.Live(d.hireClock()) {
+	if !d.regLive(reg, d.hireClock()) {
 		return reg, errors.New("requester session has ended")
 	}
 	if reg.Agent || reg.Unlisted {
@@ -327,7 +327,7 @@ func (d *Daemon) settleHiresDeadlineLocked(proposals []HireProposal) (time.Time,
 		if p.Status == "pending" {
 			reg, err := ReadRegistration(d.dir, p.Requester)
 			switch {
-			case errors.Is(err, os.ErrNotExist) || (err == nil && !reg.Live(d.hireClock())):
+			case errors.Is(err, os.ErrNotExist) || (err == nil && !d.regLive(reg, d.hireClock())):
 				p.Status, p.ReasonClosed = "withdrawn", "requester session has ended"
 			case !d.hireClock().Before(p.ExpiresAt):
 				p.Status = "expired"
@@ -352,7 +352,7 @@ func (d *Daemon) settleHiresDeadlineLocked(proposals []HireProposal) (time.Time,
 			}
 			if p.Status == "pending" {
 				arm(p.ExpiresAt)
-				if err == nil {
+				if err == nil && !d.regOwned(reg) {
 					beat, parseErr := time.Parse(time.RFC3339, reg.HeartbeatAt)
 					if parseErr == nil {
 						// Live includes the boundary. Reread the row after it;

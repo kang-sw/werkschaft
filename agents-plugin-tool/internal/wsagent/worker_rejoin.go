@@ -215,7 +215,7 @@ func (c *conv) retireDowngradedWorker(hp holderProcess, wake bool) bool {
 		if rec.Parent == nil || rec.Parent.Kind != ParentConversation {
 			return false
 		}
-		parent := c.r.conv(rec.Parent.ReplyID)
+		parent := c.r.resident(rec.Parent.ReplyID)
 		if parent == nil || !downgradeSettledChild(rec, parent.record()) {
 			return false
 		}
