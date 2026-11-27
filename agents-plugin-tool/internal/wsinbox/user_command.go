@@ -9,6 +9,16 @@ const (
 	ucmdOpenPrefix = "<ws:ucmd"
 	ucmdClose      = "</ws:ucmd>"
 	ucmdPreamble   = "User requested execution of the following command."
+
+	ucmdAddOpen     = "<ws:ucmd-add"
+	ucmdAddClose    = "</ws:ucmd-add>"
+	ucmdAddAttrs    = ` scope="worktree" tool="session.register_user_command"`
+	ucmdReqOpen     = "<request>"
+	ucmdReqClose    = "</request>"
+	ucmdGuideOpen   = "<mcp-guidance>"
+	ucmdGuideClose  = "</mcp-guidance>"
+	ucmdAttachOpen  = "<attachments>"
+	ucmdAttachClose = "</attachments>"
 )
 
 // UserCommand is a structured user-command Ask Agent request carried inline
@@ -20,6 +30,11 @@ type UserCommand struct {
 	Cwd    string
 	Cmd    string
 	Prompt string
+	// Add marks a <ws:ucmd-add> block: the user's natural-language request that
+	// the agent registers a new user command (Request holds the text; Cmd,
+	// Label, Cwd and Prompt stay empty).
+	Add     bool
+	Request string
 }
 
 // UserCommandPart is a lossless segment of message text. Text always holds the
@@ -44,7 +59,7 @@ var (
 		"&#39;", "'",
 		"&amp;", "&",
 	)
-	ucmdTagPrefix  = regexp.MustCompile(`^</?ws:ucmd(?:[^A-Za-z0-9_.:-]|$)`)
+	ucmdTagPrefix  = regexp.MustCompile(`^</?ws:ucmd(?:-add)?(?:[^A-Za-z0-9_.:-]|$)`)
 	ucmdAttrRe     = regexp.MustCompile(`^([a-z]+)="([^"<]*)"`)
 	ucmdCmdOpenRe  = regexp.MustCompile(`^<cmd(?: cwd="([^"<]*)")?>`)
 	ucmdCmdClose   = "</cmd>"
@@ -92,6 +107,50 @@ func FormatUserCommand(u UserCommand) string {
 	b.WriteString("\n")
 	b.WriteString(ucmdClose)
 	return b.String()
+}
+
+// FormatUserCommandAdd serializes an add-command request into the canonical
+// <ws:ucmd-add> block: the request text plus the agent-facing tool guidance
+// (the guidance is opaque to the parser and never shown in the bubble).
+func FormatUserCommandAdd(request, guidance string) string {
+	var b strings.Builder
+	b.WriteString(ucmdAddOpen + ucmdAddAttrs + ">\n")
+	b.WriteString("  " + ucmdReqOpen + escapeUcmdText(request) + ucmdReqClose + "\n")
+	b.WriteString("  " + ucmdGuideOpen + "\n" + escapeUcmdText(guidance) + "\n  " + ucmdGuideClose + "\n")
+	b.WriteString(ucmdAddClose)
+	return b.String()
+}
+
+// parseUserCommandAdd parses a <ws:ucmd-add> block (nil when malformed).
+func parseUserCommandAdd(norm string) *UserCommand {
+	firstNL := strings.IndexByte(norm, '\n')
+	if firstNL < 0 || norm[:firstNL] != ucmdAddOpen+ucmdAddAttrs+">" || !strings.HasSuffix(norm, "\n"+ucmdAddClose) {
+		return nil
+	}
+	body := strings.TrimSpace(norm[firstNL+1 : len(norm)-len(ucmdAddClose)])
+	if !strings.HasPrefix(body, ucmdReqOpen) {
+		return nil
+	}
+	end := strings.Index(body, ucmdReqClose)
+	if end < 0 {
+		return nil
+	}
+	req := body[len(ucmdReqOpen):end]
+	rest := strings.TrimSpace(body[end+len(ucmdReqClose):])
+	if strings.HasPrefix(rest, ucmdAttachOpen) {
+		ae := strings.Index(rest, ucmdAttachClose)
+		if ae < 0 {
+			return nil
+		}
+		rest = strings.TrimSpace(rest[ae+len(ucmdAttachClose):])
+	}
+	if !strings.HasPrefix(rest, ucmdGuideOpen) || !strings.HasSuffix(rest, ucmdGuideClose) {
+		return nil
+	}
+	if strings.Contains(req, "<") || strings.TrimSpace(req) == "" {
+		return nil
+	}
+	return &UserCommand{Add: true, Request: ucmdUnescaper.Replace(req)}
 }
 
 // ParseUserCommands splits text at complete, line-delimited <ws:ucmd> blocks,
@@ -242,6 +301,9 @@ func walkUserCommandsPlain(text string, visit func(raw string, cmd *UserCommand)
 
 func parseUserCommand(raw string) *UserCommand {
 	norm := strings.ReplaceAll(raw, "\r\n", "\n")
+	if strings.HasPrefix(norm, ucmdAddOpen) {
+		return parseUserCommandAdd(norm)
+	}
 	if !strings.HasPrefix(norm, ucmdOpenPrefix) || !strings.HasSuffix(norm, "\n"+ucmdClose) {
 		return nil
 	}

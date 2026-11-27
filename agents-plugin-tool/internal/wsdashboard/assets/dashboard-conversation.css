@@ -1236,3 +1236,29 @@ html[data-mode="live"][data-sysopen] .exec-view-out[hidden] { display: none; }
 .d-turn-folded[hidden] { display: none; }
 .d-turn-drawer > .msg.fromlead[data-wb-clone] { align-self: stretch; max-width: none; background: color-mix(in srgb, var(--wb-fg) 4%, transparent); border-radius: 6px; padding: 4px 8px; }
 .d-turn[hidden] { display: none; }
+
+/* Add-command request (<ws:ucmd-add>): tonal violet variant of the request card. */
+.ucmd-req.is-add {
+  --ucmd-add-accent: #6a5de0;
+  --ucmd-add-ink: #5a4dd0;
+  --ucmd-add-chip: color-mix(in srgb, #6a5de0 13%, transparent);
+  --ucmd-add-chip-fg: #5a4dd0;
+  background: color-mix(in srgb, var(--ucmd-add-accent) 12%, var(--wb-card));
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .ucmd-req.is-add {
+    --ucmd-add-accent: #8b88f8;
+    --ucmd-add-ink: #c8c6ff;
+    --ucmd-add-chip: color-mix(in srgb, #b89cff 13%, transparent);
+    --ucmd-add-chip-fg: #c4b5e6;
+  }
+}
+:root[data-theme="dark"] .ucmd-req.is-add {
+  --ucmd-add-accent: #8b88f8;
+  --ucmd-add-ink: #c8c6ff;
+  --ucmd-add-chip: color-mix(in srgb, #b89cff 13%, transparent);
+  --ucmd-add-chip-fg: #c4b5e6;
+}
+.ucmd-req.is-add .ucmd-req-ico { background: color-mix(in srgb, var(--ucmd-add-accent) 18%, transparent); color: var(--ucmd-add-ink); }
+.ucmd-req-badge { font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 999px; background: var(--ucmd-add-chip); color: var(--ucmd-add-chip-fg); }
+.ucmd-req-tool-pill { margin-left: auto; font-family: var(--wb-mono); font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--wb-fg) 8%, transparent); color: var(--wb-primary); }
