@@ -258,6 +258,7 @@
       return r.height > 0 && bottom - top >= 1 && right - left >= 1;
     }
     function reading(scroller) {
+      if (doc && (doc.hidden || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-animation-paused")))) return null;
       // One synchronous capture has one viewport. Re-scanning every sticky
       // head for every candidate makes history initialization/resize cubic
       // in board size; reject offscreen boxes before walking their ancestry.

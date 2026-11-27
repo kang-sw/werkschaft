@@ -358,7 +358,7 @@
     entries.forEach(function (entry) {
       var el = entry.target, shown = entry.contentRect.width > 0 && entry.contentRect.height > 0;
       paneVisible[el.id] = shown;
-      if (shown && !el.wbScrollOwner) paneScroll[el.id] = el.scrollTop;
+      if (shown && PANES.indexOf(el.id) >= 0 && !el.wbScrollOwner) paneScroll[el.id] = el.scrollTop;
     });
   }) : null;
   function notePanes() {
@@ -381,6 +381,12 @@
       if (!paneFrame) paneFrame = requestAnimationFrame(notePanes);
     }, { passive: true });
   });
+  if (paneObserver) {
+    ["files", "cterm-panes"].forEach(function (id) {
+      var el = $(id);
+      if (el && el.id) paneObserver.observe(el);
+    });
+  }
   // Region messages that arrive in one frame (a warm switch's reconnect sends
   // every region that changed meanwhile) share the first one's snapshot: the
   // offsets read again after a swap's writes would force a layout per message
@@ -612,7 +618,12 @@
     modelHistorySync();
   }
   syncChead();
-  function tabShown(t) { return visible($(PANE[t])) || (t === "convo" && (visible(fpane) || visible($("cterm-panes")))); }
+  function paneShown(id) {
+    var el = $(id);
+    if (!el) return false;
+    return paneObserver && Object.prototype.hasOwnProperty.call(paneVisible, id) ? paneVisible[id] : visible(el);
+  }
+  function tabShown(t) { return paneShown(PANE[t]) || (t === "convo" && (paneShown("files") || paneShown("cterm-panes"))); }
   function tabDot(t) { var b = doc.querySelector('#tabbar [data-tab="' + t + '"]'); return b && b.querySelector(".tdot"); }
   function ctabDot() { return doc.querySelector('#ctabs [data-ctab="convo"] .tdot'); }
   var bootingPanes = false;
@@ -632,18 +643,21 @@
     pinConvo();
     if (typeof queueSyncConvoBottom === "function") queueSyncConvoBottom();
     nearTop(); // a conversation shown too short to scroll still loads older entries
+    var fs = visible(fpane);
+    paneVisible.files = fs;
+    var ts = visible($("cterm-panes"));
+    paneVisible["cterm-panes"] = ts;
     Object.keys(PANE).forEach(function (t) { var d = tabDot(t); if (d && tabShown(t)) d.classList.remove("on"); });
     var cv = typeof convoVisible === "function" ? convoVisible() : (typeof paneVisible.convo === "boolean" ? paneVisible.convo : visible(convo));
     if (cv && ctabDot()) ctabDot().classList.remove("on");
     // The Files pane hears each time it comes into view (a tab, a layout,
     // or a resize showed it) and each time it leaves.
-    var fs = visible(fpane);
     if (fs !== filesSeen && filesTab) {
       if (fs) filesTab.shown();
       else filesTab.hidden();
     }
     filesSeen = fs;
-    if (window.WsTerm && window.WsTerm.syncCtab) window.WsTerm.syncCtab(!!(grid && grid.getAttribute("data-ctab") === "term"), visible($("cterm-panes")));
+    if (window.WsTerm && window.WsTerm.syncCtab) window.WsTerm.syncCtab(!!(grid && grid.getAttribute("data-ctab") === "term"), ts);
     if (typeof convMotionRelayout === "function") convMotionRelayout();
   }
   function setLayout() {

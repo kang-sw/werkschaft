@@ -56,6 +56,15 @@
   }
 
   function auSyncSelectedMarks() {
+    var box = $("convo");
+    if (!box) return;
+    if (!auWindows.length) {
+      if (box.querySelector(".au-sel")) {
+        var prevSel = q(".au-sel", box);
+        for (var p = 0; p < prevSel.length; p++) prevSel[p].classList.remove("au-sel");
+      }
+      return;
+    }
     var activeCalls = Object.create(null), activeEvents = Object.create(null);
     for (var i = 0; i < auWindows.length; i++) {
       if (auWindows[i].eventId) activeEvents[auWindows[i].eventId] = true;
@@ -920,7 +929,7 @@
   }
 
   // --- Lazy post-render hydration for call rows ---
-  function auApplyHydration(summaries, markChecked) {
+  function auApplyHydration(summaries, markChecked, opts) {
     var byCall = Object.create(null);
     var inBytesByCall = Object.create(null);
     var outBytesByCall = Object.create(null);
@@ -945,7 +954,9 @@
         }
       }
     }
-    var rows = auCallElements();
+    var box = $("convo");
+    var sel = opts && opts.unhydratedOnly ? ".au-row[data-call]:not([data-au-hydrated])" : ".au-row[data-call]";
+    var rows = box ? q(sel, box) : [];
     for (var j = 0; j < rows.length; j++) {
       var row = rows[j];
       var cid = row.getAttribute("data-call");
@@ -1114,7 +1125,7 @@
     var sessionId = auSessionRid();
     var st = sessionId ? auHydratedSessions[sessionId] : null;
     if (st && st.events.length) {
-      auApplyHydration(st.events, false);
+      auApplyHydration(st.events, false, { unhydratedOnly: true });
     }
     if (!auHasUnhydratedRows() || auHydrateTimer) return;
     auHydrateTimer = setTimeout(auHydrateCalls, 0);
@@ -1190,13 +1201,32 @@
   });
 
   if (window.MutationObserver && $("convo")) {
+    var auMutRaf = 0, auMutTimer = 0, auMutDirty = false;
+    var auFlushMutations = function () {
+      auMutRaf = 0;
+      auMutTimer = 0;
+      if (!auMutDirty) return;
+      auMutDirty = false;
+      if (auHasUnhydratedRows()) auScheduleHydration();
+      auSyncSelectedMarks();
+      if (auFocusedWin) auUpdateNavButtons(auFocusedWin);
+    };
+    var auQueueMutations = function () {
+      if (auMutRaf || auMutTimer) return;
+      var hidden = !!(doc && (doc.hidden || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-animation-paused"))));
+      if (!hidden && typeof requestAnimationFrame === "function") {
+        auMutRaf = requestAnimationFrame(auFlushMutations);
+      } else {
+        auMutTimer = setTimeout(auFlushMutations, 0);
+      }
+    };
     new MutationObserver(function (mutations) {
       var hasCallNodes = false;
       for (var i = 0; i < mutations.length; i++) {
         var added = mutations[i].addedNodes;
         for (var k = 0; k < added.length; k++) {
           var n = added[k];
-          if (n && n.nodeType === 1 && ((n.matches && (n.matches(".au-tools") || n.matches(".au-row[data-call]"))) || (n.querySelector && n.querySelector(".au-row[data-call]")))) {
+          if (n && n.nodeType === 1 && ((n.matches && (n.matches(".au-tools") || n.matches(".au-row[data-call]:not([data-au-hydrated])"))) || (n.querySelector && n.querySelector(".au-row[data-call]:not([data-au-hydrated])")))) {
             hasCallNodes = true;
             break;
           }
@@ -1204,9 +1234,8 @@
         if (hasCallNodes) break;
       }
       if (!hasCallNodes) return;
-      auScheduleHydration();
-      auSyncSelectedMarks();
-      if (auFocusedWin) auUpdateNavButtons(auFocusedWin);
+      auMutDirty = true;
+      auQueueMutations();
     }).observe($("convo"), { childList: true, subtree: true });
   }
   auScheduleHydration();
