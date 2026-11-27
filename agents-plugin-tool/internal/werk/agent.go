@@ -54,7 +54,11 @@ type correlatedWSTools interface {
 // Config is what an Agent runs with.
 type Config struct {
 	// Dir is the session directory the conversation file lives under.
+	// Ignored when Ephemeral is true.
 	Dir string
+	// Ephemeral runs the conversation purely in memory with zero disk I/O:
+	// OpenStore and file locks are skipped, and WS tools are forbidden.
+	Ephemeral bool
 	// Root and Cwd are the worktree root and the working directory;
 	// Authority is the worker's permission level.
 	Root, Cwd string
@@ -170,7 +174,7 @@ type toolEntry struct {
 // Agent is one session's loop.
 type Agent struct {
 	cfg           Config
-	store         *Store
+	store         conversationStore
 	log           *writer
 	out           *emitter
 	now           func() time.Time
@@ -239,6 +243,9 @@ func New(cfg Config) (*Agent, error) {
 	if !cfg.Authority.Valid() {
 		return nil, fmt.Errorf("werk: a worker needs an authority (read-only, workdir-write or full); got %q", string(cfg.Authority))
 	}
+	if cfg.Ephemeral && cfg.WS != nil {
+		return nil, errors.New("werk: ephemeral sessions cannot attach ws tools")
+	}
 	now := cfg.Now
 	if now == nil {
 		now = time.Now
@@ -247,10 +254,20 @@ func New(cfg Config) (*Agent, error) {
 	if session == "" {
 		session = NewSessionID()
 	}
-	store, items, err := OpenStore(cfg.Dir, session, func() int64 { return now().UnixMilli() })
-	if err != nil {
-		return nil, fmt.Errorf("werk: open the conversation: %w", err)
+	var (
+		store conversationStore
+		items []json.RawMessage
+		err   error
+	)
+	if cfg.Ephemeral {
+		store = newMemoryStore(session)
+	} else {
+		store, items, err = OpenStore(cfg.Dir, session, func() int64 { return now().UnixMilli() })
+		if err != nil {
+			return nil, fmt.Errorf("werk: open the conversation: %w", err)
+		}
 	}
+	initial := store.initialJournal()
 	a := &Agent{
 		cfg:   cfg,
 		store: store,
@@ -258,13 +275,15 @@ func New(cfg Config) (*Agent, error) {
 		now:   now,
 		model: cfg.Model, effort: cfg.Effort, session: session,
 		transcript: items, resumed: len(items),
-		journal: store.turnJournal, turn: store.turnJournal.number,
+		journal: initial, turn: initial.number,
 	}
-	a.skills = make(map[string]Skill, len(cfg.Skills))
-	for _, skill := range cfg.Skills {
-		a.skills[skill.Name] = skill
+	if !cfg.Ephemeral {
+		a.skills = make(map[string]Skill, len(cfg.Skills))
+		for _, skill := range cfg.Skills {
+			a.skills[skill.Name] = skill
+		}
+		a.skillPrompt = skillInstructions(cfg.Skills)
 	}
-	a.skillPrompt = skillInstructions(cfg.Skills)
 	a.log = newWriter(store, cfg.BeforeAppend, func(err error) {
 		a.out.line(Line{T: LineNotice, Text: "the conversation could not be saved: " + err.Error()})
 	})
@@ -287,6 +306,29 @@ func (a *Agent) Transcript() []json.RawMessage {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return append([]json.RawMessage(nil), a.transcript...)
+}
+
+// Reset clears the in-memory transcript and turn journal between turns so an
+// ephemeral agent can start a clean conversation without restarting.
+func (a *Agent) Reset() error {
+	_ = a.log.Flush()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.running {
+		return errors.New("werk: cannot reset while a turn is running")
+	}
+	a.transcript = nil
+	a.steers = nil
+	a.turn = 0
+	a.journal = turnJournal{}
+	a.resumed = 0
+	a.repaired = 0
+	a.lastReply = ""
+	a.lastReason = ""
+	a.lastError = ""
+	a.taken = nil
+	a.store.reset()
+	return nil
 }
 
 // interruptedOutput answers a tool call a restart or an interrupt cut short.
@@ -407,7 +449,7 @@ func (a *Agent) ServeCommands(ctx context.Context, cmds <-chan Command) error {
 	a.mu.Lock()
 	init := Line{T: LineInit, Session: a.session, Version: ProtocolVersion, Model: a.model, Effort: a.effort, Resumed: a.resumed}
 	a.mu.Unlock()
-	if checkpoint := a.store.checkpoint; checkpoint != nil {
+	if checkpoint := a.store.checkpointLine(); checkpoint != nil {
 		a.out.line(checkpoint.event(true))
 	}
 	a.out.line(init)
@@ -457,14 +499,25 @@ func (a *Agent) ServeCommands(ctx context.Context, cmds <-chan Command) error {
 			<-done
 		}
 	}()
+	applyReset := func(cmd Command) {
+		err := a.Reset()
+		if cmd.Ack != nil {
+			cmd.Ack <- err
+		}
+	}
 	finish := func() {
 		cancel()
 		running = false
 		a.dropSteers()
-		if len(queued) > 0 {
+		for len(queued) > 0 {
 			next := queued[0]
 			queued = queued[1:]
+			if next.Type == CmdReset {
+				applyReset(next)
+				continue
+			}
 			start(next)
+			break
 		}
 	}
 	for {
@@ -492,6 +545,12 @@ func (a *Agent) ServeCommands(ctx context.Context, cmds <-chan Command) error {
 					queued = append(queued, c)
 				} else {
 					start(c)
+				}
+			case CmdReset:
+				if running {
+					queued = append(queued, c)
+				} else {
+					applyReset(c)
 				}
 			case CmdSteer:
 				if c.TurnID != "" {
@@ -912,6 +971,9 @@ func (a *Agent) streamHandler(turn int) StreamHandler {
 // instructions is the harness's own preamble followed by the composed
 // instruction text. The caller holds a.mu.
 func (a *Agent) instructions() string {
+	if a.cfg.Ephemeral {
+		return strings.TrimSpace(a.cfg.Instructions)
+	}
 	var b strings.Builder
 	if a.cfg.Lead {
 		b.WriteString("You are a ws lead running on ws's builtin agent harness. ")

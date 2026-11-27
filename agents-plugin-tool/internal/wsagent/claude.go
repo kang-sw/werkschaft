@@ -247,8 +247,49 @@ func claudeOneShotArgs(model, effort string) []string {
 	return args
 }
 
+// claudeEphemeralArgs is the command line of a warm ephemeral stream-json
+// Claude process: no session persistence, no tools, strict empty MCP config,
+// Skill disallowed, while keeping slash commands active so in-stream /clear
+// resets conversation context without respawning.
+func claudeEphemeralArgs(spec StartSpec) []string {
+	disabled := map[string]bool{}
+	for _, id := range claudeDisabledPlugins {
+		disabled[id] = false
+	}
+	settings, _ := json.Marshal(map[string]any{"enabledPlugins": disabled})
+	args := []string{
+		"-p",
+		"--input-format", "stream-json",
+		"--output-format", "stream-json",
+		"--verbose",
+		"--setting-sources", "",
+		"--settings", string(settings),
+		"--strict-mcp-config",
+		"--tools", "",
+		"--permission-mode", "dontAsk",
+		"--no-session-persistence",
+		"--disallowedTools", "Skill",
+	}
+	if spec.Instructions != "" {
+		args = append(args, "--append-system-prompt-file", spec.Instructions)
+	}
+	if sp := strings.TrimSpace(spec.SystemPrompt); sp != "" {
+		args = append(args, "--append-system-prompt", sp)
+	}
+	if spec.Model != "" {
+		args = append(args, "--model", spec.Model)
+	}
+	if spec.Effort != "" {
+		args = append(args, "--effort", spec.Effort)
+	}
+	return args
+}
+
 // claudeArgs is the claude command line for spec, without the executable.
 func claudeArgs(spec StartSpec) ([]string, error) {
+	if spec.Ephemeral {
+		return claudeEphemeralArgs(spec), nil
+	}
 	if spec.Lead != nil {
 		return claudeLeadArgs(spec)
 	}
@@ -537,6 +578,15 @@ func checkClaudeInit(init claudeInit, spec StartSpec) error {
 
 // Start launches the claude process for spec.
 func (b ClaudeBackend) Start(ctx context.Context, spec StartSpec) (Process, error) {
+	if spec.Ephemeral {
+		spec.Lead = nil
+		spec.Holder = nil
+		spec.MCPSession = nil
+		spec.WSMCP = nil
+		spec.SessionState = false
+		spec.audit = nil
+		spec.Profile = Profile{}
+	}
 	command, pre, err := harnessCommand(b.Command, "claude")
 	if err != nil {
 		return nil, fmt.Errorf("claude backend: %w", err)
@@ -593,5 +643,5 @@ func (b ClaudeBackend) Start(ctx context.Context, spec StartSpec) (Process, erro
 		// the list it had.
 		p.send(claudeProtocol{}.requestLine(claudeCommandsAsk, map[string]any{"subtype": "initialize"}))
 	}
-	return claudeProcess{streamProcess: p, lead: spec.Lead != nil}, nil
+	return claudeProcess{streamProcess: p, lead: spec.Lead != nil, ephemeral: spec.Ephemeral}, nil
 }

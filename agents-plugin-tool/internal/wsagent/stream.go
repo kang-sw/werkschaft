@@ -117,10 +117,13 @@ func newStreamProcess(mapper lineMapper, proto lineProtocol) *streamProcess {
 
 // startChild starts cmd and maps its output: under a session holder when
 // spec asks for one (a lead conversation), else as the daemon's own child.
+// Ephemeral launches skip holder and audit capture unconditionally.
 func startChild(spec StartSpec, cmd *exec.Cmd, mapper lineMapper, proto lineProtocol) (*streamProcess, error) {
 	p := newStreamProcess(mapper, proto)
-	p.prepareAudit(spec, mapper)
-	if spec.Holder != nil {
+	if !spec.Ephemeral {
+		p.prepareAudit(spec, mapper)
+	}
+	if !spec.Ephemeral && spec.Holder != nil {
 		if err := spec.Holder.start(p, cmd); err != nil {
 			p.closeAudit()
 			return nil, err
@@ -420,6 +423,18 @@ func (p *streamProcess) requestBody(name string, req map[string]any, timeout tim
 
 // requestBodyID lets a mapper register a probe before its response can arrive.
 func (p *streamProcess) requestBodyID(id, name string, req map[string]any, timeout time.Duration) (json.RawMessage, error) {
+	return p.requestBodyIDContext(context.Background(), id, name, req, timeout)
+}
+
+// requestBodyIDContext sends a request and waits for its response, honouring
+// ctx cancellation as well as timeout.
+func (p *streamProcess) requestBodyIDContext(ctx context.Context, id, name string, req map[string]any, timeout time.Duration) (json.RawMessage, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	ch := make(chan controlAnswer, 1)
 	p.ctlMu.Lock()
 	p.waiters[id] = ch
@@ -432,6 +447,8 @@ func (p *streamProcess) requestBodyID(id, name string, req map[string]any, timeo
 	if err := p.writeLine(p.proto.requestLine(id, req)); err != nil {
 		return nil, err
 	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case a := <-ch:
 		if !a.ok {
@@ -441,9 +458,11 @@ func (p *streamProcess) requestBodyID(id, name string, req map[string]any, timeo
 			return nil, errors.New(a.err)
 		}
 		return a.body, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case <-p.exited:
 		return nil, errors.New("the process exited")
-	case <-time.After(timeout):
+	case <-timer.C:
 		return nil, fmt.Errorf("no answer to %s within %s", name, timeout)
 	}
 }

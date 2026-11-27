@@ -140,6 +140,13 @@ type LifecyclePolicy struct {
 	// steers once compactHardSteered is set, for backends whose steer injects
 	// a full prompt turn instead of an in-turn steer RPC.
 	SingleHardCompactionSteer bool
+	// EphemeralNoScratchCwd marks an in-process backend that needs no scratch
+	// cwd directory created on disk for EphemeralPool slots.
+	EphemeralNoScratchCwd bool
+	// EphemeralIsolatedStateDir marks a backend whose ephemeral process writes
+	// native session state that must be redirected into a pool-owned temporary
+	// directory (StartSpec.ephemeralStateDir) and deleted on eviction/close.
+	EphemeralIsolatedStateDir bool
 }
 
 // ExecOptIn names an exec-cutover opt-in: the config Key that must say on and
@@ -221,6 +228,13 @@ type workerSetup interface {
 	// models the user configured (none: a harness that ships no default
 	// model); "" when it is.
 	workerTierGap(tiers map[string]wsconfig.AgentTier) string
+}
+
+// ephemeralStatePruner is implemented by a backend whose ephemeral sessions
+// write native artifacts inside StartSpec.ephemeralStateDir that need bounded
+// LRU pruning between resets while preserving keepSession.
+type ephemeralStatePruner interface {
+	pruneEphemeralStateDir(dir, keepSession string, maxKeep int)
 }
 
 func (r *Runner) permissionPolicy(backend string) PermissionPolicy {

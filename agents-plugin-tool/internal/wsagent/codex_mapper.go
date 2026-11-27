@@ -345,6 +345,15 @@ func (m *codexMapper) response(msg codexWire, replies lineReplies, now int64) []
 				answer.ok, answer.err = false, "Codex thread response has no thread id"
 				break
 			}
+			if m.sessionID != "" && m.sessionID != r.Thread.ID {
+				// Warm thread/start reset: clear per-thread turn/item state so
+				// the new thread starts clean even if it reuses turn or item ids.
+				m.turnID, m.endedTurn, m.compact, m.retry, m.context = "", "", false, 0, nil
+				clear(m.texts)
+				clear(m.started)
+				clear(m.finished)
+				clear(m.approvals)
+			}
 			m.sessionID = r.Thread.ID
 			var demoted []CapabilityItem
 			if r.Thread.Model == nil {

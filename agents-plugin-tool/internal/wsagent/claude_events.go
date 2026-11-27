@@ -88,7 +88,9 @@ func (m *claudeMapper) mapEvents(line []byte, replies lineReplies, observeLimits
 			// is known from its first turn on, so the meter and the
 			// compaction thresholds never see a zero window mid-turn.
 			m.model = init.Model
-			m.askContextUsage(replies)
+			if !m.spec.Ephemeral {
+				m.askContextUsage(replies)
+			}
 			out := []Event{m.harnessReport(init)}
 			if init.SessionID != "" {
 				out = append(out, Event{SessionID: init.SessionID})
@@ -249,6 +251,12 @@ func (m *claudeMapper) mapEvents(line []byte, replies lineReplies, observeLimits
 			return []Event{m.status()}
 		}
 	case "result":
+		if l.LocalCommand == "clear" {
+			m.context = nil
+			m.uuids = nil
+			m.evidence = nil
+			m.compacted = false
+		}
 		out := m.closeTurn(now)
 		if m.retrying {
 			m.retrying = false

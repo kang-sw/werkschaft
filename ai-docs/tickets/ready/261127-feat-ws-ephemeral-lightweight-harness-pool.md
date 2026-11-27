@@ -172,6 +172,30 @@ type EphemeralRequest struct {
    - Unit and fake-backend/process tests covering exact `(harness, model, effort/tier)` keying, zero `Runner`/`wsmeta`/`wslive`/`wsholder` side effects, `PureOneShot` vs `BoundedRotation`, `ErrUnsupported` process-restart fallback, idle TTL eviction, timeout fallback, `werk` zero-disk `OpenStore` skip + `Agent.Reset()`, per-slot serialization / same-key queueing, and `agy` isolated `--gemini-dir` bounded cleanup.
    - Env-gated real-CLI isolation probe test per harness (skipped by default; run on a machine with the CLI installed): after N pool calls plus a `Reset`, assert that no session / rollout / transcript files appear in the harness-native session location (`claude` no `.jsonl`; `codex` no rollout `.jsonl`; `agy` only inside the isolated `--gemini-dir`, then removed by pool cleanup), and that no tool or MCP call is reachable beyond the documented residual set. This is the check that confirms the empirical Windows probe claims the fake-backend tests cannot.
 
+### Result (04226a5d) - 2026-11-28
+
+- **What landed (`af19cafec..04226a5de`):**
+  - `internal/werk` (`cf546b22`): Added `Config.Ephemeral`, an in-memory `storeBackend` implementation (`memoryStore`) bypassing `OpenStore` and file locks for zero disk I/O, and `Agent.Reset()` / `CmdReset` clearing in-memory transcript/journal/prompt state while enforcing `cfg.WS == nil`.
+  - `internal/wsagent` (`9112dd77`, `04226a5d`):
+    - Extended `StartSpec` with `Ephemeral bool`, inline `SystemPrompt string`, and private `ephemeralStateDir`; added optional `conversationResetter` (`Reset(ctx context.Context) error`) wired through `processControls` / `controlsFor`; added `LifecyclePolicy` traits (`EphemeralNoScratchCwd`, `EphemeralIsolatedStateDir`) and `ephemeralStatePruner` seam so common pool code stays free of harness-name branches.
+    - Extended all 4 backends for ephemeral non-persistent isolation and warm `Reset`:
+      - `werk` (`werk_loop.go`): skips MCP/session-dir/holder requirements, runs read-only with inline system prompt and `CmdReset`.
+      - `codex` (`codex.go`, `codex_mapper.go`): runs `codex app-server` with `-c features.apps=false`, `-c features.plugins=false`, and `-c mcp_servers.<name>.enabled=false` for user-configured `$CODEX_HOME/config.toml` servers, `thread/start` `ephemeral: true`, read-only sandbox + `approvalPolicy: never`, scratch cwd, warm `thread/start` reset with best-effort `thread/unsubscribe` on superseded threads.
+      - `claude` (`claude.go`, `claude_process.go`, `claude_events.go`): runs with `--no-session-persistence`, `--tools ""`, `--strict-mcp-config`, `--disallowedTools Skill`, `--append-system-prompt`, keeping slash commands enabled so `Reset` runs `/clear` in-stream.
+      - `agy` (`agy.go`): runs shared `agy acp` (without `--process-per-session`) with isolated `--gemini-dir`, `mcpServers: []`, scratch cwd, auto-deny (`reject_once` / `cancelled`) for ACP `session/request_permission`, `Reset` via `session/close` + `session/new` rebinding `agyMapper`, and `pruneAgyGeminiDir` bounded LRU cleanup.
+    - Implemented `EphemeralPool` (`ephemeral_pool.go`) with exact `(harness, model, effort, provider, mode, systemPrompt)` keying, lazy start, FIFO per-slot serialization, `PureOneShot` & `BoundedRotation`, documented package defaults (`DefaultEphemeralIdleTTL = 5m`, `DefaultEphemeralMaxTurns = 20`, `DefaultEphemeralMaxTokens = 0`, `DefaultEphemeralTimeout = 30s`, `DefaultEphemeralMaxStateSessions = 4`), optional JSON `ResponseSchema` validation, timeout interrupt + async cleanup hand-off, `ErrUnsupported` process-restart fallback, idle TTL eviction, and `Close` cleanup.
+    - Added unit/fake-CLI tests (`ephemeral_pool_test.go`, `backend_policy_test.go`) and the env-gated real-CLI isolation probe (`ephemeral_probe_test.go`, gated by `WS_EPHEMERAL_PROBE=1`).
+- **Review (`code-review-lite`, one pass):** Resolved both Important findings (`DefaultEphemeralTimeout` applied when `Timeout <= 0` with dedicated test; Codex user/apps/plugin MCP suppression plus probe tool-reachability assertions) and folded four Minor fixes (preserve healthy warm slot on pre-send ctx expiry, remove dead `slot.dirty`, drain pending events before `Send`, best-effort `thread/unsubscribe` on Codex `Reset`). Remaining Minor notes: `pruneAgyGeminiDir` `.db` naming heuristic and fake-CLI wire fidelity are covered only by the env-gated real-CLI probe (`WS_EPHEMERAL_PROBE=1`).
+- **Verification:**
+  - `cd agents-plugin-tool && go test -v -race -count=1 ./internal/wsagent -run 'TestCommonCodeHasNoHarnessNameBranch|TestBuiltinBackendPolicyTable|TestEphemeral|TestWerkEphemeral|TestCodexEphemeral|TestClaudeEphemeral|TestAgyEphemeral'`: PASS (13 passed, 1 skipped `TestEphemeralPoolRealCLIProbe` env-gated).
+  - `cd agents-plugin-tool && go test -race -count=1 -timeout 10m ./internal/werk/... ./internal/wsagent/...`: PASS (`internal/werk` 5.80s, `internal/wsagent` 187.74s).
+  - `cd agents-plugin-tool && go build ./...`: PASS.
+  - `cd agents-plugin-tool && GOOS=windows go vet ./...`: PASS.
+- **Decisions:**
+  - Routed ephemeral scratch-cwd and isolated-state-dir behavior through `LifecyclePolicy` and an optional `ephemeralStatePruner` interface (`backend_policy.go`, `agy.go`, `werk.go`) instead of harness-name switches in `ephemeral_pool.go`, preserving `TestCommonCodeHasNoHarnessNameBranch`.
+  - Added `EphemeralPoolOptions.DefaultTimeout` (0 -> `DefaultEphemeralTimeout`) and applied it when `EphemeralRequest.Timeout <= 0` so zero-Timeout callers get bounded waits rather than unbounded FIFO queue stalls.
+  - Suppressed user-configured Codex MCP servers by reading `$CODEX_HOME/config.toml` once at `CodexBackend.Start` and disabling discovered servers alongside `ws`/`wsflow`, `features.apps=false`, and `features.plugins=false`.
+
 ### Phase 2: Companion Reaction and agent.spawn Dynamic Tier Router Integration
 
 *Depends on Phase 1 landing (`EphemeralPool` and all 4 harness extensions).*

@@ -47,6 +47,9 @@ const (
 	CmdSet = "set"
 	// CmdCompact selects a new model input at the next quiescent boundary.
 	CmdCompact = "compact"
+	// CmdReset clears the in-memory transcript and turn journal at the next
+	// quiescent boundary (for warm ephemeral reuse).
+	CmdReset = "reset"
 )
 
 // Steer is an admitted mid-turn message. ID is stable across daemon openings.
@@ -66,6 +69,8 @@ type Command struct {
 	Effort      *string                `json:"effort,omitempty"`
 	Steers      []Steer                `json:"-"`
 	LeadSummary *wscompact.LeadSummary `json:"-"`
+	// Ack, when non-nil on CmdReset, receives the reset result once applied.
+	Ack chan<- error `json:"-"`
 }
 
 // Line types, process to daemon.
