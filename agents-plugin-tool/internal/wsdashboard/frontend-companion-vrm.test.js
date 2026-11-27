@@ -89,6 +89,16 @@ function makeFakeElement(tag, doc) {
         setTransform() {},
         save() {},
         restore() {},
+        translate() {},
+        rotate() {},
+        beginPath() {},
+        closePath() {},
+        moveTo() {},
+        lineTo() {},
+        arc() {},
+        ellipse() {},
+        stroke() {},
+        fill() {},
         getImageData: () => ({ data: [] })
       };
     },
@@ -930,8 +940,8 @@ test("VRM rail dock disables dragging, zeroes vertical lift/hop, survives rail D
     },
     ResizeObserver: class { observe() {} disconnect() {} },
     MutationObserver: class {
-      constructor(cb) { mutationCb = cb; }
-      observe() {}
+      constructor(cb) { this.cb = cb; }
+      observe(target) { if (target === railEl) mutationCb = this.cb; }
       disconnect() {}
     },
     performance: { now: () => now },
@@ -1329,5 +1339,245 @@ test("Co-Lead 3D beveled laptop prop frames strictly in bottom <=19% below chin 
     rig.dispose();
     assert.equal(capturedScene.children.some(c => c.name === "ws-colead-laptop"), false, "dispose must remove laptop prop from scene");
     assert.equal(capturedScene.children.filter(c => c.isPointLight).length, 0, "dispose must remove screen bounce light from scene");
+  }
+});
+
+test("Step 3: deterministic 6-color session palette, interruptible laptop swap, rapid-switch dizzy egg, recovery, and cooldown", () => {
+  const { C } = loadCompanion();
+  assert.equal(typeof C.sessionAccentForKey, "function", "sessionAccentForKey must be exported");
+  const palette = C.vrmCoLeadMath.SESSION_ACCENT_PALETTE;
+  assert.equal(palette.length, 6, "palette must have 6 curated colors");
+
+  // Deterministic mapping and spread across all 6 hues.
+  const seenHex = new Set();
+  for (let i = 1; i <= 30; i++) {
+    const rid = `session-${i}`;
+    const a1 = C.sessionAccentForKey(rid);
+    const a2 = C.sessionAccentForKey(rid);
+    assert.equal(a1.hex, a2.hex, "sessionAccentForKey must be deterministic");
+    seenHex.add(a1.hex);
+  }
+  assert.equal(seenHex.size, 6, "sessionAccentForKey must span all 6 palette colors");
+
+  // Pick two distinct sessions with different accents.
+  const ridA = "alpha01";
+  const accentA = C.sessionAccentForKey(ridA).hex;
+  let ridB = "alpha02";
+  for (let i = 2; i <= 20; i++) {
+    const cand = `alpha${String(i).padStart(2, "0")}`;
+    if (C.sessionAccentForKey(cand).hex !== accentA) { ridB = cand; break; }
+  }
+  const accentB = C.sessionAccentForKey(ridB).hex;
+  assert.notEqual(accentA, accentB);
+
+  const co = C.createVrmCoLead({});
+  co.syncInitialSession(ridA);
+  assert.equal(co.getCoLeadState().activeSessionId, ridA);
+  assert.equal(co.getCoLeadState().laptopAccent, accentA);
+  assert.equal(co.getCoLeadState().swapActive, false, "initial sync must not animate swap");
+
+  // Idempotency: re-selecting the same session ID must NOT trigger a swap.
+  const sameRes = co.onSessionSwitch(ridA, { nowMs: 100 });
+  assert.equal(sameRes.swapped, false, "same rid must not trigger redundant swap");
+  assert.equal(co.getCoLeadState().swapActive, false);
+
+  // Full swap lifecycle: tuck-away (old color) -> trough color switch -> slide-in (new color) -> settle -> typing.
+  const swRes = co.onSessionSwitch(ridB, { nowMs: 200 });
+  assert.equal(swRes.swapped, true);
+  assert.equal(swRes.dizzyTriggered, false);
+  assert.equal(co.getCoLeadState().laptopAccent, accentA, "outgoing laptop keeps old color before trough");
+  assert.equal(co.getCoLeadState().targetLaptopAccent, accentB);
+
+  let t = 0;
+  let sawSwapOut = false, sawSwapIn = false, sawSwapSettle = false;
+  let minOffsetY = 0;
+  let colorSwitchedAt = -1;
+  for (let i = 0; i < 24; i++) {
+    t += 0.05;
+    const out = co.step({ dt: 0.05, elapsed: t, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+    const st = co.getCoLeadState();
+    for (const [bone, rot] of Object.entries(out.boneTargets)) {
+      for (const v of rot) assert.ok(Number.isFinite(v), `${bone} rotation must remain finite during swap`);
+    }
+    assert.ok(Number.isFinite(st.liveLaptopOffsetY) && Number.isFinite(st.liveLaptopOffsetX));
+    if (st.liveLaptopOffsetY < minOffsetY) minOffsetY = st.liveLaptopOffsetY;
+    if (out.mode === "swap-out") sawSwapOut = true;
+    if (out.mode === "swap-in") sawSwapIn = true;
+    if (out.mode === "swap-settle") sawSwapSettle = true;
+    if (colorSwitchedAt < 0 && st.laptopAccent === accentB) colorSwitchedAt = t;
+  }
+  assert.equal(sawSwapOut, true, "swap must visit swap-out tuck-away phase");
+  assert.equal(sawSwapIn, true, "swap must visit swap-in slide-in phase");
+  assert.equal(sawSwapSettle, true, "swap must visit swap-settle phase");
+  assert.ok(minOffsetY < -0.1, `laptop must glide downward during tuck-away (minOffsetY=${minOffsetY})`);
+  assert.ok(colorSwitchedAt >= 0.25 && colorSwitchedAt <= 0.45, `accent should swap at trough (~0.30s, got ${colorSwitchedAt.toFixed(2)}s)`);
+  assert.equal(co.getCoLeadState().swapActive, false, "swap must finish cleanly within ~0.85s");
+  assert.equal(co.getCoLeadState().laptopAccent, accentB);
+  assert.equal(co.getCoLeadState().typing, true, "companion must resume typing after swap settles");
+
+  // Mid-swap interruptibility: interrupting mid-swap continues from live offset without snapping back to 0.
+  co.onSessionSwitch("mid-s1");
+  for (let i = 0; i < 4; i++) {
+    t += 0.05;
+    co.step({ dt: 0.05, elapsed: t, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+  }
+  const beforeInterruptY = co.getCoLeadState().liveLaptopOffsetY;
+  assert.ok(beforeInterruptY < -0.02, "mid-swap laptop should already be moving downward");
+  co.onSessionSwitch("mid-s2");
+  t += 0.016;
+  co.step({ dt: 0.016, elapsed: t, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+  const afterInterruptY = co.getCoLeadState().liveLaptopOffsetY;
+  assert.ok(Math.abs(afterInterruptY - beforeInterruptY) < 0.06,
+    `mid-swap interrupt must not snap (before=${beforeInterruptY}, after=${afterInterruptY})`);
+
+  // Let sliding window expire (> 3.0s) before testing exact rapid-switch threshold.
+  for (let i = 0; i < 70; i++) {
+    t += 0.05;
+    co.step({ dt: 0.05, elapsed: t, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+  }
+  assert.equal(co.getCoLeadState().recentSwitchCount, 0);
+
+  // Rapid-switch threshold: 3 distinct switches within 2.8s -> normal swap (NOT dizzy).
+  for (const rid of ["burst-1", "burst-2", "burst-3"]) {
+    const r = co.onSessionSwitch(rid);
+    assert.equal(r.dizzyTriggered, false, "fewer than 4 switches must not trigger dizzy");
+    t += 0.25;
+    co.step({ dt: 0.25, elapsed: t, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+  }
+  assert.equal(co.getCoLeadState().dizzyActive, false);
+  assert.equal(co.getCoLeadState().recentSwitchCount, 3);
+
+  // 4th distinct switch within 2.8s -> triggers dizzy easter egg!
+  const trig = co.onSessionSwitch("burst-4");
+  assert.equal(trig.dizzyTriggered, true, "4th distinct switch within 2.8s must trigger dizzy easter egg");
+  assert.equal(co.getCoLeadState().dizzyActive, true);
+  assert.equal(co.getCoLeadState().mode, "dizzy");
+
+  let sawDizzySway = false, sawDizzyFx = false, sawDizzyShake = false, sawDizzySmile = false;
+  for (let i = 0; i < 90; i++) {
+    t += 0.05;
+    const out = co.step({ dt: 0.05, elapsed: t, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+    for (const [bone, rot] of Object.entries(out.boneTargets)) {
+      for (const v of rot) assert.ok(Number.isFinite(v), `${bone} rotation must remain finite during dizzy/recovery`);
+    }
+    if (out.mode === "dizzy") sawDizzySway = true;
+    if (out.dizzyFxAlpha > 0.7) sawDizzyFx = true;
+    if (out.exprOverlay?.mode === "dizzy-shake") sawDizzyShake = true;
+    if (out.exprOverlay?.mode === "dizzy-recover" && out.exprOverlay.happy > 0.25) sawDizzySmile = true;
+  }
+  assert.equal(sawDizzySway, true, "dizzy must run sway phase");
+  assert.equal(sawDizzyFx, true, "dizzy must fade in 2D anime FX alpha");
+  assert.equal(sawDizzyShake, true, "dizzy recovery must include blink+head-shake beat");
+  assert.equal(sawDizzySmile, true, "dizzy recovery must bloom sheepish warm smile");
+  assert.equal(co.getCoLeadState().dizzyActive, false, "dizzy must recover cleanly after ~3.6s");
+  assert.equal(co.getCoLeadState().dizzyFxAlpha, 0, "dizzy FX must fade completely out after recovery");
+  assert.equal(co.getCoLeadState().typing, true, "companion must resume typing after recovery");
+
+  // Cooldown prevents an immediate infinite re-trigger right after recovery.
+  for (const rid of ["cool-1", "cool-2", "cool-3", "cool-4"]) {
+    const r = co.onSessionSwitch(rid);
+    assert.equal(r.dizzyTriggered, false, "cooldown must prevent immediate dizzy re-trigger");
+    t += 0.05;
+    co.step({ dt: 0.05, elapsed: t, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+  }
+  assert.equal(co.getCoLeadState().dizzyActive, false);
+
+  // After cooldown (> 1.5s), a fresh burst of 4 switches CAN trigger dizzy again.
+  for (let i = 0; i < 65; i++) {
+    t += 0.05;
+    co.step({ dt: 0.05, elapsed: t, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+  }
+  let retriggered = false;
+  for (const rid of ["fresh-1", "fresh-2", "fresh-3", "fresh-4"]) {
+    const r = co.onSessionSwitch(rid);
+    if (r.dizzyTriggered) retriggered = true;
+    t += 0.2;
+    co.step({ dt: 0.2, elapsed: t, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+  }
+  assert.equal(retriggered, true, "fresh rapid burst after cooldown must re-trigger dizzy");
+  co.dispose();
+});
+
+test("Step 3: 2D anime dizzy FX layout clamps safely inside rail bounds and draws crisp spirals + orbiting stars", async () => {
+  const { C } = loadCompanion();
+  assert.equal(typeof C.vrmDizzyFx?.computeDizzyLayout, "function");
+  assert.equal(typeof C.vrmDizzyFx?.drawDizzyFx, "function");
+
+  // Even for extreme head coordinates near viewport edges, spirals & halo stay strictly clamped inside 340x240.
+  for (const probe of [
+    { headX: 170, headY: 96, headRadius: 46 },
+    { headX: 18, headY: 16, headRadius: 60 },
+    { headX: 330, headY: 225, headRadius: 55 }
+  ]) {
+    const layout = C.vrmDizzyFx.computeDizzyLayout({ width: 340, height: 240, ...probe });
+    for (const sp of [layout.rightSpiral, layout.leftSpiral]) {
+      assert.ok(sp.x - sp.radius >= 8 && sp.x + sp.radius <= 332,
+        `spiral X [${sp.x - sp.radius}, ${sp.x + sp.radius}] escaped horizontal bounds`);
+      assert.ok(sp.y - sp.radius >= 8 && sp.y + sp.radius <= 232,
+        `spiral Y [${sp.y - sp.radius}, ${sp.y + sp.radius}] escaped vertical bounds`);
+    }
+    assert.ok(layout.halo.cx - layout.halo.rx >= 8 && layout.halo.cx + layout.halo.rx <= 332,
+      "star halo escaped horizontal bounds");
+    assert.ok(layout.halo.cy - layout.halo.ry >= 6 && layout.halo.cy + layout.halo.ry <= 232,
+      "star halo escaped vertical bounds");
+  }
+
+  // Verify drawDizzyFx issues stroke + fill calls for arcs, 2 spirals, and 3 stars, and clears when alpha=0.
+  let strokes = 0, fills = 0, clears = 0;
+  const fakeCtx = {
+    save() {}, restore() {}, translate() {}, rotate() {}, beginPath() {}, closePath() {},
+    moveTo() {}, lineTo() {}, arc() {}, ellipse() {},
+    stroke() { strokes++; },
+    fill() { fills++; },
+    clearRect() { clears++; }
+  };
+  C.vrmDizzyFx.drawDizzyFx(fakeCtx, { width: 340, height: 240, headX: 170, headY: 96, headRadius: 46, alpha: 1, time: 0.8 });
+  assert.ok(clears >= 1, "drawDizzyFx must clear before drawing");
+  assert.ok(strokes >= 6, `expected >= 6 stroke calls (2 halo arcs + 2 dual-pass spirals), got ${strokes}`);
+  assert.ok(fills >= 9, `expected >= 9 fill calls (3 orbiting stars x glow/body/core), got ${fills}`);
+
+  const prevStrokes = strokes;
+  C.vrmDizzyFx.drawDizzyFx(fakeCtx, { width: 340, height: 240, alpha: 0, time: 1.0 });
+  assert.equal(strokes, prevStrokes, "alpha=0 must clear without drawing FX strokes");
+
+  // Verify VRM rig wires .ws-companion-vrm-fx canvas, onSessionSwitch, getCoLeadState, and dizzy beats on VRM 1.0 & 0.x.
+  for (const metaVer of ["1", "0"]) {
+    const fakeThree = makeFakeVrmRuntime(metaVer);
+    const doc = {
+      documentElement: { dataset: { rid: "init-s1" }, getAttribute: () => "init-s1" },
+      createElement: tag => makeFakeElement(tag, doc),
+      addEventListener() {}
+    };
+    const { C: C2 } = loadCompanion({
+      document: doc,
+      window: { innerWidth: 1680, innerHeight: 960, devicePixelRatio: 2, addEventListener() {} },
+      fetch: async () => ({ ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer })
+    });
+    C2.vrmRuntimeLoader = async () => fakeThree.runtime;
+
+    const container = makeFakeElement("div", doc);
+    const rig = C2.makeVrmRig({ id: `vrm-s3-${metaVer}`, rev: "r1", renderer: "vrm", modelFile: "a.vrm", manifest: {}, expressionMap: {}, animations: {} });
+    await rig.mount(container, { width: 340, height: 240, dpr: 2 });
+
+    const fxCanvas = container.all().find(el => el.className === "ws-companion-vrm-fx");
+    assert.ok(fxCanvas, `VRM ${metaVer}: must mount .ws-companion-vrm-fx 2D overlay canvas`);
+    assert.equal(fxCanvas.hidden, true, "FX canvas starts hidden while idle");
+
+    assert.equal(C2.getCoLeadState().activeSessionId, "init-s1");
+    const sw = C2.onSessionSwitch("next-s2");
+    assert.equal(sw.swapped, true);
+    assert.equal(C2.getCoLeadState().activeSessionId, "next-s2");
+
+    // Forced dizzy beat shows FX canvas; returning to typing hides it cleanly.
+    assert.equal(C2.setCoLeadBeat("dizzy"), "dizzy");
+    const view = rig.view("stand", null, "idle", []);
+    view.render(0.05, { x: 0, y: 0 }, null, {});
+    assert.equal(fxCanvas.hidden, false, `VRM ${metaVer}: dizzy beat must reveal .ws-companion-vrm-fx canvas`);
+    assert.equal(C2.getCoLeadState().dizzyActive, true);
+
+    assert.equal(C2.setCoLeadBeat("typing"), "typing");
+    for (let i = 0; i < 4; i++) view.render(0.05, { x: 0, y: 0 }, null, {});
+    assert.equal(fxCanvas.hidden, true, `VRM ${metaVer}: returning to typing must hide .ws-companion-vrm-fx canvas`);
+    rig.dispose();
   }
 });
