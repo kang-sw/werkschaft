@@ -233,6 +233,57 @@ func testLeadSummary(paths ...string) *wscompact.LeadSummary {
 	}
 }
 
+// A lead's own multi-KB Korean prose must reach the replacement session whole:
+// the checkpoint builder must not re-truncate it to the old 2 KiB field cap.
+func TestCompactLargeKoreanLeadSummaryCarriedWhole(t *testing.T) {
+	root := t.TempDir()
+	restoreFn := func(_, _, wsKey string, cause RestoreCause, _ []AgentChild) (string, error) {
+		return fmt.Sprintf("## Hosted Session Restore\nkey=%s cause=%s\n", wsKey, cause), nil
+	}
+	runner, b, id := newWSCompactTestRunner(t, root, BackendClaude, wsconfig.CompactionModeWS, restoreFn)
+	if _, err := runner.Send(id, "hello"); err != nil {
+		t.Fatal(err)
+	}
+	waitWSCompact(t, "initial turn sent", func() bool {
+		p := b.latest()
+		if p == nil {
+			return false
+		}
+		sends, _ := p.sent()
+		return len(sends) == 1
+	})
+	p1 := b.latest()
+	p1.events <- Event{SessionID: "native-sid-1"}
+	p1.events <- Event{TurnEnd: true}
+	waitWSCompact(t, "idle", func() bool {
+		st, err := runner.Get(id)
+		return err == nil && st.Status == StatusIdle
+	})
+
+	big := strings.Repeat("긴 한국어 요약입니다. ", 700) // ~12 KiB, 6x the old per-field cap
+	lead := testLeadSummary()
+	lead.Prose[3] = big
+	lead.Prose[2] = big + "끝"
+	rec, _ := runner.recordOf(id)
+	if res := runner.CompactWithSummary(rec.WSKey, "", nil, lead); res.Status != "queued" {
+		t.Fatalf("CompactWithSummary = %+v", res)
+	}
+	waitWSCompact(t, "rotated session continued", func() bool {
+		_, _, procs := b.snapshot()
+		if len(procs) != 2 {
+			return false
+		}
+		sends, _ := procs[1].sent()
+		return len(sends) >= 1
+	})
+	_, _, procs := b.snapshot()
+	sends, _ := procs[1].sent()
+	prompt := sends[0]
+	if !strings.Contains(prompt, "### Current work\n"+strings.TrimSpace(big)+"\n") || !strings.Contains(prompt, big+"끝") {
+		t.Fatalf("lead prose truncated in the continuation prompt (%d bytes)", len(prompt))
+	}
+}
+
 func TestWSManagedLeadRotationAuditOrderAndChildDedup(t *testing.T) {
 	for _, backendName := range []string{BackendClaude, BackendCodex, BackendAgy} {
 		t.Run(backendName, func(t *testing.T) {

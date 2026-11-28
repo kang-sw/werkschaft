@@ -495,8 +495,8 @@ func TestCompactAgendaUpdatesValidationAtomic(t *testing.T) {
 		{name: "merge true non-object value", args: map[string]any{"agenda_updates": map[string]any{"k": map[string]any{"value": []any{1}, "merge": true}}}},
 		{name: "merge true null value", args: map[string]any{"agenda_updates": map[string]any{"k": map[string]any{"value": nil, "merge": true}}}},
 		{name: "mixed valid and invalid batch", args: map[string]any{"agenda_updates": map[string]any{"stable": map[string]any{"value": map[string]any{"v": 999}}, "bad": "nope"}}},
-		{name: "invalid lead_summary with valid agenda_updates", args: map[string]any{
-			"lead_summary":   map[string]any{"user_preferences": "missing other 6 fields"},
+		{name: "non-coercible lead_summary with valid agenda_updates", args: map[string]any{
+			"lead_summary":   map[string]any{"user_preferences": map[string]any{"not": "a string"}},
 			"agenda_updates": map[string]any{"stable": map[string]any{"value": map[string]any{"v": 999}}},
 		}},
 	}
