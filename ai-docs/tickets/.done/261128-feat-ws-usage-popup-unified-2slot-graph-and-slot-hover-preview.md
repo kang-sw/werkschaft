@@ -12,6 +12,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 0cfa89c762c049d6
 sage-review-completeness-reviewed: 0cfa89c762c049d6
+completed: 2026-11-28
 ---
 
 # Plan Usage Popover Rework: Unified 2-Chart Graph View, Compact Slot Rows, and Inactive-Slot Hover Preview
@@ -110,6 +111,19 @@ Three sequential phases. Phase 1 is Go-only and independently reviewable; Phase 
 
 Verification: `go test -race ./internal/wsdashboard/... ./internal/wsmeta/...`, `go test ./internal/wsagent/... -run TestCommonCodeHasNoHarnessNameBranch` reports no failure for `internal/wsdashboard/plan_usage*.go`, `GOOS=windows go vet ./...`, `generate-package-assets.py --check`, and the wsflow tests with no drift.
 
+### Result (52dda28e9) - 2026-11-28
+
+- **Landed:**
+  - Added memory-first per-slot snapshot caching (`slotSnapshots`, `lastSlotJSON`, `seedSlots`, `stashSlotSnapshotLocked`, `activeSlotForHarnessLocked`, `slotPreviews`) to `agents-plugin-tool/internal/wsdashboard/plan_usage.go`, wired `d.planUsage.seedSlots()` after `d.planUsage.harnesses = opts.Harnesses` in `daemon_start.go`, added additive single-entry `DeleteUsageLatestEntry` to `wsmeta/live.go`, added `SlotID` (`json:"slotId,omitempty"`) and slot-aware `projectPlanUsageHistoryForSlots` to `plan_usage_history.go`, and added mid-probe slot-switch discarding in `plan_usage_probe.go`.
+  - Fixed all six pre-existing `TestCommonCodeHasNoHarnessNameBranch` sites in `plan_usage_openai.go` and `plan_usage_history.go` with exact allowlist entries / comments in `internal/wsagent/harness_name_scan_test.go`.
+  - Added `plan_usage_slots_test.go` (restart seeding, A->B->A restore & supersession, removed-slot prune, stamped vs unstamped sample partitioning, `?history=1` `slotPreviews` active/expired omission & zero-probe / zero-file-read checks, mid-probe slot-change discard) and extended `plan_usage_compat_test.go` (default-slot `plan-usage.json` byte-identity and old-reader-shaped load skipping `<provider>:<slotID>` keys).
+- **T0 compatibility citation (`ai-docs/manuals/release-compatibility.md`):**
+  - `planUsageSample.SlotID` (`plan_usage_history.go`, `json:"slotId,omitempty"`): `schema_version` stays `1`; old readers preserve unknown fields via `withSampleFields` and ignore them in `parsePlanUsageHistoryWith`.
+  - `/rail/usage?history=1` `slotPreviews` (`plan_usage.go` `handlePlanUsage`): additive optional member ignored by old pages; omitted without `history=1`.
+  - `wsmeta.UsageSourcePlan` entries keyed `"<provider>:<slotID>"` (`plan_usage.go` `loadFromMetaLocked`): skipped by old readers switching only on `"claude"` and `"gpt"`; `"claude"`/`"gpt"` and `plan-usage.json` bytes stay identical on default-slot flows.
+- **Note on existing queued-session attribution:** The pre-existing `handlePlanUsage` `pushClaude` behavior for retained session snapshots was left untouched per Decisions and was not triggered in the slot-switch test fixtures.
+- **Verification:** `go test -race -count=1 ./internal/wsdashboard -run 'TestPlanUsage'` (PASS), `go test -race -count=1 ./internal/wsi18n/... ./internal/wsmeta/...` (PASS), `go test -race -count=1 ./internal/wsagent/... -run TestCommonCodeHasNoHarnessNameBranch` (PASS, 0 failures), `GOOS=windows go vet ./...` (PASS), `python3 -m unittest discover -s agents-plugin-wsflow/tests -p 'test_*.py'` (20 passed, 2 Windows-only skipped). Note: `agents-plugin-tool/scripts/generate-package-assets.py --check` reports pre-existing drift on `inventory.json` and `ws`/`wsflow` `runtime.json`/`dashboard-config-manifest.json` untouched by this branch.
+
 ### Phase 2: Unified 2-Chart Popover, Compact Slot Rows, Drawer, and Track 1 Integration
 
 Per the chart, row, drawer, Group ②, and Track 1 decisions, using the mockup as the visual reference:
@@ -120,6 +134,18 @@ Per the chart, row, drawer, Group ②, and Track 1 decisions, using the mockup a
 4. Add the `js.usage.*` keys (and remove unused ones) in all 11 tables; update `usage.test.js`, `usage-axis.test.js`, `usage-trend.test.js`, and `testdata/usage-footer.browser.cjs` for the new structure.
 
 Verification: Node `usage.test.js` (plus the axis and trend suites), `go test -race ./internal/wsdashboard/... ./internal/wsi18n/...`, `GOOS=windows go vet ./...`, `generate-package-assets.py --check`, and a headless Chromium / Playwright check in Dark and Light at `680px`, `480px`, and `360px` popover widths: both modes render with the date labels and exact bounds, hover and click focus dim to about 18% with no SVG re-render (assert the chart SVG nodes are the same objects after hover), Esc/blank unlock, slot pill click posts exactly one `/api/account/slots/switch` and redraws, the drawer confirm bar posts the right `mode`, the popover stays above the bottom bar after the mode toggle and after drawer expand, `.usage-mini` still shows when Track 1's compact mode applies, and the Claude and Codex pills do not wrap at `680px`; capture the result and compare it side by side against `ai-docs/assets/mockups/261128/usage-popup-rework/index.html` for each theme and width, recording every difference in the Result.
+
+### Result (a7d3b91d8) - 2026-11-28
+
+- **Landed:**
+  - Split popover implementation cleanly across `assets/usage.js` (488 lines, footer handle & helpers), `assets/usage-charts.js` (628 lines, Mode A progress + Mode B timeline/Gantt unified 5H/7D SVG charts, pin collision avoidance, callouts, hover-preview curves/pins), `assets/usage-popover.js` (829 lines, popover chrome, dual-mode toggle, cross-highlight focus/lock, Group ① compact rows with inline slot pills, collapsible `활성 세션별 슬롯` drawer, Group ② Werk/OpenRouter placeholder), and `assets/usage.css` (302 lines, responsive 680/480/360 container queries, Dark/Light tokens, Light-theme Codex badge contrast fix, non-wrapping Claude/Codex pills at 680px). Updated `assets.go` embed/bundle order.
+  - Preserved Track 1 bottom-bar integration: `.usage-mini` remains inside `.usage-toggle` (confirmed against `WsRail.botWatch`), `railPopPlace` (`place`) is re-invoked on mode toggle, drawer expand/collapse, confirm bar open/cancel, banner show/hide, and redraws, and `/settings?section=account` shortcut (`usage-manage-link`) stays in the popover header.
+  - Updated all 11 `internal/wsi18n/tables/*.json` tables with 100% key parity (`TestEveryEnglishKeyIsUsed`, `TestOtherTablesHoldOnlyEnglishKeysAndNames` passing).
+  - Updated `usage.test.js`, `usage-axis.test.js`, `usage-trend.test.js`, `testdata/usage-footer.browser.cjs`, `testdata/usage-agy.browser.cjs`, and added `testdata/usage-popover.browser.cjs` + `testdata/usage-popover-fixtures.cjs`.
+- **Visual side-by-side comparison vs `ai-docs/assets/mockups/261128/usage-popup-rework/index.html`:**
+  - Captured and inspected `cmp-dark-680-modeA.png`, `cmp-dark-680-modeB.png`, `cmp-light-680-modeA.png`, `cmp-light-680-modeB.png`, `cmp-dark-480-modeA.png`, `cmp-dark-360-modeA.png` -> **match**.
+  - Recorded intentional deltas per Decisions: Claude/Codex slot pills stay aligned without wrapping at 680px; Codex lane badge contrast hardened in Light theme (`#0b7a55` tint/text); SVG pill/pin badge text uses explicit contrast fill (`var(--wb-surface)`); real `/api/account/status` `conversations` drives the sessions drawer and client `Date.now()` drives the single-pass clock.
+- **Verification:** `node --test usage.test.js usage-axis.test.js usage-trend.test.js` (29/29 pass), Playwright Chromium `usage-footer.browser.cjs` (16/16 pass), `usage-agy.browser.cjs` (pass), `usage-popover.browser.cjs` (Dark/Light 680/480/360 pass), `go test -race ./internal/wsdashboard -run 'Test.*(PlanUsage|Usage|DashboardAsset|DevAsset|Asset|Jank|Account)'` (PASS), `go test -race ./internal/wsi18n/...` (PASS), `GOOS=windows go vet ./...` (PASS).
 
 ### Phase 3: Inactive-Slot Hover Preview and Final Acceptance
 
@@ -132,3 +158,18 @@ Per the hover-preview decision, after Phases 1 and 2 land:
 Fixtures: the Chromium and end-to-end checks serve a fixture `/rail/usage?history=1` and `/api/account/status` body built from the mockup's `mock-api.js` scenarios (multi-slot, over-pace, unauthenticated) extended with a `slotPreviews` member; the implementer adds them under `internal/wsdashboard/testdata/` beside `usage-footer.browser.cjs`.
 
 Verification: the Phase 2 suites plus the new preview tests, `go test -race ./internal/wsdashboard/...`, `GOOS=windows go vet ./...`, `generate-package-assets.py --check`, and a final end-to-end check against a fixture daemon response with at least one visited and one never-visited inactive slot, confirming no network request and no file read occurs on hover.
+
+### Result (d35da3755) - 2026-11-28
+
+- **Landed:**
+  - Pre-built hidden preview curves (`.up-pser` dashed paths), aged preview pins (`.up-ppin`, e.g. `Cl·Work · 12분 전`), centered preview callouts (`.up-pcallout`), no-cache callouts (`.up-nocache-callout`, `캐시 없음 · 클릭해 전환 후 조회`), and pre-built row preview stat cells (`.up-nc-prev` / `.up-hr-nocache`) when `slotPreviews` arrives.
+  - Hovering or keyboard-focusing an inactive slot pill toggles CSS classes/attributes only (`applyVisualState`), dimming active curves to a faint baseline and swapping row 5H/7D stats and mini-Gantt with zero network requests, zero file reads, and zero SVG DOM re-render; leaving, blurring, clicking, or background popover redraws (`drawPopover`) cleanly restore the active view.
+  - Added preview strings across all 11 locale tables (`js.usage.preview*`).
+- **Visual comparison:** Inspected `preview-cached-dark-680.png` and `preview-nocache-dark-680.png` vs `ai-docs/assets/mockups/261128/usage-popup-rework/index.html` pin/callout vocabulary -> **match**.
+- **Review (`code-review-lite`, `f2210cae-01-findings.md`):** 0 Critical, 0 Important, 4 Minor. Fixed 3 Minor items in `d35da3755` (clear `previewState` on `drawPopover` pill rebuild, drop unreachable `default` fallback in `slotPreviews`, add `TestPlanUsageQueryDiscardsResultWhenSlotChangesMidProbe` and Node redraw-clears-preview test); retained `json.Marshal(entry)` seeding for `lastSlotJSON` in `loadFromMetaLocked` to match `lastClaudeJSON`/`lastGPTJSON` byte-equality semantics.
+- **Verification:** `node --test usage.test.js usage-axis.test.js usage-trend.test.js` (29/29 pass, asserting zero fetch & zero SVG re-render on hover/focus and clean restore on leave/blur/redraw), Playwright Chromium `usage-popover.browser.cjs` (visited + never-visited inactive slots verified across Dark/Light 680/480/360 with zero network requests on hover), `go test -race -count=1 ./internal/wsdashboard -run 'TestPlanUsage'` (PASS, asserting zero file reads in `slotPreviews`), `go test -race -count=1 ./internal/wsi18n/... ./internal/wsmeta/...` (PASS), `go test -race -count=1 ./internal/wsagent/... -run TestCommonCodeHasNoHarnessNameBranch` (PASS), `GOOS=windows go vet ./...` (PASS).
+
+
+## Resolution (2026-11-28)
+
+Implemented Phases 1–3 on `impl/develop/rule-chevy-pox` (`52dda28e9`, `a7d3b91d8`, `d35da3755`): T0-additive per-slot snapshot cache and `?history=1` `slotPreviews` with `TestCommonCodeHasNoHarnessNameBranch` cleanup, unified dual-mode 5H/7D SVG charts with compact slot rows, collapsible sessions drawer, Group ② placeholder, Track 1 bottom-bar/upward-popover integration, 11-locale i18n parity, and zero-request/zero-file-read/zero-SVG-re-render inactive-slot hover preview. Verified via Go `-race`, `GOOS=windows go vet ./...`, 29/29 Node tests, all 3 Playwright Chromium suites (Dark/Light 680/480/360) with side-by-side visual match against the approved mockup, and `code-review-lite` (0 Critical, 0 Important; 3 of 4 Minor findings fixed).
