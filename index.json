@@ -484,16 +484,6 @@
     "261128-feat-ws-companion-control-rig-studio-and-action-catalog": {
       "registered_at": "2026-11-28T10:07:48Z"
     },
-    "261128-feat-ws-companion-interactive-guide-highlight-and-monitor": {
-      "registered_at": "2026-11-28T08:34:37Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-28T10:15:02Z"
-      }
-    },
     "261128-feat-ws-companion-visual-polish-and-metafiction-overlay": {
       "registered_at": "2026-11-28T06:52:51Z"
     },
