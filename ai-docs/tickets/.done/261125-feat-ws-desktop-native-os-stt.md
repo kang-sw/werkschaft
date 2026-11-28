@@ -11,6 +11,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 20d3c4ad313d3cbb
 sage-review-completeness-reviewed: 20d3c4ad313d3cbb
+completed: 2026-11-28
 ---
 
 # Desktop OS Native STT Backend and Composer Voice Input UX (macOS SFSpeechRecognizer and Windows WinRT)
@@ -172,3 +173,8 @@ Implemented the Voice Providers settings section (`dashboard-settings-voice.js` 
 ### Result (cc9ed4da) - 2026-11-28
 
 Moved `#cvox` out of `#csend-wrap` to a self-contained bottom-left composer slot (`.cfoot-left`) in `dashboard.tmpl` and `dashboard-voice.css`; kept `#cvox` visible whenever eligible (capabilities HTTP 200) and routed unconfigured clicks to `/settings?section=account&provider=voice` via `shOpenSettings` (including same-origin framed relay through `dashboard-lifecycle.js`); styled inline `[data-voice-span]` with `dashboard-style.md` tonal tokens, compositor-only pulse, dark-mode recording hover ink contrast, `prefers-reduced-motion`, and multi-line `#cvox-cap` fallback; verified the owner `(1818)=ok` Spacebar 0.5 s PTT single-space trim refinement (collapse consecutive horizontal spaces before caret to 1 space after non-space text, or empty at start of empty line/composer); added `js.voice.configure` across all 11 `wsi18n` locale tables and `frontend-voice-phase5.test.js`; updated MCP dashboard key-count assertions (`24 -> 26`) in `dashboard_config_test.go` and `dashboard_settings_config_test.go`. Verified with Node tests (`54/54` across voice/settings/capsules/composer-md/ws-input), Go `-race` tests (`wsdashboard` voice/asset/account/pages, `wscred`, `wsi18n`, `cmd/ws-mcp`, targeted `mcp`, `wsagent` werk/voice), `GOOS=windows go vet ./...`, Rust `cargo test` (`136/136`) + `node desktop/scripts/test-package.cjs` (`5/5`), `generate-package-assets.py --check`, `agents-plugin-wsflow/tests` (`22 OK, 2 skipped`), and zero `:has(` in voice/settings CSS. Capture method: `needs-capture` (`WS_PLAYWRIGHT_MODULE` is not set in this worker environment; pre-existing failures outside our diff noted: `frontend-idle.test.js` `:has()`/`railPopScrim` in `dashboard-conversation.css`, `TestGalleryNoReservedColumnWithoutAPage` in `dashboard.css`, and `TestServeStdioConfigShow` macOS `/var` vs `/private/var` TMPDIR).
+
+
+## Resolution (2026-11-28)
+
+Completed Phases 1–5 on `impl/develop/wager-uncle-juicy` (`f1993022` Phase 1 native macOS/Windows STT bridges & teardown, `49f78a4b` Phase 2 `openrouter_voice` + shared-key toggle + backend priority order, `93a55157` Phase 3 native adapter + inline `[data-voice-span]` + Spacebar 0.5 s PTT, `839483b2` Phase 4 Voice Providers settings UI & Powerline priority bar, `cc9ed4da` Phase 5 bottom-left mic + unconfigured click routing + span styling, `28744fa9` ticket Results, `49510ed0` `code-review-lite` hardening fixes). Verified with Rust `cargo test` (136/136), `node desktop/scripts/test-package.cjs` (5/5), Node frontend tests (54/54), Go `-race` tests, `GOOS=windows go vet ./...`, `generate-package-assets.py --check`, and `agents-plugin-wsflow/tests`. Visual capture method: `needs-capture` (`WS_PLAYWRIGHT_MODULE` unavailable in this worker environment); packaged macOS/Windows native audio smoke checks remain manual.
