@@ -490,21 +490,18 @@
     "261128-feat-ws-companion-visual-polish-and-metafiction-overlay": {
       "registered_at": "2026-11-28T06:52:51Z"
     },
-    "261128-feat-ws-dashboard-gallery-workpanel-b": {
-      "registered_at": "2026-11-28T02:48:30Z",
+    "261128-feat-ws-dashboard-global-holders-popup": {
+      "registered_at": "2026-11-28T03:57:30Z",
       "lease": {
         "email": "ki6080@gmail.com",
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-28T08:49:14Z",
+        "phase": "active",
+        "touched_at": "2026-11-28T10:26:58Z",
         "impl": {
-          "branch": "impl/develop/jury-pesky-swab"
+          "branch": "impl/develop/kitty-traps-shady"
         }
       }
-    },
-    "261128-feat-ws-dashboard-global-holders-popup": {
-      "registered_at": "2026-11-28T03:57:30Z"
     }
   }
 }
