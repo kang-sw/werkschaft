@@ -514,7 +514,14 @@
       }
     },
     "261128-feat-ws-companion-soul-memory-and-pacing": {
-      "registered_at": "2026-11-28T00:24:19Z"
+      "registered_at": "2026-11-28T00:24:19Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-28T03:26:57Z"
+      }
     },
     "261128-feat-ws-dashboard-always-open-gallery-and-ticketmap": {
       "registered_at": "2026-11-28T02:47:47Z"
