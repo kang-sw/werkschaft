@@ -16,7 +16,7 @@ use objc2_web_kit::{WKNavigationDelegate, WKUIDelegate, WKWebView};
 use tauri::{Manager, WebviewWindow};
 
 use crate::{
-    capture, close, notify, shell::Connection, speech as native_speech, updates,
+    capture, chrome::queue, close, notify, shell::Connection, speech as native_speech, updates,
     webview_setup_failed,
 };
 use escape_guard::guard_escape;
@@ -58,12 +58,16 @@ pub fn install(
         let marker = MainThreadMarker::new().expect("with_webview runs on the main thread");
         // The pinned Tauri runtime supplies a WKWebView on the main thread.
         let webview = unsafe { &*platform.inner().cast::<WKWebView>() };
+        // This closure runs inline, with the webview's window-ID lock held,
+        // when `install` is called on the main thread (setup, menu Retry).
+        // Shell code that navigates, evaluates or reads the URL must wait
+        // for it to return: see `chrome::queue`.
         let Some(original) = (unsafe { webview.navigationDelegate() }) else {
-            webview_setup_failed(&target, &connection);
+            queue(&target, move |target| webview_setup_failed(&target, &connection));
             return;
         };
         let Some(original_ui) = (unsafe { webview.UIDelegate() }) else {
-            webview_setup_failed(&target, &connection);
+            queue(&target, move |target| webview_setup_failed(&target, &connection));
             return;
         };
         guard_escape(webview);
@@ -149,6 +153,6 @@ pub fn install(
                 controller.addScriptMessageHandler_name(ProtocolObject::from_ref(&*messages), name);
             }
         }
-        ready(target);
+        queue(&target, ready);
     })
 }

@@ -28,6 +28,28 @@ pub fn set_title(window: &WebviewWindow, title: &str) {
     crate::strip::title_changed(window, title);
 }
 
+/// Runs `action` on the main thread after the caller's stack has unwound.
+///
+/// Tauri runs a main-thread dispatch inline when the caller already is on the
+/// main thread, so a task sent from inside a native callback runs nested in
+/// it. `with_webview` holds the webview's window-ID lock for the whole inline
+/// call, and `url`, `eval`, `navigate` and `show` take that same non-reentrant
+/// lock: shell code that touches the webview from inside the callback
+/// deadlocks the main thread. Dispatching from a worker queues the task on the
+/// event loop, which runs it once the callback has returned.
+pub(crate) fn queue<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    action: impl FnOnce(tauri::WebviewWindow<R>) + Send + 'static,
+) {
+    let window = window.clone();
+    std::thread::spawn(move || {
+        let target = window.clone();
+        if window.run_on_main_thread(move || action(target)).is_err() {
+            crate::shell_log!("Could not queue a shell action");
+        }
+    });
+}
+
 #[cfg(windows)]
 pub use registry::{all, get, register};
 
@@ -81,3 +103,37 @@ mod registry {
 
 #[cfg(windows)]
 pub use registry::manage;
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::mpsc, thread, time::Duration};
+
+    use tauri::{test::mock_app, webview::WebviewWindowBuilder, WebviewUrl};
+
+    use super::queue;
+
+    // The shell's `ready` hook runs the first connect, which reads the webview
+    // URL. Run on the caller's stack inside `with_webview`, that read waits
+    // on a lock the caller holds. The queued action must never run there, and
+    // must still run once the caller has finished.
+    #[test]
+    fn queued_action_runs_after_the_caller_returns_and_never_on_its_stack() {
+        let app = mock_app();
+        let window = WebviewWindowBuilder::new(&app, "main", WebviewUrl::App("index.html".into()))
+            .build()
+            .unwrap();
+        let caller = thread::current().id();
+        let (sender, receiver) = mpsc::channel();
+
+        queue(&window, move |target| {
+            let url = target.url().map(|url| url.to_string());
+            let _ = sender.send((thread::current().id(), url));
+        });
+
+        let (ran_on, url) = receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the queued action runs");
+        assert_ne!(ran_on, caller);
+        assert!(url.is_ok());
+    }
+}
