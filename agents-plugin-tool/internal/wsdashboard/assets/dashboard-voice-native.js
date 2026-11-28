@@ -12,15 +12,21 @@
     return err;
   }
 
+  function cleanLocaleTag(tag) {
+    var s = typeof tag === "string" ? tag.trim().replace(/_/g, "-") : "";
+    if (!s || s.length > 35) return "";
+    return /^[A-Za-z0-9-]+$/.test(s) ? s : "";
+  }
+
   function normalizeLocale(language, nav) {
     var raw = typeof language === "string" ? language.trim() : "";
     if (raw) {
-      var first = raw.split(",")[0].trim();
-      if (first) return first.slice(0, 35);
+      var first = cleanLocaleTag(raw.split(",")[0]);
+      if (first) return first;
     }
     var n = nav || (typeof navigator !== "undefined" ? navigator : null);
-    var lang = n && typeof n.language === "string" ? n.language.trim() : "";
-    return lang ? lang.slice(0, 35) : "";
+    var lang = n && typeof n.language === "string" ? cleanLocaleTag(n.language) : "";
+    return lang;
   }
 
   function createNativeAdapter(opts) {

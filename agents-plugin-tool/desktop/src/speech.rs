@@ -97,10 +97,13 @@ pub fn parse_command(message: &str) -> Option<Command> {
     }
     let body = message.strip_prefix(PREFIX)?;
     let payload: Payload = serde_json::from_str(body).ok()?;
-    let locale = sanitize_locale(payload.locale.as_deref())?;
     match payload.op.as_str() {
-        "status" => Some(Command::Status { locale }),
-        "start" => Some(Command::Start { locale }),
+        "status" => Some(Command::Status {
+            locale: sanitize_locale(payload.locale.as_deref())?,
+        }),
+        "start" => Some(Command::Start {
+            locale: sanitize_locale(payload.locale.as_deref())?,
+        }),
         "stop" => Some(Command::Stop),
         "cancel" => Some(Command::Cancel),
         _ => None,
@@ -159,6 +162,13 @@ pub enum StartError {
     Busy,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopAction {
+    Stop(u64),
+    AlreadyStopping,
+    Idle,
+}
+
 impl SessionState {
     pub fn start(&mut self) -> Result<u64, StartError> {
         if !matches!(self.phase, SessionPhase::Idle) {
@@ -210,13 +220,21 @@ impl SessionState {
         Some(SpeechEvent::Final { text })
     }
 
-    /// Transitions `Listening -> Stopping` and returns the active session id.
-    pub fn begin_stop(&mut self) -> Option<u64> {
-        let SessionPhase::Listening { id, last_partial } = std::mem::take(&mut self.phase) else {
-            return None;
-        };
-        self.phase = SessionPhase::Stopping { id, last_partial };
-        Some(id)
+    /// Transitions `Listening -> Stopping` and returns the stop action without
+    /// clobbering an already-stopping session on duplicate stop requests.
+    pub fn begin_stop(&mut self) -> StopAction {
+        match self.phase {
+            SessionPhase::Idle => StopAction::Idle,
+            SessionPhase::Stopping { .. } => StopAction::AlreadyStopping,
+            SessionPhase::Listening { .. } => {
+                let SessionPhase::Listening { id, last_partial } = std::mem::take(&mut self.phase)
+                else {
+                    unreachable!();
+                };
+                self.phase = SessionPhase::Stopping { id, last_partial };
+                StopAction::Stop(id)
+            }
+        }
     }
 
     /// If session `id` is still in `Stopping`, finishes it with the last seen
@@ -406,9 +424,21 @@ impl Controller {
                 self.backend.start(self.clone(), app.clone(), id, locale);
             }
             Command::Stop => {
-                let id = self.state.lock().unwrap().begin_stop();
-                if let Some(id) = id {
-                    self.backend.stop(self.clone(), app.clone(), id);
+                let action = self.state.lock().unwrap().begin_stop();
+                match action {
+                    StopAction::Stop(id) => self.backend.stop(self.clone(), app.clone(), id),
+                    StopAction::AlreadyStopping => {}
+                    StopAction::Idle => {
+                        self.emit(
+                            app,
+                            &SpeechEvent::Error {
+                                code: "not_recording".to_owned(),
+                                reason: Some(
+                                    "No active speech recognition session.".to_owned(),
+                                ),
+                            },
+                        );
+                    }
                 }
             }
             Command::Cancel => {
@@ -585,7 +615,15 @@ mod tests {
         );
         assert_eq!(parse_command(&msg(json!({"op": "stop"}))), Some(Command::Stop));
         assert_eq!(
+            parse_command(&msg(json!({"op": "stop", "locale": "en-US@x"}))),
+            Some(Command::Stop)
+        );
+        assert_eq!(
             parse_command(&msg(json!({"op": "cancel"}))),
+            Some(Command::Cancel)
+        );
+        assert_eq!(
+            parse_command(&msg(json!({"op": "cancel", "locale": "en-US@x"}))),
             Some(Command::Cancel)
         );
 
@@ -619,7 +657,12 @@ mod tests {
             "stale session id ignored"
         );
 
-        assert_eq!(s.begin_stop(), Some(id1));
+        assert_eq!(s.begin_stop(), StopAction::Stop(id1));
+        assert_eq!(
+            s.begin_stop(),
+            StopAction::AlreadyStopping,
+            "duplicate stop must not reset Stopping state"
+        );
         assert_eq!(s.start(), Err(StartError::Busy), "still busy while stopping");
         assert_eq!(
             s.on_final(id1, "hello world".into()),
@@ -628,11 +671,12 @@ mod tests {
             })
         );
         assert_eq!(s.on_final(id1, "duplicate".into()), None);
+        assert_eq!(s.begin_stop(), StopAction::Idle);
 
         // Fallback final when stop finishes without OS final callback.
         let id2 = s.start().expect("idle again");
         let _ = s.on_partial(id2, "partial text".into());
-        assert_eq!(s.begin_stop(), Some(id2));
+        assert_eq!(s.begin_stop(), StopAction::Stop(id2));
         assert_eq!(
             s.finish_stopping_with_fallback(id2),
             Some(SpeechEvent::Final {

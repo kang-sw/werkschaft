@@ -464,9 +464,12 @@ test('resolved backend receives legacy voice_model only when matching legacy_bac
   assert.equal(lastCtx.model, 'whisper-large-v3-turbo', 'legacy backend keeps legacy voice_model');
   await ctrl.stop();
 
-  // Native adapter locale normalization falls back to navigator.language when voice_language is empty.
+  // Native adapter locale normalization falls back to navigator.language when voice_language is empty,
+  // and drops malformed tags so the Rust bridge never rejects a start/status command.
   assert.equal(env.window.WsVoiceNative.normalizeLocale('', { language: 'ko-KR' }), 'ko-KR');
   assert.equal(env.window.WsVoiceNative.normalizeLocale('en-US, ko-KR', { language: 'ko-KR' }), 'en-US');
+  assert.equal(env.window.WsVoiceNative.normalizeLocale('en-US@x', { language: 'ko_KR' }), 'ko-KR');
+  assert.equal(env.window.WsVoiceNative.normalizeLocale('en-US@x', { language: 'bad;tag' }), '');
   ctrl.destroy();
 });
 
