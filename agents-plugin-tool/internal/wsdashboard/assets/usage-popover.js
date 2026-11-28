@@ -449,7 +449,8 @@
       // Pill DOM nodes are rebuilt in drawGroup1, so mouseleave/blur on a replaced
       // pill will never fire and the previewed slot may have become active or gone.
       previewState = null;
-      drawCharts(now);
+      var deferCharts = hasResizeObserver && (popover.hidden || !(popover.clientWidth > 0));
+      if (!deferCharts) drawCharts(now);
       drawGroup1(now);
       drawGroup2();
       applyVisualState();
@@ -766,13 +767,14 @@
         else if (focusLocked) unlockFocus();
       });
 
-      if (typeof window.ResizeObserver === "function") {
-        var rzTimer = null, lastW = 0;
+      var rzTimer = null;
+      if (hasResizeObserver) {
         new window.ResizeObserver(function () {
           var curW = box.clientWidth || 0;
-          if (!shown || !curW || Math.abs(curW - lastW) < 4) return;
-          var firstPaint = lastW === 0;
-          lastW = curW;
+          if (!shown || !curW || Math.abs(curW - lastChartW) < 4) return;
+          if (scroll && scroll.hidden) return;
+          var firstPaint = lastChartW === 0;
+          lastChartW = curW;
           if (rzTimer !== null) { window.clearTimeout(rzTimer); rzTimer = null; }
           if (firstPaint) {
             drawCharts(Date.now()); applyVisualState(); place();
@@ -800,6 +802,8 @@
         },
         close: function () {
           shown = false;
+          lastChartW = 0;
+          if (rzTimer !== null) { window.clearTimeout(rzTimer); rzTimer = null; }
           confirmConv = null;
           focusKey = null;
           focusLocked = false;

@@ -491,6 +491,7 @@
     }
     function drawCharts(now) {
       if (!popover) return;
+      if (!popover.hidden && popover.clientWidth > 0) lastChartW = popover.clientWidth;
       var box = popover.querySelector(".up-charts");
       if (!box) return;
       box.textContent = "";

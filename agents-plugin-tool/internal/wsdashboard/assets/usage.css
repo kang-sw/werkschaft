@@ -73,6 +73,8 @@
   padding: 0;
   gap: 0;
   overflow: hidden;
+  contain: layout paint style;
+  isolation: isolate;
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
 }
@@ -155,30 +157,29 @@
 .usage-now { stroke: var(--wb-muted-fg); stroke-width: 1; opacity: .65; }
 .usage-now-label { fill: var(--wb-fg) !important; font-weight: 700 !important; }
 .usage-actual { fill: none; stroke-linecap: round; stroke-linejoin: round; }
-.usage-area { stroke: none; opacity: 0; transition: opacity .14s; }
-.usage-excess { stroke: none; opacity: 0; transition: opacity .14s; }
+.usage-area { stroke: none; opacity: 0; }
+.usage-excess { stroke: none; opacity: 0; }
 .usage-point { stroke: var(--wb-card); stroke-width: 1.5; }
 .usage-point-current { stroke-width: 1.6; }
 .up-wash { fill: var(--wb-fail); opacity: .06; }
 .up-fut { fill: var(--wb-fg); opacity: .035; }
-.up-ser { transition: opacity .14s; }
 .up-ser.is-disabled { opacity: .55; }
 .up-ser.is-dim, .up-gl.is-dim, .up-leader.is-dim { opacity: .18; }
 .up-ser.is-preview-base, .up-gl.is-preview-base, .up-leader.is-preview-base { opacity: .22; }
 .up-ser.is-focus .usage-actual { stroke-width: 2.5; }
 .up-ser.is-focus .usage-area { opacity: .16; }
 .up-ser.is-focus .usage-excess { opacity: .24; }
-.up-ser .up-fxd { opacity: 0; transition: opacity .14s; }
+.up-ser .up-fxd { opacity: 0; }
 .up-ser.is-focus .up-fxd { opacity: .85; }
-.up-pin { cursor: pointer; transition: opacity .14s; }
+.up-pin { cursor: pointer; }
 .up-pin text { font: 800 9px ui-rounded, var(--wb-sans, sans-serif); }
 .up-pin.is-dim { opacity: .26; }
 .up-pin.is-preview-base { opacity: .24; }
 .up-pin.is-focus rect.up-pb { stroke: var(--wb-fg); stroke-width: 1.2; }
 .up-pin:focus-visible { outline: none; }
 .up-pin:focus-visible rect.up-pb { stroke: var(--wb-primary); stroke-width: 1.8; }
-.up-leader { stroke: var(--wb-muted-fg); stroke-width: 1; opacity: .6; fill: none; transition: opacity .14s; }
-.up-gl { cursor: pointer; transition: opacity .14s; }
+.up-leader { stroke: var(--wb-muted-fg); stroke-width: 1; opacity: .6; fill: none; }
+.up-gl { cursor: pointer; }
 .up-gl-tag { font: 800 9px ui-rounded, var(--wb-sans, sans-serif); }
 .up-gl .up-lbl { font-weight: 700; fill: var(--wb-fg); paint-order: stroke; stroke: var(--up-tone-a); stroke-width: 2.5px; stroke-linejoin: round; }
 .up-gl .up-lbl.out { fill: var(--wb-muted-fg); stroke: none; }
@@ -222,7 +223,7 @@ a.up-pill.fail:hover { background: color-mix(in srgb, var(--wb-fail) 24%, var(--
 
 /* Group 1 provider rows (aligned single-line at 680px, no awkward pill wrap) */
 .up-rows { padding: 4px 6px 6px; border-radius: 10px; background: var(--up-tone-a); display: flex; flex-direction: column; gap: 1px; }
-.up-hr { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr) minmax(0, 1fr); column-gap: 8px; align-items: center; padding: 6px 7px; border-radius: 8px; transition: background .12s, opacity .14s; cursor: default; }
+.up-hr { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr) minmax(0, 1fr); column-gap: 8px; align-items: center; padding: 6px 7px; border-radius: 8px; transition: background .12s; cursor: default; }
 .up-hr[data-k]:hover, .up-hr.is-focus { background: color-mix(in srgb, var(--wb-fg) 7%, transparent); }
 .up-hr.is-dim { opacity: .45; }
 .up-hr.is-previewing { background: color-mix(in srgb, var(--wb-primary) 9%, transparent); }

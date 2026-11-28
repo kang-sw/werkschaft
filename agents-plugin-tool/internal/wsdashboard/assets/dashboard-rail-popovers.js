@@ -466,29 +466,40 @@
   // a row menu whose row is gone or hidden.
   function railPopSync() {
     if (!rp.P) return;
+    var prevBtn = rp.btn;
     var b = railPopBtn();
     if (!b || ((rp.kind === "row" || rp.kind === "confirm" || rp.kind === "fold") && !b.getClientRects().length)) { railPopClose(false); return; }
+    var dirty = !rp.placeClean || b !== prevBtn;
     // A popup that lists rows (fold) redraws them from the new render and
     // may move to the button it now belongs to, or close (null).
     if (rp.P.sync) {
       b = rp.P.sync(b);
       if (!b) { railPopClose(false); return; }
+      dirty = true;
     }
-    if (rp.kind !== "row" && rp.kind !== "confirm") b.setAttribute("aria-expanded", "true");
+    if (rp.kind !== "row" && rp.kind !== "confirm" && b.getAttribute("aria-expanded") !== "true") {
+      b.setAttribute("aria-expanded", "true");
+    }
+    if (!dirty && (rp.kind === "usage" || rp.kind === "settings" || rp.kind === "holders" || rp.kind === "lead")) return;
     railPopPlace();
+    rp.placeClean = true;
   }
   function railPopClose(refocus) {
     if (!rp.P) return;
     if (window.WsHoldConfirm) window.WsHoldConfirm.cancelAll();
     var P = rp.P, b = railPopBtn(), row = rp.kind === "row" || rp.kind === "confirm";
     railPopScrim(false);
+    railPopRootState(false);
     P.close();
     P.el.hidden = true;
-    rp = { P: null, kind: "", ws: "", btn: null };
+    rp = { P: null, kind: "", ws: "", btn: null, placeClean: false };
     if (b) {
       if (!row) b.setAttribute("aria-expanded", "false");
       if (refocus) b.focus();
     }
+  }
+  function railPopRootState(on) {
+    if (root && root.classList) root.classList.toggle("rpop-open", !!on);
   }
   // --- rail: the archived and deleted lists' popup -------------------------------
   // A group's fold row (.rfold) holds a button for its archived rows and one
@@ -692,10 +703,12 @@
     railPopClose(false);
     var P = rpConf || (rpConf = rpConfMake());
     if (!P.el.parentNode) doc.body.appendChild(P.el);
-    rp = { P: P, kind: "confirm", ws: spec.rid, btn: anchorEl };
+    rp = { P: P, kind: "confirm", ws: spec.rid, btn: anchorEl, placeClean: false };
+    railPopRootState(true);
     P.open(spec);
     P.el.hidden = false;
     railPopPlace();
+    rp.placeClean = true;
     P.focus();
   }
   // railPopOpen opens kind's popover ("ws", "wt", "lead": a new session,
@@ -716,12 +729,14 @@
     // The fold popup lives in the rail (outside its swapped region), so the
     // rail's row styles and click handling reach its rows.
     if (!P.el.parentNode) (kind === "fold" ? railEl : doc.body).appendChild(P.el);
-    rp = { P: P, kind: kind, ws: ws, btn: btn };
+    rp = { P: P, kind: kind, ws: ws, btn: btn, placeClean: false };
+    railPopRootState(true);
     btn.setAttribute("aria-expanded", "true");
     var nm = bar && bar.querySelector(".nm");
     P.open(ws, nm ? nm.textContent : ws, btn);
     P.el.hidden = false;
     railPopPlace();
+    rp.placeClean = true;
     P.focus();
   }
   // railRevive brings an ended row's session back by its entry's move (take
@@ -991,10 +1006,12 @@
     railPopClose(false);
     var P = rpRow || (rpRow = rpRowMake());
     if (!P.el.parentNode) doc.body.appendChild(P.el);
-    rp = { P: P, kind: "row", ws: id, btn: link, at: at };
+    rp = { P: P, kind: "row", ws: id, btn: link, at: at, placeClean: false };
+    railPopRootState(true);
     P.open(id, row);
     P.el.hidden = false;
     railPopPlace();
+    rp.placeClean = true;
     P.focus();
   }
   function rmCancel(e) {
@@ -1496,7 +1513,12 @@
       }, 0);
     });
     window.addEventListener("resize", railPopPlace);
-    doc.addEventListener("scroll", function () { if (rp.P) railPopPlace(); }, true);
+    doc.addEventListener("scroll", function (e) {
+      if (!rp.P) return;
+      var t = e && e.target, b = rp.btn;
+      if (b && t && t !== doc && typeof t.contains === "function" && !t.contains(b)) return;
+      railPopPlace();
+    }, true);
     if (RAIL_WIDE && RAIL_WIDE.addEventListener) RAIL_WIDE.addEventListener("change", function () { railPopClose(false); });
   }
 
