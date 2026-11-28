@@ -305,12 +305,21 @@
     }
 
     function commitFinal(text) {
-      var finalText = String(text == null ? "" : text);
+      var finalText = String(text == null ? "" : text).trim();
       var hadSpan = !!liveSpan;
       clearSpan();
       renderCapsule("idle", "");
       if (finalText) {
-        applyRangeEdit(ctext, caretStart, caretEnd, finalText);
+        // One uniform spacing rule for every start path (Space hold, mic button)
+        // and backend: the dictation follows text on its line after exactly one
+        // space, however many (or none) were typed, and starts a line or an
+        // empty composer with none. The Space hold already collapsed its arming
+        // spaces; this makes the rule independent of that.
+        var val = String((ctext && ctext.value) || "");
+        var ws = Math.min(caretStart, val.length);
+        while (ws > 0 && /[ \t ]/.test(val.charAt(ws - 1))) ws--;
+        var lead = ws === 0 || val.charAt(ws - 1) === "\n" ? "" : " ";
+        applyRangeEdit(ctext, ws, Math.max(ws, caretEnd), lead + finalText);
       }
       if (hadSpan || finalText) {
         reconcileEditorOnce();

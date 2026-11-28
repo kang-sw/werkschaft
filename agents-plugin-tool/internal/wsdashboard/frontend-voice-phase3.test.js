@@ -1144,6 +1144,58 @@ test('PTT drops a stale active hold (lost keyup, failed recording) so the next p
   t.handle.destroy();
 });
 
+test('dictation commit normalizes the leading space to exactly one (or none at composer/line start) for mic button and Space hold', async () => {
+  // [value before the gesture, dictated text, expected composer value]
+  const cases = [
+    ['안녕', '하세요', '안녕 하세요'],
+    ['안녕 ', '하세요', '안녕 하세요'],
+    ['안녕   ', '하세요', '안녕 하세요'],
+    ['안녕\t ', '하세요', '안녕 하세요'],
+    ['', '하세요', '하세요'],
+    ['   ', '하세요', '하세요'],
+    ['첫줄\n', '둘째', '첫줄\n둘째'],
+    ['첫줄\n   ', '둘째', '첫줄\n둘째'],
+    ['안녕', '  하세요  ', '안녕 하세요'],
+  ];
+  for (const via of ['mic', 'space']) {
+    for (const [before, said, want] of cases) {
+      const t = makeCapsulesForwardingPTT({
+        value: before,
+        backend: {
+          id: 'native', label: 'OS Native', kind: 'native', available: () => true,
+          start: () => Promise.resolve(), stop: () => Promise.resolve({ text: said }), cancel: () => {}
+        }
+      });
+      if (via === 'mic') {
+        t.env.btn.click();
+        await flush();
+        t.env.btn.click();
+      } else {
+        // The arming Space types one more space before the hold timer fires.
+        t.env.ctext.value = before + ' ';
+        t.env.ctext.selectionStart = t.env.ctext.selectionEnd = t.env.ctext.value.length;
+        t.down();
+        t.timers.advance(1000);
+        await flush();
+        t.up();
+      }
+      await flush();
+      await flush();
+      assert.equal(t.env.ctext.value, want, `${via}: ${JSON.stringify(before)} + ${JSON.stringify(said)}`);
+      assert.equal(t.handle.controller.getState(), 'idle');
+      t.handle.destroy();
+    }
+  }
+  // A blank dictation leaves the composer exactly as it was.
+  const blank = makeCapsulesForwardingPTT({
+    value: '안녕   ',
+    backend: { id: 'native', label: 'OS Native', kind: 'native', available: () => true, start: () => Promise.resolve(), stop: () => Promise.resolve({ text: '  ' }), cancel: () => {} }
+  });
+  blank.env.btn.click(); await flush(); blank.env.btn.click(); await flush(); await flush();
+  assert.equal(blank.env.ctext.value, '안녕   ');
+  blank.handle.destroy();
+});
+
 test('macOS LSR 201 (recognizer_unavailable) shows the unavailable label, not the generic failure', async () => {
   const label = makeVoiceEnv().window.WsVoicePTT.errorLabel;
   for (const code of ['recognizer_unavailable', 'unavailable', 'privacy_disabled', 'language_unavailable']) {
