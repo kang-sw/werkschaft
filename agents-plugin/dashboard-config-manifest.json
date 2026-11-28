@@ -210,7 +210,7 @@
       "type": "boolean",
       "default": false,
       "default_scope": "global",
-      "description": "When true, OpenRouter voice transcription may reuse the top-level OpenRouter agent API key instead of requiring a dedicated OpenRouter (Voice) key. Default false so configuring the agent key never silently enables paid voice transcription. Only the global value applies."
+      "description": "When true, OpenRouter voice transcription may reuse the Werk OpenRouter API key (configured in Account) instead of requiring a dedicated OpenRouter (Voice) key. Default false so configuring the Werk key never silently enables paid voice transcription. Only the global value applies."
     },
     {
       "key": "dashboard.voice_model",
