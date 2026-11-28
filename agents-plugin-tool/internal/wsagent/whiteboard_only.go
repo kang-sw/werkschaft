@@ -8,6 +8,7 @@
 package wsagent
 
 import (
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -32,7 +33,7 @@ const whiteboardOnlyAdvisory = "Your previous turn answered in plain text, but t
 // as an operator entry so it runs interactively). None of those says anything
 // about the user's whiteboard toggle.
 func userOriginEntry(e wsinbox.Entry) bool {
-	if !e.Operator || e.Command != nil || e.Cron != nil || e.EventID != "" || e.Interrupt {
+	if (!e.User && !e.Operator) || e.Command != nil || e.Cron != nil || e.EventID != "" || e.Interrupt {
 		return false
 	}
 	if len(e.Parts) == 1 && (e.Parts[0] == quotaContinuationPrompt(true) || e.Parts[0] == quotaContinuationPrompt(false)) {
@@ -95,19 +96,17 @@ func (c *conv) noteSteerWhiteboard(recs []wsinbox.Record) {
 }
 
 // boardRevision reads the lead's board revision through the daemon's in-memory
-// hook; ok is false without a hook or for a non-lead.
+// hook without touching disk; ok is false without a hook, for a non-lead, or
+// when the lead lacks a root or session key.
 func (c *conv) boardRevision() (rev uint64, ok bool) {
-	fn := c.r.opts.WhiteboardRevision
-	if fn == nil || !c.rec.Lead {
+	if c == nil || c.r == nil {
 		return 0, false
 	}
-	root := c.rec.Root
-	if roots, found := c.r.opts.Keys.(interface{ Root(string) (string, bool) }); found {
-		if r, has := roots.Root(c.rec.WSKey); has {
-			root = r
-		}
+	fn := c.r.opts.WhiteboardRevision
+	if fn == nil || !c.rec.Lead || c.rec.Root == "" || c.rec.WSKey == "" {
+		return 0, false
 	}
-	return fn(root, c.rec.WSKey), true
+	return fn(filepath.Clean(c.rec.Root), c.rec.WSKey), true
 }
 
 // snapshotBoardRevision records the board revision at a turn's start, for
@@ -156,5 +155,5 @@ func (c *conv) stageWhiteboardNudge(turnErr, reply string) {
 	if briefAck(reply) {
 		return
 	}
-	c.passive.putAdvisory(c.openGen(), whiteboardOnlyAdvisory)
+	c.passive.putAdvisory(c.openGen(), whiteboardOnlyAdvisory, rev, ok)
 }

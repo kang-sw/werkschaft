@@ -163,6 +163,10 @@ type Entry struct {
 	SchemaVersion int `json:"schemaVersion"`
 	// Operator is set by a trusted operator send before the entry is stored.
 	Operator bool `json:"operator,omitempty"`
+	// User marks a message authored by a human user (dashboard composer, REST
+	// send, or Runner.Send), regardless of whether the request came from
+	// localhost (Operator) or a LAN browser. Older binaries ignore it (T0).
+	User bool `json:"user,omitempty"`
 	// Parts holds the send's text, including server-serialized selections
 	// (selections.go). An older combined entry may hold several parts,
 	// each kept as its own paragraph; no new stored field is needed.

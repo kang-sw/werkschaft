@@ -78,6 +78,9 @@ func (c *conv) turnInput(text string, whiteboard bool) string {
 	if !whiteboardOnly {
 		// A staged whiteboard advisory means nothing outside the mode.
 		c.passive.clearAdvisory()
+	} else if c.passive.hasAdvisoryRevision() {
+		rev, ok := c.boardRevision()
+		c.passive.dropStaleAdvisory(rev, ok)
 	}
 	if block, took := c.passive.render(c.openGen()); block != "" {
 		// Passive receipts of dashboard-run commands ride this send; they are
@@ -90,6 +93,12 @@ func (c *conv) turnInput(text string, whiteboard bool) string {
 		}
 	}
 	text = c.compactInput(text)
+	return c.appendAmbient(text, whiteboardOnly)
+}
+
+// appendAmbient appends the conversation's cached <ws-ambient> block to text,
+// folding in whiteboardFirstDirective when whiteboardOnly is true.
+func (c *conv) appendAmbient(text string, whiteboardOnly bool) string {
 	ambient := c.ambient
 	if whiteboardOnly {
 		ambient = ambientWithDirective(ambient, whiteboardFirstDirective)

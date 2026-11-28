@@ -109,6 +109,9 @@ func (c *conv) compactDurableContinue() bool {
 		return false
 	}
 	text := strings.TrimSpace(c.renderPendingNote(c.compactNote)) + "\n\nContinue the work that was pending."
+	if c.rec.Lead {
+		text = c.appendAmbient(text, c.rec.WhiteboardOnly)
+	}
 	start := c.r.opts.Now()
 	var committed bool
 	err := c.sendStandalonePrompt(true, func() error {

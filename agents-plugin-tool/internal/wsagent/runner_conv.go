@@ -1621,6 +1621,9 @@ func (c *conv) applyMode(ev wslive.Event, quiet, coalesceTurnEnd bool) {
 	}
 	if ev.Kind == wslive.KindReset {
 		c.spawnDirty = true
+		if !quiet {
+			c.passive.clearAdvisory()
+		}
 	}
 	usageChanged := false
 	if ev.Kind == wslive.KindStatus {
@@ -2382,6 +2385,10 @@ func (c *conv) kickInput() {
 		return
 	}
 	if durable && err != nil {
+		if committed {
+			c.passive.ack(c.passiveTook)
+			c.passiveTook = nil
+		}
 		if errors.Is(err, errDurableStopping) {
 			return
 		}

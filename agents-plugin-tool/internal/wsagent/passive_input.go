@@ -63,16 +63,19 @@ type passiveInput struct {
 	items []passiveItem
 	ver   uint64
 
-	advisory    string
-	advisoryVer uint64
+	advisory       string
+	advisoryVer    uint64
+	advisoryRev    uint64
+	advisoryHasRev bool
 }
 
 // passiveAdvisoryBlockName frames the advisory in a turn's input.
 const passiveAdvisoryBlockName = "ws-advisory"
 
 // putAdvisory stages text as the one pending advisory under generation gen,
-// replacing any earlier one. An empty text clears it.
-func (p *passiveInput) putAdvisory(gen uint64, text string) {
+// replacing any earlier one. An empty text clears it. When hasRev is true,
+// rev records the board revision the advisory was staged against.
+func (p *passiveInput) putAdvisory(gen uint64, text string, rev uint64, hasRev bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.gen != gen {
@@ -80,6 +83,11 @@ func (p *passiveInput) putAdvisory(gen uint64, text string) {
 	}
 	p.ver++
 	p.advisory, p.advisoryVer = strings.TrimSpace(text), p.ver
+	if p.advisory == "" {
+		p.advisoryRev, p.advisoryHasRev = 0, false
+		return
+	}
+	p.advisoryRev, p.advisoryHasRev = rev, hasRev
 }
 
 // clearAdvisory drops the pending advisory, if any.
@@ -87,6 +95,29 @@ func (p *passiveInput) clearAdvisory() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.advisory = ""
+	p.advisoryRev, p.advisoryHasRev = 0, false
+}
+
+// hasAdvisoryRevision reports whether a staged advisory carries a board
+// revision check.
+func (p *passiveInput) hasAdvisoryRevision() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.advisory != "" && p.advisoryHasRev
+}
+
+// dropStaleAdvisory clears a staged advisory that recorded a board revision
+// when the board revision is no longer known or changed while idle.
+func (p *passiveInput) dropStaleAdvisory(rev uint64, hasRev bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.advisory == "" || !p.advisoryHasRev {
+		return
+	}
+	if !hasRev || rev != p.advisoryRev {
+		p.advisory = ""
+		p.advisoryRev, p.advisoryHasRev = 0, false
+	}
 }
 
 // advisoryPending reports whether an advisory waits (tests, diagnostics).
@@ -105,7 +136,7 @@ func (p *passiveInput) put(gen uint64, execID, text string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.gen != gen {
-		p.gen, p.items, p.advisory = gen, nil, ""
+		p.gen, p.items, p.advisory, p.advisoryRev, p.advisoryHasRev = gen, nil, "", 0, false
 	}
 	p.ver++
 	text = passiveFit(strings.TrimSpace(text))
@@ -200,7 +231,7 @@ func (p *passiveInput) render(gen uint64) (string, []passiveTake) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.gen != gen {
-		p.gen, p.items, p.advisory = gen, nil, ""
+		p.gen, p.items, p.advisory, p.advisoryRev, p.advisoryHasRev = gen, nil, "", 0, false
 	}
 	if len(p.items) == 0 && p.advisory == "" {
 		return "", nil
@@ -239,6 +270,7 @@ func (p *passiveInput) ack(takes []passiveTake) {
 		if t.advisory {
 			if p.advisory != "" && p.advisoryVer == t.ver {
 				p.advisory = ""
+				p.advisoryRev, p.advisoryHasRev = 0, false
 			}
 			continue
 		}

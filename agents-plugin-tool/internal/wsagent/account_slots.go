@@ -122,6 +122,7 @@ func (c *conv) retireAndCommitPendingSlot() error {
 	c.accountSlotBoundaryPending = false
 	c.slot2aVerifyPending = false
 	c.slot2aFallbackRetried = false
+	c.passive.clearAdvisory()
 	c.update(func(rec *Record) {
 		rec.AccountSlotID = storedAccountSlotID(pending)
 		rec.PendingAccountSlotID = ""
@@ -162,6 +163,7 @@ func (c *conv) coldRestartPendingAccountSlot(reason string) error {
 	c.accountSlotBoundaryPending = false
 	c.slot2aVerifyPending = false
 	c.slot2aFallbackRetried = false
+	c.passive.clearAdvisory()
 	c.queueRestore(RestoreCompaction)
 	c.appendRestoreInstructions()
 	c.update(func(rec *Record) {
