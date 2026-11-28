@@ -20,6 +20,14 @@ import (
 // with effort "<size>-effort".
 func companionTierRuntime(t *testing.T, harnesses ...string) (*companionRuntime, wsconfig.Options) {
 	t.Helper()
+	return companionTierRuntimeWith(t, nil, harnesses...)
+}
+
+// companionTierRuntimeWith is companionTierRuntime that, with a non-nil
+// agy backend, registers "agy" as the daemon's own descriptor (cross-harness
+// refusal and all) over that backend.
+func companionTierRuntimeWith(t *testing.T, agy wsagent.Backend, harnesses ...string) (*companionRuntime, wsconfig.Options) {
+	t.Helper()
 	cfg := wsconfig.Options{CacheHome: filepath.Join(t.TempDir(), "cache"), ConfigHome: filepath.Join(t.TempDir(), "config")}
 	backend := &companionTestBackend{}
 	regs := map[string]wsagent.BackendRegistration{}
@@ -29,6 +37,11 @@ func companionTierRuntime(t *testing.T, harnesses ...string) (*companionRuntime,
 			profile = "lead-" + name
 		}
 		regs[name] = wsagent.BackendRegistration{Backend: backend, LeadProfile: profile, WorkerCapable: true, WorkerProfile: wsagent.AgentWorkerProfile(name)}
+		if name == wsagent.BackendAgy && agy != nil {
+			shipped := wsagent.BuiltinBackendRegistrations()[name]
+			shipped.Backend = agy
+			regs[name] = shipped
+		}
 		for _, size := range []string{"small", "medium", "large"} {
 			if name == "werk" || strings.HasPrefix(name, "zz-") {
 				break
@@ -268,6 +281,96 @@ func TestCompanionTierAutoCandidateRules(t *testing.T) {
 	if got := lead.resolveRole(mcp.CompanionRoleBody); got.Harness != "codex" || got.FallbackReason == "" {
 		t.Fatalf("an explicit worker-less harness must fall back: %+v", got)
 	}
+}
+
+// The shipped agy registration carries the worker-only cross-harness refusal,
+// which a daemon-created companion lead does not hit: agy.<tier>, an alias
+// and a bundle ending on agy resolve for both roles, and agy launches. Auto
+// stays off agy while another harness is installed, and a bare tier too.
+func TestCompanionTierShippedAgyIsExplicitOnly(t *testing.T) {
+	rt, cfg := companionTierRuntimeWith(t, &companionTestBackend{}, "claude", "codex", "agy")
+	setCompanionTier(t, cfg, wsconfig.ScopeGlobal, wsconfig.ItemAgentTierAliases, "far=agy.medium")
+	setCompanionStructured(t, cfg, wsconfig.ItemAgentTierRouting, `{"bundles":{"quick":{"harness":"agy","model":"agy-quick","effort":"low"}}}`)
+
+	values := map[string]wsagent.CompanionTierOption{}
+	for _, o := range rt.agents.CompanionTierOptions(cfg) {
+		values[o.Value] = o
+	}
+	for _, v := range []string{"agy.small", "agy.medium", "agy.large"} {
+		if o := values[v]; o.Kind != "harness" || o.Harness != "agy" || o.Model == "" {
+			t.Fatalf("option %s = %+v", v, o)
+		}
+	}
+	if o := values["far"]; o.Kind != "alias" || o.Harness != "agy" || o.Target != "agy.medium" {
+		t.Fatalf("alias option = %+v", o)
+	}
+	if o := values["quick"]; o.Kind != "bundle" || o.Harness != "agy" {
+		t.Fatalf("bundle option = %+v", o)
+	}
+
+	claudeBody := tierWant{"claude", "small", "claude-small", "small-effort", ""}
+	claudeWork := tierWant{"claude", "medium", "claude-medium", "medium-effort", ""}
+	checkCompanionTier(t, "auto body", rt.resolveRole(mcp.CompanionRoleBody), claudeBody)
+	checkCompanionTier(t, "auto work", rt.resolveRole(mcp.CompanionRoleWork), claudeWork)
+	for _, key := range []string{wsdashboard.CompanionBodyTierKey, wsdashboard.CompanionWorkTierKey} {
+		setCompanionTier(t, cfg, wsconfig.ScopeGlobal, key, "auto")
+	}
+	checkCompanionTier(t, "explicit auto body", rt.resolveRole(mcp.CompanionRoleBody), claudeBody)
+	checkCompanionTier(t, "explicit auto work", rt.resolveRole(mcp.CompanionRoleWork), claudeWork)
+
+	for _, tc := range []struct {
+		role, key, value string
+		want             tierWant
+	}{
+		{mcp.CompanionRoleBody, wsdashboard.CompanionBodyTierKey, "agy.small", tierWant{"agy", "small", "agy-small", "small-effort", ""}},
+		{mcp.CompanionRoleWork, wsdashboard.CompanionWorkTierKey, "agy.medium", tierWant{"agy", "medium", "agy-medium", "medium-effort", ""}},
+		{mcp.CompanionRoleWork, wsdashboard.CompanionWorkTierKey, "far", tierWant{"agy", "medium", "agy-medium", "medium-effort", ""}},
+		{mcp.CompanionRoleBody, wsdashboard.CompanionBodyTierKey, "quick", tierWant{"agy", "", "agy-quick", "low", ""}},
+		{mcp.CompanionRoleWork, wsdashboard.CompanionWorkTierKey, "large", tierWant{"claude", "large", "claude-large", "large-effort", ""}},
+	} {
+		setCompanionTier(t, cfg, wsconfig.ScopeGlobal, tc.key, tc.value)
+		checkCompanionTier(t, tc.role+" "+tc.value, rt.resolveRole(tc.role), tc.want)
+	}
+	setCompanionTier(t, cfg, wsconfig.ScopeGlobal, wsdashboard.CompanionBodyTierKey, "agy.small")
+	if spec, ok := rt.pickLaunchSpec(mcp.CompanionRoleBody); !ok || spec != (companionLaunchSpec{Backend: "agy", Model: "agy-small", Effort: "small-effort"}) {
+		t.Fatalf("agy launch = %+v (%v)", spec, ok)
+	}
+}
+
+// With agy the only harness installed, auto stays unavailable (never spends
+// agy unasked) while an explicit agy value still launches; a bare tier has no
+// auto harness to land on and falls back.
+func TestCompanionTierShippedAgyOnlyStaysExplicit(t *testing.T) {
+	rt, cfg := companionTierRuntimeWith(t, &companionTestBackend{}, "agy")
+	if res := rt.resolveRole(mcp.CompanionRoleBody); res.Available || res.Harness != "" || res.FallbackReason == "" {
+		t.Fatalf("auto with only agy = %+v", res)
+	}
+	if _, ok := rt.pickLaunchSpec(mcp.CompanionRoleBody); ok {
+		t.Fatal("auto launched agy unasked")
+	}
+	if len(rt.agents.CompanionTierOptions(cfg)) < 2 {
+		t.Fatal("agy options not offered when it is the only harness")
+	}
+	setCompanionTier(t, cfg, wsconfig.ScopeGlobal, wsdashboard.CompanionBodyTierKey, "agy.small")
+	checkCompanionTier(t, "explicit", rt.resolveRole(mcp.CompanionRoleBody), tierWant{"agy", "small", "agy-small", "small-effort", ""})
+	setCompanionTier(t, cfg, wsconfig.ScopeGlobal, wsdashboard.CompanionBodyTierKey, "small")
+	if res := rt.resolveRole(mcp.CompanionRoleBody); res.Available || res.FallbackReason == "" {
+		t.Fatalf("bare tier with only agy = %+v", res)
+	}
+}
+
+// The relaxed admission still rejects what cannot host a lead: an agy whose
+// executable is missing is neither offered nor selectable.
+func TestCompanionTierShippedAgyStillNeedsAvailableBackend(t *testing.T) {
+	rt, cfg := companionTierRuntimeWith(t, wsagent.AgyBackend{Command: filepath.Join(t.TempDir(), "no-such-agy")}, "claude", "agy")
+	for _, o := range rt.agents.CompanionTierOptions(cfg) {
+		if o.Harness == "agy" {
+			t.Fatalf("an uninstalled agy was offered: %+v", o)
+		}
+	}
+	setCompanionTier(t, cfg, wsconfig.ScopeGlobal, wsdashboard.CompanionBodyTierKey, "agy.small")
+	checkCompanionTier(t, "uninstalled", rt.resolveRole(mcp.CompanionRoleBody),
+		tierWant{"claude", "small", "claude-small", "small-effort", "not installed"})
 }
 
 // A malformed agent.tier_aliases breaks only alias lookups: a plain name

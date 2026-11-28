@@ -56,10 +56,26 @@ type CompanionTierOption struct {
 	Target  string `json:"target,omitempty"`
 }
 
+// companionAutoHarnesses are the companion harnesses auto may launch: those
+// whose registration carries no cross-harness refusal. A refused harness
+// (one whose provider's terms restrict third-party use) hosts a companion
+// only when a value names it (<harness>.<tier>, or an alias or bundle that
+// ends on it), so auto never spends its quota unasked, even when it is the
+// only harness installed.
+func (r *Runner) companionAutoHarnesses(all []string) []string {
+	var out []string
+	for _, name := range all {
+		if r.opts.Backends[name].crossHarnessRefusal == "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // companionHarnesses are the registered harnesses that can host a
-// companion lead now (a lead profile and an available backend), in the
-// launch preference order: the built-in harness order, then the rest by
-// name. The first one is what auto launches.
+// companion lead now (a lead profile, the worker role and an available
+// backend), in the launch preference order: the built-in harness order, then
+// the rest by name. Auto launches only companionAutoHarnesses of them.
 func (r *Runner) companionHarnesses() []string {
 	var usable []string
 	for name := range r.opts.Backends {
@@ -83,8 +99,13 @@ func (r *Runner) companionHarnesses() []string {
 }
 
 // companionHarnessGap says why harness cannot host a companion lead now,
-// "" when it can.
+// "" when it can. A companion is a daemon-created lead, so the worker-only
+// cross-harness admission (admitWorker) does not apply; only the lead
+// profile, the worker role and the executable do.
 func (r *Runner) companionHarnessGap(harness string) string {
+	if harness == "" {
+		return "no harness is eligible for auto to host it; name one as <harness>.<tier>"
+	}
 	reg, ok := r.opts.Backends[harness]
 	if !ok || reg.Backend == nil {
 		return fmt.Sprintf("harness %q is not registered in this daemon", harness)
@@ -92,28 +113,30 @@ func (r *Runner) companionHarnessGap(harness string) string {
 	if LeadProfileFor(harness, r.opts.Backends) == "" {
 		return fmt.Sprintf("harness %q cannot host a lead session", harness)
 	}
-	return r.registeredWorker("", harness)
+	return workerRoleGap(harness, reg)
 }
 
 // ResolveCompanionTier resolves a companion role's configured tier with cfg
 // for agents.tier, agent.tier_aliases and agent.tier_routing. Empty or
-// "auto" is the role's autoSize on the first companion harness, with that
-// harness's default model when its slot is unset. An explicit value pins
+// "auto" is the role's autoSize on the first auto companion harness, with
+// that harness's default model when its slot is unset. An explicit value pins
 // the harness it names (<harness>.<tier>, an alias, or a routing token; a
-// bare tier uses the first companion harness) and must have a slot there;
-// any value that cannot launch falls back to auto with FallbackReason.
+// bare tier uses the first auto companion harness) and must have a slot
+// there; any value that cannot launch falls back to auto with
+// FallbackReason. A harness with a cross-harness refusal is explicit-only.
 func (r *Runner) ResolveCompanionTier(cfg wsconfig.Options, configured, autoSize string) CompanionTierResolution {
 	raw := strings.ToLower(strings.TrimSpace(configured))
 	harnesses := r.companionHarnesses()
+	autos := r.companionAutoHarnesses(harnesses)
 	auto := func(reason string) CompanionTierResolution {
 		out := CompanionTierResolution{Configured: raw, Tier: autoSize, FallbackReason: reason}
-		if len(harnesses) == 0 {
+		if len(autos) == 0 {
 			if out.FallbackReason == "" {
 				out.FallbackReason = "no harness can host a companion session now"
 			}
 			return out
 		}
-		out.Harness, out.Available = harnesses[0], true
+		out.Harness, out.Available = autos[0], true
 		if tiers, err := wsconfig.HarnessTiers(cfg, out.Harness); err == nil {
 			if slot, ok := tiers[autoSize]; ok && slot.Model != "" {
 				out.Model, out.Effort, out.Provider = slot.Model, slot.Effort, slot.Provider
@@ -127,12 +150,20 @@ func (r *Runner) ResolveCompanionTier(cfg wsconfig.Options, configured, autoSize
 	if len(harnesses) == 0 {
 		return auto(fmt.Sprintf("%q: no harness can host a companion session now", raw))
 	}
-	res, err := r.companionExplicitTier(cfg, raw, harnesses[0], NewTierBindingResolver(cfg, r.opts.Backends))
+	res, err := r.companionExplicitTier(cfg, raw, firstOf(autos), NewTierBindingResolver(cfg, r.opts.Backends))
 	if err != nil {
 		return auto(fmt.Sprintf("%q: %v; using auto", raw, err))
 	}
 	res.Configured = raw
 	return res
+}
+
+// firstOf is the first harness of an ordered list, "" for none.
+func firstOf(harnesses []string) string {
+	if len(harnesses) == 0 {
+		return ""
+	}
+	return harnesses[0]
 }
 
 // companionExplicitTier resolves a non-auto value the way agent.spawn reads
@@ -227,6 +258,7 @@ func (r *Runner) CompanionTierOptions(cfg wsconfig.Options) []CompanionTierOptio
 		return out
 	}
 	resolver := NewTierBindingResolver(cfg, r.opts.Backends)
+	first := firstOf(r.companionAutoHarnesses(harnesses))
 	aliases, _ := tierAliases(cfg)
 	names := make([]string, 0, len(aliases))
 	for name := range aliases {
@@ -236,7 +268,7 @@ func (r *Runner) CompanionTierOptions(cfg wsconfig.Options) []CompanionTierOptio
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if res, err := r.companionExplicitTier(cfg, name, harnesses[0], resolver); err == nil {
+		if res, err := r.companionExplicitTier(cfg, name, first, resolver); err == nil {
 			out = append(out, CompanionTierOption{Value: name, Kind: CompanionTierKindAlias, Harness: res.Harness,
 				Tier: res.Tier, Model: res.Model, Effort: res.Effort, Target: aliases[name]})
 		}
@@ -254,7 +286,7 @@ func (r *Runner) CompanionTierOptions(cfg wsconfig.Options) []CompanionTierOptio
 	}
 	sort.Strings(bundleNames)
 	for _, name := range bundleNames {
-		if res, err := r.companionExplicitTier(cfg, name, harnesses[0], resolver); err == nil {
+		if res, err := r.companionExplicitTier(cfg, name, first, resolver); err == nil {
 			out = append(out, CompanionTierOption{Value: name, Kind: CompanionTierKindBundle, Harness: res.Harness,
 				Tier: res.Tier, Model: res.Model, Effort: res.Effort})
 		}

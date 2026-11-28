@@ -325,6 +325,13 @@ func (r *Runner) registeredWorker(callerBackend, harness string) string {
 	if err := r.admitWorker(harness, callerBackend); err != nil {
 		return err.Error()
 	}
+	return workerRoleGap(harness, reg)
+}
+
+// workerRoleGap is registeredWorker's caller-independent part: the worker
+// role and the executable. A daemon-created lead (companion) reuses it
+// without the cross-harness caller admission, which guards workers only.
+func workerRoleGap(harness string, reg BackendRegistration) string {
 	if !reg.WorkerCapable || reg.WorkerProfile == "" {
 		return fmt.Sprintf("harness %q is registered for hosted leads only, not for spawned workers", harness)
 	}

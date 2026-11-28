@@ -201,6 +201,55 @@ test("a rejected save still refreshes the readback", async () => {
   assert.equal(h.fetches.length, 2);
 });
 
+test("the agy consumer-terms notice shows once while either role launches on agy", async () => {
+  const agyOptions = readback().options.concat([
+    { value: "agy.small", kind: "harness", harness: "agy", tier: "small", model: "agy-small", effort: "" },
+    { value: "far", kind: "alias", harness: "agy", tier: "medium", model: "agy-medium", effort: "", target: "agy.medium" }
+  ]);
+  const respond = () => ({ ok: true, status: 200, json: async () => ({ resolved_agents: readback({ options: agyOptions }) }) });
+  const notices = h => byData(h.root, "companionAgentTerms");
+  const none = setup({ values: { [BODY]: "claude.small", [WORK]: "brain" }, respond });
+  await tick();
+  assert.equal(notices(none).length, 0, "no notice without agy");
+  assert.equal(notices(setup({ respond })).length, 0, "auto never shows it");
+
+  for (const values of [{ [BODY]: "agy.small" }, { [WORK]: "Far" }, { [BODY]: "agy.small", [WORK]: "agy.small" }]) {
+    const h = setup({ values, respond });
+    await tick();
+    const found = notices(h);
+    assert.equal(found.length, 1, JSON.stringify(values));
+    assert.equal(found[0].textContent, "js.lead.agy.terms", "the lead modal's own key");
+    assert.equal(found[0].attrs.role, "note");
+    assert.equal(h.root.children[h.root.children.length - 1], found[0], "it closes the card");
+  }
+
+  // Before the readback loads, a dotted value is read by its prefix; an
+  // alias cannot be resolved yet.
+  const pending = setup({ values: { [BODY]: "agy.small", [WORK]: "far" }, respond: () => new Promise(() => {}) });
+  assert.equal(notices(pending).length, 1);
+  assert.equal(notices(setup({ values: { [WORK]: "far" }, respond: () => new Promise(() => {}) })).length, 0);
+
+  // A project scope shows its own value, not the effective one.
+  const project = setup({ scope: "project", values: { [BODY]: "agy.small" }, respond });
+  project.ctx.selected = () => "claude.small";
+  await tick();
+  project.ctx.rerender();
+  assert.equal(notices(project).length, 0);
+  project.ctx.selected = () => "agy.small";
+  project.ctx.rerender();
+  assert.equal(notices(project).length, 1);
+
+  // Choosing agy and then leaving it moves the notice with the saved value.
+  const live = setup({ respond });
+  await tick();
+  live.ctx.byKey.get(WORK).value = "agy.small";
+  live.ctx.rerender();
+  assert.equal(notices(live).length, 1);
+  live.ctx.byKey.get(WORK).value = "";
+  live.ctx.rerender();
+  assert.equal(notices(live).length, 0);
+});
+
 test("the card hides with its rows and never fetches while hidden", async () => {
   const h = setup({ matches: entry => entry.key === WORK });
   assert.equal(byData(h.root, "companionAgentRole").length, 1);
