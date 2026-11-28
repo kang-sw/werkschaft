@@ -504,7 +504,14 @@
       "registered_at": "2026-11-28T11:39:25Z"
     },
     "261129-feat-whiteboard-artifact-gc": {
-      "registered_at": "2026-11-28T16:15:43Z"
+      "registered_at": "2026-11-28T16:15:43Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "closed",
+        "touched_at": "2026-11-28T16:33:18Z"
+      }
     },
     "261129-feat-ws-cache-large-growth-gc": {
       "registered_at": "2026-11-28T16:15:15Z"
