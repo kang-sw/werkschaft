@@ -494,19 +494,6 @@
     "261127-feat-ws-tier-routing-caller-target": {
       "registered_at": "2026-11-27T04:44:39Z"
     },
-    "261127-feat-ws-werk-usage-metrics-and-openai-codex-unification": {
-      "registered_at": "2026-11-27T05:13:52Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-28T01:56:00Z",
-        "impl": {
-          "branch": "impl/develop/chaps-doing-salon"
-        }
-      }
-    },
     "261127-feat-ws-whiteboard-selected-topics-html-export": {
       "registered_at": "2026-11-27T02:19:52Z"
     },
@@ -544,6 +531,9 @@
           "branch": "impl/develop/oink-grass-giddy"
         }
       }
+    },
+    "261128-feat-ws-dashboard-gallery-git-page": {
+      "registered_at": "2026-11-28T02:54:38Z"
     },
     "261128-feat-ws-dashboard-gallery-workpanel-b": {
       "registered_at": "2026-11-28T02:48:30Z"
