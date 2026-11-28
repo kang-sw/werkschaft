@@ -101,8 +101,8 @@
     if (rtoastEl.parentNode !== railEl) railEl.appendChild(rtoastEl);
     rtoastEl.textContent = message;
     rtoastEl.className = "rtoast" + (ok ? " ok" : "");
-    var r = region("rail"), anchor = r && (r.querySelector(".rcap:not([hidden])") || r.querySelector(".rfoot"));
-    if (anchor) rtoastEl.style.bottom = Math.round(railEl.getBoundingClientRect().bottom - anchor.getBoundingClientRect().top + 8) + "px";
+    var r = region("rail"), anchor = (r && (r.querySelector(".rcap:not([hidden])") || r.querySelector(".rfoot") || r.querySelector("#rail-companion-slot:not([hidden])"))) || (railEl && railEl.querySelector(".rfoot"));
+    rtoastEl.style.bottom = anchor && anchor.offsetHeight ? Math.round(railEl.getBoundingClientRect().bottom - anchor.getBoundingClientRect().top + 8) + "px" : "8px";
     void rtoastEl.offsetWidth;
     rtoastEl.classList.add("on");
     clearTimeout(rtoastTimer);

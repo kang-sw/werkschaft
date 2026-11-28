@@ -31,10 +31,10 @@ func TestPinnedColumnFillsTheWindowRightOfTheBoard(t *testing.T) {
 }`,
 		".dash { --tkml: 0px; }",
 		".dash.index { --tkmaxw: 1080px; --tkml: auto; }",
-		":root { --pbw: calc(1680px - 32px - 348px); }",
+		":root { --pbw: calc(1680px - 32px - var(--rail-reserve, 288px)); }",
 		".dash { --stagew: var(--pbw); }",
 		".dash.board { --pbw: 900px; }",
-		`:root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody { grid-template-columns: 340px minmax(0, min(var(--boardw, min(var(--pbw), 100% - 836px)), 100% - 636px)) minmax(280px, 1fr); }`,
+		`:root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody { grid-template-columns: var(--rail-w, 280px) minmax(0, min(var(--boardw, min(var(--pbw), 100% - (var(--rail-reserve, 288px) + 488px))), 100% - (var(--rail-reserve, 288px) + 288px))) minmax(280px, 1fr); }`,
 		`:root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dwrap:not(.narrow),`,
 	} {
 		if !strings.Contains(css, want) {
@@ -135,8 +135,18 @@ func TestGalleryLayoutModes(t *testing.T) {
 var bad = [];
 function check(what, got, want) { if (JSON.stringify(got) !== JSON.stringify(want)) bad.push(what + ": got " + JSON.stringify(got) + ", want " + JSON.stringify(want)); }
 var w = {}; new Function("window", "module", GALLERY)(w, undefined); var G = w.WsGallery;
-var attrs = {}, rails = 0, placed = 0, width = 0, layoutKey = "auto";
-var root = { hasAttribute: function (k) { return k in attrs; }, setAttribute: function (k, v) { attrs[k] = v; }, removeAttribute: function (k) { delete attrs[k]; } };
+var attrs = {}, props = {}, rails = 0, placed = 0, width = 0, layoutKey = "auto";
+var root = {
+  hasAttribute: function (k) { return k in attrs; },
+  getAttribute: function (k) { return k in attrs ? attrs[k] : null; },
+  setAttribute: function (k, v) { attrs[k] = String(v); },
+  removeAttribute: function (k) { delete attrs[k]; },
+  style: {
+    setProperty: function (k, v) { props[k] = String(v); },
+    getPropertyValue: function (k) { return props[k] || ""; },
+    removeProperty: function (k) { delete props[k]; }
+  }
+};
 var grid = { getAttribute: function () { return layoutKey; } }, live = true, LAYOUT_KEY = "layout";
 var CONVW_MIN = 320, SPLITB_MIN = 360, boardw = 0, convow = 0, board = null, opt = { split: {} };
 function load() { return layoutKey; }
@@ -159,16 +169,28 @@ check("Band 1 1599px, a page: the narrow view", at(1599, 1, false), ["narrow", f
 check("Band 1 1599px, a drag with no page: the narrow rail", at(1599, 0, true), ["narrow", false, false]);
 check("Band 2 1640px, a page: fused narrow, no overlay rail", at(1640, 1, false), ["narrow", false, false]);
 check("Band 3 1920px, a page: fused narrow, no overlay rail", at(1920, 1, false), ["narrow", false, false]);
-check("Band 3 2441px live default, a page: still Band 3 (753 < 753.67)", at(2441, 1, false), ["narrow", false, false]);
-check("Band 4 2442px live default, no page: idle empty slot in Col 3", at(2442, 0, false), ["empty", false, false]);
+check("Band 3 2381px live default (280px rail), a page: still Band 3", at(2381, 1, false), ["narrow", false, false]);
+check("Band 4 2382px live default (280px rail), no page: idle empty slot in Col 3", at(2382, 0, false), ["empty", false, false]);
 check("Band 4 2560px live default, a page: 4-col gallery with rail docked", at(2560, 1, false), ["col", true, false]);
 check("Band 4 2560px, a drag with no page: drag slot in Col 3, no pincol", at(2560, 0, true), ["drag", false, false]);
+// Live --rail-w width transitions (220px, 280px, 360px, and collapsed) shift the Band 4 threshold dynamically.
+root.style.setProperty("--rail-w", "220px");
+check("Band 3 2321px live (220px rail), a page: still Band 3", at(2321, 1, false), ["narrow", false, false]);
+check("Band 4 2322px live (220px rail), no page: opens Col 3", at(2322, 0, false), ["empty", false, false]);
+root.style.setProperty("--rail-w", "360px");
+check("Band 3 2461px live (360px rail), a page: still Band 3", at(2461, 1, false), ["narrow", false, false]);
+check("Band 4 2462px live (360px rail), no page: opens Col 3", at(2462, 0, false), ["empty", false, false]);
+root.setAttribute("data-rail-collapsed", "true");
+check("Band 3 2093px live (collapsed rail), a page: still Band 3", at(2093, 1, false), ["narrow", false, false]);
+check("Band 4 2094px live (collapsed rail), no page: opens Col 3", at(2094, 0, false), ["empty", false, false]);
+root.removeAttribute("data-rail-collapsed");
+root.style.setProperty("--rail-w", "280px");
 opt.split = null;
-check("Band 3 2187px board-first, no page: still fused narrow", at(2187, 0, false), [null, false, false]);
-check("Band 4 2188px board-first, no page: idle empty slot in Col 3", at(2188, 0, false), ["empty", false, false]);
+check("Band 3 2127px board-first (280px rail), no page: still fused narrow", at(2127, 0, false), [null, false, false]);
+check("Band 4 2128px board-first (280px rail), no page: idle empty slot in Col 3", at(2128, 0, false), ["empty", false, false]);
 board = { closest: function (selector) { return selector === ".dgrid.worktree" ? {} : null; } };
-check("worktree 2188px keeps gallery fused while its 753.67px board would not fit", at(2188, 1, false), ["narrow", false, false]);
-check("worktree 2442px fits the board beside its gallery", at(2442, 1, false), ["col", true, false]);
+check("worktree 2128px keeps gallery fused while its 753.67px board would not fit", at(2128, 1, false), ["narrow", false, false]);
+check("worktree 2382px fits the board beside its gallery", at(2382, 1, false), ["col", true, false]);
 board = null;
 opt.split = {};
 check("tabs at 2560px, a page: the narrow view", at(2560, 1, false, true), ["narrow", false, false]);
@@ -244,7 +266,7 @@ func TestLiveCellIsTheConversationAndTheBoard(t *testing.T) {
 	css := mustAsset(t, "dashboard.css")
 	for _, want := range []string{
 		".dash[data-split-grid] { --cvw: var(--convow, calc(var(--boardw) * 5 / 7)); }",
-		`  :root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody[data-split-grid] { grid-template-columns: 340px minmax(0, min(var(--cvw) + 8px + var(--boardw), 100% - 636px)) minmax(280px, 1fr); }`,
+		`  :root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody[data-split-grid] { grid-template-columns: var(--rail-w, 280px) minmax(0, min(var(--cvw) + 8px + var(--boardw), 100% - (var(--rail-reserve, 288px) + 288px))) minmax(280px, 1fr); }`,
 		`:root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"], [data-overview-preview]) .dgrid:is(.live, .history) { --dgrid-cols: minmax(320px, min(var(--cvw), 100% - 360px - var(--dgrid-gap))) minmax(0, 1fr); }`,
 		".dgrid { --dgrid-cols: minmax(320px, 5fr) minmax(0, 7fr); --dgrid-gap: 8px; }",
 	} {

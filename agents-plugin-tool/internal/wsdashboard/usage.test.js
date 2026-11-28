@@ -527,11 +527,17 @@ test('the header handle keeps one row: small badge marks clear of the columns, a
   assert.match(rule('.tcen .usage-number'), /font-size: 10\.5px/);
   assert.match(rule('.tcen .usage-pace'), /font-size: 9\.5px/);
   assert.match(rule('.usage-key'), /9px\/1\.2/);
-  // Where the header runs short (tu) only the compact trigger shows.
+  // Where the header runs short (tu) or the bottom bar runs short (.shell-bottom.bu)
+  // only the compact trigger shows.
   assert.match(rule('.usage-mini'), /display: none/);
-  assert.match(rule('.dwrap > .top.tu .tcen > .usage-toggle'), /width: 34px/);
+  assert.match(rule('.dwrap > .top.tu .tcen > .usage-toggle'), /width: var\(--toph, 36px\)/);
   assert.match(rule('.dwrap > .top.tu .tcen > .usage-toggle > :not(.usage-mini)'), /display: none/);
   assert.match(rule('.dwrap > .top.tu .tcen > .usage-toggle > .usage-mini'), /display: inline-flex/);
+  assert.match(rule('.shell-bottom .usage-toggle'), /height: 20px/);
+  assert.match(rule('.shell-bottom .usage-column'), /flex-direction: row/);
+  assert.match(rule('.shell-bottom.bu .usage-toggle'), /width: 24px/);
+  assert.match(rule('.shell-bottom.bu .usage-toggle > :not(.usage-mini)'), /display: none/);
+  assert.match(rule('.shell-bottom.bu .usage-toggle > .usage-mini'), /display: inline-flex/);
   const handleCss = css.slice(0, css.indexOf('.rpop.usage-pop'));
   assert.doesNotMatch(handleCss, /overflow:\s*hidden|text-overflow:\s*ellipsis/);
 });
