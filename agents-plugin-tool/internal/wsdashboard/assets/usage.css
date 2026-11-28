@@ -135,6 +135,7 @@
 .up-hb[data-k="codex"] { background: var(--k-codex-bg); color: var(--k-codex-fg); box-shadow: inset 0 0 0 1px var(--k-codex-stroke); }
 .up-hb[data-k="agyg"], .up-hb[data-k="agy"] { background: var(--k-agyg); color: #ffffff; }
 .up-hb[data-k="agyc"] { background: var(--k-agyc); color: #ffffff; }
+.up-hb[data-k="pi-rpc"] { background: #0b0b0c; color: #e6e6e6; box-shadow: inset 0 0 0 1px #5a5a5a; }
 
 /* Unified 2-chart panels */
 .up-charts { display: block; }

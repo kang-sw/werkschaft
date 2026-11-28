@@ -308,7 +308,8 @@
       legendExcess: "js.usage.legend_excess", legendPin: "js.usage.legend_pin",
       legendClock: "js.usage.legend_clock", legendFocus: "js.usage.legend_focus",
       legendGantt: "js.usage.legend_gantt", legendGanttOver: "js.usage.legend_gantt_over",
-      legendReset: "js.usage.legend_reset", legendPreview: "js.usage.legend_preview"
+      legendReset: "js.usage.legend_reset", legendPreview: "js.usage.legend_preview",
+      piNoQuotaNote: "js.usage.pi_no_quota_note"
     };
     function t(key) { return window.wsT.apply(null, [keys[key]].concat(Array.prototype.slice.call(arguments, 1))); }
     function locale() { return (window.wsI18n && window.wsI18n.lang) || "en"; }

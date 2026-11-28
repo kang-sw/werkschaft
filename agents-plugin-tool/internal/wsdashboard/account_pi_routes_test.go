@@ -690,3 +690,55 @@ func TestPiRuntimeInstallErrorRecordedAndClearedOnUninstall(t *testing.T) {
 		t.Fatalf("expected error cleared after uninstall, got %q", st.Error)
 	}
 }
+
+func TestSettingsPageEmitsXtermAssetAndAccountFlagForPiRuntime(t *testing.T) {
+	// 1. piRuntime alone enables data-settings-account; without holders, data-term is omitted.
+	d := authFixture(t)
+	d.config = settingsTestBackend(t)
+	d.accountSlots = nil
+	d.credentials = nil
+	d.piRuntime = wspiruntime.NewManager(wspiruntime.Options{CacheRoot: t.TempDir()})
+	d.piLogin.daemon = d
+
+	rec := settingsRequest(t, d, http.MethodGet, "/settings?scope=global&frame=1", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /settings?scope=global&frame=1 (no holders) = %d (%s)", rec.Code, rec.Body.String())
+	}
+	html := rec.Body.String()
+	if !strings.Contains(html, "data-settings-account") {
+		t.Fatalf("expected data-settings-account when piRuntime is set, got HTML without it")
+	}
+	if strings.Contains(html, `data-term="`) {
+		t.Fatalf("expected data-term omitted when holders is nil")
+	}
+
+	assets, err := loadDashboardAssets()
+	if err != nil {
+		t.Fatalf("loadDashboardAssets: %v", err)
+	}
+	if strings.Contains(html, "/s/"+assets.data.FrameXtermFile) {
+		t.Fatalf("expected FrameXtermFile stylesheet omitted when holders is nil")
+	}
+
+	// 2. With holders attached on a local request, data-term and FrameXtermFile stylesheet are emitted.
+	holdersDir, python := termHoldersDir(t)
+	mgr := wsholder.New(wsholder.Options{Dir: holdersDir, Python: python})
+	defer mgr.Close()
+	d.holders = mgr
+
+	rec2 := settingsRequest(t, d, http.MethodGet, "/settings?scope=global&frame=1", "", "")
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("GET /settings?scope=global&frame=1 (with holders) = %d (%s)", rec2.Code, rec2.Body.String())
+	}
+	html2 := rec2.Body.String()
+	xtermName, xtermData := XtermAsset()
+	if xtermName == "" || len(xtermData) == 0 {
+		t.Fatalf("XtermAsset returned empty asset (%q, %d bytes)", xtermName, len(xtermData))
+	}
+	if !strings.Contains(html2, `data-term="`+xtermName+`"`) {
+		t.Fatalf("expected data-term=%q in settings HTML", xtermName)
+	}
+	if !strings.Contains(html2, `/s/`+assets.data.FrameXtermFile) {
+		t.Fatalf("expected FrameXtermFile stylesheet (/s/%s) in settings HTML", assets.data.FrameXtermFile)
+	}
+}

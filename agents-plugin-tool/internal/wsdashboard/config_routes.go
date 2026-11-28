@@ -314,8 +314,13 @@ func (d *Daemon) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if framedRequest(r) {
 		lang, _ := requestLang(r)
-		_, hasAccount := d.credentials.(browserCredentialStore)
-		html, err := renderSettingsPage(lang, requestTheme(r), hasAccount)
+		_, isBrowserCred := d.credentials.(browserCredentialStore)
+		hasAccount := isBrowserCred || d.accountSlots != nil || d.piRuntime != nil
+		xtermFile := ""
+		if localViewer(r) && d.holders != nil {
+			xtermFile, _ = XtermAsset()
+		}
+		html, err := renderSettingsPage(lang, requestTheme(r), hasAccount, xtermFile)
 		if err != nil {
 			writeConfigError(w, configUnavailable)
 			return

@@ -612,7 +612,7 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 			CompanionCSS:      template.CSS(get("dashboard-companion.css")),
 			CompanionVrmFile:  companionVrmName,
 			SettingsCSS:       template.CSS(get("dashboard-settings.css") + "\n" + optional("dashboard-settings-extras.css") + "\n" + get("dashboard-settings-tiers.css") + "\n" + get("dashboard-settings-preferences.css") + "\n" + get("dashboard-settings-account.css") + "\n" + get("dashboard-settings-voice.css") + "\n" + get("dashboard-settings-companion.css")),
-			SettingsScript:    template.JS(get("hold-confirm.js") + "\n;\n" + optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings-combobox.js") + "\n;\n" + get("dashboard-settings-tiers.js") + "\n;\n" + get("dashboard-settings-preferences.js") + "\n;\n" + get("dashboard-voice-native.js") + "\n;\n" + get("dashboard-settings-account-shared.js") + "\n;\n" + get("dashboard-settings-account-harness.js") + "\n;\n" + get("dashboard-settings-account-runtime.js") + "\n;\n" + get("dashboard-settings-account.js") + "\n;\n" + get("dashboard-settings-voice.js") + "\n;\n" + get("dashboard-settings-companion-agents.js") + "\n;\n" + get("dashboard-settings-companion.js") + "\n;\n" + get("dashboard-settings.js")),
+			SettingsScript:    template.JS(get("hold-confirm.js") + "\n;\n" + optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings-combobox.js") + "\n;\n" + get("dashboard-settings-tiers.js") + "\n;\n" + get("dashboard-settings-preferences.js") + "\n;\n" + get("dashboard-voice-native.js") + "\n;\n" + get("dashboard-settings-account-shared.js") + "\n;\n" + get("dashboard-settings-account-harness.js") + "\n;\n" + get("dashboard-settings-account-runtime.js") + "\n;\n" + get("dashboard-settings-account-pirpc.js") + "\n;\n" + get("dashboard-settings-account.js") + "\n;\n" + get("dashboard-settings-voice.js") + "\n;\n" + get("dashboard-settings-companion-agents.js") + "\n;\n" + get("dashboard-settings-companion.js") + "\n;\n" + get("dashboard-settings.js")),
 			SettingsCatalog:   template.JS(get("dashboard-settings-catalog.json")),
 			OverviewScript:    template.JS(get("overview.js")),
 			CardsScript:       template.JS(cardsJoined),
@@ -685,14 +685,15 @@ type settingsPageData struct {
 	Assets     pageAssetsData
 	Theme      string
 	HasAccount bool
+	XtermFile  string
 }
 
-func renderSettingsPage(lang, theme string, hasAccount bool) (string, error) {
+func renderSettingsPage(lang, theme string, hasAccount bool, xtermFile string) (string, error) {
 	assets, err := loadDashboardAssets()
 	if err != nil {
 		return "", err
 	}
 	var buf bytes.Buffer
-	err = assets.templateFor(lang).ExecuteTemplate(&buf, "config-settings", settingsPageData{Assets: assets.data, Theme: theme, HasAccount: hasAccount})
+	err = assets.templateFor(lang).ExecuteTemplate(&buf, "config-settings", settingsPageData{Assets: assets.data, Theme: theme, HasAccount: hasAccount, XtermFile: xtermFile})
 	return buf.String(), err
 }

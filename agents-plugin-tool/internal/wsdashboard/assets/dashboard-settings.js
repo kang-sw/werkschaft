@@ -27,7 +27,7 @@ var wsSettingsChoiceLabels = {
   var scopes = ["builtin", "synced", "global", "repo", "project", "session"];
   var sections = ["workflow", "agents", "tier_routing", "account", "voice", "compaction", "adapters", "companion", "profiles", "prompts"];
   var adapters = ["claude", "agy", "dashboard"];
-  var tierHarnessOrder = ["claude", "codex", "agy", "werk"];
+  var tierHarnessOrder = ["claude", "codex", "agy", "werk", "pi-rpc"];
   var filterLabels = {
     all: "js.settings.filter.all",
     overridden: "js.settings.filter.overridden",
@@ -525,6 +525,7 @@ var wsSettingsChoiceLabels = {
     if (name === "*" || name === "all") return tr("js.settings.bucket.common");
     if (adapters.includes(name)) return sectionName(name);
     if (name === "codex") return "Codex";
+    if (name === "pi-rpc") return "Pi";
     if (name === "werk") return tr("js.settings.section.werk");
     if (name === "default") return tr("js.settings.bucket.default");
     return name;
@@ -1614,7 +1615,7 @@ var wsSettingsChoiceLabels = {
   }
 
   function harnessChoices(entries) {
-    var order = ["*", "default", "claude", "codex", "agy", "werk"];
+    var order = ["*", "default", "claude", "codex", "agy", "werk", "pi-rpc"];
     return [...new Set(entries.map(function (entry) { return entry.selectors.harness; }).filter(Boolean))].sort(function (a, b) {
       return (order.indexOf(a) + order.length + 1) % (order.length + 1) - (order.indexOf(b) + order.length + 1) % (order.length + 1);
     });

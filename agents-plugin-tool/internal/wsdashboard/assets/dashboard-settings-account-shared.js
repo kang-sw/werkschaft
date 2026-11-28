@@ -141,7 +141,13 @@
         auth_preflight_failed: "js.settings.account.slot_preflight_failed",
         auth_not_ready: "js.settings.account.slot_preflight_failed",
         login_failed: "js.settings.account.slot_login_failed",
-        timed_out: "js.settings.account.timed_out"
+        timed_out: "js.settings.account.timed_out",
+        runtime_unavailable: "js.settings.account.pi_runtime_unavailable",
+        runtime_not_installed: "js.settings.account.pi_runtime_not_installed",
+        runtime_busy: "js.settings.account.pi_runtime_busy",
+        pty_unavailable: "js.settings.account.pi_pty_unavailable",
+        login_in_progress: "js.settings.account.pi_login_in_progress",
+        invalid_provider: "js.settings.account.pi_invalid_provider"
       };
       return t(Object.hasOwn(errors, code) ? errors[code] : fallback);
     }

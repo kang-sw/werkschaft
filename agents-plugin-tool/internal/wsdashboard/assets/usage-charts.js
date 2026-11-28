@@ -5,6 +5,11 @@
       { k: "agyg", short: "Ag·G", name: "Gemini", harness: "agy", group: "gemini" },
       { k: "agyc", short: "Ag·C", name: "Claude / GPT", harness: "agy", group: "claude_gpt" }
     ];
+    // Non-quota harnesses resolve badges for session/switcher rows without entering
+    // quota DEFS, activeGroupDefs(), inactiveSlotsList(), or "No curve" chart notes.
+    var NON_QUOTA_DEFS = [
+      { k: "pi-rpc", short: "Pi", name: "Pi", harness: "pi-rpc", group: "", noQuota: true }
+    ];
     function hbadge(def, sm, textOverride) {
       var n = el("span", "up-hb" + (sm ? " sm" : ""), textOverride || def.short);
       n.setAttribute("data-k", def.k);
@@ -21,8 +26,12 @@
     }
     function defForHarness(harness, group) {
       var norm = harness === "codex_openai" ? "codex" : harness;
+      var g = group || "";
       for (var i = 0; i < DEFS.length; i++) {
-        if (DEFS[i].harness === norm && DEFS[i].group === (group || "")) return DEFS[i];
+        if (DEFS[i].harness === norm && DEFS[i].group === g) return DEFS[i];
+      }
+      for (var j = 0; j < NON_QUOTA_DEFS.length; j++) {
+        if (NON_QUOTA_DEFS[j].harness === norm && NON_QUOTA_DEFS[j].group === g) return NON_QUOTA_DEFS[j];
       }
       return null;
     }
@@ -627,8 +636,14 @@
       var pH = previewState && previewState.harness || null;
       var pS = previewState && previewState.slotId || null;
       var pDef = pH ? defForHarness(pH, "") : null;
+      if (pDef && pDef.noQuota) {
+        pH = null;
+        pS = null;
+        pDef = null;
+      }
       var pK = pDef ? pDef.k : null;
-      var f = pK ? null : focusKey;
+      var fNoQuota = focusKey && NON_QUOTA_DEFS.some(function (d) { return d.k === focusKey; });
+      var f = (pK || fNoQuota) ? null : focusKey;
       var sig = (f || "") + "\x1f" + (pH || "") + "\x1f" + (pS || "");
       if (sig === lastAppliedVisSig) return;
       lastAppliedVisSig = sig;

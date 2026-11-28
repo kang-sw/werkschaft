@@ -44,7 +44,7 @@
       return "";
     }
 
-    let harnessGroup, runtimeGroup;
+    let harnessGroup, runtimeGroup, pirpcGroup;
 
     function refreshStatus() {
       if (statusLoad) return statusLoad;
@@ -54,6 +54,7 @@
         nav.error = false;
         harnessGroup.applyStatus(before, result);
         runtimeGroup.applyStatus(before, result);
+        if (pirpcGroup) pirpcGroup.applyStatus(before, result);
         if (typeof onStatusChange === "function" &&
             (JSON.stringify(before?.voice_keys) !== JSON.stringify(result.voice_keys) ||
              JSON.stringify(before?.openrouter) !== JSON.stringify(result.openrouter))) {
@@ -105,6 +106,7 @@
 
     harnessGroup = window.WsSettingsAccountHarness.create(ctx);
     runtimeGroup = window.WsSettingsAccountRuntime.create(ctx);
+    pirpcGroup = window.WsSettingsAccountPiRPC ? window.WsSettingsAccountPiRPC.create(ctx) : null;
 
     panel.append(
       el("p", "info-note", t("js.settings.account.machine_note")),
@@ -112,6 +114,7 @@
       harnessGroup.element,
       runtimeGroup.element
     );
+    if (pirpcGroup) panel.append(pirpcGroup.element);
 
     return {
       panel,
@@ -138,6 +141,7 @@
       closeEditors() {
         harnessGroup.closeEditors();
         runtimeGroup.closeEditors();
+        if (pirpcGroup) pirpcGroup.closeEditors();
       },
       focus(provider) {
         if (!provider) return;
@@ -147,11 +151,13 @@
           harnessNode.scrollIntoView({block: "nearest"});
           return;
         }
+        if (pirpcGroup && pirpcGroup.focus(provider)) return;
         runtimeGroup.focus(provider);
       },
       destroy() {
         harnessGroup.destroy();
         runtimeGroup.destroy();
+        if (pirpcGroup) pirpcGroup.destroy();
       }
     };
   }
