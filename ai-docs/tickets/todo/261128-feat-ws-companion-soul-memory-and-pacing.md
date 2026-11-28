@@ -1,9 +1,9 @@
 ---
 title: "컴패니언 3계층 장기 메모리(Portable Soul / Local Episodes / VRM), 캐릭터성 및 하이브리드 MCP 애니메이션 딜레이 페이싱"
 parent: 261122-epic-werkschaft-lead-companion
-blocked-by: 261127-feat-ws-companion-layered-agents-and-naming#phase3
+blocked-by: 261127-feat-ws-companion-layered-agents-and-naming#phase1
 related:
-  261127-feat-ws-companion-layered-agents-and-naming: Tier 1 reaction agent, Tier 2 Companion Messenger coordinator, and ws/companion.* surface (Phase 3 prerequisite)
+  261127-feat-ws-companion-layered-agents-and-naming: companion-body/companion-work markers, Tier-1 Companion burst session, companion.delegate_work, Tier-2 Hidden Work Brain, and ws/delegation.report (Phase 1 prerequisite)
   261126-feat-ws-companion-vrm-engine: VRM 0.x/1.0 runtime, procedural 2-bone IK, 3D props, and expression controller
   261122-epic-werkschaft-lead-companion: parent companion architecture and cross-child invariants
 sage-review-design: required
@@ -14,7 +14,7 @@ sage-review-completeness: required
 
 ## Background
 
-The Werkschaft Companion currently executes bounded-rotation reaction calls via `companionPrompt` (`companion_director.go`), driven solely by transient session-digest rings and an optional static `CompanionPersona` (`name`, `voice`, `quipLanguage`) embedded inside a visual pack's `pack.json` (`companion_pack_schema.go`). While `261127-feat-ws-companion-layered-agents-and-naming` splits live visual reactions (Tier 1) from the Companion Messenger coordinator (Tier 2) and adds `ws/companion.{speak,face,motion}`, three core capabilities remain missing:
+The Werkschaft Companion currently executes bounded-rotation reaction calls via `companionPrompt` (`companion_director.go`), driven solely by transient session-digest rings and an optional static `CompanionPersona` (`name`, `voice`, `quipLanguage`) embedded inside a visual pack's `pack.json` (`companion_pack_schema.go`). While `261127-feat-ws-companion-layered-agents-and-naming` (Phase 1) establishes the `companion-body`/`companion-work` markers, Tier-1 Companion burst session, `companion.delegate_work`, Tier-2 Hidden Work Brain, and `ws/delegation.report`, three core capabilities remain missing:
 
 1. **No orthogonal long-term memory or portable identity:** Character identity is coupled to visual pack manifests, there is no machine-portable user/companion Soul store (safe for Git sync across work and home machines without binary conflicts or secret leakage), and there is no machine-local episodic recall store scoped by project.
 2. **No structured personality/mood continuity or single-embodiment dual-brain boundary:** There is no Characteristic Sheet or dynamic mood state machine feeding the Tier-1 Companion, and no structural separation ensuring the sole embodied Tier-1 Companion owns all user conversation and character presentation while delegating heavy engineering work via lossless curated task briefs to a headless Tier-2 work brain ("Companion AI's AI") whose structured results Tier-1 translates back in character with verbatim technical artifacts preserved.
@@ -37,7 +37,7 @@ The Werkschaft Companion currently executes bounded-rotation reaction calls via 
   - **Chosen:** Three-mode hybrid pacing combining zero-token idle with interruptible bounded bursts:
     1. **0-token idle:** Procedural VRM animations (breathing, typing, glancing, sleepy/doze) run purely in the frontend renderer with zero LLM turns.
     2. **Event / low-frequency active-user wake:** Wake Tier 1 only on qualifying session events or low-frequency active-user triggers (gated by cooldown/hourly caps).
-    3. **Bounded active bursts via interruptible MCP animation-delay pacing:** During an active burst, `ws/companion.act` issues the visual/speech command and performs an interruptible `select` wait of **1.5–6 s** (clamped) across: animation timer expiry, incoming user message, glass-knock/touch interaction, or daemon shutdown — zero polling, immediate wake on interruption, and a clean turn end when the burst completes so conversation context never grows O(N²). Tier-1 runs as the **single MCP-burst Companion** (no duplicate zero-MCP triage layer), unifying the `261127` Phase 3 surface.
+    3. **Bounded active bursts via interruptible MCP animation-delay pacing:** During an active burst, `ws/companion.act` issues the visual/speech command and performs an interruptible `select` wait of **1.5–6 s** (clamped) across: animation timer expiry, incoming user message, glass-knock/touch interaction, or daemon shutdown — zero polling, immediate wake on interruption, and a clean turn end when the burst completes so conversation context never grows O(N²). Tier-1 runs as the **single MCP-burst Companion** (no duplicate zero-MCP triage layer), unifying the `261127` Phase 1 surface.
   - **Rejected:** `(b)` 24/7 always-on `wait_event` long-blocking loop (continuous idle token burn, O(N²) context accumulation, and client harness tool-timeout risk); `(c)` pure zero-MCP 1-turn JSON script only (cannot handle mid-burst user interruption or active memory recall/save tool calls) or a separate duplicate zero-MCP triage layer in front of Tier-1.
 - **D2 — Gap-Moe Dual Tone & Delegated Pure-Tech Worker Reporting (`(152)=a`, `(1737)=a`, `(1744)=a`):**
   - **Chosen:** Enforce a strict structural split between companion embodiment/presentation and headless technical execution:
@@ -59,7 +59,7 @@ The Werkschaft Companion currently executes bounded-rotation reaction calls via 
   - **Rejected:** `(b)` Separate portable SQLite file for Soul (binary Git merge conflicts across work/home machines and opaque secret auditing); `(c)` 1-file-per-entry `traits/<ulid>.md` (triggers Windows antivirus startup scan explosion after years of growth, violating `performance.md`).
 - **D4 — Single-Embodiment · Dual-Brain — "Companion AI's AI" (`(1744)=a`, refining `(1737)=a`):**
   - **Chosen:** Separate the embodied conversational companion from the hidden engineering work brain with zero overlap in tools or user exposure:
-    - **Tier-1 Companion (sole embodied persona):** Exclusively owns the VRM body, `ws/companion.*` (`phone_*`, `act`, `remember_soul`, `remember_episode`, `recall_memory`, `delegate_work`), the posture lock, Soul/Episodes memory, and **all** direct user conversation as a single unified MCP-burst Companion aligned with `261127` Phase 3.
+    - **Tier-1 Companion (sole embodied persona):** Exclusively owns the VRM body, `ws/companion.*` (`phone_*`, `act`, `remember_soul`, `remember_episode`, `recall_memory`, `delegate_work`), the posture lock, Soul/Episodes memory, and **all** direct user conversation as a single unified MCP-burst Companion aligned with `261127` Phase 1.
     - **Tier-2 Hidden Work Brain ("Companion AI's AI", dedicated daemon-launched hosted session per `(1737)=a`):** Has **zero** body control, **zero** `phone_*` tools, **zero** persona prompt, and **never** surfaces directly to the user. It receives a **lossless curated task brief** from Tier-1 via `ws/companion.delegate_work` (with **no** artificial line cap such as a 3-line limit), executes pure engineering/daemon work (`ws/daemon.*`, coding/ticket delegation) silently while the VRM shows `laptop_work`, returns structured technical results plus artifact links to Tier-1 (which reports them in character per `(152)=a`), and compacts cleanly at idle boundaries — leaving the user's primary coding lead completely untouched.
   - **Rejected:** Allowing Tier-2 to speak directly to the user or drive VRM/phone tools (splits character embodiment and leaks raw system/work framing), imposing an artificial line cap on `delegate_work` task briefs (drops critical engineering constraints/context), or routing Tier-1 through a separate duplicate zero-MCP triage layer.
 - **D5 — Compatibility Tier Verdict: T0 Transparent (`ai-docs/manuals/release-compatibility.md`):**
@@ -102,7 +102,7 @@ The Werkschaft Companion currently executes bounded-rotation reaction calls via 
 | complexity.reuse_points | confirmed | `CompanionConfig` (`companion_config.go:76-91`), `companionPrompt` (`companion_director.go:871-898`), `CompanionPersona` (`companion_pack_schema.go:85-119`), `BoardDB` held SQLite WAL pattern (`board_db.go:47-55`), `dashboard-settings-companion.js:1536-1556` |
 | complexity.side_effect_risk | moderate | additive stores and tools isolated from `ws/note.*` and primary coding leads; main risks are file-touch discipline under Windows AV, SQLite handle lifecycle on daemon drain, and interruptible MCP cancellation cleanup |
 | risk.correctness | moderate | interruptible `select` timing vs `proxyDrainBudget`/`hostedCallLinger`, regex scrubber false-positive/false-negative tuning, Tier-2 idle compaction handoff, and Soul-vs-pack starter template precedence |
-| risk.fit | moderate | integrates cleanly atop `261127-feat-ws-companion-layered-agents-and-naming#phase3` (unified Tier-1 MCP-burst Companion, headless Tier-2 work brain, and `ws/companion.*` surface) |
+| risk.fit | moderate | integrates cleanly atop `261127-feat-ws-companion-layered-agents-and-naming#phase1` (unified Tier-1 MCP-burst Companion, headless Tier-2 work brain, and `ws/companion.*` surface) |
 | risk.test | moderate | deterministic clock/channel injection required to test 1.5–6 s `ws/companion.act` interruption without flaky sleeps; full FTS5 and scrubber edge-case coverage needed |
 | risk.security_or_contract | high | Portable Soul secret/PII scrubber, approval queue gating, `localViewer` + `sameOrigin` HTTP guardrails on Soul ZIP export/import and memory routes, and T0 config/manifest parity |
 
@@ -136,7 +136,7 @@ Layer structured personality, mood continuity, and the strict Tier-1/Tier-2 boun
 
 1. **Characteristic Sheet & Dynamic Mood State Machine (Tier-1 Exclusive):**
    - Define the structured Characteristic Sheet inside `persona.md` (archetype, speech quirks, gap-moe triggers, comfort/focus behaviors) and an in-memory dynamic mood state machine (energy, focus, rapport, stress/empathy shifts updated by session/user signals and decayed over idle time, with zero disk writes per mood tick).
-   - Inject compact Soul summary (`persona.md` + `profile.md` + active mood state + relevant recalled snippets) exclusively into the unified Tier-1 Companion context (aligning cleanly with `261127` Phase 3 with no duplicate zero-MCP triage layer), respecting rune budgets and `<<<...>>>` delimiter quoting.
+   - Inject compact Soul summary (`persona.md` + `profile.md` + active mood state + relevant recalled snippets) exclusively into the unified Tier-1 Companion context (aligning cleanly with `261127` Phase 1 with no duplicate zero-MCP triage layer), respecting rune budgets and `<<<...>>>` delimiter quoting.
 2. **Single-Embodiment · Dual-Brain Delegation & In-Character Briefing (`(152)=a`, `(1737)=a`, `(1744)=a`):**
    - Enforce exclusive ownership on Tier-1: Tier-1 owns the VRM body, `ws/companion.*` (`phone_*`, `act`, `remember_soul`, `remember_episode`, `recall_memory`, `delegate_work`), the posture lock, Soul/Episodes memory, and **all** direct user conversation.
    - Expose `ws/companion.delegate_work` on Tier-1 to dispatch a **lossless curated task brief** (with no artificial line cap such as a 3-line limit) to the headless **Tier-2 Hidden Work Brain** ("Companion AI's AI", the dedicated daemon-launched hosted session per `(1737)=a`).
