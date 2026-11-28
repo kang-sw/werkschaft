@@ -304,7 +304,8 @@
     let lastVrmRenderAt = -Infinity, lastVrmActivityAt = 0, vrmIdleMode = false, vrmBreakoutActive = false, vrmTargetFps = VRM_ACTIVE_FPS, lastVrmGazeX = 0, lastVrmGazeY = 0;
     let vrmRailVisible = false, cursorSeen = false, lastVrmW = 0, lastVrmH = 0, lastVrmDpr = 0;
     let lastVrmVw = 0, lastVrmVh = 0, lastVrmAnchorLeft = NaN, lastVrmAnchorTop = NaN;
-    let beat = null, viewBeat, viewPlaying, prop, fx, propCanvas, propCtx, decoration, quip, quipWidth = 0, quipHeight = 28, fxWidth = 36, fxHeight = 24, lastCount;
+    let beat = null, viewBeat, viewPlaying, prop, fx, propCanvas, propCtx, decoration, fxWidth = 36, fxHeight = 24, lastCount;
+    const quipCtrl = C.quip?.create?.(node, doc) || null;
     let size = 96, vrmHeight = 240, dpr = 1, vw = 0, vh = 0, dirty = true;
     let frameElement = null, frameInput = null, frameBox = null;
     let home = { x: 60, y: 96 }, arrived = false, custom = null, drag = null, suppressClick = false;
@@ -522,9 +523,9 @@
       if (!phoneSnapNewer(latestPhoneSnap, snap)) return;
       latestPhoneSnap = snap;
       updateUnreadBadge(snap.unreadClient || 0);
-      if (rig?.setPhoneState) {
+      if (rig?.setPhoneState && !C.reflex?.suppressPhoneSnapshot?.(snap)) {
         rig.setPhoneState(snap);
-      } else if (pendingPhoneGesture) {
+      } else if (!rig && pendingPhoneGesture) {
         // A newer authoritative phone snapshot supersedes a phone gesture
         // buffered while no rig was mounted.
         pendingPhoneGesture = "";
@@ -541,6 +542,7 @@
     function command(payload) {
       if (!C.record(payload)) return false;
       if (payload.sessionId !== "*" && (!activeRid || payload.sessionId !== activeRid)) return false;
+      if (C.reflex && C.reflex.onCommand(payload) === false) return false;
       if (!rig) {
         // Buffer phone choreography until a rig mounts so pickup/putdown are
         // never dropped while the pack loads.
@@ -780,7 +782,7 @@
       hit.hidden = true;
       controls.close();
       if (decoration) decoration.hidden = true;
-      if (quip) quip.hidden = true;
+      quipCtrl?.hide?.();
       if (frame) { cancelAnimationFrame(frame); frame = 0; }
       if (idleTimer) { clearTimeout(idleTimer); idleTimer = 0; }
       last = 0;
@@ -1087,18 +1089,7 @@
       const rawFx = rig.prop(propAction(next.fx), "fx");
       fx = rawFx?.data ? rawFx : { ...(rawFx || { drawable: false, draw() {} }), data: C.own(C.fxDefaults, propAction(next.fx)) };
       lastCount = null;
-      if (quip) quip.hidden = !next.quip;
-      if (next.quip) {
-        if (!quip) {
-          quip = doc.createElement("div");
-          quip.className = "ws-companion-quip";
-          node.append(quip);
-        }
-        // Text only: a quip may come from a model and must never become markup.
-        quip.textContent = next.quip;
-        quipWidth = quip.offsetWidth || 0;
-        quipHeight = quip.offsetHeight || 28;
-      }
+      if (quipCtrl) { if (next.quip) quipCtrl.set(next.quip); else quipCtrl.hide(); }
     }
 
     function handPosition(out) {
@@ -1239,13 +1230,8 @@
           }
         }
       }
-      if (quip && !quip.hidden) {
-        const charH = isVrm() ? vrmHeight : size;
-        const left = clamp(position.x - quipWidth / 2, 6, Math.max(6, vw - quipWidth - 6));
-        const top = isVrm()
-          ? clamp(bodyBox.y - (quipHeight || 28) - 4, 6, Math.max(6, vh - (quipHeight || 28) - 6))
-          : clamp(position.y - charH * 0.95, 6, Math.max(6, vh - (quipHeight || 28) - 6));
-        quip.style.transform = "translate3d(" + Math.round(left) + "px," + Math.round(top) + "px,0)";
+      if (quipCtrl?.isVisible()) {
+        quipCtrl.position({ vw, vh, isVrm: isVrm(), projectedBounds: isVrm() ? rig?.getCharacterBounds?.() : null, bodyBox, position, vrmHeight, size });
       }
     }
 
@@ -1648,6 +1634,12 @@
         }
         return res;
       },
+      wake() {
+        if (isVrm() && vrmRailVisible && !doc.hidden) {
+          markVrmActivity();
+          schedule();
+        }
+      },
       debugState() {
         const slotEl = rail?.querySelector("#rail-companion-slot");
         const slotRect = slotEl && !slotEl.hidden ? slotEl.getBoundingClientRect() : null;
@@ -1693,6 +1685,7 @@
         railResize.disconnect();
         clearRailDock();
         loader.dispose();
+        quipCtrl?.dispose?.();
         node.remove();
         C.focus?.show("", "");
       }
@@ -1705,6 +1698,7 @@
   Object.assign(C, { mount, railSignals, signalPairs, resizeControl, phoneSnapNewer,
     debugStage() { return mountedStage?.debugState?.() || null; },
     setVrmRenderMode(mode) { return mountedStage ? mountedStage.setVrmRenderMode(mode) : (vrmSetRenderMode?.(mode) ?? "docked"); },
+    wakeStage() { mountedStage?.wake?.(); },
     phoneState(snap) { mountedStage?.phoneState?.(snap); },
     toggleMessenger() { return window.WsCompanionMessenger?.toggle?.() ?? false; },
     openMessenger() { return window.WsCompanionMessenger?.open?.() ?? false; },

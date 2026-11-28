@@ -1,11 +1,12 @@
 (function () {
   "use strict";
 
-  // Companion Agents card: the Lightweight (body) and Work companion tier
-  // selectors with a readback of what each launches with now. The readback
-  // comes from /api/companion/agents, which resolves exactly as the next
-  // companion launch does (the global value, fallback to auto). Both keys are
-  // global-only, so other scopes show the card read-only like its siblings.
+  // Companion Agents card: the Lightweight Cosmetic Puppeteer (body) and
+  // High-Tier Mobile Full Lead (brain / work) tier selectors with a readback
+  // of what each launches with now. The readback comes from /api/companion/agents,
+  // which resolves exactly as the next companion launch does (the global value,
+  // fallback to auto). Both keys are global-only, so other scopes show the card
+  // read-only like its siblings.
   var ROUTE = "/api/companion/agents";
   var ROLES = [
     { id: "body", key: "dashboard.companion_body_tier", hint: "js.settings.companion.agents.body_hint" },

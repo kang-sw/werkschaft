@@ -110,6 +110,8 @@ var companionScriptFiles = []string{
 	"dashboard-companion-compositor.js",
 	"dashboard-companion-scenarios.js",
 	"dashboard-companion-menu.js",
+	"dashboard-companion-reflex.js",
+	"dashboard-companion-quip.js",
 	"dashboard-companion-vrm-fx.js",
 	"dashboard-companion-vrm-studio.js",
 	"dashboard-companion-vrm-props.js",
@@ -126,6 +128,7 @@ var companionScriptFiles = []string{
 
 var companionStyleFiles = []string{
 	"dashboard-companion.css",
+	"dashboard-companion-quip.css",
 	"dashboard-companion-messenger.css",
 }
 

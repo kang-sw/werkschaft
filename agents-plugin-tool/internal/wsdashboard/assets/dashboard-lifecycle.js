@@ -1853,6 +1853,12 @@
       if (shCompanion && typeof shCompanion.phoneState === "function") shCompanion.phoneState(event.detail);
       if (window.WsCompanionMessenger && typeof window.WsCompanionMessenger.applySnapshot === "function") window.WsCompanionMessenger.applySnapshot(event.detail);
     });
+    doc.addEventListener("ws-companion-brain-state", function (event) {
+      var detail = event.detail;
+      if (!detail || typeof detail !== "object") return;
+      window.WsCompanion?.reflex?.onBrainState?.(detail);
+      if (detail.kind === "handoff") window.WsCompanionMessenger?.onBrainChanged?.(detail);
+    });
     shCompanionConfigure(window.wsCompanionConfig);
     if (window.wsCompanionPhoneState) {
       if (shCompanion && typeof shCompanion.phoneState === "function") shCompanion.phoneState(window.wsCompanionPhoneState);
