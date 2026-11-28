@@ -680,7 +680,7 @@ test('shell reveals frame early on ready+head without waiting for iframe load an
     $: id => doc.getElementById(id),
     q: () => [],
     region: () => null,
-    railMarks() {}, railOpen() {}, railShown: () => false, railPopClose() {}, railRenameNew() {}, railSettingsMark() {},
+    railMarks() {}, railOpen() {}, railShown: () => false, railPopClose() {}, railSettingsMark() {},
     railBtn: null, hdNavigated() {},
     labelEditing: () => false, labelEnd() {},
     setTheme() {},

@@ -152,8 +152,7 @@ test("stageFill: hydration, toggle persistence, storage sync, and frame/shell he
     shHeadHtml: "",
     shSeq: 0,
     $(id) { return id === "qsslot" ? { innerHTML: "" } : null; },
-    swap() {},
-    railRenameNew() {}
+    swap() {}
   };
 
   vm.runInNewContext(`

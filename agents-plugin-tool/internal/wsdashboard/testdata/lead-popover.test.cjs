@@ -50,7 +50,7 @@ function fixture(harness, choices = legacy, delayed = false, translate = k => k)
     supChoices: delayed ? null : { harnesses: choices },
     rpId: () => 'row-' + ++seq,
     tkFetch: (route, options, done) => { assert.equal(route, '/support/choices'); answerChoices = () => done(200, { harnesses: choices }); },
-    window: {}, Date: { now: () => 12345 }, RENAME_NEW: 'ws.dashboard.renameNew',
+    window: {},
     sessionStorage: { setItem(key, value) { storage[key] = value; events.push('rename-intent'); } },
     railOpen(open) { assert.equal(open, false); events.push('rail-close'); },
     railPopPlace() {}, notifAsk() {}, gIcon: () => mk('svg'),
@@ -134,9 +134,8 @@ for (const harness of ['claude']) {
   assert.equal(f.p.busy, false);
   assert.equal(f.start.disabled, false);
   assert.equal(f.status.textContent, 'js.lead.start');
-  assert.deepEqual(f.events, ['close', 'rail-close', 'draft', 'rename-intent', ['navigate', '/s/new%2Fsession']]);
-  assert.deepEqual(JSON.parse(f.storage['ws.dashboard.renameNew']), { id: 'new/session', at: 12345 },
-    'successful creation hands the raw session ID and timestamp to post-navigation rename');
+  assert.deepEqual(f.events, ['close', 'rail-close', 'draft', ['navigate', '/s/new%2Fsession']]);
+  assert.deepEqual(f.storage, {}, 'successful creation does not schedule post-navigation rename');
 
   for (const status of [400, 500, 0]) {
     const e = fixture(harness);
@@ -158,8 +157,8 @@ for (const harness of ['claude']) {
   dismissed.start.listeners.click();
   dismissed.dismiss();
   dismissed.requests[0].done(201, { id: 'created' }, '');
-  assert.deepEqual(dismissed.events, ['rail-close', 'draft', 'rename-intent', ['navigate', '/s/created']], 'late success still opens the created session without closing another popover');
-  assert.deepEqual(JSON.parse(dismissed.storage['ws.dashboard.renameNew']), { id: 'created', at: 12345 });
+  assert.deepEqual(dismissed.events, ['rail-close', 'draft', ['navigate', '/s/created']], 'late success still opens the created session without closing another popover');
+  assert.deepEqual(dismissed.storage, {}, 'late success does not schedule post-navigation rename');
 }
 for (const provider of ['openrouter', 'local/desk']) {
   const remedy = 'ChatGPT plan usage is disabled; enable it with "credential sign-in openai --enable-plan"';

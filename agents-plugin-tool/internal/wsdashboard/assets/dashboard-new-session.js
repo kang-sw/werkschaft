@@ -658,7 +658,6 @@
       if (rpLive(P, gen)) railPopClose(false);
       railOpen(false);
       saveDraft();
-      try { sessionStorage.setItem(RENAME_NEW, JSON.stringify({ id: String(v.id), at: Date.now() })); } catch (_) { /* storage may be unavailable */ }
       go("/s/" + encodeURIComponent(String(v.id)));
     }
     function recheck() {

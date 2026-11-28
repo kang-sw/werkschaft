@@ -1261,7 +1261,6 @@
     shTop.style.setProperty("--sh-stage-side", side ? side + "px" : "");
     // Headerless fallback clears stale session controls, not their box.
     if (m) shTop.style.minHeight = m.top + "px";
-    railRenameNew();
   }
   // shLayout takes the shown frame's pinned column and its backdrop's dim.
   function shLayout(ent) {

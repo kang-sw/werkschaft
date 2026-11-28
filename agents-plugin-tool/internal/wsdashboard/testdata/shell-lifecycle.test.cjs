@@ -125,17 +125,14 @@ async function runBase() {
   // The frame the shell page loaded with already finished loading, so no load
   // event will tell it that it is the shown one: the shell does.
   assert.deepEqual(plain(first.got), ['sync', 'settings', 'shown:true']);
-  const beforeHead = c.renameChecks;
   c.from(first.contentWindow, { wsShell: 'head', html: '<b>a</b>', qs: '', pad: 0, top: 40 });
   assert.deepEqual(plain(c.log), ['swap:head:<b>a</b>']);
-  assert.equal(c.renameChecks, beforeHead + 1, 'the mirrored header retries a pending rename');
   for (const [source, origin, data] of [
     [first.contentWindow, 'http://evil:1', { wsShell: 'nav', href: '/s/evil' }],
     [{}, c.ORIGIN, { wsShell: 'nav', href: '/s/evil' }],
     [first.contentWindow, c.ORIGIN, { wsShell: 'head', html: 1, qs: '', pad: 0, top: 40 }],
   ]) c.from(source, data, origin);
   assert.deepEqual(plain(c.pushed), []);
-  assert.equal(c.renameChecks, beforeHead + 1);
 
   first.draft = true;
   c.click('/s/b');
@@ -159,12 +156,11 @@ async function runBase() {
   b.load();
   assert.equal(s.current(), b);
   assert.deepEqual(plain(b.got), ['settings', 'shown:true']);
-  const head = c.log.length, renames = c.renameChecks;
+  const head = c.log.length;
   c.from(first.contentWindow, { wsShell: 'nav', href: '/s/stray' });
   c.from(first.contentWindow, { wsShell: 'head', html: '<b>stale</b>', qs: '', pad: 0, top: 40 });
   first.load();
   assert.equal(c.log.length, head);
-  assert.equal(c.renameChecks, renames);
   assert.equal(s.current(), b);
 
   for (let i = 0; i < 10; i++) {

@@ -34,11 +34,11 @@ function makeEnv(opts = {}) {
     showModal() { this.open = true; }
     close() { this.open = false; }
   }
-  const dialogs = [];
+  const dialogs = [], sessionWrites = [];
   const c = {
     mode: 'index', root: { hasAttribute: () => false }, supChoices: opts.supChoices ?? null,
     localStorage: opts.localStorage || { getItem: () => null, setItem() {} },
-    sessionStorage: { setItem() {} }, RENAME_NEW: 'rename',
+    sessionStorage: { setItem(k, v) { sessionWrites.push([k, v]); } },
     doc: { body: { appendChild(e) { e.parentNode = this; dialogs.push(e); return e; } } },
     supHarness(k) { return c.supChoices && c.supChoices.harnesses.find(h => h.harness === k); },
     tkFetch: opts.tkFetch || (() => {}),
@@ -116,7 +116,7 @@ function makeEnv(opts = {}) {
     return b;
   }
   return {
-    c, p, btn, dialogs, all, find, texts,
+    c, p, btn, dialogs, sessionWrites, all, find, texts,
     tierInput, tierBox, tierList, pickTier,
     modelInput, modelList, modelTag, typeModel, pickModel, modelOptions,
     effortKnob, effortReset, effortDots, pickEffort,
@@ -784,4 +784,34 @@ test('whiteboard-only toggle remembers last choice and seeds whiteboardFirst.<id
   reply(201, { id: 'sess10' });
   assert.equal(store.has('ws.dashboard.whiteboardFirst.sess10'), false);
   assert.equal('whiteboardOnly' in JSON.parse(store.get('ws.dashboard.newSession')), false);
+});
+
+test('creating a session never triggers post-navigation auto-rename (with label or blank), while manual rename remains intact', async () => {
+  // 1. Blank/default label creation writes no rename intent to sessionStorage.
+  const blankEnv = labelEnv();
+  blankEnv.input.value = '   ';
+  blankEnv.start.events.click({ target: blankEnv.start });
+  blankEnv.reply(201, { id: 'blank-sess' });
+  assert.deepEqual(blankEnv.log, [['post', '/agents/leads'], ['go', '/s/blank-sess']]);
+  assert.deepEqual(blankEnv.sessionWrites, []);
+
+  // 2. Provided label creation posts the label and navigates without writing rename intent.
+  const labeledEnv = labelEnv();
+  labeledEnv.input.value = '초기 라벨';
+  labeledEnv.start.events.click({ target: labeledEnv.start });
+  labeledEnv.reply(201, { id: 'labeled-sess' });
+  labeledEnv.labelCalls[0].resolve({ status: 200, ok: true });
+  await new Promise(r => setImmediate(r));
+  assert.deepEqual(labeledEnv.log, [['post', '/agents/leads'], ['label', '/s/labeled-sess/label', '초기 라벨'], ['go', '/s/labeled-sess']]);
+  assert.deepEqual(labeledEnv.sessionWrites, []);
+
+  // 3. Rail and shell lifecycle scripts carry no post-create auto-rename hook while keeping manual rename.
+  const railSrc = fs.readFileSync(__dirname + '/assets/dashboard-rail.js', 'utf8');
+  const lifeSrc = fs.readFileSync(__dirname + '/assets/dashboard-lifecycle.js', 'utf8');
+  const actionsSrc = fs.readFileSync(__dirname + '/assets/dashboard-actions.js', 'utf8');
+  assert.equal(/RENAME_NEW|railRenameNew|ws\.dashboard\.renameNew/.test(railSrc), false);
+  assert.equal(/railRenameNew/.test(lifeSrc), false);
+  assert.match(railSrc, /function railRename\(row\)/);
+  assert.match(actionsSrc, /function labelStart\(ed\)/);
+  assert.match(actionsSrc, /function labelHead\(sn\)/);
 });

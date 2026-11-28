@@ -108,7 +108,7 @@ function world() {
     doc: { body }, supChoices: null,
     tkFetch: (route, opt, done) => fetches.push({ route, done }),
     railPost: (route, b, done, timeout) => posts.push({ route, body: plain(b), done, timeout }),
-    localStorage: { getItem: () => null, setItem() {} }, sessionStorage: { setItem() {} }, RENAME_NEW: 'rename',
+    localStorage: { getItem: () => null, setItem() {} },
     window: {}, Date: { now: () => 1 },
     railOpen() {}, railPopPlace() {}, notifAsk() {}, saveDraft() {}, go: href => events.push(['go', href]),
     toast: t => events.push(['toast', t]), railPopClose() { events.push('close'); },
