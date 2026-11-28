@@ -521,7 +521,7 @@ test("OpenRouter (Voice) modal shows shared toggle only when top key exists, dis
   orBtn.click();
   let sw = m1.doc.body.querySelector("[data-voice-or-shared]");
   let inp = m1.doc.body.querySelector("[data-voice-or-key-input]");
-  assert.ok(sw, "shared toggle must be shown when top OpenRouter key is configured");
+  assert.ok(sw, "shared toggle must be shown when the Werk OpenRouter key is configured");
   assert.equal(sw.getAttribute("aria-checked"), "false");
   assert.equal(inp.disabled, false);
 
@@ -540,9 +540,9 @@ test("OpenRouter (Voice) modal shows shared toggle only when top key exists, dis
   assert.equal(m1.configWrites[1].key, "dashboard.voice_backend_order");
   assert.equal(m1.configWrites[1].value, "native openrouter");
   assert.equal(m1.accountCalls.length, 0, "no dedicated key API call when using shared key");
-  assert.match(m1.section.element.querySelector('[data-voice-provider="openrouter"]').textContent, /Sharing top key/);
+  assert.match(m1.section.element.querySelector('[data-voice-provider="openrouter"]').textContent, /Reusing Werk key/);
 
-  // Case B: No top OpenRouter key -> toggle hidden, dedicated key input enabled
+  // Case B: No Werk OpenRouter key -> toggle hidden, dedicated key input enabled
   const m2 = mountVoiceSection({
     status: {
       openrouter: { configured: false, masked: "" },
