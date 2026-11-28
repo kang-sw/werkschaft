@@ -583,6 +583,8 @@
   "js.dc.confirm.failed": "無法傳送你的決定，請再試一次。",
   "js.dc.confirm.title": "核准儀表板控制操作",
   "js.dc.desc": "允許此主導工作階段呼叫 ws/daemon.* 儀表板控制工具（變更類操作仍需一鍵確認）。",
+  "js.dc.guide.dismiss": "關閉醒目提示",
+  "js.dc.guide.monitor_stop": "正在監看導覽 · 停止",
   "js.dc.off": "關",
   "js.dc.on": "開",
   "js.dc.pending.badge": "需要重新啟動",

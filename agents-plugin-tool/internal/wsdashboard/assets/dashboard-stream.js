@@ -583,11 +583,13 @@
         railNoteDisconnect();
         if (framed && rid) companionStream(false);
         if (daemonBridgeEnabled && typeof clearDaemonConfirm === "function") clearDaemonConfirm();
+        // A dropped stream hides the guide stop chip until the next push.
+        if (daemonBridgeEnabled) doc.dispatchEvent(new CustomEvent("ws-daemon-guide-monitor", { detail: { active: false, monitors: [] } }));
         connected(false);
         trackerLost();
         retry(connect, 3000);
       },
-      events: { assets: onAssets, "openai-consent": onOpenAIConsent, "account-changed": onAccountChanged, "daemon-confirm-request": onDaemonConfirmRequest, "daemon-confirm-clear": onDaemonConfirmClear, "daemon-bridge-request": onDaemonBridgeRequest, companion: onCompanion, "companion-focus": onCompanionFocus, "companion-command": onCompanionCommand, "companion-phone": onCompanionPhone, "conv-reveal": onConvReveal, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, usercmd: onUsercmd, execjobs: onExecJobs, gone: onGone }
+      events: { assets: onAssets, "openai-consent": onOpenAIConsent, "account-changed": onAccountChanged, "daemon-confirm-request": onDaemonConfirmRequest, "daemon-confirm-clear": onDaemonConfirmClear, "daemon-bridge-request": onDaemonBridgeRequest, "daemon-guide-monitor": onDaemonGuideMonitor, companion: onCompanion, "companion-focus": onCompanionFocus, "companion-command": onCompanionCommand, "companion-phone": onCompanionPhone, "conv-reveal": onConvReveal, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, usercmd: onUsercmd, execjobs: onExecJobs, gone: onGone }
     });
     mainStream = st;
     function onOpenAIConsent(event) {
@@ -606,6 +608,10 @@
     function onDaemonBridgeRequest(event) {
       if (!daemonBridgeEnabled || !current() || !event) return;
       doc.dispatchEvent(new CustomEvent("ws-daemon-bridge-request", { detail: event }));
+    }
+    function onDaemonGuideMonitor(event) {
+      if (!daemonBridgeEnabled || !current() || !event) return;
+      doc.dispatchEvent(new CustomEvent("ws-daemon-guide-monitor", { detail: event }));
     }
     function onAccountChanged(event) {
       if (!framed && current()) doc.dispatchEvent(new CustomEvent("ws-account-changed", { detail: event }));

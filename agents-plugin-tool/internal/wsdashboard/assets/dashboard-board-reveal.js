@@ -53,6 +53,6 @@
     // The shell's show/hide and the browser's own visibility both arrive as
     // ws-page-visibility: re-measure and settle on every hidden-to-visible edge.
     doc.addEventListener("ws-page-visibility", boardRevealNow);
-    doc.addEventListener("visibilitychange", function () { if (!doc.hidden) boardRevealSchedule(); });
+    doc.addEventListener("visibilitychange", function () { if (!(typeof docHidden === "function" ? docHidden() : doc.hidden)) boardRevealSchedule(); });
     if (window.addEventListener) window.addEventListener("pageshow", function () { boardRevealSchedule(); });
   }

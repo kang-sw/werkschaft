@@ -649,12 +649,18 @@ func TestCompanionRuntimeEndToEndTrivialWorkCapabilitiesAndHiding(t *testing.T) 
 
 	// --- (d) Capability tests over tools/list + tools/call on REAL minted keys ---
 	bodyTools := f.listTools(bodyKey)
-	for _, forbidden := range []string{"config.tune", "git.commit", "git.merge", "tickets.close", "exec.shell", "agent.spawn", "delegation.report", "daemon.curl", "daemon.tabs", "daemon.dom", "daemon.ui", "daemon.screenshot"} {
+	for _, forbidden := range []string{"config.tune", "git.commit", "git.merge", "tickets.close", "exec.shell", "agent.spawn", "delegation.report", "daemon.curl", "daemon.ui", "daemon.screenshot"} {
 		if bodyTools[forbidden] {
 			t.Fatalf("(d) companion-body tools/list exposed forbidden tool %q", forbidden)
 		}
 		if _, _, rpcErr := f.callTool(bodyKey, forbidden, map[string]any{"session_key": bodyKey}); rpcErr == "" {
 			t.Fatalf("(d) companion-body reached forbidden tool %q", forbidden)
+		}
+	}
+	// The interactive guide subset of ws/daemon.* is the body's own.
+	for _, wantGuide := range []string{"daemon.tabs", "daemon.dom", "daemon.highlight", "daemon.monitor"} {
+		if !bodyTools[wantGuide] {
+			t.Fatalf("(d) companion-body tools/list missing guide tool %q", wantGuide)
 		}
 	}
 	workTools := f.listTools(workKey)
@@ -669,7 +675,7 @@ func TestCompanionRuntimeEndToEndTrivialWorkCapabilitiesAndHiding(t *testing.T) 
 	if !workTools["delegation.report"] {
 		t.Fatal("(d) companion-work tools/list missing delegation.report")
 	}
-	for _, wantDaemon := range []string{"daemon.curl", "daemon.tabs", "daemon.dom", "daemon.ui", "daemon.screenshot"} {
+	for _, wantDaemon := range []string{"daemon.curl", "daemon.tabs", "daemon.dom", "daemon.ui", "daemon.screenshot", "daemon.highlight", "daemon.monitor"} {
 		if !workTools[wantDaemon] {
 			t.Fatalf("(d) companion-work tools/list missing auto-granted %q", wantDaemon)
 		}

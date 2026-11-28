@@ -852,6 +852,14 @@
       return;
     }
 
+    // Interactive guide overlay lives in dashboard-daemon-guide.js.
+    if (op === "guide.highlight" && window.WsDaemonGuide && typeof window.WsDaemonGuide.highlight === "function") {
+      var gres;
+      try { gres = window.WsDaemonGuide.highlight(params) || {}; } catch (_) { gres = { error: "highlight_failed" }; }
+      await postDaemonBridgeReply(req, gres.error ? null : gres.payload, gres.error || null);
+      return;
+    }
+
     await postDaemonBridgeReply(req, null, "invalid_request");
   }
 

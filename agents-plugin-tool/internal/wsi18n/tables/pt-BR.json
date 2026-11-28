@@ -583,6 +583,8 @@
   "js.dc.confirm.failed": "Não foi possível enviar sua decisão. Tente novamente.",
   "js.dc.confirm.title": "Aprovar ação de controle do painel",
   "js.dc.desc": "Permite que este lead chame ferramentas ws/daemon.* de controle do painel (ações mutáveis ainda exigem aprovação em 1 clique).",
+  "js.dc.guide.dismiss": "Fechar destaque",
+  "js.dc.guide.monitor_stop": "Monitoramento do guia · Parar",
   "js.dc.off": "Desativado",
   "js.dc.on": "Ativado",
   "js.dc.pending.badge": "Requer reinício",

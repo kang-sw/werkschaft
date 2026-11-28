@@ -77,20 +77,33 @@
     shStageList = [];
     held.forEach(function (fn) { try { fn(); } catch (e) { /* one deferred load never blocks the rest */ } });
   }
-  // docHidden is the browser's own hidden state with one correction: a framed
-  // page the shell shows can keep a stale document.hidden === true (a WKWebView
-  // child iframe composited while the window was backgrounded, which no later
-  // visibilitychange clears), so the shell's top document, same-origin, has the
-  // last word. A truly hidden window hides the top document too and stays hidden.
+  // docHidden is the browser's own hidden state with corrections for a stale
+  // document.hidden === true, which WKWebView can leave behind after a macOS
+  // full-screen/Space transition with no later visibilitychange to clear it.
+  // A framed page the shell shows defers to the shell's top document
+  // (same-origin; its corrected state when it exposes one). The top document
+  // itself (topVisible) counts as visible while it has system focus, or while
+  // the native macOS shell last reported its window visible (nativeVisible).
+  // A truly hidden window has neither, so it stays hidden and pauses.
+  var nativeVisible = false;
+  function topVisible() {
+    if (!doc.hidden || nativeVisible) return true;
+    try { return typeof doc.hasFocus === "function" && doc.hasFocus() === true; } catch (e) { return false; }
+  }
   function docHidden() {
     if (!doc.hidden) return false;
     if (typeof shHidden !== "undefined" && shHidden) return true;
     try {
       var top = typeof window !== "undefined" ? window.top : null;
-      if (top && top !== window && top.document && top.document.hidden === false) return false;
+      if (top && top !== window) {
+        if (typeof top.wsTopVisible === "function") return !top.wsTopVisible();
+        return !(top.document && top.document.hidden === false);
+      }
+      return !(typeof topVisible === "function" && topVisible());
     } catch (e) { /* a cross-origin top says nothing: the frame's own state holds */ }
     return true;
   }
+  window.wsTopVisible = topVisible;
   function syncPageVisibility() {
     var paused = docHidden() || shHidden;
     if (root.hasAttribute("data-animation-paused") !== paused) root.toggleAttribute("data-animation-paused", paused);
@@ -98,27 +111,76 @@
     // Shell visibility can change while the browser tab is already hidden.
     doc.dispatchEvent(new CustomEvent("ws-page-visibility"));
   }
-  doc.addEventListener("visibilitychange", syncPageVisibility);
+  // A visibilitychange is the browser's own fresh word: a real hide drops the
+  // native override, so a minimized or backgrounded window pauses again.
+  doc.addEventListener("visibilitychange", function () {
+    if (doc.hidden) nativeVisible = false;
+    syncPageVisibility();
+  });
   syncPageVisibility();
-  // A window regaining focus, a page restored from the bfcache and a resize
-  // are the moments a stale paused state would otherwise survive until the
-  // user opens devtools: recheck the state, and flush the regions a hidden
-  // phase held. Both calls are idempotent and cheap when nothing changed, and
-  // resize coalesces to one check per frame.
-  var visRecheckQueued = false;
-  function recheckVisibility() {
+  // A window regaining focus, a page restored from the bfcache, a resize, a
+  // fullscreenchange and the native shell's post-transition nudge are the
+  // moments a stale paused state would otherwise survive until the user opens
+  // devtools: recheck the state and flush the regions a hidden phase held. A
+  // recovery, a resize, a fullscreenchange or a nudge also reschedules the
+  // board reveal (one coalesced double-rAF remeasure), and a recovery or nudge
+  // in the shell reaches its shown frame (shNativeNudge). Everything is
+  // idempotent and cheap when nothing changed; resize coalesces to one frame.
+  var visRecheckQueued = false, visRevealQueued = false;
+  function recheckVisibility(reveal, nudge) {
     visRecheckQueued = false;
-    if (root.hasAttribute("data-animation-paused") !== (docHidden() || shHidden)) syncPageVisibility();
+    if (visRevealQueued) { reveal = true; visRevealQueued = false; }
+    var hidden = docHidden() || shHidden, recovered = false;
+    if (root.hasAttribute("data-animation-paused") !== hidden) { syncPageVisibility(); recovered = !hidden; }
+    if (hidden) return false;
     if (typeof hiddenRegions === "object" && hiddenRegions && Object.keys(hiddenRegions).length && typeof showRegions === "function") showRegions();
+    if ((reveal === true || recovered) && typeof boardRevealSchedule === "function") boardRevealSchedule();
+    if ((typeof nudge === "string" || recovered) && typeof shNativeNudge === "function") shNativeNudge(typeof nudge === "string" ? nudge : "recover", false);
+    return true;
   }
-  function queueVisibilityRecheck() {
+  function queueVisibilityRecheck(reveal) {
+    if (reveal === true) visRevealQueued = true;
     if (visRecheckQueued) return;
     visRecheckQueued = true;
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(recheckVisibility); else recheckVisibility();
   }
+  function queueVisibilityReveal() { queueVisibilityRecheck(true); }
   window.addEventListener("focus", recheckVisibility);
   window.addEventListener("pageshow", recheckVisibility);
-  window.addEventListener("resize", queueVisibilityRecheck);
+  window.addEventListener("pagehide", function () { nativeVisible = false; });
+  window.addEventListener("resize", queueVisibilityReveal);
+  doc.addEventListener("fullscreenchange", queueVisibilityReveal);
+  doc.addEventListener("webkitfullscreenchange", queueVisibilityReveal);
+  // The native macOS shell (desktop/src/macos/visibility_nudge.rs) calls these
+  // on the top document only: the nudge once its window is verified visible
+  // after a full-screen/Space transition or occlusion change has settled, the
+  // hidden call when the window becomes occluded, minimized or hidden. Both are
+  // idempotent; a page without them (an older dashboard) ignores the calls.
+  window.__wsNativeVisibilityNudge = function (reason) {
+    if (window.top === window) nativeVisible = true;
+    return recheckVisibility(true, typeof reason === "string" ? reason : "native");
+  };
+  window.__wsNativeVisibilityHidden = function (reason) {
+    nativeVisible = false;
+    recheckVisibility();
+    if (typeof shNativeNudge === "function") shNativeNudge(typeof reason === "string" ? reason : "native", true);
+  };
+  // shNativeNudge passes the shell's visibility recovery, or the native
+  // shell's nudge (lost: its hidden call), on to the shown frame only (shOn,
+  // dashboard-lifecycle.js): hidden cached frames stay paused under shHidden.
+  // The frame rechecks its visibility, flushes held regions and reschedules
+  // its board reveal; then one layout read (shNudge) lets a frame WKWebView
+  // left composited blank paint now. Writes before the read, nothing persists.
+  function shNativeNudge(reason, lost) {
+    var ent = shell && typeof shOn !== "undefined" ? shOn : null;
+    if (!ent) return;
+    try {
+      var win = ent.el.contentWindow;
+      var hook = win && (lost ? win.__wsNativeVisibilityHidden : win.__wsNativeVisibilityNudge);
+      if (typeof hook === "function") hook(reason);
+    } catch (e) { /* unloading or inaccessible */ }
+    if (!lost && typeof shNudge === "function") shNudge(ent);
+  }
 
   // --- browser storage: guarded, since a locked-down browser throws on access
   var store = null;

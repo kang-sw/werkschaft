@@ -336,7 +336,7 @@ func TestDaemonControlCompanionPostureHandsBusyLock(t *testing.T) {
 }
 
 func TestDaemonControlHostedRenderAndLeadToolNames(t *testing.T) {
-	for _, tool := range []string{daemonCurlTool, daemonTabsTool, daemonDOMTool, daemonUITool, daemonScreenshotTool} {
+	for _, tool := range []string{daemonCurlTool, daemonTabsTool, daemonDOMTool, daemonUITool, daemonScreenshotTool, daemonHighlightTool, daemonMonitorTool} {
 		if !slices.Contains(LeadToolNames(), tool) {
 			t.Fatalf("%s missing from LeadToolNames", tool)
 		}
@@ -372,7 +372,7 @@ func TestDaemonControlHostedRenderAndLeadToolNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderLeadManual (off): %v", err)
 	}
-	for _, alias := range []string{"daemon_curl", "daemon_tabs", "daemon_dom", "daemon_ui", "daemon_screenshot"} {
+	for _, alias := range []string{"daemon_curl", "daemon_tabs", "daemon_dom", "daemon_ui", "daemon_screenshot", "daemon_highlight", "daemon_monitor"} {
 		if strings.Contains(offManual, alias) {
 			t.Fatalf("default-off agy manual unexpectedly listed %s", alias)
 		}
@@ -386,7 +386,7 @@ func TestDaemonControlHostedRenderAndLeadToolNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderLeadManual (on): %v", err)
 	}
-	for _, alias := range []string{"daemon_curl [direct]", "daemon_tabs [direct]", "daemon_dom [direct]", "daemon_ui [direct]", "daemon_screenshot [direct]"} {
+	for _, alias := range []string{"daemon_curl [direct]", "daemon_tabs [direct]", "daemon_dom [direct]", "daemon_ui [direct]", "daemon_screenshot [direct]", "daemon_highlight [direct]", "daemon_monitor [direct]"} {
 		if !strings.Contains(onManual, alias) {
 			t.Fatalf("opted-in agy manual missing %q", alias)
 		}
@@ -470,13 +470,13 @@ func TestDaemonControlCompanionWorkAutoGrantAndIsolation(t *testing.T) {
 	}{
 		{
 			backend:   wsagent.BackendClaude,
-			wantNames: []string{daemonCurlTool, daemonTabsTool, daemonDOMTool, daemonUITool, daemonScreenshotTool},
+			wantNames: []string{daemonCurlTool, daemonTabsTool, daemonDOMTool, daemonUITool, daemonScreenshotTool, daemonHighlightTool, daemonMonitorTool},
 			curlName:  daemonCurlTool,
 			uiName:    daemonUITool,
 		},
 		{
 			backend:   wsagent.BackendAgy,
-			wantNames: []string{"daemon_curl", "daemon_tabs", "daemon_dom", "daemon_ui", "daemon_screenshot"},
+			wantNames: []string{"daemon_curl", "daemon_tabs", "daemon_dom", "daemon_ui", "daemon_screenshot", "daemon_highlight", "daemon_monitor"},
 			curlName:  "daemon_curl",
 			uiName:    "daemon_ui",
 		},
@@ -606,7 +606,7 @@ func TestDaemonControlCompanionWorkAutoGrantAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderLeadManual (companion-work): %v", err)
 	}
-	for _, alias := range []string{"daemon_curl [direct]", "daemon_tabs [direct]", "daemon_dom [direct]", "daemon_ui [direct]", "daemon_screenshot [direct]"} {
+	for _, alias := range []string{"daemon_curl [direct]", "daemon_tabs [direct]", "daemon_dom [direct]", "daemon_ui [direct]", "daemon_screenshot [direct]", "daemon_highlight [direct]", "daemon_monitor [direct]"} {
 		if !strings.Contains(workManual, alias) {
 			t.Fatalf("companion-work agy manual missing %q", alias)
 		}
@@ -620,7 +620,13 @@ func TestDaemonControlCompanionWorkAutoGrantAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderLeadManual (companion-body): %v", err)
 	}
-	for _, alias := range []string{"daemon_curl", "daemon_tabs", "daemon_dom", "daemon_ui", "daemon_screenshot"} {
+	// Tier-1 body: exactly the guide subset is [direct]; curl/ui/screenshot never appear.
+	for _, alias := range []string{"daemon_tabs [direct]", "daemon_dom [direct]", "daemon_highlight [direct]", "daemon_monitor [direct]"} {
+		if !strings.Contains(bodyManual, alias) {
+			t.Fatalf("companion-body agy manual missing guide tool %q", alias)
+		}
+	}
+	for _, alias := range []string{"daemon_curl", "daemon_ui", "daemon_screenshot"} {
 		if strings.Contains(bodyManual, alias) {
 			t.Fatalf("companion-body agy manual unexpectedly listed %s", alias)
 		}

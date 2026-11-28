@@ -194,6 +194,7 @@ func (d *Daemon) Done() <-chan struct{} { return d.done }
 func (d *Daemon) Close() {
 	d.closeOnce.Do(func() {
 		close(d.stop)
+		d.closeGuideMonitors()
 		d.closeMeta()
 		d.accountSignIn.stop()
 		d.slotSignIn.stop()

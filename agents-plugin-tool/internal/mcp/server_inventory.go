@@ -47,7 +47,10 @@ const (
 // mailbox.*, and read-only discovery with zero ws/note.* access (D3, D8).
 // No lead-level mutating tool is reachable.
 func companionBodyBaseAllows(name string) bool {
-	if isCompanionTool(name) || strings.HasPrefix(name, "mailbox.") {
+	// The guide subset of ws/daemon.* (tabs, dom, highlight, monitor) is
+	// reachable here; daemonControlCallRefusal still requires an open
+	// top-level body record, and phone posture still locks it.
+	if isCompanionTool(name) || strings.HasPrefix(name, "mailbox.") || isDaemonGuideTool(name) {
 		return true
 	}
 	switch name {
@@ -335,9 +338,10 @@ func (s *Server) filteredToolsFor(markerEntry sessionEntry, applyMarker bool) []
 			// trusted binding, not a supplied key, names the session.
 			continue
 		}
-		if isDaemonControlTool(name) && !s.daemonControlListed() {
+		if isDaemonControlTool(name) && !s.daemonControlListedFor(name) {
 			// Advertised only to an opted-in top-level hosted lead whose
-			// persisted && effective dashboard_control_access are both true.
+			// persisted && effective dashboard_control_access are both true,
+			// to companion-work, and (guide tools only) to companion-body.
 			continue
 		}
 		if isConvTool(name) && !s.convToolsListed() {
