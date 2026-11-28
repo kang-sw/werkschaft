@@ -748,7 +748,7 @@ test('postProcess hook transitions listening -> refining -> atomic span replacem
   handle2.destroy();
 });
 
-test('Spacebar 1.0s PTT: owner single-space trim rule, repeat suppression, short tap, preconditions, and release after lock-induced blur', async () => {
+test('Spacebar 0.5s PTT: owner single-space trim rule, repeat suppression, short tap, preconditions, and release after lock-induced blur', async () => {
   const env = makeVoiceEnv();
   const trim = (v, c) => ({ ...env.window.WsVoicePTT.trimPrecedingSpacesForPTT(v, c) });
 
@@ -792,7 +792,7 @@ test('Spacebar 1.0s PTT: owner single-space trim rule, repeat suppression, short
   // Enable backend.
   handle.controller.setCapabilities({ eligible: true, order: ['native'] });
 
-  // 2. Short tap (< 1000ms) -> does not start dictation, keeps normal space.
+  // 2. Short tap (< 500ms) -> does not start dictation, keeps normal space.
   env.ctext.value = '안녕 ';
   env.ctext.selectionStart = env.ctext.selectionEnd = 3;
   env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', target: env.editor }));
@@ -829,8 +829,8 @@ test('Spacebar 1.0s PTT: owner single-space trim rule, repeat suppression, short
   env.editor.dispatchEvent(repEv);
   assert.equal(repEv.defaultPrevented, true, 'key-repeat spaces suppressed while holding');
 
-  timers.advance(999);
-  assert.equal(startCount, 0, 'not yet at the 1000ms hold threshold');
+  timers.advance(499);
+  assert.equal(startCount, 0, 'not yet at the 500ms hold threshold');
   timers.advance(1);
   await flush();
   assert.equal(startCount, 1);
@@ -851,7 +851,7 @@ test('Spacebar 1.0s PTT: owner single-space trim rule, repeat suppression, short
   env.ctext.value = '안녕  ';
   env.ctext.selectionStart = env.ctext.selectionEnd = 4;
   env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', target: env.editor }));
-  timers.advance(1000);
+  timers.advance(500);
   await flush();
   assert.equal(env.ctext.value, '안녕 ', 'consecutive spaces after text collapse to exactly 1 space');
   env.doc.dispatchEvent(new FakeEvent('keyup', { key: ' ', code: 'Space' }));
@@ -932,9 +932,9 @@ test('PTT with capsules key forwarding: short Space taps never trigger via an or
   t.up();
   t.timers.advance(320);
   t.down();
-  t.timers.advance(700);
+  t.timers.advance(400);
   await flush();
-  assert.equal(t.counts.start, 0, 'second press at 700ms hold must not start from the first press timer');
+  assert.equal(t.counts.start, 0, 'second press at 400ms hold must not start from the first press timer');
   t.up();
   t.timers.advance(3000);
   await flush();
@@ -942,16 +942,16 @@ test('PTT with capsules key forwarding: short Space taps never trigger via an or
   t.handle.destroy();
 });
 
-test('PTT with capsules key forwarding: a 1000ms hold starts once and stops cleanly on keyup', async () => {
+test('PTT with capsules key forwarding: a 500ms hold starts once and stops cleanly on keyup', async () => {
   const t = makeCapsulesForwardingPTT({ value: '' });
   t.down();
   t.down({ repeat: true });
-  t.timers.advance(999);
+  t.timers.advance(499);
   await flush();
   assert.equal(t.counts.start, 0);
   t.timers.advance(1);
   await flush();
-  assert.equal(t.counts.start, 1, 'PTT starts exactly once at 1000ms');
+  assert.equal(t.counts.start, 1, 'PTT starts exactly once at 500ms');
   assert.equal(t.handle.controller.getState(), 'recording');
   assert.equal(t.timers.pendingCount(), 0, 'no second timer left to disarm the active hold');
   assert.equal(t.handle.ptt.isActive(), true, 'active hold survives the sibling listener');
@@ -965,10 +965,10 @@ test('PTT with capsules key forwarding: a 1000ms hold starts once and stops clea
   t.handle.destroy();
 });
 
-test('PTT with capsules key forwarding: a 600ms hold does not trigger PTT', async () => {
+test('PTT with capsules key forwarding: a 400ms hold does not trigger PTT', async () => {
   const t = makeCapsulesForwardingPTT();
   t.down();
-  t.timers.advance(600);
+  t.timers.advance(400);
   t.up();
   t.timers.advance(3000);
   await flush();
@@ -980,7 +980,7 @@ test('PTT with capsules key forwarding: a 600ms hold does not trigger PTT', asyn
 test('PTT with capsules key forwarding: keyup on the editor alone still releases when forwarding is skipped', async () => {
   const t = makeCapsulesForwardingPTT({ value: '' });
   t.down();
-  t.timers.advance(1000);
+  t.timers.advance(500);
   await flush();
   assert.equal(t.counts.start, 1);
   // capsules skips forwarding when the real keyup is already defaultPrevented.
@@ -1032,7 +1032,7 @@ test('PTT with capsules key forwarding: composing Space, input, and pointer even
   fire(t.env.ctext, 'input');
   fire(t.env.editor, 'input', { inputType: 'insertText', data: ' ' });
   assert.equal(t.handle.ptt.isArmed(), true, 'own Space insertion keeps the hold armed');
-  t.timers.advance(1000);
+  t.timers.advance(500);
   await flush();
   assert.equal(t.counts.start, 1);
   t.up();
@@ -1042,7 +1042,128 @@ test('PTT with capsules key forwarding: composing Space, input, and pointer even
   t.handle.destroy();
 });
 
-test('PTT recovers after any failed start or error state: next 1000ms hold starts and stops cleanly', async () => {
+test('PTT default hold is 500ms: the exported default and an unconfigured composer both start at exactly 500ms', async () => {
+  const t = makeCapsulesForwardingPTT({ value: '' });
+  assert.equal(t.env.window.WsVoicePTT.DEFAULT_HOLD_MS, 500);
+  t.down();
+  t.timers.advance(499);
+  await flush();
+  assert.equal(t.counts.start, 0);
+  t.timers.advance(1);
+  await flush();
+  assert.equal(t.counts.start, 1, 'default holdMs is 500');
+  t.up();
+  await flush();
+  await flush();
+  assert.equal(t.counts.stop, 1);
+  t.handle.destroy();
+});
+
+test('PTT held Space: its own space input plus key-repeat ticks before and after 500ms neither disarm nor stop; keyup stops once', async () => {
+  const fire = (target, type, init) => target.dispatchEvent(new FakeEvent(type, { target, ...(init || {}) }));
+  // `leaky` models a repeat the browser typed anyway (not suppressed in time).
+  for (const leaky of [false, true]) {
+    const t = makeCapsulesForwardingPTT({ value: '안녕' });
+    const { env } = t;
+    env.ctext.selectionStart = env.ctext.selectionEnd = 2;
+    const typeSpace = () => {
+      fire(env.editor, 'beforeinput', { inputType: 'insertText', data: ' ' });
+      env.ctext.value += ' ';
+      env.ctext.selectionStart = env.ctext.selectionEnd = env.ctext.value.length;
+      fire(env.ctext, 'input'); // capsules' data-less forwarded input
+      fire(env.editor, 'input', { inputType: 'insertText', data: ' ' });
+    };
+    t.down();
+    typeSpace();
+    assert.equal(t.handle.ptt.isArmed(), true, 'own space input keeps the hold armed');
+    // Repeat ticks before holdMs (macOS repeat starts ~225-400ms).
+    for (const at of [250, 100]) {
+      t.timers.advance(at);
+      const rep = new FakeEvent('keydown', { key: ' ', code: 'Space', keyCode: 32, repeat: true, target: env.editor });
+      env.editor.dispatchEvent(rep);
+      assert.equal(rep.defaultPrevented, true, 'repeat Space is suppressed');
+      if (leaky) typeSpace();
+      assert.equal(t.handle.ptt.isArmed(), true, 'repeat tick must not disarm the pending hold');
+    }
+    assert.equal(t.counts.start, 0);
+    assert.equal(t.timers.pendingCount(), 1, 'still exactly one timer');
+    t.timers.advance(150);
+    await flush();
+    assert.equal(t.counts.start, 1, 'starts at 500ms despite repeats');
+    assert.equal(t.handle.controller.getState(), 'recording');
+    // Repeat ticks while recording: composer is locked/blurred, so they land on
+    // the editor, ctext or the page.
+    for (const target of [env.editor, env.ctext, env.doc]) {
+      fire(target, 'keydown', { key: ' ', code: 'Space', keyCode: 32, repeat: true });
+      fire(env.editor, 'blur');
+      fire(env.ctext, 'input'); // value no longer matters once active
+      await flush();
+      assert.equal(t.handle.controller.getState(), 'recording', 'repeat tick / lock blur must not stop');
+      assert.equal(t.handle.ptt.isActive(), true);
+    }
+    assert.equal(t.counts.stop, 0);
+    assert.equal(t.timers.pendingCount(), 0);
+    t.up();
+    await flush();
+    await flush();
+    assert.equal(t.counts.stop, 1, 'keyup stops exactly once');
+    assert.equal(t.handle.ptt.isArmed(), false);
+    assert.equal(t.handle.ptt.isActive(), false);
+    t.handle.destroy();
+  }
+});
+
+test('PTT held Space under a Korean IME: repeats reported as keyCode 229 / key Process do not disarm, and its keyup stops', async () => {
+  const t = makeCapsulesForwardingPTT({ value: '' });
+  const imeRepeat = { key: 'Process', code: '', keyCode: 229, repeat: true };
+  t.down();
+  t.timers.advance(300);
+  const rep = new FakeEvent('keydown', { ...imeRepeat, target: t.env.editor });
+  t.env.editor.dispatchEvent(rep);
+  assert.equal(t.handle.ptt.isArmed(), true, 'IME repeat tick keeps the hold armed');
+  assert.equal(rep.defaultPrevented, true);
+  t.timers.advance(200);
+  await flush();
+  assert.equal(t.counts.start, 1);
+  t.env.editor.dispatchEvent(new FakeEvent('keydown', { ...imeRepeat, target: t.env.editor }));
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'recording');
+  t.env.editor.dispatchEvent(new FakeEvent('keyup', { key: 'Process', code: '', keyCode: 229, target: t.env.editor }));
+  await flush();
+  await flush();
+  assert.equal(t.counts.stop, 1, 'IME-flavoured Space keyup releases the hold');
+  t.handle.destroy();
+});
+
+test('PTT still disarms cleanly on non-Space activity after Space repeats, with zero orphaned timers', async () => {
+  const fire = (target, type, init) => target.dispatchEvent(new FakeEvent(type, { target, ...(init || {}) }));
+  const cases = {
+    'other key': (t) => t.env.editor.dispatchEvent(new FakeEvent('keydown', { key: 'a', code: 'KeyA', keyCode: 65, target: t.env.editor })),
+    'other key repeat': (t) => t.env.editor.dispatchEvent(new FakeEvent('keydown', { key: 'a', code: 'KeyA', keyCode: 65, repeat: true, target: t.env.editor })),
+    'typed non-space input': (t) => fire(t.env.editor, 'input', { inputType: 'insertText', data: 'a' }),
+    'data-less paste-like input': (t) => { t.env.ctext.value += 'paste'; fire(t.env.ctext, 'input'); },
+    'pointerdown': (t) => fire(t.env.editor, 'pointerdown'),
+    'editor blur': (t) => fire(t.env.editor, 'blur'),
+    'window blur': (t) => fire(t.env.window, 'blur'),
+    'release before 500ms': (t) => t.up()
+  };
+  for (const [why, act] of Object.entries(cases)) {
+    const t = makeCapsulesForwardingPTT({ value: 'hi' });
+    t.down();
+    t.timers.advance(200);
+    t.env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', keyCode: 32, repeat: true, target: t.env.editor }));
+    assert.equal(t.handle.ptt.isArmed(), true, why + ': still armed after repeat');
+    act(t);
+    assert.equal(t.handle.ptt.isArmed(), false, why + ': disarmed');
+    assert.equal(t.timers.pendingCount(), 0, why + ': no orphaned timer');
+    t.timers.advance(3000);
+    await flush();
+    assert.equal(t.counts.start, 0, why + ': no PTT');
+    t.handle.destroy();
+  }
+});
+
+test('PTT recovers after any failed start or error state: next 500ms hold starts and stops cleanly', async () => {
   // Root cause being pinned: a failed start leaves controller state "error",
   // and PTT used to arm only from "idle" (mic click may start from "error").
   const modes = ['reject', 'throw', 'backend-onError', 'start-then-stop-reject'];
@@ -1071,7 +1192,7 @@ test('PTT recovers after any failed start or error state: next 1000ms hold start
 
     // Attempt 1: hold until PTT fires; the start fails (or recording dies).
     t.down();
-    t.timers.advance(1000);
+    t.timers.advance(500);
     await flush();
     if (mode === 'backend-onError') {
       assert.equal(t.handle.controller.getState(), 'recording');
@@ -1093,13 +1214,13 @@ test('PTT recovers after any failed start or error state: next 1000ms hold start
     const startsBefore = counts.start;
     const stopsBefore = counts.stop;
 
-    // Attempt 2: backend now healthy; a fresh 1000ms hold must work.
+    // Attempt 2: backend now healthy; a fresh 500ms hold must work.
     behavior = 'ok';
     t.down();
     assert.equal(t.handle.ptt.isArmed(), true, `${mode}: Space arms from error state`);
-    t.timers.advance(999);
+    t.timers.advance(499);
     await flush();
-    assert.equal(counts.start, startsBefore, `${mode}: not before 1000ms`);
+    assert.equal(counts.start, startsBefore, `${mode}: not before 500ms`);
     t.timers.advance(1);
     await flush();
     assert.equal(counts.start, startsBefore + 1, `${mode}: PTT starts after recovery`);
@@ -1126,7 +1247,7 @@ test('PTT drops a stale active hold (lost keyup, failed recording) so the next p
   };
   const t = makeCapsulesForwardingPTT({ value: '', backend });
   t.down();
-  t.timers.advance(1000);
+  t.timers.advance(500);
   await flush();
   assert.equal(counts.start, 1);
   errCb({ code: 'mic_unavailable' }); // recording dies while Space is still held
@@ -1135,7 +1256,7 @@ test('PTT drops a stale active hold (lost keyup, failed recording) so the next p
   t.down();
   assert.equal(t.handle.ptt.isArmed(), true, 'stale hold replaced by a fresh arm');
   assert.equal(t.handle.ptt.isActive(), false);
-  t.timers.advance(1000);
+  t.timers.advance(500);
   await flush();
   assert.equal(counts.start, 2);
   t.up();
@@ -1176,7 +1297,7 @@ test('native unavailable on start rejection or throw falls back to the next back
   for (const mode of [{ reject: 'recognizer_unavailable' }, { throw: 'bridge_error' }, { reject: 'unavailable' }, { reject: 'privacy_disabled' }, { reject: 'language_unavailable' }]) {
     const t = makeFallbackEnv(mode);
     t.down();
-    t.timers.advance(1000);
+    t.timers.advance(500);
     await flush();
     assert.deepEqual(t.log, ['native.start', 'native.cancel', 'router.start'], JSON.stringify(mode));
     assert.equal(t.handle.controller.getState(), 'recording', 'the held gesture keeps recording on the fallback');
@@ -1284,7 +1405,7 @@ test('dictation commit normalizes the leading space to exactly one (or none at c
         t.env.ctext.value = before + ' ';
         t.env.ctext.selectionStart = t.env.ctext.selectionEnd = t.env.ctext.value.length;
         t.down();
-        t.timers.advance(1000);
+        t.timers.advance(500);
         await flush();
         t.up();
       }
