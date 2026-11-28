@@ -17,7 +17,9 @@ import (
 // worktree pool of the session's project as JSON (WorktreePool), with each
 // worktree's disk size when one is known; ?wait=1 holds the answer until the
 // sizes the read started are measured (worktreeSizeWait at most), so a page
-// draws the list at once and asks again for the sizes. POST
+// draws the list at once and asks again for the sizes; ?no_size=1 answers with
+// only the sizes already measured and still fresh and starts no measurement
+// (no disk walk), for a page that must not touch every worktree's files. POST
 // /s/<reply-id>/worktrees/cleanup holds one message in the session's inbox,
 // through the composer's own path: a line in the page's language saying the
 // user asks for unused worktrees to be cleaned up, then the pool as plain
@@ -140,6 +142,20 @@ func (c *sizeCache) fill(wts []PooledWorktree, now time.Time) (pending []chan st
 	return pending
 }
 
+// peek sets Size on each worktree whose measurement is finished and within
+// worktreeSizeTTL, and touches nothing else: it starts no walk and inserts,
+// evicts, or refreshes no entry, so a lightweight read never costs a disk walk.
+func (c *sizeCache) peek(wts []PooledWorktree, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range wts {
+		if e := c.entries[wts[i].Path]; e != nil && e.measured && now.Sub(e.at) <= worktreeSizeTTL {
+			n := e.bytes
+			wts[i].Size = &n
+		}
+	}
+}
+
 func (c *sizeCache) measure(path string, e *sizeEntry, done chan struct{}) {
 	c.sem <- struct{}{}
 	n := c.walk(path)
@@ -169,14 +185,21 @@ func dirSize(root string) int64 {
 }
 
 // readPool reads the pool of session s with the sizes known now; with wait
-// it waits for the sizes it started, up to worktreeSizeWait.
-func (d *Daemon) readPool(s Session, wait bool) (WorktreePool, error) {
+// it waits for the sizes it started, up to worktreeSizeWait. With noSize it
+// starts no measurement at all: only sizes already measured and still fresh
+// are attached, the rest stay nil, and Sizing is false (wait is ignored).
+func (d *Daemon) readPool(s Session, wait, noSize bool) (WorktreePool, error) {
 	pool, err := d.worktrees.ReadWorktrees(s.Registration)
 	if err != nil {
 		return pool, err
 	}
 	if pool.Worktrees == nil {
 		pool.Worktrees = []PooledWorktree{}
+	}
+	if noSize {
+		d.sizes.peek(pool.Worktrees, time.Now())
+		pool.Sizing = false
+		return pool, nil
 	}
 	pending := d.sizes.fill(pool.Worktrees, time.Now())
 	if wait && len(pending) > 0 {
@@ -216,7 +239,8 @@ func (d *Daemon) handleWorktrees(w http.ResponseWriter, r *http.Request, replyID
 	if !ok {
 		return
 	}
-	pool, err := d.readPool(s, r.URL.Query().Get("wait") == "1")
+	q := r.URL.Query()
+	pool, err := d.readPool(s, q.Get("wait") == "1", q.Get("no_size") == "1")
 	if err != nil {
 		http.Error(w, "the worktree pool could not be read: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -240,7 +264,8 @@ func (d *Daemon) handleWorktreeCleanup(w http.ResponseWriter, r *http.Request, r
 		http.Error(w, "unknown session", http.StatusNotFound)
 		return
 	}
-	pool, err := d.readPool(s, false)
+	// Cache-only: a cleanup request never starts a disk walk of its own.
+	pool, err := d.readPool(s, false, true)
 	if err != nil {
 		http.Error(w, "the worktree pool could not be read: "+err.Error(), http.StatusInternalServerError)
 		return

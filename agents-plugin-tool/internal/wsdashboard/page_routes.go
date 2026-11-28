@@ -41,7 +41,7 @@ func (d *Daemon) handleIndex(w http.ResponseWriter, r *http.Request) {
 // handleSessionRoutes serves everything under /s/: a session page, its SSE
 // stream, its image, file view, files, history, audit query (audit_routes.go),
 // entry text, closed-topic, topic-history, worktree pool,
-// git status, log, and commit, attachment, and file browser routes, its
+// git status, log, and commit, review ledger, attachment, and file browser routes, its
 // message, composer-exec, user-commands, exec (the job HUD), cancel, steer, interrupt, system-open, file browser host,
 // outside-link mint, git
 // refresh, git push, pull, and fetch, worktree cleanup, and display label
@@ -191,6 +191,8 @@ func (d *Daemon) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 		d.handleTicketGraph(w, r, replyID)
 	case sub == "worktrees":
 		d.handleWorktrees(w, r, replyID)
+	case sub == "review-ledger":
+		d.handleReviewLedger(w, r, replyID)
 	case sub == "git/status":
 		d.handleGitStatus(w, r, replyID)
 	case sub == "git/log":
