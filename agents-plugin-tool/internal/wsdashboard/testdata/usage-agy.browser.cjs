@@ -149,65 +149,50 @@ const pendingPayload = {
       assert.ok(labelCentered, `${theme}: single-line group labels vertically centered`);
       await page.locator('.usage-toggle').screenshot({ path: path.join(output, `dual-agy-${theme}.png`) });
 
-      // Open popover and verify both agy groups, full headings, timestamps, dimmed disabled card, and charts.
+      // Open popover and verify unified 2-chart panels, nested agy group rows, dimmed disabled cell, and responsive widths.
       await page.locator('.usage-toggle').click();
       const pop = page.locator('.usage-pop');
       await pop.waitFor({ state: 'visible' });
-      assert.equal(await pop.locator('.usage-account').count(), 4);
-      const popHeadings = await pop.locator('.usage-account .usage-heading b').allTextContents();
-      assert.ok(popHeadings.includes('Gemini Models'), `${theme}: popover keeps Gemini Models heading`);
-      assert.ok(popHeadings.includes('Claude and GPT models'), `${theme}: popover keeps Claude and GPT models heading`);
-      assert.deepEqual(await pop.locator('.usage-account .usage-vage').allTextContents(), ['0m ago', '0m ago', '12m ago', '12m ago']);
-      assert.equal(await pop.locator('.usage-window-card.usage-disabled').count(), 1);
-      const disabledOpacity = await pop.locator('.usage-window-card.usage-disabled').evaluate(e => parseFloat(getComputedStyle(e).opacity));
-      assert.ok(disabledOpacity < 0.7, `${theme}: disabled card dimmed (${disabledOpacity})`);
-      assert.equal(await pop.locator('.usage-window-empty').count(), 1);
-      assert.equal(await pop.locator('.usage-window-empty').textContent(), 'no 5-hour window');
+      assert.equal(await pop.locator('.up-cpanel').count(), 2, `${theme}: two unified charts (5H and 7D)`);
+      assert.equal(await pop.locator('.up-hg').count(), 1, `${theme}: nested Antigravity group`);
+      const popNames = await pop.locator('.up-hr .up-hr-name').allTextContents();
+      assert.ok(popNames.includes('Gemini Models'), `${theme}: popover keeps Gemini Models row`);
+      assert.ok(popNames.includes('Claude and GPT models'), `${theme}: popover keeps Claude and GPT models row`);
+      assert.equal(await pop.locator('.up-nc.usage-disabled').count(), 1);
+      const disabledOpacity = await pop.locator('.up-nc.usage-disabled').evaluate(e => parseFloat(getComputedStyle(e).opacity));
+      assert.ok(disabledOpacity < 0.7, `${theme}: disabled cell dimmed (${disabledOpacity})`);
       const wideLayout = await pop.evaluate(el => ({
         width: el.getBoundingClientRect().width,
-        rows: getComputedStyle(el.querySelector('.usage-row-label')).display,
-        columns: getComputedStyle(el.querySelector('.usage-col-head')).display,
+        gridCols: getComputedStyle(el.querySelector('.up-cgrid')).gridTemplateColumns.split(' ').length,
       }));
-      assert.ok(wideLayout.width <= 988 && wideLayout.width > 980, `${theme}: wide popover width ${wideLayout.width}`);
-      assert.notEqual(wideLayout.rows, 'none', `${theme}: wide B row labels visible`);
-      assert.equal(wideLayout.columns, 'none', `${theme}: wide B column labels hidden`);
+      assert.ok(wideLayout.width <= 680 && wideLayout.width >= 660, `${theme}: wide popover width ${wideLayout.width}`);
+      assert.equal(wideLayout.gridCols, 2, `${theme}: wide 2-column chart grid`);
       await pop.screenshot({ path: path.join(output, `agy-popover-${theme}.png`) });
 
       await page.setViewportSize({ width: 420, height: 2200 });
       await page.evaluate(() => window.dispatchEvent(new Event('resize')));
-      const narrowLayout = await pop.evaluate(el => {
-        const percentRows = [...el.querySelectorAll('.usage-window')];
-        return {
-          width: el.getBoundingClientRect().width,
-          rows: getComputedStyle(el.querySelector('.usage-row-label')).display,
-          columns: getComputedStyle(el.querySelector('.usage-col-head')).display,
-          vendorColumn: getComputedStyle(el.querySelector('.usage-vhead')).gridColumn,
-          overflow: percentRows.some(n => n.scrollWidth > n.clientWidth),
-          pageWidth: document.documentElement.scrollWidth,
-          viewportWidth: window.innerWidth,
-        };
-      });
+      const narrowLayout = await pop.evaluate(el => ({
+        width: el.getBoundingClientRect().width,
+        gridCols: getComputedStyle(el.querySelector('.up-cgrid')).gridTemplateColumns.split(' ').length,
+        pageWidth: document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth,
+      }));
       assert.ok(narrowLayout.width <= 404, `${theme}: narrow popover width ${narrowLayout.width}`);
-      assert.equal(narrowLayout.rows, 'none', `${theme}: narrow B row labels hidden`);
-      assert.notEqual(narrowLayout.columns, 'none', `${theme}: narrow C column labels visible`);
-      assert.equal(narrowLayout.vendorColumn, '1 / -1', `${theme}: narrow vendor head above cards`);
-      assert.equal(narrowLayout.overflow, false, `${theme}: percent rows stay inside their cards`);
+      assert.equal(narrowLayout.gridCols, 1, `${theme}: narrow stacked 1-column chart grid`);
       assert.ok(narrowLayout.pageWidth <= narrowLayout.viewportWidth, `${theme}: no horizontal page scroll`);
       await pop.screenshot({ path: path.join(output, `agy-popover-narrow-${theme}.png`) });
 
       // A just-started daemon has no agy cache yet. The response still carries
-      // the known groups as pending so both chart rows reserve their final size.
+      // the known groups as pending so both agy rows render spinners.
       await page.setViewportSize({ width: 1280, height: 2200 });
       await page.evaluate(pending => {
         window.__usagePayload = pending;
         document.dispatchEvent(new Event('visibilitychange'));
       }, pendingPayload);
-      await pop.locator('.usage-pending-card').first().waitFor();
-      assert.equal(await pop.locator('.usage-pending-card').count(), 4);
-      assert.equal(await pop.locator('.usage-pending-card .spin').count(), 4);
+      await pop.locator('.up-hr-status[aria-busy="true"]').first().waitFor();
+      assert.equal(await pop.locator('.up-hr-status[aria-busy="true"]').count(), 2);
+      assert.equal(await pop.locator('.up-hr-status .spin').count(), 2);
       assert.equal(await page.locator('.usage-harness').count(), 2, `${theme}: pending agy groups omitted from header`);
-      const pendingLabels = await pop.locator('.usage-pending-card').evaluateAll(cards => cards.map(card => card.getAttribute('aria-label')));
-      assert.deepEqual(pendingLabels, Array(4).fill('Checking usage…'));
       await pop.screenshot({ path: path.join(output, `agy-pending-wide-${theme}.png`) });
 
       await page.setViewportSize({ width: 420, height: 2200 });

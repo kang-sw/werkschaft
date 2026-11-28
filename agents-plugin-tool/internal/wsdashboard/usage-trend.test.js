@@ -2,8 +2,9 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const { readAssetSource } = require('./testdata/asset-source.cjs');
 const window = {};
-vm.runInNewContext(fs.readFileSync(__dirname + '/assets/usage.js', 'utf8'), { window });
+vm.runInNewContext(readAssetSource('wsdashboard', 'usage.js'), { window });
 const start = Date.UTC(2026, 10, 15), duration = 5 * 3600000, reset = start + duration;
 const sample = (elapsed, percent, source = 'Claude push', resetsAt = reset) => ({ harness: 'claude', kind: 'five_hour', source, resetsAt, asOf: start + elapsed * duration, percent });
 function trend(samples, current = samples.at(-1), projection) {
