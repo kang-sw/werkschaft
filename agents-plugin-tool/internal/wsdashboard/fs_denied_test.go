@@ -111,6 +111,17 @@ func TestFSLocalDeniedProviderCredentials(t *testing.T) {
 			assertOrdinaryLocalReads(t, o, o.write(t, o.away, "ordinary.txt", "ORDINARY"))
 		})
 	}
+	t.Run("pi-rpc auth.json home and env", func(t *testing.T) {
+		o := startOutsideFixture(t)
+		homeAuth := o.write(t, o.home, ".pi/agent/auth.json", "DENIED-PI-HOME-AUTH")
+		assertSensitiveReadsRefused(t, o, homeAuth)
+
+		customDir := filepath.Join(o.away, "custom-pi-agent")
+		t.Setenv("PI_CODING_AGENT_DIR", customDir)
+		envAuth := o.write(t, customDir, "auth.json", "DENIED-PI-ENV-AUTH")
+		assertSensitiveReadsRefused(t, o, envAuth)
+		assertOrdinaryLocalReads(t, o, o.write(t, customDir, "settings.json", `{"ok":true}`))
+	})
 }
 
 func TestFSLocalDeniedDaemonState(t *testing.T) {

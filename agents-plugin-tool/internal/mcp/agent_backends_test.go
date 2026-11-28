@@ -20,6 +20,7 @@ func registerFixtureAgentBackends(s *Server) {
 		wsagent.BackendAgy:    {LeadProfile: wsagent.LeadProfileAgy, PermissionModes: wsagent.AgyPermissionModes},
 		wsagent.BackendCodex:  {LeadProfile: wsagent.LeadProfileCodex, PermissionModes: wsagent.CodexPermissionModes},
 		wsagent.BackendWerk:   {LeadProfile: wsagent.LeadProfileWerk},
+		wsagent.BackendPiRPC:  {LeadProfile: wsagent.LeadProfilePiRPC},
 		"fixture":             {LeadProfile: "fixture-lead", PermissionModes: []string{"review"}},
 	}})
 }
@@ -65,7 +66,7 @@ func TestConfigRegisteredAgentProfile(t *testing.T) {
 	}
 	for _, knob := range catalog.Knobs {
 		if knob.ID == "agent.profile.<name>" {
-			if knob.Error != "" || !reflect.DeepEqual(knob.ValueSchema.Properties.Backend.Enum, []string{"agy", "claude", "codex", "fixture", "pi", "werk"}) {
+			if knob.Error != "" || !reflect.DeepEqual(knob.ValueSchema.Properties.Backend.Enum, []string{"agy", "claude", "codex", "fixture", "pi", "pi-rpc", "werk"}) {
 				t.Fatalf("registered catalog = %+v", knob)
 			}
 			return
@@ -81,7 +82,7 @@ func TestConfigRegisteredAgentProfileRefusesAbsentBackend(t *testing.T) {
 		"key": "agent.profile.fixture-lead", "scope": "project",
 		"value": map[string]any{"backend": "unregistered", "lead": true, "permission_mode": "review"},
 	})
-	want := `config.tune: agent.profile.fixture-lead backend must be "agy" or "claude" or "codex" or "fixture" or "pi" or "werk"; got "unregistered"`
+	want := `config.tune: agent.profile.fixture-lead backend must be "agy" or "claude" or "codex" or "fixture" or "pi" or "pi-rpc" or "werk"; got "unregistered"`
 	if !toolIsError(t, resp) || toolText(t, resp) != want {
 		t.Fatalf("unregistered profile write = %s, want refusal %q", resp, want)
 	}

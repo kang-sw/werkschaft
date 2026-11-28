@@ -1393,7 +1393,7 @@ func (c *conv) applySettings() {
 	rec := c.record()
 	restart := false
 	controls := controlsFor(c.proc)
-	if permission && (!rec.Lead || c.r.durableProcess(rec.Backend)) {
+	if permission && (!rec.Lead || c.r.durableProcess(rec.Backend) || c.r.lifecycle(rec.Backend).RestartLeadOnPermissionChange) {
 		restart = true
 	}
 	if model && !restart && controls.SetModel(rec.Model) != nil {

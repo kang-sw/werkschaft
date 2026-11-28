@@ -119,7 +119,7 @@ func CreateManagedSlotDir(cacheHome, harness, slotID string) (string, error) {
 
 // SupportedSlotHarness reports whether harness participates in config-dir account slots.
 func SupportedSlotHarness(harness string) bool {
-	return harness == "codex" || harness == "claude"
+	return harness == "codex" || harness == "claude" || harness == "pi-rpc"
 }
 
 // ValidAccountSlotID validates a caller-supplied account slot identifier.
@@ -160,6 +160,8 @@ func harnessHomeSpec(harness string) (envKey, defaultSubdir string, ok bool) {
 		return "CODEX_HOME", ".codex", true
 	case "claude":
 		return "CLAUDE_CONFIG_DIR", ".claude", true
+	case "pi-rpc":
+		return "PI_CODING_AGENT_DIR", ".pi/agent", true
 	default:
 		return "", "", false
 	}
@@ -173,6 +175,8 @@ func HarnessForConfigEnv(envKey string) string {
 		return "codex"
 	case "CLAUDE_CONFIG_DIR":
 		return "claude"
+	case "PI_CODING_AGENT_DIR":
+		return "pi-rpc"
 	default:
 		return ""
 	}
@@ -623,8 +627,8 @@ func (r *AccountSlotRegistry) ActiveSlots() map[string]string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	_ = r.loadLocked(false)
-	out := make(map[string]string, 2)
-	for _, h := range []string{"codex", "claude"} {
+	out := make(map[string]string, 3)
+	for _, h := range []string{"codex", "claude", "pi-rpc"} {
 		out[h] = r.activeIDLocked(h)
 	}
 	return out
