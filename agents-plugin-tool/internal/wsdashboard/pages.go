@@ -113,6 +113,7 @@ var dashboardStyleFiles = []string{
 	"dashboard-ticketmap.css",
 	"dashboard-menus.css",
 	"dashboard-rail.css",
+	"dashboard-new-session.css",
 	"dashboard-shell.css",
 	"dashboard-account-consent.css",
 	"dashboard-audit.css",

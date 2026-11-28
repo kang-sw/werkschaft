@@ -406,7 +406,7 @@ async function until(check, message) {
         // attachment. Held synthetic responses make busy/generation observable.
         const initialRequests = (await action('requests')).count;
         let modal = await openModal();
-        const start = modal.getByRole('button', { name: 'Start', exact: true });
+        const start = modal.locator('.ns-cta.go');
         await start.click();
         await until(async () => (await action('requests')).count === initialRequests + 1, 'one creation request reaches synthetic host');
         assert.equal(await start.isDisabled(), true, 'Start is disabled while the creation request is held');
@@ -423,16 +423,16 @@ async function until(check, message) {
         await draftRestored();
         assert.equal(await page.locator('#ctext').inputValue(), draft, 'modal completion saves the originating session draft');
         modal = await openModal();
-        await modal.getByRole('button', { name: 'Start', exact: true }).click();
+        await modal.locator('.ns-cta.go').click();
         await until(async () => (await action('requests')).count === initialRequests + 2, 'second held creation request arrives');
-        await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
+        await modal.getByRole('button', { name: 'Close', exact: true }).click();
         modal = await openModal();
         await action('complete');
         await tab.waitForURL(base + '/s/createdsession');
         await active('board');
         assert.equal(await modal.isVisible(), true, 'late prior-generation success never closes a newer modal');
-        assert.equal(await modal.getByRole('button', { name: 'Start', exact: true }).isDisabled(), false, 'the newer modal stays startable');
-        await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
+        assert.equal(await modal.locator('.ns-cta.go').isDisabled(), false, 'the newer modal stays startable');
+        await modal.getByRole('button', { name: 'Close', exact: true }).click();
         await shot('modal-generation-completed');
         assert.deepEqual(serviceWorkerAttempts, [], 'no service worker registration attempts');
         assert.deepEqual(serviceWorkerEvents, [], 'no service worker creations');

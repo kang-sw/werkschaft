@@ -130,7 +130,7 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
           assert.equal(await pop.locator('.pmseg button[aria-checked="true"]').textContent(), '기본(기존 동작)');
           assert.equal(await pop.locator('.pmseg button').count(), 4);
           assert.equal(await pop.locator('.pmadv').evaluate(d => d.open), false, 'Advanced starts collapsed');
-          assert.equal(await pop.locator('.pmadv select').inputValue(), 'auto');
+          assert.equal(await pop.locator('.pmadv .ns-adv-cap button[aria-checked="true"]').getAttribute('data-mode'), 'auto');
           await page.screenshot({ path: out(name('create')) });
           assert.equal(await pop.locator('.spseg [data-harness="pi"]').count(), 0,
             'retired Pi stays hidden even if a legacy choices response advertises it');
@@ -141,8 +141,9 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
         await step('full-warning', async () => {
           const pop = await create();
           await pop.locator('.pmseg [data-level="full"]').click();
-          assert.equal(await pop.locator('.pmadv select').inputValue(), 'bypassPermissions');
-          await pop.locator('.sprow .pbtn.go').click();
+          assert.equal(await pop.locator('.pmadv .ns-adv-cap button[aria-checked="true"]').getAttribute('data-mode'), 'bypassPermissions');
+          assert.equal(await pop.locator('.ns-cta.go').evaluate(el => el.classList.contains('danger')), true, 'full level turns hero CTA danger-red');
+          await pop.locator('.ns-cta.go').click();
           const dlg = page.locator('dialog.pmdlg[open]');
           await dlg.waitFor();
           assert.equal(await dlg.locator('.pbtn.danger').isDisabled(), true);
@@ -156,7 +157,7 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
           assert.equal(await pop.locator('.pmseg button[aria-checked="true"]').getAttribute('data-level'), 'full');
           // Confirm: tick, grant; the request carries the acknowledgement.
           S.answer = () => ({ status: 500, body: 'fixture: no runner' });
-          await pop.locator('.sprow .pbtn.go').click();
+          await pop.locator('.ns-cta.go').click();
           await dlg.locator('label.pmack').click();
           await dlg.locator('.pbtn.danger').click();
           await page.waitForFunction(() => true);
@@ -171,23 +172,34 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
           S.catalogAt = Date.now() + 4600;
           const pop = await create();
           await pop.locator('.spseg [data-harness="werk"]').click();
-          const model = pop.getByLabel('모델', { exact: true });
-          assert.equal(await pop.locator('.sprow .pbtn.go').isDisabled(), true);
+          const model = pop.locator('[data-model-input]');
+          assert.equal(await pop.locator('.ns-cta.go').isDisabled(), true);
           try {
-            await model.selectOption({ label: 'Account fixture · OpenAI' }, { timeout: 10000 });
+            await page.waitForFunction(() => {
+              const inp = document.querySelector('.rpop.ns-modal [data-model-input]');
+              return !!inp && !inp.disabled;
+            }, { timeout: 10000 });
           } catch (e) {
             throw new Error('model unavailable after catalog polls at offsets ' + S.catalogPolls.join(', ') + ': ' + e.message);
           }
           S.catalogAt = 0;
+          await model.click();
+          const acctOpt = pop.locator('.ns-mod .ns-cb-list li[data-val="openai vendor/fixture"]');
+          await acctOpt.waitFor();
+          assert.match(await acctOpt.textContent(), /Account fixture · OpenAI/);
+          await acctOpt.dispatchEvent('mousedown');
+          assert.equal(await model.inputValue(), 'openai vendor/fixture');
           for (const name of ['office', 'home']) {
-            await model.selectOption('local/' + name + ' vendor/fixture');
+            await model.click();
+            await pop.locator(`.ns-mod .ns-cb-list li[data-val="local/${name} vendor/fixture"]`).dispatchEvent('mousedown');
             assert.equal(await model.inputValue(), 'local/' + name + ' vendor/fixture');
           }
-          await model.selectOption('local/home vendor/fixture');
-          assert.equal(await model.locator('option[value="vendor/fixture"]').textContent(), 'vendor/fixture');
+          await model.click();
+          assert.equal(await pop.locator('.ns-mod .ns-cb-list li[data-val="vendor/fixture"] > span').textContent(), 'vendor/fixture');
+          await page.keyboard.press('Escape');
           await pop.locator('.pmseg [data-level="read-only"]').click();
           const created = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === '/agents/leads/permission');
-          await pop.locator('.sprow .pbtn.go').click();
+          await pop.locator('.ns-cta.go').click();
           await created;
           assert.deepEqual(S.posts.map(p => [p.path, p.body.harness, p.body.provider, p.body.model, p.body.permission_level]), [
             ['/agents/leads/permission', 'werk', 'local/home', 'vendor/fixture', 'read-only']
@@ -255,15 +267,15 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
           pop = await create();
           await pop.locator('.pmseg [data-level="read-only"]').click();
           S.answer = () => ({ status: 404, body: '404 page not found' });
-          await pop.locator('.sprow .pbtn.go').click();
+          await pop.locator('.ns-cta.go').click();
           await pop.locator('.pmerr:not([hidden])').waitFor();
           assert.deepEqual(S.posts.map(p => p.path), ['/agents/leads/permission'], 'a refusal is never resent on the legacy route');
           utiles.push({ k: 'B', png: await pop.screenshot() });
           S.choices = choices(false);
-          await pop.locator('.sprow .pbtn.go').click();
+          await pop.locator('.ns-cta.go').click();
           await pop.locator('.pmoff:not([hidden])').waitFor();
           assert.equal(S.posts.length, 1, 're-check sends nothing');
-          await pop.locator('select').filter({ has: page.locator('option[value="plan"]') }).first().selectOption('plan');
+          await pop.locator('.ns-native-cap button[data-mode="plan"]').click();
           utiles.push({ k: 'B2', png: await pop.screenshot() });
           await closePop();
           await load(STATES.derived, choices(false));
@@ -278,7 +290,7 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
           pop = await create();
           await pop.locator('.pmseg [data-level="read-only"]').click();
           S.choices = choices(true, { available: false });
-          await pop.locator('.sprow .pbtn.go').click();
+          await pop.locator('.ns-cta.go').click();
           await pop.locator('.pmoff:not([hidden])').waitFor();
           assert.equal(S.posts.length, 0, 'unavailable harness with levels sends no creation request');
           if (theme === 'dark' && width === 1440) await pop.screenshot({ path: out(name('permission-unavailable')) });

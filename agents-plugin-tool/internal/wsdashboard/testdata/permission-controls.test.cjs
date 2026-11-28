@@ -22,19 +22,20 @@ const gone = source.match(/\n  function leadGone\(st\) \{.*\}\n/);
 const connected = source.match(/\n  function connected\(on\) \{[\s\S]*?\n  \}\n/);
 assert(gone && connected, 'leadGone and the stream connected hook exist');
 const supHarness = source.match(/\n  function supHarness\(name\) \{[\s\S]*?\n  \}\n/)[0];
-const tierPicker = source.match(/\n  function leadTierPicker\([\s\S]*?\n  \}\n/)[0];
+const tierPicker = readAssetSource('wsdashboard', 'dashboard-tier-picker.js');
 const rail = readAssetSource('wsdashboard', 'rail.js');
 
 class Node {
   constructor(tag, cls, text) {
     this.tag = tag; this.cls = cls || ''; this.children = []; this.parentNode = null;
-    this.attrs = {}; this.listeners = {}; this.hidden = false; this.disabled = false; this.value = ''; this.text = '';
+    this.attrs = {}; this.listeners = {}; this.style = {}; this.hidden = false; this.disabled = false; this.value = ''; this.text = '';
     if (text != null) this.text = String(text);
     const self = this;
     this.classList = {
       toggle(k, on) { const s = new Set(self.cls.split(' ').filter(Boolean)); if (on === undefined ? !s.has(k) : on) s.add(k); else s.delete(k); self.cls = [...s].join(' '); },
       contains(k) { return self.cls.split(' ').includes(k); },
-      add(k) { this.toggle(k, true); }
+      add(k) { this.toggle(k, true); },
+      remove(k) { this.toggle(k, false); }
     };
   }
   appendChild(c) { if (c.parentNode) c.parentNode.removeChild(c); c.parentNode = this; this.children.push(c); return c; }
@@ -55,6 +56,7 @@ class Node {
   setAttribute(k, v) { this.attrs[k] = String(v); if (k === 'class') this.cls = String(v); }
   getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; }
   removeAttribute(k) { delete this.attrs[k]; }
+  toggleAttribute(k, on) { if (on) this.attrs[k] = ''; else delete this.attrs[k]; }
   addEventListener(k, f) { (this.listeners[k] = this.listeners[k] || []).push(f); }
   fire(k, e) { (this.listeners[k] || []).forEach(f => f(Object.assign({ target: this, preventDefault() {} }, e))); }
   click() { this.fire('click'); }
@@ -124,6 +126,9 @@ function creation(w, c = choices()) {
   p.open('/repo', 'repo', new Node('button'));
   p.el.hidden = false;
   w.choices(c);
+  const nativeInline = byCls(p.el, 'ns-native-cap');
+  const nativeAdv = byCls(p.el, 'ns-adv-cap');
+  const activeCaps = () => shown(nativeInline) ? nativeInline : nativeAdv;
   const f = {
     p,
     seg: byCls(p.el, 'pmseg'),
@@ -131,10 +136,15 @@ function creation(w, c = choices()) {
     levels() { return f.seg.children.map(n => n.getAttribute('data-level')); },
     checked() { return f.seg.children.filter(n => n.attrs['aria-checked'] === 'true').map(n => n.getAttribute('data-level')); },
     harness(k) { const g = p.el.find(n => n.attrs['aria-label'] === 'js.sup.harness'); g.fire('click', { target: g.find(n => n.attrs['data-harness'] === k) }); },
-    model: selectOf(p.el, 'js.sup.model'), mode: selectOf(p.el, 'js.lead.mode'), effort: selectOf(p.el, 'js.sup.effort'),
-    adv: byCls(p.el, 'pmadv'), opts: byCls(p.el, 'spopts'), off: byCls(p.el, 'pmoff'), err: byCls(p.el, 'pmerr'),
+    model: p.el.find(n => n.attrs['data-model-input']),
+    effort: p.el.find(n => n.attrs['data-effort-knob']),
+    nativeInline, nativeAdv,
+    modeValue() { const b = activeCaps().children.find(n => n.attrs['aria-checked'] === 'true'); return b ? b.getAttribute('data-mode') : ''; },
+    modeDisabled() { const cs = activeCaps().children; return !cs.length || cs.every(n => n.disabled); },
+    pickMode(m) { const b = activeCaps().children.find(n => n.getAttribute('data-mode') === m); assert(b, 'mode capsule ' + m); b.click(); },
+    adv: byCls(p.el, 'pmadv'), off: byCls(p.el, 'pmoff'), err: byCls(p.el, 'pmerr'),
     map: byCls(p.el, 'pmmap'), fine: byCls(p.el, 'pmfine'),
-    start: p.el.find(n => n.tag === 'button' && n.cls === 'pbtn go'),
+    start: byCls(p.el, 'ns-cta'), startLbl: byCls(p.el, 'ns-cta-lbl'),
     dialog: () => w.body.find(n => n.tag === 'dialog')
   };
   return f;
@@ -144,17 +154,17 @@ function dialogParts(d) {
 }
 
 // 1. Absent support: no permission_levels on the current daemon's list.
-// The native row stays where it was and Start keeps the legacy request;
+// The native capsules stay inline and Start keeps the legacy request;
 // no level is ever invented, and the unsupported state is said.
 {
   const w = world(), f = creation(w, choices(null, null));
   assert.equal(shown(f.seg), false, 'no level segment without positive support');
   assert.equal(shown(f.off), true);
   assert.equal(f.off.textContent, 'js.perm.off.create');
-  assert.equal(f.mode.parentNode.parentNode, f.opts, 'native mode row stays inline');
+  assert.equal(shown(f.nativeInline), true, 'native mode capsules stay inline');
   assert.equal(shown(f.adv), false);
-  assert.equal(f.mode.disabled, false);
-  assert.equal(f.mode.value, 'auto', 'Claude still starts in auto');
+  assert.equal(f.modeDisabled(), false);
+  assert.equal(f.modeValue(), 'auto', 'Claude still starts in auto');
   f.start.click();
   assert.equal(w.posts.length, 1);
   assert.equal(w.posts[0].route, '/agents/leads');
@@ -171,13 +181,12 @@ function dialogParts(d) {
   assert.deepEqual(f.levels(), ['', 'read-only', 'workdir-write', 'full']);
   assert.deepEqual(f.checked(), ['']);
   assert.equal(f.seg.all(n => n.cls === 'pmtag' || n.cls.includes('derived')).length, 0, 'no level is tagged derived on creation');
-  assert.equal(f.mode.parentNode.parentNode, f.adv, 'native mode lives under Advanced');
+  assert.equal(shown(f.nativeInline), false, 'inline native capsules hidden when levels supported');
   assert.equal(shown(f.adv), true);
-  assert.equal(f.mode.disabled, false, 'native mode still editable by default');
-  assert.deepEqual(f.map.children.map(n => n.tag + ':' + n.textContent), ['span:js.perm.map.default(', 'span:Claude', 'code:auto', 'span:)']);
+  assert.equal(f.modeDisabled(), false, 'native mode still editable by default');
+  assert.deepEqual(f.map.children.map(n => n.tag + ':' + n.textContent), ['span:→', 'code:auto']);
   assert.equal(shown(f.fine), true);
-  f.mode.value = 'plan';
-  f.mode.fire('change');
+  f.pickMode('plan');
   f.start.click();
   assert.equal(w.fetches.length, 0);
   assert.deepEqual(w.posts[0].body, { root: '/repo', harness: 'claude', plugin_isolation: 'default', permission_mode: 'plan' }, 'native controls keep working under Advanced');
@@ -188,12 +197,11 @@ function dialogParts(d) {
 // only to the selection route, without permission_mode or acknowledgement.
 for (const [level, native] of [['read-only', 'plan'], ['workdir-write', 'acceptEdits']]) {
   const w = world(), f = creation(w);
-  f.mode.value = 'default';
-  f.mode.fire('change');
+  f.pickMode('default');
   f.level(level);
   assert.deepEqual(f.checked(), [level]);
-  assert.equal(f.mode.value, native);
-  assert.equal(f.mode.disabled, true, 'the level owns the native mode');
+  assert.equal(f.modeValue(), native);
+  assert.equal(f.modeDisabled(), true, 'the level owns the native mode');
   assert.equal(shown(byCls(f.adv, 'pmown')), true);
   f.start.click();
   assert.equal(w.posts.length, 0, 'nothing is sent before the fresh support read');
@@ -206,10 +214,10 @@ for (const [level, native] of [['read-only', 'plan'], ['workdir-write', 'acceptE
   assert.deepEqual(w.events.slice(-1), [['go', '/s/made']]);
   // Back to the default the user's own native pick returns.
   const g = creation(world());
-  g.mode.value = 'default'; g.mode.fire('change');
+  g.pickMode('default');
   g.level(level); g.level('');
-  assert.equal(g.mode.value, 'default');
-  assert.equal(g.mode.disabled, false);
+  assert.equal(g.modeValue(), 'default');
+  assert.equal(g.modeDisabled(), false);
 }
 
 {
@@ -218,8 +226,8 @@ for (const [level, native] of [['read-only', 'plan'], ['workdir-write', 'acceptE
   const w = world(), f = creation(w);
   f.harness('codex');
   f.level('workdir-write');
-  assert.equal(f.mode.value, 'workspace-write');
-  assert.equal(f.mode.disabled, true);
+  assert.equal(f.modeValue(), 'workspace-write');
+  assert.equal(f.modeDisabled(), true);
   assert(f.map.textContent.includes('workspace-write'));
   f.start.click();
   w.choices(choices());
@@ -233,8 +241,9 @@ for (const [level, native] of [['read-only', 'plan'], ['workdir-write', 'acceptE
 {
   const w = world(), f = creation(w);
   f.level('full');
-  assert.equal(f.start.textContent, 'js.perm.start.full');
-  assert.equal(f.mode.value, 'bypassPermissions');
+  assert.equal(f.startLbl.textContent, 'js.perm.start.full');
+  assert.equal(f.start.classList.contains('danger'), true, 'full level puts CTA in danger state');
+  assert.equal(f.modeValue(), 'bypassPermissions');
   f.start.click();
   let d = f.dialog();
   assert(d && d.open, 'the warning opens');
@@ -301,9 +310,9 @@ for (const [level, native] of [['read-only', 'plan'], ['workdir-write', 'acceptE
   assert.equal(w.posts.length, 0);
   assert.equal(shown(f.seg), false);
   assert.equal(f.off.textContent, 'js.perm.off.again(js.perm.level.readonly)');
-  assert.equal(f.start.textContent, 'js.perm.start.native');
-  assert.equal(f.mode.disabled, false);
-  assert.equal(f.mode.parentNode.parentNode, f.opts, 'the native row is back inline for a manual pick');
+  assert.equal(f.startLbl.textContent, 'js.perm.start.native');
+  assert.equal(f.modeDisabled(), false);
+  assert.equal(shown(f.nativeInline), true, 'the native capsules are back inline for a manual pick');
   f.start.click();
   assert.equal(w.fetches.length, 0);
   assert.equal(w.posts[0].route, '/agents/leads', 'only the explicit, relabelled Start uses the legacy route');
@@ -392,13 +401,13 @@ for (const status of [404, 405]) {
   assert.equal(w.posts.length, 1, 'no legacy retry');
   assert.equal(shown(f.err), true);
   assert(f.err.textContent.startsWith('js.perm.refused(' + status + ')'));
-  assert.equal(f.start.textContent, 'js.perm.recheck');
+  assert.equal(f.startLbl.textContent, 'js.perm.recheck');
   assert.equal(w.ctx.permLevels('claude'), null, 'a refusal makes support unknown');
   f.start.click();
   assert.equal(w.posts.length, 1, 're-check sends no selection');
   w.choices(choices());
   assert.equal(shown(f.err), false);
-  assert.equal(f.start.textContent, 'js.lead.start', 'support back: the user starts again explicitly');
+  assert.equal(f.startLbl.textContent, 'js.lead.start', 'support back: the user starts again explicitly');
   assert.equal(w.posts.length, 1);
 }
 
