@@ -812,7 +812,7 @@ func functionCalls(items []json.RawMessage) []functionCall {
 func (a *Agent) report(turn int, resp *Response) {
 	u := resp.Usage
 	a.out.line(Line{
-		T: LineUsage, Turn: turn, Response: resp.ID,
+		T: LineUsage, Turn: turn, Response: resp.ID, Model: resp.Model,
 		InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CachedTokens: u.CachedTokens, ReasoningTokens: u.ReasoningTokens,
 		CostUSD: u.CostUSD, CacheWriteTokens: u.CacheWriteTokens, Context: u.InputTokens + u.OutputTokens, Window: resp.window,
 	})
@@ -830,7 +830,7 @@ func (a *Agent) report(turn int, resp *Response) {
 				}
 			}
 			text := Scrub(strings.Join(parts, "\n"), a.cfg.SummarySecrets...)
-			a.out.line(Line{T: LineReasoning, Turn: turn, Response: resp.ID, Item: it.ID, Model: resp.model, Text: text, Encrypted: text == "" && it.Encrypted != ""})
+			a.out.line(Line{T: LineReasoning, Turn: turn, Response: resp.ID, Item: it.ID, Model: resp.Model, Text: text, Encrypted: text == "" && it.Encrypted != ""})
 		case "message":
 			if text := it.reply(); text != "" {
 				a.reportReply(Line{T: LineReply, Turn: turn, Response: resp.ID, Item: it.ID, Text: text, Final: true})
@@ -892,7 +892,9 @@ func (a *Agent) request(ctx context.Context, turn int, budget *turnSearchBudget)
 		if err == nil {
 			if resp != nil {
 				budget.settle(reserved, resp)
-				resp.model = req.Model
+				if resp.Model == "" {
+					resp.Model = req.Model
+				}
 				if a.cfg.ContextWindow != nil {
 					resp.window = a.cfg.ContextWindow(req.Model)
 				}

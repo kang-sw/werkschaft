@@ -276,6 +276,9 @@ func (c *conv) settleTurn(status, errText string, mark uint64) error {
 		return err
 	}
 	c.reply = ""
+	if c.rec.CompanionRole != "" && c.r.opts.OnCompanionTurnEnd != nil {
+		c.r.opts.OnCompanionTurnEnd(c.rec.CompanionRole, c.rec.ReplyID, c.rec.WSKey, status, errText)
+	}
 	return nil
 }
 

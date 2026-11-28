@@ -27,7 +27,136 @@ import (
 // preserved no-op, since the pre-rename tickets.sage_record was reachable by
 // a delegate-scoped key.
 func isLeadOnlyTool(name string) bool {
-	return sessionHireTool(name) || userCommandTool(name) || isPiTool(name) || isAgentTool(name) || isCompanionTool(name) || isDaemonControlTool(name) || name == bootstrapToolName || name == "workflow_manual" || name == "workflow_state" || name == "tickets.sage_stamp" || name == "tickets.index_init" || name == "git.merge" || name == "worktree.acquire" || name == "worktree.release" || name == "worktree.remove" || name == "worktree.list" || strings.HasPrefix(name, "lead.") || workflowPreferenceWriterTool(name)
+	return sessionHireTool(name) || userCommandTool(name) || isPiTool(name) || isAgentTool(name) || isCompanionTool(name) || isDelegationReportTool(name) || isDaemonControlTool(name) || name == bootstrapToolName || name == "workflow_manual" || name == "workflow_state" || name == "tickets.sage_stamp" || name == "tickets.index_init" || name == "git.merge" || name == "worktree.acquire" || name == "worktree.release" || name == "worktree.remove" || name == "worktree.list" || strings.HasPrefix(name, "lead.") || workflowPreferenceWriterTool(name)
+}
+
+// Companion session capability markers ((1737)=a, (1744)=a, (1740), (1750)).
+// Kept as separate, additive predicates beside isLeadOnlyTool/roleAllowsTool
+// per the shared gate surface constraint.
+const (
+	CompanionRoleBody = "companion-body"
+	CompanionRoleWork = "companion-work"
+)
+
+// companionBodyBaseAllows is the fixed server-side base allowlist for Tier-1
+// (companion-body) sessions at every posture ((1740)): ws/companion.*,
+// mailbox.*, and read-only discovery. No lead-level mutating tool is reachable.
+func companionBodyBaseAllows(name string) bool {
+	if isCompanionTool(name) || strings.HasPrefix(name, "mailbox.") {
+		return true
+	}
+	switch name {
+	case "call", "workflow_manual", "workflow_state", "runtime.read",
+		"git.status", "git.diff", "git.log", "git.merge_base", "git.followups",
+		"tickets.query", "tickets.verify",
+		"note.query", "agenda.list", "todo.list", "todo.read",
+		"api.list", "project.tree", "rationale.query", "review.marker",
+		"config.get", "config.list", "config.resolve_agent",
+		"infra.read", "convention.read", "playbook.read",
+		dashboardIntakeTool, dashboardInboxDrainTool:
+		return true
+	default:
+		return false
+	}
+}
+
+// companionBodyPhonePostureAllows is the strict allowlist enforced for
+// companion-body while holding the smartphone ((1740)): phone_* tools,
+// mailbox.*, and minimal read-only discovery (call, workflow_manual,
+// workflow_state). Every other tool, including companion.delegate_work, is a
+// work tool and is blocked with posture_locked.
+func companionBodyPhonePostureAllows(name string) bool {
+	if isCompanionPhoneTool(name) || strings.HasPrefix(name, "mailbox.") {
+		return true
+	}
+	switch name {
+	case "call", "workflow_manual", "workflow_state", dashboardIntakeTool, dashboardInboxDrainTool:
+		return true
+	default:
+		return false
+	}
+}
+
+// companionMarkerAllowsTool enforces the capability marker rules for
+// companion-body, companion-work, and unmarked sessions ((1737)=a, (1740),
+// (1750)). Unmarked sessions keep lead-scoped companion.{speak,face,motion}
+// while never seeing or reaching companion.phone_*, companion.delegate_work,
+// or delegation.report.
+func (s *Server) companionMarkerAllowsTool(entry sessionEntry, name string) string {
+	switch entry.companionRole {
+	case "":
+		if isCompanionBodyOnlyTool(name) || isDelegationReportTool(name) {
+			return fmt.Sprintf("tool not available in current %s MCP profile: %s", s.runtimeNamespace(), name)
+		}
+		return ""
+	case CompanionRoleBody:
+		if !companionBodyBaseAllows(name) {
+			return fmt.Sprintf("tool not available in companion-body %s MCP profile: %s", s.runtimeNamespace(), name)
+		}
+		return ""
+	case CompanionRoleWork:
+		if isCompanionTool(name) || sessionHireTool(name) || userCommandTool(name) {
+			return fmt.Sprintf("tool not available in companion-work %s MCP profile: %s", s.runtimeNamespace(), name)
+		}
+		return ""
+	default:
+		return fmt.Sprintf("tool not available in current %s MCP profile: %s", s.runtimeNamespace(), name)
+	}
+}
+
+// companionWorkAllowsWithoutApproval is the fail-closed low-impact allowlist
+// for companion-work ((1750)). Any tool not explicitly allowed here (such as
+// global config writes via config.tune, cross-session control, whiteboard/
+// tracker mutations, tickets.index_init, or future unlisted mutating tools)
+// requires 1-click user approval.
+func companionWorkAllowsWithoutApproval(name string, args map[string]any) bool {
+	if isDelegationReportTool(name) || isAgentTool(name) || strings.HasPrefix(name, "mailbox.") {
+		return true
+	}
+	if strings.HasPrefix(name, "exec.") || isFSReadTool(name) || isFSWriteTool(name) || isWebFetchTool(name) {
+		return true
+	}
+	if strings.HasPrefix(name, "worktree.") || strings.HasPrefix(name, "todo.") || strings.HasPrefix(name, "agenda.") {
+		return true
+	}
+	if strings.HasPrefix(name, "tickets.") {
+		return name != "tickets.index_init"
+	}
+	if strings.HasPrefix(name, "git.") {
+		return true
+	}
+	if isNoteMutationTool(name) {
+		// Only session-local note state runs without approval; repo/clone/global
+		// note mutations are shared state and fail closed.
+		layer, _ := args["layer"].(string)
+		return strings.EqualFold(strings.TrimSpace(layer), "session")
+	}
+	switch name {
+	case "call", "workflow_manual", "workflow_state", "runtime.read", "runtime.debug_events",
+		"config.get", "config.list", "config.resolve_agent",
+		"route.resolve_implement", "playbook.read", "playbook.render",
+		"infra.read", "convention.read", "api.list", "project.tree",
+		"rationale.query", "review.marker", "review.stamp",
+		"path.generate", "path.write", "note.query", "compact", "session.children",
+		dashboardIntakeTool, dashboardInboxDrainTool:
+		return true
+	default:
+		return false
+	}
+}
+
+// companionWorkApprovalRefusal enforces the (1750) high-impact confirmation
+// gate at MCP dispatch for companion-work sessions. In Phase 1 it returns a
+// structured approval_required payload without executing; Phase 2 replaces the
+// deny with the shared top-level shell 1-click approval banner.
+func (s *Server) companionWorkApprovalRefusal(entry sessionEntry, found bool, name string, args map[string]any) string {
+	if !found || entry.companionRole != CompanionRoleWork {
+		return ""
+	}
+	if companionWorkAllowsWithoutApproval(name, args) {
+		return ""
+	}
+	return formatStructuredGateError("approval_required", name, "", fmt.Sprintf("%s requires 1-click user approval before execution in companion-work mode.", name))
 }
 
 func workflowPreferenceWriterTool(name string) bool {
@@ -72,6 +201,16 @@ func leadToolNames(getenv func(string) string) []string {
 }
 
 func (s *Server) filteredTools() []map[string]any {
+	var hostedEntry sessionEntry
+	if hostedKey := s.hostedSessionKey(); hostedKey != "" {
+		if entry, ok := s.lookupSession(hostedKey); ok {
+			hostedEntry = entry
+		}
+	}
+	return s.filteredToolsFor(hostedEntry, true)
+}
+
+func (s *Server) filteredToolsFor(markerEntry sessionEntry, applyMarker bool) []map[string]any {
 	namespace := s.runtimeNamespace()
 	descriptor := s.connectionDescriptor()
 	base := tools()
@@ -105,6 +244,9 @@ func (s *Server) filteredTools() []map[string]any {
 		if name == "compact" && !s.compactAdvertisesLeadSummary() {
 			tool = compactToolWithoutLeadSummary(tool)
 		}
+		if applyMarker && s.companionMarkerAllowsTool(markerEntry, name) != "" {
+			continue
+		}
 		if s.toolAllowed(name) {
 			definition := publicToolDefinition(tool, descriptor.aliases.advertised(name), namespace)
 			if descriptor.toolsAlwaysLoad {
@@ -135,7 +277,7 @@ func (s *Server) callDiscoveryTools(key string, entry sessionEntry, found bool) 
 	}
 	aliases := s.connectionDescriptor().aliases
 	var visible []map[string]any
-	for _, tool := range s.filteredTools() {
+	for _, tool := range s.filteredToolsFor(entry, false) {
 		name := aliases.canonical(tool["name"].(string))
 		if s.permissionRefusal(name, nil) != "" {
 			continue
@@ -143,7 +285,7 @@ func (s *Server) callDiscoveryTools(key string, entry sessionEntry, found bool) 
 		if _, refusal := s.sessionToolAccess(name, key, entry); refusal != "" {
 			continue
 		}
-		if s.companionPostureRefusal(name, key) != "" {
+		if s.companionPostureRefusal(name, key, entry, found) != "" {
 			continue
 		}
 		visible = append(visible, tool)
@@ -155,6 +297,9 @@ func (s *Server) callDiscoveryTools(key string, entry sessionEntry, found bool) 
 // call discovery. A successful sub-lead board access also supplies the board
 // rewrite execution needs; discovery never runs a handler or writes a board.
 func (s *Server) sessionToolAccess(name, key string, entry sessionEntry) (*subleadBoard, string) {
+	if refusal := s.companionMarkerAllowsTool(entry, name); refusal != "" {
+		return nil, refusal
+	}
 	// A forwarding worker's delegation tools use its token, not its key.
 	workerByToken := (isPiTool(name) || isAgentTool(name)) && s.workerForwards()
 	if entry.scope != roleLead && !workerByToken && (isLeadOnlyTool(name) || !roleAllowsTool(entry.scope, name)) {

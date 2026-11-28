@@ -980,6 +980,113 @@ test("THREE.Box3 bust framing includes tall hair/ears with headroom, and gesture
   rig.dispose();
 });
 
+test("getCharacterBounds projects vrm.scene character meshes only (excluding scene props), caches within TTL, and updates on resize", async () => {
+  const { pathToFileURL } = require("node:url");
+  const rt = await import(pathToFileURL(path.join(__dirname, "assets", "companion-vrm-runtime.mjs")).href);
+  const { THREE } = rt;
+
+  const root = new THREE.Group();
+  const head = new THREE.Object3D();
+  head.name = "head";
+  head.position.set(0, 1.45, 0);
+  root.add(head);
+  const chest = new THREE.Object3D();
+  chest.name = "chest";
+  chest.position.set(0, 1.18, 0);
+  root.add(chest);
+  const bodyMesh = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.56, 0.22), new THREE.MeshBasicMaterial());
+  bodyMesh.position.set(0, 1.32, 0);
+  root.add(bodyMesh);
+  root.updateMatrixWorld(true);
+
+  const presets = { neutral: {}, blink: {}, happy: {}, sad: {}, angry: {}, relaxed: {}, surprised: {} };
+  const vrmObj = {
+    meta: { metaVersion: "1" },
+    scene: root,
+    humanoid: { getNormalizedBoneNode: name => (name === "head" ? head : name === "chest" ? chest : null) },
+    expressionManager: {
+      presetExpressionMap: presets,
+      customExpressionMap: {},
+      expressions: Object.keys(presets).map(expressionName => ({ expressionName })),
+      setValue() {}
+    },
+    lookAt: { target: null },
+    update() { root.updateMatrixWorld(true); }
+  };
+
+  let capturedScene = null;
+  class StubRenderer {
+    constructor() { this.shadowMap = { enabled: true }; this.info = { render: { calls: 1, triangles: 12 } }; }
+    setClearColor() {}
+    setPixelRatio() {}
+    setSize() {}
+    render(sc) { capturedScene = sc; }
+    dispose() {}
+    forceContextLoss() {}
+  }
+
+  let nowMs = 100;
+  let resolveFetch = null;
+  const doc = { createElement: tag => makeFakeElement(tag, doc), addEventListener() {} };
+  const { C } = loadCompanion({
+    document: doc,
+    performance: { now: () => nowMs },
+    window: { innerWidth: 1680, innerHeight: 960, devicePixelRatio: 1, addEventListener() {} },
+    fetch: () => new Promise(resolve => {
+      resolveFetch = () => resolve({ ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer });
+    })
+  });
+  C.vrmRuntimeLoader = async () => ({
+    THREE: { ...THREE, WebGLRenderer: StubRenderer },
+    GLTFLoader: class {
+      register() {}
+      async parseAsync() { return { scene: vrmObj.scene, userData: { vrm: vrmObj } }; }
+    },
+    VRMLoaderPlugin: class {},
+    VRMAnimationLoaderPlugin: class {},
+    VRMUtils: { removeUnnecessaryVertices() {}, combineSkeletons() {}, rotateVRM0() {}, deepDispose() {} },
+    createVRMAnimationClip: () => ({})
+  });
+
+  const rig = C.makeVrmRig({ id: "vrm-bbox", rev: "r1", renderer: "vrm", modelFile: "avatar.vrm", manifest: {}, expressionMap: {}, animations: {} });
+  const mountPromise = rig.mount(makeFakeElement("div", doc), { width: 340, height: 240, dpr: 1 });
+  for (let i = 0; i < 4; i++) await new Promise(r => setImmediate(r));
+  assert.equal(rig.getCharacterBounds(), null, "before VRM loads, getCharacterBounds() returns null");
+
+  resolveFetch();
+  await mountPromise;
+
+  // Add a huge wide prop directly to scene (outside vrm.scene) to prove props are excluded.
+  const hugeProp = new THREE.Mesh(new THREE.BoxGeometry(10, 10, 0.2), new THREE.MeshBasicMaterial());
+  hugeProp.position.set(0, 1.3, 0.1);
+  capturedScene.add(hugeProp);
+  capturedScene.updateMatrixWorld(true);
+
+  const b1 = rig.getCharacterBounds();
+  assert.ok(b1, "loaded VRM must produce projected character bounds");
+  assert.ok(b1.x > 40 && b1.x + b1.width < 300, `character bounds must exclude wide scene props (got x=${b1.x}, w=${b1.width})`);
+  assert.ok(b1.width > 20 && b1.height > 40);
+  assert.deepEqual(rig.debugState().projectedBounds, b1);
+
+  // Within TTL (120ms), cached bounds are returned even if mesh moves; after TTL, bounds recompute.
+  bodyMesh.position.x = 0.25;
+  nowMs += 40;
+  const bCached = rig.getCharacterBounds();
+  assert.deepEqual(bCached, b1, "bounds should stay cached within 120ms TTL");
+
+  nowMs += 150;
+  const bMoved = rig.getCharacterBounds();
+  assert.ok(bMoved.x > b1.x + 15, `bounds should refresh after TTL (before=${b1.x}, after=${bMoved.x})`);
+
+  // Resize invalidates cache immediately and updates bounds to new viewport width.
+  rig.resize(240, 240, 1);
+  const bResized = rig.getCharacterBounds();
+  assert.ok(bResized && bResized.x + bResized.width <= 240, `resized bounds must fit 240px width (got ${JSON.stringify(bResized)})`);
+
+  rig.dispose();
+  assert.equal(rig.getCharacterBounds(), null);
+});
+
 test("VRM rail dock disables dragging, zeroes vertical lift/hop, survives rail DOM swaps, and renders FX inside viewport bounds", async () => {
   let now = 0, raf = null, rafId = 0;
   let mutationCb = null;

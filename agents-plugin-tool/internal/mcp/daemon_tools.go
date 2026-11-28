@@ -26,6 +26,9 @@ func isDaemonControlTool(name string) bool {
 }
 
 func isCompanionBodyRecord(rec wsagent.Record) bool {
+	if strings.EqualFold(strings.TrimSpace(rec.CompanionRole), CompanionRoleBody) {
+		return true
+	}
 	p := strings.ToLower(strings.TrimSpace(rec.Profile))
 	return p == "companion-body" || strings.HasPrefix(p, "companion-body-")
 }

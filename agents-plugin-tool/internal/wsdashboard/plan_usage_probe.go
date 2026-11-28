@@ -40,6 +40,8 @@ func (s *planUsageStore) refresh(ctx context.Context, force bool) {
 	if force {
 		s.refreshAgy()
 	}
+	s.refreshOpenRouter()
+	s.refreshWerkOpenAI()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()

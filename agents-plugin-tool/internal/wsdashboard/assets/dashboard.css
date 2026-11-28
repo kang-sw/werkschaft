@@ -226,6 +226,12 @@ html[data-can-control] .tph.child-close:disabled { opacity: .5; cursor: default;
 .hb[data-h="agy"]::before { content: "Ag"; }
 .hb[data-h="werk"] { background: #2f6f5e; color: #fff; }
 .hb[data-h="werk"]::before { content: "Wk"; }
+.hb[data-h="codex_openai"] { background: #f2f2f2; color: #1e1f22; box-shadow: inset 0 0 0 1.5px #2f6f5e; }
+.hb[data-h="codex_openai"]::before { content: "Co"; }
+.hb[data-h="werk_openai"] { background: #2f6f5e; color: #fff; }
+.hb[data-h="werk_openai"]::before { content: "Wk"; }
+.hb[data-h="openrouter"] { background: #5b5bd6; color: #fff; }
+.hb[data-h="openrouter"]::before { content: "OR"; }
 /* Conic ring spinners rotate a static gradient on a pseudo-element (transform
    only, compositor-side) under the host's static mask; animating an angle custom
    property inside the gradient re-rasterised every frame on the main thread.

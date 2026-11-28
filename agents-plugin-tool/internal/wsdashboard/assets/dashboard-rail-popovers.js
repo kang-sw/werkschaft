@@ -374,6 +374,7 @@
   // rpKey is what a popover of kind opened from btn concerns: the folder of
   // a new session, the viewed session, else the button's workspace.
   function rpKey(kind, btn) {
+    if (kind === "fold") return WsRail.groupKey(btn) + "\0" + (btn.getAttribute("data-k") || "");
     if (kind === "sess") return rid;
     if (kind === "lead") return btn.getAttribute("data-root") || "";
     var ws = btn.closest(".rws");
@@ -392,6 +393,8 @@
     else if (rp.kind === "row" || rp.kind === "confirm") {
       var row = r && WsRail.refind(r, { cls: "rs", attr: "data-rid", val: rp.ws });
       found = row && row.querySelector(".rl");
+    } else if (rp.kind === "fold") {
+      if (r) q(".rfh", r).forEach(function (b) { if (rpKey("fold", b) === rp.ws) found = b; });
     } else if (r) q(rp.kind === "lead" ? ".rnew" : '.radd[data-add="' + rp.kind + '"]', r).forEach(function (b) {
       if (rpKey(rp.kind, b) === rp.ws) found = b;
     });
@@ -425,7 +428,12 @@
       return;
     }
     var a = b.getBoundingClientRect();
-    if (rp.kind === "row") {
+    if (rp.kind === "fold") {
+      // the archived/deleted popup is as wide as the rail it hangs from
+      var rail = railEl.getBoundingClientRect();
+      el.style.width = Math.max(260, Math.round(rail.width - 12)) + "px";
+      a = { top: a.top, bottom: a.bottom, left: rail.left + 6, right: rail.right - 6 };
+    } else if (rp.kind === "row") {
       var rr = b.closest(".rs").getBoundingClientRect(), o = rp.at;
       a = o ? { top: rr.top + o.dy, bottom: rr.top + o.dy, left: rr.left + o.dx, right: rr.left + o.dx + el.offsetWidth } : rr;
     } else if (rp.kind === "usage") {
@@ -443,7 +451,13 @@
   function railPopSync() {
     if (!rp.P) return;
     var b = railPopBtn();
-    if (!b || ((rp.kind === "row" || rp.kind === "confirm") && !b.getClientRects().length)) { railPopClose(false); return; }
+    if (!b || ((rp.kind === "row" || rp.kind === "confirm" || rp.kind === "fold") && !b.getClientRects().length)) { railPopClose(false); return; }
+    // A popup that lists rows (fold) redraws them from the new render and
+    // may move to the button it now belongs to, or close (null).
+    if (rp.P.sync) {
+      b = rp.P.sync(b);
+      if (!b) { railPopClose(false); return; }
+    }
     if (rp.kind !== "row" && rp.kind !== "confirm") b.setAttribute("aria-expanded", "true");
     railPopPlace();
   }
@@ -459,6 +473,165 @@
       if (!row) b.setAttribute("aria-expanded", "false");
       if (refocus) b.focus();
     }
+  }
+  // --- rail: the archived and deleted lists' popup -------------------------------
+  // A group's fold row (.rfold) holds a button for its archived rows and one
+  // for its deleted ones. The rows themselves stay in the rendered rail as a
+  // hidden source (.rended, never shown); a click on a button opens this
+  // popup, a header, the two lists as tabs, a live filter, and a bounded
+  // scrolling list of copies of the source rows, so a long history never
+  // pushes the live rows down. The popup sits in the rail but outside the
+  // swapped region, so it survives a swap: railPopSync calls P.sync, which
+  // redraws the list from the new render and keeps the filter, the scroll
+  // position, and the focused row's button. The copies are plain rail rows
+  // (the rail's click handling reaches them): a link opens the session, the
+  // unarchive and revive buttons post as in the rail. They carry no grip,
+  // rename, or children toggle, and no row menu or drag starts from them.
+  var rpFold = null;
+  function rpFoldMake() {
+    var P = { f: null, k: "arch", q: "", rows: [] };
+    var el = P.el = rpPop("");
+    el.classList.add("rfpop");
+    var hd = el.appendChild(mk("div", "rfphd"));
+    var title = hd.appendChild(mk("b", "rfpt"));
+    var x = hd.appendChild(rpBtn("rfx"));
+    x.appendChild(gIcon("x"));
+    x.title = wsT("js.rail.fold.close");
+    x.setAttribute("aria-label", x.title);
+    var tabs = el.appendChild(mk("div", "rftabs"));
+    tabs.setAttribute("role", "tablist");
+    var qin = el.appendChild(mk("input", "rfq"));
+    qin.type = "search";
+    qin.spellcheck = false;
+    qin.setAttribute("autocomplete", "off");
+    qin.placeholder = wsT("js.rail.fold.search");
+    qin.setAttribute("aria-label", qin.placeholder);
+    var list = el.appendChild(mk("div", "rflist"));
+    var none = el.appendChild(mk("p", "rfnone", wsT("js.rail.fold.nomatch")));
+    none.hidden = true;
+    function half(k) { return P.f ? P.f.querySelector('.rfh[data-k="' + k + '"]') : null; }
+    // head names the group: its workspace and, for a worktree, its branch.
+    function head(btn) {
+      var bar = btn.closest(".rws"), nm = bar && bar.querySelector(".nm"), br = btn.closest(".rwt"), b = br && br.querySelector(".wthd .br");
+      var tag = b ? b.textContent.trim() : "";
+      title.textContent = (nm ? nm.textContent : "") + (tag ? " · " + tag : "");
+      el.setAttribute("aria-label", title.textContent);
+    }
+    // drawTabs sets the two tabs from the fold row's buttons (their icon,
+    // label, and live count); a tab with no rows is disabled.
+    function drawTabs() {
+      ["arch", "del"].forEach(function (k) {
+        var h = half(k), t = tabs.querySelector('[data-k="' + k + '"]');
+        if (!t) {
+          t = tabs.appendChild(rpBtn("rftab"));
+          t.setAttribute("role", "tab");
+          t.setAttribute("data-k", k);
+        }
+        t.setAttribute("aria-selected", String(k === P.k));
+        t.disabled = !h || h.disabled;
+        t.textContent = "";
+        if (h) Array.prototype.forEach.call(h.childNodes, function (n) { t.appendChild(n.cloneNode(true)); });
+      });
+    }
+    function filter() {
+      var n = 0;
+      P.rows.forEach(function (o) {
+        var ok = WsRail.foldMatch(o.hay, P.q);
+        o.el.hidden = !ok;
+        if (ok) n++;
+      });
+      none.hidden = !P.rows.length || n > 0;
+    }
+    // fill redraws the list from the source of the open tab, keeping the
+    // scroll position and the focused row's button.
+    function fill() {
+      var src = P.f && WsRail.foldSource(P.f, P.k), top = list.scrollTop, a = doc.activeElement, keep = null, frag = doc.createDocumentFragment();
+      var ar = a && list.contains(a) && a.closest ? a.closest(".rs") : null;
+      for (var i = 0; ar && i < RAIL_FOCUS.length; i++) if (a.matches(RAIL_FOCUS[i])) keep = { rid: ar.getAttribute("data-rid") || "", sel: RAIL_FOCUS[i] };
+      P.rows = [];
+      (src ? q(".rs", src) : []).forEach(function (r) {
+        var c = r.cloneNode(true), hb = r.querySelector(".hb[data-h]");
+        q("template, .drgrip, .drren, .kidtog", c).forEach(function (n) { n.parentNode.removeChild(n); });
+        P.rows.push({ el: c, hay: (r.getAttribute("data-rid") || "") + " " + (hb ? hb.getAttribute("data-h") : "") + " " + r.textContent });
+        frag.appendChild(c);
+      });
+      list.textContent = "";
+      list.appendChild(frag);
+      var els = P.rows.map(function (o) { return o.el; });
+      WsRail.markCurrent(els, rid);
+      WsRail.markRevive(els, revBusy);
+      els.forEach(function (r) {
+        var b = r.querySelector(".drarch");
+        if (b) b.classList.toggle("busy", !!archBusy && r.getAttribute("data-rid") === archBusy);
+      });
+      filter();
+      list.scrollTop = top;
+      if (keep) {
+        var row = WsRail.refind(list, { cls: "rs", attr: "data-rid", val: keep.rid }), n = row && row.querySelector(keep.sel);
+        if (n) n.focus({ preventScroll: true });
+      }
+    }
+    function setTab(k) {
+      var b = half(k), old = half(P.k);
+      if (!b || b.disabled || k === P.k) return;
+      if (old) old.setAttribute("aria-expanded", "false");
+      b.setAttribute("aria-expanded", "true");
+      P.k = k;
+      rp.ws = rpKey("fold", b);
+      rp.btn = b;
+      drawTabs();
+      fill();
+      list.scrollTop = 0;
+      railPopPlace();
+    }
+    x.addEventListener("click", function () { railPopClose(true); });
+    tabs.addEventListener("click", function (e) {
+      var t = e.target.closest && e.target.closest(".rftab");
+      if (t && !t.disabled) setTab(t.getAttribute("data-k"));
+    });
+    tabs.addEventListener("keydown", function (e) {
+      if ((e.key !== "ArrowLeft" && e.key !== "ArrowRight") || e.isComposing) return;
+      e.preventDefault();
+      setTab(P.k === "arch" ? "del" : "arch");
+      var t = tabs.querySelector('[data-k="' + P.k + '"]');
+      if (t) t.focus();
+    });
+    qin.addEventListener("input", function () {
+      P.q = qin.value;
+      filter();
+      list.scrollTop = 0;
+    });
+    P.open = function (ws, name, btn) {
+      P.f = btn.parentNode;
+      P.k = btn.getAttribute("data-k") === "del" ? "del" : "arch";
+      P.q = qin.value = "";
+      head(btn);
+      drawTabs();
+      fill();
+      list.scrollTop = 0;
+    };
+    // sync is railPopSync's hook after a rail swap: b is the button the
+    // popup belongs to in the new render. A list that emptied shows the
+    // other one; both empty closes it (null).
+    P.sync = function (b) {
+      P.f = b.parentNode;
+      head(b);
+      if (b.disabled) {
+        var o = half(P.k === "arch" ? "del" : "arch");
+        if (!o || o.disabled) return null;
+        b = o;
+        P.k = o.getAttribute("data-k") === "del" ? "del" : "arch";
+        rp.ws = rpKey("fold", b);
+      }
+      rp.btn = b;
+      ["arch", "del"].forEach(function (k) { var h = half(k); if (h) h.setAttribute("aria-expanded", String(k === P.k)); });
+      drawTabs();
+      fill();
+      return b;
+    };
+    P.close = function () {};
+    P.focus = function () { requestAnimationFrame(function () { if (rp.P === P) qin.focus({ preventScroll: true }); }); };
+    return P;
   }
   var rpConf = null;
   function rpConfMake() {
@@ -521,9 +694,11 @@
       open: function () { root.setAttribute("data-settings-open", ""); setLayout(layoutMode); setInput(inputMode); markTheme(); markLang(); },
       close: function () { root.removeAttribute("data-settings-open"); },
       focus: function () { gmenu.focus(); }
-    } : kind === "usage" ? rpUsage || (rpUsage = usageGutter.makePopover(railPopPlace, function () { railPopClose(true); })) : kind === "wt" ? rpWt || (rpWt = rpWtMake()) : kind === "lead" ? rpLead || (rpLead = rpLeadMake()) : kind === "sess" ? rpSess || (rpSess = rpSessMake()) : rpWs || (rpWs = rpWsMake());
+    } : kind === "fold" ? rpFold || (rpFold = rpFoldMake()) : kind === "usage" ? rpUsage || (rpUsage = usageGutter.makePopover(railPopPlace, function () { railPopClose(true); })) : kind === "wt" ? rpWt || (rpWt = rpWtMake()) : kind === "lead" ? rpLead || (rpLead = rpLeadMake()) : kind === "sess" ? rpSess || (rpSess = rpSessMake()) : rpWs || (rpWs = rpWsMake());
     if (kind === "lead") railPopScrim(true);
-    if (!P.el.parentNode) doc.body.appendChild(P.el);
+    // The fold popup lives in the rail (outside its swapped region), so the
+    // rail's row styles and click handling reach its rows.
+    if (!P.el.parentNode) (kind === "fold" ? railEl : doc.body).appendChild(P.el);
     rp = { P: P, kind: kind, ws: ws, btn: btn };
     btn.setAttribute("aria-expanded", "true");
     var nm = bar && bar.querySelector(".nm");
@@ -581,7 +756,7 @@
   // archived fold. Live-row archiving lives in the right-click and session
   // menus behind a 1.5s hold.
   var archBusy = "";
-  function railArchive(btn) {
+  function railArchive(btn) { // also the archived popup's rows (rpFoldMake)
     var row = btn.closest(".rs"), id = row ? row.getAttribute("data-rid") || "" : "", act = btn.getAttribute("data-act") || "";
     if (!id || archBusy || (act !== "hide" && act !== "unhide")) return;
     archBusy = id;
@@ -815,7 +990,7 @@
     // keyboard sends, with no point in the row, under the row). A press on
     // a grip is the drag's (its long touch opens nothing).
     railEl.addEventListener("contextmenu", function (e) {
-      var t = e.target, row = t.closest && !t.closest("input, textarea") ? t.closest(".rs") : null;
+      var t = e.target, row = t.closest && !t.closest("input, textarea, .rfpop") ? t.closest(".rs") : null;
       if (!row || rdrag) return;
       e.preventDefault();
       var rr = row.getBoundingClientRect(), x = e.clientX, y = e.clientY;
@@ -838,7 +1013,7 @@
       rmHeld = false;
       rmCancel(null);
       if (e.pointerType !== "touch" || !e.isPrimary) return;
-      var t = e.target, row = t.closest && !t.closest(".drgrip, button, input, textarea") ? t.closest(".rs") : null;
+      var t = e.target, row = t.closest && !t.closest(".drgrip, button, input, textarea, .rfpop") ? t.closest(".rs") : null;
       if (!row) return;
       var id = row.getAttribute("data-rid") || "", h = { id: e.pointerId, x: e.clientX, y: e.clientY, timer: 0 };
       h.timer = setTimeout(function () {
@@ -1289,7 +1464,7 @@
       var t = e.target;
       if (rdrag || rdragged || !rp.P || !t || !t.closest) return;
       if (window.WsHoldConfirm && (window.WsHoldConfirm.isHolding() || window.WsHoldConfirm.wasJustCancelled())) return;
-      if (rp.P.el.contains(t) || t.closest(".radd, .rnew, .hbtn, .usage-toggle, .settings-toggle, .pmdlg, .pmhead")) return;
+      if (rp.P.el.contains(t) || t.closest(".radd, .rnew, .rfh, .hbtn, .usage-toggle, .settings-toggle, .pmdlg, .pmhead")) return;
       railPopClose(false);
     }, true);
     // A press inside an iframe never reaches the listener above (the shell's

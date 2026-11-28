@@ -204,15 +204,26 @@ func TestDaemonControlBlocksWorkersCompanionBodyAndNonHosted(t *testing.T) {
 		}
 	}
 
-	// Tier-1 companion-body record is blocked even if Lead=true and DashboardControlAccess=true.
+	// Tier-1 companion-body record is blocked (both by Profile and by CompanionRole)
+	// even if Lead=true and DashboardControlAccess=true.
 	rec.Profile = "companion-body"
 	f.records.Set(rec)
 	if names := daemonTestListedToolNames(t, s); names[daemonCurlTool] {
-		t.Fatal("companion-body must not see daemon.curl in tools/list")
+		t.Fatal("companion-body profile must not see daemon.curl in tools/list")
 	}
 	res := callToolOnce(t, s, 11, daemonCurlTool, map[string]any{"method": "GET", "path": "/health"})
 	if !strings.Contains(res, `"error"`) {
-		t.Fatalf("companion-body call unexpectedly allowed: %s", res)
+		t.Fatalf("companion-body profile call unexpectedly allowed: %s", res)
+	}
+	rec.Profile = "claude-lead"
+	rec.CompanionRole = CompanionRoleBody
+	f.records.Set(rec)
+	if names := daemonTestListedToolNames(t, s); names[daemonCurlTool] {
+		t.Fatal("companion-body role must not see daemon.curl in tools/list")
+	}
+	res = callToolOnce(t, s, 13, daemonCurlTool, map[string]any{"method": "GET", "path": "/health"})
+	if !strings.Contains(res, `"error"`) {
+		t.Fatalf("companion-body role call unexpectedly allowed: %s", res)
 	}
 
 	// Non-hosted / launcher connection (s.conversation == "") is blocked even with a top-level lead key.
@@ -249,27 +260,22 @@ func TestDaemonControlCompanionPostureHandsBusyLock(t *testing.T) {
 	comp := &fakePostureCompanionHost{posture: wsdashboard.CompanionPosturePhone}
 	s.companion = comp
 
-	// While holding phone, daemon.curl is blocked by companionPostureRefusal (hands busy)
-	// and omitted from callDiscoveryTools.
-	entry, found := s.lookupSession(f.hosted)
-	for _, tool := range s.callDiscoveryTools(f.hosted, entry, found) {
+	// Companion-body sessions holding the phone are refused by companionPostureRefusal
+	// (hands-busy lock) and never see daemon.curl in callDiscoveryTools.
+	bodyEntry := sessionEntry{scope: roleLead, companionRole: CompanionRoleBody}
+	if refusal := s.companionPostureRefusal(daemonCurlTool, f.hosted, bodyEntry, true); !strings.Contains(refusal, companionRefusalHandsBusy) {
+		t.Fatalf("companion-body phone posture refusal = %q, want %q", refusal, companionRefusalHandsBusy)
+	}
+	for _, tool := range s.callDiscoveryTools(f.hosted, bodyEntry, true) {
 		if tool["name"] == daemonCurlTool {
-			t.Fatal("daemon.curl must be hidden in callDiscoveryTools during phone posture")
+			t.Fatal("daemon.curl must be hidden in callDiscoveryTools for companion-body during phone posture")
 		}
 	}
-	res := callToolOnce(t, s, 20, daemonCurlTool, map[string]any{"method": "GET", "path": "/health"})
-	if !toolIsError(t, res) || !strings.Contains(res, companionRefusalHandsBusy) {
-		t.Fatalf("phone posture call = %s, want %q", res, companionRefusalHandsBusy)
-	}
-	if host.calls != 0 {
-		t.Fatalf("phone posture call reached DaemonCurl %d times", host.calls)
-	}
 
-	// Putting phone down restores access.
-	comp.posture = wsdashboard.CompanionPostureLaptop
-	res = callToolOnce(t, s, 21, daemonCurlTool, map[string]any{"method": "GET", "path": "/health"})
+	// Regular unmarked opted-in leads are not posture-locked (261127 (1740)).
+	res := callToolOnce(t, s, 21, daemonCurlTool, map[string]any{"method": "GET", "path": "/health"})
 	if toolIsError(t, res) || host.calls != 1 {
-		t.Fatalf("laptop posture call failed: res=%s calls=%d", res, host.calls)
+		t.Fatalf("unmarked lead call failed: res=%s calls=%d", res, host.calls)
 	}
 }
 

@@ -75,12 +75,22 @@ async function showRail(page) {
   await page.addStyleTag({ content: '*{animation-play-state:paused !important; transition:none !important}' });
 }
 
-async function openFoldHalf(page, wtSel, k) {
+// openFoldPopup opens the archived/deleted popup from a group's fold button
+// and waits for the tab for k to be the selected one.
+async function openFoldPopup(page, wtSel, k) {
   const btn = page.locator(`${wtSel} > .rsessions > .rfold .rfh[data-k="${k}"]`);
-  if ((await btn.getAttribute('aria-expanded')) !== 'true') {
-    await btn.click();
-    await until(page, `${wtSel} fold ${k} expanded`, async () => (await btn.getAttribute('aria-expanded')) === 'true');
-  }
+  if ((await btn.getAttribute('aria-expanded')) !== 'true') await btn.click();
+  await page.locator(`.rfpop:not([hidden]) .rftab[data-k="${k}"][aria-selected="true"]`).waitFor();
+}
+async function closeFoldPopup(page) {
+  if (await page.locator('.rfpop:not([hidden])').count()) await page.keyboard.press('Escape');
+  await page.locator('.rfpop').waitFor({ state: 'hidden' });
+}
+// life restores a row through the lifecycle API the popup buttons use, since
+// the popup's rows are not drag sources.
+async function life(page, id, act, body) {
+  const r = await apiPost(page, '/agents/' + encodeURIComponent(id) + '/' + act, body || {});
+  assert.ok(r.status >= 200 && r.status < 300, act + ' ' + id + ' -> ' + r.status);
 }
 
 // drag points from startSel (or row's .rid/.drgrip) past threshold so revealed
@@ -200,20 +210,13 @@ async function drag(page, fromId, targetFn, { grip = false, inspect = null, wait
     // Check cross-worktree refusal while DEVENV_SOLO still has solorow in arch (visible .rfold).
     await assertRefused('peer2', `${DEVENV_SOLO} > .rsessions > .rfold .rfh[data-k="arch"]`, 'cross-worktree');
 
-    // 3. Restore solorow into 0-active-row group above .rfold.
-    await openFoldHalf(page, DEVENV_SOLO, 'arch');
-    const emptyRestoreSnap = await drag(page, 'solorow', async () => {
-      const b = await box(page, `${DEVENV_SOLO} .wthd`);
-      return [b.x + b.width / 2, b.y + b.height - 2];
-    }, {
-      inspect: () => page.evaluate(() => {
-        const l = document.querySelector('.rdrop');
-        return { lineHidden: !l || l.hidden, hintVisible: (() => { const h = document.querySelector('.drhint'); return !!h && !h.hidden; })() };
-      }),
-    });
-    assert.equal(emptyRestoreSnap.lineHidden, false, 'dropping on 0-active-row group header draws .rdrop');
-    assert.equal(emptyRestoreSnap.hintVisible, false);
+    // 3. Restore solorow from the archived popup (its unarchive button) into
+    // the 0-active-row group above .rfold.
+    await openFoldPopup(page, DEVENV_SOLO, 'arch');
+    await page.locator('.rfpop .rs[data-rid="solorow"]').hover();
+    await page.locator('.rfpop .rs[data-rid="solorow"] .drarch.unarch').click();
     await until(page, 'solorow restored to empty active list', async () => (await where(page, 'solorow')) === 'live');
+    await until(page, 'popup closes when its last row leaves', async () => (await page.locator('.rfpop:not([hidden])').count()) === 0);
     assert.match(await page.locator(row('solorow')).getAttribute('class'), /\bstopped\b/, 'restored solorow stays asleep');
     assert.equal(page.url(), base + '/', 'restore never navigates to /s/<id>');
 
@@ -228,20 +231,22 @@ async function drag(page, fromId, targetFn, { grip = false, inspect = null, wait
     await until(page, 'gameone moved to game archived fold', async () => (await where(page, 'gameone')) === 'arch');
     await assertRefused('peer2', `${GAME} > .rsessions > .rfold .rfh[data-k="arch"]`, 'cross-workspace');
 
-    await openFoldHalf(page, DEVENV_MAIN, 'del');
-    assert.equal(await page.locator(row('delblocked') + ' .drgrip').getAttribute('data-drag'), null, 'blocked revive row lacks data-drag');
-    const blkSnap = await drag(page, 'delblocked', async () => {
-      const b = await box(page, row('starlead'));
-      return [b.x + b.width / 2, b.y + b.height / 2];
-    }, {
-      inspect: () => page.evaluate(() => ({
-        rdraggingLife: document.documentElement.classList.contains('rdragging-life'),
-        hintShown: (() => { const h = document.querySelector('.drhint'); return !!h && !h.hidden; })(),
-      })),
-    });
-    assert.equal(blkSnap.rdraggingLife, false, 'blocked deleted row never activates rdragging-life');
-    assert.equal(blkSnap.hintShown, true, 'blocked deleted row shows .drhint refusal over active list');
+    // Rows in the popup are not drag sources: no grip, and pressing and
+    // dragging one never starts a lifecycle drag.
+    await openFoldPopup(page, DEVENV_MAIN, 'del');
+    const pr = (id) => `.rfpop .rs[data-rid="${id}"]`;
+    assert.equal(await page.locator(pr('delblocked')).count(), 1, 'popup lists the deleted row');
+    assert.equal(await page.locator(pr('delblocked') + ' .drgrip').count(), 0, 'popup rows carry no drag grip');
+    const pb = await box(page, pr('delblocked') + ' .rid');
+    await page.mouse.move(pb.x + pb.width / 2, pb.y + pb.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(900, 500, { steps: 10 });
+    const popDrag = await page.evaluate(() => document.documentElement.classList.contains('rdragging') || document.documentElement.classList.contains('rdragging-life'));
+    await page.mouse.up();
+    assert.equal(popDrag, false, 'dragging a popup row never starts a rail drag');
+    await page.waitForTimeout(150);
     assert.equal(await where(page, 'delblocked'), 'del', 'blocked deleted row stays in deleted fold');
+    await closeFoldPopup(page);
 
     // 5. Bidirectional transitions & positioned restores (Active <-> Archived <-> Deleted).
     await drag(page, 'peer2', async () => {
@@ -250,29 +255,13 @@ async function drag(page, fromId, targetFn, { grip = false, inspect = null, wait
     });
     await until(page, 'peer2 moved Active -> Deleted', async () => (await where(page, 'peer2')) === 'del');
 
-    await openFoldHalf(page, DEVENV_MAIN, 'arch');
-    await drag(page, 'archidle', async () => {
-      const b = await box(page, `${DEVENV_MAIN} > .rsessions > .rfold .rfh[data-k="del"]`);
-      return [b.x + b.width / 2, b.y + b.height / 2];
-    });
-    await until(page, 'archidle moved Archived -> Deleted', async () => (await where(page, 'archidle')) === 'del');
-
-    await openFoldHalf(page, DEVENV_MAIN, 'del');
-    await drag(page, 'delreopen', async () => {
-      const b = await box(page, `${DEVENV_MAIN} > .rsessions > .rfold .rfh[data-k="arch"]`);
-      return [b.x + b.width / 2, b.y + b.height / 2];
-    });
+    // Folded rows are not drag sources, so Archived <-> Deleted and the
+    // restores run through the same lifecycle routes the drops post to.
+    await life(page, 'delreopen', 'reopen', { hidden: true });
     await until(page, 'delreopen moved Deleted -> Archived (reopen {hidden: true})', async () => (await where(page, 'delreopen')) === 'arch');
 
-    await openFoldHalf(page, DEVENV_MAIN, 'arch');
-    await drag(page, 'delreopen', async () => {
-      const b = await box(page, row('peer1'));
-      return [b.x + b.width / 2, b.y + b.height * 0.2];
-    }, { waitMs: 350 });
-    await until(page, 'delreopen restored Archived -> Active before peer1', async () => {
-      const o = await groupOrder(page, DEVENV_MAIN);
-      return o.indexOf('delreopen') >= 0 && o.indexOf('delreopen') < o.indexOf('peer1');
-    });
+    await life(page, 'delreopen', 'unhide');
+    await until(page, 'delreopen restored Archived -> Active', async () => (await where(page, 'delreopen')) === 'live');
 
     await drag(page, 'delreopen', async () => {
       const b = await box(page, `${DEVENV_MAIN} > .rsessions > .rfold .rfh[data-k="del"]`);
@@ -280,15 +269,8 @@ async function drag(page, fromId, targetFn, { grip = false, inspect = null, wait
     });
     await until(page, 'delreopen moved back to Deleted', async () => (await where(page, 'delreopen')) === 'del');
 
-    await openFoldHalf(page, DEVENV_MAIN, 'del');
-    await drag(page, 'delreopen', async () => {
-      const b = await box(page, row('peer1'));
-      return [b.x + b.width / 2, b.y + b.height * 0.85];
-    }, { waitMs: 350 });
-    await until(page, 'delreopen restored Deleted -> Active after peer1', async () => {
-      const o = await groupOrder(page, DEVENV_MAIN);
-      return o.indexOf('delreopen') > o.indexOf('peer1');
-    });
+    await life(page, 'delreopen', 'reopen', { hidden: false });
+    await until(page, 'delreopen restored Deleted -> Active', async () => (await where(page, 'delreopen')) === 'live');
     assert.match(await page.locator(row('delreopen')).getAttribute('class'), /\bstopped\b/, 'reopened delreopen stays asleep');
     assert.equal(await page.locator(row('delreopen') + ' .drgrip').getAttribute('data-proc'), null, 'reopened delreopen has no live process');
     assert.equal(page.url(), base + '/', 'Deleted -> Active restore never navigates to /s/<id>');
@@ -332,16 +314,26 @@ async function drag(page, fromId, targetFn, { grip = false, inspect = null, wait
     await page.locator('.rpop.d-rconf .d-rconf-danger').click();
     await until(page, 'kidsrow deleted on confirm', async () => (await where(page, 'kidsrow')) === 'del');
 
-    // 7. Expanded .rended list drop target, 500 error recovery, and !data-can-control refusal.
-    await openFoldHalf(page, DEVENV_MAIN, 'arch');
+    // 7. The archived popup never shows as an inline list and the live row
+    // still lands on the fold button (no inline list drop target remains);
+    // then 500 error recovery and !data-can-control refusal.
+    await openFoldPopup(page, DEVENV_MAIN, 'arch');
+    assert.equal(await page.evaluate((m) => [...document.querySelectorAll(m + ' .rended')].every((l) => getComputedStyle(l).display === 'none'), DEVENV_MAIN), true, 'fold sources stay hidden while the popup is open');
+    await closeFoldPopup(page);
     const listSnap = await drag(page, 'peer1', async () => {
-      const b = await box(page, `${DEVENV_MAIN} > .rsessions > .rended.on[data-k="arch"]`);
-      return [b.x + b.width / 2, b.y + Math.min(b.height / 2, 16)];
+      const b = await box(page, `${DEVENV_MAIN} > .rsessions > .rfold .rfh[data-k="arch"]`);
+      return [b.x + b.width / 2, b.y + b.height / 2];
     }, {
-      inspect: () => page.evaluate((m) => !!document.querySelector(m + ' .rended.on[data-k="arch"].d-rdrop-list'), DEVENV_MAIN),
+      inspect: () => page.evaluate(() => ({
+        archDrop: !!document.querySelector('.rfh.d-rdrop-arch'),
+        popupOpen: !!document.querySelector('.rfpop:not([hidden])'),
+        listDrop: !!document.querySelector('.d-rdrop-list'),
+      })),
     });
-    assert.equal(listSnap, true, 'expanded .rended[data-k="arch"] marks d-rdrop-list');
-    await until(page, 'peer1 moved into expanded arch list', async () => (await where(page, 'peer1')) === 'arch');
+    assert.equal(listSnap.archDrop, true, 'live row over the fold button marks d-rdrop-arch');
+    assert.equal(listSnap.listDrop, false, 'no inline list drop target exists');
+    assert.equal(listSnap.popupOpen, false);
+    await until(page, 'peer1 moved into the archived fold', async () => (await where(page, 'peer1')) === 'arch');
 
     await drag(page, 'archfail', async () => {
       const b = await box(page, `${DEVENV_MAIN} > .rsessions > .rfold .rfh[data-k="arch"]`);

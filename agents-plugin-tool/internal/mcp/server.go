@@ -64,6 +64,7 @@ type Server struct {
 	// agents is the dashboard daemon's runner.
 	agents                    AgentHost
 	companion                 CompanionHost
+	companionDelegation       CompanionDelegationHost
 	daemonControl             DaemonControlHost
 	dashboardControlEffective bool
 	ephemeralPool             *wsagent.EphemeralPool

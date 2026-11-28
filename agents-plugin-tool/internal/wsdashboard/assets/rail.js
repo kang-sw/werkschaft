@@ -804,10 +804,9 @@
   }
   // marks applies the stored marks (s, state) to the rendered rail region
   // r: marks the viewed session's row (rid), collapses the collapsed
-  // workspaces and parents, and opens the ended folds left open. The page
-  // script runs it after every rail swap; the iframe shell also runs it as
-  // soon as the rail is parsed, before the first paint, so a reload never
-  // shows a fold the browser keeps closed open.
+  // workspaces and parents. The page script runs it after every rail swap;
+  // the iframe shell also runs it as soon as the rail is parsed, before the
+  // first paint. (The archived and ended lists open as a popup, not here.)
   function marks(r, s, rid) {
     function all(sel) { return Array.prototype.slice.call(r.querySelectorAll(sel)); }
     markCurrent(all(".rs"), rid);
@@ -821,36 +820,25 @@
       if (row) { if (col) row.classList.add("kcol"); else row.classList.remove("kcol"); }
       tog.setAttribute("aria-expanded", String(!col));
     });
-    all(".rfold[data-key]").forEach(function (f) {
-      var key = f.getAttribute("data-key") || "";
-      foldShow(f, s.ended.has(FOLD_KEYS.arch + key) ? "arch" : s.ended.has(FOLD_KEYS.del + key) ? "del" : "");
-    });
   }
   // A group's fold row (.rfold, data-key its path) has two halves, archived
-  // ("arch") and ended ("del"), acting as one tri-state radio: none, one,
-  // or the other list open. The pick is kept in the ended-fold set under
-  // FOLD_KEYS' prefix and the path; "rended:" is the key the single ended
-  // fold kept before the split, so a fold left open stays open.
-  var FOLD_KEYS = { arch: "rarch:", del: "rended:" };
-  // foldShow opens the fold row f's list open ("arch", "del", or "" for
-  // none); a disabled half (no rows) never opens.
-  function foldShow(f, open) {
-    var halves = Array.prototype.slice.call(f.querySelectorAll(".rfh")), on = "";
-    halves.forEach(function (b) { if (b.getAttribute("data-k") === open && !b.disabled) on = open; });
-    halves.forEach(function (b) { b.setAttribute("aria-expanded", String(!!on && b.getAttribute("data-k") === on)); });
-    (f.parentNode ? Array.prototype.slice.call(f.parentNode.children) : []).forEach(function (l) {
-      if (!l.classList.contains("rended")) return;
-      if (on && l.getAttribute("data-k") === on) l.classList.add("on"); else l.classList.remove("on");
-    });
+  // ("arch") and ended ("del"). Each opens a floating popup (dashboard-rail-
+  // popovers.js, rpFoldMake) that lists the half's rows, copied from the
+  // server-rendered .rended source beside the row; the source itself never
+  // shows. foldMatch is the popup's filter: every blank-separated word of
+  // query, lowercased, must occur in hay (a row's reply-id, harness, and
+  // text); an empty query matches all.
+  function foldMatch(hay, query) {
+    var h = String(hay || "").toLowerCase(), words = String(query || "").toLowerCase().split(/\s+/);
+    for (var i = 0; i < words.length; i++) if (words[i] && h.indexOf(words[i]) < 0) return false;
+    return true;
   }
-  // foldPick is a click on the fold half: it opens its list and closes the
-  // other, or closes its own list when open, and keeps the pick (s, state).
-  function foldPick(s, half) {
-    var f = half.parentNode, key = f.getAttribute("data-key") || "", k = half.getAttribute("data-k") || "";
-    var on = !half.disabled && half.getAttribute("aria-expanded") !== "true";
-    s.ended.put(FOLD_KEYS.arch + key, on && k === "arch");
-    s.ended.put(FOLD_KEYS.del + key, on && k === "del");
-    foldShow(f, on ? k : "");
+  // foldSource is the hidden .rended list of kind k ("arch" or "del") that
+  // fold row f's group rendered beside it, or null when it has none.
+  function foldSource(f, k) {
+    var sibs = f && f.parentNode ? Array.prototype.slice.call(f.parentNode.children) : [];
+    for (var i = 0; i < sibs.length; i++) if (sibs[i].classList.contains("rended") && sibs[i].getAttribute("data-k") === k) return sibs[i];
+    return null;
   }
 
   // REVIVE_MOVES are the ways an ended row brings its session back (its
@@ -1303,7 +1291,8 @@
     endedOpen: endedOpen,
     state: state,
     marks: marks,
-    foldPick: foldPick,
+    foldMatch: foldMatch,
+    foldSource: foldSource,
     drop: drop,
     dropRefusal: dropRefusal,
     kidsCollapsed: kidsCollapsed,

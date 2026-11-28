@@ -148,7 +148,9 @@ type Line struct {
 	Failed    bool   `json:"failed,omitempty"`
 
 	// usage: one model request's figures. CostUSD is the provider's own
-	// figure when the response carried one.
+	// figure when the response carried one. Compaction marks usage from a
+	// compaction summary request outside a user turn.
+	Compaction       bool     `json:"compaction,omitempty"`
 	InputTokens      int64    `json:"input_tokens,omitempty"`
 	OutputTokens     int64    `json:"output_tokens,omitempty"`
 	CachedTokens     int64    `json:"cached_tokens,omitempty"`

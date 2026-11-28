@@ -249,6 +249,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		}
 		d.planUsage.explicitHome = opts.Home
 		d.planUsage.accountSlots = d.accountSlots
+		d.planUsage.credentials = d.credentials
 		d.planUsage.resolveAgy = opts.AgyCommand
 		d.planUsage.onAgyChange = d.accountChanged
 		d.planUsage.harnesses = opts.Harnesses

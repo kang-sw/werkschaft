@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/kang-sw/devenv/internal/wsconfig"
 )
 
 // Companion phone lifecycle states and postures (4-state embodiment contract).
@@ -29,6 +31,16 @@ const (
 
 	CompanionPutdownNextAmbient = "ambient"
 	CompanionPutdownNextWork    = "work"
+
+	// CompanionLeaseIdleTimeout is the sliding idle deadline for a held
+	// Embodiment Lease when no Tier-2 delegation is in flight ((1739)).
+	CompanionLeaseIdleTimeout = 5 * time.Minute
+	// CompanionLeaseDelegationTimeout is the sliding in-flight deadline while at
+	// least one Tier-2 delegation is active or queued ((1739), (1748)).
+	CompanionLeaseDelegationTimeout = 30 * time.Minute
+	// CompanionWakeMaxRetries bounds consecutive Tier-1 wake/turn failures
+	// before the messenger enters the unavailable state ((1749)).
+	CompanionWakeMaxRetries = 3
 
 	companionPhoneMaxMessages  = 50
 	companionPhoneMaxSummaries = 10
@@ -50,9 +62,9 @@ var (
 	// ErrCompanionPhoneOnDesk is returned when a caller tries to read or send on
 	// the companion phone while posture is still "laptop".
 	ErrCompanionPhoneOnDesk = errors.New("Smartphone is on the desk — call ws/companion.phone_pickup first to check or reply.")
-	// ErrCompanionPhoneHeldByOther is returned when another owner holds the
-	// active phone Embodiment Lease.
-	ErrCompanionPhoneHeldByOther = errors.New("Smartphone is currently held by another session.")
+	// ErrCompanionPhoneHeldByOther is returned when another live owner holds the
+	// active Embodiment Lease.
+	ErrCompanionPhoneHeldByOther = errors.New("lease_held: Smartphone is currently held by another session.")
 )
 
 // CompanionPhoneConfirmCard is an optional 1-Click confirmation card attached
@@ -87,16 +99,19 @@ type CompanionPhoneRotationMeta struct {
 // CompanionPhoneSnapshot is the wire shape returned by GET /api/companion/phone/thread
 // and broadcast over the rail SSE stream as event: companion-phone.
 type CompanionPhoneSnapshot struct {
-	Seq           uint64                     `json:"seq"`
-	State         string                     `json:"state"`
-	Posture       string                     `json:"posture"`
-	LeaseOwner    string                     `json:"leaseOwner,omitempty"`
-	PhoneFaceDown bool                       `json:"phoneFaceDown,omitempty"`
-	Messages      []CompanionPhoneMessage    `json:"messages"`
-	UnreadClient  int                        `json:"unreadClient"`
-	UnreadAgent   int                        `json:"unreadAgent"`
-	Tier1Summary  []string                   `json:"tier1Summary"`
-	RotationMeta  CompanionPhoneRotationMeta `json:"rotationMeta"`
+	Seq                uint64                     `json:"seq"`
+	State              string                     `json:"state"`
+	Posture            string                     `json:"posture"`
+	LeaseOwner         string                     `json:"leaseOwner,omitempty"`
+	PhoneFaceDown      bool                       `json:"phoneFaceDown,omitempty"`
+	Typing             bool                       `json:"typing,omitempty"`
+	DelegationInFlight bool                       `json:"delegationInFlight,omitempty"`
+	Unavailable        bool                       `json:"unavailable,omitempty"`
+	Messages           []CompanionPhoneMessage    `json:"messages"`
+	UnreadClient       int                        `json:"unreadClient"`
+	UnreadAgent        int                        `json:"unreadAgent"`
+	Tier1Summary       []string                   `json:"tier1Summary"`
+	RotationMeta       CompanionPhoneRotationMeta `json:"rotationMeta"`
 }
 
 // CompanionPhoneReadResult is returned to MCP callers of phone_pickup / phone_read.
@@ -113,21 +128,28 @@ type CompanionPhoneReadResult struct {
 // Embodiment Lease, bounded 50-message thread ring, unread user queue, and
 // 10-entry Tier-1 summary ring. Zero disk I/O.
 type CompanionPhoneStore struct {
-	mu            sync.Mutex
-	now           func() time.Time
-	seq           uint64
-	msgSeq        uint64
-	state         string
-	posture       string
-	leaseOwner    string
-	phoneFaceDown bool
-	messages      []CompanionPhoneMessage
-	unreadAgent   []CompanionPhoneMessage
-	unreadClient  int
-	tier1Summary  []string
-	turns         int
-	payload       []byte
-	wake          chan struct{}
+	mu                 sync.Mutex
+	now                func() time.Time
+	holderAlive        func(holder string) bool
+	seq                uint64
+	msgSeq             uint64
+	state              string
+	posture            string
+	leaseOwner         string
+	deadline           time.Time
+	delegationInFlight bool
+	wakeAcquire        bool
+	typing             bool
+	unavailable        bool
+	wakeFailures       int
+	phoneFaceDown      bool
+	messages           []CompanionPhoneMessage
+	unreadAgent        []CompanionPhoneMessage
+	unreadClient       int
+	tier1Summary       []string
+	turns              int
+	payload            []byte
+	wake               chan struct{}
 }
 
 func (s *CompanionPhoneStore) initLocked() {
@@ -156,21 +178,67 @@ func (s *CompanionPhoneStore) snapshotLocked() CompanionPhoneSnapshot {
 	summaries := make([]string, len(s.tier1Summary))
 	copy(summaries, s.tier1Summary)
 	return CompanionPhoneSnapshot{
-		Seq:           s.seq,
-		State:         s.state,
-		Posture:       s.posture,
-		LeaseOwner:    s.leaseOwner,
-		PhoneFaceDown: s.phoneFaceDown,
-		Messages:      msgs,
-		UnreadClient:  s.unreadClient,
-		UnreadAgent:   len(s.unreadAgent),
-		Tier1Summary:  summaries,
+		Seq:                s.seq,
+		State:              s.state,
+		Posture:            s.posture,
+		LeaseOwner:         s.leaseOwner,
+		PhoneFaceDown:      s.phoneFaceDown,
+		Typing:             s.typing,
+		DelegationInFlight: s.delegationInFlight,
+		Unavailable:        s.unavailable,
+		Messages:           msgs,
+		UnreadClient:       s.unreadClient,
+		UnreadAgent:        len(s.unreadAgent),
+		Tier1Summary:       summaries,
 		RotationMeta: CompanionPhoneRotationMeta{
 			Turns:      s.turns,
 			MaxTurns:   companionPoolMaxTurns,
 			SummaryCap: companionPhoneMaxSummaries,
 		},
 	}
+}
+
+func (s *CompanionPhoneStore) renewDeadlineLocked() {
+	if s.delegationInFlight {
+		s.deadline = s.clock().Add(CompanionLeaseDelegationTimeout)
+	} else {
+		s.deadline = s.clock().Add(CompanionLeaseIdleTimeout)
+	}
+}
+
+// holderIsLiveLocked reports whether s.leaseOwner currently names a live
+// session. When holderAlive is configured and reports false, the stale holder
+// is cleared so a relaunched Tier-1 with a new key can acquire immediately
+// ((1739)).
+func (s *CompanionPhoneStore) holderIsLiveLocked() bool {
+	if s.leaseOwner == "" {
+		return false
+	}
+	if s.holderAlive != nil && !s.holderAlive(s.leaseOwner) {
+		s.leaseOwner = ""
+		s.wakeAcquire = false
+		return false
+	}
+	return true
+}
+
+// SetHolderAlive installs an optional live-holder predicate checked during CAS
+// acquire. Nil treats any non-empty holder as live.
+func (s *CompanionPhoneStore) SetHolderAlive(fn func(holder string) bool) {
+	s.mu.Lock()
+	s.holderAlive = fn
+	s.mu.Unlock()
+}
+
+// LatestSummary returns the most recent 1-line messenger exchange summary for
+// the ambient director backfeed ((1730)=a), or "" when none exists.
+func (s *CompanionPhoneStore) LatestSummary() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.tier1Summary) == 0 {
+		return ""
+	}
+	return s.tier1Summary[len(s.tier1Summary)-1]
 }
 
 func (s *CompanionPhoneStore) publishLocked() CompanionPhoneSnapshot {
@@ -208,12 +276,18 @@ func (s *CompanionPhoneStore) Current() (uint64, []byte, <-chan struct{}) {
 }
 
 // EmbodimentLeaseActive reports whether the companion embodiment is currently
-// leased (phone_active or laptop_work), pausing Tier-1 ambient director ticks.
+// leased (phone_active, laptop_work, wake-acquired, or delegation in flight),
+// pausing Tier-1 ambient director ticks.
 func (s *CompanionPhoneStore) EmbodimentLeaseActive() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.initLocked()
-	return s.state == CompanionStatePhoneActive || s.state == CompanionStateLaptopWork || s.leaseOwner != ""
+	hadOwner := s.leaseOwner != ""
+	live := s.holderIsLiveLocked()
+	if hadOwner && !live {
+		s.publishLocked()
+	}
+	return s.state == CompanionStatePhoneActive || s.state == CompanionStateLaptopWork || s.delegationInFlight || live
 }
 
 // PostureFor reports the effective posture ("laptop" or "phone") for owner.
@@ -239,6 +313,18 @@ func (s *CompanionPhoneStore) UnreadAgentCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.unreadAgent)
+}
+
+// OldestUnreadID returns the ID of the oldest unread user phone message, or ""
+// when the unread queue is empty. Used by companionRuntime to detect a Tier-1
+// turn that exited without making progress on unread mail ((1749)).
+func (s *CompanionPhoneStore) OldestUnreadID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.unreadAgent) == 0 {
+		return ""
+	}
+	return s.unreadAgent[0].ID
 }
 
 func boundCompanionPhoneText(text string) string {
@@ -289,18 +375,175 @@ func (s *CompanionPhoneStore) EnqueueUserMessage(text string) (CompanionPhoneMes
 	}
 	s.messages = appendBoundedMessage(s.messages, msg, companionPhoneMaxMessages)
 	s.unreadAgent = appendBoundedMessage(s.unreadAgent, msg, companionPhoneMaxMessages)
-	// A buzzing notification wakes a sleepy companion and turns attention back
-	// to the phone screen.
+	// A buzzing notification wakes a sleepy companion, clears unavailable/retry
+	// state ((1749)), and turns attention back to the phone screen.
 	if s.state == CompanionStateLaptopSleepy {
 		s.state = CompanionStateLaptopAmbient
 	}
 	s.phoneFaceDown = false
+	s.wakeFailures = 0
+	s.unavailable = false
 	snap := s.publishLocked()
 	return msg, snap, nil
 }
 
-// PhonePickup transitions posture to "phone" / state to "phone_active", locks
-// the Embodiment Lease to owner, and drains unread user messages.
+// AcquireOnWake acquires the Embodiment Lease in laptop posture for a Tier-1
+// wake delivery (user message or delegation completion) without switching visual
+// state into laptop_work until a delegation is in flight or Tier-1 invokes a
+// laptop-posture work tool ((1739)).
+func (s *CompanionPhoneStore) AcquireOnWake(owner string) (CompanionPhoneSnapshot, bool) {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return s.Snapshot(), false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLocked()
+	if s.leaseOwner != "" && s.leaseOwner != owner && s.holderIsLiveLocked() {
+		return s.snapshotLocked(), false
+	}
+	if s.posture == CompanionPosturePhone && s.leaseOwner == owner {
+		s.renewDeadlineLocked()
+		return s.snapshotLocked(), true
+	}
+	changed := s.leaseOwner != owner || s.posture != CompanionPostureLaptop || s.state == CompanionStateLaptopSleepy
+	s.leaseOwner = owner
+	s.posture = CompanionPostureLaptop
+	if s.delegationInFlight {
+		if s.state != CompanionStateLaptopWork {
+			s.state = CompanionStateLaptopWork
+			changed = true
+		}
+		s.wakeAcquire = false
+	} else if s.state != CompanionStateLaptopWork {
+		s.state = CompanionStateLaptopAmbient
+		s.wakeAcquire = true
+	}
+	s.renewDeadlineLocked()
+	if changed {
+		return s.publishLocked(), true
+	}
+	return s.snapshotLocked(), true
+}
+
+// SetDelegationInFlight marks whether at least one Tier-2 delegation is active
+// or queued ((1739), (1748)). While true, laptop posture shows laptop_work and
+// uses the longer delegation deadline.
+func (s *CompanionPhoneStore) SetDelegationInFlight(inFlight bool) CompanionPhoneSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLocked()
+	changed := s.delegationInFlight != inFlight
+	s.delegationInFlight = inFlight
+	if inFlight {
+		s.wakeAcquire = false
+		if s.posture == CompanionPostureLaptop && s.state != CompanionStateLaptopWork {
+			s.state = CompanionStateLaptopWork
+			changed = true
+		}
+		s.renewDeadlineLocked()
+	} else {
+		if s.posture == CompanionPostureLaptop && s.state == CompanionStateLaptopWork && !s.holderIsLiveLocked() {
+			s.state = CompanionStateLaptopAmbient
+			s.deadline = time.Time{}
+			changed = true
+		} else if s.holderIsLiveLocked() || s.posture == CompanionPosturePhone {
+			s.renewDeadlineLocked()
+		} else {
+			s.deadline = time.Time{}
+		}
+	}
+	if changed {
+		return s.publishLocked()
+	}
+	return s.snapshotLocked()
+}
+
+// RenewLease refreshes the sliding deadline for owner (5m idle or 30m when a
+// delegation is in flight).
+func (s *CompanionPhoneStore) RenewLease(owner string) bool {
+	owner = strings.TrimSpace(owner)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLocked()
+	if owner != "" && s.leaseOwner != owner {
+		return false
+	}
+	if s.leaseOwner == "" && !s.delegationInFlight {
+		return false
+	}
+	s.renewDeadlineLocked()
+	return true
+}
+
+// RenewDelegationLease refreshes the sliding in-flight delegation deadline on
+// Tier-2 or spawned engineering-agent turn activity ((1739), (1748)).
+func (s *CompanionPhoneStore) RenewDelegationLease() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLocked()
+	if !s.delegationInFlight {
+		return false
+	}
+	s.deadline = s.clock().Add(CompanionLeaseDelegationTimeout)
+	return true
+}
+
+// SetTyping updates the phone_active typing visual state on the companion-phone
+// SSE snapshot ((1743)).
+func (s *CompanionPhoneStore) SetTyping(owner string, typing bool) bool {
+	owner = strings.TrimSpace(owner)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLocked()
+	if s.posture != CompanionPosturePhone {
+		typing = false
+	}
+	if owner != "" && s.leaseOwner != "" && s.leaseOwner != owner {
+		return false
+	}
+	if s.typing == typing {
+		return false
+	}
+	s.typing = typing
+	s.publishLocked()
+	return true
+}
+
+// RecordWakeFailure increments consecutive Tier-1 wake/turn failure count and
+// marks the messenger unavailable once CompanionWakeMaxRetries is reached
+// ((1749)).
+func (s *CompanionPhoneStore) RecordWakeFailure() (CompanionPhoneSnapshot, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLocked()
+	s.wakeFailures++
+	if s.wakeFailures >= CompanionWakeMaxRetries {
+		if !s.unavailable {
+			s.unavailable = true
+			return s.publishLocked(), true
+		}
+		return s.snapshotLocked(), true
+	}
+	return s.snapshotLocked(), false
+}
+
+// ResetWakeFailures clears consecutive wake failure count and unavailable state.
+func (s *CompanionPhoneStore) ResetWakeFailures() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLocked()
+	wasUnavailable := s.unavailable
+	s.wakeFailures = 0
+	s.unavailable = false
+	if wasUnavailable {
+		s.publishLocked()
+	}
+}
+
+// PhonePickup transitions posture to "phone" / state to "phone_active", atomically
+// acquires the Embodiment Lease via CAS (failing with ErrCompanionPhoneHeldByOther
+// only while a different holder's session is live), and drains unread user messages.
 func (s *CompanionPhoneStore) PhonePickup(owner string) (CompanionPhoneReadResult, CompanionPhoneSnapshot, error) {
 	owner = strings.TrimSpace(owner)
 	if owner == "" {
@@ -309,13 +552,17 @@ func (s *CompanionPhoneStore) PhonePickup(owner string) (CompanionPhoneReadResul
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.initLocked()
-	if s.posture == CompanionPosturePhone && s.leaseOwner != "" && s.leaseOwner != owner {
+	if s.leaseOwner != "" && s.leaseOwner != owner && s.holderIsLiveLocked() {
 		return CompanionPhoneReadResult{}, CompanionPhoneSnapshot{}, ErrCompanionPhoneHeldByOther
 	}
 	s.posture = CompanionPosturePhone
 	s.state = CompanionStatePhoneActive
 	s.leaseOwner = owner
+	s.wakeAcquire = false
 	s.phoneFaceDown = false
+	s.wakeFailures = 0
+	s.unavailable = false
+	s.renewDeadlineLocked()
 
 	unread := make([]CompanionPhoneMessage, len(s.unreadAgent))
 	copy(unread, s.unreadAgent)
@@ -341,9 +588,10 @@ func (s *CompanionPhoneStore) PhoneRead(owner string) (CompanionPhoneReadResult,
 	if s.posture != CompanionPosturePhone {
 		return CompanionPhoneReadResult{}, CompanionPhoneSnapshot{}, ErrCompanionPhoneOnDesk
 	}
-	if owner != "" && s.leaseOwner != "" && s.leaseOwner != owner {
+	if owner != "" && s.leaseOwner != "" && s.leaseOwner != owner && s.holderIsLiveLocked() {
 		return CompanionPhoneReadResult{}, CompanionPhoneSnapshot{}, ErrCompanionPhoneHeldByOther
 	}
+	s.renewDeadlineLocked()
 	unread := make([]CompanionPhoneMessage, len(s.unreadAgent))
 	copy(unread, s.unreadAgent)
 	s.unreadAgent = nil
@@ -379,7 +627,7 @@ func (s *CompanionPhoneStore) PhoneSend(owner, text, tone string, confirmCard *C
 	if s.posture != CompanionPosturePhone {
 		return CompanionPhoneMessage{}, CompanionPhoneSnapshot{}, ErrCompanionPhoneOnDesk
 	}
-	if owner != "" && s.leaseOwner != "" && s.leaseOwner != owner {
+	if owner != "" && s.leaseOwner != "" && s.leaseOwner != owner && s.holderIsLiveLocked() {
 		return CompanionPhoneMessage{}, CompanionPhoneSnapshot{}, ErrCompanionPhoneHeldByOther
 	}
 	s.msgSeq++
@@ -394,13 +642,16 @@ func (s *CompanionPhoneStore) PhoneSend(owner, text, tone string, confirmCard *C
 	s.messages = appendBoundedMessage(s.messages, msg, companionPhoneMaxMessages)
 	s.unreadClient++
 	s.turns++
+	s.wakeFailures = 0
+	s.unavailable = false
+	s.renewDeadlineLocked()
 	snap := s.publishLocked()
 	return msg, snap, nil
 }
 
 // PhonePutdown returns posture to "laptop" with style ("normal"|"facedown_merong")
-// and next ("ambient"|"work"). Already-laptop calls are idempotent for turn-end
-// failsafe cleanup.
+// and next ("ambient"|"work"). When a delegation is in flight, next="ambient"
+// settles to laptop_work with the lease still held ((1739)).
 func (s *CompanionPhoneStore) PhonePutdown(owner, style, next string) (CompanionPhoneSnapshot, bool, error) {
 	owner = strings.TrimSpace(owner)
 	style = strings.TrimSpace(style)
@@ -421,67 +672,161 @@ func (s *CompanionPhoneStore) PhonePutdown(owner, style, next string) (Companion
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.initLocked()
+	if owner != "" && s.leaseOwner != "" && s.leaseOwner != owner && s.holderIsLiveLocked() {
+		return CompanionPhoneSnapshot{}, false, ErrCompanionPhoneHeldByOther
+	}
 	if s.posture != CompanionPosturePhone {
-		// Idempotent no-op when already on laptop, except releasing a held
-		// laptop_work lease back to laptop_ambient when requested by owner.
-		if s.state == CompanionStateLaptopWork && next == CompanionPutdownNextAmbient && (owner == "" || s.leaseOwner == "" || s.leaseOwner == owner) {
+		if next == CompanionPutdownNextWork {
+			if owner != "" {
+				s.leaseOwner = owner
+			}
+			changed := s.state != CompanionStateLaptopWork || s.wakeAcquire
+			s.state = CompanionStateLaptopWork
+			s.wakeAcquire = false
+			s.renewDeadlineLocked()
+			if changed {
+				return s.publishLocked(), true, nil
+			}
+			return s.snapshotLocked(), false, nil
+		}
+		if s.delegationInFlight {
+			changed := s.state != CompanionStateLaptopWork || s.wakeAcquire
+			s.state = CompanionStateLaptopWork
+			s.wakeAcquire = false
+			s.renewDeadlineLocked()
+			if changed {
+				return s.publishLocked(), true, nil
+			}
+			return s.snapshotLocked(), false, nil
+		}
+		if s.state == CompanionStateLaptopWork || s.leaseOwner != "" {
 			s.leaseOwner = ""
+			s.wakeAcquire = false
+			s.deadline = time.Time{}
 			s.state = CompanionStateLaptopAmbient
 			return s.publishLocked(), true, nil
 		}
 		return s.snapshotLocked(), false, nil
 	}
-	if owner != "" && s.leaseOwner != "" && s.leaseOwner != owner {
-		return CompanionPhoneSnapshot{}, false, ErrCompanionPhoneHeldByOther
-	}
 
 	s.posture = CompanionPostureLaptop
 	s.phoneFaceDown = style == CompanionPutdownFacedownMerong
-	if next == CompanionPutdownNextWork {
-		if owner != "" {
-			s.leaseOwner = owner
-		}
-		s.state = CompanionStateLaptopWork
-	} else {
-		s.leaseOwner = ""
-		s.state = CompanionStateLaptopAmbient
+	s.wakeAcquire = false
+	s.typing = false
+	if next == CompanionPutdownNextAmbient {
 		if line := summarizeLatestPhoneExchange(s.messages, style); line != "" {
 			s.tier1Summary = appendBoundedSummary(s.tier1Summary, line, companionPhoneMaxSummaries)
 		}
 	}
+	if next == CompanionPutdownNextWork || s.delegationInFlight {
+		if owner != "" {
+			s.leaseOwner = owner
+		}
+		s.state = CompanionStateLaptopWork
+		s.renewDeadlineLocked()
+	} else {
+		s.leaseOwner = ""
+		s.deadline = time.Time{}
+		s.state = CompanionStateLaptopAmbient
+	}
 	return s.publishLocked(), true, nil
 }
 
-// ReleaseOnTurnEnd is the turn-end failsafe hook: if owner still holds
-// phone_active, it performs an automatic normal putdown to laptop_ambient; if
-// owner holds laptop_work, it releases the lease to laptop_ambient.
+// ForceRelease releases holder's Embodiment Lease (on turn end, Tier-1 close/crash,
+// or explicit forced cleanup). Passing an empty holder releases regardless of
+// current holder. When a delegation is in flight, holder is cleared so a
+// relaunched Tier-1 can acquire, while posture settles to laptop_work and visual
+// delegation state continues ((1739), (1743)). Returns (snapshot, changed, hasUnread).
+func (s *CompanionPhoneStore) ForceRelease(holder string) (CompanionPhoneSnapshot, bool, bool) {
+	snap, changed, _, hasUnread := s.forceRelease(holder)
+	return snap, changed, hasUnread
+}
+
+func (s *CompanionPhoneStore) forceRelease(holder string) (CompanionPhoneSnapshot, bool, bool, bool) {
+	holder = strings.TrimSpace(holder)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLocked()
+	if holder != "" && s.leaseOwner != "" && s.leaseOwner != holder {
+		return s.snapshotLocked(), false, false, false
+	}
+	wasPhone := s.posture == CompanionPosturePhone || s.state == CompanionStatePhoneActive
+	wasHeld := wasPhone || s.leaseOwner != "" || (!s.delegationInFlight && s.state == CompanionStateLaptopWork)
+	if !wasHeld {
+		return s.snapshotLocked(), false, false, len(s.unreadAgent) > 0
+	}
+	if wasPhone {
+		s.posture = CompanionPostureLaptop
+		s.phoneFaceDown = false
+		if line := summarizeLatestPhoneExchange(s.messages, CompanionPutdownNormal); line != "" {
+			s.tier1Summary = appendBoundedSummary(s.tier1Summary, line, companionPhoneMaxSummaries)
+		}
+	}
+	s.leaseOwner = ""
+	s.wakeAcquire = false
+	s.typing = false
+	if s.delegationInFlight {
+		s.state = CompanionStateLaptopWork
+		if s.deadline.IsZero() {
+			s.renewDeadlineLocked()
+		}
+	} else {
+		s.state = CompanionStateLaptopAmbient
+		s.deadline = time.Time{}
+	}
+	return s.publishLocked(), true, wasPhone, len(s.unreadAgent) > 0
+}
+
+// ReleaseOnTurnEnd is the turn-end failsafe hook: delegates to ForceRelease so
+// an unclosed phone_active or laptop_work lease settles cleanly per (1739).
 func (s *CompanionPhoneStore) ReleaseOnTurnEnd(owner string) (CompanionPhoneSnapshot, bool) {
 	owner = strings.TrimSpace(owner)
 	if owner == "" {
 		return s.Snapshot(), false
 	}
+	snap, changed, _ := s.ForceRelease(owner)
+	return snap, changed
+}
+
+// ExpireIfPastDeadline checks whether the active Embodiment Lease has passed
+// its sliding deadline. While a delegation is in flight and hasLiveTier2Children
+// is true, the deadline is renewed instead of expiring ((1748)). Returns
+// (snap, leaseExpired, delegationExpired, hasUnread).
+func (s *CompanionPhoneStore) ExpireIfPastDeadline(now time.Time, hasLiveTier2Children bool) (CompanionPhoneSnapshot, bool, bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.initLocked()
-	if s.leaseOwner != owner {
-		return s.snapshotLocked(), false
+	if s.deadline.IsZero() || now.Before(s.deadline) {
+		return s.snapshotLocked(), false, false, false
 	}
-	if s.posture == CompanionPosturePhone || s.state == CompanionStatePhoneActive {
-		s.posture = CompanionPostureLaptop
-		s.phoneFaceDown = false
+	if s.delegationInFlight {
+		if hasLiveTier2Children {
+			s.deadline = now.Add(CompanionLeaseDelegationTimeout)
+			return s.snapshotLocked(), false, false, false
+		}
+		s.delegationInFlight = false
 		s.leaseOwner = ""
+		s.wakeAcquire = false
+		s.typing = false
+		s.posture = CompanionPostureLaptop
 		s.state = CompanionStateLaptopAmbient
+		s.deadline = time.Time{}
+		return s.publishLocked(), true, true, len(s.unreadAgent) > 0
+	}
+	wasPhone := s.posture == CompanionPosturePhone || s.state == CompanionStatePhoneActive
+	if wasPhone {
 		if line := summarizeLatestPhoneExchange(s.messages, CompanionPutdownNormal); line != "" {
 			s.tier1Summary = appendBoundedSummary(s.tier1Summary, line, companionPhoneMaxSummaries)
 		}
-		return s.publishLocked(), true
 	}
-	if s.state == CompanionStateLaptopWork {
-		s.leaseOwner = ""
-		s.state = CompanionStateLaptopAmbient
-		return s.publishLocked(), true
-	}
-	return s.snapshotLocked(), false
+	s.leaseOwner = ""
+	s.wakeAcquire = false
+	s.typing = false
+	s.posture = CompanionPostureLaptop
+	s.phoneFaceDown = false
+	s.state = CompanionStateLaptopAmbient
+	s.deadline = time.Time{}
+	return s.publishLocked(), true, false, len(s.unreadAgent) > 0
 }
 
 // SetSleepy toggles between laptop_ambient and laptop_sleepy when the
@@ -490,7 +835,13 @@ func (s *CompanionPhoneStore) SetSleepy(sleepy bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.initLocked()
-	if s.leaseOwner != "" || s.state == CompanionStatePhoneActive || s.state == CompanionStateLaptopWork {
+	hadOwner := s.leaseOwner != ""
+	live := s.holderIsLiveLocked()
+	cleared := hadOwner && !live
+	if s.delegationInFlight || live || s.state == CompanionStatePhoneActive || s.state == CompanionStateLaptopWork {
+		if cleared {
+			s.publishLocked()
+		}
 		return false
 	}
 	want := CompanionStateLaptopAmbient
@@ -498,6 +849,9 @@ func (s *CompanionPhoneStore) SetSleepy(sleepy bool) bool {
 		want = CompanionStateLaptopSleepy
 	}
 	if s.state == want {
+		if cleared {
+			s.publishLocked()
+		}
 		return false
 	}
 	s.state = want
@@ -713,21 +1067,144 @@ func (d *Daemon) CompanionPhonePutdown(owner, style, next string) (CompanionPhon
 			Prop:       "smartphone",
 			TTLms:      4500,
 		})
+		if snap.UnreadAgent > 0 && !snap.Unavailable && snap.Posture == CompanionPostureLaptop && snap.LeaseOwner == "" {
+			d.notifyCompanionWake("release-unread")
+		}
 	}
 	return snap, nil
 }
 
 // CompanionReleaseOnTurnEnd releases any held Embodiment Lease at turn end.
 func (d *Daemon) CompanionReleaseOnTurnEnd(owner string) bool {
-	_, changed := d.companionPhone.ReleaseOnTurnEnd(owner)
-	if changed {
+	return d.CompanionForceRelease(owner)
+}
+
+// CompanionForceRelease releases holder's Embodiment Lease (turn end, close, or
+// crash), emits phone_putdown visuals when needed, and triggers an unread re-wake
+// when messages are still waiting and the messenger is not unavailable ((1739),
+// (1743), (1749)).
+func (d *Daemon) CompanionForceRelease(holder string) bool {
+	snap, changed, wasPhone, hasUnread := d.companionPhone.forceRelease(holder)
+	if changed && wasPhone {
 		d.PublishCompanionCommand(CompanionCommand{
 			SessionID: companionPhoneBroadcastSession,
 			Gesture:   "phone_putdown",
 			TTLms:     3000,
 		})
 	}
+	if changed && hasUnread && !snap.Unavailable {
+		d.notifyCompanionWake("release-unread")
+	}
 	return changed
+}
+
+// SetCompanionWake registers the daemon-side Tier-1 burst wake callback.
+func (d *Daemon) SetCompanionWake(fn func(reason string)) {
+	if fn == nil {
+		d.companionWake.Store(nil)
+		return
+	}
+	d.companionWake.Store(&fn)
+}
+
+// SetCompanionHolderAlive installs the live-session check used during CAS
+// Embodiment Lease acquisition ((1739)).
+func (d *Daemon) SetCompanionHolderAlive(fn func(holder string) bool) {
+	d.companionPhone.SetHolderAlive(fn)
+}
+
+func (d *Daemon) notifyCompanionWake(reason string) {
+	if fn := d.companionWake.Load(); fn != nil && *fn != nil {
+		go (*fn)(reason)
+	}
+}
+
+// CompanionPhone returns the daemon's in-memory CompanionPhoneStore.
+func (d *Daemon) CompanionPhone() *CompanionPhoneStore {
+	return &d.companionPhone
+}
+
+// CompanionDirectorEnabled reports whether companion agent mode is active
+// (dashboard.companion_enabled && dashboard.companion_director == "agent").
+func (d *Daemon) CompanionDirectorEnabled() bool {
+	cfg := d.companion.current().config
+	return cfg.Enabled && cfg.Director == "agent"
+}
+
+// CompanionActivePersona returns the currently focused pack's persona and
+// resolved language for building the Tier-1 Companion persona prompt.
+func (d *Daemon) CompanionActivePersona() (*CompanionPersona, string) {
+	packID := companionDefaultID
+	d.director.mu.Lock()
+	var bestSeq uint64
+	for _, f := range d.director.streams {
+		if f.seq >= bestSeq && f.pack != "" {
+			bestSeq = f.seq
+			packID = f.pack
+		}
+	}
+	d.director.mu.Unlock()
+	pack := d.companionPackFor(packID)
+	lang := ""
+	if pack.persona != nil {
+		lang = pack.persona.QuipLanguage
+	}
+	if lang == "" {
+		if overrides, err := wsconfig.GlobalOverrides(d.companionOptions()); err == nil {
+			lang = overrides[wsconfig.ItemWorkflowLang]
+		}
+	}
+	return pack.persona, lang
+}
+
+// CompanionActiveRoot resolves the workspace root for daemon-launched companion
+// sessions: the focused session's project root first, then any live indexed
+// session's project root, then a registered workspace root (preferring Git
+// repositories). Returns "" when no session or workspace is registered.
+func (d *Daemon) CompanionActiveRoot() string {
+	d.director.mu.Lock()
+	focusID := d.director.focusLocked().sessionID
+	d.director.mu.Unlock()
+	if focusID != "" && d.index != nil {
+		if s, ok := d.index.Session(focusID); ok && strings.TrimSpace(s.Project) != "" {
+			return s.Project
+		}
+	}
+	if d.index != nil {
+		var fallback string
+		for _, s := range d.index.Sessions() {
+			if s.Hidden || strings.TrimSpace(s.Project) == "" {
+				continue
+			}
+			if s.Live {
+				return s.Project
+			}
+			if fallback == "" {
+				fallback = s.Project
+			}
+		}
+		if fallback != "" {
+			return fallback
+		}
+	}
+	if d.workspaces != nil {
+		var fallback string
+		for _, w := range d.workspaces.workspaces() {
+			if strings.TrimSpace(w.Path) == "" {
+				continue
+			}
+			if w.Repo {
+				return w.Path
+			}
+			if fallback == "" {
+				fallback = w.Path
+			}
+		}
+		if fallback != "" {
+			return fallback
+		}
+	}
+	return ""
 }
 
 // --- HTTP routes -------------------------------------------------------------
@@ -788,6 +1265,7 @@ func (d *Daemon) handleCompanionPhoneSend(w http.ResponseWriter, r *http.Request
 		Prop:      "smartphone",
 		TTLms:     4000,
 	})
+	d.notifyCompanionWake("user-message")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"message": msg,
 		"thread":  snap,

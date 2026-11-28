@@ -512,6 +512,11 @@ func (s *Server) handleMailboxLookupPeers(id json.RawMessage, args map[string]an
 	correspondents := []mailboxCorrespondentOut{}
 	if registry, lerr := s.mailboxPaths().Store().LoadReply(); lerr == nil {
 		for _, c := range wsmailbox.SortedContacts(registry.Entries[s.mailboxReplyID(sessionKey)].Contacts) {
+			if peerID, ok := strings.CutPrefix(c.Address, wsmailbox.ReplyIDPrefix); ok {
+				if registry.Entries[peerID].Hidden || s.sessions.isCompanionReplyID(peerID) {
+					continue
+				}
+			}
 			correspondents = append(correspondents, mailboxCorrespondentOut{
 				Address: c.Address, LastExchange: c.LastExchange, Harness: c.Harness, Cwd: c.Cwd,
 			})

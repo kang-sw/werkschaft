@@ -29,6 +29,57 @@
     }
   }
   function resetEntries(box) { box.textContent = ""; box.wsKeys = Object.create(null); }
+  // One completed turn is one summary. The server anchors a completed turn's
+  // summary (data-turn-key = the closing turn entry) at the first folded entry
+  // it can still see, so a newest window or history page that truncates the
+  // turn's head re-anchors it at a later entry. The box keeps the earliest
+  // anchor (the fullest counts) and turns every other row of the turn,
+  // including the closing .turnline footer, into a hidden absorbed marker.
+  function turnSummaryEl(box, tk, except) {
+    var all = box.querySelectorAll("[data-turn-key]");
+    for (var i = 0; i < all.length; i++) {
+      if (all[i] !== except && all[i].getAttribute("data-turn-key") === tk) return all[i];
+    }
+    return null;
+  }
+  function absorbedMarker(n, k) {
+    var m = doc.createElement("span"), at = n.getAttribute("data-at");
+    m.setAttribute("hidden", ""); m.setAttribute("data-entry", k); m.setAttribute("data-turn-absorbed", "1");
+    if (at) m.setAttribute("data-at", at);
+    return m;
+  }
+  // dedupTurn returns the node to merge for incoming n: n itself, or its
+  // absorbed marker when the box already shows the turn elsewhere. It retires
+  // a later anchor or a visible footer the incoming summary supersedes.
+  function dedupTurn(box, have, n, k) {
+    var tk = n.getAttribute("data-turn-key"), cur = have[k], foot;
+    if (tk) {
+      if (cur && cur.getAttribute("data-turn-key") === tk && cur.getAttribute("data-turn-rev") === n.getAttribute("data-turn-rev")) return n;
+      var rival = turnSummaryEl(box, tk, cur);
+      if (rival) {
+        var rk = rival.getAttribute("data-entry");
+        if (rk < k) return absorbedMarker(n, k);
+        var rm = absorbedMarker(rival, rk);
+        box.replaceChild(rm, rival); have[rk] = rm;
+      }
+      foot = have[tk];
+      if (foot && foot.matches(".turnline")) {
+        var mk = absorbedMarker(foot, tk);
+        box.replaceChild(mk, foot); have[tk] = mk;
+      } else if (foot && foot.matches(".turn-with-summary")) {
+        var fl = foot.querySelector(".turnline");
+        if (fl) fl.parentNode.removeChild(fl);
+      }
+    } else if (cur && !cur.hasAttribute("data-turn-absorbed")) {
+      return n;
+    } else if (n.matches(".turnline") && turnSummaryEl(box, k)) {
+      return absorbedMarker(n, k);
+    } else if (n.matches(".turn-with-summary") && turnSummaryEl(box, k)) {
+      var nl = n.querySelector(".turnline");
+      if (nl) nl.parentNode.removeChild(nl);
+    }
+    return n;
+  }
   // mergeEntries inserts each node of src whose name box lacks at its sorted
   // place and returns inserted/replaced nodes, in order. Existing entries
   // stay put unless their mail-wake presentation changes: a hidden mail
@@ -41,6 +92,7 @@
       Array.prototype.slice.call(src.children).forEach(function (n) {
         var k = n.getAttribute("data-entry");
         if (!k) return;
+        n = dedupTurn(box, have, n, k);
         var old = have[k];
         if (old) {
           if (!(changed && changed[k]) &&

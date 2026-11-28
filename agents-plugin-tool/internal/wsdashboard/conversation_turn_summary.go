@@ -16,8 +16,13 @@ import (
 // DOM contract ([data-conv-turn-summary], [data-conv-turn-drawer],
 // [data-conv-turn-count], [data-conv-turn-fails], [data-conv-turn-tokens]).
 type TurnSummaryView struct {
-	Key         string
-	EntryKey    string
+	Key      string
+	EntryKey string
+	// TurnKey is the closing RingTurn's entry key on a completed tool turn. It
+	// is the turn's identity, stable while the anchor (EntryKey, the first
+	// folded entry of the span) moves as the newest-window or a /history page
+	// truncates the span's head; the page keeps one summary node per TurnKey.
+	TurnKey     string
 	At          int64
 	AtRFC       string
 	TurnAtRFC   string
@@ -156,6 +161,8 @@ func (v *TurnSummaryView) CacheFingerprint() string {
 	var b strings.Builder
 	b.WriteString("\x00ts:")
 	b.WriteString(v.Key)
+	b.WriteByte('|')
+	b.WriteString(v.TurnKey)
 	b.WriteByte('|')
 	b.WriteString(strconv.FormatInt(v.At, 10))
 	b.WriteByte('|')
@@ -395,6 +402,7 @@ func collapseCompletedTurnSpan(entries []ConvEntry, spanStart, turnIdx int) {
 	summary := &TurnSummaryView{
 		Key:         "turn-" + anchor.Key,
 		EntryKey:    anchor.Key,
+		TurnKey:     turn.Key,
 		At:          at,
 		AtRFC:       anchor.AtRFC,
 		TurnAtRFC:   turn.AtRFC,

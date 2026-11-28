@@ -72,6 +72,15 @@ type Record struct {
 	// WSKey is a lead key, Root its canonical git root, and the fields
 	// below apply.
 	Lead bool `json:"lead,omitempty"`
+	// CompanionRole marks a daemon-managed companion hosted session
+	// ("companion-body" or "companion-work"). Companion sessions stay unlisted
+	// from the session rail, roster, idle-lead sleep list, and mail
+	// correspondents. Additive top-level member on Record (T0).
+	CompanionRole string `json:"companion_role,omitempty"`
+	// CompanionSystemPrompt is the system instruction text composed for a
+	// companion hosted session in place of the standard lead workflow manual.
+	// Additive top-level member on Record (T0).
+	CompanionSystemPrompt string `json:"companion_system_prompt,omitempty"`
 	// QuotaContinuation is a hosted lead's persisted post-usage-limit resume
 	// state. Additive top-level member on Record; preserved as unknown by
 	// older daemons (T0).
@@ -1114,8 +1123,8 @@ func registration(rec Record, now time.Time) wsdashboard.Registration {
 	if rec.Lead {
 		// A lead session is an ordinary dashboard session: it has a session
 		// record (its board, mail, and contacts are read as any lead's) and
-		// is always listed. Only the writer of this row differs.
-		reg.Agent, reg.Unlisted = false, false
+		// is listed unless it carries a daemon-managed CompanionRole marker.
+		reg.Agent, reg.Unlisted = false, rec.CompanionRole != ""
 		reg.Hosted, reg.HostPID = true, rec.HostPID
 	}
 	if rec.Parent != nil {

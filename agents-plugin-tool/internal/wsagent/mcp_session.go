@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/execjob"
@@ -160,6 +161,65 @@ func (r *Runner) attachMCP(id, token string, env map[string]string, cwd string, 
 
 type durableStarter interface {
 	startLoop(context.Context, StartSpec) (Process, error)
+}
+
+// WrapDurableBackend adapts a Backend whose Start method implements a durable
+// process loop so callers in tests outside wsagent can register ProcessDurable
+// fixtures without relaxing the runner's durable-process guard.
+func WrapDurableBackend(b Backend) Backend {
+	if b == nil {
+		return nil
+	}
+	if _, ok := b.(durableStarter); ok {
+		return b
+	}
+	return durableBackendAdapter{Backend: b}
+}
+
+type durableBackendAdapter struct{ Backend }
+
+func (a durableBackendAdapter) startLoop(ctx context.Context, spec StartSpec) (Process, error) {
+	proc, err := a.Backend.Start(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := proc.(durableTurnProcess); ok {
+		return proc, nil
+	}
+	return newDurableProcessAdapter(proc), nil
+}
+
+type durableProcessAdapter struct {
+	Process
+	events chan Event
+	turnID atomic.Value // string
+}
+
+func newDurableProcessAdapter(proc Process) *durableProcessAdapter {
+	a := &durableProcessAdapter{
+		Process: proc,
+		events:  make(chan Event, 64),
+	}
+	a.turnID.Store("")
+	go func() {
+		defer close(a.events)
+		for ev := range proc.Events() {
+			if ev.TurnID == "" && (ev.TurnStart || ev.TurnEnd) {
+				if id, _ := a.turnID.Load().(string); id != "" {
+					ev.TurnID = id
+				}
+			}
+			a.events <- ev
+		}
+	}()
+	return a
+}
+
+func (a *durableProcessAdapter) Events() <-chan Event { return a.events }
+
+func (a *durableProcessAdapter) submitTurn(id, text string, _ []durableSteer, _ bool) error {
+	a.turnID.Store(id)
+	return a.Process.Send(text)
 }
 
 type fileCallRecorder interface {
