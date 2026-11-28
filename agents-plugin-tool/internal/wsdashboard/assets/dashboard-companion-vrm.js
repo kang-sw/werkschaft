@@ -432,6 +432,9 @@
     "leftUpperArm", "leftLowerArm", "rightUpperArm", "rightLowerArm",
     "leftHand", "rightHand"
   ];
+  // Body bones + 30 humanoid finger bones (rigs missing finger bones skip them).
+  const POSE_BONES = Object.freeze(BASE_BONES.concat(C.vrmCoLeadPose?.FINGER_BONES || []));
+  const ZERO_EULER = Object.freeze([0, 0, 0]);
   const EXTRA_VRMA_BONES = [
     "hips",
     "leftUpperLeg", "rightUpperLeg", "leftLowerLeg", "rightLowerLeg",
@@ -500,7 +503,7 @@
     let mounted = false, disposed = false, paused = false, contextLost = false;
     let container = null, canvasWrap = null, canvas = null, dissolveGrid = null, fxCanvas = null, fxCtx = null, overlay = null;
     let runtime = null, renderer = null, scene = null, camera = null, vrm = null, coLead = null;
-    let isVrm0 = false, lookTarget = null, headPosVec = null, projHeadVec = null, handPosVec = null, handMidVec = null, projMeshBox = null, projCornerVec = null, raycaster = null, rayNdcVec = null, mixer = null, activeVrmaAction = null, activeVrmaKey = "";
+    let isVrm0 = false, lookTarget = null, headPosVec = null, projHeadVec = null, studio = null, palmProbe = null, palmSampler = null, fingerBoneCount = 0, calibFrames = 0, calibPasses = 0, projMeshBox = null, projCornerVec = null, raycaster = null, rayNdcVec = null, mixer = null, activeVrmaAction = null, activeVrmaKey = "";
     const CHAR_BOUNDS_TTL_MS = 120;
     const cachedCharBounds = { x: 0, y: 0, width: 0, height: 0, viewportX: 0, viewportY: 0 };
     let hasCachedCharBounds = false, charBoundsDirty = true, lastCharBoundsAt = -Infinity;
@@ -575,6 +578,8 @@
         try { coLead.dispose(); } catch (_) { /* ignore */ }
         coLead = null;
       }
+      try { studio?.dispose(); } catch (_) { /* ignore */ }
+      studio = null;
       if (renderer) {
         try { renderer.dispose(); } catch (_) { /* ignore */ }
         if (forceLoss) {
@@ -587,8 +592,8 @@
       lookTarget = null;
       headPosVec = null;
       projHeadVec = null;
-      handPosVec = null;
-      handMidVec = null;
+      palmProbe = null;
+      palmSampler = null;
       projMeshBox = null;
       projCornerVec = null;
       raycaster = null;
@@ -710,8 +715,8 @@
       lookTarget = new THREE.Object3D();
       headPosVec = new THREE.Vector3();
       projHeadVec = new THREE.Vector3();
-      handPosVec = new THREE.Vector3();
-      handMidVec = new THREE.Vector3();
+      palmProbe = C.vrmStudio?.createPalmProbe?.(THREE, "left") || null;
+      palmSampler = () => (palmProbe && vrm && C.vrmStudio.samplePalmProbe(vrm.humanoid, palmProbe) ? palmProbe : null);
       projMeshBox = typeof THREE.Box3 === "function" ? new THREE.Box3() : null;
       projCornerVec = typeof THREE.Vector3 === "function" ? new THREE.Vector3() : null;
       raycaster = typeof THREE.Raycaster === "function" ? new THREE.Raycaster() : null;
@@ -729,14 +734,9 @@
       renderer.shadowMap.enabled = false;
       renderer.setClearColor(0x000000, 0);
 
-      // Flat anime MToon lighting + subtle cool rim light so dark outfits
-      // separate cleanly from Werkschaft's #1e2024 dark tonal surface.
-      const keyLight = new THREE.DirectionalLight(0xfffaf5, 1.18);
-      keyLight.position.set(0.6, 1.4, 2.0);
-      const hemiLight = new THREE.HemisphereLight(0xe4ecff, 0x3b3e4c, 0.92);
-      const coolRim = new THREE.DirectionalLight(0xa8c8ff, 0.72);
-      coolRim.position.set(-0.9, 1.75, -1.65);
-      scene.add(keyLight, hemiLight, coolRim);
+      // Theme-adaptive key/fill/rim + hemisphere studio lighting (live data-theme /
+      // prefers-color-scheme) with a prop-only PMREM env; avatar MToon untouched.
+      studio = C.vrmStudio?.createStudioLighting?.({ THREE, scene, renderer }) || null;
 
       if (typeof C.createVrmCoLead === "function") {
         coLead = C.createVrmCoLead({ THREE, scene, camera });
@@ -791,10 +791,10 @@
       const targets = coLead && C.vrmCoLeadMath
         ? C.vrmCoLeadMath.computeCoLeadTargets({ elapsed: 0, typingWeight: 1, glanceWeight: 0, sleepyWeight: 0, reactionWeight: 0, workingWeight: 0, tiltDir: 1, headYaw: 0, headPitch: 5.6 * DEG, headPitchCue: 0 })
         : computeStandTargets(0, 0, 0, 0, 1);
-      for (const boneName of BASE_BONES) {
+      for (const boneName of POSE_BONES) {
         const node = loadedVrm.humanoid?.getNormalizedBoneNode(boneName);
         if (!node) continue;
-        const rawTarget = targets[boneName] || [0, 0, 0];
+        const rawTarget = targets[boneName] || ZERO_EULER;
         const [tx, ty, tz] = conjugateVrm0Euler(rawTarget[0], rawTarget[1], rawTarget[2], vrm0Flag);
         boneRotations.set(boneName, [tx, ty, tz]);
         node.rotation.set(tx, ty, tz, "XYZ");
@@ -892,39 +892,47 @@
         }
       }
 
-      // Reserve comfortable headroom (~12% of frame height) above true hair/ear/hat top.
-      const headroomRatio = 0.12;
-      const visibleBustSpan = Math.max(bustSpan * 2.1, topY - waistY);
-      const minFrameForHeight = visibleBustSpan / (1 - headroomRatio);
+      // Calibrated 12% headroom above the true hair/ear/hat top on the head plane
+      // (10-14% across 220-360px rails); width-limited slots grow downward only.
       const slotAspect = Math.max(0.45, anchorRect.width / Math.max(1, anchorRect.height));
       camera.fov = BASE_FOV;
       camera.aspect = slotAspect;
-      const minFrameForWidth = upperWidth / slotAspect;
-      const frameHeight = Math.max(minFrameForHeight, minFrameForWidth);
-      const frameTopY = topY + frameHeight * headroomRatio;
-      const frameBottomY = frameTopY - frameHeight;
-      const targetY = (frameTopY + frameBottomY) * 0.5;
-      const distAtFront = (frameHeight * 0.5) / Math.tan((camera.fov * DEG) * 0.5);
-      const dist = distAtFront + frontOffset;
-
-      camera.position.set(centerX, targetY + frameHeight * 0.02, headPos.z + dist);
-      camera.lookAt(centerX, targetY, headPos.z);
+      const fr = C.vrmStudio.solveBustFraming({ topY, waistY, bustSpan, upperWidth, frontOffset, aspect: slotAspect, fov: BASE_FOV });
+      camera.position.set(centerX, fr.targetY, headPos.z + fr.dist);
+      camera.lookAt(centerX, fr.targetY, headPos.z);
       camera.updateProjectionMatrix();
       cameraFraming = {
-        headY: headPos.y,
-        chestY: chestPos.y,
-        waistY,
-        topY,
-        centerX,
-        headZ: headPos.z,
-        bustSpan,
-        targetY,
-        frameHeight,
-        headroomRatio,
-        cameraZ: headPos.z + dist,
-        usedBox3
+        headY: headPos.y, chestY: chestPos.y, waistY, topY, centerX, headZ: headPos.z, bustSpan,
+        targetY: fr.targetY, frameHeight: fr.frameHeight, headroomRatio: fr.headroomRatio,
+        cameraZ: headPos.z + fr.dist, usedBox3, upperWidth, limitedBy: fr.limitedBy
       };
+      cameraFraming.qa = C.vrmStudio.measureFraming(THREE, camera, cameraFraming);
       coLead?.layoutProp(cameraFraming, camera);
+      studio?.attachPropEnvironment(coLead?.getPropObjects?.());
+      calibFrames = 6;
+      calibPasses = 0;
+    }
+
+    // Pixel-true headroom: once per framing, read the docked slot alpha after render
+    // and slide the camera vertically so the visible silhouette top (not alpha-cut
+    // card bounds) lands on the solved headroom ratio. At most two corrections.
+    function calibrateHeadroom(R, bounds) {
+      const fr = cameraFraming;
+      if (!camera || !(fr.frameHeight > 0)) return;
+      const rect = overlayMode ? R : { left: 0, top: 0, width, height };
+      const probe = C.vrmStudio?.measureAlphaTopRow?.(renderer.getContext?.(), rect, overlayMode ? bounds.vh : height, renderer.getPixelRatio?.() || 1);
+      if (!probe || probe.ratio < 0) return;
+      const err = probe.ratio - fr.headroomRatio;
+      fr.qa = { ...(fr.qa || {}), pixelHeadroomPct: Number((probe.ratio * 100).toFixed(2)), calibPasses };
+      if (Math.abs(err) < 0.006 || calibPasses >= 2) return;
+      // Clamp so a mis-read can never throw the avatar out of frame.
+      const dy = C.clamp(err, -0.06, 0.08) * fr.frameHeight;
+      camera.position.y -= dy;
+      fr.targetY -= dy;
+      camera.updateMatrixWorld?.(true);
+      calibPasses++;
+      calibFrames = 2;
+      coLead?.layoutProp(fr, camera);
     }
 
     async function parseVrmBuffer(buffer) {
@@ -947,6 +955,7 @@
       scene.add(loaded.scene);
       vrm = loaded;
       isVrm0 = String(loaded.meta?.metaVersion ?? "") === "0";
+      fingerBoneCount = POSE_BONES.slice(BASE_BONES.length).filter(n => loaded.humanoid?.getNormalizedBoneNode(n)).length;
       if (loaded.lookAt && lookTarget) loaded.lookAt.target = lookTarget;
       mixer = new THREE.AnimationMixer(loaded.scene);
 
@@ -1039,7 +1048,7 @@
 
     function syncBoneCacheFromRig() {
       if (!vrm) return;
-      for (const boneName of BASE_BONES) {
+      for (const boneName of POSE_BONES) {
         const node = vrm.humanoid?.getNormalizedBoneNode(boneName);
         if (node) boneRotations.set(boneName, [node.rotation.x, node.rotation.y, node.rotation.z]);
       }
@@ -1234,10 +1243,10 @@
         }
 
         const lerpAlpha = 1 - Math.exp(-8.5 * dt);
-        for (const boneName of BASE_BONES) {
+        for (const boneName of POSE_BONES) {
           const node = vrm.humanoid?.getNormalizedBoneNode(boneName);
           if (!node) continue;
-          const rawTarget = targets[boneName] || [0, 0, 0];
+          const rawTarget = targets[boneName] || ZERO_EULER;
           const [tx, ty, tz] = conjugateVrm0Euler(
             Number.isFinite(rawTarget[0]) ? rawTarget[0] : 0,
             Number.isFinite(rawTarget[1]) ? rawTarget[1] : 0,
@@ -1303,18 +1312,8 @@
       const coState = updatePoseAndLook(clampedDt, currentGaze, physics, extra);
       exprCtrl.update(clampedDt);
       vrm.update(clampedDt);
-      if (coLead && typeof coLead.syncPhoneToHand === "function" && vrm.humanoid && handPosVec) {
-        const handNode = vrm.humanoid.getNormalizedBoneNode("leftHand") || vrm.humanoid.getRawBoneNode?.("leftHand");
-        if (handNode && typeof handNode.getWorldPosition === "function") {
-          handNode.getWorldPosition(handPosVec);
-          const midNode = vrm.humanoid.getNormalizedBoneNode("leftMiddleProximal") || vrm.humanoid.getNormalizedBoneNode("leftIndexProximal");
-          if (midNode && handMidVec && typeof midNode.getWorldPosition === "function") {
-            midNode.getWorldPosition(handMidVec);
-            handPosVec.lerp(handMidVec, 0.45);
-          }
-          coLead.syncPhoneToHand(handPosVec);
-        }
-      }
+      // Lazy palm probe: sampled only while the phone is held (VRM 0.x/1.0 palm frame).
+      if (palmSampler && typeof coLead?.syncPhoneToHand === "function") coLead.syncPhoneToHand(palmSampler);
       const { rect: R, bounds, primaryBounds } = computeActiveScissorRect();
       activeScissorRect = R;
       if (overlayMode) {
@@ -1339,6 +1338,7 @@
         prevScissorRect = { left: R.left, top: R.top, width: R.width, height: R.height };
       }
       renderer.render(scene, camera);
+      if (calibFrames > 0 && renderMode === "docked" && --calibFrames === 0) calibrateHeadroom(R, bounds);
       if (renderMode === "roam" && primaryBounds) {
         cachedCharBounds.viewportX = primaryBounds.left;
         cachedCharBounds.viewportY = primaryBounds.top;
@@ -1879,6 +1879,10 @@
           projectedBounds: getCharacterBounds(),
           renderMetrics: rigApi.getRenderMetrics(),
           coLead: coLead ? coLead.debugState() : null,
+          studio: studio ? studio.getState() : null,
+          fingerBoneCount,
+          headroomCalibPending: calibFrames > 0,
+          slotPoints: runtime && vrm ? C.vrmStudio.measureSlotPoints(runtime.THREE, camera, vrm, coLead?.getPropObjects?.()) : null,
           contextLost,
           paused,
           disposed,

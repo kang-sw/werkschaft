@@ -11,6 +11,13 @@
   const DEG = Math.PI / 180;
   const DEFAULT_ACCENT = "#7aa2ff";
   const LID_TILT_RAD = 11 * DEG;
+  // Palm grip tuning: phone center slides GRIP_ALONG x palm length toward the
+  // fingers, lifts off the palm by half the hand depth (relative to palm width)
+  // plus the phone back depth (local units x lid scale), and rolls GRIP_ROLL.
+  const GRIP_ALONG = 0.15;
+  const GRIP_HAND_HALF_DEPTH = 0.2;
+  const PHONE_BACK_DEPTH = 0.016;
+  const GRIP_ROLL = 0;
 
   // Curated 6-color dark-UI-friendly session laptop palette.
   const SESSION_ACCENT_PALETTE = Object.freeze([
@@ -95,165 +102,16 @@
     return null;
   }
 
-  // Paint a brushed anodized dark-slate lid texture matching Werkschaft's dark
-  // tonal surface (#222630 - #2b303d) with a chamfered top specular edge.
-  function makeLidTexture(THREE) {
-    if (typeof document === "undefined" || typeof THREE.CanvasTexture !== "function") return null;
-    const canvas = document.createElement("canvas");
-    canvas.width = 512;
-    canvas.height = 320;
-    const ctx = canvas.getContext("2d");
-    if (!ctx || typeof ctx.createLinearGradient !== "function" || typeof ctx.fillRect !== "function") return null;
-
-    const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
-    grad.addColorStop(0.0, "#3d4658");
-    grad.addColorStop(0.04, "#2f3645");
-    grad.addColorStop(0.30, "#262b38");
-    grad.addColorStop(0.76, "#1f242f");
-    grad.addColorStop(1.0, "#171a22");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    const sheen = ctx.createLinearGradient(0, 0, canvas.width, 0);
-    sheen.addColorStop(0.0, "rgba(185, 205, 240, 0.03)");
-    sheen.addColorStop(0.28, "rgba(215, 228, 252, 0.11)");
-    sheen.addColorStop(0.52, "rgba(235, 244, 255, 0.17)");
-    sheen.addColorStop(0.76, "rgba(210, 224, 248, 0.09)");
-    sheen.addColorStop(1.0, "rgba(185, 205, 240, 0.03)");
-    ctx.fillStyle = sheen;
-    ctx.fillRect(0, 0, canvas.width, 54);
-
-    ctx.fillStyle = "rgba(255, 255, 255, 0.016)";
-    for (let y = 4; y < canvas.height; y += 3) {
-      ctx.fillRect(0, y, canvas.width, 1);
-    }
-
-    const rim = ctx.createLinearGradient(24, 0, canvas.width - 24, 0);
-    rim.addColorStop(0.0, "rgba(164, 184, 220, 0.22)");
-    rim.addColorStop(0.5, "rgba(230, 240, 255, 0.56)");
-    rim.addColorStop(1.0, "rgba(164, 184, 220, 0.22)");
-    ctx.fillStyle = rim;
-    ctx.fillRect(14, 2, canvas.width - 28, 3);
-
-    const tex = new THREE.CanvasTexture(canvas);
-    if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
-    tex.needsUpdate = true;
-    return tex;
+  // Procedural prop textures are painted by dashboard-companion-vrm-studio.js
+  // (loaded first) and re-exported here for backwards-compatible callers.
+  function studioPainter(name) {
+    return THREE => (typeof C.vrmStudio?.[name] === "function" ? C.vrmStudio[name](THREE) : null);
   }
-
-  // Soft radial halo texture for the minimalist center-upper accent emblem pill.
-  function makeEmblemGlowTexture(THREE) {
-    if (typeof document === "undefined" || typeof THREE.CanvasTexture !== "function") return null;
-    const canvas = document.createElement("canvas");
-    canvas.width = 128;
-    canvas.height = 64;
-    const ctx = canvas.getContext("2d");
-    if (!ctx || typeof ctx.createRadialGradient !== "function" || typeof ctx.beginPath !== "function") return null;
-
-    ctx.clearRect(0, 0, 128, 64);
-    const halo = ctx.createRadialGradient(64, 32, 3, 64, 32, 54);
-    halo.addColorStop(0.0, "rgba(255, 255, 255, 0.92)");
-    halo.addColorStop(0.28, "rgba(255, 255, 255, 0.45)");
-    halo.addColorStop(0.62, "rgba(255, 255, 255, 0.12)");
-    halo.addColorStop(1.0, "rgba(255, 255, 255, 0.0)");
-    ctx.fillStyle = halo;
-    ctx.fillRect(0, 0, 128, 64);
-
-    const px = 42, py = 26, pw = 44, ph = 12, r = 6;
-    ctx.beginPath();
-    ctx.moveTo(px + r, py);
-    ctx.lineTo(px + pw - r, py);
-    ctx.quadraticCurveTo(px + pw, py, px + pw, py + r);
-    ctx.lineTo(px + pw, py + ph - r);
-    ctx.quadraticCurveTo(px + pw, py + ph, px + pw - r, py + ph);
-    ctx.lineTo(px + r, py + ph);
-    ctx.quadraticCurveTo(px, py + ph, px, py + ph - r);
-    ctx.lineTo(px, py + r);
-    ctx.quadraticCurveTo(px, py, px + r, py);
-    ctx.closePath();
-    ctx.fillStyle = "rgba(255, 255, 255, 0.96)";
-    ctx.fill();
-
-    const tex = new THREE.CanvasTexture(canvas);
-    if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
-    tex.needsUpdate = true;
-    return tex;
-  }
-
-  // Paint a crisp minimalist smartphone front display texture (OLED notification card).
-  function makePhoneScreenTexture(THREE) {
-    if (typeof document === "undefined" || typeof THREE.CanvasTexture !== "function") return null;
-    const canvas = document.createElement("canvas");
-    canvas.width = 128;
-    canvas.height = 256;
-    const ctx = canvas.getContext("2d");
-    if (!ctx || typeof ctx.createLinearGradient !== "function" || typeof ctx.fillRect !== "function") return null;
-
-    const bg = ctx.createLinearGradient(0, 0, 0, 256);
-    bg.addColorStop(0.0, "#1c2740");
-    bg.addColorStop(0.55, "#151d30");
-    bg.addColorStop(1.0, "#0f1422");
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, 128, 256);
-
-    ctx.fillStyle = "rgba(180, 212, 255, 0.35)";
-    ctx.fillRect(42, 10, 44, 6);
-
-    ctx.fillStyle = "rgba(122, 162, 255, 0.92)";
-    ctx.fillRect(14, 42, 100, 46);
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(24, 52, 54, 7);
-    ctx.fillStyle = "rgba(255, 255, 255, 0.72)";
-    ctx.fillRect(24, 66, 76, 6);
-
-    ctx.fillStyle = "rgba(246, 228, 173, 0.92)";
-    ctx.fillRect(30, 106, 84, 34);
-    ctx.fillStyle = "#3c3222";
-    ctx.fillRect(40, 118, 60, 6);
-
-    ctx.fillStyle = "rgba(226, 234, 250, 0.24)";
-    ctx.fillRect(14, 154, 82, 34);
-    ctx.fillStyle = "rgba(235, 242, 255, 0.8)";
-    ctx.fillRect(24, 166, 56, 6);
-
-    ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
-    ctx.fillRect(42, 240, 44, 4);
-
-    const tex = new THREE.CanvasTexture(canvas);
-    if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
-    tex.needsUpdate = true;
-    return tex;
-  }
-
-  // Paint a metallic back-shell texture with matte gradient so the back side
-  // of the smartphone reads unmistakably apart from the OLED front.
-  function makePhoneBackTexture(THREE) {
-    if (typeof document === "undefined" || typeof THREE.CanvasTexture !== "function") return null;
-    const canvas = document.createElement("canvas");
-    canvas.width = 128;
-    canvas.height = 256;
-    const ctx = canvas.getContext("2d");
-    if (!ctx || typeof ctx.createLinearGradient !== "function" || typeof ctx.fillRect !== "function") return null;
-
-    const grad = ctx.createLinearGradient(0, 0, 128, 256);
-    grad.addColorStop(0.0, "#c8d2e6");
-    grad.addColorStop(0.45, "#9eaac2");
-    grad.addColorStop(1.0, "#76829c");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 128, 256);
-
-    ctx.fillStyle = "rgba(255, 255, 255, 0.22)";
-    ctx.beginPath?.();
-    if (typeof ctx.arc === "function") {
-      ctx.arc(64, 134, 16, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    const tex = new THREE.CanvasTexture(canvas);
-    if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
-    tex.needsUpdate = true;
-    return tex;
-  }
+  const makeLidTexture = studioPainter("makeLidTexture");
+  const makeEmblemGlowTexture = studioPainter("makeEmblemGlowTexture");
+  const makePhoneScreenTexture = studioPainter("makePhoneScreenTexture");
+  const makePhoneBackTexture = studioPainter("makePhoneBackTexture");
+  const makeContactShadowTexture = studioPainter("makeContactShadowTexture");
 
   // Build a smooth rounded-rectangle THREE.Shape centered at (0, 0).
   function makeRoundedRectShape(THREE, w, h, radius) {
@@ -314,7 +172,20 @@
     let screenGlow = 0.13;
     let phoneScreenGlow = 0.14;
     let bounceColorRgb = hexToRgb(DEFAULT_ACCENT);
+    let hingeAccentMesh = null;
+    let phoneShadowMesh = null;
+    let shadowTexture = null;
     const scratchVec = THREE && typeof THREE.Vector3 === "function" ? new THREE.Vector3() : null;
+    // Preallocated palm-grip scratch (zero allocation per frame).
+    const hasQuat = !!(THREE && typeof THREE.Quaternion === "function" && typeof THREE.Matrix4 === "function" && typeof THREE.Vector3 === "function");
+    const palmFrame = { palmX: { x: 0, y: 0, z: 0 }, palmY: { x: 0, y: 0, z: 0 }, palmZ: { x: 0, y: 0, z: 0 }, center: { x: 0, y: 0, z: 0 } };
+    const gripBasis = hasQuat ? new THREE.Matrix4() : null;
+    const gripQuat = hasQuat ? new THREE.Quaternion() : null;
+    const gripRoll = hasQuat ? new THREE.Quaternion() : null;
+    const gripAxisX = hasQuat ? new THREE.Vector3() : null;
+    const gripAxisY = hasQuat ? new THREE.Vector3() : null;
+    const gripAxisZ = hasQuat ? new THREE.Vector3() : null;
+    const palmGrip = { mode: "none", side: "left", weight: 0, screenFacing: 0, normal: { x: 0, y: 0, z: 0 }, center: { x: 0, y: 0, z: 0 }, phoneUpDot: 0 };
 
     function canBuild3DProp() {
       return !!(
@@ -336,6 +207,7 @@
       if (rimMesh?.material?.color?.setHex) {
         rimMesh.material.color.setHex(mixRgbToHex([192, 206, 228], rgb, 0.58));
       }
+      hingeAccentMesh?.material?.color?.setHex?.(mixRgbToHex([200, 214, 236], rgb, 0.82));
       if (lidMesh?.material?.emissive?.setHex) {
         lidMesh.material.emissive.setHex(mixRgbToHex([11, 14, 20], rgb, 0.13));
       }
@@ -453,6 +325,47 @@
         emblemMesh.position.set(0, 0.266, 0.0145);
         emblemMesh.frustumCulled = false;
         laptopGroup.add(emblemMesh);
+
+        // Thin accent hinge light strip just above the barrel.
+        const accentGeo = new THREE.PlaneGeometry(0.30, 0.008);
+        const accentMat = new THREE.MeshBasicMaterial({ color: 0x7aa2ff, transparent: true, opacity: 0.82, depthWrite: false });
+        geometries.push(accentGeo);
+        materials.push(accentMat);
+        hingeAccentMesh = new THREE.Mesh(accentGeo, accentMat);
+        hingeAccentMesh.name = "ws-colead-hinge-accent";
+        hingeAccentMesh.position.set(0, -0.292, 0.0142);
+        hingeAccentMesh.frustumCulled = false;
+        laptopGroup.add(hingeAccentMesh);
+      }
+
+      // Diamond-cut chamfer frame catching the prop-only studio env highlights.
+      if (typeof THREE.ShapeGeometry === "function" && typeof THREE.Path === "function") {
+        const outer = makeRoundedRectShape(THREE, 0.998, 0.618, 0.047);
+        const inner = makeRoundedRectShape(THREE, 0.978, 0.598, 0.040);
+        outer.holes.push(new THREE.Path(inner.getPoints(10).reverse()));
+        const chamferGeo = new THREE.ShapeGeometry(outer, 10);
+        const chamferMat = new THREE.MeshStandardMaterial({ color: 0xaeb9cc, roughness: 0.24, metalness: 0.82 });
+        geometries.push(chamferGeo);
+        materials.push(chamferMat);
+        const chamfer = new THREE.Mesh(chamferGeo, chamferMat);
+        chamfer.name = "ws-colead-lid-chamfer";
+        chamfer.position.set(0, 0, 0.0132);
+        chamfer.frustumCulled = false;
+        laptopGroup.add(chamfer);
+      }
+
+      // Brushed metal hinge barrel along the lid's bottom edge.
+      if (typeof THREE.CylinderGeometry === "function") {
+        const hingeGeo = new THREE.CylinderGeometry(0.017, 0.017, 0.84, 20, 1);
+        const hingeMat = new THREE.MeshStandardMaterial({ color: 0x3a4152, roughness: 0.3, metalness: 0.78 });
+        geometries.push(hingeGeo);
+        materials.push(hingeMat);
+        const hinge = new THREE.Mesh(hingeGeo, hingeMat);
+        hinge.name = "ws-colead-hinge";
+        hinge.rotation.set(0, 0, Math.PI * 0.5);
+        hinge.position.set(0, -0.318, -0.002);
+        hinge.frustumCulled = false;
+        laptopGroup.add(hinge);
       }
 
       laptopGroup.rotation.set(LID_TILT_RAD, 0, 0, "XYZ");
@@ -589,12 +502,32 @@
         geometries.push(lensGeo, flashGeo);
         materials.push(lensMat, flashMat);
 
+        // Polished lens rims + dark sapphire glass discs (back faces -Z).
+        const hasRim = typeof THREE.TorusGeometry === "function" && typeof THREE.CircleGeometry === "function";
+        const rimGeo = hasRim ? new THREE.TorusGeometry(0.0235, 0.0034, 8, 24) : null;
+        const rimMat = hasRim ? new THREE.MeshStandardMaterial({ color: 0xd6dde9, roughness: 0.18, metalness: 0.92 }) : null;
+        const glassGeo = hasRim ? new THREE.CircleGeometry(0.0145, 20) : null;
+        const glassMat = hasRim ? new THREE.MeshStandardMaterial({ color: 0x0b1020, roughness: 0.06, metalness: 0.6, emissive: 0x10204a, emissiveIntensity: 0.4 }) : null;
+        if (hasRim) {
+          geometries.push(rimGeo, glassGeo);
+          materials.push(rimMat, glassMat);
+        }
         for (const ly of [0.126, 0.072]) {
           const lens = new THREE.Mesh(lensGeo, lensMat);
           lens.rotation.set(Math.PI * 0.5, 0, 0);
           lens.position.set(0.052, ly, -(phoneD * 0.5 + 0.021));
           lens.frustumCulled = false;
           phoneGroup.add(lens);
+          if (hasRim) {
+            const ring = new THREE.Mesh(rimGeo, rimMat);
+            ring.position.set(0.052, ly, -(phoneD * 0.5 + 0.0252));
+            ring.frustumCulled = false;
+            const glass = new THREE.Mesh(glassGeo, glassMat);
+            glass.rotation.set(0, Math.PI, 0);
+            glass.position.set(0.052, ly, -(phoneD * 0.5 + 0.0253));
+            glass.frustumCulled = false;
+            phoneGroup.add(ring, glass);
+          }
         }
         const flash = new THREE.Mesh(flashGeo, flashMat);
         flash.rotation.set(Math.PI * 0.5, 0, 0);
@@ -603,17 +536,81 @@
         phoneGroup.add(flash);
       }
 
+      // Soft contact shadow grounding the desk phone (fades when held or flipped).
+      shadowTexture = makeContactShadowTexture(THREE);
+      if (shadowTexture && typeof THREE.PlaneGeometry === "function" && typeof THREE.MeshBasicMaterial === "function") {
+        textures.push(shadowTexture);
+        const shadowGeo = new THREE.PlaneGeometry(phoneW * 1.55, phoneH * 1.22);
+        const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, map: shadowTexture, transparent: true, opacity: 0.3, depthWrite: false });
+        shadowMat.userData = { studioOpacity: 0.3 };
+        geometries.push(shadowGeo);
+        materials.push(shadowMat);
+        phoneShadowMesh = new THREE.Mesh(shadowGeo, shadowMat);
+        phoneShadowMesh.name = "ws-colead-contact-shadow";
+        phoneShadowMesh.userData.contactShadow = true;
+        phoneShadowMesh.position.set(0.012, -0.024, -(phoneD * 0.5 + 0.034));
+        phoneShadowMesh.renderOrder = -1;
+        phoneShadowMesh.frustumCulled = false;
+        phoneGroup.add(phoneShadowMesh);
+      }
+
       scene.add(phoneGroup);
       applyAccentVisuals(accentHex);
     }
 
-    // Anchor the held 3D smartphone cleanly to the avatar's actual posed left palm
-    // world position (post-vrm.update) so both VRM 1.0 and VRM 0.x physically hold
-    // the phone in hand with zero floating gap regardless of arm length.
-    function syncPhoneToHand(handWorldPos, phoneHoldWeight) {
-      if (!phoneGroup || !handWorldPos || phoneHoldWeight <= 0.01) return;
+    // Held phone grip (post-vrm.update). Given a palm probe (wrist + index/middle/
+    // little proximal world positions) the phone sits flush in the palm: screen
+    // normal = palm normal (palmZ), long axis along palmY, centered on the palm and
+    // lifted by half the hand + phone thickness, so VRM 0.x and 1.0 hold it
+    // identically. Rigs without finger bones (or a bare Vector3 input) keep the
+    // legacy position-only knuckle anchor and the authored Euler orientation.
+    function syncPhoneToHand(input, phoneHoldWeight) {
+      const w = clamp(Number.isFinite(phoneHoldWeight) ? phoneHoldWeight : 0, 0, 1);
+      palmGrip.weight = w;
+      if (!phoneGroup || !input || w <= 0.01) { palmGrip.mode = "none"; return; }
+      const probe = input.wrist ? input : null;
+      const holdBlend = easeInOutCubic(w);
+      const computePalm = C.vrmCoLeadPose?.computePalmFrame;
+      if (probe?.hasFingers && hasQuat && typeof computePalm === "function" &&
+          computePalm(probe.wrist, probe.index, probe.middle, probe.little, probe.side || "left", palmFrame)) {
+        const px = palmFrame.palmX, py = palmFrame.palmY, pz = palmFrame.palmZ, pc = palmFrame.center;
+        gripAxisX.set(px.x, px.y, px.z);
+        gripAxisY.set(py.x, py.y, py.z);
+        gripAxisZ.set(pz.x, pz.y, pz.z);
+        gripBasis.makeBasis(gripAxisX, gripAxisY, gripAxisZ);
+        gripQuat.setFromRotationMatrix(gripBasis);
+        if (GRIP_ROLL !== 0) {
+          gripAxisZ.set(0, 0, 1);
+          gripRoll.setFromAxisAngle(gripAxisZ, GRIP_ROLL);
+          gripQuat.multiply(gripRoll);
+        }
+        const along = palmFrame.length * GRIP_ALONG;
+        const lift = palmFrame.width * GRIP_HAND_HALF_DEPTH + PHONE_BACK_DEPTH * baseScale;
+        const cx = pc.x + py.x * along + pz.x * lift;
+        const cy = pc.y + py.y * along + pz.y * lift;
+        const cz = pc.z + py.z * along + pz.z * lift;
+        phoneGroup.position.set(
+          lerp(livePhonePose.x, cx, holdBlend),
+          lerp(livePhonePose.y, cy, holdBlend),
+          lerp(livePhonePose.z, cz, holdBlend)
+        );
+        phoneGroup.quaternion.slerp(gripQuat, holdBlend);
+        palmGrip.mode = "palm";
+        palmGrip.side = palmFrame.side;
+        palmGrip.normal.x = pz.x; palmGrip.normal.y = pz.y; palmGrip.normal.z = pz.z;
+        palmGrip.center.x = cx; palmGrip.center.y = cy; palmGrip.center.z = cz;
+        palmGrip.phoneUpDot = py.y;
+        if (probe.hasHead) {
+          const hx = probe.head.x - cx, hy = probe.head.y - cy, hz = probe.head.z - cz;
+          const hl = Math.hypot(hx, hy, hz) || 1;
+          palmGrip.screenFacing = (pz.x * hx + pz.y * hy + pz.z * hz) / hl;
+        }
+        return;
+      }
+      const handWorldPos = probe ? (probe.anchor || probe.wrist) : input;
       if (!Number.isFinite(handWorldPos.x) || !Number.isFinite(handWorldPos.y) || !Number.isFinite(handWorldPos.z)) return;
-      const holdBlend = easeInOutCubic(clamp(phoneHoldWeight, 0, 1));
+      palmGrip.mode = "anchor";
+      palmGrip.screenFacing = 0;
       const anchorX = handWorldPos.x + baseScale * 0.012;
       const anchorY = Math.max(handWorldPos.y + baseScale * 0.145, lidTopWorldY + baseScale * 0.13);
       const anchorZ = Math.max(handWorldPos.z + baseScale * 0.025, basePos.z - baseScale * 0.24);
@@ -655,8 +652,10 @@
       const screenBottomY = rayY - visHalfH;
 
       const desiredTopY = screenBottomY + visH * 0.172;
+      // Calibrated framing (12% headroom) leaves the chest bone low in the slot on
+      // short avatars, so only clamp at chest level; the chin guard dominates.
       const maxSafeTopY = Math.min(
-        chestY - bustSpan * 0.14,
+        chestY + bustSpan * 0.06,
         headY - bustSpan * 0.92
       );
       const lidTopY = Math.min(desiredTopY, maxSafeTopY);
@@ -757,6 +756,10 @@
       livePhonePose.ry += (phoneTarget.ry - livePhonePose.ry) * phoneA;
       livePhonePose.rz += (phoneTarget.rz - livePhonePose.rz) * phoneA;
       applyPhoneTransform();
+      if (phoneShadowMesh?.material) {
+        const baseOpacity = phoneShadowMesh.material.userData?.studioOpacity ?? 0.3;
+        phoneShadowMesh.material.opacity = baseOpacity * clamp(1 - palmGrip.weight * 1.6, 0, 1) * Math.max(0, Math.cos(livePhonePose.ry));
+      }
 
       phoneScreenGlow = damp(phoneScreenGlow, targetPhoneGlow, 10.0, dt);
       if (phoneScreenMesh?.material) {
@@ -806,7 +809,8 @@
         screenGlow,
         phoneScreenGlow,
         hasLaptopProp: !!laptopGroup,
-        hasPhoneProp: !!phoneGroup
+        hasPhoneProp: !!phoneGroup,
+        palmGrip
       };
     }
 
@@ -823,6 +827,9 @@
       laptopGroup = lidMesh = rimMesh = emblemMesh = null;
       phoneGroup = phoneBodyMesh = phoneScreenMesh = phoneBackMesh = phoneCameraBumpMesh = phoneBuzzGlowMesh = null;
       screenLight = lidTexture = emblemTexture = phoneScreenTexture = phoneBackTexture = null;
+      hingeAccentMesh = phoneShadowMesh = shadowTexture = null;
+      palmGrip.mode = "none";
+      palmGrip.weight = 0;
       lastFraming = null;
       phonePoseInitialized = false;
     }
@@ -856,6 +863,7 @@
       makeEmblemGlowTexture,
       makePhoneScreenTexture,
       makePhoneBackTexture,
+      makeContactShadowTexture,
       makeRoundedRectShape,
       createCoLeadProps
     }

@@ -105,6 +105,7 @@ var companionScriptFiles = []string{
 	"dashboard-companion-scenarios.js",
 	"dashboard-companion-menu.js",
 	"dashboard-companion-vrm-fx.js",
+	"dashboard-companion-vrm-studio.js",
 	"dashboard-companion-vrm-props.js",
 	"dashboard-companion-vrm-pose.js",
 	"dashboard-companion-vrm-colead.js",

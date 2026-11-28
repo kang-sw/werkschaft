@@ -9,11 +9,153 @@
   // normalized humanoid coordinates (+X character-left, +Y up, +Z forward,
   // Euler XYZ) and conjugated for VRM 0.x by dashboard-companion-vrm.js.
   //
-  // Extension hooks reserved for later phases:
-  //   - params.fingerPreset (Phase 2: 30-bone humanoid finger curl tables)
+  // Extension hooks:
+  //   - params.fingerPreset (force one finger curl preset on both hands)
+  //   - params.fingerOut (caller-owned scratch map for zero-allocation finger targets)
   //   - params.breakoutPose (Phase 3: bleed/roam lean & walk overrides)
 
   const DEG = Math.PI / 180;
+
+  // 30 VRM humanoid finger bones (thumb Metacarpal/Proximal/Distal plus
+  // Index/Middle/Ring/Little Proximal/Intermediate/Distal on both hands).
+  const FINGER_DIGITS = Object.freeze(["Thumb", "Index", "Middle", "Ring", "Little"]);
+  const FINGER_SEGMENTS = Object.freeze({
+    Thumb: Object.freeze(["Metacarpal", "Proximal", "Distal"]),
+    Index: Object.freeze(["Proximal", "Intermediate", "Distal"]),
+    Middle: Object.freeze(["Proximal", "Intermediate", "Distal"]),
+    Ring: Object.freeze(["Proximal", "Intermediate", "Distal"]),
+    Little: Object.freeze(["Proximal", "Intermediate", "Distal"])
+  });
+  const FINGER_BONES = Object.freeze(["left", "right"].flatMap(side =>
+    FINGER_DIGITS.flatMap(d => FINGER_SEGMENTS[d].map(seg => side + d + seg))
+  ));
+
+  // Per-digit segment curl (radians, base -> tip). Thumb adds an opposition swing
+  // on its metacarpal; spread fans the proximal joints apart in the palm plane.
+  const FINGER_PRESETS = Object.freeze({
+    relaxed: Object.freeze({
+      thumb: Object.freeze([0.16, 0.18, 0.14]), thumbOpp: 0.20,
+      index: Object.freeze([0.20, 0.24, 0.14]), middle: Object.freeze([0.28, 0.32, 0.18]),
+      ring: Object.freeze([0.34, 0.38, 0.22]), little: Object.freeze([0.40, 0.42, 0.26]), spread: 0.05
+    }),
+    typing: Object.freeze({
+      thumb: Object.freeze([0.12, 0.20, 0.16]), thumbOpp: 0.30,
+      index: Object.freeze([0.36, 0.50, 0.28]), middle: Object.freeze([0.40, 0.54, 0.30]),
+      ring: Object.freeze([0.44, 0.56, 0.32]), little: Object.freeze([0.48, 0.58, 0.34]), spread: 0.07
+    }),
+    "phone-grip": Object.freeze({
+      thumb: Object.freeze([0.26, 0.30, 0.24]), thumbOpp: 0.58,
+      index: Object.freeze([0.86, 0.74, 0.40]), middle: Object.freeze([0.96, 0.84, 0.44]),
+      ring: Object.freeze([1.02, 0.88, 0.48]), little: Object.freeze([1.08, 0.92, 0.50]), spread: 0.02
+    }),
+    point: Object.freeze({
+      thumb: Object.freeze([0.46, 0.58, 0.44]), thumbOpp: 0.52,
+      index: Object.freeze([0.04, 0.04, 0.02]), middle: Object.freeze([1.20, 1.26, 0.68]),
+      ring: Object.freeze([1.26, 1.32, 0.70]), little: Object.freeze([1.30, 1.36, 0.72]), spread: 0.0
+    })
+  });
+  const FINGER_SPREAD_SIGN = Object.freeze({ index: -1, middle: 0, ring: 0.5, little: 1 });
+
+  function resolveFingerPreset(name) {
+    return Object.hasOwn(FINGER_PRESETS, name) ? FINGER_PRESETS[name] : null;
+  }
+
+  // Blend relaxed -> typing -> phone-grip -> point for one hand and write the
+  // 15 VRM 1.0 Euler targets into out (reusing existing arrays when present).
+  // Left curls rotate -Z; the right hand mirrors across the YZ plane.
+  function writeHandFingerTargets(side, blend, out) {
+    const rel = FINGER_PRESETS.relaxed, typ = FINGER_PRESETS.typing;
+    const grip = FINGER_PRESETS["phone-grip"], pt = FINGER_PRESETS.point;
+    const wT = clamp(blend?.typing || 0, 0, 1);
+    const wG = clamp(blend?.grip || 0, 0, 1);
+    const wP = clamp(blend?.point || 0, 0, 1);
+    const tap = Number.isFinite(blend?.tap) ? blend.tap : 0;
+    const forced = blend?.preset ? resolveFingerPreset(blend.preset) : null;
+    const mirror = side === "right" ? -1 : 1;
+    const mix = (key, i) => {
+      if (forced) return i < 0 ? forced[key] : forced[key][i];
+      const a = i < 0 ? rel[key] : rel[key][i];
+      const b = i < 0 ? typ[key] : typ[key][i];
+      const c = i < 0 ? grip[key] : grip[key][i];
+      const d = i < 0 ? pt[key] : pt[key][i];
+      return lerp(lerp(lerp(a, b, wT), c, wG), d, wP);
+    };
+    const put = (name, x, y, z) => {
+      const arr = out[name];
+      if (Array.isArray(arr) && arr.length >= 3) { arr[0] = x; arr[1] = y; arr[2] = z; }
+      else out[name] = [x, y, z];
+    };
+    const spread = mix("spread", -1);
+    const opp = mix("thumbOpp", -1);
+    for (let i = 0; i < 3; i++) {
+      const c = mix("thumb", i);
+      put(side + "Thumb" + FINGER_SEGMENTS.Thumb[i], 0.7 * c, mirror * (i === 0 ? opp : 0), -mirror * 0.7 * c);
+    }
+    for (const key of ["index", "middle", "ring", "little"]) {
+      const digit = key[0].toUpperCase() + key.slice(1);
+      const tapCurl = (key === "index" || key === "middle") && !forced ? tap * 0.10 * wT : 0;
+      for (let i = 0; i < 3; i++) {
+        const c = mix(key, i) + (i < 2 ? tapCurl : 0);
+        const y = i === 0 ? spread * FINGER_SPREAD_SIGN[key] : 0;
+        put(side + digit + FINGER_SEGMENTS[digit][i], 0, mirror * y, -mirror * c);
+      }
+    }
+    return out;
+  }
+
+  // Compute all 30 finger Euler targets. weights = { left: blend, right: blend }
+  // where blend = { typing, grip, point, tap, preset }.
+  function computeFingerTargets(weights, out) {
+    const target = out && typeof out === "object" ? out : {};
+    writeHandFingerTargets("left", weights?.left || null, target);
+    writeHandFingerTargets("right", weights?.right || null, target);
+    return target;
+  }
+
+  // World-space orthonormal palm frame from wrist + index/middle/little proximal
+  // joint positions ({x, y, z}). palmY runs wrist -> middle knuckle, palmZ is the
+  // palm-surface normal (out of the palm), palmX = palmY x palmZ (right-handed).
+  // Inputs are world positions, so the frame is identical on VRM 0.x (after
+  // VRMUtils.rotateVRM0) and VRM 1.0. Returns false on degenerate input.
+  function computePalmFrame(wrist, index, middle, little, side, out) {
+    if (!wrist || !index || !middle || !little || !out) return false;
+    for (const p of [wrist, index, middle, little]) {
+      if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) return false;
+    }
+    let yx = middle.x - wrist.x, yy = middle.y - wrist.y, yz = middle.z - wrist.z;
+    const len = Math.hypot(yx, yy, yz);
+    let ax = index.x - little.x, ay = index.y - little.y, az = index.z - little.z;
+    const width = Math.hypot(ax, ay, az);
+    if (len < 1e-5 || width < 1e-5) return false;
+    yx /= len; yy /= len; yz /= len;
+    ax /= width; ay /= width; az /= width;
+    // Left palm normal = palmY x across; right = across x palmY (mirror).
+    const s = side === "right" ? -1 : 1;
+    let zx = s * (yy * az - yz * ay), zy = s * (yz * ax - yx * az), zz = s * (yx * ay - yy * ax);
+    const zl = Math.hypot(zx, zy, zz);
+    if (zl < 1e-5) return false;
+    zx /= zl; zy /= zl; zz /= zl;
+    let xx = yy * zz - yz * zy, xy = yz * zx - yx * zz, xz = yx * zy - yy * zx;
+    const xl = Math.hypot(xx, xy, xz);
+    xx /= xl; xy /= xl; xz /= xl;
+    // Re-orthogonalize palmY = palmZ x palmX.
+    yx = zy * xz - zz * xy; yy = zz * xx - zx * xz; yz = zx * xy - zy * xx;
+    const set = (key, x, y, z) => {
+      const v = out[key] || (out[key] = { x: 0, y: 0, z: 0 });
+      v.x = x; v.y = y; v.z = z;
+    };
+    set("palmX", xx, xy, xz);
+    set("palmY", yx, yy, yz);
+    set("palmZ", zx, zy, zz);
+    set("center",
+      wrist.x + (middle.x - wrist.x) * 0.55,
+      wrist.y + (middle.y - wrist.y) * 0.55,
+      wrist.z + (middle.z - wrist.z) * 0.55);
+    out.length = len;
+    out.width = width;
+    out.side = side === "right" ? "right" : "left";
+    return true;
+  }
 
   function clamp(v, lo, hi) {
     return v < lo ? lo : (v > hi ? hi : v);
@@ -189,7 +331,9 @@
       -uYaw + tapL * 0.010 + swapSweep * 0.09,
       -uDrop - breath * 0.008 + swapActiveW * 0.02 + knockJoltW * 0.14
     ];
-    const lUpperPhone = [-0.58 + thumbBob * 0.4, -0.14, -0.82 + thumbBob * 0.3];
+    // Phone hold (solved on a generic VRM 1.0 rig): elbow tucked at the side, forearm
+    // raised so the palm (and the phone screen) faces the face at upper-chest height.
+    const lUpperPhone = [-0.37 + thumbBob * 0.4, 0.85, -1.50 + thumbBob * 0.3];
     const lUpperTap = [-0.46 + tapGlassPulse * 0.35, -0.18, -0.84];
     const lUpper = [
       lerp(lerp(lUpperBase[0], lUpperPhone[0], phoneHoldW), lUpperTap[0], annoyedTapW),
@@ -204,7 +348,8 @@
       uYaw * (1 - phoneHoldW * 0.35) - tapR * 0.010 + swapSweep * 0.09,
       uDrop + breath * 0.008 - swapActiveW * 0.02 - knockJoltW * 0.14 + phoneHoldW * 0.05
     ];
-    const rUpperType = [-0.34 - thumbBob * 0.35, 0.22, 1.04];
+    // Right index reaches the held phone screen (solved against the palm grip).
+    const rUpperType = [-0.03 - thumbBob * 0.35, 0.53, 1.48];
     const rUpper = [
       lerp(rUpperBase[0], rUpperType[0], phoneTypingW * 0.85),
       lerp(rUpperBase[1], rUpperType[1], phoneTypingW * 0.85),
@@ -221,7 +366,7 @@
       -(fFlex + tapL * 0.045 + knockJoltW * 0.18),
       -(fInward + tapL * 0.018 - swapSweep * 0.06)
     ];
-    const lLowerPhone = [0.56 + thumbBob, -(1.26 + thumbBob * 0.65), -0.28];
+    const lLowerPhone = [1.33 + thumbBob, -(2.0 + thumbBob * 0.65), 0.30];
     const lLowerTap = [0.22, -(1.56 + tapGlassPulse), -0.12];
     const lLower = [
       lerp(lerp(lLowerBase[0], lLowerPhone[0], phoneHoldW), lLowerTap[0], annoyedTapW),
@@ -234,7 +379,7 @@
       fFlex * (1 - phoneHoldW * 0.35) + tapR * 0.045 + knockJoltW * 0.18,
       fInward * (1 - phoneHoldW * 0.4) + tapR * 0.018 + swapSweep * 0.06
     ];
-    const rLowerType = [0.32 - thumbBob * 0.8, 1.38 + thumbBob * 0.9, 0.26];
+    const rLowerType = [0.55 - thumbBob * 0.8, 2.52 + thumbBob * 0.9, -0.26];
     const rLower = [
       lerp(rLowerBase[0], rLowerType[0], phoneTypingW * 0.85),
       lerp(rLowerBase[1], rLowerType[1], phoneTypingW * 0.85),
@@ -243,14 +388,14 @@
 
     // Delicate alternating wrist/hand key-tap articulation or phone thumb-typing micro-motion.
     const lHandBase = [0.08 + wristL * 0.055, 0.05 + tapL * 0.035, 0.10 + wristL * 0.04];
-    const lHandPhone = [0.18 + thumbBob * 1.4, 0.12 - thumbBob * 0.8, 0.24];
+    const lHandPhone = [-0.66 + thumbBob * 1.4, -0.67 - thumbBob * 0.8, 0.03];
     const lHand = [
       lerp(lHandBase[0], lHandPhone[0], phoneHoldW),
       lerp(lHandBase[1], lHandPhone[1], phoneHoldW),
       lerp(lHandBase[2], lHandPhone[2], phoneHoldW)
     ];
     const rHandBase = [0.08 + wristR * 0.055, -(0.05 + tapR * 0.035), -(0.10 + wristR * 0.04)];
-    const rHandType = [0.16 - thumbBob * 1.6, -0.14 + thumbBob * 0.9, -0.18];
+    const rHandType = [-0.19 - thumbBob * 1.6, -0.11 + thumbBob * 0.9, -0.29];
     const rHand = [
       lerp(rHandBase[0], rHandType[0], phoneTypingW * 0.85),
       lerp(rHandBase[1], rHandType[1], phoneTypingW * 0.85),
@@ -273,7 +418,18 @@
       rightHand: rHand
     };
 
-    // Phase 2/3 additive hooks (no-op when omitted).
+    // 30-bone finger curls: keys while typing, wrap the phone while holding it,
+    // point at the glass on annoyed tap, and tap the screen with the right index.
+    const forcedPreset = typeof params.fingerPreset === "string" && resolveFingerPreset(params.fingerPreset) ? params.fingerPreset : "";
+    const fingerTargets = computeFingerTargets({
+      left: { typing: typingW * keyMask, grip: phoneHoldW * (1 - annoyedTapW), point: annoyedTapW, tap: tapL, preset: forcedPreset },
+      right: { typing: typingW * keyMask, grip: 0, point: phoneTypingW * 0.85, tap: tapR, preset: forcedPreset }
+    }, params.fingerOut && typeof params.fingerOut === "object" ? params.fingerOut : null);
+    for (let i = 0; i < FINGER_BONES.length; i++) {
+      targets[FINGER_BONES[i]] = fingerTargets[FINGER_BONES[i]];
+    }
+
+    // Phase 3 additive hooks (no-op when omitted).
     if (params.breakoutPose && typeof params.breakoutPose === "object") {
       for (const bone of Object.keys(params.breakoutPose)) {
         const delta = params.breakoutPose[bone];
@@ -499,6 +655,10 @@
       hashPhase,
       mirrorLR,
       classifyActivity,
+      FINGER_BONES,
+      FINGER_PRESETS,
+      computeFingerTargets,
+      computePalmFrame,
       computeCoLeadTargets,
       evalDizzyBeat,
       evalSwapBeat,

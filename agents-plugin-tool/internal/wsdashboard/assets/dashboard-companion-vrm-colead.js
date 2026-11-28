@@ -178,8 +178,10 @@
       props.layoutProp(framing, camOverride, { accentHex, phoneFaceDown });
     }
 
-    function syncPhoneToHand(handWorldPos) {
-      props.syncPhoneToHand(handWorldPos, phoneHoldWeight);
+    const fingerScratch = {};
+    function syncPhoneToHand(palmProbeOrHandPos) {
+      const input = typeof palmProbeOrHandPos === "function" ? (phoneHoldWeight > 0.01 ? palmProbeOrHandPos() : null) : palmProbeOrHandPos;
+      props.syncPhoneToHand(input, phoneHoldWeight);
     }
 
     function advanceRhythm(dt, activity, hovered) {
@@ -621,7 +623,8 @@
         tiltDir: glanceTiltDir,
         headYaw: wantHeadYaw,
         headPitch: wantHeadPitch,
-        headPitchCue: ctx.headPitchCue || 0
+        headPitchCue: ctx.headPitchCue || 0,
+        fingerOut: fingerScratch
       });
 
       const activeMode = overrideBeat !== "auto"
@@ -941,7 +944,8 @@
         breakoutMode,
         laptopTopViewportPct: Number(pm.lidTopViewportPct.toFixed(2)),
         chinViewportPct: Number(pm.chinViewportPct.toFixed(2)),
-        headViewportPct: Number(pm.headViewportPct.toFixed(2))
+        headViewportPct: Number(pm.headViewportPct.toFixed(2)),
+        palmGrip: { mode: pm.palmGrip.mode, side: pm.palmGrip.side, weight: Number(pm.palmGrip.weight.toFixed(3)), screenFacing: Number(pm.palmGrip.screenFacing.toFixed(3)), phoneUpDot: Number(pm.palmGrip.phoneUpDot.toFixed(3)) }
       };
     }
 
