@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -201,5 +202,59 @@ func TestCreateManagedSlotDirPermissions(t *testing.T) {
 	}
 	if _, err := CreateManagedSlotDir(cacheHome, "codex", "../escape"); !errors.Is(err, ErrInvalidAccountSlot) {
 		t.Fatalf("traversal id must be refused: %v", err)
+	}
+}
+
+func TestAccountSlotLabelRuneBounds(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, AccountSlotsFileName)
+	slotA := filepath.Join(dir, "codex-a")
+	slotB := filepath.Join(dir, "codex-b")
+
+	reg := NewAccountSlotRegistry(path)
+	t.Cleanup(reg.Close)
+
+	label80 := strings.Repeat("가", 80) // 240 UTF-8 bytes, 80 runes
+	label81 := strings.Repeat("가", 81)
+
+	added, err := reg.AddSlot(AccountSlot{
+		ID:        "work",
+		Harness:   "codex",
+		Label:     "  " + label80 + "  ",
+		ConfigDir: slotA,
+	})
+	if err != nil {
+		t.Fatalf("AddSlot with 80 runes failed: %v", err)
+	}
+	if added.Label != label80 {
+		t.Fatalf("AddSlot did not trim label: got %q", added.Label)
+	}
+
+	if _, err := reg.AddSlot(AccountSlot{
+		ID:        "too-long",
+		Harness:   "codex",
+		Label:     label81,
+		ConfigDir: slotB,
+	}); !errors.Is(err, ErrInvalidAccountSlot) {
+		t.Fatalf("AddSlot 81 runes = %v, want ErrInvalidAccountSlot", err)
+	}
+
+	if err := reg.UpdateSlotLabel("codex", "work", "  "+label80+"\t"); err != nil {
+		t.Fatalf("UpdateSlotLabel 80 runes failed: %v", err)
+	}
+	if got, ok := reg.ResolveSlot("codex", "work"); !ok || got.Label != label80 {
+		t.Fatalf("ResolveSlot after 80-rune rename: ok=%v got=%+v", ok, got)
+	}
+	if err := reg.UpdateSlotLabel("codex", "work", label81); !errors.Is(err, ErrInvalidAccountSlot) {
+		t.Fatalf("UpdateSlotLabel 81 runes = %v, want ErrInvalidAccountSlot", err)
+	}
+	if err := reg.UpdateSlotLabel("codex", "work", "   "); !errors.Is(err, ErrInvalidAccountSlot) {
+		t.Fatalf("UpdateSlotLabel blank = %v, want ErrInvalidAccountSlot", err)
+	}
+	if err := reg.UpdateSlotLabel("codex", DefaultAccountSlotID, "Renamed Default"); !errors.Is(err, ErrDefaultSlotImmutable) {
+		t.Fatalf("UpdateSlotLabel default = %v, want ErrDefaultSlotImmutable", err)
+	}
+	if err := reg.UpdateSlotLabel("codex", "missing", "Valid"); !errors.Is(err, ErrAccountSlotNotFound) {
+		t.Fatalf("UpdateSlotLabel missing = %v, want ErrAccountSlotNotFound", err)
 	}
 }

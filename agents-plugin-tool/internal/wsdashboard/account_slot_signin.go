@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/kang-sw/devenv/internal/wscred"
@@ -174,7 +175,7 @@ func (d *Daemon) handleAccountSlotSignInStart(w http.ResponseWriter, r *http.Req
 	if label == "" {
 		label = slotID
 	}
-	if len(label) > 80 {
+	if utf8.RuneCountInString(label) > 80 {
 		accountError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
