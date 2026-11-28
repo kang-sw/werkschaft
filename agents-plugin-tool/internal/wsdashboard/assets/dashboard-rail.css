@@ -508,22 +508,23 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rail .rs.cur .qdot { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card)); }
 /* Unread attention: three fast flashes (0.38s * 3 = 1.14s) on arrival, then
    a seamless transition into a continuous 1Hz gradient pulse; server-replaced
-   rows mount with .attn alone and start directly in the 1Hz pulse. The
-   question dot's z-index keeps it above both overlays. */
+   or reordered rows inherit --attn-t / --attn-breathe-delay so their phase
+   continues without restarting. The question dot's z-index keeps it above both
+   overlays. */
 .rail .rs.attn::before {
   content: ""; position: absolute; inset: 0; border-radius: 6px; pointer-events: none;
   background: linear-gradient(90deg, var(--wb-accent-policy) 0%, color-mix(in srgb, var(--wb-accent-policy) 68%, transparent) 60%, color-mix(in srgb, var(--wb-accent-policy) 18%, transparent) 100%);
   opacity: .04;
-  animation: attn-breathe 1s ease-in-out infinite;
+  animation: attn-breathe 1s ease-in-out var(--attn-breathe-delay, 0s) infinite;
 }
 .rail .rs.attn .hb::after {
   content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
   box-shadow: 0 0 0 3px var(--wb-accent-policy);
   opacity: .25;
-  animation: attn-breathe-ring 1s ease-in-out infinite;
+  animation: attn-breathe-ring 1s ease-in-out var(--attn-breathe-delay, 0s) infinite;
 }
-.rail .rs.attn.attn-flash::before { animation: attn-flash .38s ease-in-out 3, attn-breathe 1s ease-in-out 1.14s infinite; }
-.rail .rs.attn.attn-flash .hb::after { animation: attn-flash-ring .38s ease-in-out 3, attn-breathe-ring 1s ease-in-out 1.14s infinite; }
+.rail .rs.attn.attn-flash::before { animation: attn-flash .38s ease-in-out calc(-1 * var(--attn-t, 0s)) 3, attn-breathe 1s ease-in-out calc(1.14s - var(--attn-t, 0s)) infinite; }
+.rail .rs.attn.attn-flash .hb::after { animation: attn-flash-ring .38s ease-in-out calc(-1 * var(--attn-t, 0s)) 3, attn-breathe-ring 1s ease-in-out calc(1.14s - var(--attn-t, 0s)) infinite; }
 @keyframes attn-flash { 0%, 100% { opacity: .04; } 50% { opacity: .44; } }
 @keyframes attn-breathe { 0%, 100% { opacity: .04; } 50% { opacity: .28; } }
 /* The ring's shadow is static and only its opacity moves, so the pulse stays

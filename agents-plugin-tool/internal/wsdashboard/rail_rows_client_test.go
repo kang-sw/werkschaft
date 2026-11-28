@@ -7,13 +7,14 @@ import "testing"
 func TestRailRowsClientRecovery(t *testing.T) {
 	src := streamClientFuncs(t, "openStream", "connected", "connect", "showRegions")
 	runNode(t, "rail delta dispatch and recovery", streamPageHarness(t)+`
+Date.now = function () { return now; };
 var mode="session",rid="rid1",worktree="",hiddenRegions={},modeHash="m1",liveMode=false,sseOn=true;
 function held() { return "rail.old,head.kept"; }
 function trackerLost() {} function trackerNudge() {} function syncBadge() {} function modeChanged() {} function banner() {}
 function tlHold() {} function tlCount() {} function tlShown() {} var tlHeld={};
 function frag(html) { return html; } function apScan() {}
-var applied=[], bases=[], rebases=0;
-var railAttention={observe:function(rows,rid,baseline) { if (baseline) rebases++; }};
+var applied=[], bases=[], baselines=[];
+var railAttention={observe:function(rows,rid,baseline) { baselines.push(!!baseline); }};
 function swap(name,hash,input) { applied.push([name,hash,input]); }
 var WsRail={
  rowInputFull:function(html) { return {value:html}; },
@@ -41,7 +42,24 @@ advance(0);
 sockets[2].msg("region",{name:"rail",hash:"fresh",html:"D"});
 sockets[2].msg("rail-rows",{hash:"next",valid:true,add:"E"});
 check("full region repairs baseline",applied[3],["rail","next",{value:"DE"}]);
-check("only connection baselines rebase attention",rebases,2);
+check("cold load baselines once, short 0ms recovery reconnect preserves seen",baselines,[true,false,false,false,false]);
+
+// Brief drop (<= 60s, e.g. 3s daemon restart) preserves seen (baseline = false).
+sockets[2].fail();
+advance(3000);
+sockets[3].msg("region",{name:"rail",hash:"brief",html:"F"});
+check("short 3s reconnect preserves seen without re-baselining",baselines[baselines.length-1],false);
+
+// Long outage (> 60s across repeated failed retries, e.g. sleep/wake) silently re-baselines.
+sockets[3].fail();
+for (var k = 0; k < 21; k++) {
+  advance(3000);
+  if (k < 20) sockets[sockets.length - 1].fail();
+}
+sockets[sockets.length - 1].msg("region",{name:"rail",hash:"wake",html:"G"});
+check("long >60s outage silently re-baselines on recovery",baselines[baselines.length-1],true);
+sockets[sockets.length - 1].msg("rail-rows",{hash:"after-wake",valid:true,add:"H"});
+check("subsequent delta after recovery does not baseline",baselines[baselines.length-1],false);
 process.stdout.write(bad.join("\n"));
 `)
 }

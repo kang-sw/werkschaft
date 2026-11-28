@@ -13,7 +13,7 @@
   var railEl = $("rail"), railBtn = $("railbtn"), rscrim = $("rscrim"), WsRail = window.WsRail;
   var railHoverUpdates = region("rail") && WsRail ? WsRail.hoverUpdates(region("rail")) : null;
   var railRendered = null; // last applied canonical server input, not client-marked DOM
-  var railAttention = WsRail ? WsRail.attention() : null;
+  var railAttention = WsRail ? WsRail.attention({ paused: doc.hidden || shHidden }) : null;
   var memoPad = railEl && $("memo-pad") && window.WsMemo ? window.WsMemo.mount(doc, railEl, $("memo-pad"), function (open) { railOpen(open === true); }) : null;
   var stopNeedsHold = new Set();
   var railStore = { load: load, save: save }, railSets = WsRail ? WsRail.state(railStore) : null;
@@ -1319,6 +1319,7 @@
       b.className = "rkids";
       return b;
     });
+    railMarks();
     layoutSave(z.op, function () { undo(); railMarks(); });
   }
   // rdSave drops a workspace or complete worktree group next to ref and
@@ -1326,6 +1327,7 @@
   function rdSave(item, ref, after) {
     var box = item.parentNode, next = item.nextSibling;
     if (!WsRail.drop(item, ref, after)) return;
+    railMarks();
     var wt = item.classList.contains("rwt"), attr = wt ? "data-g" : "data-ws";
     var body = { op: wt ? "wtmove" : "wsmove", path: item.getAttribute(attr) || "" };
     if (wt) body.workspace = item.closest(".rws").getAttribute("data-ws") || "";

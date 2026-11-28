@@ -80,6 +80,7 @@
   function syncPageVisibility() {
     var paused = doc.hidden || shHidden;
     if (root.hasAttribute("data-animation-paused") !== paused) root.toggleAttribute("data-animation-paused", paused);
+    if (typeof railAttention !== "undefined" && railAttention && railAttention.setPaused) railAttention.setPaused(paused);
     // Shell visibility can change while the browser tab is already hidden.
     doc.dispatchEvent(new CustomEvent("ws-page-visibility"));
   }
