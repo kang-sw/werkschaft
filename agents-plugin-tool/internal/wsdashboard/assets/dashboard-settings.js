@@ -180,9 +180,28 @@ var wsSettingsChoiceLabels = {
     if (!el || (el.tagName !== "INPUT" && el.tagName !== "TEXTAREA")) return false;
     var t = el.tagName === "INPUT" ? String(el.getAttribute("type") || el.type || "text").toLowerCase() : "textarea";
     if (t === "password") return true;
-    return [el.getAttribute("name"), el.getAttribute("id"), el.getAttribute("placeholder"), el.getAttribute("aria-label")].some(function (v) {
+    if ([el.getAttribute("name"), el.getAttribute("id"), el.getAttribute("autocomplete"), el.getAttribute("placeholder"), el.getAttribute("aria-label"), el.getAttribute("title")].some(function (v) {
       return !!(v && dcSettingsSensitiveRe.test(v));
-    });
+    })) return true;
+    if (el.attributes) {
+      for (var i = 0; i < el.attributes.length; i++) {
+        var a = el.attributes[i];
+        if (a && a.name && a.name.indexOf("data-ws-") === 0 && (dcSettingsSensitiveRe.test(a.name) || dcSettingsSensitiveRe.test(a.value || ""))) return true;
+      }
+    }
+    return false;
+  }
+  function dcSettingsDataWS(el) {
+    if (!el.attributes) return null;
+    var out = null;
+    for (var i = 0; i < el.attributes.length; i++) {
+      var a = el.attributes[i];
+      if (a && a.name && a.name.indexOf("data-ws-") === 0) {
+        if (!out) out = {};
+        out[a.name] = dcSettingsRedact(String(a.value || "").slice(0, 200));
+      }
+    }
+    return out;
   }
   function handleSettingsDaemonBridgeReq(msg) {
     var id = msg.id, op = msg.op, params = msg.params || {};
@@ -215,16 +234,20 @@ var wsSettingsChoiceLabels = {
         var label = node.getAttribute("aria-label") || node.getAttribute("placeholder") || node.getAttribute("title") || node.textContent || "";
         label = dcSettingsRedact(label.replace(/\s+/g, " ").trim().slice(0, 160));
         if (label) entry.name = label;
+        var dws = dcSettingsDataWS(node);
+        if (dws) entry.data_ws = dws;
         if (tag === "input" || tag === "textarea" || tag === "select") {
           if (tag === "input") entry.input_type = String(node.getAttribute("type") || node.type || "text").toLowerCase();
           if (dcSettingsSensitiveInput(node)) {
             entry.masked = true;
             if (node.value) entry.value = "[REDACTED]";
+          } else if (tag === "input" && (entry.input_type === "checkbox" || entry.input_type === "radio")) {
+            entry.checked = !!node.checked;
           } else if (node.value) {
             entry.value = dcSettingsRedact(String(node.value).slice(0, 240));
           }
         }
-        if (node.disabled) entry.disabled = true;
+        if (node.disabled || node.getAttribute("aria-disabled") === "true") entry.disabled = true;
         nodes.push(entry);
       }
       reply(true, { nodes: nodes, truncated: truncated, ref_end: refSeq }, null);
@@ -237,11 +260,14 @@ var wsSettingsChoiceLabels = {
       if (!el) { reply(false, null, "ref_not_found"); return; }
       if (!el.isConnected) { reply(false, null, "stale_ref"); return; }
       if (el.closest && el.closest('[data-ws-dom-exclude="1"]')) { reply(false, null, "denied"); return; }
+      if (el.disabled || el.getAttribute("aria-disabled") === "true") { reply(false, null, "denied"); return; }
+      if (typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest", inline: "nearest" });
+      if (typeof el.focus === "function") el.focus({ preventScroll: true });
       if (op === "ui.click_ref") {
         el.click();
         reply(true, { route: location.pathname }, null);
       } else {
-        if (el.disabled || el.readOnly) { reply(false, null, "denied"); return; }
+        if (el.readOnly) { reply(false, null, "denied"); return; }
         var masked = dcSettingsSensitiveInput(el);
         el.value = String(params.value === undefined || params.value === null ? "" : params.value);
         el.dispatchEvent(new Event("input", { bubbles: true }));
