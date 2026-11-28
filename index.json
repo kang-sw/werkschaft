@@ -331,7 +331,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-28T10:11:17Z"
+        "touched_at": "2026-11-28T10:22:51Z",
+        "impl": {
+          "branch": "impl/develop/royal-frown-flyer"
+        }
       }
     },
     "261118-research-ws-agy-custom-agent-prompt": {
