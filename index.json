@@ -484,19 +484,6 @@
         }
       }
     },
-    "261128-refactor-ws-daemon-wake-driven-stat-invalidation": {
-      "registered_at": "2026-11-28T11:39:20Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-28T13:19:38Z",
-        "impl": {
-          "branch": "impl/develop/goon-cost-stray"
-        }
-      }
-    },
     "261128-refactor-ws-live-observed-batch-writes": {
       "registered_at": "2026-11-28T11:39:25Z"
     },
@@ -508,16 +495,6 @@
         "track": "develop",
         "phase": "closed",
         "touched_at": "2026-11-28T16:33:18Z"
-      }
-    },
-    "261129-feat-ws-cache-large-growth-gc": {
-      "registered_at": "2026-11-28T16:15:15Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-28T16:38:00Z"
       }
     },
     "261129-feat-ws-pi-rpc-account-ui-and-pty-login": {
