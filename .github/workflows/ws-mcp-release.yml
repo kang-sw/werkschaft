@@ -184,12 +184,15 @@ jobs:
           DISPATCH_VERSION: ${{ inputs.version }}
         run: |
           $ErrorActionPreference = "Stop"
-          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and -not [string]::IsNullOrWhiteSpace($env:DISPATCH_VERSION)) {
+          if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch" -and -not [string]::IsNullOrWhiteSpace($env:DISPATCH_VERSION)) {
             $buildVersion = $env:DISPATCH_VERSION.Trim() -replace '^v', ''
-          } elseif ("${{ github.ref }}" -like "refs/tags/*") {
-            $buildVersion = "${{ github.ref_name }}" -replace '^v', ''
+          } elseif ($env:GITHUB_REF -like "refs/tags/*") {
+            $buildVersion = $env:GITHUB_REF_NAME -replace '^v', ''
           } else {
             $buildVersion = "0.53.2-dev"
+          }
+          if ($buildVersion -notmatch '^[0-9A-Za-z._+-]+$') {
+            throw "Invalid build version: $buildVersion"
           }
           $sourceCommit = (git rev-parse --short=12 HEAD 2>$null)
           if (-not $sourceCommit) { $sourceCommit = "unknown" }

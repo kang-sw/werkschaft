@@ -11,9 +11,10 @@ name: ws canary
 # - prerelease mode: requires refs/heads/develop, emits a non-blocking
 #   ::warning:: if develop is ahead of the review-watermark frontier, runs
 #   ws-mcp-ci.yml via workflow_call, derives the next patch core X.Y.(Z+1) and
-#   lowest unclaimed vX.Y.(Z+1)-canary.N (N >= 1), applies bump-ws-version.sh
-#   ephemerally in every checkout job, and publishes an atomic draft-then-undraft
-#   GitHub prerelease targeting GITHUB_SHA with production signing.
+#   next monotonic vX.Y.(Z+1)-canary.N (N >= 1), applies bump-ws-version.sh
+#   ephemerally in build/windows-smoke/package checkouts, and publishes an
+#   atomic draft-then-undraft GitHub prerelease targeting GITHUB_SHA with
+#   production signing.
 on:
   workflow_dispatch:
     inputs:
@@ -44,9 +45,7 @@ on:
           - "eval"
           - "production"
 
-permissions:
-  contents: write
-  actions: read
+permissions: {}
 
 concurrency:
   group: ws-canary-${{ github.ref }}-${{ inputs.mode }}
@@ -69,7 +68,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
         with:
-          fetch-depth: 0
+          fetch-depth: ${{ inputs.mode == 'prerelease' && 0 || 1 }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -77,6 +76,7 @@ jobs:
           python-version: "3.12"
 
       - name: Check review-watermark advisory
+        if: inputs.mode == 'prerelease'
         run: python3 agents-plugin-tool/scripts/resolve-canary-version.py watermark --target HEAD
 
       - name: Resolve canary build plan
@@ -105,6 +105,8 @@ jobs:
     name: ws-mcp CI
     needs: plan
     if: needs.plan.outputs.run_ci == 'true'
+    permissions:
+      contents: read
     uses: ./.github/workflows/ws-mcp-ci.yml
     with:
       long_tests: ${{ inputs.long_tests || false }}
@@ -219,6 +221,9 @@ jobs:
           BUILD_VERSION: ${{ needs.plan.outputs.version }}
         run: |
           $ErrorActionPreference = "Stop"
+          if ($env:BUILD_VERSION -notmatch '^[0-9A-Za-z._+-]+$') {
+            throw "Invalid build version: $($env:BUILD_VERSION)"
+          }
           $sourceCommit = (git rev-parse --short=12 HEAD 2>$null)
           if (-not $sourceCommit) { $sourceCommit = "unknown" }
           New-Item -ItemType Directory -Force dist | Out-Null
@@ -242,6 +247,9 @@ jobs:
     name: Tauri desktop
     needs: [plan, build]
     if: ${{ !cancelled() && needs.plan.result == 'success' && needs.build.result == 'success' }}
+    # Required by werkschaft-tauri-build.yml's publish job declaration (skipped on branch refs).
+    permissions:
+      contents: write
     uses: ./.github/workflows/werkschaft-tauri-build.yml
     with:
       version: ${{ needs.plan.outputs.version }}
@@ -301,7 +309,8 @@ jobs:
             echo "::error::Tag ${CANARY_TAG} was claimed while the build was running."
             exit 1
           fi
-          if gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '.[].tag_name' | grep -Fxq -- "$CANARY_TAG"; then
+          existing_releases=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '.[].tag_name')
+          if grep -Fxq -- "$CANARY_TAG" <<< "$existing_releases"; then
             echo "::error::GitHub release ${CANARY_TAG} already exists."
             exit 1
           fi
@@ -311,8 +320,19 @@ jobs:
             echo "::error::Expected at least 20 release assets, found ${#files[@]}."
             exit 1
           fi
+          published=0
+          cleanup() {
+            local status=$?
+            if [ "$status" -ne 0 ] && [ "$published" -eq 0 ]; then
+              if gh release view "$CANARY_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null | grep -Fxq 'true'; then
+                echo "::warning::Cleaning up incomplete draft release ${CANARY_TAG}."
+                gh release delete "$CANARY_TAG" --repo "$GITHUB_REPOSITORY" --yes || true
+              fi
+            fi
+          }
+          trap cleanup EXIT
           notes="Automated develop canary prerelease ${CANARY_TAG} from ${GITHUB_SHA}."
-          gh release create "$CANARY_TAG" \
+          gh release create "$CANARY_TAG" "${files[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --draft \
             --prerelease \
@@ -320,11 +340,10 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "$CANARY_TAG" \
             --notes "$notes"
-          gh release upload "$CANARY_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
           uploaded=$(gh release view "$CANARY_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | select(.state == "uploaded") | .name')
           for file in "${files[@]}"; do
             if ! grep -Fxq -- "${file##*/}" <<< "$uploaded"; then
-              echo "::error::Draft release ${CANARY_TAG} is missing uploaded asset ${file##*/}; leaving as draft."
+              echo "::error::Draft release ${CANARY_TAG} is missing uploaded asset ${file##*/}."
               exit 1
             fi
           done
@@ -333,3 +352,4 @@ jobs:
             --draft=false \
             --prerelease \
             --latest=false
+          published=1

@@ -2,14 +2,13 @@ name: ws-mcp CI
 
 # Runs the default Go test group on Linux and Windows, and the Werkschaft shell's
 # Rust tests on macOS and Windows when the shell changed, for pull requests that touch
-# the tooling or plugin trees and on manual dispatch (`gh workflow run ws-mcp-ci.yml --ref
-# develop`). A develop push starts no run; the ship flow dispatches this
-# workflow on the exact commit it is about to tag, so a Windows-specific failure
-# is caught before release. It is also the release's only test run: the
-# tagged release workflow does not re-run the suite and instead refuses to
-# publish unless this workflow succeeded on the tagged commit. It publishes
-# nothing; the release workflow remains the sole path that builds and uploads
-# release assets.
+# the tooling or plugin trees, `workflow_call` from `ws-canary.yml`, and manual
+# dispatch (`gh workflow run ws-mcp-ci.yml --ref develop`). A develop push starts no
+# run; the ship flow dispatches this workflow on the exact commit it is about to tag,
+# so a Windows-specific failure is caught before release. It is also the release's only
+# test run: the tagged release workflow does not re-run the suite and instead refuses to
+# publish unless this workflow succeeded on the tagged commit. It publishes nothing; the
+# release workflow remains the sole path that builds and uploads release assets.
 #
 # Manual debug runs may pass `windows_shard` to run a single Windows shard
 # alone; that skips Linux, desktop, long, and the remaining Windows shards so

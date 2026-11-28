@@ -2642,10 +2642,11 @@ review-watermark frontier (`ai-docs/.review-ledger.md`):
   and restricts `signing=production` to `refs/heads/develop`.
 - `mode=prerelease` enforces `refs/heads/develop`, runs `.github/workflows/ws-mcp-ci.yml`
   via `workflow_call`, selects the next patch core `X.Y.(Z+1)` (never a minor
-  bump) and lowest unclaimed `v<next-patch-core>-canary.<N>` (`N >= 1`), runs
-  `bump-ws-version.sh` ephemerally in each checkout job (including
-  `.github/workflows/werkschaft-tauri-build.yml` via `bump_core`), and publishes
-  an atomic draft-then-undraft GitHub prerelease targeting `GITHUB_SHA`.
+  bump, failing fast if `v<next-patch-core>` already exists) and next monotonic
+  `v<next-patch-core>-canary.<N>` (`N >= 1`), runs `bump-ws-version.sh`
+  ephemerally in `build`, `windows-smoke`, and `werkschaft-tauri-build.yml`
+  `package` checkouts (via `bump_core`), and publishes an atomic
+  draft-then-undraft GitHub prerelease targeting `GITHUB_SHA`.
 
 ## Local Devenv Repair
 

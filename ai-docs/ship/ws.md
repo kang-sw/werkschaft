@@ -358,12 +358,14 @@ merge, zero ephemeral `release/canary-*` branch, zero manual tag push):
     `agents-plugin/runtime.json` (strictly patch-only — **do not publish a
     minor-core canary** unless a separately approved T3 flow is defined, because
     a higher minor would raise the shared daemon floor, break older plugin
-    sessions, and `Back to stable` would not restore that daemon), and picks
-    the lowest unclaimed integer `N >= 1` for `v<next-patch-core>-canary.<N>`
-    across remote tags (`git ls-remote --tags origin`) and GitHub Releases.
+    sessions, and `Back to stable` would not restore that daemon), verifies
+    `v<next-patch-core>` does not already exist on origin, and picks the next
+    monotonic integer `N = max(claimed, 0) + 1` (`N >= 1`) for
+    `v<next-patch-core>-canary.<N>` across remote tags (`git ls-remote --tags
+    origin`) and GitHub Releases.
   - Ephemerally runs `agents-plugin-tool/scripts/bump-ws-version.sh
-    <next-patch-core>` inside every checkout job (`build`, `windows-smoke`,
-    `werkschaft-tauri-build.yml` `package` and `combine`) without committing or
+    <next-patch-core>` inside the `build`, `windows-smoke`, and
+    `werkschaft-tauri-build.yml` `package` checkout jobs without committing or
     pushing to `develop`/`main`, so embedded package inventories, binary
     metadata, `agents-plugin-wsflow/runtime.json`, `package.cjs`, `release.cjs`,
     and `werkschaft-tauri-update.json` all agree on `<next-patch-core>-canary.<N>`.
@@ -371,10 +373,10 @@ merge, zero ephemeral `release/canary-*` branch, zero manual tag push):
     `WERKSCHAFT_UPDATER_PUBLIC_KEY` (`WERKSCHAFT_EVALUATION` unset), verifies
     `SHA256SUMS` and `release.cjs --verify`, and publishes an **atomic
     draft-then-undraft** prerelease targeting `GITHUB_SHA` (`gh release create
-    --draft --prerelease --latest=false` -> upload all native + Tauri assets ->
+    --draft --prerelease --latest=false` with all native + Tauri assets ->
     verify every asset is `uploaded` -> `gh release edit --draft=false
-    --prerelease --latest=false`), so the in-app canary updater (`feed.rs`)
-    never observes a half-uploaded release.
+    --prerelease --latest=false`, cleaning up the draft on failure), so the
+    in-app canary updater (`feed.rs`) never observes a half-uploaded release.
 
 Before dispatching `prerelease` mode, grade the payload under
 `ai-docs/manuals/release-compatibility.md` (T4 cannot ship; a T3 change must not

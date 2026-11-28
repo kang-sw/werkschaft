@@ -77,16 +77,37 @@ def parse_claimed_canary_counters(tag_names: Iterable[str], core: str) -> set[in
     return claimed
 
 
-def lowest_unclaimed_canary_counter(claimed: set[int]) -> int:
-    counter = 1
-    while counter in claimed:
-        counter += 1
-    return counter
+def has_stable_tag(tag_names: Iterable[str], core: str) -> bool:
+    expected = f"v{core}"
+    for raw in tag_names:
+        name = raw.strip()
+        if not name:
+            continue
+        if name.startswith("refs/tags/"):
+            name = name[len("refs/tags/") :]
+        if name.endswith("^{}"):
+            name = name[:-3]
+        if name == expected:
+            return True
+    return False
+
+
+def next_canary_counter(claimed: set[int]) -> int:
+    return max(claimed, default=0) + 1
 
 
 def fetch_remote_canary_tags(repo: Path, core: str) -> list[str]:
     proc = subprocess.run(
-        ["git", "-C", str(repo), "ls-remote", "--tags", "origin", f"refs/tags/v{core}-canary.*"],
+        [
+            "git",
+            "-C",
+            str(repo),
+            "ls-remote",
+            "--tags",
+            "origin",
+            f"refs/tags/v{core}",
+            f"refs/tags/v{core}-canary.*",
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -174,8 +195,13 @@ def resolve_canary_plan(
     elif not skip_remote:
         all_tags.extend(fetch_github_release_tags(repo, github_repository))
 
+    if has_stable_tag(all_tags, target_core):
+        raise ValueError(
+            f"Stable tag v{target_core} already exists on origin; merge main back into develop before cutting a canary."
+        )
+
     claimed = parse_claimed_canary_counters(all_tags, target_core)
-    counter = lowest_unclaimed_canary_counter(claimed)
+    counter = next_canary_counter(claimed)
     version = f"{target_core}-canary.{counter}"
     return {
         "mode": "prerelease",

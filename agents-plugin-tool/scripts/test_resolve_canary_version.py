@@ -72,7 +72,7 @@ class ResolveCanaryVersionTest(unittest.TestCase):
             self.assertEqual(plan["eval_signing"], "false")
             self.assertEqual(plan["version"], "0.53.2-canary.0")
 
-    def test_prerelease_mode_requires_develop_and_picks_lowest_unclaimed_patch_canary(self):
+    def test_prerelease_mode_requires_develop_and_picks_monotonic_patch_canary(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             write_runtime_pair(repo, "0.53.2")
@@ -113,6 +113,40 @@ class ResolveCanaryVersionTest(unittest.TestCase):
                     "eval_signing": "false",
                 },
             )
+
+    def test_prerelease_mode_is_strictly_monotonic_across_deleted_gaps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            write_runtime_pair(repo, "0.53.2")
+            plan = MOD.resolve_canary_plan(
+                repo=repo,
+                mode="prerelease",
+                ref="refs/heads/develop",
+                remote_tags=[
+                    "refs/tags/v0.53.3-canary.1",
+                    "refs/tags/v0.53.3-canary.4",
+                ],
+                release_tags=[],
+            )
+            self.assertEqual(plan["version"], "0.53.3-canary.5")
+            self.assertEqual(plan["tag"], "v0.53.3-canary.5")
+
+    def test_prerelease_mode_refuses_when_next_patch_stable_tag_already_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            write_runtime_pair(repo, "0.53.2")
+            for existing in (
+                {"remote_tags": ["refs/tags/v0.53.3"], "release_tags": []},
+                {"remote_tags": ["refs/tags/v0.53.3^{}"], "release_tags": []},
+                {"remote_tags": [], "release_tags": ["v0.53.3"]},
+            ):
+                with self.assertRaisesRegex(ValueError, "v0.53.3 already exists"):
+                    MOD.resolve_canary_plan(
+                        repo=repo,
+                        mode="prerelease",
+                        ref="refs/heads/develop",
+                        **existing,
+                    )
 
     def test_prerelease_mode_starts_at_counter_one_when_unclaimed(self):
         with tempfile.TemporaryDirectory() as tmp:
