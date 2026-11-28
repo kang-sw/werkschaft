@@ -67,7 +67,7 @@ var win = { innerHeight: 1000 }, ctx = {
   drMode: 'panels', drOpen: true, drShown: '', drTop: -500, tkApi: null,
   $: function (id) { return id === 'composer' ? composer : null; }, visible: function () { return composerVisible; },
   wsT: function (s) { return s; }, ghSync: function () {}, drTitle: function () {}, drFill: function () {},
-  drFoldShow: function () {}, wtLoad: function () {}, hdLoad: function () {}, notesLoad: function () {}, gitOpened: function () {}
+  drFoldShow: function () {}, wtLoad: function () {}, hdLoad: function () {}, gitOpened: function () {}
 };
 vm.createContext(ctx);
 vm.runInContext(funcs(dash, ['drHeaderBottom', 'drMax', 'drApply']), ctx);
@@ -176,7 +176,7 @@ var drheader = {getBoundingClientRect:function(){return {bottom:40};}};
 var drOpen = false, drMode = 'panels', drWant = false, drTop = 40, drShown = '', drHas = true, drSwap = false, DR_OPEN = 'k', DR_SEARCH = 'search', tkApi = null;
 function ghandle() { return ghandleEl; }
 function drMax() { return 600; }
-function ghSync() {} function drTitle() {} function drFill() {} function wtLoad() {} function hdLoad() {} function notesLoad() {} function gitOpened() {} function drDot() {} function drAnnounce() {}
+function ghSync() {} function drTitle() {} function drFill() {} function wtLoad() {} function hdLoad() {} function gitOpened() {} function drDot() {} function drAnnounce() {}
 var stored = {};
 function save(k, v) { stored[k] = v; }
 function wsT(k) { return k; }
