@@ -1,11 +1,19 @@
 package mcp
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wscompact"
+	"github.com/kang-sw/devenv/internal/wsconfig"
 )
 
 func newCompactDraftFixture(t *testing.T) (*Server, *compactAgendaTestRunner, string) {
@@ -172,8 +180,207 @@ func TestCompactDraftClearedOnServerClose(t *testing.T) {
 	if s.compactDrafts.get(key) == nil {
 		t.Fatal("draft not cached")
 	}
-	s.compactDrafts.reset()
+	s.Close()
 	if s.compactDrafts.get(key) != nil {
-		t.Fatal("draft survived reset")
+		t.Fatal("draft survived Server.Close")
 	}
+}
+
+// compactOnlyRunner hosts native compaction but cannot take a lead_summary.
+type compactOnlyRunner struct {
+	AgentHost
+	calls int
+}
+
+func (*compactOnlyRunner) Watch(func(wsagent.State)) func() { return func() {} }
+func (r *compactOnlyRunner) Compact(string, string, *bool) wsagent.CompactResult {
+	r.calls++
+	return wsagent.CompactResult{Status: "queued", Reason: "native"}
+}
+
+func TestCompactDraftNotCachedWhereRetryCannotSummarize(t *testing.T) {
+	setupMailboxTestEnv(t)
+	bad := map[string]any{"lead_summary": map[string]any{"next_step": "x"}, "agenda_updates": "bad"}
+
+	t.Run("host without CompactWithSummary", func(t *testing.T) {
+		root := t.TempDir()
+		runner := &compactOnlyRunner{}
+		s := NewServerWithOptions(ServerOptions{Root: root, Version: "test", Agents: runner})
+		t.Cleanup(s.Close)
+		key, _ := s.sessions.mint(root, roleLead, "")
+		resp := keyedCall(t, s, 1, key, "compact", bad)
+		if !toolIsError(t, resp) || strings.Contains(toolText(t, resp), "cached in server memory") || s.compactDrafts.get(key) != nil {
+			t.Fatalf("draft cached for a host that cannot summarize: %s", resp)
+		}
+		if resp := keyedCall(t, s, 2, key, "compact", nil); toolIsError(t, resp) || runner.calls != 1 {
+			t.Fatalf("bare compact locked out: %s calls=%d", resp, runner.calls)
+		}
+	})
+
+	t.Run("forwarding worker", func(t *testing.T) {
+		var forwarded int
+		daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			forwarded++
+			io.WriteString(w, `{"status":"queued","reason":"forwarded"}`)
+		}))
+		defer daemon.Close()
+		t.Setenv(wsagent.EnvPiToken, "tok123")
+		t.Setenv(wsagent.EnvPiEndpoint, daemon.URL)
+		root := t.TempDir()
+		s := NewServer(root, "test")
+		t.Cleanup(s.Close)
+		if !s.workerForwards() {
+			t.Fatal("fixture is not a forwarding worker")
+		}
+		key, _ := s.sessions.mint(root, roleLead, "")
+		resp := keyedCall(t, s, 1, key, "compact", bad)
+		if !toolIsError(t, resp) || strings.Contains(toolText(t, resp), "cached in server memory") || s.compactDrafts.get(key) != nil {
+			t.Fatalf("draft cached for a forwarding worker: %s", resp)
+		}
+		resp = keyedCall(t, s, 2, key, "compact", nil)
+		if toolIsError(t, resp) || forwarded != 1 || !strings.HasPrefix(toolText(t, resp), "queued: forwarded") {
+			t.Fatalf("bare compact was not forwarded natively: %s forwarded=%d", resp, forwarded)
+		}
+	})
+}
+
+func TestCompactBareRetryDropsDraftRunnerWillRefuse(t *testing.T) {
+	for _, tc := range []wsagent.CompactResult{
+		{Status: "unsupported", Reason: "the caller is not a hosted session"},
+		{Status: "error", Reason: wsagent.LeadSummaryRefusalPrefix + " for a hosted lead or ws-mode worker compacting itself"},
+	} {
+		t.Run(tc.Status, func(t *testing.T) {
+			s, runner, key := newCompactDraftFixture(t)
+			keyedCall(t, s, 1, key, "compact", map[string]any{"lead_summary": map[string]any{"next_step": "x"}, "agenda_updates": "bad"})
+			runner.result = tc
+			keyedCall(t, s, 2, key, "compact", nil)
+			if s.compactDrafts.get(key) != nil {
+				t.Fatal("draft survived a role refusal and would lock the caller out")
+			}
+			runner.result = wsagent.CompactResult{Status: "queued", Reason: "native"}
+			runner.calledWith, runner.calledNoArg = nil, false
+			keyedCall(t, s, 3, key, "compact", nil)
+			if runner.calledWith != nil || !runner.calledNoArg {
+				t.Fatalf("next bare compact was not native: %+v", runner.calledWith)
+			}
+		})
+	}
+}
+
+func TestCompactBareRetryAfterLeadModeSwitchedToNative(t *testing.T) {
+	setupMailboxTestEnv(t)
+	root := t.TempDir()
+	runner := &compactSchemaRunner{state: wsagent.State{ID: "lead1", Lead: true, Backend: wsagent.BackendAgy}}
+	s := NewServerWithOptions(ServerOptions{Root: root, Version: "test", Agents: runner})
+	t.Cleanup(s.Close)
+	s.conversation = "lead1"
+	key, _ := s.sessions.mint(root, roleLead, "")
+
+	keyedCall(t, s, 1, key, "compact", map[string]any{"lead_summary": map[string]any{"next_step": "x"}, "agenda_updates": "bad"})
+	if s.compactDrafts.get(key) == nil {
+		t.Fatal("draft not cached under ws mode")
+	}
+	runner.mode = wsconfig.CompactionModeNative
+	if resp := keyedCall(t, s, 2, key, "compact", nil); toolIsError(t, resp) || runner.calledWith != nil || !runner.calledNoArg {
+		t.Fatalf("stale draft replayed as ws-managed after switch to native: %s %+v", resp, runner.calledWith)
+	}
+	if s.compactDrafts.get(key) != nil {
+		t.Fatal("stale draft not cleared")
+	}
+
+	// An explicit lead_summary stays accepted under the single-acceptance contract.
+	runner.calledWith = nil
+	if resp := keyedCall(t, s, 3, key, "compact", map[string]any{"lead_summary": map[string]any{"next_step": "y"}}); toolIsError(t, resp) || runner.calledWith == nil {
+		t.Fatalf("explicit lead_summary refused under native mode: %s", resp)
+	}
+}
+
+func TestCompactJSONResponseWarnings(t *testing.T) {
+	s, _, key := newCompactDraftFixture(t)
+	decode := func(resp string) map[string]any {
+		t.Helper()
+		var out map[string]any
+		if err := json.Unmarshal([]byte(toolText(t, resp)), &out); err != nil {
+			t.Fatalf("not JSON: %v: %s", err, resp)
+		}
+		return out
+	}
+	with := decode(keyedCall(t, s, 1, key, "compact", map[string]any{"format": "json", "lead_summary": map[string]any{"bogus": 1}}))
+	if w, _ := with["warnings"].([]any); len(w) != 1 || with["status"] != "queued" {
+		t.Fatalf("json response = %v, want status queued and one warning", with)
+	}
+	without := decode(keyedCall(t, s, 2, key, "compact", map[string]any{"format": "json", "lead_summary": map[string]any{"next_step": "x"}}))
+	if _, has := without["warnings"]; has || without["status"] != "queued" {
+		t.Fatalf("json response = %v, want no warnings key", without)
+	}
+}
+
+func TestCompactDescendantTargetNeverTouchesSelfDraft(t *testing.T) {
+	s, runner, key := newCompactDraftFixture(t)
+	keyedCall(t, s, 1, key, "compact", map[string]any{"lead_summary": map[string]any{"next_step": "mine"}, "agenda_updates": "bad"})
+
+	// A failed descendant call with lead_summary must not add to self's draft.
+	resp := keyedCall(t, s, 2, key, "compact", map[string]any{"target": "id:child1", "lead_summary": map[string]any{"user_preferences": "child", "current_work": []any{1}}})
+	if !toolIsError(t, resp) || strings.Contains(toolText(t, resp), "cached in server memory") {
+		t.Fatalf("descendant failure should not cache: %s", resp)
+	}
+	if d := s.compactDrafts.get(key); d == nil || d.Has[0] || d.Prose[4] != "mine" {
+		t.Fatalf("self draft polluted: %+v", d)
+	}
+
+	// A successful descendant call neither uses nor clears self's draft.
+	runner.calledWith, runner.calledNoArg = nil, false
+	if resp := keyedCall(t, s, 3, key, "compact", map[string]any{"target": "id:child1"}); toolIsError(t, resp) {
+		t.Fatalf("descendant compact failed: %s", resp)
+	}
+	if runner.calledWith != nil || !runner.calledNoArg {
+		t.Fatalf("descendant call replayed self's draft: %+v", runner.calledWith)
+	}
+	if d := s.compactDrafts.get(key); d == nil || d.Prose[4] != "mine" {
+		t.Fatalf("descendant success cleared self's draft: %+v", d)
+	}
+}
+
+func TestCompactCombinedLeadAndAgendaErrorsStillCacheValidFields(t *testing.T) {
+	s, runner, key := newCompactDraftFixture(t)
+	resp := keyedCall(t, s, 1, key, "compact", map[string]any{
+		"lead_summary":   map[string]any{"user_preferences": "kept", "current_work": map[string]any{"x": 1}, "bogus": 1},
+		"agenda_updates": badAgenda,
+	})
+	text := toolText(t, resp)
+	for _, sub := range []string{"current_work must be a string", "agenda_updates has 3 error(s)", "lead_summary warnings:", "unknown key(s): bogus", "cached in server memory"} {
+		if !toolIsError(t, resp) || !strings.Contains(text, sub) {
+			t.Errorf("combined error missing %q: %s", sub, text)
+		}
+	}
+	resp = keyedCall(t, s, 2, key, "compact", map[string]any{"lead_summary": map[string]any{"current_work": "fixed"}})
+	if toolIsError(t, resp) || runner.calledWith.Prose[0] != "kept" || runner.calledWith.Prose[3] != "fixed" {
+		t.Fatalf("retry = %s %+v", resp, runner.calledWith)
+	}
+}
+
+func TestCompactDraftCacheConcurrentUse(t *testing.T) {
+	var c compactDraftCache
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			key := fmt.Sprintf("k%d", g%3)
+			draft, _, _ := wscompact.ParseLeadSummaryDraft(json.RawMessage(`{"next_step":"x","reread":["a"]}`))
+			for i := 0; i < 200; i++ {
+				c.merge(key, draft)
+				if d := c.get(key); d != nil && d.Prose[4] != "x" {
+					t.Errorf("torn read: %+v", d)
+				}
+				switch i % 25 {
+				case 0:
+					c.clear(key)
+				case 12:
+					c.reset()
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
 }

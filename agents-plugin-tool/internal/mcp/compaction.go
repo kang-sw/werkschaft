@@ -267,6 +267,10 @@ func (s *Server) handleCompact(ctx context.Context, id json.RawMessage, args map
 		resume = &b
 	}
 	selfCompact := target == "" || target == key
+	summarizer, canSummarize := s.agents.(interface {
+		CompactWithSummary(string, string, *bool, *wscompact.LeadSummary) wsagent.CompactResult
+	})
+	canSummarize = canSummarize && !s.workerForwards()
 	var (
 		hasLeadSummary bool
 		prose          *wscompact.LeadSummary
@@ -294,7 +298,12 @@ func (s *Server) handleCompact(ctx context.Context, id json.RawMessage, args map
 		if agendaErr != nil {
 			problems = append(problems, agendaErr.Error())
 		}
-		if selfCompact && !supplied.Empty() {
+		if len(warnings) > 0 {
+			problems = append(problems, "lead_summary warnings: "+strings.Join(warnings, "; "))
+		}
+		// Only a caller whose retry can reach CompactWithSummary gets a draft;
+		// otherwise a cached draft could never be used or cleared by a success.
+		if canSummarize && selfCompact && !supplied.Empty() {
 			s.compactDrafts.merge(key, supplied)
 			problems = append(problems, fmt.Sprintf("Valid lead_summary fields were cached in server memory for %d minutes: fix the errors above and retry omitting lead_summary, or send only the changed fields.", int(compactDraftTTL/time.Minute)))
 		}
@@ -302,8 +311,17 @@ func (s *Server) handleCompact(ctx context.Context, id json.RawMessage, args map
 	}
 	// A retry's fields overlay the draft a failed call left behind.
 	var cached *wscompact.LeadDraft
-	if selfCompact {
+	if canSummarize && selfCompact {
 		cached = s.compactDrafts.get(key)
+		if cached != nil && supplied == nil && s.conversation != "" {
+			// A bare retry must not replay a stale draft as ws-managed once the
+			// lead was switched to native compaction.
+			if binding, ok := s.agents.(interface{ LeadCompactionMode(string) string }); ok &&
+				binding.LeadCompactionMode(s.conversation) == wsconfig.CompactionModeNative {
+				s.compactDrafts.clear(key)
+				cached = nil
+			}
+		}
 	}
 	if supplied != nil || cached != nil {
 		hasLeadSummary = true
@@ -311,12 +329,16 @@ func (s *Server) handleCompact(ctx context.Context, id json.RawMessage, args map
 	}
 	out := wsagent.CompactResult{Status: "unsupported", Reason: "native compaction requires a hosted session"}
 	if hasLeadSummary {
-		if runner, ok := s.agents.(interface {
-			CompactWithSummary(string, string, *bool, *wscompact.LeadSummary) wsagent.CompactResult
-		}); ok {
-			out = runner.CompactWithSummary(key, target, resume, prose)
+		if canSummarize {
+			out = summarizer.CompactWithSummary(key, target, resume, prose)
 		} else {
 			out = wsagent.CompactResult{Status: "unsupported", Reason: "lead_summary requires a hosted lead session"}
+		}
+		// A replayed draft the runner refuses for role can never succeed: drop
+		// it so the caller's next bare compact is not locked out.
+		if cached != nil && supplied == nil && selfCompact &&
+			(out.Status == "unsupported" || (out.Status == "error" && strings.HasPrefix(out.Reason, wsagent.LeadSummaryRefusalPrefix))) {
+			s.compactDrafts.clear(key)
 		}
 	} else if runner, ok := s.agents.(compactRunner); ok {
 		out = runner.Compact(key, target, resume)

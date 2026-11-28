@@ -255,6 +255,11 @@ func (r *Runner) Compact(callerKey, target string, resume *bool) CompactResult {
 	return r.CompactWithSummary(callerKey, target, resume, nil)
 }
 
+// LeadSummaryRefusalPrefix starts the error CompactWithSummary returns when the
+// caller's role or target cannot carry a lead_summary; the mcp draft cache
+// keys off it to drop a draft that can never be used.
+const LeadSummaryRefusalPrefix = "lead_summary is only available"
+
 // CompactWithSummary queues a checkpoint with prose supplied by its own lead.
 func (r *Runner) CompactWithSummary(callerKey, target string, resume *bool, lead *wscompact.LeadSummary) CompactResult {
 	target = strings.TrimSpace(target)
@@ -311,7 +316,7 @@ func (r *Runner) CompactWithSummary(callerKey, target string, resume *bool, lead
 		}
 		if lead != nil {
 			if dest != own || !(dest.rec.Lead || wsWorker) {
-				out = CompactResult{"error", "lead_summary is only available for a hosted lead or ws-mode worker compacting itself"}
+				out = CompactResult{"error", LeadSummaryRefusalPrefix + " for a hosted lead or ws-mode worker compacting itself"}
 				return
 			}
 		}

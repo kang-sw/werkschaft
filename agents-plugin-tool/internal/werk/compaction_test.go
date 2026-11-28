@@ -349,3 +349,31 @@ func TestWerkCheckpointBoundaryEscapingAndToolGrouping(t *testing.T) {
 		t.Fatalf("adjacent tool calls were not grouped in <tool-calls>:\n%s", cp.Text)
 	}
 }
+
+// A lead's own Korean prose (3 bytes per character) must reach the checkpoint
+// whole, well past the 2 KiB cap that still bounds model-generated prose.
+func TestWerkLeadSummaryProseCarriedWholeBeyondModelCap(t *testing.T) {
+	dir, root, session := t.TempDir(), t.TempDir(), NewSessionID()
+	var cp Line
+	a, err := New(Config{
+		Dir: dir, Root: root, Cwd: root, Session: session, Lead: true, Model: "fixture",
+		Authority: AuthorityReadOnly, Endpoint: &scripted{}, Emit: func(line Line) { cp = line },
+	})
+	must(t, err)
+	t.Cleanup(func() { _ = a.Close() })
+
+	big := strings.Repeat("긴 한국어 요약입니다. ", 700)
+	if len(big) <= 4*wscompact.ProseFieldBytes {
+		t.Fatalf("fixture too small: %d bytes", len(big))
+	}
+	lead := &wscompact.LeadSummary{Prose: []string{big, "", big + "끝", "", "", "", ""}}
+	a.reportCompaction(context.Background(), lead)
+	if cp.T != LineCheckpoint {
+		t.Fatalf("expected checkpoint line, got %+v", cp)
+	}
+	for _, want := range []string{"### User preferences and style\n" + strings.TrimSpace(big) + "\n", big + "끝"} {
+		if !strings.Contains(cp.Text, want) {
+			t.Fatalf("lead prose was truncated in the werk checkpoint (%d bytes)", len(cp.Text))
+		}
+	}
+}

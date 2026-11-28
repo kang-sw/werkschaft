@@ -152,7 +152,7 @@ func ParseLeadSummaryDraft(raw json.RawMessage) (draft *LeadDraft, warnings []st
 		value = bytes.TrimSpace(value)
 		if !present || string(value) == "null" {
 			if present {
-				warnings = append(warnings, "lead_summary."+field.Key+" is null; treated as empty")
+				warnings = append(warnings, "lead_summary."+field.Key+" is null; ignored")
 			}
 			continue
 		}
@@ -179,7 +179,7 @@ func ParseLeadSummaryDraft(raw json.RawMessage) (draft *LeadDraft, warnings []st
 		var items []any
 		switch v := bytes.TrimSpace(value); {
 		case string(v) == "null":
-			warnings = append(warnings, "lead_summary.reread is null; treated as empty")
+			warnings = append(warnings, "lead_summary.reread is null; ignored")
 		case json.Unmarshal(v, &items) != nil:
 			problems = append(problems, "lead_summary.reread must be an array of strings")
 		default:
