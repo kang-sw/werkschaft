@@ -100,10 +100,23 @@ func TestObservedLastTurnRateAndSnapshotOwnership(t *testing.T) {
 	if snap.Lead.LastTurnOutput == nil || *snap.Lead.LastTurnOutput.OutputTps != 42 || snap.Lead.LastTurnOutput.At != 200 {
 		t.Fatalf("last-turn evidence: %+v", snap.Lead)
 	}
-	snap.Lead.Observed.History[0].Model = "tampered"
 	*snap.Lead.LastTurnOutput.OutputTps = 999
-	if got := st.Snapshot(500); got.Lead.Observed.History[0].Model != "physical" || *got.Lead.LastTurnOutput.OutputTps != 42 {
+	if got := st.Snapshot(500); *got.Lead.LastTurnOutput.OutputTps != 42 {
 		t.Fatal("snapshot aliases mutable state")
+	}
+	// Observed models are published read-only and shared, never written
+	// into: newer evidence replaces the state's model and leaves the one an
+	// earlier snapshot holds as it was taken.
+	held := snap.Lead.Observed
+	_, _ = st.Apply(observedEvent("later", "virtual", 450), 450)
+	if held.Current.Model != "physical" || len(held.History) != 1 || held.History[0].Model != "physical" {
+		t.Fatalf("newer evidence rewrote an earlier snapshot's model: %+v", held)
+	}
+	if got := st.Snapshot(500).Lead.Observed; got == held || got.Current.Model != "virtual" || len(got.History) != 2 {
+		t.Fatalf("newer evidence: %+v", got)
+	}
+	if cap(held.History) != len(held.History) {
+		t.Fatal("a shared history must be clipped so an append reallocates")
 	}
 	// A later turn with no eligible output cannot keep the old turn's rate.
 	_, _ = st.Apply(Event{Kind: KindTurnStart, At: 600}, 600)
