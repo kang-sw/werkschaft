@@ -478,7 +478,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-28T14:29:37Z"
+        "touched_at": "2026-11-28T14:31:36Z",
+        "impl": {
+          "branch": "impl/develop/swell-polar-swan"
+        }
       }
     },
     "261128-feat-ws-companion-visual-polish-and-metafiction-overlay": {
