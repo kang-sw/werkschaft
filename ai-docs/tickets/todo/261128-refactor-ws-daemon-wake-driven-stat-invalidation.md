@@ -40,6 +40,48 @@ wake/generation invalidation, keeping a longer fallback revalidation interval
 only for writers outside the daemon process. The expected effect is cutting the
 daemon's file touches by roughly 40-50% in the same capture workload.
 
+### Source-verified refinements (post-`faa341024`)
+
+Reading the sources and a second 60 s capture taken after `faa341024` (PID
+`63759`) corrected and extended the table above.
+
+**Additional burst site: `mcp/whiteboard_nudges.go:137:stat`.** It fired
+**12,465 stats / 60 s** and triggered **2,856 `ReadRegistration` stats / 60 s**
+(`registry.go:319`) during the startup / 5-minute recovery sweep
+(`whiteboard_nudges.go:458-461`, `:27`, `:496`). Root cause: `processBoard`
+(`whiteboard_nudges.go:423`) eagerly constructs `deliveryGate` (`:362-386`),
+which runs the uncached `identity()`, `ReadRegistration` (`:368`) and
+`agents.Get`, BEFORE checking whether a board exists or any notice is due. Yet
+the gate's consumer, `eligible()` (`wswhiteboard/board_notice.go:316`), runs
+only when a notice is actually due. This is the largest stat source in the
+sweep and is in scope.
+
+**`ReadRegistration` already caches.** `registry.go:272-359` (landed in
+`faa341024`) holds a stat-validated parse cache, which cut registration reads
+from 184 to 4 per minute. `deliveryGate`'s `ReadRegistration` must NOT be
+replaced with `Index` memory: external `ws-mcp` processes write registrations,
+and `deliveryGate` intentionally re-reads under the board lock
+(`whiteboard_nudges.go:392`) for PID / `EndedAt` safety. The fix is to make the
+gate lazy, not to change its source of truth.
+
+**Table-row clarifications:**
+
+- `wsdashboard/file_cache.go:133`: hosted sessions already skip the stat via
+  `SetLive` (`snapshot_cache.go:88-93`), and external `ws-mcp` snapshot writes
+  already send `/nudge`, which reaches `FileCache.InvalidateUnder`
+  (`file_cache.go:200`). The 1 s `fileCacheValidationInterval` is therefore
+  purely a lost-nudge backstop, which is why a longer fallback is safe.
+- `wsinbox/inbox_list.go:59` (the earlier draft mislabeled this path under
+  `wsdashboard/`): `namesGen` already skips the directory listing for in-process
+  writes. The `agent_delivery.go:275-280` expiry-commit path needs real
+  freshness, and standalone `ws-mcp` processes have no daemon signals, so
+  daemon-mode trust-the-signal must be opt-in per process and must preserve
+  `agent_delivery.go`'s fresh check.
+- `mcp/session_layout.go:565` (`activityMark`): `touch` only checks whether
+  `key.json` was touched within `touchGuardWindow` = 1 hour
+  (`session_auth.go:148`). `recordMtime` (`session_auth.go:497`) is an
+  inspection read and must keep its real stat.
+
 ## Constraints
 
 - Follow `ai-docs/manuals/performance.md`: memory is the source of truth
@@ -50,8 +92,8 @@ daemon's file touches by roughly 40-50% in the same capture workload.
   same-minor clients, the launcher, standalone `ws-mcp` commands, hosted
   processes, Electron) may still write these files, so a reader that trusts
   only in-process invalidation could serve stale data to or from another
-  version. The fallback revalidation exists for that reason; the chosen
-  tier for the final behavior is recorded when the open decisions settle.
+  version. The 5 s fallback revalidation exists for that reason; the tier is
+  recorded under `## Decisions`.
 - Follow `ai-docs/manuals/shipped-surface-boundary.md` if any playbook, tool
   description, advisory or other string emitted to an agent changes; this work
   is expected to be daemon-internal only.
@@ -59,47 +101,84 @@ daemon's file touches by roughly 40-50% in the same capture workload.
   must still be observed within the fallback interval.
 - Do not reintroduce per-call stat in a different form (for example a new
   `SameFile` check); count syscalls before and after.
+- Do not replace `deliveryGate`'s `ReadRegistration` with `Index` memory, and
+  keep its re-read under the board lock (`whiteboard_nudges.go:392`).
 - Scope boundary: this ticket changes how existing caches revalidate. It does
   not map file stores (`261117-research-ws-daemon-file-touch-map`), does not
   choose an event-ledger design (`261116-research-ws-polling-minimization-event-ledger`),
   and does not change what is persisted. Other idle-CPU findings stay in
   `261111-bug-ws-dashboard-daemon-idle-cpu-windows`.
 
-## Open Decision Queue
+## Decisions
 
-- (1662) policy: fallback revalidation interval for external writers once the
-  1 s stat poll is replaced. (a) 5 s. (b) 10 s. (c) Revalidate only on an
-  external-writer signal (no timer). Trade-off: a shorter interval keeps
-  cross-process freshness but leaves more steady stat load; a longer one saves
-  more syscalls but delays seeing an external writer's change. Recommended:
-  decide from the post-change Windows capture; (a) is the conservative start.
-- (1663) design: whether `activityMark` in `mcp/session_layout.go` (stat of
-  `key.json` plus the legacy fallback) needs handling separate from
-  `FileCache` and `ReadFileCached`. (a) Route it through the same generation
-  mechanism. (b) Handle it on its own path because its writer and consumer
-  differ (a key file written by the session layout rather than a cached read).
-  Recommended: inspect the writer set first, then choose.
-
-Last ID: (1663)
+- **External-writer fallback interval: 5 s (settled from former 1662).**
+  Daemon-mode `FileCache` (`wsdashboard/file_cache.go`) and an opt-in daemon
+  `wsinbox.Names` revalidate by `stat` at most every 5 s instead of every 1 s,
+  with in-process writers invalidating immediately through the existing
+  wake/generation signals. The `agent_delivery.go:275-280` expiry-commit path
+  is excluded and keeps its real stat. Rejected: 10 s (longer external-writer
+  blind window without a measured need) and removing the timer entirely
+  (revalidate only on external signal), because `/nudge` is fire-and-forget and
+  older same-minor clients may not send it (`index.go:15-17`), so a dropped or
+  absent nudge would leave stale data indefinitely.
+- **`activityMark` takes its own path (settled from former 1663).** Keep an
+  in-memory per-key `lastTouched` map, matching the `intakeEntry.markAt`
+  precedent (`session_auth.go:426-465`), to skip the `stat` while within the
+  1-hour `touchGuardWindow`. Worst-case stale memory costs one redundant
+  `os.Chtimes` per hour. `recordMtime` (`session_auth.go:497`) keeps its real
+  `stat`. Rejected: routing through the generic `FileCache` generation
+  mechanism, because the consumer is a touch guard rather than a cached read.
+- **Lazy `deliveryGate`.** Move `identity()`, the initial `ReadRegistration`
+  and `agents.Get` in `whiteboard_nudges.go:362-386` into the first call of
+  `eligible()`, so absent or not-due boards pay zero registration/identity I/O
+  during startup and 5-minute sweeps. The re-read under the board lock stays.
+- **Compatibility tier: T0 transparent.** Daemon-internal revalidation and
+  caching only; no wire, protocol, on-disk or shipped-surface change.
+  External and older writers stay observable within the 5 s fallback.
 
 ## Phases
 
-### Phase 1: Writer-side generation invalidation for the four hot stat sites
+### Phase 1: Lazy gate, 5 s fallback revalidation, and `activityMark` throttle
 
-Intended behavior: for the sites in the Background table, a reader serves its
-memory copy until the in-process writer signals a change (generation counter
-or existing wake such as `wake_live`, `signals` or `namesGen`), and falls back
-to `stat` revalidation only at the interval settled in (1662). A content change
-by an in-process writer is visible to the next read without waiting for a timer.
+Intended behavior:
 
-Deferred scope: other stat sites below the top four, stores outside these
-readers, and any new event ledger design.
+1. **Lazy `deliveryGate`** (`mcp/whiteboard_nudges.go:362-386`, `:423`):
+   `identity()`, `ReadRegistration` and `agents.Get` execute on the first
+   `eligible()` call, not in `processBoard` construction. Boards that are absent
+   or have no due notice perform no registration or identity I/O.
+2. **5 s fallback for `FileCache` and opt-in daemon `wsinbox.Names`:** a reader
+   serves its memory copy until the in-process writer signals a change
+   (generation counter or existing wake such as `wake_live`, `signals` or
+   `namesGen`), and falls back to `stat` revalidation at most every 5 s for
+   external writers. `wsinbox.Names` trust-the-signal mode is opt-in per
+   process (daemon only); standalone `ws-mcp` keeps current behavior, and
+   `agent_delivery.go:275-280` keeps its fresh check on the expiry-commit path.
+   A content change by an in-process writer is visible to the next read
+   without waiting for a timer.
+3. **`activityMark` throttle** (`mcp/session_layout.go:565`): an in-memory
+   per-key `lastTouched` map skips the `stat` within `touchGuardWindow`.
+   `recordMtime` (`session_auth.go:497`) keeps its real stat.
+4. **Verification tests** as listed below.
+
+Deferred scope: other stat sites below the top four, `wsstate/read_cache.go:39`
+beyond what the shared mechanism gives for free, stores outside these readers,
+and any new event ledger design.
 
 Verification boundary:
 - Repeat the 60 s pprof and `file_io_site:*` capture on the same workload and
-  compare per-site counts and `file_io_total` against the 2026-11-28 baseline
-  (1,468 total, 882 `stat`). Target: roughly 40-50% fewer touches.
-- Tests that an in-process write is observed without a timer wait and that an
-  external-writer change is observed within the fallback interval.
+  compare per-site counts and `file_io_total` against the 2026-11-28 baselines
+  (1,468 total, 882 `stat`; and the post-`faa341024` capture with 12,465 stats
+  at `whiteboard_nudges.go:137` and 2,856 at `registry.go:319`). Target: roughly
+  40-50% fewer touches, and near-zero registration/identity I/O for not-due
+  boards in the sweep.
+- Unit tests using `FileIOCounters` assertions: not-due and absent boards in
+  `processBoard` perform zero `ReadRegistration`/identity operations, and
+  `activityMark` performs no `stat` within the guard window while
+  `recordMtime` still does.
+- Tests that an in-process write is observed immediately (no timer wait) and
+  that an external-writer change is observed within the 5 s fallback interval,
+  for both `FileCache` and opt-in `wsinbox.Names`; plus a test that the
+  `agent_delivery.go` expiry-commit path still sees fresh state.
+- `GOOS=windows go vet ./...` passes.
 - A Windows after capture on the heavy-security-software baseline, reported
   next to the matching before counts.
