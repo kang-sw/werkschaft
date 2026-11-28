@@ -1257,6 +1257,49 @@
     if (win.document.fonts && win.document.fonts.ready) win.document.fonts.ready.then(fit);
     fit();
   }
+  // botOver / botFit / botWatch compact the relocated bottom-right usage handle
+  // (.shell-bottom.bu) when it overflows #slot-bot-right, and restore the full
+  // pill as soon as the right cell widens again.
+  function botOver(bar) {
+    var right = bar && bar.querySelector("#slot-bot-right, .bot-right");
+    if (!right) return false;
+    var rbox = right.getBoundingClientRect();
+    if (rbox.width <= 0) return false;
+    if (right.scrollWidth > right.clientWidth + 0.5) return true;
+    var btn = right.querySelector(".usage-toggle");
+    if (!btn) return false;
+    var bbox = btn.getBoundingClientRect();
+    return bbox.width > 0 && (bbox.left < rbox.left - 0.5 || bbox.right > rbox.right + 0.5);
+  }
+  function botFit(bar, win) {
+    win = win || window;
+    if (!bar || !bar.classList) return 0;
+    var cl = bar.classList;
+    cl.remove("bu");
+    if (botOver(bar)) {
+      cl.add("bu");
+      return 1;
+    }
+    return 0;
+  }
+  function botWatch(bar, win) {
+    win = win || window;
+    if (!bar) return;
+    var fit = function () { botFit(bar, win); };
+    if (win.ResizeObserver) {
+      var ro = new win.ResizeObserver(fit);
+      ro.observe(bar);
+      var right = bar.querySelector("#slot-bot-right, .bot-right");
+      if (right) ro.observe(right);
+      var center = bar.querySelector("#slot-bot-center, .bot-center");
+      if (center) ro.observe(center);
+    }
+    if (win.MutationObserver) {
+      new win.MutationObserver(fit).observe(bar, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["hidden"] });
+    }
+    if (win.document && win.document.fonts && win.document.fonts.ready) win.document.fonts.ready.then(fit);
+    fit();
+  }
   window.WsRail = {
     homeGroup: homeGroup,
     groupKey: groupKey,
@@ -1316,6 +1359,8 @@
     popPlace: popPlace,
     topFit: topFit,
     topWatch: topWatch,
+    botFit: botFit,
+    botWatch: botWatch,
     matchBranches: matchBranches,
     worktreeBody: worktreeBody,
     deleteReady: deleteReady,

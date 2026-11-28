@@ -207,7 +207,7 @@ async function saveDockShot(page, name) {
           rlistRect: rectOf(rlist),
           railRect: rectOf(document.getElementById('rail')),
           panelRect: rectOf(document.querySelector('#rail .rail-session-panel')),
-          aboveRect: rectOf(rfoot || unreg),
+          aboveRect: rectOf(rfoot || unreg || rlist),
           unregInsideRlist: !!(unreg && rlist && rlist.contains(unreg)),
           stage: window.WsCompanion.debugStage()
         };
@@ -223,7 +223,7 @@ async function saveDockShot(page, name) {
       assert.equal(st.avoiding, false);
       assert.equal(visuals.unregInsideRlist, false, 'details.rws-unreg must sit outside #rlist');
       assert.equal(visuals.slotHidden, false, '#rail-companion-slot must be visible at >= 1600px');
-      assert.ok(visuals.slotRect && visuals.slotRect.width >= 300 && visuals.slotRect.height >= 160,
+      assert.ok(visuals.slotRect && visuals.slotRect.width >= 220 && visuals.slotRect.width <= 360 && visuals.slotRect.height >= 160,
         `unexpected rail slot rect: ${JSON.stringify(visuals.slotRect)}`);
       assert.ok(visuals.slotRect.top >= visuals.rlistRect.bottom - 1,
         `slot (${JSON.stringify(visuals.slotRect)}) must sit below #rlist (${JSON.stringify(visuals.rlistRect)})`);

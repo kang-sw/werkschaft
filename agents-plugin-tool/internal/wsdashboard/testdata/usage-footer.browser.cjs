@@ -1,8 +1,9 @@
-// Source-only, fake-data LOOK check of the header's plan usage handle (the
-// tcen template). No daemon, build, credentials or network.
+// Source-only, fake-data LOOK check of the bottom-right global status bar plan
+// usage handle (#shell-bottom #slot-bot-right .usage-toggle). No daemon, build,
+// credentials or network.
 // WS_PLAYWRIGHT_MODULE=/absolute/path/to/playwright node <this-file> <mockup.html> <shots-dir>
-// The mockup is the approved shell redesign; its usage handle is captured
-// beside each implementation shot.
+// The mockup is the approved Variant D shell redesign; its usage handle is
+// captured beside each implementation shot.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -11,7 +12,12 @@ const { chromium } = require(process.env.WS_PLAYWRIGHT_MODULE);
 const [mockup, output] = process.argv.slice(2);
 assert.ok(mockup && output, 'pass the approved mockup HTML and output directory');
 const { readAssetSource } = require('./asset-source.cjs');
-const css = [readAssetSource('wswhiteboard', 'page.css'), readAssetSource('wsdashboard', 'dashboard.css'), readAssetSource('wsdashboard', 'usage.css')].join('\n');
+const css = [
+  readAssetSource('wswhiteboard', 'page.css'),
+  readAssetSource('wsdashboard', 'dashboard.css'),
+  readAssetSource('wsdashboard', 'dashboard-ide-shell.css'),
+  readAssetSource('wsdashboard', 'usage.css'),
+].join('\n');
 const scripts = ['rail.js', 'usage.js', 'dashboard.js'].map(p => readAssetSource('wsdashboard', p));
 const at = Date.UTC(2026, 10, 15);
 function entries(variant) {
@@ -36,8 +42,8 @@ function entries(variant) {
         page.on('pageerror', e => errors.push(e.message));
         await page.setContent(`<!doctype html><html data-theme="${theme}" data-mode="index" data-shell><head><style>${css}</style><style>
           body { margin: 0; padding: 10px; }
-          .rail { position: static !important; transform: none !important; visibility: visible !important; width: 340px !important; max-width: 100%; height: auto !important; }
-        </style></head><body><div class="dwrap"><div class="top"><span class="tcen"><button class="usage-toggle" type="button" aria-label="Plan usage" aria-expanded="false"></button><span class="talert" id="talert" hidden></span></span></div></div><aside class="rail" id="rail"><div id="r-rail"><div class="rfoot"></div></div></aside><button id="outside" style="position:fixed;bottom:10px;right:10px">Outside</button></body></html>`);
+          .rail { position: static !important; transform: none !important; visibility: visible !important; width: 280px !important; max-width: 100%; height: auto !important; }
+        </style></head><body><div class="dwrap"><div class="top"></div></div><aside class="rail" id="rail"><div id="r-rail"></div></aside><footer class="shell-bottom" id="shell-bottom" role="contentinfo"><div class="bot-left" id="slot-bot-left"></div><div class="bot-center" id="slot-bot-center"><span class="talert" id="talert" hidden></span></div><div class="bot-right" id="slot-bot-right"><button class="usage-toggle" type="button" aria-label="Plan usage" aria-expanded="false"></button></div></footer><button id="outside" style="position:fixed;top:10px;left:10px">Outside</button></body></html>`);
         await page.evaluate(({ at, entries }) => {
           Date.now = () => at;
           window.wsI18n = { lang: 'en', t: {} }; window.wsT = key => key; window.wsTn = key => key;
@@ -51,7 +57,7 @@ function entries(variant) {
         }, { at, entries: entries(variant) });
         for (const content of scripts) await page.addScriptTag({ content });
         assert.deepEqual(errors, [], `${theme}/${width}/${variant}: initialization`);
-        await page.locator('.usage-number').first().waitFor();
+        await page.locator('.usage-number').first().waitFor({ state: 'attached' });
         assert.equal(await page.locator('.usage-column').count(), variant === 'weekly' ? 1 : 3);
         assert.equal(await page.locator('.usage-clock').count(), variant === 'stale' ? 1 : 0);
         if (variant === 'stale') {
@@ -63,14 +69,20 @@ function entries(variant) {
         } else {
           assert.equal(await page.locator('.usage-pace').first().textContent(), variant === 'over' ? '+31%' : variant === 'weekly' ? '−7%' : '−13%');
         }
-        // One 36px handle row; each badge mark (with its stale clock) clear of its columns.
+        // Single-line pill inside the 26px bottom status bar; at 360px compact mode (.bu) shows .usage-mini.
         const handle = await page.locator('.usage-toggle').boundingBox();
-        assert.equal(handle.height, 36, `${theme}/${width}/${variant}: one 36px handle`);
-        const clear = await page.evaluate(() => [...document.querySelectorAll('.usage-harness')].every(h => {
-          const cols = h.querySelector('.usage-columns').getBoundingClientRect().left, c = h.querySelector('.usage-clock');
-          return h.querySelector('.usage-mark').getBoundingClientRect().right <= cols && (!c || c.getBoundingClientRect().right <= cols);
-        }));
-        assert.ok(clear, `${theme}/${width}/${variant}: marks clear of the columns`);
+        assert.ok(handle.height <= 26 && handle.height >= 18, `${theme}/${width}/${variant}: compact bottom-bar handle (${handle.height}px)`);
+        const isCompact = await page.locator('#shell-bottom').evaluate(el => el.classList.contains('bu'));
+        if (isCompact) {
+          assert.equal(await page.locator('.usage-mini').isVisible(), true, `${theme}/${width}/${variant}: compact .usage-mini visible`);
+          assert.ok(handle.width <= 26, `${theme}/${width}/${variant}: compact width (${handle.width}px)`);
+        } else {
+          const clear = await page.evaluate(() => [...document.querySelectorAll('.usage-harness')].every(h => {
+            const cols = h.querySelector('.usage-columns').getBoundingClientRect().left, c = h.querySelector('.usage-clock');
+            return h.querySelector('.usage-mark').getBoundingClientRect().right <= cols && (!c || c.getBoundingClientRect().right <= cols);
+          }));
+          assert.ok(clear, `${theme}/${width}/${variant}: marks clear of the columns`);
+        }
         if (variant === 'stale') {
           const staleStyle = await page.locator('.usage-column.usage-stale').first().evaluate(e => ({
             decorationLine: getComputedStyle(e.querySelector('.usage-number')).textDecorationLine,
@@ -82,7 +94,10 @@ function entries(variant) {
           assert.notEqual(staleStyle.decorationStyle, 'dotted');
         }
         const prefix = `${theme}-${width}-${variant}`;
-        const expected = await reference.locator('.sr4-h[data-a="usage"]').screenshot({ path: path.join(output, `${prefix}-mockup.png`) });
+        const refLocator = (await reference.locator('.usage-toggle').count())
+          ? reference.locator('.usage-toggle')
+          : reference.locator('.sr4-h[data-a="usage"]');
+        const expected = await refLocator.first().screenshot({ path: path.join(output, `${prefix}-mockup.png`) });
         const actual = await page.locator('.usage-toggle').screenshot({ path: path.join(output, `${prefix}-actual.png`) });
         const comparison = await context.newPage();
         await comparison.setViewportSize({ width: 720, height: 90 });
@@ -94,6 +109,9 @@ function entries(variant) {
         const button = page.locator('.usage-toggle'), dialog = page.locator('.usage-pop');
         await button.focus(); await page.keyboard.press('Enter');
         await dialog.waitFor({ state: 'visible' });
+        const popBox = await dialog.boundingBox();
+        const barBox = await page.locator('#shell-bottom').boundingBox();
+        assert.ok(popBox && barBox && popBox.y >= 0 && popBox.y + popBox.height <= barBox.y + 1, `${theme}/${width}/${variant}: usage popover opens upward above bottom bar`);
         assert.equal(await button.getAttribute('aria-expanded'), 'true');
         assert.ok((await dialog.textContent()).includes(variant === 'weekly' ? 'Codex' : 'Claude')); // harness names, never the source
         if (variant === 'stale') {

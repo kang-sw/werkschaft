@@ -62,7 +62,7 @@ func TestIdeShellPhase1Assets(t *testing.T) {
 	for _, want := range []string{
 		`<div class="stage-well-bg" id="stage-well-bg" aria-hidden="true"></div>`,
 		`<div class="rail-splitter" id="rail-splitter"`,
-		`<footer class="shell-bottom" id="shell-bottom" aria-hidden="true"></footer>`,
+		`<footer class="shell-bottom" id="shell-bottom" aria-label="Status bar">`,
 		`ws.dashboard.railWidth`,
 		`ws.dashboard.railCollapsed`,
 	} {
@@ -70,6 +70,156 @@ func TestIdeShellPhase1Assets(t *testing.T) {
 			t.Errorf("dashboard.tmpl lacks %q", want)
 		}
 	}
+}
+
+// TestIdeShellPhase2AssetsAndUnframedFallback pins the Phase 2 26px 3-column
+// global bottom bar CSS/markup, modal dimming, compact .bu rules, and verifies
+// that unframed (Frame: false) standalone renders keep their in-page .rfoot
+// and .tcen controls per decision (1724).
+func TestIdeShellPhase2AssetsAndUnframedFallback(t *testing.T) {
+	css := mustAsset(t, "dashboard-ide-shell.css")
+	for _, want := range []string{
+		"grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);",
+		"z-index: 46;",
+		":root[data-shell][data-fdim] .shell-bottom,",
+		":root[data-shell][data-fdim] .shell-bottom::after {",
+		".shell-bottom .bot-left {",
+		".shell-bottom .bot-center {",
+		".shell-bottom .bot-right {",
+		".shell-bottom .talert {",
+		".shell-bottom .talert[hidden],",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("dashboard-ide-shell.css lacks Phase 2 rule %q", want)
+		}
+	}
+
+	usageCSS := mustAsset(t, "usage.css")
+	for _, want := range []string{
+		".shell-bottom .usage-toggle {",
+		".shell-bottom.bu .usage-toggle {",
+		".dwrap > .top.tu .tcen > .usage-toggle {",
+	} {
+		if !strings.Contains(usageCSS, want) {
+			t.Errorf("usage.css lacks %q", want)
+		}
+	}
+
+	tmpl := mustAsset(t, "dashboard.tmpl")
+	for _, want := range []string{
+		`id="slot-bot-left"`,
+		`id="slot-bot-center"`,
+		`id="slot-bot-right"`,
+		`{{define "rfoot"}}`,
+		`{{region . "rail"}}{{template "rfoot"}}</aside>`,
+	} {
+		if !strings.Contains(tmpl, want) {
+			t.Errorf("dashboard.tmpl lacks Phase 2 markup %q", want)
+		}
+	}
+
+	// Verify unframed standalone render (Frame: false) still includes in-page
+	// .rfoot and .tcen and never includes shell-only #shell-bottom.
+	unframedIdx, err := renderIndexPage(IndexView{Lang: "en"}, nil, nil, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`<div class="rfoot">`, `<span class="tcen">`, `id="gear"`, `id="talert"`, `class="usage-toggle"`} {
+		if !strings.Contains(unframedIdx, want) {
+			t.Errorf("unframed index render lacks %q", want)
+		}
+	}
+	if strings.Contains(unframedIdx, `id="shell-bottom"`) {
+		t.Errorf("unframed index render must not include shell-only #shell-bottom")
+	}
+	assertSettingsOwner(t, unframedIdx, true)
+}
+
+// TestIdeShellPhase2BottomBarJS verifies WsRail.botFit compact step-down and
+// upward viewport-clamped popover placement for #shell-bottom anchors.
+func TestIdeShellPhase2BottomBarJS(t *testing.T) {
+	railJS, _ := json.Marshal(mustAsset(t, "rail.js"))
+	popJS, _ := json.Marshal(mustAsset(t, "dashboard-rail-popovers.js"))
+	runNode(t, "phase 2 bottom bar fit and upward popover placement", "var RAIL_JS = "+string(railJS)+", POP_JS = "+string(popJS)+";\n"+`
+var bad = [];
+function check(what, got, want) {
+  if (JSON.stringify(got) !== JSON.stringify(want)) {
+    bad.push(what + ": got " + JSON.stringify(got) + ", want " + JSON.stringify(want));
+  }
+}
+
+// 1. WsRail.botFit toggles .bu when .usage-toggle overflows #slot-bot-right and clears when wide.
+var rw = {};
+new Function("window", "module", RAIL_JS)(rw, undefined);
+var R = rw.WsRail;
+check("WsRail exports botFit/botWatch", [typeof R.botFit, typeof R.botWatch], ["function", "function"]);
+
+function makeBar(rightClientW, rightScrollW, btnRect, rightRect) {
+  var classes = new Set();
+  var btn = { getBoundingClientRect: function () { return btnRect; } };
+  var right = {
+    clientWidth: rightClientW,
+    scrollWidth: rightScrollW,
+    getBoundingClientRect: function () { return rightRect; },
+    querySelector: function (sel) { return sel === ".usage-toggle" ? btn : null; }
+  };
+  return {
+    classes: classes,
+    classList: {
+      add: function (c) { classes.add(c); },
+      remove: function (c) { classes.delete(c); },
+      contains: function (c) { return classes.has(c); }
+    },
+    querySelector: function (sel) { return sel.indexOf("bot-right") >= 0 ? right : null; }
+  };
+}
+
+var wideBar = makeBar(400, 260, { left: 1000, right: 1260, width: 260 }, { left: 860, right: 1260, width: 400 });
+check("botFit keeps full usage when right cell has room", [R.botFit(wideBar), wideBar.classList.contains("bu")], [0, false]);
+
+var tightBar = makeBar(120, 260, { left: 1000, right: 1260, width: 260 }, { left: 1140, right: 1260, width: 120 });
+check("botFit adds .bu when right cell overflows", [R.botFit(tightBar), tightBar.classList.contains("bu")], [1, true]);
+
+// 2. Extract and run railPopPlace for bottom-bar anchors (upward clamped) vs non-bottom-bar anchors.
+var m = POP_JS.match(/function railPopPlace\(\) \{[\s\S]*?\n  \}/);
+if (!m) { bad.push("missing railPopPlace in dashboard-rail-popovers.js"); }
+else {
+  function runPlace(opts) {
+    var el = { style: {}, offsetWidth: opts.w, offsetHeight: opts.h };
+    var btn = { getBoundingClientRect: function () { return opts.anchor; } };
+    var rp = { kind: opts.kind, P: { el: el } };
+    var botBarEl = opts.inBar ? { contains: function (x) { return x === btn; } } : null;
+    var root = { clientWidth: opts.vw, clientHeight: opts.vh };
+    var place = new Function(
+      "railPopBtn", "rp", "root", "window", "botBarEl", "railEl", "WsRail",
+      m[0] + "\nrailPopPlace();"
+    );
+    place(
+      function () { return btn; }, rp, root, { innerWidth: opts.vw, innerHeight: opts.vh },
+      botBarEl, { getBoundingClientRect: function () { return { left: 0, right: 280, width: 280 }; } }, R
+    );
+    return el.style;
+  }
+
+  // Settings (#gear) in bottom-left opens upward, left-aligned to anchor.
+  var st1 = runPlace({ kind: "settings", inBar: true, vw: 1200, vh: 800, w: 280, h: 320, anchor: { top: 777, bottom: 797, left: 118, right: 140 } });
+  check("settings upward bottom-left placement", [st1.top, st1.left, st1.maxHeight], ["451px", "118px", "763px"]);
+
+  // Usage (.usage-toggle) in bottom-right opens upward, right-aligned to anchor.
+  var st2 = runPlace({ kind: "usage", inBar: true, vw: 1200, vh: 800, w: 360, h: 400, anchor: { top: 777, bottom: 797, left: 1020, right: 1192 } });
+  check("usage upward bottom-right placement", [st2.top, st2.left, st2.maxHeight], ["371px", "832px", "763px"]);
+
+  // Tall popover in short viewport clamps top to 8px and caps maxHeight to a.top - 14.
+  var st3 = runPlace({ kind: "usage", inBar: true, vw: 400, vh: 300, w: 390, h: 500, anchor: { top: 277, bottom: 297, left: 360, right: 392 } });
+  check("short narrow viewport clamps top, left, and maxHeight", [st3.top, st3.left, st3.maxHeight], ["8px", "8px", "263px"]);
+
+  // Unframed/non-bottom-bar anchor clears maxHeight and uses downward WsRail.popPlace.
+  var st4 = runPlace({ kind: "usage", inBar: false, vw: 1200, vh: 800, w: 300, h: 200, anchor: { top: 0, bottom: 36, left: 500, right: 700 } });
+  check("unframed usage anchor clears maxHeight and opens downward", [st4.maxHeight, parseInt(st4.top, 10) >= 36], ["", true]);
+}
+
+process.stdout.write(bad.join("\n"));
+`)
 }
 
 // TestIdeShellRailSplitterAndSync runs dashboard-ide-shell.js and shell.js

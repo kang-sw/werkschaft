@@ -788,7 +788,7 @@
     const railResize = new ResizeObserver(invalidated);
     let observed = [];
     function observeRailLayout() {
-      const nodes = rail ? [rail, ...rail.querySelectorAll(".rlist, .rfoot, .rws-unreg, #rail-companion-slot")] : [];
+      const nodes = rail ? [rail, ...rail.querySelectorAll(".rail-session-panel, .rlist, .rfoot, .rws-unreg, #rail-companion-slot")] : [];
       if (nodes.length === observed.length && nodes.every((item, i) => item === observed[i])) return;
       railResize.disconnect();
       nodes.forEach(el => railResize.observe(el));

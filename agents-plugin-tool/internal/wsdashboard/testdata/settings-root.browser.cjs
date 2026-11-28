@@ -121,20 +121,20 @@ const [base, emptyBase] = process.argv.slice(2);
     await page.keyboard.press('Escape');
 
     await page.setViewportSize({ width: 360, height: 760 });
+    assert.equal(await page.locator('#rail .rfoot').count(), 0, 'retired .rfoot is absent from shell rail');
+    assert.equal(await gear.isVisible(), true, '#gear is reachable in #shell-bottom without opening the rail at 360px');
     await openSettings();
     assert.equal(await dialog.evaluate(e => e.scrollWidth <= e.clientWidth), true);
-    assert.equal(await page.locator('.rfoot').evaluate(e => e.scrollWidth <= e.clientWidth), true);
-    const footer = await page.locator('.rfoot').boundingBox();
+    assert.equal(await page.locator('#slot-bot-left').evaluate(e => e.scrollWidth <= e.clientWidth), true);
+    const bar = await page.locator('#shell-bottom').boundingBox();
     const gearBox = await gear.boundingBox();
-    assert.ok(gearBox.x >= footer.x, 'gear leads the footer');
-    // Plan usage is the header's center handle, not the footer's.
-    assert.equal(await page.locator('.rfoot .usage-toggle').count(), 0, 'plan usage left the footer');
+    assert.ok(gearBox.x >= bar.x && gearBox.y >= bar.y, 'gear sits inside the bottom status bar');
     await page.locator('#settings-close').click();
     if (await page.locator('html').evaluate(e => e.classList.contains('rail-open'))) {
       await page.keyboard.press('Escape');
       await page.waitForFunction(() => !document.documentElement.classList.contains('rail-open'));
     }
-    await page.locator('.dwrap > .top .usage-toggle').click();
+    await page.locator('#shell-bottom .usage-toggle').click();
     // The page is Korean by now (#glang above); the popup's label is
     // localized (5fb017bc9), so it is js.usage.heading in ko.
     await page.getByRole('dialog', { name: '플랜 사용량', exact: true }).waitFor({ state: 'visible' });

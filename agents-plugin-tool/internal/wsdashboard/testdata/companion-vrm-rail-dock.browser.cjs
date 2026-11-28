@@ -154,15 +154,14 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
     const collapsed = await readLayout();
     assert.equal(collapsed.unregInsideRlist, false, 'details.rws-unreg must sit outside #rlist');
     assert.equal(collapsed.unregInsidePanel, true, 'details.rws-unreg must sit inside .rail-session-panel');
-    assert.equal(collapsed.rfootInsidePanel, true, '.rfoot must sit inside .rail-session-panel');
+    assert.equal(collapsed.rfootInsidePanel, false, 'retired .rfoot must be absent from shell .rail-session-panel');
+    assert.equal(collapsed.rfootRect, null, 'retired .rfoot must not render inside shell rail');
     assert.equal(collapsed.slotInsidePanel, false, '#rail-companion-slot must sit outside .rail-session-panel as final sibling');
     assert.ok(Number(collapsed.unregCount) >= 3, `expected >= 3 pending unregistered workspaces, got ${collapsed.unregCount}`);
     assert.ok(collapsed.slotRect.top >= collapsed.panelRect.bottom - 1,
       `slot (${JSON.stringify(collapsed.slotRect)}) must sit below .rail-session-panel (${JSON.stringify(collapsed.panelRect)})`);
     assert.ok(collapsed.slotRect.top >= collapsed.unregRect.bottom - 1,
       `slot (${JSON.stringify(collapsed.slotRect)}) must sit below details.rws-unreg (${JSON.stringify(collapsed.unregRect)})`);
-    assert.ok(collapsed.slotRect.top >= collapsed.rfootRect.bottom - 1,
-      `slot (${JSON.stringify(collapsed.slotRect)}) must sit below .rfoot (${JSON.stringify(collapsed.rfootRect)})`);
     assert.ok(Math.abs(collapsed.slotRect.bottom - collapsed.railRect.bottom) <= 1,
       `slot must be flush to #rail bottom: slot=${JSON.stringify(collapsed.slotRect)} rail=${JSON.stringify(collapsed.railRect)}`);
     assert.ok(Math.abs(collapsed.slotRect.bottom - (collapsed.vh - 26)) <= 1,
