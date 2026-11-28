@@ -480,26 +480,13 @@
     "261128-feat-ws-companion-visual-polish-and-metafiction-overlay": {
       "registered_at": "2026-11-28T06:52:51Z"
     },
-    "261128-feat-ws-dashboard-gallery-git-page": {
-      "registered_at": "2026-11-28T02:54:38Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-28T08:49:15Z",
-        "impl": {
-          "branch": "impl/develop/maker-quill-evil"
-        }
-      }
-    },
     "261128-feat-ws-dashboard-gallery-workpanel-b": {
       "registered_at": "2026-11-28T02:48:30Z",
       "lease": {
         "email": "ki6080@gmail.com",
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
-        "phase": "active",
+        "phase": "closed",
         "touched_at": "2026-11-28T08:49:14Z",
         "impl": {
           "branch": "impl/develop/jury-pesky-swab"
