@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -15,6 +16,7 @@ import (
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsfs"
+	"github.com/kang-sw/devenv/internal/wsharnessenv"
 )
 
 // mcp_session.go is the hosted path's ws-mcp attachment over HTTP: a
@@ -524,20 +526,48 @@ func (r *Runner) finishMCPRejoin() {
 	r.rejoinOnce.Do(func() { close(r.rejoined) })
 }
 
+// durableDropEnv names parent-harness session prefixes that a durable
+// in-daemon session must not inherit from the daemon's own environment.
+var durableDropEnv = []string{"CLAUDE", "CODEX_", "PI_", "ORCA_", "WS_PI_"}
+
+// durableEnv returns base without inherited ws session identity or parent
+// harness session variables, keeping user state such as PATH, HOME,
+// USERPROFILE, WS_CACHE_HOME, and WS_CONFIG_HOME.
+func durableEnv(base []string) []string {
+	return harnessEnv(wsharnessenv.Drop(base), durableDropEnv, nil, nil)
+}
+
 // mcpHello is the hello the stdio launcher would have sent for a harness
 // started with harnessEnv whose ws-mcp entry carries env: the launcher
 // inherits the harness's environment, the entry's environment overrides
 // it, and the launcher adds the harness PID and its runtime binary.
 func mcpHello(harnessEnv []string, env map[string]string, cwd string, pid int, version string) wsdashboard.ProxyHello {
+	return mcpHelloForOS(runtime.GOOS, harnessEnv, env, cwd, pid, version)
+}
+
+func mcpHelloForOS(goos string, harnessEnv []string, env map[string]string, cwd string, pid int, version string) wsdashboard.ProxyHello {
 	out := make(map[string]string, len(harnessEnv)+len(env)+2)
 	for _, kv := range harnessEnv {
 		if name, value, ok := strings.Cut(kv, "="); ok {
+			if goos == "windows" {
+				deleteEnvFold(out, name)
+			}
 			out[name] = value
 		}
 	}
 	// The session's credentials are the harness's, not its server's.
-	delete(out, EnvMCPSessionURL)
-	delete(out, EnvMCPSessionToken)
+	if goos == "windows" {
+		deleteEnvFold(out, EnvMCPSessionURL)
+		deleteEnvFold(out, EnvMCPSessionToken)
+		for name := range env {
+			deleteEnvFold(out, name)
+		}
+		deleteEnvFold(out, "WS_MCP_HARNESS_PID")
+		deleteEnvFold(out, "WS_MCP_RUNTIME_BINARY")
+	} else {
+		delete(out, EnvMCPSessionURL)
+		delete(out, EnvMCPSessionToken)
+	}
 	for name, value := range env {
 		out[name] = value
 	}
@@ -549,12 +579,32 @@ func mcpHello(harnessEnv []string, env map[string]string, cwd string, pid int, v
 		Protocol:    wsdashboard.ProxyProtocol,
 		Mode:        wsdashboard.ProxyModeMCP,
 		Cwd:         cwd,
-		ProjectRoot: out["WS_MCP_PROJECT_ROOT"],
+		ProjectRoot: lookupEnvKey(goos, out, "WS_MCP_PROJECT_ROOT"),
 		Env:         out,
-		Harness:     out["WS_MCP_HARNESS"],
+		Harness:     lookupEnvKey(goos, out, "WS_MCP_HARNESS"),
 		OwnerPID:    pid,
 		Version:     version,
 	}
+}
+
+func deleteEnvFold(m map[string]string, target string) {
+	for k := range m {
+		if strings.EqualFold(k, target) {
+			delete(m, k)
+		}
+	}
+}
+
+func lookupEnvKey(goos string, m map[string]string, target string) string {
+	if v, ok := m[target]; ok || goos != "windows" {
+		return v
+	}
+	for k, v := range m {
+		if strings.EqualFold(k, target) {
+			return v
+		}
+	}
+	return ""
 }
 
 // mcpSessionEnv is env with session's credentials, and without any a

@@ -129,6 +129,17 @@
   point was the retired routing skill, and no shipped skill or playbook calls
   it. `route.resolve_implement` keeps the shared fact-parsing helpers.
 
+### Fixed
+- **Durable (`werk`) MCP sessions inherit the daemon's cleaned environment.**
+  Worker and lead `ProcessDurable` launches now populate their MCP session
+  hello with the daemon's environment (`PATH`, `HOME`, `USERPROFILE`,
+  `WS_CACHE_HOME`, `WS_CONFIG_HOME`) scrubbed of inherited `WS_*` session
+  variables, parent-harness session variables, and session credentials
+  (case-insensitively on Windows), and `LookPath` reports an unset, empty, or
+  separator-only `PATH` explicitly instead of a generic missing-binary error.
+  Compatibility: T0; the `/mcp` hello wire shape and store schemas are
+  unchanged.
+
 ## v0.52.0
 
 - **Hosted exec jobs close stdin by default.** Commands such as `cat` and
