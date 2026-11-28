@@ -526,7 +526,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-28T02:06:37Z"
+        "touched_at": "2026-11-28T02:08:26Z",
+        "impl": {
+          "branch": "impl/develop/oink-grass-giddy"
+        }
       }
     },
     "261128-feat-ws-dashboard-ide-shell-overhaul": {
