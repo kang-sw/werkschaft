@@ -619,6 +619,22 @@
     convRestart.appendChild(mk("span", "spconv-rtxt", wsT("js.lead.conv_history.restart_needed")));
     var convStopNow = convRestart.appendChild(rpBtn("spconv-stop", wsT("js.lead.conv_history.stop_now")));
     convStopNow.setAttribute("data-conv-stop-now", "1");
+    var hswitch = typeof makeHarnessSwitchSection === "function" ? makeHarnessSwitchSection({
+      getState: state,
+      getId: function () { return P.rid; },
+      isBusy: function () { return P.busy; },
+      setBusy: function (on) { P.busy = !!on; P.draw(); },
+      isLive: function (gen) { return P.live(gen); },
+      getGen: function () { return P.gen; },
+      onUpdated: function (v, gen) {
+        if (inRow && gen === P.gen) P.st = v;
+        if (rid === P.rid && (hostedPage || handedPage)) lead.st = v;
+        P.redraw();
+      },
+      onError: function () { P.fetch(); },
+      onResize: function () { if (typeof railPopPlace === "function") railPopPlace(); }
+    }) : null;
+    if (hswitch) el.appendChild(hswitch.el);
     el.appendChild(mk("p", "spnote", wsT("js.lead.menu.note")));
     var acts = el.appendChild(mk("div", "spacts"));
     function actBtn(icon, cls, title, hold) {
@@ -902,6 +918,7 @@
         convRestart.hidden = true;
         convStopHold.cancel();
       }
+      if (hswitch) hswitch.draw(st);
       stop.b.disabled = P.busy || !st.process;
       var stopSig = (st.process ? "1" : "0") + ":" + (safeStop ? "1" : "0");
       if (stop.b.getAttribute("data-stop-sig") !== stopSig) {
@@ -943,6 +960,7 @@
         P.rid = id;
         P.st = null;
       }
+      if (hswitch) hswitch.reset();
       P.draw();
       var redraw = function () { if (P.live(gen)) { P.draw(); railPopPlace(); } };
       leadChoices(redraw, redraw, function () { return P.live(gen); });
@@ -993,12 +1011,16 @@
       redraw();
       if (read) leadChoices(redraw, redraw, function () { return P.live(gen); });
     };
+    P.openHarnessSwitch = function (focusTarget) {
+      if (hswitch) hswitch.open(focusTarget);
+    };
     P.focus = function () { rows.model.focus(); };
     P.close = function () {
       stopHold.cancel();
       archiveHold.cancel();
       closeHold.cancel();
       permFullDrop();
+      if (hswitch) hswitch.reset();
       if (!inRow) return;
       P.gen++;
       el.hidden = true;
@@ -1397,7 +1419,7 @@
       return;
     }
     var sig = JSON.stringify([
-      mode, can, quotaState.busy,
+      mode, can, quotaState.busy, String(st.backend || ""),
       fail ? Number(fail.resetsAt || 0) : 0,
       qc ? [qc.status || "", Number(qc.resume_at || 0), Number(qc.attempts || 0), Number(qc.max_attempts || 0)] : null
     ]);
@@ -1452,6 +1474,12 @@
         schedBtn.disabled = quotaState.busy;
         schedBtn.addEventListener("click", function () { quotaAction("schedule"); });
       }
+      var swBtn = act.appendChild(rpBtn("btn qcswitch", wsT("js.quota.switch_harness")));
+      swBtn.setAttribute("data-qc-act", "switch-harness");
+      swBtn.disabled = quotaState.busy;
+      swBtn.addEventListener("click", function () {
+        if (typeof openHarnessSwitcher === "function") openHarnessSwitcher(swBtn);
+      });
     }
     box.appendChild(card);
     box.hidden = false;
