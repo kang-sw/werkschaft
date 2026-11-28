@@ -63,7 +63,7 @@ func (s *agyPromptSpan) finish() int64 {
 }
 
 // agyOutputRateTracker holds in-memory per-prompt spans and the rolling window
-// of eligible completed responses for one agyMapper.
+// of eligible completed responses for one acpMapper.
 type agyOutputRateTracker struct {
 	spans  []*agyPromptSpan
 	window []agyRateSample
@@ -141,7 +141,7 @@ func (t *agyOutputRateTracker) popSpan(id string) *agyPromptSpan {
 // complete closes the prompt span matching id, evaluates eligibility against
 // the prompt result's visible tokens (outputTokens - thoughtTokens) and span,
 // and returns the updated token-weighted rolling rate when eligible.
-func (t *agyOutputRateTracker) complete(id string, msg agyMessage, replaying bool) (float64, bool) {
+func (t *agyOutputRateTracker) complete(id string, msg acpMessage, replaying bool) (float64, bool) {
 	span := t.popSpan(id)
 	if replaying || span == nil || span.replayed {
 		return 0, false
