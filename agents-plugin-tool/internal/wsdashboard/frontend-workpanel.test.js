@@ -58,6 +58,17 @@ function harness(extra = {}) {
 }
 const ok = body => ({ ok: true, json: async () => body });
 
+test('the head live indicator follows the stream through the connected hook', () => {
+  const h = harness();
+  const dot = h.ids.wpsse = new El('span');
+  h.c.wpStreamSync(false);
+  assert.ok(dot.classList.contains('off'));
+  h.c.wpStreamSync(true);
+  assert.ok(!dot.classList.contains('off'));
+  const stream = fs.readFileSync(path.join(__dirname, 'assets/dashboard-stream.js'), 'utf8');
+  assert.match(stream, /if \(typeof wpStreamSync === "function"\) wpStreamSync\(on\);/);
+});
+
 test('notes load the cached snapshot, wait on the worker, refresh by POST, and render safely', async () => {
   const h = harness(), list = h.ids.wpnoteslist, button = h.ids.wpnotesrefresh;
   assert.equal(h.requests.length, 0, 'nothing loads at declaration');

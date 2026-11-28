@@ -173,7 +173,7 @@ var doc = { activeElement: null, addEventListener: function () {} };
 var drawer = el('drawer'), drbody = el('drbody'), gbody = el('gbody'), sbody = el('sbody'), shandle = el('shandle'), drsheet = el('drsheet'), drclip = el('drclip');
 var drhandle = el('drhandle'), gitRegion = el('r-git'), ghandleEl = el('ghandle'), drfold = el('drfold');
 var drheader = {getBoundingClientRect:function(){return {bottom:40};}};
-var drOpen = false, drMode = 'panels', drWant = false, drTop = 40, drShown = '', drHas = true, drSwap = false, DR_OPEN = 'k', DR_SEARCH = 'search', tkApi = null;
+var drOpen = false, drMode = 'panels', drWant = false, drTop = 40, drShown = '', drHas = true, DR_OPEN = 'k', DR_SEARCH = 'search', tkApi = null;
 function ghandle() { return ghandleEl; }
 function drMax() { return 600; }
 function ghSync() {} function drTitle() {} function drFill() {} function wtLoad() {} function hdLoad() {} function gitOpened() {} function drDot() {} function drAnnounce() {}

@@ -34,7 +34,9 @@
   }
   // ghandle is the git handle now: a region swap replaces it.
   function ghandle() { return $("ghandle"); }
-  var drBadge = false, drSwap = false; // the handle's dot: a section badge, or a panels change while closed
+  // The handle's dot: a section badge. #r-panels lives in the Workpanel
+  // (dashboard-workpanel.js), so a panels change no longer lights it.
+  var drBadge = false;
   function drawerTab(entry) { drEntries.push(entry); }
   // cardTab registers one of the drawer's own cards (#p-<id>, drcards):
   // no region swap touches them.
@@ -132,7 +134,7 @@
   }
   function drDot() {
     var d = drhandle.querySelector(".tdot");
-    if (d) d.classList.toggle("on", drBadge || drSwap);
+    if (d) d.classList.toggle("on", drBadge);
   }
   // drRoom keeps the header and the tracker's handle row clear of the
   // handles: --drhw is their width together (the header's padding and the
@@ -185,10 +187,6 @@
     if (drMode === "panels" && drfold.classList.contains("wait")) f += "; " + wsT("js.drawer.waiting");
     drfold.title = f;
     drfold.setAttribute("aria-label", f);
-  }
-  // A panels change the drawer is closed over lights the handle's dot.
-  function drawerSwapped() {
-    if (drhandle && !drOpen && drHas) { drSwap = true; drDot(); }
   }
   function drHeaderBottom() {
     return drheader ? Math.max(0, Math.round(drheader.getBoundingClientRect().bottom)) : 0;
@@ -265,7 +263,6 @@
     drWant = open && mode === "panels";
     save(DR_OPEN, drWant ? "1" : null);
     save(DR_SEARCH, open && mode === "search" ? "1" : null);
-    if (drWant) { drSwap = false; drDot(); }
     drApply(true);
     // The focused opener hides while its sheet shows: focus moves to the fold
     // button in its slot instead of falling to the body, only while it is

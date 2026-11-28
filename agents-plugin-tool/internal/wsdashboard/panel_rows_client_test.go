@@ -24,13 +24,15 @@ function syncSpinnerPhases(){}
 function drawerSync(){log.push("drawer-sync");}
 function restorePanelReader(n,state){check("reader snapshot",[n===el,state],[true,"reader"]);log.push("reader-restore");}
 function restoreScroll(state){check("pane snapshot",state,"panes");log.push("scroll-restore");}
+function wpSync(){log.push("workpanel-sync");}
+// #r-panels lives in the Workpanel: a panels swap must not light the drawer dot.
 function drawerSwapped(){log.push("drawer-swapped");}
 `+src+`
 swap("panels","delta",{value:"next"});
-check("changed cards lifecycle",log,["scroll-capture","reader-capture","merge","open:agenda","times:agenda","images:agenda","hash","drawer-sync","reader-restore","scroll-restore","drawer-swapped"]);
+check("changed cards lifecycle",log,["scroll-capture","reader-capture","merge","open:agenda","times:agenda","images:agenda","hash","drawer-sync","workpanel-sync","reader-restore","scroll-restore"]);
 check("delta canonical remembered",panelRendered.value,"next");
 log=[];merge=false;swap("panels","full","legacy");
-check("full fallback lifecycle",log,["scroll-capture","reader-capture","full","merge","replace","open:panels","times:panels","images:panels","hash","drawer-sync","reader-restore","scroll-restore","drawer-swapped"]);
+check("full fallback lifecycle",log,["scroll-capture","reader-capture","full","merge","replace","open:panels","times:panels","images:panels","hash","drawer-sync","workpanel-sync","reader-restore","scroll-restore"]);
 check("old daemon canonical remembered",panelRendered.value,"legacy");
 log=[];swap("panels","old",{value:"first-full-current"});
 check("same hash initializes without remount",[log,panelRendered.value],[[],"first-full-current"]);

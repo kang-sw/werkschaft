@@ -43,7 +43,9 @@ test('only the active sheet opener hides; closed handle signals remain in place'
   assert.match(css, /\.dr-handle\.wait \.dr-wait \{ display: inline-flex; \}/);
   assert.match(js, /drhandle\.addEventListener\("click", function \(\) \{\s*drSetOpen\(!\(drOpen && drMode === "panels"\), "panels"\)/);
   assert.match(js, /drhandle\.setAttribute\("aria-label", t\)/);
-  assert.match(js, /drBadge \|\| drSwap/);
+  // #r-panels moved to the Workpanel: only a section badge lights the dot.
+  assert.match(js, /d\.classList\.toggle\("on", drBadge\)/);
+  assert.doesNotMatch(js, /drSwap|function drawerSwapped/);
 });
 
 test('the fold button carries the approval wait while the panels sheet hides the handle', () => {
@@ -53,7 +55,7 @@ test('the fold button carries the approval wait while the panels sheet hides the
   let found = [];
   const row = inSource => ({ closest: s => s === '.ag-source' && inSource ? {} : null });
   const c = vm.createContext({ drhandle, drfold, drOpen: true, drMode: 'panels', wsT: k => k, q: () => found, doc: { querySelector: () => null } });
-  vm.runInContext(section('  function drTitle()', '  // A panels change'), c);
+  vm.runInContext(section('  function drTitle()', '  function drHeaderBottom()'), c);
   const wp = fs.readFileSync(path.join(__dirname, 'assets/dashboard-workpanel.js'), 'utf8');
   vm.runInContext(wp.slice(wp.indexOf('  function drawerWait()'), wp.indexOf('  // wpGallery follows')), c);
   const waitLabel = 'js.drawer.fold; js.drawer.waiting';

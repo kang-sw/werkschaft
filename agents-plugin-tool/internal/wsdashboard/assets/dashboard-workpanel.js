@@ -114,6 +114,13 @@
     if (chip && snm && snm.textContent.trim()) chip.textContent = snm.textContent.trim();
   }
 
+  // wpStreamSync: the head's live indicator follows the stream
+  // (dashboard-stream.js connected).
+  function wpStreamSync(on) {
+    var el = $("wpsse");
+    if (el) el.classList.toggle("off", !on);
+  }
+
   // The narrow layout's [Todo | Agenda] switch.
   function wpMem(id) {
     if (!wpmemory) return;
