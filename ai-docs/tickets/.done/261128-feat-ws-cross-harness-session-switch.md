@@ -9,6 +9,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 621bf19b5db57fa4
 sage-review-completeness-reviewed: 621bf19b5db57fa4
+completed: 2026-11-28
 ---
 
 # Global Cross-Harness Session Switch (Clear + Checkpoint Handoff)
@@ -178,6 +179,13 @@ Responses:
   - HTTP handler tests for `POST /agents/<id>/harness` (200 with the State view, 400, 404, 409, untrusted refusal for both a lead id and a worker id).
 - `GOOS=windows go vet ./...` passes cleanly.
 
+### Result (03f5e28) - 2026-11-28
+
+- Landed the backend-neutral cross-harness switch primitive (`HarnessSwitchSpec`, `Runner.SwitchHarness`, `Runner.SwitchCompanionHarness`, `Runner.HasUsableHarness`, `conv.switchHarness`, and `rotateExternalSession` target-harness extension) in `agents-plugin-tool/internal/wsagent/harness_switch.go`, `compaction.go`, `runner_companion.go`, `http.go`, and `support.go`, with review fixes in `2e90ed4`.
+- Wired `POST /agents/<id>/harness` behind the unconditional trusted gate in `wsagent/http.go` and exposed additive `omitempty` `SupportHarness.harness_switch` (`T0`) computed purely from the backend registry (`LeadProfileFor` + non-durable check), preserving `TestCommonCodeHasNoHarnessNameBranch`.
+- Enforced all 7 invariants, busy/ended `409` guards (including firing quota continuations and durable turns while allowing scheduled/exhausted continuations and consuming queued `compactPending`), pre-flight model/effort/provider + `(1838)` permission + companion gap checks before retirement, atomic single-commit WAL persistence, full failure rollback, retired-process host & compaction circuit-breaker resets, audit cut (`trigger_path: "harness_switch"`), and `registration.json` update.
+- Verification: `go test -race -count=1 ./internal/wsagent/...` passed (221.8s on Phase 1); after review fixes (`2e90ed4`), `go test -race -count=1 ./internal/wsagent -run "TestSwitch|TestSupportChoicesHarnessSwitchFlag|TestCommonCodeHasNoHarnessNameBranch|TestWSManagedCompaction"` passed (13.0s) and `GOOS=windows go vet ./...` passed cleanly.
+
 ### Phase 2: Dashboard harness switcher UI, `#qcbox` quota escape button, and i18n
 
 Expose cross-harness switching in the Werkschaft dashboard for lead sessions so users can switch harnesses manually or escape a quota-exhausted harness in one click.
@@ -191,3 +199,15 @@ Expose cross-harness switching in the Werkschaft dashboard for lead sessions so 
 - New frontend unit tests (`node --test`, alongside the existing `internal/wsdashboard/*.test.js` files; no current test covers `quotaDraw`) covering `#qcbox` button rendering in exhausted/scheduled/ready states, the button opening the switcher with the current harness filtered out, harness switch submission, busy (`409`) / unsupported (`400`) error handling, and exclusion of `harness_switch: false` harnesses from switch options.
 - `go test -race -count=1 ./internal/wsi18n/... ./internal/wsdashboard/...` confirming 100% i18n key parity across all locale tables and dashboard asset/route tests passing.
 - `GOOS=windows go vet ./...` passes cleanly.
+
+### Result (b7ce472) - 2026-11-28
+
+- Added modular harness switcher UI in `agents-plugin-tool/internal/wsdashboard/assets/dashboard-harness-switch.js` (zero hardcoded harness names; filters `/support/choices` by `harness_switch === true && available !== false && harness !== currentBackend`; never preselects a target; posts `POST /agents/<id>/harness` with omitted defaults or selected model/effort/provider; surfaces localized 409/400 errors; sig-guarded minimal DOM updates).
+- Integrated the switcher into `dashboard-leads.js` (`rpSessMake` with cross-session popover isolation/generation guards and `quotaDraw` one-click **"Switch harness"** button in exhausted/scheduled/ready states when the current harness supports switching), registered asset assembly in `pages.go` and styling in `dashboard.css`, and added 12 `wsi18n` keys across all 11 locale tables (`en`, `de`, `es`, `fr`, `it`, `ja`, `ko`, `pt-BR`, `ru`, `zh-Hans`, `zh-Hant`), with review fixes in `2e90ed4`.
+- Added frontend test suite `internal/wsdashboard/frontend-harness-switch.test.js` covering `#qcbox` states, one-click switcher opening, submission payloads, 409/400 localized errors, `harness_switch: false` hiding, zero-mutation unchanged redraws, and cross-session shared-popover isolation.
+- Verification (post review fixes `2e90ed4`): `node --test internal/wsdashboard/frontend-harness-switch.test.js internal/wsdashboard/frontend-approval.test.js internal/wsdashboard/new-session.test.js` (30/30 pass), `permission-controls.test.cjs` / `lead-popover.test.cjs` / `hold-confirm.test.cjs` (all pass), `go test -race -count=1 ./internal/wsi18n/...` (pass, 54.9s), targeted `go test -race -count=1 ./internal/wsdashboard -run "TestDashboardAssetSourceAssembly|TestQuota|TestAccountSlot"` (pass, 3.4s; also `TestDashboard|TestPages|TestPage|TestQuota|TestAccountSlot|TestLead|TestSupport|TestHarness|TestI18n|TestLocale|TestAsset|TestBundle` passed in 78.7s on `b7ce472`), and `GOOS=windows go vet ./...` (pass). Note: full unfiltered `wsdashboard` suite hits a pre-existing unrelated failure/timeout in `board_frame_lazy_test.go` (`TestTickTimesKeepsItsSetsUntilThePageChanges`) and browser hold tests on `develop`.
+
+
+## Resolution (2026-11-28)
+
+Completed Phase 1 (wsagent cross-harness clear+handoff primitive, HTTP route POST /agents/<id>/harness, additive SupportHarness.harness_switch flag, companion Runner seams) and Phase 2 (dashboard harness switcher UI, #qcbox one-click Switch harness button, 12 wsi18n keys across all 11 locale tables, and frontend/Go test coverage), plus all code-review-lite fixes (2e90ed4).
