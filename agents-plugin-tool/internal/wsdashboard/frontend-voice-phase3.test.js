@@ -1,0 +1,886 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const assetsDir = path.join(__dirname, 'assets');
+const voicePttJS = fs.readFileSync(path.join(assetsDir, 'dashboard-voice-ptt.js'), 'utf8');
+const voiceJS = fs.readFileSync(path.join(assetsDir, 'dashboard-voice.js'), 'utf8');
+const voiceNativeJS = fs.readFileSync(path.join(assetsDir, 'dashboard-voice-native.js'), 'utf8');
+const capsulesJS = fs.readFileSync(path.join(assetsDir, 'capsules.js'), 'utf8');
+const mdEditorJS = fs.readFileSync(path.join(assetsDir, 'md-editor.js'), 'utf8');
+
+class NodeStub {
+  constructor(nodeType) {
+    this.nodeType = nodeType;
+    this.parentNode = null;
+    this.childNodes = [];
+  }
+  get nextSibling() {
+    if (!this.parentNode) return null;
+    const i = this.parentNode.childNodes.indexOf(this);
+    return i >= 0 && i + 1 < this.parentNode.childNodes.length ? this.parentNode.childNodes[i + 1] : null;
+  }
+  get previousSibling() {
+    if (!this.parentNode) return null;
+    const i = this.parentNode.childNodes.indexOf(this);
+    return i > 0 ? this.parentNode.childNodes[i - 1] : null;
+  }
+  remove() {
+    if (this.parentNode) this.parentNode.removeChild(this);
+  }
+}
+
+class TextStub extends NodeStub {
+  constructor(val) {
+    super(3);
+    this.nodeName = '#text';
+    this.nodeValue = String(val == null ? '' : val);
+  }
+  get data() { return this.nodeValue; }
+  set data(v) { this.nodeValue = String(v == null ? '' : v); }
+  get length() { return this.nodeValue.length; }
+  splitText(off) {
+    const tail = new TextStub(this.nodeValue.slice(off));
+    this.nodeValue = this.nodeValue.slice(0, off);
+    if (this.parentNode) this.parentNode.insertBefore(tail, this.nextSibling);
+    return tail;
+  }
+}
+
+class ElementStub extends NodeStub {
+  constructor(tag, id, cls) {
+    super(1);
+    this.tagName = String(tag || 'div').toUpperCase();
+    this.nodeName = this.tagName;
+    this.id = id || '';
+    this.className = cls || '';
+    this.attrs = new Map();
+    this.listeners = new Map();
+    this.style = {};
+    this.hidden = false;
+    this.disabled = false;
+    this.isConnected = true;
+    this.value = '';
+    this.selectionStart = 0;
+    this.selectionEnd = 0;
+    this.rect = { left: 100, top: 10, width: 400, height: 60 };
+    this._text = '';
+  }
+  get children() { return this.childNodes.filter(n => n.nodeType === 1); }
+  get firstChild() { return this.childNodes[0] || null; }
+  get lastChild() { return this.childNodes[this.childNodes.length - 1] || null; }
+  get textContent() {
+    if (this.childNodes.length) {
+      return this.childNodes.map(n => n.nodeType === 3 ? n.nodeValue : n.textContent).join('');
+    }
+    return this._text;
+  }
+  set textContent(v) {
+    this._text = String(v == null ? '' : v);
+    this.childNodes.forEach(c => { c.parentNode = null; });
+    this.childNodes = this._text ? [new TextStub(this._text)] : [];
+    this.childNodes.forEach(c => { c.parentNode = this; });
+  }
+  setAttribute(k, v) { this.attrs.set(k, String(v)); }
+  getAttribute(k) { return this.attrs.has(k) ? this.attrs.get(k) : null; }
+  hasAttribute(k) { return this.attrs.has(k); }
+  removeAttribute(k) { this.attrs.delete(k); }
+  appendChild(child) {
+    if (child.parentNode) child.parentNode.removeChild(child);
+    child.parentNode = this;
+    this.childNodes.push(child);
+    return child;
+  }
+  insertBefore(child, ref) {
+    if (child.parentNode) child.parentNode.removeChild(child);
+    child.parentNode = this;
+    const idx = ref ? this.childNodes.indexOf(ref) : -1;
+    if (idx >= 0) this.childNodes.splice(idx, 0, child);
+    else this.childNodes.push(child);
+    return child;
+  }
+  removeChild(child) {
+    const idx = this.childNodes.indexOf(child);
+    if (idx >= 0) this.childNodes.splice(idx, 1);
+    child.parentNode = null;
+    return child;
+  }
+  contains(node) {
+    if (node === this) return true;
+    for (const c of this.childNodes) {
+      if (c === node || (c.nodeType === 1 && c.contains(node))) return true;
+    }
+    return false;
+  }
+  addEventListener(t, fn) {
+    if (!this.listeners.has(t)) this.listeners.set(t, []);
+    this.listeners.get(t).push(fn);
+  }
+  removeEventListener(t, fn) {
+    const arr = this.listeners.get(t);
+    if (!arr) return;
+    const i = arr.indexOf(fn);
+    if (i >= 0) arr.splice(i, 1);
+  }
+  dispatchEvent(ev) {
+    const t = typeof ev === 'string' ? ev : ev.type;
+    for (const fn of (this.listeners.get(t) || []).slice()) fn(ev);
+    return true;
+  }
+  click() { this.dispatchEvent({ type: 'click', preventDefault() {} }); }
+  focus() { this.focused = true; }
+  getBoundingClientRect() { return this.rect; }
+  setRangeText(rep, start, end, mode) {
+    const a = typeof start === 'number' ? start : this.selectionStart;
+    const b = typeof end === 'number' ? end : this.selectionEnd;
+    this.value = this.value.slice(0, a) + rep + this.value.slice(b);
+    if (mode === 'end') this.selectionStart = this.selectionEnd = a + rep.length;
+  }
+  setSelectionRange(a, b) { this.selectionStart = a; this.selectionEnd = b; }
+  querySelector(sel) {
+    const match = (el) => {
+      if (sel.startsWith('.')) return el.className.split(/\s+/).includes(sel.slice(1));
+      const eq = sel.match(/^\[([^=\]]+)="([^"]*)"\]$/);
+      if (eq) return el.getAttribute(eq[1]) === eq[2];
+      const pr = sel.match(/^\[([^=\]]+)\]$/);
+      if (pr) return el.hasAttribute(pr[1]);
+      return false;
+    };
+    const walk = (n) => {
+      for (const c of n.children) {
+        if (match(c)) return c;
+        const found = walk(c);
+        if (found) return found;
+      }
+      return null;
+    };
+    return walk(this);
+  }
+  querySelectorAll(sel) {
+    const res = [];
+    const tag = sel.toUpperCase();
+    const walk = (n) => {
+      for (const c of n.children) {
+        if (c.tagName === tag || (sel.startsWith('[') && c.hasAttribute(sel.slice(1, -1)))) res.push(c);
+        walk(c);
+      }
+    };
+    walk(this);
+    return res;
+  }
+}
+
+class FakeEvent {
+  constructor(type, init) {
+    this.type = type;
+    this.defaultPrevented = false;
+    Object.assign(this, init || {});
+  }
+  preventDefault() { this.defaultPrevented = true; }
+}
+
+class FakeCustomEvent extends FakeEvent {
+  constructor(type, init) {
+    super(type, init);
+    this.detail = init && init.detail;
+  }
+}
+
+function makeFakeTimers() {
+  let now = 0;
+  let nextId = 1;
+  const timers = new Map();
+  return {
+    setTimeout(fn, ms) {
+      const id = nextId++;
+      timers.set(id, { fn, due: now + (ms || 0) });
+      return id;
+    },
+    clearTimeout(id) { timers.delete(id); },
+    advance(ms) {
+      now += ms;
+      for (const [id, t] of Array.from(timers.entries())) {
+        if (t.due <= now) {
+          timers.delete(id);
+          t.fn();
+        }
+      }
+    },
+    pendingCount() { return timers.size; }
+  };
+}
+
+function makeVoiceEnv(opts = {}) {
+  const root = new ElementStub('html');
+  const body = new ElementStub('body');
+  root.appendChild(body);
+  const composer = new ElementStub('div', 'composer', 'composer');
+  const field = new ElementStub('div', '', 'cfield');
+  const ctext = new ElementStub('textarea', 'ctext');
+  const editor = new ElementStub('div', '', 'wsc-editor');
+  editor.setAttribute('contenteditable', 'true');
+  if (opts.withCapsules !== false) {
+    ctext.wsc = {
+      editor,
+      anchor(pos) { return { x: 120 + pos * 4, top: 14, bottom: 32 }; },
+      point(pos) {
+        if (editor.childNodes.length && editor.childNodes[0].nodeType === 3) {
+          return [editor.childNodes[0], Math.min(pos, editor.childNodes[0].nodeValue.length)];
+        }
+        return [editor, editor.childNodes.length];
+      }
+    };
+  }
+  const cap = new ElementStub('div', 'cvox-cap', 'cvox-cap');
+  cap.hidden = true;
+  const btn = new ElementStub('button', 'cvox', 'cvox');
+  btn.hidden = true;
+  const csend = new ElementStub('button', 'csend', 'csend');
+  field.appendChild(ctext);
+  field.appendChild(cap);
+  composer.appendChild(field);
+  composer.appendChild(btn);
+  composer.appendChild(csend);
+  body.appendChild(composer);
+
+  const docListeners = new Map();
+  const winListeners = new Map();
+  let popupOpen = false;
+  const doc = {
+    hidden: false,
+    documentElement: root,
+    body,
+    getElementById(id) {
+      if (id === 'composer') return composer;
+      if (id === 'ctext') return ctext;
+      if (id === 'csend') return csend;
+      if (id === 'cvox') return btn;
+      if (id === 'cvox-cap') return cap;
+      return null;
+    },
+    createElement(tag) { return new ElementStub(tag); },
+    createTextNode(t) { return new TextStub(t); },
+    querySelector(sel) {
+      if (sel.includes('.wsm-pop') && popupOpen) return new ElementStub('div', '', 'wsm-pop');
+      return body.querySelector(sel);
+    },
+    querySelectorAll(sel) { return body.querySelectorAll(sel); },
+    addEventListener(t, fn) {
+      if (!docListeners.has(t)) docListeners.set(t, []);
+      docListeners.get(t).push(fn);
+    },
+    removeEventListener(t, fn) {
+      const a = docListeners.get(t);
+      if (a) { const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); }
+    },
+    dispatchEvent(ev) {
+      const t = typeof ev === 'string' ? ev : ev.type;
+      for (const fn of (docListeners.get(t) || []).slice()) fn(ev);
+    }
+  };
+
+  const observers = [];
+  class FakeMutationObserver {
+    constructor(cb) { this.cb = cb; this.disconnected = false; observers.push(this); }
+    observe() {}
+    disconnect() { this.disconnected = true; }
+    trigger() { if (!this.disconnected) this.cb([]); }
+  }
+
+  const origin = opts.origin || 'http://127.0.0.1:8787';
+  const windowObj = {
+    document: doc,
+    location: { origin },
+    navigator: { language: opts.navigatorLanguage || 'ko-KR' },
+    wsT: (k) => k,
+    MutationObserver: FakeMutationObserver,
+    Event: FakeEvent,
+    CustomEvent: FakeCustomEvent,
+    addEventListener(t, fn) {
+      if (!winListeners.has(t)) winListeners.set(t, []);
+      winListeners.get(t).push(fn);
+    },
+    removeEventListener(t, fn) {
+      const a = winListeners.get(t);
+      if (a) { const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); }
+    },
+    dispatchEvent(ev) {
+      const t = typeof ev === 'string' ? ev : ev.type;
+      for (const fn of (winListeners.get(t) || []).slice()) fn(ev);
+    },
+    postMessage(data, targetOrigin) {
+      if (opts.onPostMessage) opts.onPostMessage(data, targetOrigin);
+    }
+  };
+  windowObj.top = opts.topWindow || windowObj;
+  if (opts.werkschaftSpeech) windowObj.werkschaftSpeech = opts.werkschaftSpeech;
+
+  const ctx = {
+    window: windowObj,
+    document: doc,
+    navigator: windowObj.navigator,
+    Event: FakeEvent,
+    CustomEvent: FakeCustomEvent,
+    MutationObserver: FakeMutationObserver,
+    Blob,
+    TextDecoder,
+    TextEncoder,
+    AbortController,
+    ArrayBuffer,
+    DataView,
+    Float32Array,
+    Uint8Array,
+    Promise,
+    Error,
+    Math,
+    JSON,
+    Object,
+    String,
+    Array,
+    console,
+    setTimeout,
+    clearTimeout
+  };
+  vm.createContext(ctx);
+  const origGet = doc.getElementById;
+  doc.getElementById = () => null;
+  windowObj.__wsVoiceNativeNoAuto = true;
+  vm.runInContext(voicePttJS, ctx);
+  vm.runInContext(voiceJS, ctx);
+  vm.runInContext(voiceNativeJS, ctx);
+  doc.getElementById = origGet;
+
+  return {
+    ctx, window: windowObj, doc, root, body, composer, field, ctext, editor, cap, btn, csend,
+    observers,
+    setPopupOpen(v) { popupOpen = !!v; }
+  };
+}
+
+const flush = () => new Promise(r => setImmediate(r));
+
+test('order walk resolves desktop native first, browser falls through past native, and zero available resolves null while staying eligible', async () => {
+  const env = makeVoiceEnv();
+  let nativeAvail = true;
+  env.window.WsVoiceInput.registerBackend({
+    id: 'native', label: 'OS Native', kind: 'native',
+    available: () => nativeAvail,
+    start: () => Promise.resolve(),
+    stop: () => Promise.resolve({ text: 'ok' }),
+    cancel: () => {}
+  });
+
+  let capsPayload = {
+    order: ['native', 'openrouter', 'groq'],
+    backends: [
+      { id: 'native', kind: 'native', available: false },
+      { id: 'openrouter', kind: 'external', available: false, models: [{ id: 'or-stt' }] },
+      { id: 'groq', kind: 'external', available: true, models: [{ id: 'whisper-large-v3-turbo' }] }
+    ],
+    selected: { backend: 'groq', model: 'whisper-large-v3-turbo', language: 'ko' },
+    legacy_backend: 'groq',
+    legacy_model: 'whisper-large-v3-turbo'
+  };
+  let status = 200;
+  const fakeFetch = async () => ({ ok: status === 200, status, json: async () => capsPayload });
+
+  const handle = env.window.WsVoiceInput.attachComposer({
+    document: env.doc, window: env.window, fetch: fakeFetch, autoDiscover: false
+  });
+
+  // Desktop with native available -> picks native first.
+  await handle.controller.refreshCapabilities();
+  assert.equal(handle.controller.isEligible(), true);
+  assert.equal(handle.controller.getResolvedBackend().id, 'native');
+
+  // Browser (native unavailable) -> skips openrouter (unavailable), resolves groq.
+  nativeAvail = false;
+  await handle.controller.refreshCapabilities();
+  assert.equal(handle.controller.isEligible(), true);
+  assert.equal(handle.controller.getResolvedBackend().id, 'groq');
+
+  // Zero available -> eligible stays true, resolved is null.
+  capsPayload = {
+    order: ['native', 'openrouter'],
+    backends: [
+      { id: 'native', kind: 'native', available: false },
+      { id: 'openrouter', kind: 'external', available: false }
+    ],
+    selected: null
+  };
+  await handle.controller.refreshCapabilities();
+  assert.equal(handle.controller.isEligible(), true);
+  assert.equal(handle.controller.getResolvedBackend(), null);
+
+  // Non-loopback 404 -> eligible becomes false.
+  status = 404;
+  await handle.controller.refreshCapabilities();
+  assert.equal(handle.controller.isEligible(), false);
+  assert.equal(handle.controller.getResolvedBackend(), null);
+  handle.destroy();
+});
+
+test('resolved backend receives legacy voice_model only when matching legacy_backend, and native receives voice_language or navigator.language', async () => {
+  const env = makeVoiceEnv({ navigatorLanguage: 'ko-KR' });
+  let lastCtx = null;
+  env.window.WsVoiceInput.registerBackend({
+    id: 'native', label: 'OS Native', kind: 'native',
+    available: () => true,
+    start: (ctx) => { lastCtx = ctx; return Promise.resolve(); },
+    stop: () => Promise.resolve({ text: 'done' }),
+    cancel: () => {}
+  });
+  env.window.WsVoiceInput.registerBackend({
+    id: 'groq', label: 'Groq', kind: 'external',
+    available: () => true,
+    start: (ctx) => { lastCtx = ctx; return Promise.resolve(); },
+    stop: () => Promise.resolve({ text: 'done' }),
+    cancel: () => {}
+  });
+
+  const ctrl = env.window.WsVoiceInput.createController({ autoDiscover: false });
+  ctrl.setCapabilities({
+    eligible: true,
+    order: ['native', 'groq'],
+    legacy_backend: 'groq',
+    legacy_model: 'whisper-large-v3-turbo',
+    language: 'ja-JP'
+  });
+  await ctrl.start();
+  assert.equal(lastCtx.model, '', 'non-legacy backend must not receive legacy voice_model');
+  assert.equal(lastCtx.language, 'ja-JP');
+  await ctrl.stop();
+
+  ctrl.setCapabilities({
+    eligible: true,
+    order: ['groq'],
+    legacy_backend: 'groq',
+    legacy_model: 'whisper-large-v3-turbo',
+    language: ''
+  });
+  await ctrl.start();
+  assert.equal(lastCtx.model, 'whisper-large-v3-turbo', 'legacy backend keeps legacy voice_model');
+  await ctrl.stop();
+
+  // Native adapter locale normalization falls back to navigator.language when voice_language is empty.
+  assert.equal(env.window.WsVoiceNative.normalizeLocale('', { language: 'ko-KR' }), 'ko-KR');
+  assert.equal(env.window.WsVoiceNative.normalizeLocale('en-US, ko-KR', { language: 'ko-KR' }), 'en-US');
+  ctrl.destroy();
+});
+
+test('native adapter top-frame direct, browser absence, framed postMessage relay, busy refusal, hidden broadcast, and iframe detach teardown', async () => {
+  const calls = [];
+  const bridge = {
+    status(loc) { calls.push({ op: 'status', loc }); return true; },
+    start(loc) { calls.push({ op: 'start', loc }); return true; },
+    stop() { calls.push({ op: 'stop' }); return true; },
+    cancel() { calls.push({ op: 'cancel' }); return true; }
+  };
+
+  // Browser-only (no werkschaftSpeech): native never registers.
+  const browserEnv = makeVoiceEnv();
+  const browserNative = browserEnv.window.WsVoiceNative.create({
+    window: browserEnv.window, document: browserEnv.doc, voiceInput: browserEnv.window.WsVoiceInput, isTop: true
+  });
+  assert.equal(browserNative.isDesktop(), false);
+  assert.equal(browserEnv.window.WsVoiceInput.getBackend('native'), null);
+  browserNative.destroy();
+
+  // Top-frame desktop host + two child iframes communicating over same-origin postMessage.
+  const topEnv = makeVoiceEnv({ werkschaftSpeech: bridge, origin: 'http://127.0.0.1:8787' });
+  const topNative = topEnv.window.WsVoiceNative.create({
+    window: topEnv.window, document: topEnv.doc, voiceInput: topEnv.window.WsVoiceInput, isTop: true
+  });
+
+  // Handshake ready makes native available on top.
+  topEnv.window.dispatchEvent(new FakeCustomEvent('ws-native-speech', {
+    detail: { type: 'ready', available: true, on_device: true, locale: 'ko-KR', reason: '' }
+  }));
+  assert.equal(topNative.isDesktop(), true);
+  assert.equal(topNative.getStatus().available, true);
+  assert.ok(topEnv.window.WsVoiceInput.getBackend('native'));
+
+  // Mount two same-origin child iframes.
+  function mountChildFrame() {
+    const iframe = new ElementStub('iframe');
+    const childEnv = makeVoiceEnv({
+      origin: 'http://127.0.0.1:8787',
+      topWindow: {
+        postMessage(data, targetOrigin) {
+          topEnv.window.dispatchEvent({
+            type: 'message',
+            origin: targetOrigin,
+            source: childEnv.window,
+            data
+          });
+        }
+      }
+    });
+    childEnv.window.postMessage = (data, targetOrigin) => {
+      childEnv.window.dispatchEvent({
+        type: 'message',
+        origin: targetOrigin,
+        source: childEnv.window.top,
+        data
+      });
+    };
+    iframe.contentWindow = childEnv.window;
+    topEnv.body.appendChild(iframe);
+    const native = childEnv.window.WsVoiceNative.create({
+      window: childEnv.window, document: childEnv.doc, voiceInput: childEnv.window.WsVoiceInput, isTop: false
+    });
+    return { iframe, env: childEnv, native };
+  }
+
+  const frameA = mountChildFrame();
+  const frameB = mountChildFrame();
+
+  assert.equal(frameA.native.getStatus().available, true, 'frame A receives cached ready status via relay');
+  assert.ok(frameA.env.window.WsVoiceInput.getBackend('native'));
+
+  // Cross-origin postMessage is strictly ignored.
+  const startCountBefore = calls.filter(c => c.op === 'start').length;
+  topEnv.window.dispatchEvent({
+    type: 'message',
+    origin: 'https://evil.example',
+    source: frameA.env.window,
+    data: { wsVoiceRelay: true, op: 'start', locale: 'en-US' }
+  });
+  assert.equal(calls.filter(c => c.op === 'start').length, startCountBefore);
+
+  // Frame A starts dictation via relay; partials/final route only to frame A.
+  const partialsA = [];
+  const errorsB = [];
+  frameA.native.backend.onPartial(t => partialsA.push(t));
+  frameB.native.backend.onError(e => errorsB.push(e));
+
+  await frameA.native.backend.start({ language: 'ko-KR' });
+  assert.equal(calls[calls.length - 1].op, 'start');
+  assert.equal(calls[calls.length - 1].loc, 'ko-KR');
+
+  // Second frame B start while frame A owns recognizer -> refused with busy.
+  await frameB.native.backend.start({ language: 'en-US' });
+  assert.equal(errorsB.length, 1);
+  assert.equal(errorsB[0].code, 'busy');
+
+  // Partial arrives -> delivered to A.
+  topEnv.window.dispatchEvent(new FakeCustomEvent('ws-native-speech', {
+    detail: { type: 'partial', text: '안녕' }
+  }));
+  assert.deepEqual(partialsA, ['안녕']);
+
+  // Stop from A -> final delivered to A.
+  const stopPromise = frameA.native.backend.stop();
+  topEnv.window.dispatchEvent(new FakeCustomEvent('ws-native-speech', {
+    detail: { type: 'final', text: '안녕하세요' }
+  }));
+  const finalRes = await stopPromise;
+  assert.equal(finalRes.text, '안녕하세요');
+
+  // Start again in A, then broadcast hidden teardown from Rust -> reaches A and cancels lock/span.
+  let hiddenReceived = false;
+  frameA.native.backend.onHidden(() => { hiddenReceived = true; });
+  await frameA.native.backend.start({ language: 'ko-KR' });
+  topEnv.window.dispatchEvent(new FakeCustomEvent('ws-native-speech', {
+    detail: { type: 'hidden', reason: 'minimized' }
+  }));
+  assert.equal(hiddenReceived, true, 'hidden teardown broadcast reaches framed composer');
+
+  // Start in A, then detach iframe A mid-dictation -> MutationObserver triggers bridge.cancel() and lets B start cleanly.
+  await frameA.native.backend.start({ language: 'ko-KR' });
+  const cancelsBefore = calls.filter(c => c.op === 'cancel').length;
+  frameA.iframe.isConnected = false;
+  frameA.iframe.remove();
+  topEnv.observers.forEach(o => o.trigger());
+  assert.equal(calls.filter(c => c.op === 'cancel').length, cancelsBefore + 1, 'detaching owning iframe cancels native bridge');
+
+  const startsBeforeB = calls.filter(c => c.op === 'start').length;
+  await frameB.native.backend.start({ language: 'en-US' });
+  assert.equal(calls.filter(c => c.op === 'start').length, startsBeforeB + 1, 'second frame starts cleanly after first frame detaches');
+
+  frameA.native.destroy();
+  frameB.native.destroy();
+  topNative.destroy();
+});
+
+test('capsules.js read() and md-editor.js readEditorDom() exclude [data-voice-span] and WsMdEditor skips reconcile while live', () => {
+  // Verify readEditorDom directly on DOM containing [data-voice-span].
+  const ctx = {
+    window: {},
+    document: {},
+    console,
+    setTimeout,
+    clearTimeout
+  };
+  ctx.window.document = ctx.document;
+  vm.createContext(ctx);
+  vm.runInContext(mdEditorJS, ctx);
+
+  const editor = new ElementStub('div', '', 'wsc-editor');
+  editor.appendChild(new TextStub('hello '));
+  const vspan = new ElementStub('span');
+  vspan.setAttribute('data-voice-span', 'listening');
+  vspan.appendChild(new TextStub('interim speech'));
+  editor.appendChild(vspan);
+  editor.appendChild(new TextStub('world'));
+
+  const read = ctx.window.WsMdEditor.readEditorDom(editor);
+  assert.equal(read.text, 'hello world', 'readEditorDom must exclude [data-voice-span] text');
+
+  // Verify capsules.js source excludes data-voice-span in both isMeaningful and read().
+  assert.match(capsulesJS, /!node\.hasAttribute\("data-voice-span"\)/);
+  assert.match(capsulesJS, /n\.hasAttribute\("data-voice-span"\)/);
+
+  // Verify WsMdEditor.attach skips reconcile while [data-voice-span] is live, and reconciles once removed.
+  let renderCount = 0;
+  const fakeField = new ElementStub('textarea', 'ctext');
+  fakeField.value = 'hello **world**';
+  const liveEd = new ElementStub('div', '', 'wsc-editor');
+  liveEd.appendChild(new TextStub('hello **world**'));
+  liveEd.appendChild(vspan);
+  const fakeDoc = {
+    activeElement: null,
+    createElement: (t) => new ElementStub(t),
+    createTextNode: (t) => new TextStub(t),
+    createDocumentFragment: () => new ElementStub('fragment'),
+    addEventListener() {},
+    removeEventListener() {}
+  };
+  const fakeWin = {
+    document: fakeDoc,
+    getSelection: () => ({ rangeCount: 0, removeAllRanges() {}, addRange() {} }),
+    WsMdParser: {
+      parse: (text) => {
+        renderCount++;
+        return { lines: [{ start: 0, end: text.length, tokens: [], hasNewline: false }] };
+      }
+    }
+  };
+  const ctx2 = { window: fakeWin, document: fakeDoc, console, setTimeout, clearTimeout };
+  vm.createContext(ctx2);
+  vm.runInContext(mdEditorJS, ctx2);
+  const md = ctx2.window.WsMdEditor.attach(liveEd, { field: fakeField, window: fakeWin, document: fakeDoc });
+  // Initial attach skipped reconcile because vspan is live.
+  assert.equal(renderCount, 0, 'reconcile must skip while [data-voice-span] is present');
+  liveEd._wsmdRenderHook();
+  assert.equal(renderCount, 0, 'renderHook must skip while [data-voice-span] is present');
+  assert.ok(liveEd.querySelector('[data-voice-span]'), 'voice span remains intact');
+
+  // Remove span -> _wsmdReconcile runs once.
+  vspan.remove();
+  liveEd._wsmdReconcile();
+  assert.ok(renderCount >= 1, '_wsmdReconcile runs once span is removed');
+  md.detach();
+});
+
+test('postProcess hook transitions listening -> refining -> atomic span replacement and falls back to raw text on rejection', async () => {
+  const env = makeVoiceEnv();
+  env.ctext.value = 'before  after';
+  env.ctext.selectionStart = 7;
+  env.ctext.selectionEnd = 7;
+
+  let reconcileCalls = 0;
+  env.editor._wsmdReconcile = () => { reconcileCalls++; };
+
+  const states = [];
+  env.window.WsVoiceInput.registerBackend({
+    id: 'native', label: 'OS Native', kind: 'native',
+    available: () => true,
+    onPartial() {},
+    start: () => Promise.resolve(),
+    stop: () => Promise.resolve({ text: 'raw spoken' }),
+    cancel: () => {}
+  });
+
+  let resolveRefine;
+  const refinePromise = new Promise(r => { resolveRefine = r; });
+
+  const handle = env.window.WsVoiceInput.attachComposer({
+    document: env.doc,
+    window: env.window,
+    autoDiscover: false,
+    postProcess: async (raw) => {
+      assert.equal(raw, 'raw spoken');
+      return refinePromise;
+    }
+  });
+  handle.controller.setCapabilities({ eligible: true, order: ['native'] });
+
+  env.btn.click();
+  await flush();
+  assert.equal(env.editor.querySelector('[data-voice-span]').getAttribute('data-voice-span'), 'listening');
+
+  env.btn.click();
+  await flush();
+  assert.equal(handle.controller.getState(), 'refining');
+  assert.equal(env.editor.querySelector('[data-voice-span]').getAttribute('data-voice-span'), 'refining');
+  assert.equal(env.ctext.value, 'before  after', 'composer unchanged while refining');
+
+  resolveRefine('Refined text.');
+  await flush();
+  await flush();
+  assert.equal(env.ctext.value, 'before Refined text. after', 'only the exact span caret is replaced');
+  assert.equal(env.editor.querySelector('[data-voice-span]'), null);
+  assert.ok(reconcileCalls >= 1, 'reconcile runs once after atomic replacement');
+
+  // Rejecting postProcess falls back to raw text safely.
+  env.window.WsVoiceInput.setPostProcess(() => Promise.reject(new Error('llm down')));
+  handle.destroy();
+  const handle2 = env.window.WsVoiceInput.attachComposer({
+    document: env.doc, window: env.window, autoDiscover: false
+  });
+  handle2.controller.setCapabilities({ eligible: true, order: ['native'] });
+  env.ctext.value = 'hi ';
+  env.ctext.selectionStart = env.ctext.selectionEnd = 3;
+  env.btn.click();
+  await flush();
+  env.btn.click();
+  await flush();
+  await flush();
+  assert.equal(env.ctext.value, 'hi raw spoken');
+
+  env.window.WsVoiceInput.setPostProcess(null);
+  handle2.destroy();
+});
+
+test('Spacebar 0.5s PTT: owner single-space trim rule, repeat suppression, short tap, preconditions, and release after lock-induced blur', async () => {
+  const env = makeVoiceEnv();
+  const trim = (v, c) => ({ ...env.window.WsVoicePTT.trimPrecedingSpacesForPTT(v, c) });
+
+  // Direct unit checks of the owner's single-space trim rule:
+  assert.deepEqual(trim(' ', 1), { start: 0, end: 1, replacement: '', nextCaret: 0, changed: true });
+  assert.deepEqual(trim('   ', 3), { start: 0, end: 3, replacement: '', nextCaret: 0, changed: true });
+  assert.deepEqual(trim('line1\n ', 7), { start: 6, end: 7, replacement: '', nextCaret: 6, changed: true });
+  assert.deepEqual(trim('안녕 ', 3), { start: 2, end: 3, replacement: ' ', nextCaret: 3, changed: false });
+  assert.deepEqual(trim('안녕  ', 4), { start: 2, end: 4, replacement: ' ', nextCaret: 3, changed: true });
+  assert.deepEqual(trim('안녕   ', 5), { start: 2, end: 5, replacement: ' ', nextCaret: 3, changed: true });
+  assert.deepEqual(trim('hello   world', 8), { start: 5, end: 8, replacement: ' ', nextCaret: 6, changed: true });
+
+  // End-to-end PTT gesture checks with fake timers.
+  const timers = makeFakeTimers();
+  let startCount = 0;
+  let stopCount = 0;
+  env.window.WsVoiceInput.registerBackend({
+    id: 'native', label: 'OS Native', kind: 'native',
+    available: () => true,
+    start: () => { startCount++; return Promise.resolve(); },
+    stop: () => { stopCount++; return Promise.resolve({ text: '말하기' }); },
+    cancel: () => {}
+  });
+
+  const handle = env.window.WsVoiceInput.attachComposer({
+    document: env.doc,
+    window: env.window,
+    autoDiscover: false,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout
+  });
+
+  // 1. Unconfigured (no resolved backend) -> Space hold does nothing.
+  handle.controller.setCapabilities({ eligible: true, order: [] });
+  env.ctext.value = ' ';
+  env.ctext.selectionStart = env.ctext.selectionEnd = 1;
+  env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', target: env.editor }));
+  timers.advance(600);
+  assert.equal(startCount, 0, 'unconfigured user typing is untouched');
+
+  // Enable backend.
+  handle.controller.setCapabilities({ eligible: true, order: ['native'] });
+
+  // 2. Short tap (< 500ms) -> does not start dictation, keeps normal space.
+  env.ctext.value = '안녕 ';
+  env.ctext.selectionStart = env.ctext.selectionEnd = 3;
+  env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', target: env.editor }));
+  timers.advance(300);
+  env.doc.dispatchEvent(new FakeEvent('keyup', { key: ' ', code: 'Space' }));
+  timers.advance(300);
+  assert.equal(startCount, 0, 'short tap types normal space without starting dictation');
+  assert.equal(env.ctext.value, '안녕 ');
+
+  // 3. IME / modifier / popup preconditions block PTT.
+  env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', target: env.editor, isComposing: true }));
+  env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', target: env.editor, keyCode: 229 }));
+  env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', target: env.editor, ctrlKey: true }));
+  env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', target: env.editor, shiftKey: true }));
+  env.setPopupOpen(true);
+  env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', target: env.editor }));
+  env.setPopupOpen(false);
+  timers.advance(600);
+  assert.equal(startCount, 0, 'IME, modifiers, and open menus must never trigger PTT');
+
+  // 4. Full hold at start of empty composer: initial space trimmed to "", repeat prevented, lock-induced blur ignored, doc keyup stops & commits.
+  env.ctext.value = ' ';
+  env.ctext.selectionStart = env.ctext.selectionEnd = 1;
+  // Simulate lock turning contenteditable="false" triggering an immediate blur on editor.
+  const origSetAttr = env.editor.setAttribute.bind(env.editor);
+  env.editor.setAttribute = (k, v) => {
+    origSetAttr(k, v);
+    if (k === 'contenteditable' && v === 'false') {
+      env.editor.dispatchEvent(new FakeEvent('blur', { target: env.editor }));
+    }
+  };
+  env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', target: env.editor }));
+  const repEv = new FakeEvent('keydown', { key: ' ', code: 'Space', repeat: true, target: env.editor });
+  env.editor.dispatchEvent(repEv);
+  assert.equal(repEv.defaultPrevented, true, 'key-repeat spaces suppressed while holding');
+
+  timers.advance(500);
+  await flush();
+  assert.equal(startCount, 1);
+  assert.equal(stopCount, 0, 'lock-induced blur must NOT count as PTT release');
+  assert.equal(env.ctext.value, '', 'empty composer leading space trimmed to "" before span insert');
+  assert.equal(handle.controller.getState(), 'recording');
+
+  // Document-level keyup releases PTT and commits final text.
+  const upEv = new FakeEvent('keyup', { key: ' ', code: 'Space' });
+  env.doc.dispatchEvent(upEv);
+  await flush();
+  await flush();
+  assert.equal(upEv.defaultPrevented, true);
+  assert.equal(stopCount, 1);
+  assert.equal(env.ctext.value, '말하기');
+
+  // 5. Hold after "안녕 " (where initial keydown made it "안녕  "): collapses to exactly 1 space "안녕 " before dictated text.
+  env.ctext.value = '안녕  ';
+  env.ctext.selectionStart = env.ctext.selectionEnd = 4;
+  env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', target: env.editor }));
+  timers.advance(500);
+  await flush();
+  assert.equal(env.ctext.value, '안녕 ', 'consecutive spaces after text collapse to exactly 1 space');
+  env.doc.dispatchEvent(new FakeEvent('keyup', { key: ' ', code: 'Space' }));
+  await flush();
+  await flush();
+  assert.equal(env.ctext.value, '안녕 말하기', 'dictated text separates cleanly with 1 space');
+
+  handle.destroy();
+});
+
+test('fallback #cvox-cap capsule activates when WsCapsules is absent', async () => {
+  const env = makeVoiceEnv({ withCapsules: false });
+  let emitPartial = null;
+  env.window.WsVoiceInput.registerBackend({
+    id: 'native', label: 'OS Native', kind: 'native',
+    available: () => true,
+    onPartial: (cb) => { emitPartial = cb; },
+    start: () => Promise.resolve(),
+    stop: () => Promise.resolve({ text: 'fallback ok' }),
+    cancel: () => {}
+  });
+  const handle = env.window.WsVoiceInput.attachComposer({
+    document: env.doc, window: env.window, autoDiscover: false
+  });
+  handle.controller.setCapabilities({ eligible: true, order: ['native'] });
+
+  env.btn.click();
+  await flush();
+  assert.equal(env.cap.hidden, false, '#cvox-cap shown when WsCapsules is absent');
+  emitPartial('live');
+  assert.equal(env.cap.querySelector('.cvox-text').textContent, 'live');
+  env.btn.click();
+  await flush();
+  assert.equal(env.ctext.value, 'fallback ok');
+  assert.equal(env.cap.hidden, true);
+  handle.destroy();
+});

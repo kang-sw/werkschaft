@@ -5,11 +5,14 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const assetsDir = path.join(__dirname, 'assets');
+const voicePttJS = fs.readFileSync(path.join(assetsDir, 'dashboard-voice-ptt.js'), 'utf8');
 const voiceJS = fs.readFileSync(path.join(assetsDir, 'dashboard-voice.js'), 'utf8');
+const voiceNativeJS = fs.readFileSync(path.join(assetsDir, 'dashboard-voice-native.js'), 'utf8');
 const deliveryJS = fs.readFileSync(path.join(assetsDir, 'dashboard-composer-delivery.js'), 'utf8');
 
 class FakeElement {
   constructor(tag, id, cls) {
+    this.nodeType = 1;
     this.tagName = String(tag || 'div').toUpperCase();
     this.id = id || '';
     this.className = cls || '';
@@ -29,6 +32,7 @@ class FakeElement {
     this.focused = false;
     this.rect = { left: 100, top: 10, width: 400, height: 60 };
   }
+  get childNodes() { return this.children; }
   get textContent() { return this._text; }
   set textContent(v) {
     this._text = String(v == null ? '' : v);
@@ -42,6 +46,29 @@ class FakeElement {
     child.parentNode = this;
     this.children.push(child);
     return child;
+  }
+  insertBefore(child, ref) {
+    child.parentNode = this;
+    const idx = ref ? this.children.indexOf(ref) : -1;
+    if (idx >= 0) this.children.splice(idx, 0, child);
+    else this.children.push(child);
+    return child;
+  }
+  removeChild(child) {
+    const idx = this.children.indexOf(child);
+    if (idx >= 0) this.children.splice(idx, 1);
+    child.parentNode = null;
+    return child;
+  }
+  remove() {
+    if (this.parentNode) this.parentNode.removeChild(this);
+  }
+  contains(node) {
+    if (node === this) return true;
+    for (const child of this.children) {
+      if (child === node || (typeof child.contains === 'function' && child.contains(node))) return true;
+    }
+    return false;
   }
   addEventListener(type, fn) {
     if (!this.listeners.has(type)) this.listeners.set(type, []);
@@ -85,6 +112,8 @@ class FakeElement {
       }
       const attrMatch = sel.match(/^\[([^=\]]+)="([^"]*)"\]$/);
       if (attrMatch) return el.getAttribute(attrMatch[1]) === attrMatch[2];
+      const attrPresence = sel.match(/^\[([^=\]]+)\]$/);
+      if (attrPresence) return el.hasAttribute(attrPresence[1]);
       return false;
     };
     const walk = (node) => {
@@ -200,13 +229,18 @@ function createEnv(sharedTop) {
     Object,
     String,
     Array,
-    console
+    console,
+    setTimeout,
+    clearTimeout
   };
   vm.createContext(ctx);
   // Prevent auto-attach before test configures mocks by returning null during initial script eval.
   const origGetById = doc.getElementById;
   doc.getElementById = () => null;
+  windowObj.__wsVoiceNativeNoAuto = true;
+  vm.runInContext(voicePttJS, ctx);
   vm.runInContext(voiceJS, ctx);
+  vm.runInContext(voiceNativeJS, ctx);
   doc.getElementById = origGetById;
 
   return { ctx, window: windowObj, doc, root, composer, field, ctext, editor, cap, btn, csend };
@@ -344,18 +378,21 @@ test('common WsVoiceInput interface accepts pluggable native backends identicall
   assert.equal(started, true);
   assert.equal(env.composer.getAttribute('data-voice-locked'), '1');
   emitPartial('wor');
-  assert.equal(env.cap.querySelector('.cvox-text').textContent, 'wor');
+  const liveSpan = env.editor.querySelector('[data-voice-span]');
+  assert.ok(liveSpan, 'inline [data-voice-span] rendered inside WsCapsules editor');
+  assert.equal(liveSpan.textContent, 'wor');
   assert.equal(env.ctext.value, 'hi !', 'interim partial must not touch composer text');
 
   env.btn.click();
   await flush();
   assert.equal(env.ctext.value, 'hi world!');
   assert.equal(env.composer.hasAttribute('data-voice-locked'), false);
+  assert.equal(env.editor.querySelector('[data-voice-span]'), null);
   assert.equal(env.cap.hidden, true);
   handle.destroy();
 });
 
-test('push-to-talk calls getUserMedia synchronously, streams SSE preview in capsule, and inserts final text via setRangeText', async () => {
+test('push-to-talk calls getUserMedia synchronously, streams SSE preview in inline span, and inserts final text via setRangeText', async () => {
   const env = createEnv();
   const media = makeFakeMedia('audio/webm;codecs=opus');
   env.ctext.value = 'prefix suffix';
@@ -426,10 +463,10 @@ test('push-to-talk calls getUserMedia synchronously, streams SSE preview in caps
   assert.equal(env.ctext.disabled, true);
   assert.equal(env.csend.disabled, true);
   assert.equal(env.editor.getAttribute('contenteditable'), 'false');
-  assert.equal(env.cap.hidden, false);
-  assert.equal(env.cap.getAttribute('data-caret'), '7');
-  assert.equal(env.cap.style.left, '68px');
-  assert.equal(env.cap.style.top, '30px');
+  const recSpan = env.editor.querySelector('[data-voice-span]');
+  assert.ok(recSpan, 'inline span inserted inside editor during recording');
+  assert.equal(recSpan.getAttribute('data-voice-span'), 'listening');
+  assert.equal(env.cap.hidden, true);
 
   await flush();
   // Stop recording -> starts upload & SSE stream.
@@ -444,8 +481,9 @@ test('push-to-talk calls getUserMedia synchronously, streams SSE preview in caps
   assert.equal(lastForm.get('language'), 'en');
   assert.equal(media.tracks[0].stopped, true, 'microphone tracks released on stop');
 
-  // While streaming, partial text appears only inside capsule; composer stays untouched.
-  assert.equal(env.cap.querySelector('.cvox-text').textContent, 'hello ');
+  // While streaming, partial text appears only inside inline span; composer stays untouched.
+  assert.equal(env.editor.querySelector('[data-voice-span]').getAttribute('data-voice-span'), 'refining');
+  assert.equal(env.editor.querySelector('[data-voice-span]').textContent, 'hello ');
   assert.equal(env.ctext.value, 'prefix suffix');
   assert.equal(env.composer.getAttribute('data-voice-locked'), '1');
 

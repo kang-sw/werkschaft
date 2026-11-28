@@ -111,6 +111,10 @@ Approved by owner (`(1818)=ok`, 2026-11-28): `ai-docs/assets/mockups/261128/voic
 
 **Done when:** both bridges and the teardown hooks exist, the pure Rust decision/state-machine tests pass, and the macOS bundle carries `NSSpeechRecognitionUsageDescription`.
 
+### Result (f1993022) - 2026-11-28
+
+Implemented native macOS (`objc2-speech`/`objc2-av-foundation` against `objc2 =0.6.5`) and Windows (WinRT `Media_SpeechRecognition` + `Globalization` on `windows =0.62.2`) STT bridges under pinned-origin isolation (`werkschaftSpeech` handler, `ws-native-speech` CustomEvent with `ready`/`partial`/`final`/`error`/`hidden`), Rust-side single-owner session state machine (`busy` on concurrent start), immediate teardown on close-to-tray/hide/minimize/navigation/suspend (`speech_teardown`), and `NSSpeechRecognitionUsageDescription` in `Info.plist` + `package.cjs`/`test-package.cjs`. Verified with `cargo test` in `agents-plugin-tool/desktop/` and `node agents-plugin-tool/desktop/scripts/test-package.cjs`. Packaged macOS/Windows native audio smoke checks remain manual.
+
 ### Phase 2: Daemon and config foundation: voice OpenRouter key, shared-key toggle, priority order (no UI; independent of Phase 1)
 
 1. **`wscred` (`internal/wscred/provider.go` and callers):** Add the voice-only `openrouter_voice` registry entry per Decisions; confirm each `VoiceOnly` refusal (token route, `werkProvider`, credential CLI listing, `/api/account/status` voice group) covers it, and that `account_routes.go` key CRUD accepts it with masked, never-echoed responses.
@@ -119,6 +123,10 @@ Approved by owner (`(1818)=ok`, 2026-11-28): `ai-docs/assets/mockups/261128/voic
 4. **Verification:** Go tests (`go test ./internal/wscred/... ./internal/wsdashboard/... ./internal/mcp/... ./internal/wsi18n/... ./internal/wsagent/... ./cmd/ws-mcp/...`) covering: top key alone does not make `openrouter` available; shared toggle on plus top key does; dedicated `openrouter_voice` key does; legacy `voice_backend=openrouter` with unset order and unset toggle keeps working; effective-order fallbacks; `openrouter_voice` refused by every `VoiceOnly` surface; masked responses; unchanged non-loopback rejection; manifest and wsflow mirror parity checks (`python3 agents-plugin-tool/scripts/generate-package-assets.py --check`, wsflow tests). Mock providers only.
 
 **Done when:** the registry entry, both keys with mirror/catalog/i18n, the capability `order` and `native` entry, and the credential resolution all exist together and the item 4 tests pass.
+
+### Result (49f78a4b) - 2026-11-28
+
+Added `openrouter_voice` (`VoiceOnly: true`, `KeyPrefix: "sk-or-"`) to `internal/wscred/provider.go` with fail-closed refusals across `ServeToken`, `werkProvider`, and credential CLI; added `dashboard.voice_backend_order` and `dashboard.voice_openrouter_shared_key` to `agents-plugin/` and `agents-plugin-wsflow/` manifests, `dashboard-settings-catalog.json`, all 11 `wsi18n` locale tables, and regenerated `settings-description-digests.json`; updated `voice_routes.go` for additive `order`, `native` descriptor, and shared-key vs dedicated-key resolution (with T0 legacy `voice_backend == "openrouter"` migration). Verified with `generate-package-assets.py --check`, `agents-plugin-wsflow/tests`, Go tests (`wscred`, `wsi18n`, `wspackage`, `cmd/ws-mcp`, `mcp`, `wsdashboard`, `wsagent`), and `GOOS=windows go vet ./...`.
 
 ### Phase 3: Frontend logic: native adapter, order resolver, inline span mechanics, hold-to-talk (no visual styling; depends on Phases 1 and 2)
 
@@ -130,6 +138,10 @@ Approved by owner (`(1818)=ok`, 2026-11-28): `ai-docs/assets/mockups/261128/voic
 6. **Verification:** Node tests for `WsVoiceInput` backend selection, order walk (desktop native first; browser falls through past `native`; zero available -> none), partial/final events, native hidden outside Tauri, cleanup on error/cancel/hide; `read()` and `readEditorDom` exclude the voice span and the `WsMdEditor` reconcile leaves it intact (existing `capsules` and `md-editor` Node tests stay green); `postProcess` replaces only the exact span; PTT hold (500 ms threshold, tap types a space, IME/modifier/menu/unconfigured guards, repeat suppression, rollback, release after lock-induced blur); framed-composer start via the relay, `busy` refusal of a second start, the hide broadcast reaching a framed composer, and the owning frame being removed mid-dictation followed by a second frame starting cleanly; resolved-backend model/language/locale defaults; `frontend-idle.test.js` and `asset_source_test.go` stay green; zero `:has()` regressions.
 
 **Done when:** the native backend, resolver, span mechanics and hold-to-talk run through `WsVoiceInput` with no provider-specific branch in the composer, and the Node and Go asset tests pass.
+
+### Result (pending) - 2026-11-28
+
+Added sibling modules `dashboard-voice-native.js` (top-frame `werkschaftSpeech` adapter + same-origin `postMessage` relay, single-owner lock, `MutationObserver` iframe-detach cancel, `hidden` broadcast) and `dashboard-voice-ptt.js` (`[data-voice-span]` inline lifecycle, `#cvox-cap` fallback, composer lock/button helpers, and Spacebar 0.5 s PTT with owner single-space trim rule, repeat suppression, IME/modifier/menu/unconfigured guards, and lock-blur guard); shrunk `dashboard-voice.js` from 1,019 to 1,013 lines while adding `resolveOrder`, eligibility vs usability separation, and the `postProcess` hook; excluded `[data-voice-span]` in `capsules.js` `read()` and `md-editor.js` `readEditorDom()` with reconcile skipped while live and run once after commit; bundled scripts in `pages.go` and added `js.voice.listening`/`refining`/`err.unavailable` across all 11 `wsi18n` tables. Tracked approved mockup under `ai-docs/assets/mockups/261128/voice-provider-ui/`. Verified with `frontend-voice.test.js`, `frontend-voice-phase3.test.js` (15/15), `capsules.test.cjs`, `composer-md-render.test.cjs`, `composer-md-ime-undo.test.cjs`, `ws-input.test.cjs`, Go `wsi18n` & `wsdashboard` asset/voice tests, and zero `:has(`.
 
 ### Phase 4: Voice Providers settings UI (gated by the approved mockup; depends on Phases 2 and 3)
 
