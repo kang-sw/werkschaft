@@ -6,7 +6,7 @@
   var DC_SENSITIVE_RE = /(?:password|passwd|secret|token|api[-_\s]?key|credential|cookie|bearer|private[-_\s]?key|auth[-_\s]?key)/i;
   var DC_REDACT_QUERY_RE = /([?&](?:token|login)=)[^&#\s"'<>]+/g;
   var DC_REDACT_BEARER_RE = /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi;
-  var DC_REDACT_COOKIE_RE = /(ws_dashboard_(?:localhost|token)=)[^;\s"'<>]+/g;
+  var DC_REDACT_COOKIE_RE = /(ws_dashboard_(?:localhost|token|screenshot_render)=)[^;\s"'<>]+/g;
   var DC_REDACT_APIKEY_RE = /\b(?:sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|AIza[A-Za-z0-9_-]{20,})\b/g;
   var DC_SKIP_TAGS = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, SVG: 1, IFRAME: 1, LINK: 1, META: 1 };
   var DC_INTERACTIVE_ROLES = {

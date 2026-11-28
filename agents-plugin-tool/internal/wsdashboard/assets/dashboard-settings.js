@@ -173,7 +173,7 @@ var wsSettingsChoiceLabels = {
     return String(s || "")
       .replace(/([?&](?:token|login)=)[^&#\s"'<>]+/g, "$1[REDACTED]")
       .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [REDACTED]")
-      .replace(/(ws_dashboard_(?:localhost|token)=)[^;\s"'<>]+/g, "$1[REDACTED]")
+      .replace(/(ws_dashboard_(?:localhost|token|screenshot_render)=)[^;\s"'<>]+/g, "$1[REDACTED]")
       .replace(/\b(?:sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|AIza[A-Za-z0-9_-]{20,})\b/g, "[REDACTED]");
   }
   function dcSettingsSensitiveInput(el) {
