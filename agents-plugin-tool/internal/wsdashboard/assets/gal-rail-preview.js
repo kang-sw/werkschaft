@@ -207,9 +207,10 @@
       if (isNaN(pos)) { hide(); return; }
       var n = st.gal.pages ? st.gal.pages.length : 0;
       var toKey = isDrag ? dropActionKey(to) : "";
-      var kind = pos < 0 ? "home" : pos >= n ? "plus" : "page";
+      var sysId = dotEl.getAttribute("data-sys") || "";
+      var kind = sysId ? "sys" : pos < 0 ? "home" : pos >= n ? "plus" : "page";
       var pg = kind === "page" ? st.gal.pages[pos] : null;
-      var renderKey = kind + "|" + pos + "|" + (pg ? pg.id : "") + "|" + (isDrag ? "d" : "h") + "|" + toKey;
+      var renderKey = kind + "|" + (sysId || pos) + "|" + (pg ? pg.id : "") + "|" + (isDrag ? "d" : "h") + "|" + toKey;
 
       var p = ensurePop();
       if (!p) return;
@@ -224,7 +225,16 @@
       var vh = window.innerHeight || 800;
 
       bodyEl.textContent = "";
-      if (kind === "home") {
+      if (kind === "sys") {
+        var sinfo = cfg.getSysInfo ? (cfg.getSysInfo(sysId) || {}) : {};
+        p.setAttribute("data-mode", "pill");
+        var pillS = mk("div", "gal-pop-pill gal-pop-sys");
+        if (sinfo.title) pillS.appendChild(mk("span", "gal-pop-pill-text", sinfo.title));
+        else pillS.appendChild(mk("span", "gal-pop-pill-text", dotEl.getAttribute("aria-label") || sysId));
+        if (sinfo.sub) pillS.appendChild(mk("span", "gal-pop-sys-sub", sinfo.sub));
+        bodyEl.appendChild(pillS);
+        dropEl.hidden = true;
+      } else if (kind === "home") {
         p.setAttribute("data-mode", "pill");
         var pillH = mk("div", "gal-pop-pill");
         pillH.appendChild(mk("span", "gal-pop-pill-glyph", "⌂"));

@@ -1,9 +1,12 @@
-  // --- ticket map: the full-viewport overlay #thandle opens ----------------
+  // --- ticket map: docked in #bgal's Ticket Map page, expandable ------------
   // One outer binding (the asset concatenation is a single IIFE): every
-  // declaration below lives in this inner scope. The map reads
-  // GET /s/<rid>/tickets/graph on the first open and on Refresh only, keeps
-  // the graph and its state in memory across close and reopen, and covers
-  // the page at --z-modal while shown.
+  // declaration below lives in this inner scope. The map is one root
+  // (.d-tm-root): docked, it fills the gallery's ticketmap system page
+  // (cards.js #tmdock) under a two-row toolbar with a bottom-sheet
+  // inspector; expanded (⤢), the same root moves into #tmback, which covers
+  // the page at --z-modal, and moves back on close, so every state is
+  // shared. The map reads GET /s/<rid>/tickets/graph when first shown and on
+  // Refresh only, and keeps the graph and its state in memory.
   //
   // View host contract. A view is an object registered on ticketMap before
   // the first open: ticketMap.viewB (dashboard-ticketmap-viewb.js, right
@@ -32,8 +35,9 @@
   // S.cam is View C's live camera and S.ego its ring's ticket (or null).
   // A view calls back select(i), unselect(), move(d), openFull(i), the
   // builders, and savePrefs(); it never fetches and never adds a key
-  // listener of its own (the host's window capture listener isolates the
-  // page while the overlay shows).
+  // listener of its own (expanded, the host's window capture listener
+  // isolates the page; docked, the host's listener on #tmdock acts only
+  // while focus is inside the pane).
   var ticketMap = (function () {
     // tm:pure-begin. Pure logic: no DOM and no page helper, so the node
     // tests (testdata/ticketmap-state.test.cjs) run this block as is.
@@ -192,19 +196,20 @@
     }
     // tmEscStep is the Esc layering over a snapshot, first match wins:
     // the Full View, the cluster popover, a query in the focused search,
-    // View C's ego ring, keyword filter and selection, View B's focus,
-    // and the overlay itself.
+    // the docked bottom sheet, View C's ego ring, keyword filter and
+    // selection, View B's focus, and the overlay itself (docked, nothing).
     function tmEscStep(s) {
       if (s.full) return "full";
       if (s.pop) return "pop";
       if (s.inQuery && s.query) return "query";
+      if (s.sheet) return "sheet";
       if (s.view === "C") {
         if (s.ego) return "ego";
         if (s.kw) return "kw";
         if (s.sel !== null && s.sel !== undefined) return "deselect";
       }
       if (s.view === "B" && s.focus) return "unfocus";
-      return "close";
+      return s.docked ? "none" : "close";
     }
     // tmMd renders a ticket preview: everything is escaped first, then only
     // fenced code, ## and ###-###### headings, - and * list items, inline
@@ -254,6 +259,12 @@
     };
     var G = null, back = null, E = {}, built = false, fetched = false, busy = false, seq = 0;
     var keysOn = false, lastFocus = null, fullFrom = null, fullNode = null, noteTimer = 0, rendered = {};
+    // mode is where the root stands ("docked" in #tmdock, "modal" in
+    // #tmback); host is #tmdock. The docked sheet starts closed (decision
+    // (1730)=a): sheetOn turns on with a user selection, sheetMin is the
+    // grip's collapse; inspWant is what the views last asked (the modal's
+    // side inspector).
+    var mode = "", host = null, opener = null, dockVis = false, sheetOn = false, sheetMin = false, inspWant = false, hooked = false;
     var api = {};
 
     function el(tag, cls, text) {
@@ -298,7 +309,7 @@
     function mentionAvailable() { return !!(doc.getElementById("ctext") && window.WsComposer && typeof window.WsComposer.addTicketMention === "function"); }
     function mention(n) {
       if (!n || !mentionAvailable()) return false;
-      close(false);
+      close(true);
       return !!window.WsComposer.addTicketMention({ stem: n.stem, title: n.title, status: n.status, path: n.path });
     }
     function mentionButton(n, cls) {
@@ -322,6 +333,11 @@
       if (!G || !G.nodes[i]) return;
       if (push !== false) tmHistPush(S, i);
       S.sel = i;
+      hooks();
+      // A user selection opens the docked sheet, expanded.
+      sheetOn = true;
+      sheetMin = false;
+      if (built) E.insp.classList.remove("d-tm-sheet-min");
       var v = cur();
       if (v) v.focus(i);
     }
@@ -339,16 +355,24 @@
       return true;
     }
 
-    // --- DOM: built on the first open --------------------------------
+    // hooks exposes the state to tests (window.__tmap): the hook attribute
+    // may be set any time before a show or a selection (a framed page's URL
+    // is the shell's).
+    function hooks() {
+      if (hooked || !(root.hasAttribute("data-test-hooks") || /[?&]tmaptest=1(?:&|$)/.test(location.search))) return;
+      hooked = true;
+      window.__tmap = S;
+      window.__tmapc = api.graph ? api.graph.probe : null;
+    }
+
+    // --- DOM: built on the first show ---------------------------------
+    // The bar holds two rows: docked they stack (row 1 the views, search,
+    // clusters, refresh and ⤢; row 2 the status pills and the shortcut
+    // scope), expanded they flatten into the one-line bar (CSS order).
     function build() {
       if (built) return;
       built = true;
-      // Tests read the state on the first open: the hook attribute may be
-      // set any time before it (a framed page's URL is the shell's).
-      if (root.hasAttribute("data-test-hooks") || /[?&]tmaptest=1(?:&|$)/.test(location.search)) {
-        window.__tmap = S;
-        window.__tmapc = api.graph ? api.graph.probe : null;
-      }
+      hooks();
       var p = tmPrefs(load(PREFS_KEY));
       S.simTh = p.simTh; S.simUnlinked = p.simUnlinked; S.simRefs = p.simRefs;
       S.st = p.st; S.edge = p.edge; S.simEdgeTh = p.simEdgeTh;
@@ -360,13 +384,16 @@
       back.setAttribute("role", "dialog");
       back.setAttribute("aria-modal", "true");
       back.setAttribute("aria-labelledby", "tmtitle");
-      var bar = el("div", "d-tm-bar");
+      E.root = el("div", "d-tm-root");
+      var bar = el("div", "d-tm-bar"), r1 = el("div", "d-tm-r1"), r2 = el("div", "d-tm-r2");
+      bar.appendChild(r1);
+      bar.appendChild(r2);
       var brand = el("div", "d-tm-brand");
       brand.appendChild(el("i", "d-tm-logo"));
       var title = el("span", "", wsT("js.tmap.title"));
       title.id = "tmtitle";
       brand.appendChild(title);
-      bar.appendChild(brand);
+      r1.appendChild(brand);
       var seg = el("div", "d-tm-seg");
       seg.setAttribute("role", "group");
       seg.setAttribute("aria-label", wsT("js.tmap.view.group"));
@@ -382,7 +409,7 @@
       E.vc.addEventListener("click", function () { setView("C"); });
       seg.appendChild(E.vb);
       seg.appendChild(E.vc);
-      bar.appendChild(seg);
+      r1.appendChild(seg);
       var search = el("label", "d-tm-search");
       search.appendChild(luIcon("search"));
       E.q = el("input");
@@ -400,7 +427,7 @@
       hc.appendChild(E.qc);
       hc.appendChild(kbd("/"));
       search.appendChild(hc);
-      bar.appendChild(search);
+      r1.appendChild(search);
       E.pills = el("div", "d-tm-pills");
       E.pill = {};
       TM_ST.forEach(function (s) {
@@ -420,7 +447,7 @@
         E.pill[s] = b;
         E.pills.appendChild(b);
       });
-      bar.appendChild(E.pills);
+      r2.appendChild(E.pills);
       var clwrap = el("div", "d-tm-clwrap");
       E.clb = button("btn d-tm-btn", "", "list-filter");
       E.clb.id = "tmclusters";
@@ -437,7 +464,7 @@
       E.pop.addEventListener("change", popChange);
       clwrap.appendChild(E.clb);
       clwrap.appendChild(E.pop);
-      bar.appendChild(clwrap);
+      r1.appendChild(clwrap);
       E.kw = el("span", "d-tm-kw");
       E.kw.id = "tmkw";
       E.kw.hidden = true;
@@ -449,22 +476,40 @@
       kwx.setAttribute("aria-label", kwx.title);
       kwx.addEventListener("click", function () { setKw(null); });
       E.kw.appendChild(kwx);
-      bar.appendChild(E.kw);
-      bar.appendChild(el("span", "d-tm-spacer"));
+      r2.appendChild(E.kw);
+      r1.appendChild(el("span", "d-tm-spacer"));
       E.stats = el("span", "d-tm-stats");
       E.stats.id = "tmstats";
-      bar.appendChild(E.stats);
+      r1.appendChild(E.stats);
       E.refresh = button("btn d-tm-btn", wsT("js.tmap.refresh"), "refresh-cw");
       E.refresh.id = "tmrefresh";
+      E.refresh.title = wsT("js.tmap.refresh");
+      E.refresh.setAttribute("aria-label", E.refresh.title);
       E.refresh.addEventListener("click", function () { fetchGraph(true); });
-      bar.appendChild(E.refresh);
+      r1.appendChild(E.refresh);
+      E.expand = button("btn d-tm-btn d-tm-icon d-tm-exp", "", "maximize-2");
+      E.expand.id = "tmexpand";
+      E.expand.title = wsT("js.tmap.expand");
+      E.expand.setAttribute("aria-label", E.expand.title);
+      E.expand.setAttribute("aria-controls", "tmback");
+      E.expand.addEventListener("click", expand);
+      r1.appendChild(E.expand);
       E.close = button("btn d-tm-btn d-tm-icon", "", "x");
       E.close.id = "tmclose";
       E.close.title = wsT("js.tmap.close") + " (Esc)";
       E.close.setAttribute("aria-label", wsT("js.tmap.close"));
       E.close.addEventListener("click", function () { close(false); });
-      bar.appendChild(E.close);
-      back.appendChild(bar);
+      r1.appendChild(E.close);
+      // The scope badge: the bare keys act while the docked pane has focus.
+      E.scope = el("span", "d-tm-scope");
+      E.scope.appendChild(el("i", "d-tm-scdot"));
+      E.scope.appendChild(el("span", "d-tm-scl", wsT("js.tmap.scope")));
+      var sck = el("span", "d-tm-sck");
+      ["1", "2", "/", "Esc"].forEach(function (k) { sck.appendChild(kbd(k)); });
+      E.scope.appendChild(sck);
+      E.scope.title = wsT("js.tmap.scope");
+      r2.appendChild(E.scope);
+      E.root.appendChild(bar);
 
       var stage = el("div", "d-tm-stage");
       E.views = el("div", "d-tm-views");
@@ -489,12 +534,37 @@
         v.mount(box);
       });
       stage.appendChild(E.views);
+      // The inspector: a side panel expanded, a bottom sheet docked (grip
+      // collapse, stem, ⤢ and close show docked only).
       E.insp = el("aside", "d-tm-insp");
       E.insp.id = "tminsp";
       E.insp.hidden = true;
+      E.insp.setAttribute("aria-label", wsT("js.tmap.insp"));
       var ih = el("div", "d-tm-ih");
-      ih.appendChild(el("span", "", wsT("js.tmap.insp")));
-      var imin = button("d-tm-imin", "", "chevron-right");
+      E.grip = button("d-tm-grip");
+      E.grip.id = "tmgrip";
+      E.grip.title = wsT("js.tmap.insp.min");
+      E.grip.setAttribute("aria-label", E.grip.title);
+      E.grip.setAttribute("aria-controls", "tminspb");
+      E.grip.appendChild(el("i"));
+      E.grip.addEventListener("click", function () { sheetCollapse(!sheetMin); });
+      ih.appendChild(E.grip);
+      ih.appendChild(el("span", "d-tm-ik", wsT("js.tmap.insp")));
+      E.istem = el("span", "d-tm-istem");
+      ih.appendChild(E.istem);
+      var iexp = button("d-tm-imin d-tm-iact", "", "maximize-2");
+      iexp.id = "tminspexp";
+      iexp.title = wsT("js.tmap.expand");
+      iexp.setAttribute("aria-label", iexp.title);
+      iexp.addEventListener("click", expand);
+      ih.appendChild(iexp);
+      var ix = button("d-tm-imin d-tm-iact", "", "x");
+      ix.id = "tminspx";
+      ix.title = wsT("js.tmap.insp.close") + " (Esc)";
+      ix.setAttribute("aria-label", wsT("js.tmap.insp.close"));
+      ix.addEventListener("click", sheetClose);
+      ih.appendChild(ix);
+      var imin = button("d-tm-imin d-tm-imod", "", "chevron-right");
       imin.title = wsT("js.tmap.insp.min");
       imin.setAttribute("aria-label", imin.title);
       imin.addEventListener("click", function () {
@@ -508,9 +578,9 @@
       E.inspb.id = "tminspb";
       E.insp.appendChild(E.inspb);
       stage.appendChild(E.insp);
-      back.appendChild(stage);
+      E.root.appendChild(stage);
       buildFull();
-      back.addEventListener("click", function (e) {
+      E.root.addEventListener("click", function (e) {
         var t = e.target;
         if (!E.pop.hidden && !(t.closest && t.closest("#tmclpop, #tmclusters"))) popOpen(false);
       });
@@ -543,7 +613,7 @@
       box.appendChild(E.fullb);
       E.full.appendChild(box);
       E.full.addEventListener("click", function (e) { if (e.target === E.full) closeFull(true); });
-      back.appendChild(E.full);
+      E.root.appendChild(E.full);
     }
 
     // --- the top bar's state -----------------------------------------
@@ -613,10 +683,37 @@
       if (v.show) v.show();
     }
     function layout() { var v = cur(); if (v && v.layout) v.layout(); }
+    function docked() { return mode === "docked"; }
+    // inspShow is the views' ask; inspSync presents it: expanded, the side
+    // inspector follows the ask; docked, the bottom sheet shows the
+    // selection while the user keeps it open (sheetOn).
     function inspShow(on) {
       if (!built) return;
-      E.insp.hidden = !on;
+      inspWant = !!on;
+      inspSync();
+    }
+    function inspSync() {
+      if (!built) return;
+      var n = G && S.sel !== null ? G.nodes[S.sel] : null;
+      var on = docked() ? sheetOn && !!n : inspWant;
+      if (docked() && on && api.viewB && api.viewB.insp) api.viewB.insp(S.sel);
+      E.istem.textContent = n ? n.stem : "";
+      E.grip.setAttribute("aria-expanded", String(on && !sheetMin));
+      if (E.insp.hidden !== !on) { E.insp.hidden = !on; layout(); }
+      else if (!docked()) layout();
+    }
+    function sheetCollapse(min) {
+      sheetMin = !!min;
+      E.insp.classList.toggle("d-tm-sheet-min", sheetMin);
+      E.grip.setAttribute("aria-expanded", String(!sheetMin));
       layout();
+    }
+    // sheetClose closes the docked sheet and keeps the selection.
+    function sheetClose() {
+      var inside = E.insp.contains(doc.activeElement);
+      sheetOn = false;
+      inspSync();
+      if (inside && host) host.focus({ preventScroll: true });
     }
 
     // --- the cluster filter popover ------------------------------------
@@ -757,7 +854,8 @@
       // survived focuses it again (View C keeps any selection).
       if (S.sel !== null && (wasFocus || S.view === "C")) v.focus(S.sel);
       else S.sel = null;
-      if (v.show) v.show();
+      // A dock left during the fetch stays hidden; showView shows it later.
+      if (v.show && (isOpen() || dockVis)) v.show();
     }
 
     // --- Full View and the file-card hand-off --------------------------
@@ -778,14 +876,14 @@
       md.innerHTML = tmMd(n.preview || "");
       E.fullb.appendChild(md);
       if (/…\s*$/.test(n.preview || "")) E.fullb.appendChild(el("p", "d-tm-fnote", wsT("js.tmap.full.truncated", n.lines || 0)));
-      E.fullCard.hidden = !(window.WsPreview && cardBoard && n.path && window.WsPreview.takes(n.path));
+      E.fullCard.hidden = !fileTakes(n);
       E.full.hidden = false;
       E.fullx.focus();
     }
     function closeFull(refocus) {
       if (!built || E.full.hidden) return;
       E.full.hidden = true;
-      if (refocus && fullFrom && fullFrom.isConnected && back.contains(fullFrom)) fullFrom.focus();
+      if (refocus && fullFrom && fullFrom.isConnected && E.root.contains(fullFrom)) fullFrom.focus();
       fullFrom = null;
     }
     // handOff is decision (26): close the modal, yield the overlay with
@@ -793,12 +891,86 @@
     function handOff() {
       var n = fullNode;
       closeFull(false);
+      openFile(n);
+    }
+    // openFile is the inspector's Open File: the ticket's file card.
+    function fileTakes(n) { return !!(n && n.path && window.WsPreview && cardBoard && window.WsPreview.takes(n.path)); }
+    function openFile(n) {
+      if (!fileTakes(n)) return;
       close(true);
-      if (n && window.WsPreview) window.WsPreview.open(n.path, { keep: true });
+      window.WsPreview.open(n.path, { keep: true });
     }
 
-    // --- open, close, keys ----------------------------------------------
+    // --- dock, expand, close, keys --------------------------------------
+    // isOpen tells whether the expanded overlay (#tmback) shows.
     function isOpen() { return !!back && !back.hidden; }
+    function dockHost() {
+      if (!host || !host.isConnected) host = doc.getElementById("tmdock");
+      return host;
+    }
+    // dockShown tells whether the gallery shows the Ticket Map page now.
+    function dockShown() {
+      var C = window.WsCards, g = C && C.gallery && C.gallery();
+      return !!dockHost() && !!g && !g.hidden && !!C.activeSys && C.activeSys() === "ticketmap";
+    }
+    // place moves the one root into the overlay or the dock; the
+    // inspector's presentation follows.
+    function place(where) {
+      if (where === "modal") {
+        if (E.root.parentNode !== back) back.appendChild(E.root);
+        E.root.classList.remove("d-tm-docked");
+      } else {
+        if (!dockHost()) return false;
+        if (E.root.parentNode !== host) host.appendChild(E.root);
+        E.root.classList.add("d-tm-docked");
+      }
+      mode = where;
+      inspSync();
+      return true;
+    }
+    // dockSync builds, docks and loads the map once the gallery shows its
+    // page (the gallery's change listener; never while expanded).
+    // dockVis tracks the page's showing: leaving it hides the view.
+    function dockSync() {
+      if (isOpen()) return;
+      if (!dockShown()) {
+        if (dockVis && built) {
+          var v = cur();
+          popOpen(false);
+          if (v && v.hide) v.hide();
+        }
+        dockVis = false;
+        return;
+      }
+      if (dockVis) return;
+      dockVis = true;
+      build();
+      hooks();
+      if (mode !== "docked") place("docked");
+      if (!fetched) fetchGraph(false);
+      else showView();
+    }
+    function dockInit() {
+      var C = window.WsCards;
+      if (!C || !C.onGalleryChange) return;
+      C.onGalleryChange(dockSync);
+      var h = dockHost();
+      if (h) {
+        // Only keys from inside the pane reach onDockKey (window capture, so
+        // the bare / beats the search palette's document-capture shortcut);
+        // a press on a part that takes no focus (the canvas) gives the pane
+        // the focus.
+        window.addEventListener("keydown", function (e) { if (e.target && h.contains(e.target)) onDockKey(e); }, true);
+        h.addEventListener("pointerdown", function () { if (!h.contains(doc.activeElement)) h.focus({ preventScroll: true }); });
+        // data-focus marks the pane while it holds the focus: the scope
+        // badge and the ring show the bare keys act.
+        h.addEventListener("focusin", function () { h.setAttribute("data-focus", ""); });
+        h.addEventListener("focusout", function (e) {
+          if (!e.relatedTarget || !h.contains(e.relatedTarget)) h.removeAttribute("data-focus");
+        });
+      }
+      dockSync();
+    }
     // dismiss closes the page's transient popovers, modals, and the
     // drawer, so their load-time Escape listeners stay inert under the map.
     function dismiss() {
@@ -810,14 +982,38 @@
       if (drawer && drOpen) drSetOpen(false);
       if (window.WsCards && window.WsCards.dismissFiles) window.WsCards.dismissFiles();
     }
+    function visible(e) { return !!e && e.isConnected && e.getClientRects().length > 0; }
+    // open (Ctrl+B, ticketMap.open) shows the docked map and focuses the
+    // pane: the gallery switches to its page (the narrow view's overlay
+    // included). Where no gallery can show it, the overlay opens instead.
+    // The open drawer lies over the gallery column: it closes first. The
+    // narrow view's gallery off the window (data-away: the board column
+    // is hidden) cannot show the pane either.
     function open() {
       if (isOpen()) return;
+      var C = window.WsCards, g;
+      if (drawer && drOpen) drSetOpen(false);
+      if (dockHost() && C && C.showSys) C.showSys("ticketmap");
+      g = C && C.gallery && C.gallery();
+      if (!dockShown() || (g && g.hasAttribute("data-away"))) { expand(); return; }
+      dockSync();
+      if (!host.contains(doc.activeElement)) host.focus({ preventScroll: true });
+    }
+    // expand (⤢) moves the root into the overlay with every state; the
+    // focus stays on the control it was on when that control still shows.
+    function expand() {
+      if (isOpen()) return;
+      var active = doc.activeElement, from = built && E.root.contains(active) ? active : null;
+      opener = !from && active && active !== doc.body ? active : null;
       dismiss();
       var first = !built;
       build();
+      hooks();
+      dockVis = false;
       doc.body.appendChild(back);
       back.hidden = false;
-      if (thandle) thandle.setAttribute("aria-expanded", "true");
+      place("modal");
+      E.expand.setAttribute("aria-expanded", "true");
       if (!keysOn) {
         keysOn = true;
         window.addEventListener("keydown", onKey, true);
@@ -825,46 +1021,61 @@
       }
       if (!fetched) fetchGraph(false);
       else showView();
-      if (first || !lastFocus || !lastFocus.isConnected || !back.contains(lastFocus)) E.q.focus();
+      if (visible(from)) from.focus();
+      else if (first || !visible(lastFocus) || !back.contains(lastFocus)) E.q.focus();
       else lastFocus.focus();
     }
-    // close hides the overlay and keeps every state; yieldTo (the
-    // file-card hand-off) leaves the focus to what opens next.
+    // close hides the overlay and docks the root back, keeping every
+    // state; yieldTo (the file-card hand-off, a global shortcut) leaves the
+    // focus to what opens next.
     function close(yieldTo) {
       if (!isOpen()) return;
       // A click on a non-focusable part of the modal overlay leaves the
       // focus on the body: the overlay still held it.
       var active = doc.activeElement, inside = back.contains(active), held = inside || !active || active === doc.body;
       if (inside) lastFocus = active;
-      closeFull(false);
       popOpen(false);
-      var v = cur();
-      if (v && v.hide) v.hide();
       back.hidden = true;
       if (keysOn) {
         keysOn = false;
         window.removeEventListener("keydown", onKey, true);
         doc.removeEventListener("focusin", onFocusIn, true);
       }
-      if (thandle) thandle.setAttribute("aria-expanded", "false");
-      if (held && !yieldTo && thandle && !thandle.hidden) thandle.focus();
+      E.expand.setAttribute("aria-expanded", "false");
+      var v = cur(), docks = place("docked") && dockShown();
+      dockVis = docks;
+      if (docks) showView();
+      else {
+        closeFull(false);
+        if (v && v.hide) v.hide();
+      }
+      if (!held || yieldTo) return;
+      // With no docked page to return to, the focus goes back to what
+      // opened the overlay.
+      if (!docks) { if (visible(opener)) opener.focus({ preventScroll: true }); return; }
+      (visible(lastFocus) && host.contains(lastFocus) ? lastFocus : E.expand).focus({ preventScroll: true });
     }
     function toggle() { if (isOpen()) close(false); else open(); }
     function focusSearch() { E.q.focus(); E.q.select(); }
+    // escape runs one Esc step; false when docked and nothing is left.
     function escape() {
       var v = cur();
       var step = tmEscStep({
         full: !E.full.hidden, pop: !E.pop.hidden, inQuery: doc.activeElement === E.q, query: E.q.value,
+        sheet: docked() && !E.insp.hidden, docked: docked(),
         view: S.view, ego: !!(v && v.isEgo && v.isEgo()), kw: !!S.kw, sel: S.sel,
         focus: !!(G && v && v.isFocus && v.isFocus())
       });
+      if (step === "none") return false;
       if (step === "full") closeFull(true);
       else if (step === "pop") { popOpen(false); E.clb.focus(); }
       else if (step === "query") { E.q.value = ""; setQuery(""); }
+      else if (step === "sheet") sheetClose();
       else if (step === "ego") v.exitEgo();
       else if (step === "kw") setKw(null);
       else if (step === "deselect" || step === "unfocus") unselect();
       else close(false);
+      return true;
     }
     function typing(t) {
       if (!t || !t.closest) return false;
@@ -924,6 +1135,32 @@
       } else if (G && v && v.key) done = !!v.key(e);
       if (done) e.preventDefault();
     }
+    // onDockKey is the docked pane's key listener (window capture, gated
+    // to targets inside #tmdock): a key reaches it only from inside the
+    // pane, so the bare 1, 2, / and
+    // Esc never act for the composer, the voice control or the page; it
+    // passes modified keys, typing (but Enter and Esc in the search), and
+    // an Esc with nothing left to close.
+    function onDockKey(e) {
+      if (isOpen() || !docked() || !built || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      var key = e.key || "", t = e.target, v = cur(), done = false;
+      if (key === "Escape") done = escape();
+      else if (!E.full.hidden) return;
+      else if (t === E.q && key === "Enter") {
+        var i = G ? tmFirstHit(S, G.nodes) : null;
+        if (i !== null) select(i);
+        done = true;
+      } else if (typing(t)) return;
+      else if (key === "1") { setView("B"); done = true; }
+      else if (key === "2") { setView("C"); done = true; }
+      else if (key === "/") { focusSearch(); done = true; }
+      else if ((key === "ArrowLeft" || key === "ArrowRight") && S.view === "B" && G && v && v.isFocus && v.isFocus()) done = move(key === "ArrowLeft" ? -1 : 1);
+      else if (G && v && v.key) done = !!v.key(e);
+      if (!done) return;
+      e.preventDefault();
+      e.stopPropagation();
+    }
     // Tab stays inside the overlay (inside the Full View while it shows).
     function onFocusIn(e) {
       if (!isOpen()) return;
@@ -936,9 +1173,11 @@
     api.ST = TM_ST;
     api.REL = TM_REL;
     api.open = open;
+    api.expand = expand;
     api.close = function (yieldTo) { close(!!yieldTo); };
     api.toggle = toggle;
     api.isOpen = isOpen;
+    api.isDocked = docked;
     api.data = function () { return G; };
     api.el = el;
     api.button = button;
@@ -960,6 +1199,8 @@
     api.unselect = unselect;
     api.move = move;
     api.openFull = openFull;
+    api.fileTakes = fileTakes;
+    api.openFile = openFile;
     api.setKw = setKw;
     api.savePrefs = savePrefs;
     api.setView = setView;
@@ -967,5 +1208,8 @@
     api.inspShow = inspShow;
     api.viewB = null;
     api.graph = null;
+    // The views register after this file (viewb, graph): dock once the
+    // page script has run.
+    if (typeof Promise === "function") Promise.resolve().then(dockInit);
     return api;
   })();

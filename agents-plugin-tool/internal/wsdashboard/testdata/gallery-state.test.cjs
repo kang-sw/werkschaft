@@ -127,7 +127,7 @@ test('dock appends a page before + and shows it; undock drops an emptied page', 
   assert.equal(G.position(g, false), 0);
   g = G.undock(g, 'c:a');
   assert.deepEqual(g.pages, []);
-  assert.equal(G.position(g, false), 0); // + is position 0 with no pages
+  assert.equal(G.position(g, false), 2); // wide default with 0 pages is ticketmap (+ = 0, workpanel = 1, ticketmap = 2)
   assert.equal(G.position(g, true), -1);
 });
 
@@ -138,7 +138,7 @@ test('undock of the last page while + shows leaves nothing shown; narrow stays h
   assert.deepEqual(g.pages, []);
   assert.equal(g.active, null);
   assert.equal(G.position(g, true), -1);
-  assert.equal(G.position(g, false), 0); // + is position 0 with no pages
+  assert.equal(G.position(g, false), 2); // wide default with 0 pages is ticketmap
 });
 
 test('reconcile with zero pages leaves nothing shown, + included', () => {
@@ -156,10 +156,20 @@ test('reconcile with zero pages leaves nothing shown, + included', () => {
   assert.equal(G.position(g, true), 1);
 });
 
-test('narrow position on + with zero pages is home', () => {
+test('position on + with zero pages is 0 in both views; system pages follow +', () => {
   const g = { v: 1, rev: 0, active: G.PLUS, pages: [] };
-  assert.equal(G.position(g, true), -1);
+  assert.equal(G.position(g, true), 0);
   assert.equal(G.position(g, false), 0);
+  const empty = G.empty();
+  assert.deepEqual(G.SYS, ['workpanel', 'ticketmap', 'git']);
+  assert.equal(G.DEFAULT_SYS, 'ticketmap');
+  assert.equal(G.sysPos(empty, 'workpanel'), 1);
+  assert.equal(G.sysPos(empty, 'ticketmap'), 2);
+  assert.equal(G.sysPos(empty, 'git'), 3);
+  assert.equal(G.sysAt(empty, 2), 'ticketmap');
+  assert.equal(G.position(empty, true, 'git'), 3);
+  assert.equal(G.position(empty, false, 'workpanel'), 1);
+  assert.equal(G.position(empty, false, null), 2);
 });
 
 test('undock keeps the shown page when another page empties', () => {
@@ -189,15 +199,32 @@ test('append to a page dot stacks below; past the pages is a new page', () => {
   assert.equal(G.append(g, 'c:a', 1), g); // already there
 });
 
-test('positions: home, pages, +, and activation clamps by view', () => {
+test('positions: home, user pages, +, fixed system pages, and activation clamps by view', () => {
+  assert.deepEqual(G.SYS, ['workpanel', 'ticketmap', 'git']);
+  assert.equal(G.DEFAULT_SYS, 'ticketmap');
   let g = G.dock(G.dock(G.empty(), 'c:a'), 'c:b');
+  assert.equal(G.sysPos(g, 'workpanel'), 3);
+  assert.equal(G.sysPos(g, 'ticketmap'), 4);
+  assert.equal(G.sysPos(g, 'git'), 5);
+  assert.equal(G.sysAt(g, 3), 'workpanel');
+  assert.equal(G.sysAt(g, 4), 'ticketmap');
+  assert.equal(G.sysAt(g, 5), 'git');
+  assert.equal(G.sysAt(g, 2), null);
   g = G.activate(g, -1, true);
   assert.equal(g.active, null);
   assert.equal(G.position(g, true), -1);
-  assert.equal(G.position(g, false), 0);
+  // Wide default with active=null resolves to DEFAULT_SYS (ticketmap = n+1+1 = 4).
+  assert.equal(G.position(g, false), 4);
+  assert.equal(G.position(g, false, 'git'), 5);
+  assert.equal(G.position(g, true, 'workpanel'), 3);
+  // Clamping to max (git = n + SYS.length) clears g.active (sys ids never stored in v1 record).
   g = G.activate(g, 9, false);
+  assert.equal(g.active, null);
+  // Activating + stores G.PLUS.
+  g = G.activate(g, 2, false);
   assert.equal(g.active, G.PLUS);
   assert.equal(G.position(g, true), 2);
+  // Wide clamps -1 up to 0 (first user page).
   g = G.activate(g, -1, false);
   assert.equal(G.position(g, false), 0);
   assert.equal(g.active, g.pages[0].id);
@@ -211,32 +238,38 @@ test('movePage reorders and keeps the shown page', () => {
   assert.equal(G.position(g, false), 2);
 });
 
-test('neighbors: edges are false, inert without pages in both views', () => {
+test('neighbors: always-open pager spans [Home(narrow)] -> user -> + -> workpanel -> ticketmap -> git', () => {
   const none = G.empty(), one = G.dock(none, 'c:a');
-  assert.deepEqual(G.neighbors(none, -1, true), { prev: null, next: null });
-  assert.deepEqual(G.neighbors(none, 0, false), { prev: null, next: null });
+  // 0 user pages: narrow [-1..3], wide [0..3]
+  assert.deepEqual(G.neighbors(none, -1, true), { prev: false, next: true });
+  assert.deepEqual(G.neighbors(none, 0, true), { prev: true, next: true });
+  assert.deepEqual(G.neighbors(none, 3, true), { prev: true, next: false });
+  assert.deepEqual(G.neighbors(none, 0, false), { prev: false, next: true });
+  assert.deepEqual(G.neighbors(none, 2, false), { prev: true, next: true });
+  assert.deepEqual(G.neighbors(none, 3, false), { prev: true, next: false });
+  // 1 user page: narrow [-1..4], wide [0..4]
   assert.deepEqual(G.neighbors(one, -1, true), { prev: false, next: true });
   assert.deepEqual(G.neighbors(one, 0, true), { prev: true, next: true });
-  assert.deepEqual(G.neighbors(one, 1, true), { prev: true, next: false });
+  assert.deepEqual(G.neighbors(one, 1, true), { prev: true, next: true });
+  assert.deepEqual(G.neighbors(one, 4, true), { prev: true, next: false });
   assert.deepEqual(G.neighbors(one, 0, false), { prev: false, next: true });
-  assert.deepEqual(G.neighbors(one, 1, false), { prev: true, next: false });
+  assert.deepEqual(G.neighbors(one, 1, false), { prev: true, next: true });
+  assert.deepEqual(G.neighbors(one, 4, false), { prev: true, next: false });
 });
 
-test('layout mode mapping: tabs, Band 1-3 narrow gallery, Band 4 dynamic 4-col', () => {
-  const L = o => G.layout(Object.assign({ tabs: false, fourCol: false, pages: 0, dragging: false }, o));
-  // tabs or !fourCol is narrow at any width
-  assert.deepEqual(L({ width: 3000, tabs: true, fourCol: true, pages: 2 }), { narrow: true, column: false, overlay: false, rail: true, empty: false });
-  assert.deepEqual(L({ width: 3000, tabs: true, fourCol: true }), { narrow: true, column: false, overlay: false, rail: false, empty: false });
-  // below 1600 is narrow even if fourCol were passed
-  assert.deepEqual(L({ width: 1599, fourCol: true }), { narrow: true, column: false, overlay: false, rail: false, empty: false });
+test('layout mode mapping: always-open narrow (<1600 or tabs) vs 4-column (>=1600 !tabs)', () => {
+  const L = o => G.layout(Object.assign({ tabs: false, pages: 0, dragging: false }, o));
+  // tabs is always narrow with rail visible at any width
+  assert.deepEqual(L({ width: 3000, tabs: true, pages: 2 }), { narrow: true, column: false, overlay: false, rail: true, empty: false });
+  assert.deepEqual(L({ width: 3000, tabs: true }), { narrow: true, column: false, overlay: false, rail: true, empty: false });
+  // below 1600 is always narrow with rail visible
+  assert.deepEqual(L({ width: 1599, fourCol: true }), { narrow: true, column: false, overlay: false, rail: true, empty: false });
   assert.deepEqual(L({ width: 1200, dragging: true }), { narrow: true, column: false, overlay: false, rail: true, empty: false });
-  // Bands 2-3 (>= 1600 without enough spare width for 4-col): stays fused narrow, rail never overlays
-  assert.deepEqual(L({ width: 1640, fourCol: false, pages: 1 }), { narrow: true, column: false, overlay: false, rail: true, empty: false });
-  assert.deepEqual(L({ width: 2000, fourCol: false, pages: 1 }), { narrow: true, column: false, overlay: false, rail: true, empty: false });
-  assert.deepEqual(L({ width: 2000, fourCol: false }), { narrow: true, column: false, overlay: false, rail: false, empty: false });
-  assert.deepEqual(L({ width: 2000, fourCol: false, dragging: true }), { narrow: true, column: false, overlay: false, rail: true, empty: false });
-  // Band 4 (fourCol = true, >= 1600): empty slot at rest with 0 pages; column on page/drag
-  assert.deepEqual(L({ width: 2560, fourCol: true }), { narrow: false, column: false, overlay: false, rail: false, empty: true });
-  assert.deepEqual(L({ width: 2560, fourCol: true, pages: 1 }), { narrow: false, column: true, overlay: false, rail: true, empty: false });
-  assert.deepEqual(L({ width: 2560, fourCol: true, dragging: true }), { narrow: false, column: true, overlay: false, rail: true, empty: false });
+  // >= 1600 (!tabs) is always-open 4-column mode even with 0 user pages
+  assert.deepEqual(L({ width: 1600 }), { narrow: false, column: true, overlay: false, rail: true, empty: false });
+  assert.deepEqual(L({ width: 1920, pages: 0 }), { narrow: false, column: true, overlay: false, rail: true, empty: false });
+  assert.deepEqual(L({ width: 2560, pages: 1 }), { narrow: false, column: true, overlay: false, rail: true, empty: false });
+  assert.deepEqual(L({ width: 2560, dragging: true }), { narrow: false, column: true, overlay: false, rail: true, empty: false });
+  // explicit fourCol: false falls back to narrow with rail visible
+  assert.deepEqual(L({ width: 2000, fourCol: false }), { narrow: true, column: false, overlay: false, rail: true, empty: false });
 });

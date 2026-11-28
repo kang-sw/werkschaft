@@ -80,8 +80,9 @@ func linkTexts(links []panelLink) []string {
 	return out
 }
 
-// TestWhiteboardTicketPanel pins the ticket panel: the full page lists every
-// ready/ and todo/ ticket, never idea/, with served file actions.
+// TestWhiteboardTicketPanel pins the ticketPanel helper's lane ordering and
+// confirms that retired #p-tickets and #p-mailbox are omitted from the served
+// dashboard drawer panels.
 func TestWhiteboardTicketPanel(t *testing.T) {
 	f := newWhiteboardFixture(t)
 	writeTicket(t, f.root, "ready", "261101-feat-ready-a", "Ready A")
@@ -93,35 +94,24 @@ func TestWhiteboardTicketPanel(t *testing.T) {
 	writeTicket(t, f.root, "todo", "261011-bug-todo", "Todo 11 bug")
 
 	f.update(t, ``)
-	full := panelHTML(f.servedPage(t), "tickets")
-	if full == "" {
-		t.Fatalf("full page has no ticket panel")
+	served := f.servedPage(t)
+	if panelHTML(served, "tickets") != "" || panelHTML(served, "mailbox") != "" {
+		t.Fatalf("served page must omit retired #p-tickets and #p-mailbox: %s", served)
 	}
-	links := panelLinks(full)
-	want := []string{"261020-bug-ready-b", "Ready A", "Todo 11", "Todo 11 bug", "Todo 10", "Todo 09", "Todo 08", "Todo 07", "Todo 06", "Todo 05", "Todo 04", "Todo 03", "Todo 02", "Todo 01"}
-	if got := linkTexts(links); strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Fatalf("full ticket rows = %q, want %q", got, want)
+	panel, ok := ticketPanel(whiteboardPanelInput{root: f.root, lang: "en"})
+	if !ok || panel.ID != "tickets" || panel.Count != "2 ready, 12 todo" || len(panel.Lanes) != 2 {
+		t.Fatalf("ticketPanel = %+v, ok=%v", panel, ok)
 	}
-	if !strings.Contains(full, `<span class="chip">2 ready, 12 todo</span>`) {
-		t.Fatalf("ticket chip must count the whole backlog: %s", full)
-	}
-	for _, want := range []string{
-		`<span class="lname">ready</span><span class="chip">2</span>`,
-		`<span class="lname">todo</span><span class="chip">12</span>`,
-		`<span class="chip cat bug">bug</span>`,
-		`<span class="csub" title="261101-feat-ready-a">261101-feat-ready-a</span>`,
-	} {
-		if !strings.Contains(full, want) {
-			t.Fatalf("ticket lanes lack %q: %s", want, full)
+	var got []string
+	for _, lane := range panel.Lanes {
+		for _, row := range lane.Rows {
+			got = append(got, row.Text)
 		}
 	}
-	if strings.Contains(full, `class="fpath"`) {
-		t.Fatalf("a card must not show its path as body text")
+	want := []string{"261020-bug-ready-b", "Ready A", "Todo 11", "Todo 11 bug", "Todo 10", "Todo 09", "Todo 08", "Todo 07", "Todo 06", "Todo 05", "Todo 04", "Todo 03", "Todo 02", "Todo 01"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("ticketPanel rows = %q, want %q", got, want)
 	}
-	if strings.Contains(full, "Idea X") {
-		t.Fatalf("idea tickets must not be listed")
-	}
-
 }
 
 // TestWhiteboardLatestTodoTicketsFollowsStemDate pins the latest-ten selection: by the
@@ -145,20 +135,26 @@ func TestWhiteboardLatestTodoTicketsFollowsStemDate(t *testing.T) {
 	}
 }
 
-// Empty mailbox history omits its panel; the ticket demand control remains.
+// Retired #p-tickets and #p-mailbox remain absent from served drawer panels
+// even when tickets exist; todo renders once populated.
 func TestWhiteboardPanelsOmittedWhenEmpty(t *testing.T) {
 	f := newWhiteboardFixture(t)
 	writeTicket(t, f.root, "idea", "261106-feat-idea-x", "Idea X")
 	f.update(t, ``)
-	for _, id := range []string{"mailbox"} {
+	for _, id := range []string{"mailbox", "tickets", "todo", "agenda"} {
 		if panelHTML(f.servedPage(t), id) != "" {
-			t.Fatalf("empty %s panel rendered", id)
+			t.Fatalf("empty/retired %s panel rendered", id)
 		}
 	}
 	writeTicket(t, f.root, "todo", "261106-feat-todo-x", "Todo X")
+	f.call(t, "todo.add", map[string]any{"key": "step", "title": "active step"})
 	f.update(t, ``)
-	if panelHTML(f.servedPage(t), "tickets") == "" {
-		t.Fatalf("full page must list the todo ticket")
+	served := f.servedPage(t)
+	if panelHTML(served, "tickets") != "" || panelHTML(served, "mailbox") != "" {
+		t.Fatalf("served page must keep #p-tickets and #p-mailbox retired")
+	}
+	if panelHTML(served, "todo") == "" {
+		t.Fatalf("served page must render #p-todo once populated")
 	}
 }
 
@@ -262,25 +258,30 @@ func TestWhiteboardAgendaPanelTree(t *testing.T) {
 	}
 }
 
-// TestWhiteboardTicketWriteRefreshesServedPanel pins the ticket panel's refresh:
-// a tickets.move refreshes the served panel without publishing files.
+// TestWhiteboardTicketWriteRefreshesServedPanel pins ticket-move refresh:
+// tickets.move refreshes linked topic ticket badges on the served board
+// without publishing files, while retired #p-tickets stays absent.
 func TestWhiteboardTicketWriteRefreshesServedPanel(t *testing.T) {
 	f := newWhiteboardFixture(t)
 	writeTicket(t, f.root, "ready", "261101-feat-ready-a", "Ready A")
 	writeTicket(t, f.root, "ready", "261102-feat-ready-b", "Ready B")
 	runGit(t, f.root, "add", "-A")
 	runGit(t, f.root, "commit", "-q", "-m", "tickets")
-	f.update(t, ``)
+	f.update(t, `<wb:topic name="t" tickets="261101-feat-ready-a 261102-feat-ready-b"><wb:log>tracking</wb:log></wb:topic>`)
 	boardBefore := whiteboardTreeForTest(t, f.pageDir())
-	if !strings.Contains(panelHTML(f.servedPage(t), "tickets"), "Ready B") {
-		t.Fatalf("ticket panel lacks Ready B before the move")
+	before := f.servedPage(t)
+	if !strings.Contains(before, `data-ticket="261102-feat-ready-b" data-status="ready"`) {
+		t.Fatalf("served board lacks ready badge for 261102-feat-ready-b before the move")
 	}
 	if resp := f.call(t, "tickets.move", map[string]any{"stem": "261102-feat-ready-b", "to": "idea"}); isToolError(resp) {
 		t.Fatalf("tickets.move: %s", resp)
 	}
-	panel := panelHTML(f.servedPage(t), "tickets")
-	if strings.Contains(panel, "Ready B") || !strings.Contains(panel, "Ready A") {
-		t.Fatalf("ticket panel after the move = %s", panel)
+	after := f.servedPage(t)
+	if !strings.Contains(after, `data-ticket="261102-feat-ready-b" data-status="idea"`) || !strings.Contains(after, `data-ticket="261101-feat-ready-a" data-status="ready"`) {
+		t.Fatalf("served board badges after the move did not refresh")
+	}
+	if panelHTML(after, "tickets") != "" {
+		t.Fatalf("retired #p-tickets rendered after tickets.move")
 	}
 	assertWhiteboardTreeForTest(t, f.pageDir(), boardBefore)
 }
