@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -46,6 +47,27 @@ func TestIdleTTLUnloadsIdleUnpinnedRingsOnly(t *testing.T) {
 		t.Fatalf("LoadedRings = %d, want 2", got)
 	}
 
+	// Capture s1's ring and open segment handle before idle unload so the test
+	// observes the actual handle close rather than map state alone.
+	var s1Ring *ring
+	var s1File *os.File
+	if _, err := s.call(ctx, job{kind: jobBarrier, fn: func() {
+		s.mu.Lock()
+		info := s.sessions[sessionDirName("s1")]
+		s.mu.Unlock()
+		info.mu.Lock()
+		s1Ring = info.ring
+		if s1Ring != nil {
+			s1File = s1Ring.file
+		}
+		info.mu.Unlock()
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if s1Ring == nil || s1File == nil {
+		t.Fatalf("expected s1 ring and open handle before unload: ring=%v file=%v", s1Ring, s1File)
+	}
+
 	// Advance 10m and refresh s2 via Recover; advance another 6m so s1 is 16m
 	// idle (>= 15m DefaultIdleTTL) while s2 is 6m idle (< 15m).
 	clock.Advance(10 * time.Minute)
@@ -60,6 +82,12 @@ func TestIdleTTLUnloadsIdleUnpinnedRingsOnly(t *testing.T) {
 	}
 	if isRingLoaded(t, s, "s1") {
 		t.Fatal("s1 remained loaded past 15m idle TTL")
+	}
+	if s1Ring.file != nil {
+		t.Fatal("s1 ring still references segment *os.File after idle unload")
+	}
+	if _, err := s1File.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("s1 segment file was not closed on idle unload: Stat err = %v, want os.ErrClosed", err)
 	}
 	if !isRingLoaded(t, s, "s2") {
 		t.Fatal("s2 was unloaded despite recent Recover activity")
@@ -169,6 +197,9 @@ func TestIdlePinnedRingsSkipEvictionAndDrainOnUnpin(t *testing.T) {
 		mustAppend(t, s, sourced(u, 1, wsaudit.KindToolCall))
 	}
 	flush(t, s)
+	if err := s.UnloadIdle(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if got := s.LoadedRings(); got != 6 {
 		t.Fatalf("LoadedRings with 6 pinned + 2 unpinned = %d, want 6 (unpinned drained to 0)", got)
 	}
@@ -461,10 +492,35 @@ func TestColdTombstoneRemoveRingLeavesNoOpenHandle(t *testing.T) {
 
 	// Add a newer session so enforceCaps selects "old" as the cold LRU victim
 	// and routes through makeRoom -> removeRing(old, false) without spending
-	// time redacting megabytes of test payloads.
+	// time redacting megabytes of test payloads. Track segment handles created
+	// and closed under "old" to prove the tombstone handle is actually closed.
 	mustAppend(t, s2, sourced("new", 1, wsaudit.KindToolCall))
 	s2.Touch("new", clock.Now())
 	flush(t, s2)
+
+	oldDirPrefix := filepath.Join(root, sessionDirName("old")) + string(filepath.Separator)
+	origCreate, origClose := createSegment, closeFile
+	t.Cleanup(func() { createSegment, closeFile = origCreate, origClose })
+	var handleMu sync.Mutex
+	var oldCreated []*os.File
+	closedFiles := make(map[*os.File]bool)
+	createSegment = func(path string) (*os.File, error) {
+		f, err := origCreate(path)
+		if err == nil && strings.HasPrefix(path, oldDirPrefix) {
+			handleMu.Lock()
+			oldCreated = append(oldCreated, f)
+			handleMu.Unlock()
+		}
+		return f, err
+	}
+	closeFile = func(f *os.File) error {
+		err := origClose(f)
+		handleMu.Lock()
+		closedFiles[f] = true
+		handleMu.Unlock()
+		return err
+	}
+
 	if _, err := s2.call(ctx, job{kind: jobBarrier, fn: func() {
 		s2.mu.Lock()
 		newer := s2.sessions[sessionDirName("new")]
@@ -474,6 +530,23 @@ func TestColdTombstoneRemoveRingLeavesNoOpenHandle(t *testing.T) {
 		s2.enforceCaps()
 	}}); err != nil {
 		t.Fatal(err)
+	}
+	handleMu.Lock()
+	createdCopy := append([]*os.File(nil), oldCreated...)
+	handleMu.Unlock()
+	if len(createdCopy) == 0 {
+		t.Fatalf("expected cold tombstone eviction to create a tombstone segment under %s\n%s", oldDirPrefix, logBuf.String())
+	}
+	for _, f := range createdCopy {
+		handleMu.Lock()
+		wasClosed := closedFiles[f]
+		handleMu.Unlock()
+		if !wasClosed {
+			t.Fatalf("cold-tombstone segment handle %s was never passed to closeFile", f.Name())
+		}
+		if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("cold-tombstone segment handle %s still open: Stat err = %v, want os.ErrClosed", f.Name(), err)
+		}
 	}
 	if isRingLoaded(t, s2, "old") {
 		t.Fatalf("cold-tombstone eviction left old ring loaded\n%s", logBuf.String())
