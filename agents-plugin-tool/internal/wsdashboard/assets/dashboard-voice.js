@@ -699,6 +699,9 @@
           if (typeof opts.onError === "function") opts.onError(err);
         });
       }
+      if (typeof backend.onAutoFinal === "function") backend.onAutoFinal(function (text) {
+        if (gen === generation && state === "recording") finishResult(gen, backend, { text: text });
+      });
       if (typeof backend.onHidden === "function") {
         backend.onHidden(function () {
           if (gen !== generation) return;

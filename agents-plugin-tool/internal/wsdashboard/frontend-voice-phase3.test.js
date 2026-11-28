@@ -1659,3 +1659,161 @@ test('fallback #cvox-cap capsule activates when WsCapsules is absent', async () 
   assert.equal(env.cap.hidden, true);
   handle.destroy();
 });
+
+// Real native adapter over a fake bridge, driven through the composer so the
+// controller, span, commit and PTT release paths are the production ones.
+function makeNativeBridgeComposer(opts = {}) {
+  const calls = [];
+  const bridge = {
+    status() { return true; },
+    start() { calls.push('start'); return true; },
+    stop() { calls.push('stop'); return opts.stopReturns === undefined ? true : opts.stopReturns; },
+    cancel() { calls.push('cancel'); return true; }
+  };
+  const env = makeVoiceEnv({ werkschaftSpeech: bridge });
+  const timers = makeFakeTimers();
+  const native = env.window.WsVoiceNative.create({
+    window: env.window, document: env.doc, voiceInput: env.window.WsVoiceInput, isTop: true,
+    setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout, stopTimeoutMs: 4000
+  });
+  const speech = (detail) => env.window.dispatchEvent(new FakeCustomEvent('ws-native-speech', { detail }));
+  speech({ type: 'ready', available: true, on_device: true, locale: 'ko-KR', reason: '' });
+  const handle = env.window.WsVoiceInput.attachComposer({
+    document: env.doc, window: env.window, autoDiscover: false,
+    setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout
+  });
+  handle.controller.setCapabilities({ eligible: true, order: ['native'] });
+  env.ctext.value = opts.value == null ? '안녕 ' : opts.value;
+  env.ctext.selectionStart = env.ctext.selectionEnd = env.ctext.value.length;
+  const click = () => env.btn.dispatchEvent(new FakeEvent('click', { detail: 0 }));
+  return { env, timers, calls, native, speech, handle, click };
+}
+
+test('native unsolicited Final mid-recording commits at once, normalizes the space, and a later stop/release is a silent no-op', async () => {
+  const t = makeNativeBridgeComposer({ value: '안녕   ' });
+  const errors = [];
+  t.handle.controller.getState();
+  t.click();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'recording');
+  t.speech({ type: 'partial', text: '반갑' });
+  t.speech({ type: 'final', text: '반갑습니다' });
+  await flush();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'idle', 'controller returns to idle');
+  assert.equal(t.env.ctext.value, '안녕 반갑습니다', 'single leading space');
+  assert.equal(t.env.cap.hidden, true);
+  assert.equal(t.env.ctext.disabled, false, 'composer unlocked');
+
+  // PTT/pointer release afterwards: stop() on an idle controller changes nothing.
+  const res = await t.handle.controller.stop();
+  await flush();
+  assert.equal(res, null);
+  assert.equal(t.handle.controller.getState(), 'idle');
+  assert.equal(t.env.ctext.value, '안녕 반갑습니다');
+  assert.equal(t.calls.filter((c) => c === 'stop').length, 0, 'bridge.stop never called');
+  assert.equal(errors.length, 0);
+  t.native.destroy();
+  t.handle.destroy();
+});
+
+test('native unsolicited Final with empty text commits the last partial', async () => {
+  const t = makeNativeBridgeComposer({ value: '' });
+  t.click();
+  await flush();
+  t.speech({ type: 'partial', text: '첫 번째' });
+  t.speech({ type: 'partial', text: '첫 번째 문장' });
+  t.speech({ type: 'final', text: '   ' });
+  await flush();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'idle');
+  assert.equal(t.env.ctext.value, '첫 번째 문장');
+  t.native.destroy();
+  t.handle.destroy();
+});
+
+test('native Final with empty text while Stop is pending falls back to the last partial', async () => {
+  const t = makeNativeBridgeComposer({ value: '' });
+  t.click();
+  await flush();
+  t.speech({ type: 'partial', text: '마지막 부분' });
+  t.click(); // Stop
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'transcribing');
+  t.speech({ type: 'final', text: '' });
+  await flush();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'idle');
+  assert.equal(t.env.ctext.value, '마지막 부분');
+  assert.equal(t.timers.pendingCount(), 0, 'stop timer cleared on settle');
+  // lastPartial does not leak into the next session.
+  t.click();
+  await flush();
+  t.click();
+  await flush();
+  t.speech({ type: 'final', text: '' });
+  await flush();
+  await flush();
+  assert.equal(t.env.ctext.value, '마지막 부분', 'next empty session commits nothing');
+  t.native.destroy();
+  t.handle.destroy();
+});
+
+test('native Stop whose bridge never replies settles via the JS timeout with the last partial', async () => {
+  const t = makeNativeBridgeComposer({ value: '' });
+  t.click();
+  await flush();
+  t.speech({ type: 'partial', text: '들은 만큼' });
+  t.click();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'transcribing');
+  t.timers.advance(3999);
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'transcribing', 'not before the timeout');
+  t.timers.advance(1);
+  await flush();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'idle', 'no permanent transcribing hang');
+  assert.equal(t.env.ctext.value, '들은 만큼');
+  assert.equal(t.timers.pendingCount(), 0);
+  // A late Final after abandoning is dropped silently.
+  t.speech({ type: 'final', text: '늦은 결과' });
+  await flush();
+  assert.equal(t.env.ctext.value, '들은 만큼');
+  t.native.destroy();
+  t.handle.destroy();
+});
+
+test('native bridge.stop() returning false settles at once with the last partial (or empty), and cancel clears the timer', async () => {
+  const t = makeNativeBridgeComposer({ value: '', stopReturns: false });
+  t.click();
+  await flush();
+  t.speech({ type: 'partial', text: '부분' });
+  t.click();
+  await flush();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'idle');
+  assert.equal(t.env.ctext.value, '부분');
+  assert.equal(t.timers.pendingCount(), 0, 'no timer left after immediate settle');
+
+  // No partial -> empty commit, still not hanging.
+  t.click();
+  await flush();
+  t.click();
+  await flush();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'idle');
+  assert.equal(t.env.ctext.value, '부분');
+
+  // Cancel while a stop is pending clears its timer.
+  const t2 = makeNativeBridgeComposer({ value: '' });
+  t2.click();
+  await flush();
+  t2.click();
+  await flush();
+  assert.equal(t2.timers.pendingCount(), 1, 'stop timer armed');
+  t2.handle.controller.cancel({ discardLast: true });
+  await flush();
+  assert.equal(t2.timers.pendingCount(), 0, 'cancel clears the stop timer');
+  t.native.destroy(); t.handle.destroy(); t2.native.destroy(); t2.handle.destroy();
+});
