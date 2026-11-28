@@ -487,19 +487,6 @@
     "261128-feat-ws-companion-visual-polish-and-metafiction-overlay": {
       "registered_at": "2026-11-28T06:52:51Z"
     },
-    "261128-feat-ws-pi-rpc-managed-runtime-and-backend": {
-      "registered_at": "2026-11-28T13:05:13Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-28T13:34:12Z",
-        "impl": {
-          "branch": "impl/develop/dingy-sauna-mumbo"
-        }
-      }
-    },
     "261128-refactor-ws-daemon-wake-driven-stat-invalidation": {
       "registered_at": "2026-11-28T11:39:20Z",
       "lease": {
