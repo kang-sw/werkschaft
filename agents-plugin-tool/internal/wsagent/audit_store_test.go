@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wsauditstore"
@@ -389,5 +390,67 @@ func TestAuditStoreReplayRecordsAFailedAppendAsLoss(t *testing.T) {
 				t.Fatalf("persisted losses = %+v, want record 10 only", got)
 			}
 		})
+	}
+}
+
+// TestAuditCapturePinsRealAuditStore verifies that *wsauditstore.Store
+// satisfies wsagent's optional auditCapturePinner interface end-to-end: an
+// active capture protects its ring from idle unload until capture finishes
+// draining and exits, after which idle unload releases it cleanly.
+func TestAuditCapturePinsRealAuditStore(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC)
+	var clockMu sync.Mutex
+	clockNow := func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		clockMu.Lock()
+		now = now.Add(d)
+		clockMu.Unlock()
+	}
+
+	st, err := wsauditstore.Open(wsauditstore.Options{
+		Root:              root,
+		Now:               clockNow,
+		SweepInterval:     -1,
+		IdleTTL:           15 * time.Minute,
+		IdleCheckInterval: -1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	r := newAuditRig(t, st, "h1")
+	r.kept(`{"type":"system","subtype":"status","status":"active"}`)
+	waitUntil(t, "event persisted", func() bool {
+		v, err := st.View(context.Background(), "s1")
+		return err == nil && len(v.Events) == 1
+	})
+	if got := st.LoadedRings(); got != 1 {
+		t.Fatalf("LoadedRings while active = %d, want 1", got)
+	}
+
+	// Advance past 15m TTL while capture is still running: ring stays pinned.
+	advance(20 * time.Minute)
+	if err := st.UnloadIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.LoadedRings(); got != 1 {
+		t.Fatalf("active capture ring was unloaded while pinned: LoadedRings = %d", got)
+	}
+
+	// End capture (drains, finalizes, unpins), then advance past TTL again:
+	// ring unloads cleanly.
+	r.end()
+	advance(20 * time.Minute)
+	if err := st.UnloadIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.LoadedRings(); got != 0 {
+		t.Fatalf("unpinned ring remained loaded after TTL: LoadedRings = %d", got)
 	}
 }

@@ -334,6 +334,10 @@ func TestColdViewNeverSpansAnEviction(t *testing.T) {
 		t.Fatalf("cold view across the eviction = %d events (cut %v); the evicted ring holds %d (cut %v)",
 			len(a.v.Events), a.v.Cut, len(after.Events), after.Cut)
 	}
+	if got := s2.LoadedRings(); got != 0 {
+		t.Fatalf("cold eviction left %d loaded rings, want 0", got)
+	}
+	loaded(t, s2, "old")
 	if rec := s2.Recover("old", "holder:1"); rec.Boundary != 24 {
 		t.Fatalf("evicted ring lost its boundary: %+v", rec)
 	}

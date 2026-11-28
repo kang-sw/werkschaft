@@ -253,16 +253,24 @@ func (s *Store) removeRing(info *sessionInfo, forget bool) error {
 				break
 			}
 		}
-		if cold && err != nil {
-			// The cold ring indexes only the newest header and what follows;
-			// published while an older segment survives, that segment's
-			// events would vanish from reads and admission. Left unloaded,
-			// the next use replays every surviving segment.
+		if cold {
+			// Cold eviction never leaves the ring loaded or holding an open
+			// segment handle (whether it completed as a tombstone or failed
+			// mid-drop): close r.file, account bytes and tombstone state, and
+			// keep info unloaded so the next use replays what remains.
 			r.close()
-			left, _ := ringBytes(dir)
+			left := r.bytes
+			if err != nil {
+				left, _ = ringBytes(dir)
+			}
 			s.mu.Lock()
 			s.total += left - info.bytes
 			info.bytes = left
+			if info.session == "" {
+				info.session = r.session
+			}
+			info.tombstone = err == nil
+			delete(s.resident, info)
 			s.mu.Unlock()
 			r = nil
 		}
@@ -273,13 +281,17 @@ func (s *Store) removeRing(info *sessionInfo, forget bool) error {
 			err = fmt.Errorf("evict audit ring of session %s: %w", info.dir, rerr)
 		}
 		left, _ := ringBytes(dir)
-		r = newRing(r.session, dir)
-		if left > 0 {
-			r = nil // reloaded from what remains on next use
+		if cold || left > 0 {
+			r = nil // cold stays unloaded; failed removal reloads from what remains
+		} else {
+			r = newRing(r.session, dir)
 		}
 		s.mu.Lock()
 		s.total += left - info.bytes
 		info.bytes = left
+		if r == nil {
+			delete(s.resident, info)
+		}
 		s.mu.Unlock()
 	}
 	if r != nil {
@@ -292,11 +304,15 @@ func (s *Store) removeRing(info *sessionInfo, forget bool) error {
 		s.account(info)
 		s.mu.Lock()
 		info.tombstone = err == nil && r.hasState()
+		s.resident[info] = struct{}{}
 		s.mu.Unlock()
 	} else {
 		info.ring = nil
 		info.view.Store(nil)
 		info.led.Store(nil)
+		s.mu.Lock()
+		delete(s.resident, info)
+		s.mu.Unlock()
 	}
 	info.mu.Unlock()
 	return err
@@ -326,6 +342,7 @@ func (s *Store) forgetRing(info *sessionInfo) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	delete(s.resident, info)
 	if err != nil {
 		s.total += left - info.bytes
 		info.bytes = left
@@ -424,6 +441,126 @@ func (s *Store) sweep() {
 		}
 	}
 	s.enforceCaps()
+	s.evictIdleRings(true, nil)
+}
+
+// evictIdleRings unloads idle unpinned rings to release segment file handles
+// and in-memory indexes without deleting any data on disk. When includeTTL is
+// set and IdleTTL > 0, every unpinned ring whose in-memory lastActive is at
+// least IdleTTL old is unloaded regardless of total count. Then, when
+// MaxLoadedRings > 0 and total loaded rings (pinned + unpinned) still exceed
+// MaxLoadedRings, the least-recently-active unpinned rings are unloaded even
+// within IdleTTL until total loaded rings <= MaxLoadedRings or none remain.
+// protect, when non-nil, is skipped (for the ring s.info just loaded).
+// Writer goroutine only.
+func (s *Store) evictIdleRings(includeTTL bool, protect *sessionInfo) {
+	type candidate struct {
+		info       *sessionInfo
+		lastActive time.Time
+	}
+	sortCandidates := func(cs []candidate) {
+		sort.Slice(cs, func(i, j int) bool {
+			if !cs[i].lastActive.Equal(cs[j].lastActive) {
+				return cs[i].lastActive.Before(cs[j].lastActive)
+			}
+			return cs[i].info.dir < cs[j].info.dir
+		})
+	}
+	now := s.opts.Now()
+	if includeTTL && s.opts.IdleTTL > 0 {
+		s.mu.Lock()
+		var ttlDue []candidate
+		for info := range s.resident {
+			if info == protect || s.pins[info.dir] > 0 {
+				continue
+			}
+			if now.Sub(info.lastActive) >= s.opts.IdleTTL {
+				ttlDue = append(ttlDue, candidate{info: info, lastActive: info.lastActive})
+			}
+		}
+		s.mu.Unlock()
+		sortCandidates(ttlDue)
+		for _, c := range ttlDue {
+			s.unloadRing(c.info, true, now)
+		}
+	}
+	if s.opts.MaxLoadedRings <= 0 {
+		return
+	}
+	s.mu.Lock()
+	if len(s.resident) <= s.opts.MaxLoadedRings {
+		s.mu.Unlock()
+		return
+	}
+	lru := make([]candidate, 0, len(s.resident))
+	for info := range s.resident {
+		if info == protect || s.pins[info.dir] > 0 {
+			continue
+		}
+		lru = append(lru, candidate{info: info, lastActive: info.lastActive})
+	}
+	s.mu.Unlock()
+	sortCandidates(lru)
+	for _, c := range lru {
+		if s.loadedCount() <= s.opts.MaxLoadedRings {
+			break
+		}
+		s.unloadRing(c.info, false, now)
+	}
+}
+
+// unloadRing flushes any buffered control lines on info's ring, coordinates
+// with concurrent cold View readers via info.changing(), drops info's
+// in-memory ring/view/ledger references, and closes its newest-segment handle.
+// It deletes no data and leaves info.lastSeen untouched. If flushing
+// pendingLines fails, it aborts the unload and keeps the ring dirty.
+// Writer goroutine only.
+func (s *Store) unloadRing(info *sessionInfo, checkTTL bool, now time.Time) bool {
+	info.mu.Lock()
+	r := info.ring
+	if r == nil {
+		info.mu.Unlock()
+		return false
+	}
+	s.mu.Lock()
+	skip := s.pins[info.dir] > 0 || (checkTTL && s.opts.IdleTTL > 0 && now.Sub(info.lastActive) < s.opts.IdleTTL)
+	s.mu.Unlock()
+	if skip {
+		info.mu.Unlock()
+		return false
+	}
+	if r.readOnly == nil {
+		if payload := r.pendingLines(); len(payload) > 0 {
+			if err := s.writeLocked(info, payload); err != nil {
+				s.dirty[info] = struct{}{}
+				s.logf("session %s: flush pending control lines before idle unload: %v; keeping ring loaded", info.dir, err)
+				info.mu.Unlock()
+				return false
+			}
+			r.clearPending()
+			delete(s.dirty, info)
+		}
+	}
+	// Re-check pin and TTL under s.mu in case a caller pinned or touched
+	// lastActive while pendingLines was flushing. Start info.changing() under
+	// s.mu before clearing view/led so no concurrent View can sample the old
+	// generation and then observe view==nil as a stable cold state.
+	s.mu.Lock()
+	if s.pins[info.dir] > 0 || (checkTTL && s.opts.IdleTTL > 0 && now.Sub(info.lastActive) < s.opts.IdleTTL) {
+		s.mu.Unlock()
+		info.mu.Unlock()
+		return false
+	}
+	end := info.changing()
+	info.ring = nil
+	info.view.Store(nil)
+	info.led.Store(nil)
+	delete(s.resident, info)
+	s.mu.Unlock()
+	r.close()
+	end()
+	info.mu.Unlock()
+	return true
 }
 
 // refreshLastSeen records each ring's registry last-seen time when it moved

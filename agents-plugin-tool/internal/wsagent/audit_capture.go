@@ -58,6 +58,11 @@ type auditCompactionRecovery interface {
 	RecoverCompactionBaseline(ctx context.Context, session, source string) (boundary, counter uint64, err error)
 }
 
+type auditCapturePinner interface {
+	PinCapture(session string)
+	UnpinCapture(session string)
+}
+
 type compactionBaselineResetter interface {
 	resetCompactionBaseline()
 }
@@ -169,6 +174,7 @@ type auditCapture struct {
 	source  string
 	sink    wsaudit.Sink
 	sourced wsaudit.SourcedSink
+	pinner  auditCapturePinner
 	adapter auditAdapter
 	log     io.Writer
 	wait    time.Duration
@@ -257,6 +263,10 @@ func newAuditCapture(tap *auditTap, harness, source string, adapter auditAdapter
 	}
 	if c.log == nil {
 		c.log = io.Discard
+	}
+	if p, ok := tap.Sink.(auditCapturePinner); ok {
+		c.pinner = p
+		p.PinCapture(c.session.ID)
 	}
 	if s, ok := tap.Sink.(wsaudit.SourcedSink); ok {
 		c.sourced = s
@@ -474,6 +484,9 @@ func (c *auditCapture) close() {
 
 func (c *auditCapture) run(reattaching bool) {
 	defer close(c.done)
+	if c.pinner != nil {
+		defer c.pinner.UnpinCapture(c.session.ID)
+	}
 	if reattaching {
 		c.recoverCompactionBaseline()
 	}

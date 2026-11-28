@@ -17,11 +17,19 @@ func (s *Store) run() {
 		defer t.Stop()
 		tick = t.C
 	}
+	var idleTick <-chan time.Time
+	if s.opts.IdleCheckInterval > 0 {
+		t := time.NewTicker(s.opts.IdleCheckInterval)
+		defer t.Stop()
+		idleTick = t.C
+	}
 	for {
 		select {
 		case <-s.wake:
 		case <-tick:
 			s.sweep()
+		case <-idleTick:
+			s.evictIdleRings(true, nil)
 		}
 		for {
 			batch := s.take()
@@ -31,11 +39,16 @@ func (s *Store) run() {
 			for _, j := range batch {
 				s.handle(j)
 			}
-			// A steady stream of work must not starve retention: a sweep
-			// that came due runs between batches.
+			// A steady stream of work must not starve retention or idle
+			// handle eviction: ticks that came due run between batches.
 			select {
 			case <-tick:
 				s.sweep()
+			default:
+			}
+			select {
+			case <-idleTick:
+				s.evictIdleRings(true, nil)
 			default:
 			}
 		}
@@ -43,6 +56,9 @@ func (s *Store) run() {
 			s.logf("dropped %d audit events: write queue full", n)
 		}
 		s.flushPending()
+		if s.opts.MaxLoadedRings > 0 && s.loadedCount() > s.opts.MaxLoadedRings {
+			s.evictIdleRings(false, nil)
+		}
 		if s.isClosed() {
 			s.shutdown()
 			return
@@ -113,10 +129,16 @@ func (s *Store) handle(j job) {
 		var info *sessionInfo
 		info, res.err = s.info(wsaudit.NormalizeID(j.session), false)
 		if info != nil {
+			res.ring = info.view.Load()
 			info.loading.Store(false)
 		}
 	case jobSweep:
 		s.sweep()
+	case jobUnloadIdle:
+		if j.reply == nil {
+			s.idleQueued.Store(false)
+		}
+		s.evictIdleRings(true, nil)
 	case jobBarrier:
 		s.flushPending()
 		if j.fn != nil {
@@ -133,6 +155,7 @@ func (s *Store) handle(j job) {
 // session when create is unset.
 func (s *Store) info(session string, create bool) (*sessionInfo, error) {
 	dir := sessionDirName(session)
+	now := s.opts.Now()
 	s.mu.Lock()
 	info := s.sessions[dir]
 	if info == nil {
@@ -143,13 +166,15 @@ func (s *Store) info(session string, create bool) (*sessionInfo, error) {
 		info = &sessionInfo{dir: dir, session: session}
 		s.sessions[dir] = info
 	}
+	info.lastActive = maxTime(info.lastActive, now)
 	s.mu.Unlock()
 	if info.ring != nil {
 		return info, nil
 	}
-	defer info.changing()() // recovery may truncate a torn tail
+	end := info.changing() // recovery may truncate a torn tail
 	r := newRing(session, filepath.Join(s.opts.Root, dir))
 	if err := r.recover(); err != nil {
+		end()
 		return nil, err
 	}
 	if r.readOnly != nil {
@@ -161,7 +186,17 @@ func (s *Store) info(session string, create bool) (*sessionInfo, error) {
 	info.session = session
 	info.mu.Unlock()
 	info.led.Store(r.led)
-	s.account(info)
+	s.mu.Lock()
+	s.total += r.bytes - info.bytes
+	info.bytes = r.bytes
+	info.lastActive = maxTime(info.lastActive, s.opts.Now())
+	s.resident[info] = struct{}{}
+	overCap := s.opts.MaxLoadedRings > 0 && len(s.resident) > s.opts.MaxLoadedRings
+	s.mu.Unlock()
+	end()
+	if overCap {
+		s.evictIdleRings(false, info)
+	}
 	return info, nil
 }
 
