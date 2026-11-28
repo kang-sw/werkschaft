@@ -569,13 +569,10 @@ func (w *liveWriter) syncRunningNativeAgents() {
 	if w == nil || w.st == nil {
 		return
 	}
-	var n int32
-	for _, a := range w.st.Snapshot(w.now().UnixMilli()).Agents {
-		if a.Status == wslive.StatusRunning && a.AgentKind == "" {
-			n++
-		}
-	}
-	w.runningNativeAgents.Store(n)
+	// It runs after every agent event, replays and spawn-row seeding
+	// included: a whole Snapshot here (activity views, batch and model
+	// copies) was the daemon's hottest allocation path.
+	w.runningNativeAgents.Store(int32(w.st.RunningNativeAgents()))
 }
 
 func (w *liveWriter) hasRunningNativeAgents() bool {
