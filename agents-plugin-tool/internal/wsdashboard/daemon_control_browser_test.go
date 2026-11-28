@@ -51,6 +51,9 @@ func TestDaemonControlBrowser(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
 	t.Setenv("WS_CACHE_HOME", t.TempDir())
 	t.Setenv("WS_CONFIG_HOME", t.TempDir())
+	// Keep Tier B unconfigured initially so Tier C dom_fallback is verified first;
+	// Part 5 enables ScreenshotPlaywrightModule explicitly via /ctrl/screenshot-module.
+	t.Setenv(DaemonScreenshotPlaywrightModuleEnv, "")
 	SetDevAssets(nil)
 
 	f := startPageFixture(t, func(o *DaemonOptions) {
@@ -156,6 +159,32 @@ func TestDaemonControlBrowser(t *testing.T) {
 			defer cancel()
 			resp, err := f.d.DaemonUI(ctx, req)
 			writeCtrlResult(w, resp, err)
+		case "/ctrl/screenshot":
+			var body struct {
+				TabID     string `json:"tab_id"`
+				SessionID string `json:"session_id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+			defer cancel()
+			resp, err := f.d.DaemonScreenshot(ctx, DaemonScreenshotRequest{
+				TabID:     body.TabID,
+				SessionID: body.SessionID,
+			})
+			writeCtrlResult(w, resp, err)
+		case "/ctrl/screenshot-module":
+			var body struct {
+				Module string `json:"module"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			f.d.SetScreenshotPlaywrightModule(body.Module)
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		default:
 			http.NotFound(w, r)
 		}

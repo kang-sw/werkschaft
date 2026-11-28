@@ -19,7 +19,7 @@ use tauri::{AppHandle, Manager};
 use url::Url;
 
 use crate::{
-    close,
+    capture, close,
     navigation::{self, Destination, Popup},
     notify,
     permissions::{self, MediaCaptureKind},
@@ -44,6 +44,7 @@ pub(super) enum Bridge {
     /// The recovery page's fixed actions, present with or without an updater.
     Recovery,
     Notify,
+    Capture,
 }
 
 pub(super) struct BridgeState {
@@ -82,6 +83,7 @@ define_class!(
                         updates::receive(window, state.epoch, true, source, &text)
                     }
                     Bridge::Notify => notify::receive(window, state.epoch, source, &text),
+                    Bridge::Capture => capture::receive(window, state.epoch, source, &text),
                 }
             }
         }

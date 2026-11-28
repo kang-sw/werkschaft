@@ -14,18 +14,21 @@ import (
 )
 
 type fakeDaemonControlHost struct {
-	lastReq    wsdashboard.DaemonCurlRequest
-	lastDOMReq wsdashboard.DaemonDOMRequest
-	lastUIReq  wsdashboard.DaemonUIRequest
-	calls      int
-	tabsCalls  int
-	domCalls   int
-	uiCalls    int
-	resp       wsdashboard.DaemonCurlResponse
-	tabsResp   []wsdashboard.DaemonTabInfo
-	domResp    wsdashboard.DaemonDOMSnapshot
-	uiResp     wsdashboard.DaemonUIResponse
-	err        error
+	lastReq     wsdashboard.DaemonCurlRequest
+	lastDOMReq  wsdashboard.DaemonDOMRequest
+	lastUIReq   wsdashboard.DaemonUIRequest
+	lastShotReq wsdashboard.DaemonScreenshotRequest
+	calls       int
+	tabsCalls   int
+	domCalls    int
+	uiCalls     int
+	shotCalls   int
+	resp        wsdashboard.DaemonCurlResponse
+	tabsResp    []wsdashboard.DaemonTabInfo
+	domResp     wsdashboard.DaemonDOMSnapshot
+	uiResp      wsdashboard.DaemonUIResponse
+	shotResp    wsdashboard.DaemonScreenshotResponse
+	err         error
 }
 
 func (f *fakeDaemonControlHost) DaemonCurl(_ context.Context, req wsdashboard.DaemonCurlRequest) (wsdashboard.DaemonCurlResponse, error) {
@@ -58,6 +61,15 @@ func (f *fakeDaemonControlHost) DaemonUI(_ context.Context, req wsdashboard.Daem
 		return wsdashboard.DaemonUIResponse{}, f.err
 	}
 	return f.uiResp, nil
+}
+
+func (f *fakeDaemonControlHost) DaemonScreenshot(_ context.Context, req wsdashboard.DaemonScreenshotRequest) (wsdashboard.DaemonScreenshotResponse, error) {
+	f.shotCalls++
+	f.lastShotReq = req
+	if f.err != nil {
+		return wsdashboard.DaemonScreenshotResponse{}, f.err
+	}
+	return f.shotResp, nil
 }
 
 type fakePostureCompanionHost struct {
@@ -311,7 +323,7 @@ func TestDaemonControlCompanionPostureHandsBusyLock(t *testing.T) {
 }
 
 func TestDaemonControlHostedRenderAndLeadToolNames(t *testing.T) {
-	for _, tool := range []string{daemonCurlTool, daemonTabsTool, daemonDOMTool, daemonUITool} {
+	for _, tool := range []string{daemonCurlTool, daemonTabsTool, daemonDOMTool, daemonUITool, daemonScreenshotTool} {
 		if !slices.Contains(LeadToolNames(), tool) {
 			t.Fatalf("%s missing from LeadToolNames", tool)
 		}
@@ -347,7 +359,7 @@ func TestDaemonControlHostedRenderAndLeadToolNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderLeadManual (off): %v", err)
 	}
-	for _, alias := range []string{"daemon_curl", "daemon_tabs", "daemon_dom", "daemon_ui"} {
+	for _, alias := range []string{"daemon_curl", "daemon_tabs", "daemon_dom", "daemon_ui", "daemon_screenshot"} {
 		if strings.Contains(offManual, alias) {
 			t.Fatalf("default-off agy manual unexpectedly listed %s", alias)
 		}
@@ -361,7 +373,7 @@ func TestDaemonControlHostedRenderAndLeadToolNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderLeadManual (on): %v", err)
 	}
-	for _, alias := range []string{"daemon_curl [direct]", "daemon_tabs [direct]", "daemon_dom [direct]", "daemon_ui [direct]"} {
+	for _, alias := range []string{"daemon_curl [direct]", "daemon_tabs [direct]", "daemon_dom [direct]", "daemon_ui [direct]", "daemon_screenshot [direct]"} {
 		if !strings.Contains(onManual, alias) {
 			t.Fatalf("opted-in agy manual missing %q", alias)
 		}
@@ -380,11 +392,19 @@ func TestDaemonControlTabsDOMAndUIDispatchAndErrors(t *testing.T) {
 		tabsResp: []wsdashboard.DaemonTabInfo{{TabID: "tab-1", Visible: true, Focused: true, ActiveRoute: "/s/abc"}},
 		domResp:  wsdashboard.DaemonDOMSnapshot{TabID: "tab-1", Generation: 3, Route: "/s/abc", NodeCount: 2, ByteSize: 120},
 		uiResp:   wsdashboard.DaemonUIResponse{OK: true, Action: "click_ref", TabID: "tab-1", Ref: "g3-r1"},
+		shotResp: wsdashboard.DaemonScreenshotResponse{
+			Mode:   "dom_fallback",
+			Live:   false,
+			TabID:  "tab-1",
+			Route:  "/s/abc",
+			Reason: "screenshot_unavailable",
+			DOM:    &wsdashboard.DaemonDOMSnapshot{TabID: "tab-1", Generation: 4, Route: "/s/abc", NodeCount: 1, ByteSize: 64},
+		},
 	}
 	s.daemonControl = host
 
 	names := daemonTestListedToolNames(t, s)
-	for _, want := range []string{daemonCurlTool, daemonTabsTool, daemonDOMTool, daemonUITool} {
+	for _, want := range []string{daemonCurlTool, daemonTabsTool, daemonDOMTool, daemonUITool, daemonScreenshotTool} {
 		if !names[want] {
 			t.Fatalf("opted-in tools/list missing %s", want)
 		}
@@ -403,6 +423,20 @@ func TestDaemonControlTabsDOMAndUIDispatchAndErrors(t *testing.T) {
 	resUI := callToolOnce(t, s, 32, daemonUITool, map[string]any{"tab_id": "tab-1", "action": "click_ref", "ref": "g3-r1", "generation": 3})
 	if toolIsError(t, resUI) || host.uiCalls != 1 || host.lastUIReq.Action != "click_ref" || host.lastUIReq.Ref != "g3-r1" || host.lastUIReq.Generation != 3 {
 		t.Fatalf("daemon.ui failed: res=%s req=%+v", resUI, host.lastUIReq)
+	}
+
+	resShot := callToolOnce(t, s, 34, daemonScreenshotTool, map[string]any{"tab_id": "tab-1"})
+	if toolIsError(t, resShot) || host.shotCalls != 1 || host.lastShotReq.TabID != "tab-1" || host.lastShotReq.SessionID != s.conversation {
+		t.Fatalf("daemon.screenshot failed: res=%s calls=%d req=%+v", resShot, host.shotCalls, host.lastShotReq)
+	}
+	if !strings.Contains(resShot, `\"mode\":\"dom_fallback\"`) || !strings.Contains(resShot, `\"live\":false`) {
+		t.Fatalf("daemon.screenshot missing expected fallback contract fields: %s", resShot)
+	}
+
+	host.err = &wsdashboard.DaemonControlError{Code: "payload_too_large", Message: "too large"}
+	resTooBig := callToolOnce(t, s, 35, daemonScreenshotTool, map[string]any{"tab_id": "tab-1"})
+	if !toolIsError(t, resTooBig) || !strings.Contains(resTooBig, "payload_too_large") {
+		t.Fatalf("expected payload_too_large error, got %s", resTooBig)
 	}
 
 	host.err = &wsdashboard.DaemonControlError{Code: "stale_ref", Message: "stale"}

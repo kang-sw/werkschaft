@@ -17,8 +17,8 @@ use windows::{
 };
 
 use crate::{
-    accelerator, close, menu_action, navigation, notify, permissions, shell::Connection, strip,
-    strip_msg, updates, webview_setup_failed,
+    accelerator, capture, close, menu_action, navigation, notify, permissions, shell::Connection,
+    strip, strip_msg, updates, webview_setup_failed,
 };
 
 pub fn copy_text(window: &WebviewWindow, text: &str) -> bool {
@@ -195,6 +195,7 @@ unsafe fn install_hooks(
     let failed = connection.clone();
     let epoch = failed.window_epoch();
     let notify_bridge = window.try_state::<Arc<notify::Notifier>>().is_some();
+    let capture_bridge = window.try_state::<Arc<capture::Capturer>>().is_some();
     // The theme message needs the strip, which exists only on the main window.
     let theme_bridge = window.app_handle().try_state::<strip::Strips>().is_some();
     // Always registered: the recovery page's actions work in a build with no
@@ -226,7 +227,10 @@ unsafe fn install_hooks(
                     let notice = notify_bridge
                         && message.starts_with(notify::PREFIX)
                         && message.len() <= notify::MAX_MESSAGE;
-                    if !update && !notice && !theme {
+                    let cap = capture_bridge
+                        && message.starts_with(capture::PREFIX)
+                        && message.len() <= capture::MAX_MESSAGE;
+                    if !update && !notice && !theme && !cap {
                         return Ok(());
                     }
                     let mut raw = PWSTR::null();
@@ -236,6 +240,8 @@ unsafe fn install_hooks(
                             strip::receive_theme(&target, &themes, epoch, &source, &message);
                         } else if update {
                             updates::receive(target.clone(), epoch, true, source, &message);
+                        } else if cap {
+                            capture::receive(target.clone(), epoch, source, &message);
                         } else {
                             notify::receive(target.clone(), epoch, source, &message);
                         }

@@ -541,6 +541,7 @@
     doc.addEventListener("ws-page-visibility", function () { sendDaemonHeartbeat(); });
     doc.addEventListener("ws-shell-route", function () { sendDaemonHeartbeat(); });
     doc.addEventListener("ws-shell-focus", function () { sendDaemonHeartbeat(true); });
+    doc.addEventListener("ws-daemon-native-capture-ready", function () { sendDaemonHeartbeat(); });
   }
   function connect(withoutBoard) {
     if (!window.WebSocket || shHidden) return;

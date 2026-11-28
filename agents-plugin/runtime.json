@@ -106,7 +106,8 @@
     "daemon.curl": ">=0.53.2-dev <0.54.0",
     "daemon.tabs": ">=0.53.2-dev <0.54.0",
     "daemon.dom": ">=0.53.2-dev <0.54.0",
-    "daemon.ui": ">=0.53.2-dev <0.54.0"
+    "daemon.ui": ">=0.53.2-dev <0.54.0",
+    "daemon.screenshot": ">=0.53.2-dev <0.54.0"
   },
   "commands": {
     "runtime.info": ">=0.53.2-dev <0.54.0",

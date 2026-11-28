@@ -104,9 +104,11 @@ type bridgePushEvent struct {
 }
 
 type bridgeReplyOutcome struct {
-	Decision string
-	Err      string
-	Payload  json.RawMessage
+	Decision    string
+	Err         string
+	Payload     json.RawMessage
+	Binary      []byte
+	ContentType string
 }
 
 type bridgePending struct {
@@ -532,13 +534,21 @@ func (d *Daemon) RequestDaemonConfirmation(ctx context.Context, req DaemonConfir
 // SendDaemonBridgeRequest pushes a daemon-bridge-request frame to the targeted
 // local tab and waits for its correlated single-use POST /api/daemon/bridge-reply.
 func (d *Daemon) SendDaemonBridgeRequest(ctx context.Context, explicitTabID, op string, params any, timeout time.Duration) (json.RawMessage, string, error) {
+	out, tabID, err := d.sendDaemonBridgeRequest(ctx, explicitTabID, op, params, timeout)
+	if err != nil {
+		return nil, tabID, err
+	}
+	return out.Payload, tabID, nil
+}
+
+func (d *Daemon) sendDaemonBridgeRequest(ctx context.Context, explicitTabID, op string, params any, timeout time.Duration) (bridgeReplyOutcome, string, error) {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
 	requestID := mintBridgeID("br", 16)
 	nonce := mintBridgeID("n", 24)
 	if requestID == "" || nonce == "" {
-		return nil, "", &DaemonControlError{Code: "denied", Message: "nonce unavailable"}
+		return bridgeReplyOutcome{}, "", &DaemonControlError{Code: "denied", Message: "nonce unavailable"}
 	}
 
 	b := &d.daemonBridge
@@ -546,7 +556,7 @@ func (d *Daemon) SendDaemonBridgeRequest(ctx context.Context, explicitTabID, op 
 	tab, err := b.selectTabLocked(strings.TrimSpace(explicitTabID), false)
 	if err != nil {
 		b.mu.Unlock()
-		return nil, "", err
+		return bridgeReplyOutcome{}, "", err
 	}
 	payload, err := json.Marshal(struct {
 		RequestID string `json:"request_id"`
@@ -563,11 +573,11 @@ func (d *Daemon) SendDaemonBridgeRequest(ctx context.Context, explicitTabID, op 
 	})
 	if err != nil {
 		b.mu.Unlock()
-		return nil, "", err
+		return bridgeReplyOutcome{}, "", err
 	}
 	if !tab.enqueue(DaemonBridgeRequestEvent, payload) {
 		b.mu.Unlock()
-		return nil, tab.tabID, &DaemonControlError{Code: "tab_gone", Message: "target tab queue full"}
+		return bridgeReplyOutcome{}, tab.tabID, &DaemonControlError{Code: "tab_gone", Message: "target tab queue full"}
 	}
 	ch := make(chan bridgeReplyOutcome, 1)
 	if b.pending == nil {
@@ -595,18 +605,18 @@ func (d *Daemon) SendDaemonBridgeRequest(ctx context.Context, explicitTabID, op 
 	select {
 	case out := <-ch:
 		if out.Err != "" {
-			return nil, tabID, &DaemonControlError{Code: out.Err, Message: out.Err}
+			return bridgeReplyOutcome{}, tabID, &DaemonControlError{Code: out.Err, Message: out.Err}
 		}
-		return out.Payload, tabID, nil
+		return out, tabID, nil
 	case <-timer.C:
 		cleanup()
-		return nil, tabID, &DaemonControlError{Code: "timeout", Message: "bridge request timed out"}
+		return bridgeReplyOutcome{}, tabID, &DaemonControlError{Code: "timeout", Message: "bridge request timed out"}
 	case <-ctx.Done():
 		cleanup()
-		return nil, tabID, &DaemonControlError{Code: "timeout", Message: "bridge request cancelled"}
+		return bridgeReplyOutcome{}, tabID, &DaemonControlError{Code: "timeout", Message: "bridge request cancelled"}
 	case <-d.stop:
 		cleanup()
-		return nil, tabID, &DaemonControlError{Code: "tab_gone", Message: "daemon stopped"}
+		return bridgeReplyOutcome{}, tabID, &DaemonControlError{Code: "tab_gone", Message: "daemon stopped"}
 	}
 }
 
@@ -638,8 +648,12 @@ func (d *Daemon) handleDaemonBridgeReply(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if err != nil || mt != "application/json" {
+	if err != nil || (mt != "application/json" && mt != "image/png") {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "content_type_json_required"})
+		return
+	}
+	if mt == "image/png" {
+		d.handleDaemonBridgeBinaryReply(w, r, mt)
 		return
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, daemonBridgeReplyMaxBytes+1))
@@ -701,6 +715,70 @@ func (d *Daemon) handleDaemonBridgeReply(w http.ResponseWriter, r *http.Request)
 
 	select {
 	case p.ch <- outcome:
+	default:
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (d *Daemon) handleDaemonBridgeBinaryReply(w http.ResponseWriter, r *http.Request, contentType string) {
+	requestID := strings.TrimSpace(r.Header.Get("X-WS-Request-ID"))
+	nonce := strings.TrimSpace(r.Header.Get("X-WS-Nonce"))
+	tabID := strings.TrimSpace(r.Header.Get("X-WS-Tab-ID"))
+	if requestID == "" || nonce == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing_request_id_or_nonce"})
+		return
+	}
+	b := &d.daemonBridge
+	b.mu.Lock()
+	p := b.pending[requestID]
+	if p == nil {
+		b.mu.Unlock()
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "stale_request"})
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(nonce), []byte(p.nonce)) != 1 {
+		b.mu.Unlock()
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid_nonce"})
+		return
+	}
+	if tabID != "" && tabID != p.tabID {
+		b.mu.Unlock()
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "foreign_tab"})
+		return
+	}
+	if p.kind != "bridge" {
+		b.mu.Unlock()
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "content_type_json_required"})
+		return
+	}
+	b.mu.Unlock()
+
+	raw, err := io.ReadAll(io.LimitReader(r.Body, daemonBridgeReplyMaxBytes+1))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unreadable_body"})
+		return
+	}
+
+	b.mu.Lock()
+	if b.pending[requestID] != p {
+		b.mu.Unlock()
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "stale_request"})
+		return
+	}
+	delete(b.pending, requestID)
+	b.mu.Unlock()
+
+	if len(raw) > daemonBridgeReplyMaxBytes {
+		select {
+		case p.ch <- bridgeReplyOutcome{Err: "payload_too_large"}:
+		default:
+		}
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "payload_too_large"})
+		return
+	}
+
+	select {
+	case p.ch <- bridgeReplyOutcome{Binary: raw, ContentType: contentType}:
 	default:
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

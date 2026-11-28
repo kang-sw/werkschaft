@@ -190,6 +190,11 @@ type DaemonOptions struct {
 	// returns wsmeta.ErrCutoverUnsupported, so deferred legacy stores load
 	// from legacy JSON files instead.
 	OnLegacyFallback func()
+	// ScreenshotPlaywrightModule optionally configures a runtime Playwright
+	// module path for ws/daemon.screenshot Tier B headless route rendering
+	// (distinct from test-only WS_PLAYWRIGHT_MODULE; empty falls back to
+	// WS_DAEMON_SCREENSHOT_PLAYWRIGHT_MODULE or Tier C dom_fallback).
+	ScreenshotPlaywrightModule string
 
 	// bindHost overrides the address the daemon binds, so a test runs LAN
 	// mode on loopback; empty derives it from LAN.
@@ -520,9 +525,13 @@ type Daemon struct {
 
 	// daemonBridge holds local-viewer shell tab heartbeats, per-tab push
 	// channels, and pending 1-click confirmations / bridge replies (daemon_bridge.go).
-	daemonBridge         daemonBridge
-	daemonConfirmTimeout time.Duration
-	daemonCurlTimeout    time.Duration
+	daemonBridge                  daemonBridge
+	daemonConfirmTimeout          time.Duration
+	daemonCurlTimeout             time.Duration
+	screenshotAuth                screenshotAuthState
+	screenshotPlaywrightModule    string
+	daemonScreenshotNativeTimeout time.Duration
+	daemonScreenshotRenderTimeout time.Duration
 
 	closeOnce sync.Once
 	stop      chan struct{}

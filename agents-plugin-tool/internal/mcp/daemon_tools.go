@@ -12,20 +12,22 @@ import (
 )
 
 const (
-	daemonCurlTool = "daemon.curl"
-	daemonTabsTool = "daemon.tabs"
-	daemonDOMTool  = "daemon.dom"
-	daemonUITool   = "daemon.ui"
+	daemonCurlTool       = "daemon.curl"
+	daemonTabsTool       = "daemon.tabs"
+	daemonDOMTool        = "daemon.dom"
+	daemonUITool         = "daemon.ui"
+	daemonScreenshotTool = "daemon.screenshot"
 )
 
 // DaemonControlHost bridges the MCP server to the dashboard daemon's local
-// loopback curl, multi-tab registry, semantic DOM/UI bridge, and 1-click
-// confirmation layer (wsdashboard.Daemon).
+// loopback curl, multi-tab registry, semantic DOM/UI bridge, staged screenshot
+// capture, and 1-click confirmation layer (wsdashboard.Daemon).
 type DaemonControlHost interface {
 	DaemonCurl(ctx context.Context, req wsdashboard.DaemonCurlRequest) (wsdashboard.DaemonCurlResponse, error)
 	DaemonTabs() []wsdashboard.DaemonTabInfo
 	DaemonDOM(ctx context.Context, req wsdashboard.DaemonDOMRequest) (wsdashboard.DaemonDOMSnapshot, error)
 	DaemonUI(ctx context.Context, req wsdashboard.DaemonUIRequest) (wsdashboard.DaemonUIResponse, error)
+	DaemonScreenshot(ctx context.Context, req wsdashboard.DaemonScreenshotRequest) (wsdashboard.DaemonScreenshotResponse, error)
 }
 
 func isDaemonControlTool(name string) bool {
@@ -116,6 +118,17 @@ func daemonControlTools() []map[string]any {
 				"required": []string{"action"},
 			},
 		},
+		{
+			"name":        daemonScreenshotTool,
+			"description": "Capture visual state of the targeted local dashboard tab (most recently focused visible tab by default, or explicit tab_id). Runs immediately without confirmation. Staged selection: Tier A native desktop WebView PNG (mode='native', live=true) written under the daemon's per-session cache directory (max 8 MiB, never inlined); else Tier B optional headless Playwright route render (mode='route_render', live=false) when configured at runtime; else Tier C honest dom_fallback (mode='dom_fallback', live=false, reason='screenshot_unavailable') with a bounded daemon.dom snapshot.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_key": stringProperty(sessionKeyPropertyDescription),
+					"tab_id":      stringProperty("Optional explicit local dashboard tab ID (defaults to most recently focused visible tab)."),
+				},
+			},
+		},
 	}
 }
 
@@ -188,9 +201,26 @@ func (s *Server) handleDaemonTool(ctx context.Context, id json.RawMessage, name 
 		return s.handleDaemonDOM(ctx, id, args)
 	case daemonUITool:
 		return s.handleDaemonUI(ctx, id, args)
+	case daemonScreenshotTool:
+		return s.handleDaemonScreenshot(ctx, id, args)
 	default:
 		return errorResponse(id, -32602, fmt.Sprintf("unknown tool: %s", name))
 	}
+}
+
+func (s *Server) handleDaemonScreenshot(ctx context.Context, id json.RawMessage, args map[string]any) response {
+	tabID, err := optionalStringArg(daemonScreenshotTool, "tab_id", args)
+	if err != nil {
+		return toolTextResponse(id, "", err)
+	}
+	resp, err := s.daemonControl.DaemonScreenshot(ctx, wsdashboard.DaemonScreenshotRequest{
+		TabID:     tabID,
+		SessionID: s.conversation,
+	})
+	if err != nil {
+		return daemonControlErrorResponse(id, err)
+	}
+	return toolJSONResponse(id, resp, nil)
 }
 
 func (s *Server) handleDaemonTabs(id json.RawMessage) response {

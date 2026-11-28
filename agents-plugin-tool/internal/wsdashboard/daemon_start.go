@@ -201,9 +201,10 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		clipboard:       opts.clipboard,
 		hireWake:        make(chan struct{}, 1),
 		hireDone:        make(chan struct{}),
-		meta:            metaStore,
-		metaSnap:        metaSnap,
-		stop:            make(chan struct{}),
+		meta:                       metaStore,
+		metaSnap:                   metaSnap,
+		screenshotPlaywrightModule: opts.ScreenshotPlaywrightModule,
+		stop:                       make(chan struct{}),
 		done:            make(chan struct{}),
 		endpoint: Endpoint{
 			SchemaVersion: endpointSchemaVersion,

@@ -520,6 +520,20 @@
     });
   }
 
+  var DC_SCREENSHOT_MAX_BYTES = 8 * 1024 * 1024;
+
+  function dcBase64ToBytes(b64) {
+    if (typeof b64 !== "string" || !b64) return null;
+    try {
+      var bin = atob(b64);
+      var out = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    } catch (_) {
+      return null;
+    }
+  }
+
   function postDaemonBridgeReply(req, payload, errCode) {
     var body = {
       request_id: req.request_id,
@@ -534,6 +548,21 @@
       cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
+    }).catch(function () {});
+  }
+
+  function postDaemonBridgeBinaryReply(req, bytes, contentType) {
+    return fetch("/api/daemon/bridge-reply", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: {
+        "Content-Type": contentType || "image/png",
+        "X-WS-Request-ID": String(req.request_id || ""),
+        "X-WS-Nonce": String(req.nonce || ""),
+        "X-WS-Tab-ID": String(req.tab_id || daemonTabId || "")
+      },
+      body: bytes
     }).catch(function () {});
   }
 
@@ -795,6 +824,34 @@
         action: op === "ui.click_ref" ? "click_ref" : "fill_ref",
         ref: ref
       }, remoteOut.payload || {}), null);
+      return;
+    }
+
+    if (op === "screenshot.capture") {
+      if (!window.wsDaemonNativeCapture || typeof window.wsDaemonNativeCapture.capture !== "function") {
+        await postDaemonBridgeReply(req, null, "screenshot_unavailable");
+        return;
+      }
+      var capRes = null;
+      try {
+        capRes = await window.wsDaemonNativeCapture.capture();
+      } catch (_) {
+        capRes = null;
+      }
+      if (!capRes || !capRes.ok || typeof capRes.png_base64 !== "string") {
+        await postDaemonBridgeReply(req, null, (capRes && capRes.error) ? String(capRes.error) : "screenshot_unavailable");
+        return;
+      }
+      var pngBytes = dcBase64ToBytes(capRes.png_base64);
+      if (!pngBytes || pngBytes.byteLength === 0) {
+        await postDaemonBridgeReply(req, null, "screenshot_unavailable");
+        return;
+      }
+      if (pngBytes.byteLength > DC_SCREENSHOT_MAX_BYTES) {
+        await postDaemonBridgeReply(req, null, "payload_too_large");
+        return;
+      }
+      await postDaemonBridgeBinaryReply(req, pngBytes, "image/png");
       return;
     }
 

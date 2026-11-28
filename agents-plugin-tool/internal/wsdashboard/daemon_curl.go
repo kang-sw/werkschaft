@@ -190,7 +190,7 @@ func validateDaemonCurlHeaders(headers map[string]string) (http.Header, error) {
 var (
 	redactQuerySecretRe  = regexp.MustCompile(`([?&](?:token|login)=)[^&#\s"'<>]+`)
 	redactBearerRe       = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}`)
-	redactCookieSecretRe = regexp.MustCompile(`(ws_dashboard_(?:localhost|token)=)[^;\s"'<>]+`)
+	redactCookieSecretRe = regexp.MustCompile(`(ws_dashboard_(?:localhost|token|screenshot_render)=)[^;\s"'<>]+`)
 	redactAPIKeyRe       = regexp.MustCompile(`\b(?:sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|AIza[A-Za-z0-9_-]{20,})\b`)
 )
 

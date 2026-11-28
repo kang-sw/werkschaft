@@ -1,6 +1,7 @@
 // Run by TestDaemonControlBrowser against an isolated real daemon fixture.
 // argv: <daemonBase> <ctrlBase>
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const { chromium } = require(process.env.WS_PLAYWRIGHT_MODULE);
 const [base, ctrl] = process.argv.slice(2);
 
@@ -483,6 +484,48 @@ const CHOICES_WITH_DC = {
     const navBack = await ctrlJSON('/ctrl/ui', { action: 'navigate', path: '/s/livesession' });
     assert.equal(navBack.ok, true, `navigate back failed: ${JSON.stringify(navBack)}`);
     await waitFor('shell navigated back to livesession', () => page2.evaluate(() => location.pathname === '/s/livesession'));
+
+    // --- Part 5: Phase 3 — daemon.screenshot (Tier C dom_fallback on a standard
+    // browser tab, then Tier B route_render when runtime Playwright module config
+    // is enabled, verifying PNG file placement, dimensions, and no phantom tabs).
+    const tabsBeforeShot = await ctrlJSON('/ctrl/tabs');
+    const tab2Info = tabsBeforeShot.tabs.find(t => t.tab_id === tab2);
+    assert.ok(tab2Info && tab2Info.capabilities && tab2Info.capabilities.native_capture === false, `standard browser tab must advertise native_capture=false: ${JSON.stringify(tab2Info)}`);
+
+    // 5a. Tier C (unconfigured runtime Playwright module): honest dom_fallback, immediate (no confirm banner).
+    const shotCRes = await ctrlJSON('/ctrl/screenshot', { session_id: 'livesession' });
+    assert.equal(shotCRes.ok, true, `daemon.screenshot Tier C failed: ${JSON.stringify(shotCRes)}`);
+    const shotC = shotCRes.response;
+    assert.equal(shotC.mode, 'dom_fallback');
+    assert.equal(shotC.live, false);
+    assert.equal(shotC.reason, 'screenshot_unavailable');
+    assert.equal(shotC.tab_id, tab2);
+    assert.ok(shotC.dom && shotC.dom.tab_id === tab2 && shotC.dom.node_count > 0 && shotC.dom.byte_size <= 65536, `invalid Tier C dom: ${JSON.stringify(shotC.dom)}`);
+    assert.equal(await page2.locator('section[data-daemon-confirm]').isHidden(), true, 'daemon.screenshot must not show confirm banner');
+
+    // 5b. Tier B (runtime Playwright module enabled): route_render, live:false, PNG under per-session cache dir.
+    await ctrlJSON('/ctrl/screenshot-module', { module: process.env.WS_PLAYWRIGHT_MODULE });
+    try {
+      const shotBRes = await ctrlJSON('/ctrl/screenshot', { session_id: 'livesession' });
+      assert.equal(shotBRes.ok, true, `daemon.screenshot Tier B failed: ${JSON.stringify(shotBRes)}`);
+      const shotB = shotBRes.response;
+      assert.equal(shotB.mode, 'route_render');
+      assert.equal(shotB.live, false);
+      assert.equal(shotB.tab_id, tab2);
+      assert.equal(shotB.route, '/s/livesession');
+      assert.ok(shotB.path && shotB.path.includes('livesession') && shotB.path.includes('screenshots') && shotB.path.endsWith('.png'), `unexpected Tier B path: ${shotB.path}`);
+      assert.ok(shotB.width > 0 && shotB.height > 0 && shotB.bytes > 0 && shotB.bytes <= 8 * 1024 * 1024, `invalid Tier B metadata: ${JSON.stringify(shotB)}`);
+      assert.equal(shotB.dom, undefined, 'Tier B must not include dom_fallback snapshot');
+      const pngBytes = fs.readFileSync(shotB.path);
+      assert.equal(pngBytes.length, shotB.bytes, 'disk PNG size must match reported bytes');
+      assert.deepEqual(Array.from(pngBytes.subarray(0, 8)), [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 'Tier B file must start with PNG magic');
+      assert.equal(JSON.stringify(shotB).includes('iVBORw0KGgo'), false, 'Tier B response must never inline base64 PNG bytes');
+      // Headless Tier B render must never register a phantom shell tab.
+      const tabsAfterShot = await ctrlJSON('/ctrl/tabs');
+      assert.equal(tabsAfterShot.tabs.length, tabsBeforeShot.tabs.length, `Tier B leaked a tab into daemon.tabs: ${JSON.stringify(tabsAfterShot.tabs)}`);
+    } finally {
+      await ctrlJSON('/ctrl/screenshot-module', { module: '' });
+    }
 
     assert.deepEqual(errors, [], `unexpected page errors: ${errors.join('\n')}`);
     console.log('daemon-control browser acceptance passed');
