@@ -11,7 +11,7 @@ import "testing"
 //     (data-doc-key, data-mockup-sha) match, and replaces it when sha changes;
 //   - paletteBodyText returns data-fallback-text for mockup frames.
 func TestMockupFrameMountUnmountReuseAndSearch(t *testing.T) {
-	src := dashboardFuncs(t, "boardBands", "frameNear", "frameShown", "mountFrame", "mountFrames", "unmountFrame", "unmountFrames", "openKey", "restoreOpenOne", "restoreOpen", "forgetOpen", "topicKey", "topicSeen", "morphBoard", "frameKeep", "frameKept", "frameChain", "frameGraftable", "frameGrafts", "settleMoves", "frameGraft", "frameNext", "paletteText", "paletteBodyText")
+	src := dashboardFuncs(t, "boardBands", "frameNear", "frameShown", "mountFrame", "mountFrames", "unmountFrame", "unmountFrames", "openKey", "restoreOpenOne", "restoreOpen", "forgetOpen", "topicKey", "topicSeen", "holdEcho", "morphBoard", "frameKeep", "frameKept", "frameChain", "frameGraftable", "frameGrafts", "settleMoves", "frameGraft", "frameNext", "paletteText", "paletteBodyText")
 	runNode(t, "mockup frame lifecycle", frameDOM+`
 function isFrame(n, kind) { return n.classList.contains("doc-frame") && (!kind || n.tagName === kind); }
 function entry(n) { return /^entry:/.test(n.getAttribute("data-doc-key") || ""); }
