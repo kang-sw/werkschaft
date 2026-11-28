@@ -501,7 +501,14 @@
       }
     },
     "261128-feat-ws-dashboard-always-open-gallery-and-ticketmap": {
-      "registered_at": "2026-11-28T02:47:47Z"
+      "registered_at": "2026-11-28T02:47:47Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-28T05:45:16Z"
+      }
     },
     "261128-feat-ws-dashboard-gallery-git-page": {
       "registered_at": "2026-11-28T02:54:38Z"
@@ -511,19 +518,6 @@
     },
     "261128-feat-ws-dashboard-global-holders-popup": {
       "registered_at": "2026-11-28T03:57:30Z"
-    },
-    "261128-feat-ws-dashboard-ide-shell-overhaul": {
-      "registered_at": "2026-11-28T01:59:43Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-28T04:31:44Z",
-        "impl": {
-          "branch": "impl/develop/baked-yam-perch"
-        }
-      }
     },
     "261128-feat-ws-settings-account-rework-and-voice-section-split": {
       "registered_at": "2026-11-28T03:40:30Z",
