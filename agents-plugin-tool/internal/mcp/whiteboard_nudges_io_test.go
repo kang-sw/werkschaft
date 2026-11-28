@@ -64,10 +64,15 @@ func TestWhiteboardPokedDiscoveryIsConstantIO(t *testing.T) {
 type countingPiAgents struct {
 	*fakePiAgents
 	gets atomic.Int64
+	// onGet, when set, runs inside every Get before it answers.
+	onGet func()
 }
 
 func (c *countingPiAgents) Get(id string) (wsagent.State, error) {
 	c.gets.Add(1)
+	if c.onGet != nil {
+		c.onGet()
+	}
 	return c.fakePiAgents.Get(id)
 }
 
@@ -130,12 +135,33 @@ func TestWhiteboardProcessBoardLazyDeliveryGateZeroIO(t *testing.T) {
 		t.Fatalf("not-due board used %d file reads, want 0", got)
 	}
 
-	// 3. Due board: constructs deliveryGate outside board lock (safe even while
-	// sessionStore.mu is held) and enqueues the nudge via Notify.
-	store := newSessionStore()
-	store.mu.Lock()
-	defer store.mu.Unlock()
+	// 3. Due board: constructs deliveryGate outside the board lock and enqueues
+	// the nudge via Notify. While agents.Get runs, the board's slot lock and
+	// BoardDB.mu must both be free: a re-entrant use (which takes the slot lock
+	// and reads Revision under BoardDB.mu) must complete. It runs in its own
+	// goroutine so a held lock fails the test instead of deadlocking it.
+	var boardFreeInGet atomic.Bool
+	agents.onGet = func() {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_ = f.n.stores.use(f.target.root, f.target.key, nil, false, func(slot *whiteboardSlot) error {
+				if slot.board != nil {
+					slot.board.Revision()
+				}
+				return nil
+			})
+		}()
+		select {
+		case <-done:
+			boardFreeInGet.Store(true) // only a completion inside Get counts
+		case <-time.After(2 * time.Second):
+		}
+	}
 	_, presence = f.n.processBoard(f.target, nudgeNow.Add(2*time.Minute))
+	if !boardFreeInGet.Load() {
+		t.Fatal("board lock was held while agents.Get ran")
+	}
 	if presence != nudgePresent {
 		t.Fatalf("due board presence = %v, want nudgePresent", presence)
 	}

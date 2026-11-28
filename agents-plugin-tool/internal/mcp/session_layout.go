@@ -585,19 +585,32 @@ func activityMark(d sessionDirs, key string) (string, os.FileInfo, bool) {
 // does not migrate it. Callers are expected to have already validated key via
 // a prior readRecord success (loadRecord applies sessionKeyFilenamePattern),
 // so touch does not re-derive that guard.
+//
+// The caller that finds the window expired claims it by recording now under
+// touchMu before releasing it, so concurrent callers (lookup runs unlocked)
+// see a warm entry and skip instead of each running stat + Chtimes. touchMu
+// stays a leaf lock: it is never held across the stat or Chtimes. The claim
+// is then replaced with the activity mark's real time, or rolled back when
+// the stat or Chtimes failed so a later call retries as before.
 func (s *sessionStore) touch(d sessionDirs, key string) {
 	now := s.clock()
 	s.touchMu.Lock()
-	if last, ok := s.lastTouched[key]; ok {
-		if elapsed := now.Sub(last); elapsed >= 0 && elapsed < touchGuardWindow {
+	prev, hadPrev := s.lastTouched[key]
+	if hadPrev {
+		if elapsed := now.Sub(prev); elapsed >= 0 && elapsed < touchGuardWindow {
 			s.touchMu.Unlock()
 			return
 		}
 	}
+	if s.lastTouched == nil {
+		s.lastTouched = map[string]time.Time{}
+	}
+	s.lastTouched[key] = now
 	s.touchMu.Unlock()
 
 	path, info, ok := activityMark(d, key)
 	if !ok {
+		s.releaseTouchClaim(key, now, prev, hadPrev)
 		return
 	}
 	mtime := info.ModTime()
@@ -608,8 +621,26 @@ func (s *sessionStore) touch(d sessionDirs, key string) {
 		s.recordLastTouched(key, mtime)
 		return
 	}
-	if err := os.Chtimes(path, now, now); err == nil {
-		s.recordLastTouched(key, now)
+	if err := os.Chtimes(path, now, now); err != nil {
+		s.releaseTouchClaim(key, now, prev, hadPrev)
+		return
+	}
+	s.recordLastTouched(key, now)
+}
+
+// releaseTouchClaim undoes touch's optimistic claim after a failed stat or
+// Chtimes, restoring the entry it replaced. It leaves the entry alone when
+// another party (claimKey, a sweep, a concurrent touch) changed it since.
+func (s *sessionStore) releaseTouchClaim(key string, claim, prev time.Time, hadPrev bool) {
+	s.touchMu.Lock()
+	defer s.touchMu.Unlock()
+	if cur, ok := s.lastTouched[key]; !ok || !cur.Equal(claim) {
+		return
+	}
+	if hadPrev {
+		s.lastTouched[key] = prev
+	} else {
+		delete(s.lastTouched, key)
 	}
 }
 

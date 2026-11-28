@@ -384,3 +384,19 @@ Verification boundary:
   selection has only two unrelated stale board/browser fixture failures; the
   broad MCP selection exposes its pre-existing concurrent `ServeStdio` test
   race. Neither involves this ticket's changed runtime paths.
+
+#### Edition (4bb0d064) - 2026-11-29
+
+- Phase 1 implementation landed in `4bb0d064` plus the follow-up review-fix
+  commit that wires `Daemon.snapshots.Invalidate` into `/nudge`
+  (`handleNudge`), `NotifySessionChange`, `sessionChanged` and `agentChanged`
+  (a pure in-memory expiry of the snapshot cache's validation window, via
+  `Daemon.invalidateSnapshot`), replaces the no-op lock-order check in
+  `TestWhiteboardProcessBoardLazyDeliveryGateZeroIO` with a real assertion that
+  the board lock is free while `agents.Get` runs, and stops `sessionStore.touch`
+  from stampeding stat + `Chtimes` on one expired entry (the first caller
+  claims the window under `touchMu`; `touchMu` stays a leaf lock).
+- Live macOS 60 s post-swap daemon capture (`file_io_site:*` deltas against the
+  PID 31852 / PID 63759 baselines) is deferred, by lead approval, to the batched
+  post-merge single daemon swap on `develop`. It will be recorded in a post-swap
+  Edition once `#2` is live.

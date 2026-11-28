@@ -26,6 +26,7 @@ func (d *Daemon) NotifySessionChange(stateDir string, body NudgeBody) (int, bool
 	default:
 	}
 	d.invalidateInboxNames(body.ReplyID)
+	d.invalidateSnapshot(body.ReplyID)
 	if d.mailWake != nil {
 		d.mailWake.Nudge()
 	}
