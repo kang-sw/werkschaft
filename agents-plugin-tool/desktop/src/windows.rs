@@ -87,17 +87,9 @@ fn runtime_outdated(window: &WebviewWindow) {
         .show(|_| ());
 }
 
-// Tauri runs main-thread dispatch inline on the UI thread. Dispatch from a
-// worker so a WebView2 event has returned before shell code can rebuild it.
-pub(crate) fn queue(window: &WebviewWindow, action: impl FnOnce(WebviewWindow) + Send + 'static) {
-    let window = window.clone();
-    std::thread::spawn(move || {
-        let target = window.clone();
-        if window.run_on_main_thread(move || action(target)).is_err() {
-            eprintln!("Could not queue WebView2 shell action");
-        }
-    });
-}
+// Dispatch from a worker so a WebView2 event has returned before shell code
+// can rebuild it; see `chrome::queue`.
+pub(crate) use crate::chrome::queue;
 
 unsafe fn install_hooks(
     controller: &ICoreWebView2Controller,
