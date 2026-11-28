@@ -1505,10 +1505,17 @@ func (c *conv) notifyCompanionActivity() {
 		fn(c.rec.CompanionRole, c.rec.ReplyID, c.rec.WSKey)
 		return
 	}
-	if c.rec.Parent != nil {
-		if prec, ok := c.r.recordOf(c.rec.Parent.ReplyID); ok && prec.CompanionRole != "" {
-			fn(prec.CompanionRole, prec.ReplyID, prec.WSKey)
+	parent := c.rec.Parent
+	for depth := 0; parent != nil && depth < 8; depth++ {
+		prec, ok := c.r.recordOf(parent.ReplyID)
+		if !ok {
+			break
 		}
+		if prec.CompanionRole != "" {
+			fn(prec.CompanionRole, prec.ReplyID, prec.WSKey)
+			return
+		}
+		parent = prec.Parent
 	}
 }
 

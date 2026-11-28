@@ -98,7 +98,7 @@ func (r *Runner) IsConversationLive(id string) bool {
 }
 
 // HasLiveChildren reports whether conversation parentID currently has any live
-// spawned child conversation (running, starting, or holding queued work).
+// spawned descendant conversation (running, starting, or holding queued work).
 func (r *Runner) HasLiveChildren(parentID string) bool {
 	if parentID == "" {
 		return false
@@ -109,13 +109,40 @@ func (r *Runner) HasLiveChildren(parentID string) bool {
 		convs = append(convs, c)
 	}
 	r.mu.Unlock()
+	type convInfo struct {
+		id       string
+		parentID string
+		active   bool
+	}
+	byID := make(map[string]convInfo, len(convs))
 	for _, c := range convs {
 		c.mu.Lock()
-		isChild := !c.closed && c.rec.Parent != nil && c.rec.Parent.ReplyID == parentID
-		active := isChild && (c.turn || c.proc != nil || c.spawnPending || c.sends > max(c.settled.mark, c.voided))
+		pid := ""
+		if c.rec.Parent != nil {
+			pid = c.rec.Parent.ReplyID
+		}
+		info := convInfo{
+			id:       c.rec.ReplyID,
+			parentID: pid,
+			active:   !c.closed && (c.turn || c.proc != nil || c.spawnPending || c.sends > max(c.settled.mark, c.voided)),
+		}
 		c.mu.Unlock()
-		if active {
-			return true
+		byID[info.id] = info
+	}
+	for _, info := range byID {
+		if !info.active {
+			continue
+		}
+		cur := info.parentID
+		for depth := 0; cur != "" && depth < 8; depth++ {
+			if cur == parentID {
+				return true
+			}
+			p, ok := byID[cur]
+			if !ok {
+				break
+			}
+			cur = p.parentID
 		}
 	}
 	return false

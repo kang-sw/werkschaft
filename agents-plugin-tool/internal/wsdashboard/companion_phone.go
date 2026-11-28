@@ -282,7 +282,12 @@ func (s *CompanionPhoneStore) EmbodimentLeaseActive() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.initLocked()
-	return s.state == CompanionStatePhoneActive || s.state == CompanionStateLaptopWork || s.delegationInFlight || s.holderIsLiveLocked()
+	hadOwner := s.leaseOwner != ""
+	live := s.holderIsLiveLocked()
+	if hadOwner && !live {
+		s.publishLocked()
+	}
+	return s.state == CompanionStatePhoneActive || s.state == CompanionStateLaptopWork || s.delegationInFlight || live
 }
 
 // PostureFor reports the effective posture ("laptop" or "phone") for owner.
@@ -308,6 +313,18 @@ func (s *CompanionPhoneStore) UnreadAgentCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.unreadAgent)
+}
+
+// OldestUnreadID returns the ID of the oldest unread user phone message, or ""
+// when the unread queue is empty. Used by companionRuntime to detect a Tier-1
+// turn that exited without making progress on unread mail ((1749)).
+func (s *CompanionPhoneStore) OldestUnreadID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.unreadAgent) == 0 {
+		return ""
+	}
+	return s.unreadAgent[0].ID
 }
 
 func boundCompanionPhoneText(text string) string {
@@ -818,7 +835,13 @@ func (s *CompanionPhoneStore) SetSleepy(sleepy bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.initLocked()
-	if s.delegationInFlight || s.holderIsLiveLocked() || s.state == CompanionStatePhoneActive || s.state == CompanionStateLaptopWork {
+	hadOwner := s.leaseOwner != ""
+	live := s.holderIsLiveLocked()
+	cleared := hadOwner && !live
+	if s.delegationInFlight || live || s.state == CompanionStatePhoneActive || s.state == CompanionStateLaptopWork {
+		if cleared {
+			s.publishLocked()
+		}
 		return false
 	}
 	want := CompanionStateLaptopAmbient
@@ -826,6 +849,9 @@ func (s *CompanionPhoneStore) SetSleepy(sleepy bool) bool {
 		want = CompanionStateLaptopSleepy
 	}
 	if s.state == want {
+		if cleared {
+			s.publishLocked()
+		}
 		return false
 	}
 	s.state = want
@@ -1041,7 +1067,7 @@ func (d *Daemon) CompanionPhonePutdown(owner, style, next string) (CompanionPhon
 			Prop:       "smartphone",
 			TTLms:      4500,
 		})
-		if snap.UnreadAgent > 0 && snap.Posture == CompanionPostureLaptop && snap.LeaseOwner == "" {
+		if snap.UnreadAgent > 0 && !snap.Unavailable && snap.Posture == CompanionPostureLaptop && snap.LeaseOwner == "" {
 			d.notifyCompanionWake("release-unread")
 		}
 	}
@@ -1055,9 +1081,10 @@ func (d *Daemon) CompanionReleaseOnTurnEnd(owner string) bool {
 
 // CompanionForceRelease releases holder's Embodiment Lease (turn end, close, or
 // crash), emits phone_putdown visuals when needed, and triggers an unread re-wake
-// when messages are still waiting ((1739), (1743), (1749)).
+// when messages are still waiting and the messenger is not unavailable ((1739),
+// (1743), (1749)).
 func (d *Daemon) CompanionForceRelease(holder string) bool {
-	_, changed, wasPhone, hasUnread := d.companionPhone.forceRelease(holder)
+	snap, changed, wasPhone, hasUnread := d.companionPhone.forceRelease(holder)
 	if changed && wasPhone {
 		d.PublishCompanionCommand(CompanionCommand{
 			SessionID: companionPhoneBroadcastSession,
@@ -1065,7 +1092,7 @@ func (d *Daemon) CompanionForceRelease(holder string) bool {
 			TTLms:     3000,
 		})
 	}
-	if changed && hasUnread {
+	if changed && hasUnread && !snap.Unavailable {
 		d.notifyCompanionWake("release-unread")
 	}
 	return changed
@@ -1128,6 +1155,56 @@ func (d *Daemon) CompanionActivePersona() (*CompanionPersona, string) {
 		}
 	}
 	return pack.persona, lang
+}
+
+// CompanionActiveRoot resolves the workspace root for daemon-launched companion
+// sessions: the focused session's project root first, then any live indexed
+// session's project root, then a registered workspace root (preferring Git
+// repositories). Returns "" when no session or workspace is registered.
+func (d *Daemon) CompanionActiveRoot() string {
+	d.director.mu.Lock()
+	focusID := d.director.focusLocked().sessionID
+	d.director.mu.Unlock()
+	if focusID != "" && d.index != nil {
+		if s, ok := d.index.Session(focusID); ok && strings.TrimSpace(s.Project) != "" {
+			return s.Project
+		}
+	}
+	if d.index != nil {
+		var fallback string
+		for _, s := range d.index.Sessions() {
+			if s.Hidden || strings.TrimSpace(s.Project) == "" {
+				continue
+			}
+			if s.Live {
+				return s.Project
+			}
+			if fallback == "" {
+				fallback = s.Project
+			}
+		}
+		if fallback != "" {
+			return fallback
+		}
+	}
+	if d.workspaces != nil {
+		var fallback string
+		for _, w := range d.workspaces.workspaces() {
+			if strings.TrimSpace(w.Path) == "" {
+				continue
+			}
+			if w.Repo {
+				return w.Path
+			}
+			if fallback == "" {
+				fallback = w.Path
+			}
+		}
+		if fallback != "" {
+			return fallback
+		}
+	}
+	return ""
 }
 
 // --- HTTP routes -------------------------------------------------------------

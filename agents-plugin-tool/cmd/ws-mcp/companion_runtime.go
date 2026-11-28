@@ -56,13 +56,20 @@ type companionRuntime struct {
 	// Test seam: overrides deadline tick interval when > 0.
 	tickInterval time.Duration
 
+	// Serialization mutexes ordered strictly before phone.mu and r.mu:
+	//   bodyLaunchMu / workLaunchMu / inFlightMu -> phone.mu -> r.mu -> wsagent locks
+	bodyLaunchMu sync.Mutex
+	workLaunchMu sync.Mutex
+	inFlightMu   sync.Mutex
+
 	mu sync.Mutex
 
-	bodyReplyID    string
-	bodyWSKey      string
-	bodyTurnActive bool
-	bodyWaking     bool
-	closedBodyKeys map[string]struct{}
+	bodyReplyID      string
+	bodyWSKey        string
+	bodyPendingTurns int
+	bodyWakeUnreadID string
+	bodyWaking       bool
+	closedBodyKeys   map[string]struct{}
 
 	workReplyID string
 	workWSKey   string
@@ -83,9 +90,6 @@ type companionRuntime struct {
 }
 
 func newCompanionRuntime(dir, root string, agents *wsagent.Runner, daemon func() *wsdashboard.Daemon, logw io.Writer) *companionRuntime {
-	if root == "" {
-		root = dir
-	}
 	if logw == nil {
 		logw = io.Discard
 	}
@@ -99,6 +103,18 @@ func newCompanionRuntime(dir, root string, agents *wsagent.Runner, daemon func()
 		closed:         map[string]string{},
 		stopCh:         make(chan struct{}),
 	}
+}
+
+func (r *companionRuntime) launchRoot(d *wsdashboard.Daemon) string {
+	if r.root != "" {
+		return r.root
+	}
+	if d != nil {
+		if wsRoot := d.CompanionActiveRoot(); wsRoot != "" {
+			return wsRoot
+		}
+	}
+	return r.dir
 }
 
 func (r *companionRuntime) now() time.Time {
@@ -195,7 +211,7 @@ func (r *companionRuntime) OnUserWake(reason string) {
 	// A buzz never preempts a running Tier-1 turn: it lands in the unread inbox
 	// and the [phone buzz: N unread] piggyback, and release-time re-wake fires
 	// once the turn finishes ((1739)).
-	if r.bodyTurnActive || r.bodyWaking {
+	if r.bodyPendingTurns > 0 || r.bodyWaking {
 		r.mu.Unlock()
 		return
 	}
@@ -216,17 +232,26 @@ func (r *companionRuntime) OnUserWake(reason string) {
 		return
 	}
 	unread := phone.UnreadAgentCount()
+	oldestUnreadID := phone.OldestUnreadID()
 	if unread <= 0 {
 		d.CompanionForceRelease(bodyKey)
 		return
 	}
 	msg := formatBodyUserWakePrompt(unread, reason)
 	r.mu.Lock()
-	r.bodyTurnActive = true
+	if r.bodyReplyID == bodyID {
+		r.bodyPendingTurns++
+		r.bodyWakeUnreadID = oldestUnreadID
+	}
 	r.mu.Unlock()
 	if _, err := r.agents.Deliver(bodyID, wsagent.Delivery{Text: msg}); err != nil {
 		r.mu.Lock()
-		r.bodyTurnActive = false
+		if r.bodyReplyID == bodyID {
+			if r.bodyPendingTurns > 0 {
+				r.bodyPendingTurns--
+			}
+			r.bodyWakeUnreadID = ""
+		}
 		r.mu.Unlock()
 		r.handleBodyWakeError(d, bodyKey, "deliver companion-body wake: "+err.Error())
 		return
@@ -280,24 +305,47 @@ func (r *companionRuntime) handleCompanionTurnEnd(role, replyID, wsKey, status, 
 	}
 	switch role {
 	case mcp.CompanionRoleBody:
+		var wakeUnreadID string
+		var matchedCurrent bool
+		var stillPending bool
 		r.mu.Lock()
-		if replyID == r.bodyReplyID {
-			r.bodyTurnActive = false
+		if replyID != "" && replyID == r.bodyReplyID {
+			matchedCurrent = true
+			if r.bodyPendingTurns > 0 {
+				r.bodyPendingTurns--
+			}
+			stillPending = r.bodyPendingTurns > 0
+			wakeUnreadID = r.bodyWakeUnreadID
+			r.bodyWakeUnreadID = ""
 		}
 		r.mu.Unlock()
+		if !matchedCurrent {
+			return
+		}
+		phone := d.CompanionPhone()
+		var failed bool
 		if status == wsagent.TurnFailed {
 			fmt.Fprintf(r.logw, "companion runtime: tier-1 turn failed (%s): %s\n", replyID, errText)
-			d.CompanionPhone().RecordWakeFailure()
+			failed = true
+		} else if wakeUnreadID != "" && phone.OldestUnreadID() == wakeUnreadID {
+			// A successful turn that never drained the unread message that woke
+			// it made zero progress; count it toward the (1749) retry bound so
+			// release-unread cannot re-wake indefinitely.
+			fmt.Fprintf(r.logw, "companion runtime: tier-1 turn ended without reading unread message %s\n", wakeUnreadID)
+			failed = true
+		}
+		if failed {
+			phone.RecordWakeFailure()
 		}
 		// Turn-end failsafe: always release any unclosed Embodiment Lease
 		// (settling to laptop_work if a delegation is in flight, and triggering
 		// unread re-wake if messages remain and not unavailable). Even when
 		// Tier-1 already released its lease cleanly via phone_putdown before
-		// TurnEnd settled, a user message may have arrived while bodyTurnActive
-		// was still true (suppressed to avoid preempting the turn); trigger an
-		// unread re-wake here if unread messages remain.
+		// TurnEnd settled, a user message may have arrived while the turn was
+		// running (suppressed to avoid preempting the turn); trigger an unread
+		// re-wake here if unread messages remain and no queued turn is pending.
 		released := d.CompanionForceRelease(wsKey)
-		if !released && d.CompanionPhone().UnreadAgentCount() > 0 && !d.CompanionPhone().Snapshot().Unavailable {
+		if !released && !stillPending && phone.UnreadAgentCount() > 0 && !phone.Snapshot().Unavailable {
 			go r.OnUserWake("release-unread")
 		}
 	case mcp.CompanionRoleWork:
@@ -318,18 +366,28 @@ func (r *companionRuntime) handleCompanionClose(role, replyID, wsKey, reason str
 	d := r.liveDaemon()
 	switch role {
 	case mcp.CompanionRoleBody:
+		var matchedCurrent bool
+		var firstCrash bool
 		r.mu.Lock()
-		if wsKey != "" {
+		if reason == "close" && wsKey != "" {
 			r.closedBodyKeys[wsKey] = struct{}{}
 		}
-		if replyID == r.bodyReplyID {
+		if replyID != "" && replyID == r.bodyReplyID {
+			matchedCurrent = true
 			r.bodyReplyID = ""
 			r.bodyWSKey = ""
-			r.bodyTurnActive = false
+			r.bodyPendingTurns = 0
+			r.bodyWakeUnreadID = ""
+			if reason == "crash" {
+				firstCrash = true
+				if wsKey != "" {
+					r.closedBodyKeys[wsKey] = struct{}{}
+				}
+			}
 		}
 		r.mu.Unlock()
-		if d != nil {
-			if reason == "crash" {
+		if d != nil && matchedCurrent {
+			if firstCrash {
 				d.CompanionPhone().RecordWakeFailure()
 			}
 			released := d.CompanionForceRelease(wsKey)
@@ -340,18 +398,37 @@ func (r *companionRuntime) handleCompanionClose(role, replyID, wsKey, reason str
 	case mcp.CompanionRoleWork:
 		var failedID string
 		r.mu.Lock()
-		if replyID == r.workReplyID {
+		// Fail the active delegation only when the closing session is the
+		// current Tier-2 session; duplicate/stale close events for an earlier
+		// session must never fail a newer healthy delegation.
+		if replyID != "" && replyID == r.workReplyID {
 			r.workReplyID = ""
 			r.workWSKey = ""
-		}
-		if r.active != nil {
-			failedID = r.active.ID
+			if r.active != nil {
+				failedID = r.active.ID
+			}
 		}
 		r.mu.Unlock()
 		if failedID != "" {
 			r.failActiveDelegation(failedID, fmt.Sprintf("work brain %s before reporting", reason))
 		}
 	}
+}
+
+// syncDelegationInFlight reconciles CompanionPhoneStore's delegationInFlight
+// flag with the runtime's current active/queue state under inFlightMu so
+// concurrent report/fail/delegate calls can never land a stale value out of
+// order (and without holding r.mu across phone.mu).
+func (r *companionRuntime) syncDelegationInFlight(d *wsdashboard.Daemon) {
+	if d == nil {
+		return
+	}
+	r.inFlightMu.Lock()
+	defer r.inFlightMu.Unlock()
+	r.mu.Lock()
+	inFlight := r.active != nil || len(r.queue) > 0
+	r.mu.Unlock()
+	d.CompanionPhone().SetDelegationInFlight(inFlight)
 }
 
 // CompanionDelegateWork implements mcp.CompanionDelegationHost for Tier-1's
@@ -379,9 +456,7 @@ func (r *companionRuntime) CompanionDelegateWork(callerKey, brief string) (mcp.C
 	}
 	r.mu.Unlock()
 
-	if d := r.liveDaemon(); d != nil {
-		d.CompanionPhone().SetDelegationInFlight(true)
-	}
+	r.syncDelegationInFlight(r.liveDaemon())
 	if toDispatch != nil {
 		go r.dispatchToWorkBrain(toDispatch)
 	}
@@ -403,7 +478,6 @@ func (r *companionRuntime) CompanionDelegationReport(callerKey, delegationID, st
 	}
 
 	var next *companionDelegation
-	var stillInFlight bool
 	var workWSKey string
 	r.mu.Lock()
 	if r.active == nil || r.active.ID != delegationID {
@@ -422,13 +496,10 @@ func (r *companionRuntime) CompanionDelegationReport(callerKey, delegationID, st
 		next.Status = "active"
 		r.active = next
 	}
-	stillInFlight = r.active != nil || len(r.queue) > 0
 	workWSKey = r.workWSKey
 	r.mu.Unlock()
 
-	if d := r.liveDaemon(); d != nil {
-		d.CompanionPhone().SetDelegationInFlight(stillInFlight)
-	}
+	r.syncDelegationInFlight(r.liveDaemon())
 
 	// Copy artifacts slice so caller mutations cannot race async delivery.
 	artCopy := append([]string(nil), artifacts...)
@@ -470,7 +541,7 @@ func (r *companionRuntime) dispatchToWorkBrain(del *companionDelegation) {
 		r.failActiveDelegation(del.ID, "agent runner unavailable")
 		return
 	}
-	workID, err := r.ensureWorkSession()
+	workID, err := r.ensureWorkSession(r.liveDaemon())
 	if err != nil {
 		r.failActiveDelegation(del.ID, "launch companion-work: "+err.Error())
 		return
@@ -484,7 +555,6 @@ func (r *companionRuntime) dispatchToWorkBrain(del *companionDelegation) {
 
 func (r *companionRuntime) failActiveDelegation(delegationID, reason string) {
 	var next *companionDelegation
-	var stillInFlight bool
 	r.mu.Lock()
 	if r.active == nil || r.active.ID != delegationID {
 		r.mu.Unlock()
@@ -498,12 +568,9 @@ func (r *companionRuntime) failActiveDelegation(delegationID, reason string) {
 		next.Status = "active"
 		r.active = next
 	}
-	stillInFlight = r.active != nil || len(r.queue) > 0
 	r.mu.Unlock()
 
-	if d := r.liveDaemon(); d != nil {
-		d.CompanionPhone().SetDelegationInFlight(stillInFlight)
-	}
+	r.syncDelegationInFlight(r.liveDaemon())
 	go r.deliverReportToBody(delegationID, "failed", reason, nil)
 	if next != nil {
 		go r.dispatchToWorkBrain(next)
@@ -524,7 +591,17 @@ func (r *companionRuntime) deliverReportToBody(delegationID, status, result stri
 	// mid-turn or holding the phone — Runner.Deliver queues behind an active turn).
 	d.CompanionPhone().AcquireOnWake(bodyKey)
 	envelope := formatDelegationReportEnvelope(delegationID, status, result, artifacts)
+	r.mu.Lock()
+	if r.bodyReplyID == bodyID {
+		r.bodyPendingTurns++
+	}
+	r.mu.Unlock()
 	if _, err := r.agents.Deliver(bodyID, wsagent.Delivery{Text: envelope}); err != nil {
+		r.mu.Lock()
+		if r.bodyReplyID == bodyID && r.bodyPendingTurns > 0 {
+			r.bodyPendingTurns--
+		}
+		r.mu.Unlock()
 		fmt.Fprintf(r.logw, "companion runtime: deliver delegation %s report to tier-1: %v\n", delegationID, err)
 	}
 }
@@ -564,6 +641,9 @@ func (r *companionRuntime) checkDeadlines(now time.Time) {
 }
 
 func (r *companionRuntime) ensureBodySession(d *wsdashboard.Daemon) (replyID, wsKey string, err error) {
+	r.bodyLaunchMu.Lock()
+	defer r.bodyLaunchMu.Unlock()
+
 	r.mu.Lock()
 	existingID, existingKey := r.bodyReplyID, r.bodyWSKey
 	r.mu.Unlock()
@@ -580,7 +660,7 @@ func (r *companionRuntime) ensureBodySession(d *wsdashboard.Daemon) (replyID, ws
 	if d != nil {
 		persona, lang = d.CompanionActivePersona()
 	}
-	st, err := r.agents.CreateLead(spec.Backend, r.root, wsagent.LeadOptions{
+	st, err := r.agents.CreateLead(spec.Backend, r.launchRoot(d), wsagent.LeadOptions{
 		CompanionRole:         mcp.CompanionRoleBody,
 		CompanionSystemPrompt: buildCompanionBodyPrompt(persona, lang),
 		Model:                 spec.Model,
@@ -602,7 +682,10 @@ func (r *companionRuntime) ensureBodySession(d *wsdashboard.Daemon) (replyID, ws
 	return st.ID, rec.WSKey, nil
 }
 
-func (r *companionRuntime) ensureWorkSession() (string, error) {
+func (r *companionRuntime) ensureWorkSession(d *wsdashboard.Daemon) (string, error) {
+	r.workLaunchMu.Lock()
+	defer r.workLaunchMu.Unlock()
+
 	r.mu.Lock()
 	existingID := r.workReplyID
 	r.mu.Unlock()
@@ -614,7 +697,7 @@ func (r *companionRuntime) ensureWorkSession() (string, error) {
 	if !ok {
 		return "", fmt.Errorf("no available harness backend for companion-work")
 	}
-	st, err := r.agents.CreateLead(spec.Backend, r.root, wsagent.LeadOptions{
+	st, err := r.agents.CreateLead(spec.Backend, r.launchRoot(d), wsagent.LeadOptions{
 		CompanionRole:         mcp.CompanionRoleWork,
 		CompanionSystemPrompt: companionWorkSystemPrompt,
 		Model:                 spec.Model,

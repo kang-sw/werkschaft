@@ -52,6 +52,7 @@ func (b *companionTestBackend) Start(_ context.Context, spec wsagent.StartSpec) 
 		wsKey:        wsKey,
 		instructions: instrText,
 		events:       make(chan wsagent.Event, 64),
+		stopCh:       make(chan struct{}),
 	}
 	b.mu.Lock()
 	b.procs = append(b.procs, p)
@@ -78,6 +79,8 @@ type companionTestProc struct {
 	wsKey        string
 	instructions string
 	events       chan wsagent.Event
+	stopCh       chan struct{}
+	eventsMu     sync.RWMutex
 
 	mu        sync.Mutex
 	sends     []string
@@ -110,36 +113,47 @@ func (p *companionTestProc) SetModel(string) error  { return nil }
 func (p *companionTestProc) SetEffort(string) error { return nil }
 func (p *companionTestProc) Close() error {
 	p.closeOnce.Do(func() {
+		close(p.stopCh)
 		p.mu.Lock()
 		p.closed = true
 		p.mu.Unlock()
+		p.eventsMu.Lock()
 		close(p.events)
+		p.eventsMu.Unlock()
 	})
 	return nil
 }
 
+func (p *companionTestProc) emitEvent(ev wsagent.Event) bool {
+	p.eventsMu.RLock()
+	defer p.eventsMu.RUnlock()
+	select {
+	case <-p.stopCh:
+		return false
+	default:
+	}
+	select {
+	case p.events <- ev:
+		return true
+	case <-p.stopCh:
+		return false
+	}
+}
+
 func (p *companionTestProc) emitTurn(reply, errText string) {
-	p.mu.Lock()
-	closed := p.closed
-	p.mu.Unlock()
-	if closed {
+	if !p.emitEvent(wsagent.Event{TurnStart: true}) {
 		return
 	}
-	p.events <- wsagent.Event{TurnStart: true}
 	if reply != "" {
-		p.events <- wsagent.Event{Live: &wslive.Event{Kind: wslive.KindReply, Text: reply, Final: true}}
+		if !p.emitEvent(wsagent.Event{Live: &wslive.Event{Kind: wslive.KindReply, Text: reply, Final: true}}) {
+			return
+		}
 	}
-	p.events <- wsagent.Event{TurnEnd: true, TurnError: errText}
+	p.emitEvent(wsagent.Event{TurnEnd: true, TurnError: errText})
 }
 
 func (p *companionTestProc) emitFatal(err error) {
-	p.mu.Lock()
-	closed := p.closed
-	p.mu.Unlock()
-	if closed {
-		return
-	}
-	p.events <- wsagent.Event{Fatal: err}
+	p.emitEvent(wsagent.Event{Fatal: err})
 }
 
 func (p *companionTestProc) receivedSends() []string {
@@ -974,4 +988,305 @@ func TestCompanionRuntimeIdlePerformsZeroHostedTurns(t *testing.T) {
 	if len(f.backend.procsFor(mcp.CompanionRoleBody)) != 0 || len(f.backend.procsFor(mcp.CompanionRoleWork)) != 0 {
 		t.Fatal("(g) idle daemon started hosted companion processes")
 	}
+}
+
+func TestCompanionRuntimeReviewRegressions(t *testing.T) {
+	t.Run("no_progress_successful_turn_hits_retry_bound_and_stops", func(t *testing.T) {
+		f := newCompanionFixture(t, "agent")
+		var attempts atomic.Int32
+		var ignorePhone atomic.Bool
+		ignorePhone.Store(true)
+		recovered := make(chan struct{}, 1)
+
+		f.backend.handler = func(p *companionTestProc, text string) {
+			attempts.Add(1)
+			if ignorePhone.Load() {
+				// Model finishes cleanly (TurnDone) WITHOUT calling phone_pickup:
+				// must count toward the (1749) retry bound and stop at CompanionWakeMaxRetries.
+				p.emitTurn("plain text reply without phone_pickup", "")
+				return
+			}
+			_, _, _ = f.callTool(p.wsKey, "companion.phone_pickup", map[string]any{"session_key": p.wsKey})
+			_, _, _ = f.callTool(p.wsKey, "companion.phone_send", map[string]any{"session_key": p.wsKey, "text": "Read it now!", "tone": "happy"})
+			_, _, _ = f.callTool(p.wsKey, "companion.phone_putdown", map[string]any{"session_key": p.wsKey, "style": "normal", "next": "ambient"})
+			p.emitTurn("done", "")
+			recovered <- struct{}{}
+		}
+
+		f.postUserMessage("will you pick up?")
+		waitCompanionUntil(t, 10*time.Second, "unavailable after bounded no-progress turns", func() bool {
+			return f.daemon.CompanionPhone().Snapshot().Unavailable
+		})
+		time.Sleep(150 * time.Millisecond)
+		if got := attempts.Load(); got != int32(wsdashboard.CompanionWakeMaxRetries) {
+			t.Fatalf("no-progress turn attempts=%d, want exactly %d", got, wsdashboard.CompanionWakeMaxRetries)
+		}
+		if got := f.daemon.CompanionPhone().UnreadAgentCount(); got != 1 {
+			t.Fatalf("unread count=%d, want 1", got)
+		}
+
+		// Next user message resets unavailable and succeeds once Tier-1 picks up.
+		ignorePhone.Store(false)
+		f.postUserMessage("second ping")
+		select {
+		case <-recovered:
+		case <-time.After(10 * time.Second):
+			t.Fatal("next user message did not reset unavailable and recover Tier-1")
+		}
+		if f.daemon.CompanionPhone().Snapshot().Unavailable {
+			t.Fatal("Unavailable still true after recovery")
+		}
+	})
+
+	t.Run("stale_close_event_does_not_fail_newer_delegation", func(t *testing.T) {
+		f := newCompanionFixture(t, "agent")
+		workArrived := make(chan string, 8)
+		bodyArrived := make(chan string, 8)
+		f.backend.handler = func(p *companionTestProc, text string) {
+			if p.role == mcp.CompanionRoleWork {
+				workArrived <- text
+				p.emitTurn("working", "")
+				return
+			}
+			bodyArrived <- text
+			p.emitTurn("noted", "")
+		}
+
+		_, bodyKey, err := f.rt.ensureBodySession(f.daemon)
+		if err != nil {
+			t.Fatalf("ensureBodySession: %v", err)
+		}
+
+		ack1, err := f.rt.CompanionDelegateWork(bodyKey, "FIRST_TASK")
+		if err != nil {
+			t.Fatalf("delegate 1: %v", err)
+		}
+		select {
+		case <-workArrived:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for FIRST_TASK")
+		}
+		f.rt.mu.Lock()
+		oldWorkID := f.rt.workReplyID
+		oldWorkKey := f.rt.workWSKey
+		f.rt.mu.Unlock()
+		if oldWorkID == "" {
+			t.Fatal("expected workReplyID for FIRST_TASK")
+		}
+
+		// Crash old Tier-2 -> fails del-1.
+		f.rt.handleCompanionClose(mcp.CompanionRoleWork, oldWorkID, oldWorkKey, "crash")
+		select {
+		case rep := <-bodyArrived:
+			if !strings.Contains(rep, ack1.DelegationID) || !strings.Contains(rep, "status: failed") {
+				t.Fatalf("expected failed report for %s, got %q", ack1.DelegationID, rep)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for del-1 failure report")
+		}
+
+		// Start del-2 on a fresh Tier-2 session.
+		ack2, err := f.rt.CompanionDelegateWork(bodyKey, "SECOND_TASK")
+		if err != nil {
+			t.Fatalf("delegate 2: %v", err)
+		}
+		select {
+		case b2 := <-workArrived:
+			if !strings.Contains(b2, "SECOND_TASK") {
+				t.Fatalf("expected SECOND_TASK, got %q", b2)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for SECOND_TASK")
+		}
+		f.rt.mu.Lock()
+		newWorkID := f.rt.workReplyID
+		newWorkKey := f.rt.workWSKey
+		f.rt.mu.Unlock()
+		if newWorkID == "" || newWorkID == oldWorkID {
+			t.Fatalf("expected fresh workReplyID, old=%q new=%q", oldWorkID, newWorkID)
+		}
+
+		// Deliver a stale/duplicate "close" event for the OLD Tier-2 session.
+		f.rt.handleCompanionClose(mcp.CompanionRoleWork, oldWorkID, oldWorkKey, "close")
+
+		// del-2 must remain active and accept its real report cleanly!
+		if got := f.rt.activeDelegationID(); got != ack2.DelegationID {
+			t.Fatalf("stale close killed newer delegation: active=%q want %q", got, ack2.DelegationID)
+		}
+		if _, err := f.rt.CompanionDelegationReport(newWorkKey, ack2.DelegationID, "done", "SECOND_OK", nil); err != nil {
+			t.Fatalf("report for del-2 failed after stale close: %v", err)
+		}
+		select {
+		case rep := <-bodyArrived:
+			if !strings.Contains(rep, ack2.DelegationID) || !strings.Contains(rep, "SECOND_OK") {
+				t.Fatalf("expected SECOND_OK report, got %q", rep)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for del-2 done report")
+		}
+	})
+
+	t.Run("concurrent_user_wake_and_delegation_report_single_body_launch", func(t *testing.T) {
+		f := newCompanionFixture(t, "agent")
+		delivered := make(chan string, 8)
+		f.backend.handler = func(p *companionTestProc, text string) {
+			delivered <- text
+			p.emitTurn("ok", "")
+		}
+
+		// Enqueue a user message directly so OnUserWake has unread mail to process,
+		// then race OnUserWake against deliverReportToBody from a cold start.
+		if _, _, err := f.daemon.CompanionPhone().EnqueueUserMessage("race ping"); err != nil {
+			t.Fatalf("EnqueueUserMessage: %v", err)
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			f.rt.OnUserWake("user-message")
+		}()
+		go func() {
+			defer wg.Done()
+			f.rt.deliverReportToBody("del-race", "done", "report payload", nil)
+		}()
+		wg.Wait()
+
+		// Wait for at least one delivery to finish and verify exactly 1 body launch.
+		select {
+		case <-delivered:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for concurrent body delivery")
+		}
+		bodyCount, _ := f.rt.launchCounts()
+		if bodyCount != 1 {
+			t.Fatalf("concurrent OnUserWake + deliverReportToBody launched %d companion-body sessions, want 1", bodyCount)
+		}
+	})
+
+	t.Run("delegation_in_flight_sync_never_drops_active_flag", func(t *testing.T) {
+		f := newCompanionFixture(t, "agent")
+		f.backend.handler = func(p *companionTestProc, text string) {
+			p.emitTurn("ack", "")
+		}
+		_, bodyKey, err := f.rt.ensureBodySession(f.daemon)
+		if err != nil {
+			t.Fatalf("ensureBodySession: %v", err)
+		}
+
+		// Rapidly alternate delegate + report concurrently and finish with an active delegation.
+		ack1, err := f.rt.CompanionDelegateWork(bodyKey, "TASK_1")
+		if err != nil {
+			t.Fatalf("delegate 1: %v", err)
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = f.rt.CompanionDelegationReport("work-key", ack1.DelegationID, "done", "done 1", nil)
+		}()
+		var ack2 mcp.CompanionDelegationAccepted
+		var err2 error
+		go func() {
+			defer wg.Done()
+			ack2, err2 = f.rt.CompanionDelegateWork(bodyKey, "TASK_2")
+		}()
+		wg.Wait()
+		if err2 != nil {
+			t.Fatalf("delegate 2: %v", err2)
+		}
+		if f.rt.activeDelegationID() != ack2.DelegationID {
+			t.Fatalf("active=%q want %q", f.rt.activeDelegationID(), ack2.DelegationID)
+		}
+		snap := f.daemon.CompanionPhone().Snapshot()
+		if !snap.DelegationInFlight {
+			t.Fatalf("DelegationInFlight=false while %s is active (state=%s)", ack2.DelegationID, snap.State)
+		}
+		if snap.State != wsdashboard.CompanionStateLaptopWork {
+			t.Fatalf("State=%q, want %q while %s is active", snap.State, wsdashboard.CompanionStateLaptopWork, ack2.DelegationID)
+		}
+	})
+
+	t.Run("launch_root_resolves_daemon_workspace_when_override_empty", func(t *testing.T) {
+		cacheHome := t.TempDir()
+		configHome := t.TempDir()
+		t.Setenv("WS_CACHE_HOME", cacheHome)
+		t.Setenv("WS_CONFIG_HOME", configHome)
+		cfgPath := filepath.Join(configHome, "config.json")
+		if err := os.WriteFile(cfgPath, []byte(`{"overrides":{"dashboard.companion_enabled":"true","dashboard.companion_director":"agent"}}`), 0o600); err != nil {
+			t.Fatalf("write config.json: %v", err)
+		}
+
+		// Create a fake Git workspace directory and register it in workspaces.json.
+		wsDir := filepath.Join(t.TempDir(), "customer-repo")
+		if err := os.MkdirAll(filepath.Join(wsDir, ".git"), 0o755); err != nil {
+			t.Fatalf("mkdir .git: %v", err)
+		}
+		wsFile := wsdashboard.WorkspacesFilePath(cfgPath)
+		if err := os.MkdirAll(filepath.Dir(wsFile), 0o700); err != nil {
+			t.Fatalf("mkdir workspaces dir: %v", err)
+		}
+		wsJSON, err := json.Marshal(map[string]any{
+			"version":    1,
+			"workspaces": []map[string]string{{"path": wsDir}},
+		})
+		if err != nil {
+			t.Fatalf("marshal workspaces.json: %v", err)
+		}
+		if err := os.WriteFile(wsFile, wsJSON, 0o600); err != nil {
+			t.Fatalf("write workspaces.json: %v", err)
+		}
+
+		dir := t.TempDir()
+		backend := &companionTestBackend{}
+		keys := mcp.NewAgentKeyStore()
+		claudeReg := wsagent.BuiltinBackendRegistrations()[wsagent.BackendClaude]
+		claudeReg.Backend = wsagent.WrapDurableBackend(backend)
+		claudeReg.ProcessKind = wsagent.ProcessDurable
+		agents := wsagent.NewRunner(wsagent.Options{
+			Dir:      dir,
+			Backends: map[string]wsagent.BackendRegistration{wsagent.BackendClaude: claudeReg},
+			Keys:     keys,
+			LeadKeys: keys,
+			Log:      &testLogWriter{t: t},
+			WSMCP:    func(string) (wsagent.MCPCommand, error) { return wsagent.MCPCommand{Command: "/unused/ws-mcp"}, nil },
+			DaemonMCP: func(string) (wsagent.MCPCommand, error) {
+				return wsagent.MCPCommand{}, nil
+			},
+		})
+		t.Cleanup(func() { agents.Close() })
+
+		var dPtr atomic.Pointer[wsdashboard.Daemon]
+		// Pass empty root (mirroring cmd/ws-mcp/dashboard.go) so launchRoot resolves
+		// from the daemon's active workspace instead of the daemon state dir.
+		rt := newCompanionRuntime(dir, "", agents, dPtr.Load, &testLogWriter{t: t})
+		rt.resolveLaunch = func(role string) (companionLaunchSpec, bool) {
+			return companionLaunchSpec{Backend: wsagent.BackendClaude}, true
+		}
+		t.Cleanup(rt.Close)
+
+		d, err := wsdashboard.StartDaemon(wsdashboard.DaemonOptions{
+			Dir:            dir,
+			Port:           0,
+			Log:            &testLogWriter{t: t},
+			Agents:         agents,
+			WorkspacesFile: wsFile,
+		})
+		if err != nil {
+			t.Fatalf("StartDaemon: %v", err)
+		}
+		dPtr.Store(d)
+		t.Cleanup(func() { d.Close() })
+
+		workID, err := rt.ensureWorkSession(d)
+		if err != nil {
+			t.Fatalf("ensureWorkSession: %v", err)
+		}
+		rec, ok := agents.CompanionRecord(workID)
+		if !ok {
+			t.Fatalf("missing companion-work record %s", workID)
+		}
+		if rec.Root != wsDir {
+			t.Fatalf("companion-work Root=%q, want registered workspace %q (not state dir %q)", rec.Root, wsDir, dir)
+		}
+	})
 }
