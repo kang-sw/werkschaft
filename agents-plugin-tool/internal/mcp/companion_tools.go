@@ -105,9 +105,11 @@ func isCompanionPhoneTool(name string) bool {
 	}
 }
 
-func isCompanionPacingOrMemoryTool(name string) bool {
+// isCompanionMemoryTool reports the Soul/Episodes memory tools exclusively
+// owned by Brain (companion-work).
+func isCompanionMemoryTool(name string) bool {
 	switch name {
-	case companionActTool, companionRememberSoulTool, companionRememberEpisodeTool, companionRecallMemoryTool:
+	case companionRememberSoulTool, companionRememberEpisodeTool, companionRecallMemoryTool:
 		return true
 	default:
 		return false
@@ -117,14 +119,14 @@ func isCompanionPacingOrMemoryTool(name string) bool {
 // isCompanionBurstCountedTool reports the Tier-1 tools subject to the
 // companionBurstMaxCalls = 12 per-turn cap (D11).
 func isCompanionBurstCountedTool(name string) bool {
-	return isCompanionPacingOrMemoryTool(name) || name == companionDelegateWorkTool
+	return name == companionActTool || name == companionDelegateWorkTool
 }
 
 // isCompanionBodyOnlyTool reports tools exclusively available to Tier-1
 // (companion-body) sessions and never visible/reachable by unmarked leads or
 // Tier-2 (companion-work).
 func isCompanionBodyOnlyTool(name string) bool {
-	return isCompanionPhoneTool(name) || name == companionDelegateWorkTool || isCompanionPacingOrMemoryTool(name)
+	return isCompanionPhoneTool(name) || name == companionDelegateWorkTool || name == companionActTool
 }
 
 func isDelegationReportTool(name string) bool {
@@ -502,7 +504,11 @@ func (s *Server) applyCompanionPhonePiggyback(resp response, toolName string, ca
 }
 
 func (s *Server) handleCompanionTool(ctx context.Context, id json.RawMessage, name string, args map[string]any, callerKey string, caller sessionEntry, callerFound bool) response {
-	if isCompanionBodyOnlyTool(name) && (!callerFound || caller.companionRole != CompanionRoleBody) {
+	if isCompanionMemoryTool(name) {
+		if !callerFound || caller.companionRole != CompanionRoleWork {
+			return errorResponse(id, -32601, fmt.Sprintf("tool not available in current %s MCP profile: %s", s.runtimeNamespace(), name))
+		}
+	} else if isCompanionBodyOnlyTool(name) && (!callerFound || caller.companionRole != CompanionRoleBody) {
 		return errorResponse(id, -32601, fmt.Sprintf("tool not available in current %s MCP profile: %s", s.runtimeNamespace(), name))
 	}
 	if name == companionDelegateWorkTool {

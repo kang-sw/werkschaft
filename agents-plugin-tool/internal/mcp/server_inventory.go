@@ -50,7 +50,8 @@ func companionBodyBaseAllows(name string) bool {
 	// The guide subset of ws/daemon.* (tabs, dom, highlight, monitor) is
 	// reachable here; daemonControlCallRefusal still requires an open
 	// top-level body record, and phone posture still locks it.
-	if isCompanionTool(name) || strings.HasPrefix(name, "mailbox.") || isDaemonGuideTool(name) {
+	// Soul/Episodes memory tools belong exclusively to companion-work (Brain).
+	if (isCompanionTool(name) && !isCompanionMemoryTool(name)) || strings.HasPrefix(name, "mailbox.") || isDaemonGuideTool(name) {
 		return true
 	}
 	switch name {
@@ -76,7 +77,7 @@ func companionBodyBaseAllows(name string) bool {
 // tool, including companion.delegate_work, is a work tool and is blocked with
 // posture_locked.
 func companionBodyPhonePostureAllows(name string) bool {
-	if isCompanionPhoneTool(name) || isCompanionPacingOrMemoryTool(name) || strings.HasPrefix(name, "mailbox.") {
+	if isCompanionPhoneTool(name) || name == companionActTool || strings.HasPrefix(name, "mailbox.") {
 		return true
 	}
 	switch name {
@@ -95,7 +96,7 @@ func companionBodyPhonePostureAllows(name string) bool {
 func (s *Server) companionMarkerAllowsTool(entry sessionEntry, name string) string {
 	switch entry.companionRole {
 	case "":
-		if isCompanionBodyOnlyTool(name) || isDelegationReportTool(name) {
+		if isCompanionBodyOnlyTool(name) || isCompanionMemoryTool(name) || isDelegationReportTool(name) {
 			return fmt.Sprintf("tool not available in current %s MCP profile: %s", s.runtimeNamespace(), name)
 		}
 		return ""
@@ -105,7 +106,7 @@ func (s *Server) companionMarkerAllowsTool(entry sessionEntry, name string) stri
 		}
 		return ""
 	case CompanionRoleWork:
-		if isCompanionTool(name) || sessionHireTool(name) || userCommandTool(name) {
+		if (isCompanionTool(name) && !isCompanionMemoryTool(name)) || sessionHireTool(name) || userCommandTool(name) {
 			return fmt.Sprintf("tool not available in companion-work %s MCP profile: %s", s.runtimeNamespace(), name)
 		}
 		return ""
@@ -115,12 +116,12 @@ func (s *Server) companionMarkerAllowsTool(entry sessionEntry, name string) stri
 }
 
 // companionWorkAllowsWithoutApproval is the fail-closed low-impact allowlist
-// for companion-work ((1750)). Any tool not explicitly allowed here (such as
-// global config writes via config.tune, cross-session control, whiteboard/
-// tracker mutations, tickets.index_init, or future unlisted mutating tools)
-// requires 1-click user approval.
+// for companion-work ((1750), (1796)=a). Any tool not explicitly allowed here
+// (such as global config writes via config.tune, cross-session control,
+// whiteboard/tracker mutations, tickets.index_init, or future unlisted
+// mutating tools) requires 1-click user approval.
 func companionWorkAllowsWithoutApproval(name string, args map[string]any) bool {
-	if isDelegationReportTool(name) || isAgentTool(name) || strings.HasPrefix(name, "mailbox.") {
+	if isDelegationReportTool(name) || isCompanionMemoryTool(name) || isAgentTool(name) || strings.HasPrefix(name, "mailbox.") {
 		return true
 	}
 	if strings.HasPrefix(name, "exec.") || isFSReadTool(name) || isFSWriteTool(name) || isWebFetchTool(name) {

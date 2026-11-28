@@ -354,6 +354,7 @@ func dashboardCommand(args []string) {
 	daemon.SetCompanionWake(companion.OnUserWake)
 	daemon.SetCompanionMessengerClosed(companion.OnMessengerClosed)
 	daemon.SetCompanionAgents(companion.AgentsReadback)
+	daemon.SetCompanionBrain(companion.BrainEndpoint)
 	companion.Start()
 	execJobsChanged := func() {
 		if d := host.live.Load(); d != nil {

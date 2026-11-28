@@ -704,19 +704,25 @@ func TestCompanionPhase3ToolsPostureAccessAndNoteIsolation(t *testing.T) {
 	workKey := mintCompanionTestKey(t, s, root, CompanionRoleWork)
 	workEntry, _ := s.lookupSession(workKey)
 
-	phase3Tools := []string{
-		companionActTool,
+	memoryTools := []string{
 		companionRememberSoulTool,
 		companionRememberEpisodeTool,
 		companionRecallMemoryTool,
 	}
 
-	// 1. companion-body exposes all 4 Phase 3 tools at BOTH laptop and phone postures (D8),
-	// and has ZERO access to ws/note.* (D3, D11).
+	// 1. companion-body exposes companion.act at BOTH laptop and phone postures,
+	// has ZERO access to ws/note.*, and NEVER accesses Soul/Episodes memory tools
+	// (exclusive ownership moved to Brain companion-work per D4).
 	laptopDisc := discoveryToolNames(s.callDiscoveryTools(bodyKey, bodyEntry, true))
-	for _, tool := range phase3Tools {
-		if !laptopDisc[tool] {
-			t.Fatalf("companion-body laptop discovery missing %q", tool)
+	if !laptopDisc[companionActTool] {
+		t.Fatalf("companion-body laptop discovery missing %q", companionActTool)
+	}
+	for _, tool := range memoryTools {
+		if laptopDisc[tool] {
+			t.Fatalf("companion-body laptop discovery leaked Brain-only %q", tool)
+		}
+		if resp := invokeCompanionTestToolRaw(t, s, tool, map[string]any{"session_key": bodyKey}); resp.Error == nil {
+			t.Fatalf("companion-body reached Brain-only %q: %+v", tool, resp)
 		}
 	}
 	for _, noteTool := range []string{"note.query", "note.read", "note.write", "note.delete"} {
@@ -728,58 +734,73 @@ func TestCompanionPhase3ToolsPostureAccessAndNoteIsolation(t *testing.T) {
 		}
 	}
 
-	// Call all 4 tools in laptop posture.
+	// Call companion.act in laptop posture.
 	if txt, isErr := invokeCompanionTestTool(t, s, companionActTool, map[string]any{"session_key": bodyKey, "expression": "happy", "fx": "sparkle", "speech": "hi"}); isErr || !strings.Contains(txt, "wake_reason: timer") || !strings.Contains(txt, "delay_ms: 3000") {
 		t.Fatalf("act on laptop = (%q, isErr=%v)", txt, isErr)
 	}
-	if txt, isErr := invokeCompanionTestTool(t, s, companionRememberSoulTool, map[string]any{"session_key": bodyKey, "content": "Likes jazz while coding"}); isErr || !strings.Contains(txt, "status: saved") {
-		t.Fatalf("remember_soul on laptop = (%q, isErr=%v)", txt, isErr)
-	}
-	if txt, isErr := invokeCompanionTestTool(t, s, companionRememberEpisodeTool, map[string]any{"session_key": bodyKey, "summary": "Verified build"}); isErr || !strings.Contains(txt, "saved episode #7") {
-		t.Fatalf("remember_episode on laptop = (%q, isErr=%v)", txt, isErr)
-	}
-	if txt, isErr := invokeCompanionTestTool(t, s, companionRecallMemoryTool, map[string]any{"session_key": bodyKey, "query": "jazz"}); isErr || !strings.Contains(txt, "Prefers short summaries") {
-		t.Fatalf("recall_memory on laptop = (%q, isErr=%v)", txt, isErr)
-	}
 
-	// Switch to phone posture: all 4 Phase 3 tools remain discoverable and callable (both direct and via call envelope).
+	// Switch to phone posture: companion.act remains discoverable and callable; memory tools stay refused.
 	if _, _, err := host.store.PhonePickup(bodyKey); err != nil {
 		t.Fatalf("PhonePickup: %v", err)
 	}
 	phoneDisc := discoveryToolNames(s.callDiscoveryTools(bodyKey, bodyEntry, true))
-	for _, tool := range phase3Tools {
-		if !phoneDisc[tool] {
-			t.Fatalf("companion-body phone discovery missing %q", tool)
+	if !phoneDisc[companionActTool] {
+		t.Fatalf("companion-body phone discovery missing %q", companionActTool)
+	}
+	for _, tool := range memoryTools {
+		if phoneDisc[tool] {
+			t.Fatalf("companion-body phone discovery leaked Brain-only %q", tool)
 		}
 	}
 	if txt, isErr := invokeCompanionTestTool(t, s, companionActTool, map[string]any{"session_key": bodyKey, "delay_ms": 2000}); isErr || !strings.Contains(txt, "delay_ms: 2000") {
 		t.Fatalf("act on phone = (%q, isErr=%v)", txt, isErr)
 	}
-	if txt, isErr := invokeCompanionTestTool(t, s, "call", map[string]any{
-		"tool":      companionRecallMemoryTool,
-		"arguments": map[string]any{"session_key": bodyKey, "scope": "soul"},
-	}); isErr || !strings.Contains(txt, "scope: soul") {
-		t.Fatalf("call(recall_memory) on phone = (%q, isErr=%v)", txt, isErr)
-	}
-	if txt, isErr := invokeCompanionTestTool(t, s, companionRememberSoulTool, map[string]any{"session_key": bodyKey, "content": "Drinks tea in winter"}); isErr || !strings.Contains(txt, "status: saved") {
-		t.Fatalf("remember_soul on phone = (%q, isErr=%v)", txt, isErr)
-	}
-	if txt, isErr := invokeCompanionTestTool(t, s, companionRememberEpisodeTool, map[string]any{"session_key": bodyKey, "summary": "Ran race detector"}); isErr || !strings.Contains(txt, "saved episode #7") {
-		t.Fatalf("remember_episode on phone = (%q, isErr=%v)", txt, isErr)
-	}
 
-	// 2. companion-work, unmarked lead, and keyless callers must NOT discover or reach any of the 4 tools (D8).
+	// 2. companion-work (Brain) exclusively discovers and calls remember_soul,
+	// remember_episode, and recall_memory without confirmation banner ((1796)=a),
+	// while still refusing companion.act and companion.phone_*.
+	dcHost := &fakeDaemonControlHost{confirmResp: wsdashboard.DaemonConfirmResult{Approved: false, Code: "denied", Reason: "denied"}}
+	s.daemonControl = dcHost
 	workDisc := discoveryToolNames(s.callDiscoveryTools(workKey, workEntry, true))
 	leadDisc := discoveryToolNames(s.callDiscoveryTools(leadKey, leadEntry, true))
-	for _, tool := range phase3Tools {
-		if workDisc[tool] {
-			t.Fatalf("companion-work discovery exposed %q", tool)
+	for _, tool := range memoryTools {
+		if !workDisc[tool] {
+			t.Fatalf("companion-work discovery missing Brain memory tool %q", tool)
 		}
+		if !companionWorkAllowsWithoutApproval(tool, nil) {
+			t.Fatalf("companionWorkAllowsWithoutApproval(%q) = false, want true", tool)
+		}
+	}
+	beforeConfirm := dcHost.confirmCalls
+	if txt, isErr := invokeCompanionTestTool(t, s, companionRememberSoulTool, map[string]any{"session_key": workKey, "content": "Likes jazz while coding"}); isErr || !strings.Contains(txt, "status: saved") {
+		t.Fatalf("remember_soul on brain = (%q, isErr=%v)", txt, isErr)
+	}
+	if txt, isErr := invokeCompanionTestTool(t, s, companionRememberEpisodeTool, map[string]any{"session_key": workKey, "summary": "Verified build"}); isErr || !strings.Contains(txt, "saved episode #7") {
+		t.Fatalf("remember_episode on brain = (%q, isErr=%v)", txt, isErr)
+	}
+	if txt, isErr := invokeCompanionTestTool(t, s, companionRecallMemoryTool, map[string]any{"session_key": workKey, "query": "jazz"}); isErr || !strings.Contains(txt, "Prefers short summaries") {
+		t.Fatalf("recall_memory on brain = (%q, isErr=%v)", txt, isErr)
+	}
+	if txt, isErr := invokeCompanionTestTool(t, s, "call", map[string]any{
+		"tool":      companionRecallMemoryTool,
+		"arguments": map[string]any{"session_key": workKey, "scope": "soul"},
+	}); isErr || !strings.Contains(txt, "scope: soul") {
+		t.Fatalf("call(recall_memory) on brain = (%q, isErr=%v)", txt, isErr)
+	}
+	if dcHost.confirmCalls != beforeConfirm {
+		t.Fatalf("companion-work memory tools unexpectedly triggered confirmation banner (%d -> %d)", beforeConfirm, dcHost.confirmCalls)
+	}
+
+	// Brain must NOT discover or reach companion.act; unmarked lead and keyless callers must NOT reach act or memory tools.
+	if workDisc[companionActTool] {
+		t.Fatalf("companion-work discovery exposed %q", companionActTool)
+	}
+	if resp := invokeCompanionTestToolRaw(t, s, companionActTool, map[string]any{"session_key": workKey}); resp.Error == nil {
+		t.Fatalf("companion-work reached %q: %+v", companionActTool, resp)
+	}
+	for _, tool := range append([]string{companionActTool}, memoryTools...) {
 		if leadDisc[tool] {
 			t.Fatalf("unmarked lead discovery exposed %q", tool)
-		}
-		if resp := invokeCompanionTestToolRaw(t, s, tool, map[string]any{"session_key": workKey}); resp.Error == nil {
-			t.Fatalf("companion-work reached %q: %+v", tool, resp)
 		}
 		if resp := invokeCompanionTestToolRaw(t, s, tool, map[string]any{"session_key": leadKey}); resp.Error == nil {
 			t.Fatalf("unmarked lead reached %q: %+v", tool, resp)
@@ -799,15 +820,12 @@ func TestCompanionBurstLimitEnforcementAndReset(t *testing.T) {
 	s.companion = host
 	bodyKey := mintCompanionTestKey(t, s, root, CompanionRoleBody)
 
-	// Mix all 5 burst-counted Tier-1 tools up to companionBurstMaxCalls (12).
+	// Mix burst-counted Tier-1 tools up to companionBurstMaxCalls (12).
 	calls := []struct {
 		name string
 		args map[string]any
 	}{
-		{companionRecallMemoryTool, map[string]any{"session_key": bodyKey, "query": "a"}},
 		{companionActTool, map[string]any{"session_key": bodyKey, "expression": "happy"}},
-		{companionRememberSoulTool, map[string]any{"session_key": bodyKey, "content": "note 1"}},
-		{companionRememberEpisodeTool, map[string]any{"session_key": bodyKey, "summary": "ep 1"}},
 		{companionDelegateWorkTool, map[string]any{"session_key": bodyKey, "brief": "task 1"}},
 	}
 	for i := 0; i < companionBurstMaxCalls; i++ {
@@ -824,11 +842,11 @@ func TestCompanionBurstLimitEnforcementAndReset(t *testing.T) {
 		t.Fatalf("13th call (act) = (%q, isErr=%v), want burst_limit", txt, isErr)
 	}
 	txt, isErr = invokeCompanionTestTool(t, s, "call", map[string]any{
-		"tool":      companionRecallMemoryTool,
+		"tool":      companionActTool,
 		"arguments": map[string]any{"session_key": bodyKey},
 	})
 	if !isErr || !strings.Contains(txt, `"burst_limit"`) {
-		t.Fatalf("13th call envelope (recall_memory) = (%q, isErr=%v), want burst_limit", txt, isErr)
+		t.Fatalf("13th call envelope (act) = (%q, isErr=%v), want burst_limit", txt, isErr)
 	}
 
 	// Phone lifecycle tools are NOT burst-blocked so Tier-1 can still send/putdown cleanly.

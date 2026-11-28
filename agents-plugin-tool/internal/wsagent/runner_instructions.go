@@ -79,11 +79,30 @@ func composeLeadInstructions(dir string, rec Record, manual, steer string, comma
 	} else {
 		text += "At session start, call the workflow_manual tool with this key and follow it; after any compaction, call workflow_state for fresh session state."
 	}
+	if rec.CompanionRole == companionRoleWork {
+		if addendum := strings.TrimSpace(rec.CompanionSystemPrompt); addendum != "" {
+			text += "\n\n" + addendum
+		}
+	}
 	path := filepath.Join(dir, "instructions.md")
 	if err := writeFileAtomic(path, []byte(text+"\n"), 0o600); err != nil {
 		return "", err
 	}
 	return path, nil
+}
+
+// combineLeadManualAndAddendum joins the full Lead workflow manual with a
+// companion-work Brain persona/memory addendum when either or both are present.
+func combineLeadManualAndAddendum(manual, addendum string) string {
+	manual = strings.TrimSpace(manual)
+	addendum = strings.TrimSpace(addendum)
+	if manual == "" {
+		return addendum
+	}
+	if addendum == "" {
+		return manual
+	}
+	return manual + "\n\n" + addendum
 }
 
 // composeCompanionInstructions writes the instruction file for a daemon-managed

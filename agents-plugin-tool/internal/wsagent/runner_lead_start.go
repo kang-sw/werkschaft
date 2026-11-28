@@ -71,7 +71,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 			// carries the key and the manual in its prompt. Pi leads get
 			// them from their extension, or from its bridge fallback
 			// (writePiLeadBridge, LeadSpec.Manual).
-			if rec.CompanionRole != "" {
+			if rec.CompanionRole != "" && rec.CompanionRole != companionRoleWork {
 				if instructions, err = composeCompanionInstructions(c.dir, rec); err != nil {
 					return err
 				}
@@ -156,6 +156,9 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 				EnvHostedSessionRow: wsdashboard.RegistrationPath(c.r.opts.Dir, rec.ReplyID),
 			},
 			Manual: func() string {
+				if rec.CompanionRole == companionRoleWork {
+					return combineLeadManualAndAddendum(c.leadManual(rec), rec.CompanionSystemPrompt)
+				}
 				if rec.CompanionRole != "" {
 					return rec.CompanionSystemPrompt
 				}
@@ -324,7 +327,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	}
 	// A pending restore already carries state. Queue startup state for the
 	// first model turn after a launch, including when the harness resumes.
-	if rec.CompanionRole == "" && c.r.opts.LeadSessionState != nil &&
+	if (rec.CompanionRole == "" || rec.CompanionRole == companionRoleWork) && c.r.opts.LeadSessionState != nil &&
 		!strings.HasPrefix(c.compactNote, restartRestoreMarker) &&
 		!strings.HasPrefix(c.compactNote, compactionRestoreMarker) &&
 		!strings.HasPrefix(c.compactNote, leadStartStateMarker) {

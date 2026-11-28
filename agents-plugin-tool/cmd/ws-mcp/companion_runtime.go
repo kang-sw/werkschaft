@@ -97,8 +97,12 @@ type companionRuntime struct {
 	// carries its checkpoint so the conversation continues.
 	bodyPrevID string
 
-	workReplyID string
-	workWSKey   string
+	workReplyID          string
+	workWSKey            string
+	workPrevID           string
+	workHandoffs         int
+	workSeededFromLegacy bool
+	closedWorkKeys       map[string]struct{}
 
 	delSeq      uint64
 	active      *companionDelegation
@@ -127,6 +131,7 @@ func newCompanionRuntime(dir, root string, agents *wsagent.Runner, daemon func()
 		daemon:         daemon,
 		logw:           logw,
 		closedBodyKeys: map[string]struct{}{},
+		closedWorkKeys: map[string]struct{}{},
 		closed:         map[string]string{},
 		stopCh:         make(chan struct{}),
 	}
@@ -173,12 +178,16 @@ func (r *companionRuntime) Start() {
 	if interval <= 0 {
 		interval = companionDeadlineTickInterval
 	}
-	// Reattach the companion-body a previous daemon left open (and close any
-	// duplicates) before the first wake, so a restart never adds a session.
+	// Reattach any persistent companion-work Brain session a previous daemon
+	// left open (closing duplicates) and gracefully close any surviving
+	// pre-upgrade companion-body sessions.
 	r.spawn(func() {
 		if d := r.liveDaemon(); d != nil && r.agents != nil {
+			r.workLaunchMu.Lock()
+			r.reattachWorkLocked(d)
+			r.workLaunchMu.Unlock()
 			r.bodyLaunchMu.Lock()
-			r.reattachBodyLocked()
+			r.teardownLegacyBodiesLocked()
 			r.bodyLaunchMu.Unlock()
 		}
 	})
@@ -242,92 +251,12 @@ func (r *companionRuntime) IsHolderAlive(holder string) bool {
 	return true
 }
 
-// OnUserWake handles a user messenger wake ("user-message") or release-time
-// unread re-wake ("release-unread") per (1739) and (1749).
+// OnUserWake is retained as a T0-safe callback hook; in the 3-tier
+// architecture Messenger communicates directly with Brain (companion-work)
+// via the embedded compact frame and Puppeteer observes Brain directly, so
+// OnUserWake no longer launches a persistent companion-body chat session.
 func (r *companionRuntime) OnUserWake(reason string) {
-	d := r.liveDaemon()
-	if d == nil || r.agents == nil {
-		return
-	}
-	// Graceful cosmetic fallback when companion director is disabled or
-	// unconfigured: leave the message unread and never launch a hosted session.
-	if !d.CompanionDirectorEnabled() {
-		return
-	}
-	phone := d.CompanionPhone()
-	if phone.UnreadAgentCount() <= 0 {
-		return
-	}
-	if phone.Snapshot().Unavailable {
-		return
-	}
-	r.mu.Lock()
-	// A buzz never preempts a running Tier-1 turn: it lands in the unread inbox
-	// and the [phone buzz: N unread] piggyback, and release-time re-wake fires
-	// once the turn finishes ((1739)).
-	if r.bodyPendingTurns > 0 || r.bodyWaking {
-		r.mu.Unlock()
-		return
-	}
-	r.bodyWaking = true
-	r.mu.Unlock()
-	defer func() {
-		r.mu.Lock()
-		r.bodyWaking = false
-		r.mu.Unlock()
-	}()
-
-	bodyID, bodyKey, err := r.ensureBodySession(d)
-	if err != nil {
-		r.handleBodyWakeError(d, "", "launch companion-body: "+err.Error())
-		return
-	}
-	if _, acquired := phone.AcquireOnWake(bodyKey); !acquired {
-		return
-	}
-	d.CompanionResetBurst(bodyKey)
-	unread := phone.UnreadAgentCount()
-	oldestUnreadID := phone.OldestUnreadID()
-	if unread <= 0 {
-		d.CompanionForceRelease(bodyKey)
-		return
-	}
-	envelope := d.BuildCompanionWakeEnvelope(context.Background(), wsdashboard.CompanionWakeEnvelopeInput{
-		Trigger:    reason,
-		ProjectKey: companionProjectKey(r.launchRoot(d)),
-		Hint:       phone.LatestUnreadHint(),
-	})
-	// Re-check unread inbox right before delivering the content-free nudge: if
-	// an interrupting ws/companion.act call consumed the inbox concurrently,
-	// drop the nudge cleanly so Tier-1 is never re-woken for consumed mail (D7, D11).
-	unread = phone.UnreadAgentCount()
-	oldestUnreadID = phone.OldestUnreadID()
-	if unread <= 0 {
-		d.CompanionForceRelease(bodyKey)
-		return
-	}
-	msg := envelope + "\n\n" + formatBodyUserWakePrompt(unread, reason)
-	if d.CompanionMessengerOpen() {
-		msg += "\n" + companionMessengerOpenNote
-	}
-	r.mu.Lock()
-	if r.bodyReplyID == bodyID {
-		r.bodyPendingTurns++
-		r.bodyWakeUnreadID = oldestUnreadID
-	}
-	r.mu.Unlock()
-	if _, err := r.agents.Deliver(bodyID, wsagent.Delivery{Text: msg}); err != nil {
-		r.mu.Lock()
-		if r.bodyReplyID == bodyID {
-			if r.bodyPendingTurns > 0 {
-				r.bodyPendingTurns--
-			}
-			r.bodyWakeUnreadID = ""
-		}
-		r.mu.Unlock()
-		r.handleBodyWakeError(d, bodyKey, "deliver companion-body wake: "+err.Error())
-		return
-	}
+	_ = reason
 }
 
 func (r *companionRuntime) handleBodyWakeError(d *wsdashboard.Daemon, bodyKey, errText string) {
@@ -483,10 +412,14 @@ func (r *companionRuntime) handleCompanionClose(role, replyID, wsKey, reason str
 	case mcp.CompanionRoleWork:
 		var failedID string
 		r.mu.Lock()
+		if wsKey != "" && (reason == "close" || reason == "crash") {
+			r.closedWorkKeys[wsKey] = struct{}{}
+		}
 		// Fail the active delegation only when the closing session is the
 		// current Tier-2 session; duplicate/stale close events for an earlier
 		// session must never fail a newer healthy delegation.
 		if replyID != "" && replyID == r.workReplyID {
+			r.workPrevID = replyID
 			r.workReplyID = ""
 			r.workWSKey = ""
 			if r.active != nil {
@@ -1002,41 +935,237 @@ func formatBodyMessengerClosedPrompt() string {
 		"Wrap up: call ws/companion.phone_putdown (next=\"ambient\", or next=\"work\" if a delegation is running) now. Do not send another messenger reply unless something is genuinely unfinished."
 }
 
-func (r *companionRuntime) ensureWorkSession(d *wsdashboard.Daemon) (string, error) {
+// teardownLegacyBodiesLocked gracefully closes any surviving pre-upgrade
+// persistent companion-body hosted sessions left open by an earlier daemon.
+// The caller holds bodyLaunchMu.
+func (r *companionRuntime) teardownLegacyBodiesLocked() {
+	if r.agents == nil {
+		return
+	}
+	recs := r.agents.CompanionSessions(mcp.CompanionRoleBody)
+	if len(recs) == 0 {
+		return
+	}
+	r.mu.Lock()
+	for _, rec := range recs {
+		if rec.WSKey != "" {
+			r.closedBodyKeys[rec.WSKey] = struct{}{}
+		}
+	}
+	r.bodyReplyID, r.bodyWSKey, r.bodyPendingTurns, r.bodyWakeUnreadID, r.bodyTurns = "", "", 0, "", 0
+	r.mu.Unlock()
+	for _, rec := range recs {
+		if _, err := r.agents.CloseConversation(rec.ReplyID); err != nil {
+			fmt.Fprintf(r.logw, "companion runtime: close legacy companion-body %s: %v\n", rec.ReplyID, err)
+		}
+	}
+}
+
+// reattachWorkLocked adopts the newest open companion-work Brain session that
+// is not known closed, closes any stale duplicates, and registers Brain's
+// replyID on the daemon so Puppeteer immediately observes it. The caller holds
+// workLaunchMu.
+func (r *companionRuntime) reattachWorkLocked(d *wsdashboard.Daemon) (string, string) {
+	if r.agents == nil {
+		return "", ""
+	}
+	recs := r.agents.CompanionSessions(mcp.CompanionRoleWork)
+	r.mu.Lock()
+	currentID, currentKey := r.workReplyID, r.workWSKey
+	chosenID, chosenKey := currentID, currentKey
+	var stale []wsagent.Record
+	for _, rec := range recs {
+		if rec.ReplyID == currentID {
+			continue
+		}
+		_, closedKey := r.closedWorkKeys[rec.WSKey]
+		if chosenID == "" && rec.WSKey != "" && !closedKey {
+			chosenID, chosenKey = rec.ReplyID, rec.WSKey
+			continue
+		}
+		stale = append(stale, rec)
+	}
+	for _, rec := range stale {
+		if rec.WSKey != "" {
+			r.closedWorkKeys[rec.WSKey] = struct{}{}
+		}
+	}
+	adopted := currentID == "" && chosenID != ""
+	if adopted {
+		r.workReplyID, r.workWSKey = chosenID, chosenKey
+	}
+	r.mu.Unlock()
+	if adopted {
+		fmt.Fprintf(r.logw, "companion runtime: reattached companion-work brain %s\n", chosenID)
+	}
+	if chosenID != "" && d != nil {
+		d.SetCompanionBrainReplyID(chosenID)
+	}
+	for _, rec := range stale {
+		if _, err := r.agents.CloseConversation(rec.ReplyID); err != nil {
+			fmt.Fprintf(r.logw, "companion runtime: close stale companion-work %s: %v\n", rec.ReplyID, err)
+		}
+	}
+	return chosenID, chosenKey
+}
+
+// BrainEndpoint serves GET /api/companion/brain by lazily ensuring or
+// reattaching the Mobile Full Lead (Brain) session.
+func (r *companionRuntime) BrainEndpoint() (wsdashboard.CompanionBrainInfo, error) {
+	return r.EnsureBrainSession(r.liveDaemon())
+}
+
+// EnsureBrainSession lazily attaches, launches, or cleanly hands off the
+// persistent Mobile Full Lead (Brain, companion-work) hosted session.
+func (r *companionRuntime) EnsureBrainSession(d *wsdashboard.Daemon) (wsdashboard.CompanionBrainInfo, error) {
+	if r.agents == nil {
+		return wsdashboard.CompanionBrainInfo{Ready: false}, fmt.Errorf("agent runner unavailable")
+	}
 	r.workLaunchMu.Lock()
 	defer r.workLaunchMu.Unlock()
 
 	r.mu.Lock()
-	existingID := r.workReplyID
+	existingID, existingKey := r.workReplyID, r.workWSKey
+	seeded := r.workSeededFromLegacy
 	r.mu.Unlock()
-	if existingID != "" && r.agents.IsConversationLive(existingID) {
-		return existingID, nil
+	if existingID == "" {
+		existingID, existingKey = r.reattachWorkLocked(d)
+	}
+
+	personaName := "Companion"
+	if d != nil {
+		if name := strings.TrimSpace(d.CompanionResolvedPersona().Sheet.Name); name != "" {
+			personaName = name
+		}
 	}
 
 	spec, ok := r.pickLaunchSpec(mcp.CompanionRoleWork)
+	tierLabel := companionTierWork
+	if r.resolveLaunch == nil && r.agents != nil {
+		if res := r.resolveRole(mcp.CompanionRoleWork); strings.TrimSpace(res.Tier) != "" {
+			tierLabel = strings.TrimSpace(res.Tier)
+		} else if strings.TrimSpace(res.Configured) != "" {
+			tierLabel = strings.TrimSpace(res.Configured)
+		}
+	}
+
+	if existingID != "" && existingKey != "" && r.agents.IsConversationOpen(existingID) {
+		rec, known := r.agents.CompanionRecord(existingID)
+		if !ok || !known || companionSpecMatches(rec, spec) {
+			if d != nil {
+				d.SetCompanionBrainReplyID(existingID)
+			}
+			return wsdashboard.CompanionBrainInfo{
+				ReplyID:          existingID,
+				WSKey:            existingKey,
+				Harness:          rec.Backend,
+				Model:            rec.Model,
+				Tier:             tierLabel,
+				PersonaName:      personaName,
+				Ready:            true,
+				SeededFromLegacy: seeded,
+			}, nil
+		}
+		fmt.Fprintf(r.logw, "companion runtime: companion-work brain spec changed (%s/%s -> %s/%s); handing off\n", rec.Backend, rec.Model, spec.Backend, spec.Model)
+	}
 	if !ok {
-		return "", fmt.Errorf("no available harness backend for companion-work")
+		return wsdashboard.CompanionBrainInfo{
+			PersonaName: personaName,
+			Tier:        tierLabel,
+			Ready:       false,
+		}, fmt.Errorf("no available harness backend for companion-work")
+	}
+	if existingID == "" {
+		r.mu.Lock()
+		existingID = r.workPrevID
+		r.mu.Unlock()
+	}
+	return r.launchWorkLocked(d, spec, tierLabel, personaName, existingID, existingKey)
+}
+
+// launchWorkLocked launches a new Mobile Full Lead (Brain, companion-work)
+// session on spec. When prevID names an earlier Brain (cross-harness/model/
+// effort handoff or crash recovery), it captures CompanionHandoffCheckpoint
+// from prevID, updates workReplyID/workWSKey, broadcasts the handoff via
+// SetCompanionBrainReplyID, and closes prevID. On a brand-new Brain with no
+// prior Brain checkpoint, it performs a single read-only check of legacy
+// companion-messenger/seg-*.jsonl to preserve recent conversational continuity.
+// The caller holds workLaunchMu.
+func (r *companionRuntime) launchWorkLocked(d *wsdashboard.Daemon, spec companionLaunchSpec, tierLabel, personaName, prevID, prevKey string) (wsdashboard.CompanionBrainInfo, error) {
+	var sheet wsdashboard.CharacteristicSheet
+	var lang string
+	var legacySeed string
+	if d != nil {
+		sheet, lang, _ = d.CompanionActiveSoulLaunch()
+		if name := strings.TrimSpace(sheet.Name); name != "" {
+			personaName = name
+		}
+		if prevID == "" {
+			legacySeed = d.CompanionLegacyMessengerSeed(10, 4096)
+		}
+	}
+	seeded := legacySeed != ""
+	prompt := wsdashboard.BuildCompanionBrainSystemPrompt(sheet, lang, legacySeed)
+	if prevID != "" {
+		if checkpoint, err := r.agents.CompanionHandoffCheckpoint(prevID, ""); err == nil {
+			prompt += "\n\n" + companionHandoffPreamble + "\n\n" + checkpoint
+		} else {
+			fmt.Fprintf(r.logw, "companion runtime: handoff checkpoint from companion-work %s: %v\n", prevID, err)
+		}
 	}
 	st, err := r.agents.CreateLead(spec.Backend, r.launchRoot(d), wsagent.LeadOptions{
 		CompanionRole:         mcp.CompanionRoleWork,
-		CompanionSystemPrompt: companionWorkSystemPrompt,
+		CompanionSystemPrompt: prompt,
 		Model:                 spec.Model,
 		Provider:              spec.Provider,
 		Effort:                spec.Effort,
 	})
 	if err != nil {
-		return "", err
+		return wsdashboard.CompanionBrainInfo{PersonaName: personaName, Tier: tierLabel, Ready: false}, err
 	}
 	rec, ok := r.agents.CompanionRecord(st.ID)
 	if !ok || rec.WSKey == "" {
-		return "", fmt.Errorf("companion-work session %s has no minted key", st.ID)
+		return wsdashboard.CompanionBrainInfo{PersonaName: personaName, Tier: tierLabel, Ready: false}, fmt.Errorf("companion-work session %s has no minted key", st.ID)
 	}
 	r.mu.Lock()
 	r.workReplyID = st.ID
 	r.workWSKey = rec.WSKey
+	r.workPrevID = ""
+	r.workSeededFromLegacy = seeded
 	r.workLaunches++
+	if prevKey != "" {
+		r.closedWorkKeys[prevKey] = struct{}{}
+	}
+	if prevID != "" {
+		r.workHandoffs++
+	}
 	r.mu.Unlock()
-	return st.ID, nil
+	if d != nil {
+		d.SetCompanionBrainReplyID(st.ID)
+	}
+	if prevID != "" && r.agents.IsConversationOpen(prevID) {
+		if _, err := r.agents.CloseConversation(prevID); err != nil {
+			fmt.Fprintf(r.logw, "companion runtime: close handed-off companion-work %s: %v\n", prevID, err)
+		}
+	}
+	return wsdashboard.CompanionBrainInfo{
+		ReplyID:          st.ID,
+		WSKey:            rec.WSKey,
+		Harness:          rec.Backend,
+		Model:            rec.Model,
+		Tier:             tierLabel,
+		PersonaName:      personaName,
+		Ready:            true,
+		SeededFromLegacy: seeded,
+	}, nil
+}
+
+func (r *companionRuntime) ensureWorkSession(d *wsdashboard.Daemon) (string, error) {
+	info, err := r.EnsureBrainSession(d)
+	if err != nil {
+		return "", err
+	}
+	return info.ReplyID, nil
 }
 
 func (r *companionRuntime) liveDaemon() *wsdashboard.Daemon {

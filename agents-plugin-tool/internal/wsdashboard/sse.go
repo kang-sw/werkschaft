@@ -674,6 +674,25 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 			}
 			return sink.flush() == nil
 		}
+		var brainStateWake <-chan struct{}
+		var brainStateSeq int64
+		if src.key.kind == regionRail {
+			brainStateSeq, brainStateWake = d.companionBrainStates.current()
+		}
+		sendBrainState := func() bool {
+			seq, payloads, wake := d.companionBrainStates.since(brainStateSeq)
+			brainStateWake = wake
+			if seq == brainStateSeq || len(payloads) == 0 {
+				return true
+			}
+			brainStateSeq = seq
+			for _, payload := range payloads {
+				if sink.event(companionBrainEvent, payload) != nil {
+					return false
+				}
+			}
+			return sink.flush() == nil
+		}
 		var phoneWake <-chan struct{}
 		var phoneSeq uint64
 		sendPhone := func() bool {
@@ -811,6 +830,11 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 				continue
 			case <-revealWake:
 				if !sendReveal() {
+					return
+				}
+				continue
+			case <-brainStateWake:
+				if !sendBrainState() {
 					return
 				}
 				continue
