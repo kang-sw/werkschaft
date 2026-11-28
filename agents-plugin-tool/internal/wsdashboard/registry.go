@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -265,25 +266,95 @@ func SessionDir(dir, replyID string) string {
 
 var errRegistrationMismatch = errors.New("registration identity mismatch")
 
+// registrationCache holds parsed registrations by file path. Index nudges,
+// the rail, session hire and the hosted runner read the same unchanged rows
+// several times a second; each read opened and parsed the file.
+var registrationCache struct {
+	mu      sync.Mutex
+	entries map[string]registrationCacheEntry
+}
+
+type registrationCacheEntry struct {
+	info os.FileInfo
+	reg  Registration
+}
+
+// forgetRegistration drops path's parsed row after this process replaced or
+// removed the file, so the next read never trusts the old stamp.
+func forgetRegistration(path string) {
+	registrationCache.mu.Lock()
+	delete(registrationCache.entries, path)
+	registrationCache.mu.Unlock()
+}
+
+// clone gives the caller its own copies of the row's pointer fields, so a
+// caller's write never reaches the cached row.
+func (r Registration) clone() Registration {
+	if r.HostExitCode != nil {
+		v := *r.HostExitCode
+		r.HostExitCode = &v
+	}
+	if r.HostExitSignal != nil {
+		v := *r.HostExitSignal
+		r.HostExitSignal = &v
+	}
+	return r
+}
+
 // ReadRegistration reads one session's registration.
+//
+// Every call stats the file; a parsed row is reused only while the file
+// stats as it did before the read that produced it (mode, size, mtime and
+// file identity, wsstate.SameFileMetadata) and that mtime was at least
+// fileCacheRacyWindow old at the read, the rule wsstate.ReadFileCached
+// follows. Writers replace the file whole (WriteRegistration), so every
+// change, in this process or another, gives it a new identity or stamp:
+// a row read under LockRegistration is as fresh as a re-read. A missing
+// file still answers the stat's os.ErrNotExist, and failures are not cached.
 func ReadRegistration(dir, replyID string) (Registration, error) {
 	if !ValidReplyID(replyID) {
 		return Registration{}, fmt.Errorf("invalid reply-id %q", replyID)
 	}
-	raw, err := wsstate.ReadFileOnce(filepath.Join(SessionDir(dir, replyID), registrationFileName))
+	path := filepath.Join(SessionDir(dir, replyID), registrationFileName)
+	info, err := wsstate.Stat(path)
 	if err != nil {
+		forgetRegistration(path)
+		return Registration{}, err
+	}
+	registrationCache.mu.Lock()
+	cached, ok := registrationCache.entries[path]
+	registrationCache.mu.Unlock()
+	if ok && wsstate.SameFileMetadata(cached.info, info) {
+		return cached.reg.clone(), nil
+	}
+	raw, err := wsstate.ReadFileOnce(path)
+	if err != nil {
+		forgetRegistration(path)
 		return Registration{}, err
 	}
 	var reg Registration
 	if err := json.Unmarshal(bytes.TrimSpace(raw), &reg); err != nil {
+		forgetRegistration(path)
 		return Registration{}, fmt.Errorf("parse registration %s: %w", replyID, err)
 	}
 	if reg.ReplyID == "" {
+		forgetRegistration(path)
 		return Registration{}, fmt.Errorf("registration %s has no reply-id", replyID)
 	}
 	if reg.ReplyID != replyID {
+		forgetRegistration(path)
 		return Registration{}, fmt.Errorf("%w: registration %s names reply-id %q", errRegistrationMismatch, replyID, reg.ReplyID)
 	}
+	registrationCache.mu.Lock()
+	if time.Since(info.ModTime()) >= fileCacheRacyWindow {
+		if registrationCache.entries == nil {
+			registrationCache.entries = map[string]registrationCacheEntry{}
+		}
+		registrationCache.entries[path] = registrationCacheEntry{info: info, reg: reg.clone()}
+	} else {
+		delete(registrationCache.entries, path)
+	}
+	registrationCache.mu.Unlock()
 	return reg, nil
 }
 
@@ -349,7 +420,11 @@ func WriteRegistration(dir string, reg Registration) error {
 		_ = os.Remove(name)
 		return err
 	}
-	if err := wsstate.AtomicReplaceFile(name, filepath.Join(sessionDir, registrationFileName)); err != nil {
+	path := filepath.Join(sessionDir, registrationFileName)
+	err = wsstate.AtomicReplaceFile(name, path)
+	// Forget either way: a failed replace leaves the file's state unknown.
+	forgetRegistration(path)
+	if err != nil {
 		_ = os.Remove(name)
 		return err
 	}
@@ -362,7 +437,9 @@ func RemoveRegistration(dir, replyID string) error {
 	if !ValidReplyID(replyID) {
 		return fmt.Errorf("invalid reply-id %q", replyID)
 	}
-	err := os.Remove(filepath.Join(SessionDir(dir, replyID), registrationFileName))
+	path := filepath.Join(SessionDir(dir, replyID), registrationFileName)
+	err := os.Remove(path)
+	forgetRegistration(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -423,7 +500,9 @@ func PruneRegistrations(dir string, now time.Time, retention time.Duration) int 
 			continue
 		}
 		wslive.DropRing(wslive.RingDir(sessionDir))
-		if os.RemoveAll(sessionDir) == nil {
+		err := os.RemoveAll(sessionDir)
+		forgetRegistration(filepath.Join(sessionDir, registrationFileName))
+		if err == nil {
 			pruned++
 		}
 	}
