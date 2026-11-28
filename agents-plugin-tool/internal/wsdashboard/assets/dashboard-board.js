@@ -8,7 +8,7 @@
   // pageHidden tells whether nobody sees the page (a hidden tab, or a frame
   // the shell hides): region updates are held (hiddenRegions) while it
   // holds, and land when it ends (showRegions).
-  function pageHidden() { return doc.hidden || shHidden; }
+  function pageHidden() { return docHidden() || shHidden; }
   function held(withoutBoard) {
     return q("[data-region]").filter(function (el) { return !withoutBoard || el.getAttribute("data-region") !== "board"; }).map(function (el) {
       var name = el.getAttribute("data-region"), p = hiddenRegions[name];

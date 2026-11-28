@@ -84,7 +84,7 @@ func TestIdeShellPhase2AssetsAndUnframedFallback(t *testing.T) {
 		// Side cells size to content while #talert is hidden so the usage pill can
 		// use the free middle space; a visible #talert restores symmetric 1fr columns.
 		"grid-template-columns: minmax(0, auto) minmax(0, 1fr) minmax(0, auto);",
-		".shell-bottom:has(.talert:not([hidden]):not(:empty)) {",
+		".shell-bottom:has(.talert:not([hidden])) {",
 		"grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);",
 		"z-index: 46;",
 		":root[data-shell][data-fdim] .shell-bottom,",

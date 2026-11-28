@@ -48,7 +48,7 @@ func TestBoardKeepWiring(t *testing.T) {
 		t.Error("initial and fetched board sections must remain watched")
 	}
 	for _, re := range []string{
-		`(?s)\n  var modeHash = "", hiddenRegions = \{\}, treeRendered = null, entryRendered = null, panelRendered = null;\n.*?\n  function pageHidden\(\) \{ return doc\.hidden \|\| shHidden; \}\n`,
+		`(?s)\n  var modeHash = "", hiddenRegions = \{\}, treeRendered = null, entryRendered = null, panelRendered = null;\n.*?\n  function pageHidden\(\) \{ return docHidden\(\) \|\| shHidden; \}\n`,
 		`function receiveRegion\(ev\) \{[^}]*if \(pageHidden\(\)\) \{\n        delete hiddenRegions\[ev\.name\];`,
 		`function showRegions\(\) \{\n    if \(pageHidden\(\)\) return;`,
 	} {

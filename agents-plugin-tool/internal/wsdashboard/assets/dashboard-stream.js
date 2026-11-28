@@ -205,7 +205,7 @@
         u.entries.forEach(function (x) {
           if (base[x.key]) return;
           base[x.key] = 1;
-          if (doc.hidden) tlHidden.push(x);
+          if (docHidden()) tlHidden.push(x);
           else if (!shHidden) tlNotice(x);
         });
       }
@@ -218,7 +218,7 @@
     window.WsToast.show(text, { kind: "notice", onClick: function () { if (tkApi) tkApi.openNotice(x); } });
   }
   function tlShown() {
-    if (doc.hidden) return;
+    if (docHidden()) return;
     var u = tlLastU, still = {};
     if (u && u.ready) u.entries.forEach(function (x) { still[x.store + "\n" + x.key] = 1; });
     var n = tlHidden.filter(function (x) { return still[x.store + "\n" + x.key]; }).length;

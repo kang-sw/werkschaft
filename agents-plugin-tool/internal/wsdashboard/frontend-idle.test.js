@@ -54,7 +54,7 @@ test('dashboard tick interval stops and restarts across visibility changes', () 
   const block = code.match(/  var tickTimer = null;[\s\S]*?  syncTickTimer\(\);/)[0];
   const handlers = {}, active = new Map(); let id = 0, ticks = 0;
   const doc = { hidden: false, addEventListener(type, fn) { handlers[type] = fn; } };
-  const ctx = { doc, shHidden: false, tickTimes() { ticks++; },
+  const ctx = { doc, shHidden: false, docHidden() { return doc.hidden; }, tickTimes() { ticks++; },
     setInterval(fn) { active.set(++id, fn); return id; }, clearInterval(n) { active.delete(n); } };
   vm.runInNewContext(block, ctx);
   assert.equal(active.size, 1); assert.equal(ticks, 1);

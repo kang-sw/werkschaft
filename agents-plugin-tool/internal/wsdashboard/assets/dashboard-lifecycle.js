@@ -947,7 +947,20 @@
     if (!h.ent.shownSent) {
       h.ent.shownSent = true;
       shSend(h.ent, "shown", { shown: true });
+      shNudge(h.ent);
     }
+  }
+  // shNudge forces one synchronous layout of a frame that was just made visible
+  // and its document, so a WKWebView that composited the iframe while it was
+  // display:none paints it now rather than at the next unrelated invalidation
+  // (the blank session that only devtools cleared). A read only: no style
+  // write, transform or allocation persists.
+  function shNudge(ent) {
+    try {
+      void ent.el.offsetHeight;
+      var d = ent.el.contentDocument;
+      if (d && d.documentElement) void d.documentElement.offsetHeight;
+    } catch (e) { /* unloading or inaccessible */ }
   }
   function shDrop(ent, leaving) {
     var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("shell", "shDrop") : null;
@@ -1204,6 +1217,7 @@
     } else {
       ent.shownSent = true;
       shSend(ent, "shown", { shown: true });
+      shNudge(ent);
     }
     shCompanionTarget(ent, false, !!was && !!ent.f.rid && was.f.rid !== ent.f.rid);
     shRid(ent.f.rid);

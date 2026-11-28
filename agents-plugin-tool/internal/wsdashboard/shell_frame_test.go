@@ -97,7 +97,7 @@ q = function (sel) {
   if (sel === ".rpop:not([hidden]), .lmenu, #tkdrawer[open]") return railPops.concat(linkMenus, tkDrawers);
   return [];
 };
-`+mustAsset(t, "shell.js")+dashboardFuncs(t, "syncPageVisibility")+open+connect+show+tick+post+search+frame+`
+`+mustAsset(t, "shell.js")+dashboardFuncs(t, "docHidden", "syncPageVisibility")+open+connect+show+tick+post+search+frame+`
 connect();
 shFrameInit();
 flushAnimationFrames();

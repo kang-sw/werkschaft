@@ -115,7 +115,7 @@
   pointer-events: none;
   z-index: 1;
 }
-.shell-bottom:has(.talert:not([hidden]):not(:empty)) {
+.shell-bottom:has(.talert:not([hidden])) {
   grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
 }
 .shell-bottom .bot-left {

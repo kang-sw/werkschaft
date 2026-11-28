@@ -77,8 +77,22 @@
     shStageList = [];
     held.forEach(function (fn) { try { fn(); } catch (e) { /* one deferred load never blocks the rest */ } });
   }
+  // docHidden is the browser's own hidden state with one correction: a framed
+  // page the shell shows can keep a stale document.hidden === true (a WKWebView
+  // child iframe composited while the window was backgrounded, which no later
+  // visibilitychange clears), so the shell's top document, same-origin, has the
+  // last word. A truly hidden window hides the top document too and stays hidden.
+  function docHidden() {
+    if (!doc.hidden) return false;
+    if (typeof shHidden !== "undefined" && shHidden) return true;
+    try {
+      var top = typeof window !== "undefined" ? window.top : null;
+      if (top && top !== window && top.document && top.document.hidden === false) return false;
+    } catch (e) { /* a cross-origin top says nothing: the frame's own state holds */ }
+    return true;
+  }
   function syncPageVisibility() {
-    var paused = doc.hidden || shHidden;
+    var paused = docHidden() || shHidden;
     if (root.hasAttribute("data-animation-paused") !== paused) root.toggleAttribute("data-animation-paused", paused);
     if (typeof railAttention !== "undefined" && railAttention && railAttention.setPaused) railAttention.setPaused(paused);
     // Shell visibility can change while the browser tab is already hidden.
@@ -86,6 +100,25 @@
   }
   doc.addEventListener("visibilitychange", syncPageVisibility);
   syncPageVisibility();
+  // A window regaining focus, a page restored from the bfcache and a resize
+  // are the moments a stale paused state would otherwise survive until the
+  // user opens devtools: recheck the state, and flush the regions a hidden
+  // phase held. Both calls are idempotent and cheap when nothing changed, and
+  // resize coalesces to one check per frame.
+  var visRecheckQueued = false;
+  function recheckVisibility() {
+    visRecheckQueued = false;
+    if (root.hasAttribute("data-animation-paused") !== (docHidden() || shHidden)) syncPageVisibility();
+    if (typeof hiddenRegions === "object" && hiddenRegions && Object.keys(hiddenRegions).length && typeof showRegions === "function") showRegions();
+  }
+  function queueVisibilityRecheck() {
+    if (visRecheckQueued) return;
+    visRecheckQueued = true;
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(recheckVisibility); else recheckVisibility();
+  }
+  window.addEventListener("focus", recheckVisibility);
+  window.addEventListener("pageshow", recheckVisibility);
+  window.addEventListener("resize", queueVisibilityRecheck);
 
   // --- browser storage: guarded, since a locked-down browser throws on access
   var store = null;
@@ -213,7 +246,7 @@
   }
   if (window.MutationObserver) new MutationObserver(tickDirty).observe(doc, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-ms", "data-f", "data-reset"] });
   function tickTimes() {
-    if (doc.hidden || shHidden) return;
+    if (docHidden() || shHidden) return;
     var now = Date.now();
     if (!tickSets || !window.MutationObserver) tickSets = {
       times: q('time[data-ms][data-f="since"], time[data-ms][data-f="ago"], time[data-ms][data-f="rel"], time[data-ms][data-f="relago"], time[data-ms][data-f="del"], time[data-ms][data-f="user"]'),
@@ -224,7 +257,7 @@
   }
   var tickTimer = null;
   function syncTickTimer() {
-    if (doc.hidden || shHidden) {
+    if (docHidden() || shHidden) {
       if (tickTimer !== null) { clearInterval(tickTimer); tickTimer = null; }
       return;
     }
