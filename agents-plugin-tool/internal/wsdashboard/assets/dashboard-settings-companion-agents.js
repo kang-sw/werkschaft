@@ -35,11 +35,11 @@
     });
   }
 
+  // Reload after a save, keeping the last readback on screen until the new
+  // one lands so the selectors do not flicker back to auto.
   function refresh(rerender) {
     state.seq++;
     state.loading = false;
-    state.data = null;
-    state.error = "";
     load(rerender);
   }
 

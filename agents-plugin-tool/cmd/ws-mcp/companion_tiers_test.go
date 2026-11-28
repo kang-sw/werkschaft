@@ -15,9 +15,9 @@ import (
 
 // companionTierRuntime is a companion runtime whose runner registers each
 // named harness with a test backend, reading config from throwaway homes in
-// which every harness but werk (left with no slot, as built in) sets its
-// small, medium and large slots to "<harness>-<size>" with effort
-// "<size>-effort".
+// which every harness but werk (left with no slot, as built in) and custom
+// "zz-" ones sets its small, medium and large slots to "<harness>-<size>"
+// with effort "<size>-effort".
 func companionTierRuntime(t *testing.T, harnesses ...string) (*companionRuntime, wsconfig.Options) {
 	t.Helper()
 	cfg := wsconfig.Options{CacheHome: filepath.Join(t.TempDir(), "cache"), ConfigHome: filepath.Join(t.TempDir(), "config")}
@@ -30,7 +30,7 @@ func companionTierRuntime(t *testing.T, harnesses ...string) (*companionRuntime,
 		}
 		regs[name] = wsagent.BackendRegistration{Backend: backend, LeadProfile: profile, WorkerCapable: true, WorkerProfile: wsagent.AgentWorkerProfile(name)}
 		for _, size := range []string{"small", "medium", "large"} {
-			if name == "werk" {
+			if name == "werk" || strings.HasPrefix(name, "zz-") {
 				break
 			}
 			if _, err := wsconfig.SetGlobalAgentsTierForHarness(cfg, size, "", name+"-"+size, name, size+"-effort"); err != nil {
@@ -214,4 +214,69 @@ func TestCompanionAgentsReadbackListsOptions(t *testing.T) {
 	if _, listed := values["far"]; listed {
 		t.Fatal("an alias to an unregistered harness was offered")
 	}
+}
+
+// Bundles are listed after aliases unless an alias of the same name shadows
+// them, and a name the manifest pattern rejects is never offered.
+func TestCompanionTierOptionsListBundlesAndSkipUnsavableNames(t *testing.T) {
+	rt, cfg := companionTierRuntime(t, "claude", "codex")
+	setCompanionTier(t, cfg, wsconfig.ScopeGlobal, wsconfig.ItemAgentTierAliases, "brain=codex.large a@b=codex.small")
+	setCompanionStructured(t, cfg, wsconfig.ItemAgentTierRouting,
+		`{"bundles":{"quick":{"harness":"codex","model":"codex-quick","effort":"low"},"brain":{"harness":"claude","model":"claude-brain"}}}`)
+	opts := rt.agents.CompanionTierOptions(cfg)
+	kinds := map[string]string{}
+	var order []string
+	for _, o := range opts {
+		kinds[o.Value] = o.Kind
+		order = append(order, o.Value)
+		if o.Value == "quick" && (o.Harness != "codex" || o.Model != "codex-quick" || o.Effort != "low") {
+			t.Fatalf("bundle option = %+v", o)
+		}
+	}
+	if kinds["quick"] != "bundle" || kinds["brain"] != "alias" {
+		t.Fatalf("option kinds = %v", kinds)
+	}
+	if _, listed := kinds["a@b"]; listed {
+		t.Fatalf("an unsavable alias name was offered: %v", order)
+	}
+	if order[len(order)-1] != "quick" {
+		t.Fatalf("bundles must follow aliases: %v", order)
+	}
+}
+
+// Auto skips a harness that cannot run workers, puts non-built-in harnesses
+// after the built-ins by name, and launches the harness default model when
+// the first harness has no slot.
+func TestCompanionTierAutoCandidateRules(t *testing.T) {
+	rt, _ := companionTierRuntime(t, "werk", "zz-b", "zz-a")
+	checkCompanionTier(t, "slotless built-in first", rt.resolveRole(mcp.CompanionRoleBody), tierWant{"werk", "small", "", "", ""})
+	rt2, _ := companionTierRuntime(t, "zz-b", "zz-a")
+	checkCompanionTier(t, "custom by name", rt2.resolveRole(mcp.CompanionRoleWork), tierWant{"zz-a", "medium", "", "", ""})
+
+	cfg := wsconfig.Options{CacheHome: filepath.Join(t.TempDir(), "cache"), ConfigHome: filepath.Join(t.TempDir(), "config")}
+	backend := &companionTestBackend{}
+	regs := map[string]wsagent.BackendRegistration{
+		"claude": {Backend: backend, LeadProfile: wsagent.LeadProfileFor("claude")},
+		"codex":  {Backend: backend, LeadProfile: wsagent.LeadProfileFor("codex"), WorkerCapable: true, WorkerProfile: wsagent.AgentWorkerProfile("codex")},
+	}
+	lead := newCompanionRuntime(t.TempDir(), t.TempDir(), wsagent.NewRunner(wsagent.Options{Dir: t.TempDir(), Backends: regs}), nil, nil)
+	lead.configOpts = cfg
+	if got := lead.resolveRole(mcp.CompanionRoleBody); got.Harness != "codex" {
+		t.Fatalf("auto picked a harness that cannot run workers: %+v", got)
+	}
+	setCompanionTier(t, cfg, wsconfig.ScopeGlobal, wsdashboard.CompanionBodyTierKey, "claude.small")
+	if got := lead.resolveRole(mcp.CompanionRoleBody); got.Harness != "codex" || got.FallbackReason == "" {
+		t.Fatalf("an explicit worker-less harness must fall back: %+v", got)
+	}
+}
+
+// A malformed agent.tier_aliases breaks only alias lookups: a plain name
+// falls back to auto with the parse error, while <harness>.<tier> resolves.
+func TestCompanionTierMalformedAliasesFallBackOnlyForNames(t *testing.T) {
+	rt, cfg := companionTierRuntime(t, "claude", "codex")
+	setCompanionTier(t, cfg, wsconfig.ScopeGlobal, wsconfig.ItemAgentTierAliases, "broken")
+	setCompanionTier(t, cfg, wsconfig.ScopeGlobal, wsdashboard.CompanionBodyTierKey, "brain")
+	checkCompanionTier(t, "alias", rt.resolveRole(mcp.CompanionRoleBody), tierWant{"claude", "small", "claude-small", "small-effort", "is not name="})
+	setCompanionTier(t, cfg, wsconfig.ScopeGlobal, wsdashboard.CompanionBodyTierKey, "codex.small")
+	checkCompanionTier(t, "dotted", rt.resolveRole(mcp.CompanionRoleBody), tierWant{"codex", "small", "codex-small", "small-effort", ""})
 }

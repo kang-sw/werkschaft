@@ -3,6 +3,7 @@ package wsagent
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -13,6 +14,10 @@ import (
 // CompanionTierAuto is the companion tier setting's explicit auto spelling;
 // the empty value means the same.
 const CompanionTierAuto = "auto"
+
+// companionTierValue is the dashboard.companion_*_tier manifest pattern for
+// a non-empty value; an option outside it could not be saved.
+var companionTierValue = regexp.MustCompile(`^[a-z0-9][a-z0-9_:-]{0,63}(\.[a-z0-9][a-z0-9_-]{0,15})?$`)
 
 // Companion tier option kinds.
 const (
@@ -199,8 +204,10 @@ func (r *Runner) companionExplicitTier(cfg wsconfig.Options, raw, first string, 
 // CompanionTierOptions lists what the companion tier selectors offer: auto,
 // every companion harness's set agents.tier slot as <harness>.<tier>, then
 // each agent.tier_aliases name and agent.tier_routing bundle that resolves
-// to a launchable binding now. Slots read agents.tier directly, so listing
-// never fetches a model catalog.
+// to a launchable binding now. Harness slots read agents.tier directly;
+// alias and bundle names resolve as agent.spawn does, which can read a
+// cached model catalog for a harness with no slot of its own. A name the
+// tier keys' manifest pattern rejects is left out, since saving it would fail.
 func (r *Runner) CompanionTierOptions(cfg wsconfig.Options) []CompanionTierOption {
 	out := []CompanionTierOption{{Value: CompanionTierAuto, Kind: CompanionTierKindAuto}}
 	harnesses := r.companionHarnesses()
@@ -223,7 +230,9 @@ func (r *Runner) CompanionTierOptions(cfg wsconfig.Options) []CompanionTierOptio
 	aliases, _ := tierAliases(cfg)
 	names := make([]string, 0, len(aliases))
 	for name := range aliases {
-		names = append(names, name)
+		if companionTierValue.MatchString(name) {
+			names = append(names, name)
+		}
 	}
 	sort.Strings(names)
 	for _, name := range names {
@@ -239,7 +248,7 @@ func (r *Runner) CompanionTierOptions(cfg wsconfig.Options) []CompanionTierOptio
 	bundles := graph.Bundles()
 	bundleNames := make([]string, 0, len(bundles))
 	for name := range bundles {
-		if _, shadowed := aliases[name]; !shadowed {
+		if _, shadowed := aliases[name]; !shadowed && companionTierValue.MatchString(name) {
 			bundleNames = append(bundleNames, name)
 		}
 	}

@@ -164,6 +164,43 @@ test("a failed readback says so, and a read-only scope disables the selectors", 
   assert.equal(pillFor(h.root, "body").textContent, "claude · claude-small · low");
 });
 
+test("a refresh keeps the last readback on screen and drops stale answers", async () => {
+  const pending = [];
+  const h = setup({ respond: () => new Promise(resolve => pending.push(resolve)) });
+  const answer = (i, data) => pending[i]({ ok: true, status: 200, json: async () => ({ resolved_agents: data }) });
+  answer(0, readback());
+  await tick();
+  h.mod.refresh(h.ctx.rerender);
+  h.ctx.rerender();
+  assert.equal(pillFor(h.root, "body").textContent, "claude · claude-small · low", "the old readback stays while reloading");
+  assert.equal(selectFor(h.root, "body").children.length, 4, "the options stay while reloading");
+  h.mod.refresh(h.ctx.rerender);
+  answer(2, readback({ body: { harness: "codex", model: "codex-small", available: true } }));
+  await tick();
+  answer(1, readback({ body: { harness: "stale", available: true } }));
+  await tick();
+  assert.equal(pillFor(h.root, "body").textContent, "codex · codex-small", "a superseded answer is ignored");
+  h.mod.resetState();
+  h.ctx.rerender();
+  h.mod.resetState();
+  answer(3, readback({ body: { harness: "stale", available: true } }));
+  await tick();
+  h.ctx.rerender();
+  assert.equal(pillFor(h.root, "body").textContent, "js.settings.companion.agents.loading", "a reset drops the in-flight answer");
+});
+
+test("a rejected save still refreshes the readback", async () => {
+  const h = setup();
+  await tick();
+  h.ctx.submitConfig = async () => { throw new Error("denied"); };
+  const select = selectFor(h.root, "body");
+  select.value = "claude.small";
+  select.listeners.change[0]();
+  await tick();
+  await tick();
+  assert.equal(h.fetches.length, 2);
+});
+
 test("the card hides with its rows and never fetches while hidden", async () => {
   const h = setup({ matches: entry => entry.key === WORK });
   assert.equal(byData(h.root, "companionAgentRole").length, 1);
