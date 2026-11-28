@@ -10,6 +10,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wscred"
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
 // BackendWerk is the daemon's builtin Go agent harness. Its model loop
@@ -36,6 +37,9 @@ type WerkBackend struct {
 	// read its last successful publication from memory.
 	modelWindows  *atomic.Pointer[map[string]int64]
 	openAIWindows *atomic.Pointer[map[string]int64]
+	// onUsage receives per-request werk token/cost deltas for the daemon's
+	// batched wsmeta store.
+	onUsage func(wsdashboard.WerkUsageDelta)
 }
 
 // werkWorkerText is the instruction text of the harness's worker profile.
@@ -98,11 +102,20 @@ func (b WerkBackend) withProviderCredentials(source wscred.Source, status func(p
 	return b
 }
 
+func (b WerkBackend) withWerkUsageReporter(fn func(wsdashboard.WerkUsageDelta)) Backend {
+	b.onUsage = fn
+	return b
+}
+
 // Executable is empty for the in-daemon harness.
 func (b WerkBackend) Executable() string { return "" }
 
 type credentialAware interface {
 	withProviderCredentials(source wscred.Source, status func(provider string) (bool, error)) Backend
+}
+
+type werkUsageReporterAware interface {
+	withWerkUsageReporter(fn func(wsdashboard.WerkUsageDelta)) Backend
 }
 
 // WithProviderCredentials binds the daemon's source and status lookup to
@@ -111,6 +124,18 @@ func WithProviderCredentials(registrations map[string]BackendRegistration, sourc
 	for name, reg := range registrations {
 		if aware, ok := reg.Backend.(credentialAware); ok {
 			reg.Backend = aware.withProviderCredentials(source, status)
+			registrations[name] = reg
+		}
+	}
+	return registrations
+}
+
+// WithWerkUsageReporter binds a daemon usage recorder callback to registered
+// backends that emit per-model werk usage deltas.
+func WithWerkUsageReporter(registrations map[string]BackendRegistration, fn func(wsdashboard.WerkUsageDelta)) map[string]BackendRegistration {
+	for name, reg := range registrations {
+		if aware, ok := reg.Backend.(werkUsageReporterAware); ok {
+			reg.Backend = aware.withWerkUsageReporter(fn)
 			registrations[name] = reg
 		}
 	}

@@ -103,6 +103,12 @@ type planUsageStore struct {
 	detected     usageDetectMemo
 	gptSlotID    string
 	claudeSlotID string
+	// Werk per-model usage aggregates (RAM cache + debounced wsmeta WAL deltas).
+	// Guarded by mu.
+	werkUsage         map[wsmeta.WerkModelUsageKey]wsmeta.WerkModelUsage
+	werkPending       map[wsmeta.WerkModelUsageKey]wsmeta.WerkModelUsage
+	werkFlushTimer    *time.Timer
+	werkFlushDebounce time.Duration
 }
 
 // invalidateSlots drops the memoized credential detection and resets cached
@@ -257,6 +263,7 @@ func (s *planUsageStore) loadFromMetaLocked(snap *wsmeta.Snapshot) {
 	s.loadHistoryFromMetaLocked(&s.hist, defaultHistorySpec, snap)
 	s.loadHistoryFromMetaLocked(&s.codexHist, codexFiveHourHistorySpec, snap)
 	s.loadHistoryFromMetaLocked(&s.agyHist, agyHistorySpec, snap)
+	s.loadWerkUsageFromMetaLocked(snap)
 }
 
 // beginClose marks the store closed and cancels its daemon-lifetime context so
@@ -267,6 +274,7 @@ func (s *planUsageStore) beginClose() {
 	}
 	s.mu.Lock()
 	s.closed = true
+	s.stopWerkFlushLocked()
 	cancel := s.lifetimeCancel
 	s.mu.Unlock()
 	if cancel != nil {
@@ -289,6 +297,7 @@ func (s *planUsageStore) waitClose(ctx context.Context) {
 	case <-done:
 	case <-ctx.Done():
 	}
+	_ = s.flushWerkUsage(ctx)
 }
 
 func (s *planUsageStore) close(ctx context.Context) {
