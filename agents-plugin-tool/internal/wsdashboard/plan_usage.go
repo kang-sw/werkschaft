@@ -98,7 +98,60 @@ type planUsageStore struct {
 	// Write seam for all usage files; nil means writePrivateFile.
 	writeFile func(dir, name string, data []byte) error
 	// detected memoizes detect() by the credential files' stats. Guarded by mu.
-	detected usageDetectMemo
+	detected     usageDetectMemo
+	gptSlotID    string
+	claudeSlotID string
+}
+
+// invalidateSlots drops the memoized credential detection and resets cached
+// active-slot probe state when a harness default slot changes (D13).
+func (s *planUsageStore) invalidateSlots() {
+	if s == nil {
+		return
+	}
+	var gptActive, claudeActive string
+	if s.accountSlots != nil {
+		active := s.accountSlots.ActiveSlots()
+		for h, id := range active {
+			if s.harnesses.pushesClaudeUsage(h) {
+				claudeActive = id
+			} else if s.harnesses.separateFiveHour(h) {
+				gptActive = id
+			}
+		}
+		if gptActive == "" {
+			for h, id := range active {
+				if !s.harnesses.pushesClaudeUsage(h) {
+					gptActive = id
+					break
+				}
+			}
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.detected = usageDetectMemo{}
+	if claudeActive != "" {
+		prev := s.claudeSlotID
+		if prev == "" {
+			prev = wscred.DefaultAccountSlotID
+		}
+		if claudeActive != prev {
+			s.claude = planUsageEntry{}
+		}
+		s.claudeSlotID = claudeActive
+	}
+	if gptActive != "" {
+		prev := s.gptSlotID
+		if prev == "" {
+			prev = wscred.DefaultAccountSlotID
+		}
+		if gptActive != prev {
+			s.gpt = planUsageEntry{}
+			s.lastQuery = time.Time{}
+		}
+		s.gptSlotID = gptActive
+	}
 }
 
 // usageCredStat identifies one credential file version. Only the detected
@@ -385,14 +438,7 @@ func readUsageJSON(path string, out any) bool {
 	return err == nil && json.Unmarshal(raw, out) == nil
 }
 func (s *planUsageStore) configHome(key, fallback string) string {
-	harness := ""
-	switch key {
-	case "CODEX_HOME":
-		harness = "codex"
-	case "CLAUDE_CONFIG_DIR":
-		harness = "claude"
-	}
-	if harness != "" {
+	if harness := wscred.HarnessForConfigEnv(key); harness != "" {
 		var slotDir string
 		if s.accountSlots != nil {
 			slotDir = s.accountSlots.ActiveSlot(harness).ConfigDir

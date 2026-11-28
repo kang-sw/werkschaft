@@ -20,6 +20,8 @@ type browserCredentialStore interface {
 	VerifyOpenRouterKey(context.Context, wscred.Secret) (wscred.ChangeResult, error)
 	RecheckOpenRouterKey(context.Context) (wscred.ChangeResult, error)
 	SignInOpenAI(context.Context, wscred.OpenAISignIn, func(string) error) error
+	SignInOpenAIWithCallbacks(context.Context, wscred.OpenAISignIn, wscred.OpenAISignInCallbacks) error
+	SetActiveOpenAIAccount(clientID string) error
 	SignOutOpenAI(clientID string) error
 	SetActiveOpenAIBackgroundConsent(clientID string, prompt uint64, allowed bool) error
 	OpenAIConsentPrompt() (uint64, <-chan struct{})
@@ -27,14 +29,18 @@ type browserCredentialStore interface {
 }
 
 type accountStatus struct {
-	LoopbackPeer  bool                        `json:"loopback_peer"`
-	OpenRouter    wscred.ProviderStatus       `json:"openrouter"`
-	OpenAI        *wscred.OpenAIAccountStatus `json:"openai"`
-	OpenAIReady   bool                        `json:"openai_ready"`
-	ConsentPrompt uint64                      `json:"consent_prompt"`
-	SignIn        accountSignInStatus         `json:"sign_in"`
-	LocalKeys     []wscred.ProviderStatus     `json:"local_keys"`
-	VoiceKeys     []wscred.ProviderStatus     `json:"voice_keys"`
+	LoopbackPeer   bool                                `json:"loopback_peer"`
+	OpenRouter     wscred.ProviderStatus               `json:"openrouter"`
+	OpenAI         *wscred.OpenAIAccountStatus         `json:"openai"`
+	OpenAIAccounts []wscred.OpenAIAccountStatus        `json:"openai_accounts,omitempty"`
+	OpenAIReady    bool                                `json:"openai_ready"`
+	ConsentPrompt  uint64                              `json:"consent_prompt"`
+	SignIn         accountSignInStatus                 `json:"sign_in"`
+	LocalKeys      []wscred.ProviderStatus             `json:"local_keys"`
+	VoiceKeys      []wscred.ProviderStatus             `json:"voice_keys"`
+	Slots          map[string][]wscred.AccountSlotView `json:"slots,omitempty"`
+	SlotSignIn     *accountSlotSignInStatus            `json:"slot_sign_in,omitempty"`
+	Conversations  []AccountSlotConversation           `json:"conversations,omitempty"`
 }
 
 func accountError(w http.ResponseWriter, status int, code string) {
@@ -81,7 +87,7 @@ func (d *Daemon) handleAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	action := r.URL.Path[len(accountPrefix):]
 	method := http.MethodPost
-	if action == "status" || action == "sign-in/status" {
+	if action == "status" || action == "sign-in/status" || action == "slots/sign-in/status" {
 		method = http.MethodGet
 	}
 	if r.Method != method {
@@ -95,8 +101,26 @@ func (d *Daemon) handleAccount(w http.ResponseWriter, r *http.Request) {
 		accountError(w, http.StatusForbidden, "origin_required")
 		return
 	}
+	switch action {
+	case "slots/add":
+		d.handleAccountSlotsAdd(w, r)
+		return
+	case "slots/remove":
+		d.handleAccountSlotsRemove(w, r)
+		return
+	case "slots/switch":
+		d.handleAccountSlotsSwitch(w, r)
+		return
+	case "slots/sign-in/start", "slots/sign-in/status", "slots/sign-in/complete", "slots/sign-in/cancel":
+		d.handleAccountSlotSignIn(w, r, action)
+		return
+	}
 	store, ok := d.credentials.(browserCredentialStore)
 	if !ok {
+		if action == "status" && d.accountSlots != nil {
+			d.handleAccountStatus(w, r, nil)
+			return
+		}
 		accountError(w, http.StatusServiceUnavailable, "credential_unavailable")
 		return
 	}
@@ -109,7 +133,9 @@ func (d *Daemon) handleAccount(w http.ResponseWriter, r *http.Request) {
 		d.handleAccountEndpoint(w, r, store)
 	case "consent", "consent/dismiss":
 		d.handleAccountConsent(w, r, store, action == "consent/dismiss")
-	case "sign-in/start", "sign-in/status", "sign-in/cancel", "sign-out":
+	case "openai/switch":
+		d.handleAccountOpenAISwitch(w, r, store)
+	case "sign-in/start", "sign-in/status", "sign-in/complete", "sign-in/cancel", "sign-out":
 		d.handleAccountSignIn(w, r, store, action)
 	default:
 		accountError(w, http.StatusNotFound, "not_found")
@@ -117,36 +143,54 @@ func (d *Daemon) handleAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Daemon) handleAccountStatus(w http.ResponseWriter, r *http.Request, store browserCredentialStore) {
-	providers, err := store.Status()
-	if err != nil {
-		accountStoreError(w, err)
-		return
-	}
 	var status accountStatus
 	status.LoopbackPeer = loopbackPeer(r.RemoteAddr)
-	status.ConsentPrompt, _ = store.OpenAIConsentPrompt()
 	status.SignIn = d.accountSignIn.status()
 	status.LocalKeys = []wscred.ProviderStatus{}
 	status.VoiceKeys = []wscred.ProviderStatus{}
-	for _, provider := range providers {
-		switch provider.Provider {
-		case wscred.ProviderOpenRouter:
-			status.OpenRouter = provider
-		case wscred.ProviderOpenAI:
-			status.OpenAIReady = provider.Configured
-			for _, account := range provider.OpenAIAccounts {
-				if account.Active {
-					status.OpenAI = &account
-					break
+	if store != nil {
+		providers, err := store.Status()
+		if err != nil {
+			accountStoreError(w, err)
+			return
+		}
+		status.ConsentPrompt, _ = store.OpenAIConsentPrompt()
+		for _, provider := range providers {
+			switch provider.Provider {
+			case wscred.ProviderOpenRouter:
+				status.OpenRouter = provider
+			case wscred.ProviderOpenAI:
+				status.OpenAIReady = provider.Configured
+				if len(provider.OpenAIAccounts) > 0 {
+					status.OpenAIAccounts = append([]wscred.OpenAIAccountStatus(nil), provider.OpenAIAccounts...)
+				}
+				for _, account := range provider.OpenAIAccounts {
+					if account.Active {
+						a := account
+						status.OpenAI = &a
+						break
+					}
+				}
+			default:
+				if wscred.IsVoiceOnly(provider.Provider) {
+					status.VoiceKeys = append(status.VoiceKeys, provider)
+				} else {
+					status.LocalKeys = append(status.LocalKeys, provider)
 				}
 			}
-		default:
-			if wscred.IsVoiceOnly(provider.Provider) {
-				status.VoiceKeys = append(status.VoiceKeys, provider)
-			} else {
-				status.LocalKeys = append(status.LocalKeys, provider)
-			}
 		}
+	}
+	if d.accountSlots != nil {
+		slots := map[string][]wscred.AccountSlotView{}
+		for _, harness := range wscred.SlotLoginHarnesses() {
+			slots[harness] = d.accountSlots.Slots(harness)
+		}
+		status.Slots = slots
+		slotSignIn := d.slotSignIn.status()
+		status.SlotSignIn = &slotSignIn
+	}
+	if host, ok := d.agents.(AgentAccountSlotHost); ok {
+		status.Conversations = host.AccountSlotConversations("")
 	}
 	writeJSON(w, http.StatusOK, status)
 }
@@ -211,5 +255,6 @@ func (d *Daemon) handleAccountConsent(w http.ResponseWriter, r *http.Request, st
 		accountStoreError(w, err)
 		return
 	}
+	d.accountChanged()
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -74,8 +74,9 @@ type Request struct {
 	// directly (a worker), which a restricted provider admits only with
 	// the user's stored consent.
 	Background bool
-	// An inference request pins the registration admitted by the plan gate.
-	openAIAccount string
+	// OpenAIAccount optionally pins a specific registered OpenAI client_id for
+	// an in-flight turn or plan-gate admission; empty uses the active account.
+	OpenAIAccount string
 }
 
 // Source is what a consumer asks for credentials: the daemon's Store in the
@@ -101,6 +102,18 @@ var (
 	// ErrUnauthorized is the token route's refusal of an unknown or void
 	// session token.
 	ErrUnauthorized = errors.New("the session token is not valid")
+	// ErrOpenAIAccountNotFound reports a switch targeting an unknown OpenAI client_id.
+	ErrOpenAIAccountNotFound = errors.New("OpenAI account registration not found")
+	// ErrOpenAITokensMissing reports an OpenAI registration that lacks sign-in or access tokens.
+	ErrOpenAITokensMissing = errors.New("OpenAI account lacks sign-in tokens")
+	// ErrSignInStateMismatch reports a pasted sign-in callback whose OAuth state does not match.
+	ErrSignInStateMismatch = errors.New("OpenAI sign-in state mismatch")
+	// ErrSignInClientIDMissing reports a dynamic OpenAI sign-in completion missing client_id.
+	ErrSignInClientIDMissing = errors.New("OpenAI dynamic registration requires the full redirect callback URL including client_id")
+	// ErrSignInInvalidCallback reports a malformed pasted callback URL or authorization code.
+	ErrSignInInvalidCallback = errors.New("invalid OpenAI sign-in callback or authorization code")
+	// ErrSignInAlreadyCompleted reports a completion attempt after the callback was already received.
+	ErrSignInAlreadyCompleted = errors.New("OpenAI sign-in callback was already received")
 )
 
 // ProviderError is a refusal for one provider; Err is ErrUnknownProvider,

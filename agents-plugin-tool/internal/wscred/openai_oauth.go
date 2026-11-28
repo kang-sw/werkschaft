@@ -141,13 +141,33 @@ func (o openAIOAuth) grant(ctx context.Context, form url.Values) (openAITokens, 
 	return tokens, err
 }
 
-func (o openAIOAuth) authorize(ctx context.Context, hostID string, account openAIAccount, reconsent bool, openBrowser func(string) error, now func() time.Time) (string, openAIIdentity, openAITokens, error) {
+// OpenAISignInReady carries the remote-login details for an active sign-in attempt.
+type OpenAISignInReady struct {
+	AuthorizeURL string
+	Dynamic      bool
+	Complete     func(input string) error
+}
+
+// OpenAISignInCallbacks configures dual local and remote OpenAI SIWC sign-in (D18).
+type OpenAISignInCallbacks struct {
+	// OpenBrowser opens the local one-time /auth/start/<token> entry URL.
+	// May be nil when starting in copy-link-only mode.
+	OpenBrowser func(startURL string) error
+	// IgnoreBrowserError keeps waiting for manual callback/code completion when
+	// OpenBrowser is nil or returns an error.
+	IgnoreBrowserError bool
+	// OnReady receives the copyable authorize URL (without id_token_hint) and
+	// the manual completion hook once the local listener is bound.
+	OnReady func(info OpenAISignInReady)
+}
+
+func (o openAIOAuth) authorize(ctx context.Context, hostID string, account openAIAccount, reconsent bool, cb OpenAISignInCallbacks, now func() time.Time) (string, openAIIdentity, openAITokens, error) {
 	clientID := account.ClientID
 	if clientID == "" {
 		clientID = dynamicClientID
 	}
 	for attempt := 0; ; attempt++ {
-		callback, verifier, redirect, nonce, err := o.browserCode(ctx, hostID, clientID, account.IDToken, reconsent, openBrowser)
+		callback, verifier, redirect, nonce, err := o.browserCode(ctx, hostID, clientID, account.IDToken, reconsent, cb)
 		if err != nil {
 			return "", openAIIdentity{}, openAITokens{}, err
 		}
@@ -175,7 +195,7 @@ type openAICode struct {
 	err            error
 }
 
-func (o openAIOAuth) browserCode(ctx context.Context, hostID, clientID, idHint string, reconsent bool, openBrowser func(string) error) (openAICode, string, string, string, error) {
+func (o openAIOAuth) browserCode(ctx context.Context, hostID, clientID, idHint string, reconsent bool, cb OpenAISignInCallbacks) (openAICode, string, string, string, error) {
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		return openAICode{}, "", "", "", errors.New("could not start the local OpenAI sign-in listener")
@@ -194,11 +214,15 @@ func (o openAIOAuth) browserCode(ctx context.Context, hostID, clientID, idHint s
 	}
 	if clientID == dynamicClientID {
 		query.Set("agent_name_hint", "ws")
-	} else if idHint != "" {
-		query.Set("id_token_hint", idHint)
 	}
 	if reconsent && clientID != dynamicClientID {
 		query.Set("prompt", "consent")
+	}
+	// The copyable URL deliberately omits id_token_hint so the prior id_token
+	// is never exposed in status responses or copyable remote links (D18).
+	copyURL := o.issuer + "/api/accounts/authorize?" + query.Encode()
+	if clientID != dynamicClientID && idHint != "" {
+		query.Set("id_token_hint", idHint)
 	}
 	authorizeURL := o.issuer + "/api/accounts/authorize?" + query.Encode()
 
@@ -262,7 +286,35 @@ func (o openAIOAuth) browserCode(ctx context.Context, hostID, clientID, idHint s
 			_ = server.Close()
 		}
 	}()
-	if err := openBrowser(local + startPath); err != nil {
+	complete := func(raw string) error {
+		code, err := parseManualOpenAICallback(raw, state, clientID)
+		if err != nil {
+			return err
+		}
+		used := true
+		callbackOnce.Do(func() {
+			used = false
+			result <- code
+		})
+		if used {
+			return ErrSignInAlreadyCompleted
+		}
+		return nil
+	}
+	if cb.OnReady != nil {
+		cb.OnReady(OpenAISignInReady{
+			AuthorizeURL: copyURL,
+			Dynamic:      clientID == dynamicClientID,
+			Complete:     complete,
+		})
+	}
+	var openErr error
+	if cb.OpenBrowser != nil {
+		openErr = cb.OpenBrowser(local + startPath)
+	} else {
+		openErr = errors.New("no browser launcher configured")
+	}
+	if openErr != nil && !cb.IgnoreBrowserError {
 		return openAICode{}, "", "", "", errors.New("could not open the browser for OpenAI sign-in")
 	}
 	select {
@@ -273,6 +325,48 @@ func (o openAIOAuth) browserCode(ctx context.Context, hostID, clientID, idHint s
 	case <-serveDone:
 		return openAICode{}, "", "", "", errors.New("the local OpenAI sign-in listener stopped")
 	}
+}
+
+func parseManualOpenAICallback(raw, expectedState, clientID string) (openAICode, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || len(raw) > 8192 {
+		return openAICode{}, ErrSignInInvalidCallback
+	}
+	if strings.Contains(raw, "://") || strings.Contains(raw, "?") || strings.Contains(raw, "code=") || strings.Contains(raw, "state=") {
+		rawQuery := raw
+		if u, err := url.Parse(raw); err == nil && u.RawQuery != "" {
+			rawQuery = u.RawQuery
+		} else if idx := strings.IndexByte(raw, '?'); idx >= 0 {
+			rawQuery = raw[idx+1:]
+		}
+		q, err := url.ParseQuery(rawQuery)
+		if err != nil {
+			return openAICode{}, ErrSignInInvalidCallback
+		}
+		if len(q["state"]) != 1 || subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(expectedState)) != 1 {
+			return openAICode{}, ErrSignInStateMismatch
+		}
+		if len(q["error"]) == 0 && len(q["code"]) == 1 && q.Get("code") != "" && clientID == dynamicClientID {
+			issued := q.Get("client_id")
+			if issued == "" || issued == dynamicClientID {
+				return openAICode{}, ErrSignInClientIDMissing
+			}
+		}
+		code := parseOpenAICallback(q, clientID)
+		if code.err != nil {
+			return openAICode{}, ErrSignInInvalidCallback
+		}
+		return code, nil
+	}
+	for i := 0; i < len(raw); i++ {
+		if raw[i] <= ' ' || raw[i] >= 0x7f {
+			return openAICode{}, ErrSignInInvalidCallback
+		}
+	}
+	if clientID == dynamicClientID {
+		return openAICode{}, ErrSignInClientIDMissing
+	}
+	return openAICode{code: raw, clientID: clientID}, nil
 }
 
 func tokenRandom() string {

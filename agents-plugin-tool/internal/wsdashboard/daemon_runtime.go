@@ -65,6 +65,19 @@ func (d *Daemon) agentChanged(replyID, _ string) {
 	d.acks.poke(replyID)
 }
 
+// accountChanged notifies connected local viewers and invalidates cached
+// per-slot plan usage detection whenever account credentials or active slots
+// change (D11/D13).
+func (d *Daemon) accountChanged() {
+	if d.planUsage != nil {
+		d.planUsage.invalidateSlots()
+	}
+	d.accountRev.Add(1)
+	if d.broker != nil {
+		d.broker.signalAll()
+	}
+}
+
 // ExecJobsChanged re-renders the rail once after the live exec job counts
 // (DaemonOptions.ExecJobs) changed. It reads no file: it wakes the rail
 // streams as a layout change does, and their render reuses its cached
@@ -172,6 +185,7 @@ func (d *Daemon) Close() {
 		close(d.stop)
 		d.closeMeta()
 		d.accountSignIn.stop()
+		d.slotSignIn.stop()
 		// The composer's runs and background loop end with the stop (a
 		// running launch converts on it); none writes after Close returns.
 		d.composerWait()
@@ -249,6 +263,9 @@ func (d *Daemon) Close() {
 		})
 		if d.credentials != nil {
 			runFlush(d.credentials.Close)
+		}
+		if d.accountSlots != nil {
+			runFlush(d.accountSlots.Close)
 		}
 		if d.beforeUnlock != nil {
 			runFlush(d.beforeUnlock)

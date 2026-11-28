@@ -163,6 +163,26 @@ func harnessHomeSpec(harness string) (envKey, defaultSubdir string, ok bool) {
 	}
 }
 
+// HarnessForConfigEnv maps a provider config-dir environment variable to its
+// canonical slot harness name, or "" if unknown.
+func HarnessForConfigEnv(envKey string) string {
+	switch envKey {
+	case "CODEX_HOME":
+		return "codex"
+	case "CLAUDE_CONFIG_DIR":
+		return "claude"
+	default:
+		return ""
+	}
+}
+
+// SlotConfigEnvKey returns the environment variable used to isolate config_dir
+// for harness (e.g. CODEX_HOME, CLAUDE_CONFIG_DIR), or "" if unsupported.
+func SlotConfigEnvKey(harness string) string {
+	key, _, _ := harnessHomeSpec(harness)
+	return key
+}
+
 // ResolveHarnessHome resolves CODEX_HOME / CLAUDE_CONFIG_DIR using the D10
 // precedence order:
 //  1. Explicit slot config_dir (SlotConfigDir)
@@ -244,11 +264,14 @@ func removeRegisteredSlotDirs(reg *AccountSlotRegistry) {
 }
 
 // RegisteredSlotDirs returns every non-empty account slot config_dir currently
-// loaded across live AccountSlotRegistry instances (in-memory, zero disk I/O).
+// loaded across live AccountSlotRegistry instances plus any in-progress staging
+// slot directories (in-memory, zero disk I/O).
 func RegisteredSlotDirs() []string {
 	slotDirDenyRegistry.mu.RLock()
+	tempSlotDirs.mu.RLock()
+	defer tempSlotDirs.mu.RUnlock()
 	defer slotDirDenyRegistry.mu.RUnlock()
-	if len(slotDirDenyRegistry.dirs) == 0 {
+	if len(slotDirDenyRegistry.dirs) == 0 && len(tempSlotDirs.dirs) == 0 {
 		return nil
 	}
 	seen := map[string]bool{}
@@ -259,6 +282,12 @@ func RegisteredSlotDirs() []string {
 				seen[dir] = true
 				out = append(out, dir)
 			}
+		}
+	}
+	for dir := range tempSlotDirs.dirs {
+		if dir != "" && !seen[dir] {
+			seen[dir] = true
+			out = append(out, dir)
 		}
 	}
 	slices.Sort(out)
@@ -574,6 +603,18 @@ func (r *AccountSlotRegistry) ActiveSlot(harness string) AccountSlotView {
 		}
 	}
 	return AccountSlotView{ID: DefaultAccountSlotID, Harness: harness, Label: "Default", Implicit: true, Active: true}
+}
+
+// ActiveSlots returns the active slot ID per supported harness from memory.
+func (r *AccountSlotRegistry) ActiveSlots() map[string]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_ = r.loadLocked(false)
+	out := make(map[string]string, 2)
+	for _, h := range []string{"codex", "claude"} {
+		out[h] = r.activeIDLocked(h)
+	}
+	return out
 }
 
 // ResolveSlot resolves (harness, slotID), treating "" and DefaultAccountSlotID

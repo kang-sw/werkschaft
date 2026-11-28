@@ -18,11 +18,13 @@ import (
 
 type accountTestStore struct {
 	*wscred.Store
-	verify  func(context.Context, wscred.Secret) (wscred.ChangeResult, error)
-	signIn  func(context.Context, wscred.OpenAISignIn, func(string) error) error
-	allow   func(string, uint64, bool) error
-	dismiss func(uint64)
-	signOut func(string) error
+	verify      func(context.Context, wscred.Secret) (wscred.ChangeResult, error)
+	signIn      func(context.Context, wscred.OpenAISignIn, func(string) error) error
+	signInCB    func(context.Context, wscred.OpenAISignIn, wscred.OpenAISignInCallbacks) error
+	setActiveOA func(string) error
+	allow       func(string, uint64, bool) error
+	dismiss     func(uint64)
+	signOut     func(string) error
 }
 
 func (s *accountTestStore) VerifyOpenRouterKey(ctx context.Context, key wscred.Secret) (wscred.ChangeResult, error) {
@@ -31,6 +33,23 @@ func (s *accountTestStore) VerifyOpenRouterKey(ctx context.Context, key wscred.S
 
 func (s *accountTestStore) SignInOpenAI(ctx context.Context, selectAccount wscred.OpenAISignIn, open func(string) error) error {
 	return s.signIn(ctx, selectAccount, open)
+}
+
+func (s *accountTestStore) SignInOpenAIWithCallbacks(ctx context.Context, selectAccount wscred.OpenAISignIn, cb wscred.OpenAISignInCallbacks) error {
+	if s.signInCB != nil {
+		return s.signInCB(ctx, selectAccount, cb)
+	}
+	if s.signIn != nil {
+		return s.signIn(ctx, selectAccount, cb.OpenBrowser)
+	}
+	return s.Store.SignInOpenAIWithCallbacks(ctx, selectAccount, cb)
+}
+
+func (s *accountTestStore) SetActiveOpenAIAccount(clientID string) error {
+	if s.setActiveOA != nil {
+		return s.setActiveOA(clientID)
+	}
+	return s.Store.SetActiveOpenAIAccount(clientID)
 }
 
 func (s *accountTestStore) SetActiveOpenAIBackgroundConsent(clientID string, prompt uint64, allowed bool) error {

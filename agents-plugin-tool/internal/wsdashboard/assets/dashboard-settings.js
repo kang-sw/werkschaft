@@ -1786,8 +1786,10 @@ var wsSettingsChoiceLabels = {
     if (account) {
       account.refreshStatus();
       window.parent.document.addEventListener("ws-openai-consent", account.refreshStatus);
+      window.parent.document.addEventListener("ws-account-changed", account.refreshStatus);
       window.addEventListener("pagehide", function () {
         window.parent.document.removeEventListener("ws-openai-consent", account.refreshStatus);
+        window.parent.document.removeEventListener("ws-account-changed", account.refreshStatus);
       });
       if (activeSection === "account" && requestedProvider) account.focus(requestedProvider);
     }

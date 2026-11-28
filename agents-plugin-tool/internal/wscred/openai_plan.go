@@ -28,17 +28,29 @@ type openAIPlanPause struct {
 	probing bool
 }
 
-// BeginOpenAIPlanRequest admits a plan-backed inference request before any
-// credential refresh. A paused registration admits one operator probe at a
-// time. The Store lives only in this daemon, as does the pause.
+// BeginOpenAIPlanRequest admits a plan-backed inference request for the active
+// registration before any credential refresh. A paused registration admits one
+// operator probe at a time. The Store lives only in this daemon, as does the pause.
 func (s *Store) BeginOpenAIPlanRequest(ctx context.Context, background bool) (OpenAIPlanRequest, error) {
+	return s.BeginOpenAIPlanRequestFor(ctx, "", background)
+}
+
+// BeginOpenAIPlanRequestFor admits a plan-backed inference request for a
+// specific registered clientID (or the active account when clientID is empty),
+// allowing a turn-pinned request to finish on its original account after an
+// account switch (D7).
+func (s *Store) BeginOpenAIPlanRequestFor(ctx context.Context, clientID string, background bool) (OpenAIPlanRequest, error) {
 	s.mu.Lock()
 	if err := s.loadLocked(false); err != nil {
 		s.mu.Unlock()
 		return OpenAIPlanRequest{}, err
 	}
-	account := s.openAIAccount.ClientID
-	if account == "" || s.openAIAccount.IDToken == "" {
+	acct := s.openAIAccount
+	if clientID != "" && clientID != acct.ClientID {
+		acct = s.doc.openAIState().account(clientID)
+	}
+	account := acct.ClientID
+	if account == "" || acct.IDToken == "" {
 		s.mu.Unlock()
 		return OpenAIPlanRequest{}, openAIProviderError(ErrNotConfigured)
 	}
@@ -61,7 +73,7 @@ func (s *Store) BeginOpenAIPlanRequest(ctx context.Context, background bool) (Op
 				delete(s.openAIPlanPauses, account)
 			}
 		}
-		if outcome == OpenAIPlanLimitExceeded && current == nil && s.openAIAccount.ClientID == account {
+		if outcome == OpenAIPlanLimitExceeded && current == nil && s.doc.openAIState().account(account).ClientID == account {
 			if s.openAIPlanPauses == nil {
 				s.openAIPlanPauses = make(map[string]*openAIPlanPause)
 			}
@@ -70,7 +82,7 @@ func (s *Store) BeginOpenAIPlanRequest(ctx context.Context, background bool) (Op
 	}
 
 	credential, err := s.openAICredential(ctx, Request{
-		Provider: ProviderOpenAI, AgentSession: true, Background: background, openAIAccount: account,
+		Provider: ProviderOpenAI, AgentSession: true, Background: background, OpenAIAccount: account,
 	})
 	if err != nil {
 		finish(OpenAIPlanUnchanged)

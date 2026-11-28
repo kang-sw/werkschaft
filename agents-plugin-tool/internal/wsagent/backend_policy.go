@@ -237,6 +237,32 @@ type ephemeralStatePruner interface {
 	pruneEphemeralStateDir(dir, keepSession string, maxKeep int)
 }
 
+// accountSlotContinuity is implemented by a backend that supports Path 2a
+// cross-slot native session resume (pre-flight auth check, transcript copy
+// without shared auth/db files, and post-resume turn-rejection detection for
+// automatic 2a -> 2b rotation fallback). Backends that do not implement it
+// take Path 2b directly on immediate account slot switches.
+type accountSlotContinuity interface {
+	slotAuthPreflight(configDir string) error
+	migrateSlotSession(srcConfigDir, dstConfigDir, sessionID string) error
+	isSlot2aTurnRejection(err error) bool
+}
+
+// slotHomeBinder is implemented by a backend whose Choices/cache lookup reads
+// the active account slot's config directory from the runner's registry.
+type slotHomeBinder interface {
+	withSlotHomeResolver(resolve func() string) Backend
+}
+
+func (r *Runner) slotContinuity(backend string) accountSlotContinuity {
+	reg, ok := r.opts.Backends[backend]
+	if !ok || reg.Backend == nil {
+		return nil
+	}
+	sc, _ := reg.Backend.(accountSlotContinuity)
+	return sc
+}
+
 func (r *Runner) permissionPolicy(backend string) PermissionPolicy {
 	return r.opts.Backends[backend].Permission
 }

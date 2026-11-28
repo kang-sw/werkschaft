@@ -112,6 +112,9 @@ type Config struct {
 	// BeforeAppend, when set, runs in the background writer ahead of each log
 	// append (a seam for tests that delay the write).
 	BeforeAppend func(json.RawMessage) error
+	// WrapTurnContext, when set, decorates each turn's context at turn start
+	// (used to pin a turn-bound OpenAI account across all requests of a turn).
+	WrapTurnContext func(context.Context) context.Context
 }
 
 // Limits of the loop.
@@ -468,6 +471,9 @@ func (a *Agent) ServeCommands(ctx context.Context, cmds <-chan Command) error {
 		tctx, c := context.WithCancel(ctx)
 		if cmd.Interactive {
 			tctx = context.WithValue(tctx, interactiveTurnKey{}, true)
+		}
+		if a.cfg.WrapTurnContext != nil {
+			tctx = a.cfg.WrapTurnContext(tctx)
 		}
 		cancel, done, running = c, make(chan error, 1), true
 		turnID = cmd.TurnID

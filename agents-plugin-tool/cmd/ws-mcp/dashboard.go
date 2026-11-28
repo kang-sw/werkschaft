@@ -137,7 +137,13 @@ func dashboardCommand(args []string) {
 	} else {
 		credentials = wscred.NewStore(credPath)
 	}
-	agents := newAgentRunnerWithHired(dir, logw, trackerChanged.call, agyActivity.call, callQuotaResetAt, callOnHired, holders, boards, labels.label, credentials)
+	var accountSlots *wscred.AccountSlotRegistry
+	if slotsPath, err := wscred.DefaultAccountSlotsPath(""); err != nil {
+		fmt.Fprintf(logw, "dashboard: account slot registry unavailable: %v\n", err)
+	} else {
+		accountSlots = wscred.NewAccountSlotRegistry(slotsPath)
+	}
+	agents := newAgentRunnerWithHired(dir, logw, trackerChanged.call, agyActivity.call, callQuotaResetAt, callOnHired, holders, boards, labels.label, credentials, accountSlots)
 	// The hosted exec jobs bind after the runner starts (openHostedExec):
 	// until then no held report is released and no session sleeps.
 	agents.ExpectExecJobs()
@@ -214,10 +220,12 @@ func dashboardCommand(args []string) {
 		AgyCommand:     wsagent.AgyBackend{}.ResolveCommand,
 		// How each registered harness differs on the dashboard's surfaces,
 		// from its registration.
-		Harnesses:      agents.DashboardHarnesses(),
-		Agents:         agents,
-		Credentials:    credentials,
-		LeadNudges:     nudges,
+		Harnesses:         agents.DashboardHarnesses(),
+		Agents:            agents,
+		Credentials:       credentials,
+		AccountSlots:      accountSlots,
+		SlotAuthPreflight: wsagent.SlotAuthPreflight,
+		LeadNudges:        nudges,
 		Tracker:        &dashboardTracker{h: tracker, err: trackerErr, unregistered: func() { support.CloseUnregistered() }},
 		Holders:        holders,
 		Support:        support,
@@ -598,10 +606,10 @@ func newDashboardHolders(dir string, logw io.Writer, execLink *hostedExecLink) *
 // agyActivity runs after a hosted agy turn settles. labels resolves the
 // sender legend of the mail the runner delivers; nil shows none.
 func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func(), quotaResetAt func(backend, model string) int64, holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials *wscred.Store) *wsagent.Runner {
-	return newAgentRunnerWithHired(dir, logw, trackerChanged, agyActivity, quotaResetAt, nil, holders, boards, labels, credentials)
+	return newAgentRunnerWithHired(dir, logw, trackerChanged, agyActivity, quotaResetAt, nil, holders, boards, labels, credentials, nil)
 }
 
-func newAgentRunnerWithHired(dir string, logw io.Writer, trackerChanged, agyActivity func(), quotaResetAt func(backend, model string) int64, onHired func(replyID, requestID, label string), holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials *wscred.Store) *wsagent.Runner {
+func newAgentRunnerWithHired(dir string, logw io.Writer, trackerChanged, agyActivity func(), quotaResetAt func(backend, model string) int64, onHired func(replyID, requestID, label string), holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials *wscred.Store, accountSlots *wscred.AccountSlotRegistry) *wsagent.Runner {
 	modelWaitSeconds := wsagent.DefaultAgyModelWaitTimeoutSeconds
 	modelWaitRetries := wsagent.DefaultAgyModelWaitRetries
 	if name, _, err := wsagent.ResolveHostedPackage(); err == nil && name == "wsflow" {
@@ -618,6 +626,7 @@ func newAgentRunnerWithHired(dir string, logw io.Writer, trackerChanged, agyActi
 	var runner *wsagent.Runner
 	runner = wsagent.NewRunner(wsagent.Options{
 		LoadProviderConfig:         loadProviderConfig,
+		AccountSlots:               accountSlots,
 		Dir:                        dir,
 		DaemonVersion:              version,
 		AgyModelWaitTimeoutSeconds: &modelWaitSeconds,

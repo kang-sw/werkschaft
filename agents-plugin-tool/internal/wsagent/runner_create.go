@@ -16,6 +16,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
@@ -109,6 +110,17 @@ func (r *Runner) CreateLead(backend, root string, opts LeadOptions) (State, erro
 	opts.PluginIsolation = leadPluginIsolation(opts.PluginIsolation)
 	if opts.PluginIsolation != "default" && opts.PluginIsolation != "isolated" {
 		return State{}, categorized(ErrInvalidProfile, badRequest("plugin_isolation must be default or isolated; got %q", opts.PluginIsolation))
+	}
+	if opts.AccountSlotID != "" {
+		slotID := wscred.NormalizeAccountSlotID(opts.AccountSlotID)
+		if !wscred.ValidAccountSlotID(slotID) {
+			return State{}, categorized(ErrInvalidProfile, badRequest("account_slot_id %q is invalid", opts.AccountSlotID))
+		}
+		if r.opts.AccountSlots != nil && wscred.SupportedSlotHarness(strings.TrimSpace(backend)) {
+			if _, ok := r.opts.AccountSlots.ResolveSlot(strings.TrimSpace(backend), slotID); !ok {
+				return State{}, categorized(ErrInvalidProfile, badRequest("account_slot_id %q is not registered for %s", opts.AccountSlotID, strings.TrimSpace(backend)))
+			}
+		}
 	}
 	return r.create(profile, root, &opts, nil)
 }
@@ -305,6 +317,13 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 			rec.PermissionMode = ""
 		}
 		rec.selectPermissionMode(rec.PermissionMode)
+		if lead.AccountSlotID != "" {
+			rec.AccountSlotID = storedAccountSlotID(lead.AccountSlotID)
+		} else if r.opts.AccountSlots != nil && wscred.SupportedSlotHarness(rec.Backend) {
+			rec.AccountSlotID = storedAccountSlotID(r.opts.AccountSlots.ActiveSlot(rec.Backend).ID)
+		}
+	} else if r.opts.AccountSlots != nil && wscred.SupportedSlotHarness(rec.Backend) {
+		rec.AccountSlotID = storedAccountSlotID(r.opts.AccountSlots.ActiveSlot(rec.Backend).ID)
 	}
 	if spawn != nil {
 		spawn.apply(&rec)

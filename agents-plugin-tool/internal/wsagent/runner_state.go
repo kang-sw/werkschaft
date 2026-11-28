@@ -44,6 +44,10 @@ type State struct {
 	Model     string                       `json:"model,omitempty"`
 	Provider  string                       `json:"provider,omitempty"`
 	Effort    string                       `json:"effort,omitempty"`
+	// AccountSlotID and PendingAccountSlotID expose the conversation's active
+	// and queued harness account slots (additive T0 fields).
+	AccountSlotID        string `json:"account_slot_id,omitempty"`
+	PendingAccountSlotID string `json:"pending_account_slot,omitempty"`
 	// Observed is this conversation's own response evidence, not its settings
 	// or a descendant's output. It remains available when the turn ends.
 	Observed *wslive.ModelObservation `json:"observed,omitempty"`
@@ -208,7 +212,7 @@ func (r *Runner) closedRecordState(rec Record) State {
 
 // Retained name check: ended state of retained Pi records (TestRetiredPiHoldersKeepRunning).
 func closedState(rec Record) State {
-	st := State{ID: rec.ReplyID, Profile: rec.Profile, Backend: rec.Backend, Root: rec.Root, Status: StatusClosed, Model: rec.Model, Provider: rec.Provider, Effort: rec.Effort, Page: "/s/" + rec.ReplyID, CreatedAt: rec.CreatedAt, ClosedAt: rec.ClosedAt, Lead: rec.Lead, PermissionMode: rec.selectedPermissionMode(), Label: rec.Label, Tier: rec.Tier, ActiveMs: rec.ActiveMs}
+	st := State{ID: rec.ReplyID, Profile: rec.Profile, Backend: rec.Backend, Root: rec.Root, Status: StatusClosed, Model: rec.Model, Provider: rec.Provider, Effort: rec.Effort, AccountSlotID: rec.AccountSlotID, PendingAccountSlotID: rec.PendingAccountSlotID, Page: "/s/" + rec.ReplyID, CreatedAt: rec.CreatedAt, ClosedAt: rec.ClosedAt, Lead: rec.Lead, PermissionMode: rec.selectedPermissionMode(), Label: rec.Label, Tier: rec.Tier, ActiveMs: rec.ActiveMs}
 	if rec.Lead {
 		if rec.ClosedAt != "" {
 			st.Lifecycle = wsdashboard.SessionPendingDeletion

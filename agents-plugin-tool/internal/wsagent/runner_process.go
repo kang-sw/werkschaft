@@ -214,13 +214,14 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 		}
 	}
 	spec := StartSpec{
-		Root:         rec.Root,
-		Dir:          c.dir,
-		Profile:      def,
-		Model:        rec.Model,
-		Provider:     rec.Provider,
-		Effort:       rec.Effort,
-		SessionID:    rec.SessionID,
+		Root:             rec.Root,
+		Dir:              c.dir,
+		Profile:          def,
+		Model:            rec.Model,
+		Provider:         rec.Provider,
+		Effort:           rec.Effort,
+		AccountConfigDir: c.r.resolveAccountSlotConfigDir(rec.Backend, rec.AccountSlotID),
+		SessionID:        rec.SessionID,
 		Cwd:          rec.Cwd,
 		Instructions: instructions,
 		// The child's authority, which a backend that sandboxes its worker

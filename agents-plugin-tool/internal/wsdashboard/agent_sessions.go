@@ -200,6 +200,41 @@ type AgentMetadataHost interface {
 	AgentRecord(replyID string) (AgentRecordSnapshot, bool)
 }
 
+// AccountSlotConversation is an in-memory projection of one open hosted
+// conversation's current and queued account slot binding.
+type AccountSlotConversation struct {
+	ID                   string `json:"id"`
+	Backend              string `json:"backend"`
+	Root                 string `json:"root,omitempty"`
+	Label                string `json:"label,omitempty"`
+	Lead                 bool   `json:"lead,omitempty"`
+	Status               string `json:"status,omitempty"`
+	Process              bool   `json:"process,omitempty"`
+	AccountSlotID        string `json:"account_slot_id"`
+	PendingAccountSlotID string `json:"pending_account_slot,omitempty"`
+}
+
+// AccountSlotSwitchResult describes the outcome of queuing or applying an
+// account slot switch on a conversation or harness.
+type AccountSlotSwitchResult struct {
+	ConversationID       string `json:"conversation_id,omitempty"`
+	AccountSlotID        string `json:"account_slot_id"`
+	PendingAccountSlotID string `json:"pending_account_slot,omitempty"`
+	// Mode is "queued", "restarted_2a", "rotated_2b", "immediate", or "unchanged".
+	Mode         string `json:"mode"`
+	QueuedCount  int    `json:"queued_count,omitempty"`
+	SkippedCount int    `json:"skipped_count,omitempty"`
+}
+
+// AgentAccountSlotHost is an optional AgentHost that exposes per-conversation
+// account slot bindings and applies harness-wide or per-conversation switches.
+type AgentAccountSlotHost interface {
+	AccountSlotConversations(harness string) []AccountSlotConversation
+	QueueHarnessAccountSlot(harness, slotID string) (queued, skipped int, err error)
+	QueueConversationAccountSlot(id, slotID string) (AccountSlotSwitchResult, error)
+	SwitchConversationAccountSlotNow(id, slotID string) (AccountSlotSwitchResult, error)
+}
+
 // MetaPruner is an optional LiveHost that prunes expired registrations for its
 // own state directory using daemon-owned agent metadata in memory.
 type MetaPruner interface {

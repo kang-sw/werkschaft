@@ -101,7 +101,16 @@ type OpenAISignIn struct {
 // validating its identity. openBrowser launches the system browser on the
 // local entry URL. The store must be the file's sole writer.
 func (s *Store) SignInOpenAI(ctx context.Context, selection OpenAISignIn, openBrowser func(string) error) error {
-	if openBrowser == nil || (selection.NewAccount && selection.ClientID != "") {
+	if openBrowser == nil {
+		return errors.New("invalid OpenAI sign-in selection")
+	}
+	return s.SignInOpenAIWithCallbacks(ctx, selection, OpenAISignInCallbacks{OpenBrowser: openBrowser})
+}
+
+// SignInOpenAIWithCallbacks runs the OpenAI SIWC flow with optional remote /
+// cross-device copy-link and pasted-callback completion support (D18).
+func (s *Store) SignInOpenAIWithCallbacks(ctx context.Context, selection OpenAISignIn, cb OpenAISignInCallbacks) error {
+	if (!cb.IgnoreBrowserError && cb.OpenBrowser == nil) || (selection.NewAccount && selection.ClientID != "") {
 		return errors.New("invalid OpenAI sign-in selection")
 	}
 	ctx, cancel := context.WithTimeout(ctx, openAISignInWait)
@@ -113,7 +122,7 @@ func (s *Store) SignInOpenAI(ctx context.Context, selection OpenAISignIn, openBr
 	if err != nil {
 		return err
 	}
-	clientID, identity, tokens, err := s.openAI.authorize(ctx, hostID, previous, selection.EnablePlan, openBrowser, s.now)
+	clientID, identity, tokens, err := s.openAI.authorize(ctx, hostID, previous, selection.EnablePlan, cb, s.now)
 	if err != nil {
 		return err
 	}
@@ -126,6 +135,52 @@ func (s *Store) SignInOpenAI(ctx context.Context, selection OpenAISignIn, openBr
 		return err
 	}
 	return s.finishOpenAISignIn(ctx, previous, account)
+}
+
+// ActiveOpenAIAccount returns the active OpenAI registration's ClientID from
+// memory, or empty when none is configured.
+func (s *Store) ActiveOpenAIAccount() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.loadLocked(false) != nil {
+		return ""
+	}
+	return s.openAIAccount.ClientID
+}
+
+// SetActiveOpenAIAccount switches the active OpenAI SIWC registration in-process
+// and persists the change atomically (D2, D7). Per D8, an unusable target
+// (unregistered, lacking tokens, lacking plan scope, or lacking consent) is
+// refused with a fixed error and no state change.
+func (s *Store) SetActiveOpenAIAccount(clientID string) error {
+	clientID = strings.TrimSpace(clientID)
+	s.openAIMu.Lock()
+	defer s.openAIMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.prepareWriteLocked(); err != nil {
+		return err
+	}
+	if err := s.flushOpenAIRefreshLocked(); err != nil {
+		return err
+	}
+	state := s.doc.openAIState()
+	account := state.account(clientID)
+	switch {
+	case clientID == "" || account.ClientID == "":
+		return ErrOpenAIAccountNotFound
+	case account.IDToken == "" || account.AccessToken == "" || account.RefreshToken == "":
+		return ErrOpenAITokensMissing
+	case !account.planEnabled():
+		return openAIProviderError(ErrOpenAIPlanDisabled)
+	case account.Consent == nil || !*account.Consent:
+		return openAIProviderError(ErrConsentRequired)
+	}
+	if state.Active == clientID && s.openAIAccount.ClientID == clientID {
+		return nil
+	}
+	state.Active = clientID
+	return s.writeOpenAIStateLocked(state)
 }
 
 func (s *Store) prepareOpenAISignIn(selection OpenAISignIn) (string, openAIAccount, error) {
@@ -329,13 +384,20 @@ func (s *Store) openAICurrentLocked(req Request) (Credential, openAIAccount, boo
 		return Credential{}, openAIAccount{}, false, err
 	}
 	account := s.openAIAccount
+	if req.OpenAIAccount != "" && req.OpenAIAccount != account.ClientID {
+		// Serve a registered non-active account for a turn-pinned request (D7)
+		// without mutating the store's active account.
+		account = s.doc.openAIState().account(req.OpenAIAccount)
+	}
 	switch {
-	case account.ClientID == "" || account.IDToken == "" || (req.openAIAccount != "" && req.openAIAccount != account.ClientID):
+	case account.ClientID == "" || account.IDToken == "":
 		return Credential{}, openAIAccount{}, false, openAIProviderError(ErrNotConfigured)
 	case !account.planEnabled():
 		return Credential{}, openAIAccount{}, false, openAIProviderError(ErrOpenAIPlanDisabled)
 	case req.Background && (account.Consent == nil || !*account.Consent):
-		s.requestOpenAIConsentLocked()
+		if account.ClientID == s.openAIAccount.ClientID {
+			s.requestOpenAIConsentLocked()
+		}
 		return Credential{}, openAIAccount{}, false, openAIProviderError(ErrConsentRequired)
 	case account.AccessToken == "" || account.RefreshToken == "":
 		return Credential{}, openAIAccount{}, false, openAIProviderError(ErrNotConfigured)

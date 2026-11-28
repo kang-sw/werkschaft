@@ -904,3 +904,129 @@ test('stale 5h 0% with fresh weekly retains the value in the footer, shows em-da
   assert.match(koCard5.title, /마지막 0% \(/);
   koPop.close();
 });
+
+test('accountSwitcher mode renders 1-click switchers, guided Stop+Restart/queue, SSE refresh, and Manage accounts link without OAuth forms', async () => {
+  const at = Date.UTC(2026, 10, 28, 9, 0), reset = at + 3 * 3600000;
+  const env = environment(at, 'en');
+  let accountStatus = {
+    loopback_peer: true,
+    openai_accounts: [
+      { client_id: 'oai_a', email: 'a@example.test', signed_in: true, plan_enabled: true, active: true },
+      { client_id: 'oai_b', email: 'b@example.test', signed_in: true, plan_enabled: true, active: false }
+    ],
+    slots: {
+      codex: [
+        { id: 'default', harness: 'codex', label: 'Default', implicit: true, active: true },
+        { id: 'work', harness: 'codex', label: 'Work', config_dir: '/tmp/work', active: false }
+      ]
+    },
+    conversations: [
+      { id: 'conv-1', harness: 'codex', title: 'Main Lead', account_slot_id: 'default' }
+    ]
+  };
+  const posts = [];
+  env.set({ entries: [{ harness: 'codex', plan: 'pro', asOf: at, windows: [{ kind: 'five_hour', percent: 35, asOf: at, resetsAt: reset }] }] });
+  const baseFetch = env.window.fetch;
+  env.window.fetch = (url, options = {}) => {
+    if (url === '/api/account/status') {
+      env.calls.push({ url, options });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(accountStatus) });
+    }
+    if (url.startsWith('/api/account/')) {
+      const body = JSON.parse(options.body || '{}');
+      posts.push({ url, body });
+      if (url === '/api/account/openai/switch') {
+        accountStatus = {
+          ...accountStatus,
+          openai_accounts: accountStatus.openai_accounts.map(a => ({ ...a, active: a.client_id === body.client_id }))
+        };
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ client_id: body.client_id, mode: 'immediate' }) });
+      }
+      if (url === '/api/account/slots/switch') {
+        if (body.conversation_id && body.mode === 'queue') {
+          accountStatus = {
+            ...accountStatus,
+            conversations: [{ id: 'conv-1', harness: 'codex', title: 'Main Lead', account_slot_id: 'default', pending_account_slot_id: body.slot_id }]
+          };
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ conversation_id: body.conversation_id, mode: 'queued' }) });
+        }
+        if (body.conversation_id && body.mode === 'now') {
+          accountStatus = {
+            ...accountStatus,
+            conversations: [{ id: 'conv-1', harness: 'codex', title: 'Main Lead', account_slot_id: body.slot_id }]
+          };
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ conversation_id: body.conversation_id, mode: 'restarted_2a' }) });
+        }
+        accountStatus = {
+          ...accountStatus,
+          slots: { codex: accountStatus.slots.codex.map(s => ({ ...s, active: s.id === body.slot_id })) },
+          conversations: [{ id: 'conv-1', harness: 'codex', title: 'Main Lead', account_slot_id: 'default', pending_account_slot_id: body.slot_id }]
+        };
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ mode: 'harness_default', queued_count: 1 }) });
+      }
+    }
+    return baseFetch(url, options);
+  };
+
+  let openedSettingsHref = null;
+  const mounted = env.window.WsUsage.mount(env.doc, env.top, {
+    accountSwitcher: true,
+    openSettings: href => { openedSettingsHref = href; }
+  });
+  await flush();
+  assert.equal(nodes(env.button, '.usage-accounts').length, 0);
+
+  const pop = mounted.makePopover(() => {}, () => {});
+  pop.open();
+  await flush();
+
+  const manage = pop.el.querySelector('.usage-manage-link');
+  assert.ok(manage);
+  assert.equal(manage.href, '/settings?section=account');
+  let prevented = false;
+  manage.events.click({ preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(openedSettingsHref, '/settings?section=account');
+
+  assert.equal(nodes(pop.el, 'input').length, 0);
+
+  const werkRow = nodes(pop.el, '.usage-slot-row').find(r => r.attributes['data-slot-harness'] === 'werk');
+  assert.ok(werkRow);
+  const werkChips = nodes(werkRow, '.usage-slot-chip');
+  assert.equal(werkChips.length, 2);
+  assert.equal(werkChips[0].attributes['aria-pressed'], 'true');
+  werkChips[1].events.click();
+  await flush();
+  assert.deepEqual(posts[0], { url: '/api/account/openai/switch', body: { client_id: 'oai_b' } });
+  assert.equal(nodes(nodes(pop.el, '.usage-slot-row')[0], '.usage-slot-chip')[1].attributes['aria-pressed'], 'true');
+
+  const convRow = pop.el.querySelector('.usage-conv-row');
+  assert.ok(convRow);
+  const pickBtn = nodes(convRow, '.usage-act-btn')[0];
+  pickBtn.events.click();
+  await flush();
+  const guide = pop.el.querySelector('.usage-conv-guide');
+  assert.ok(guide, 'guided Stop+Restart / queue prompt should appear');
+  const guideBtns = nodes(guide, '.usage-act-btn');
+  assert.equal(guideBtns.length, 3);
+  guideBtns[1].events.click();
+  await flush();
+  assert.deepEqual(posts[1], { url: '/api/account/slots/switch', body: { conversation_id: 'conv-1', slot_id: 'work', mode: 'queue' } });
+  assert.ok(nodes(pop.el, '.queued').length > 0);
+
+  const applyNow = nodes(pop.el.querySelector('.usage-conv-row'), '.usage-act-btn')[0];
+  applyNow.events.click();
+  await flush();
+  assert.deepEqual(posts[2], { url: '/api/account/slots/switch', body: { conversation_id: 'conv-1', slot_id: 'work', mode: 'now' } });
+
+  const statusCallsBefore = env.calls.filter(c => c.url === '/api/account/status').length;
+  env.doc.events['ws-account-changed']();
+  await flush();
+  assert.ok(env.calls.filter(c => c.url === '/api/account/status').length > statusCallsBefore);
+
+  const css = fs.readFileSync(__dirname + '/assets/usage.css', 'utf8');
+  assert.match(css, /\.usage-accounts\s*\{/);
+  assert.match(css, /\.usage-slot-chip\[aria-pressed="true"\]/);
+  assert.match(css, /var\(--wb-/);
+  pop.close();
+});

@@ -51,7 +51,14 @@
   // like the rail: only the page that holds the rail draws it and opens its
   // popover; a framed page's header stays an invisible placeholder.
   var topEl = doc.querySelector(".dwrap > .top");
-  var usageGutter = railEl && topEl && window.WsUsage ? window.WsUsage.mount(doc, topEl) : null;
+  var usageGutter = railEl && topEl && window.WsUsage ? window.WsUsage.mount(doc, topEl, {
+    accountSwitcher: root.hasAttribute("data-sysopen"),
+    openSettings: function (href, opener) {
+      railPopClose(false);
+      if (shell && typeof shOpenSettings === "function") shOpenSettings(new URL(href, location.origin), opener);
+      else location.href = href;
+    }
+  }) : null;
   function railWide() { return !!(RAIL_WIDE && RAIL_WIDE.matches); }
   function railShown() { return root.classList.contains("rail-open"); }
   // Ctrl+` toggles rail + memos in overlay mode, memos alone beside a column;

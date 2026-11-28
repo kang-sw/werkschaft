@@ -171,6 +171,12 @@ type DaemonOptions struct {
 	// Close closes it to changes before it releases the lock, so a store
 	// serves one daemon.
 	Credentials *wscred.Store
+	// AccountSlots is the per-harness account slot registry the daemon owns
+	// (D11). Loaded once at StartDaemon and served from memory thereafter.
+	AccountSlots *wscred.AccountSlotRegistry
+	// SlotAuthPreflight optionally validates a newly logged-in harness slot
+	// directory before registering it (D14). Nil falls back to wscred.SlotAuthReady.
+	SlotAuthPreflight func(harness, configDir string) error
 	// AgentRecordValidator validates legacy agent.json captures during the
 	// one-time SQLite metadata cutover (wsmeta.StoreAgentRecord). Production
 	// supplies wsagent.ValidateLegacyRecord; leaving it nil rejects a state
@@ -230,6 +236,10 @@ type DaemonOptions struct {
 	// clipboard replaces the native login-link clipboard writer in tests.
 	// Nil selects the platform writer; it never disables authentication.
 	clipboard clipboardWriter
+	// slotLoginCmd replaces the harness CLI binary/args for slot login in tests.
+	slotLoginCmd func(harness string, mode wscred.SlotLoginMode) (string, []string, error)
+	// slotSignInTimeout overrides the slot login timeout in tests.
+	slotSignInTimeout time.Duration
 }
 
 // MailWaker receives the daemon's mailbox wake signals (DaemonOptions.MailWake).
@@ -295,8 +305,14 @@ type Daemon struct {
 	userCmds atomic.Pointer[UserCommandService]
 	// credentials is DaemonOptions.Credentials (or a test's
 	// credentialSource), nil without one.
-	credentials   credentialStore
-	accountSignIn accountSignIn
+	credentials       credentialStore
+	accountSlots      *wscred.AccountSlotRegistry
+	accountSignIn     accountSignIn
+	slotSignIn        accountSlotSignIn
+	slotAuthPreflight func(harness, configDir string) error
+	slotLoginCmd      func(harness string, mode wscred.SlotLoginMode) (string, []string, error)
+	slotSignInTimeout time.Duration
+	accountRev        atomic.Int64
 	// voice test hooks (nil in production).
 	voiceBaseURLs   map[wscred.ProviderID]string
 	voiceHTTPClient *http.Client
