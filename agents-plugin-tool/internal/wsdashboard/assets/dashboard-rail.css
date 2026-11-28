@@ -14,7 +14,7 @@
 :root[data-theme="dark"] { --scrim: rgb(0 0 0 / .5); --star: #f2b632; }
 .dbody { display: contents; }
 .rail { background: var(--wb-card); border-radius: var(--wb-radius); box-shadow: var(--wb-shadow); display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
-.rail > .r-rail { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.rail > .r-rail { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .rail .rail-session-panel { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; position: relative; overflow: hidden; }
 .rscrim { display: none; }
 @media (min-width: 1600px) {
@@ -285,7 +285,10 @@
 .rail .rref:disabled { cursor: default; color: var(--wb-muted-fg); background: transparent; }
 .rail .rref:disabled > .i { opacity: .4; }
 html:not([data-sysopen]) .rail .rsleep { display: none; }
-.rail .rlist { flex: 1 1 auto; min-height: 0; overflow: auto; padding-bottom: 12px; scroll-padding-bottom: 12px; display: flex; flex-direction: column; }
+.rail .rlist { position: relative; z-index: 1; flex: 1 1 auto; min-height: 0; overflow: auto; padding-bottom: 12px; scroll-padding-bottom: 12px; display: flex; flex-direction: column; }
+.rail[data-companion-dock="rail-slot"] .rlist,
+.rail[data-companion-dock="unregistered"] .rlist,
+.rail[data-companion-dock="footer"] .rlist { padding-bottom: calc(var(--companion-slot, 0px) + 28px); scroll-padding-bottom: calc(var(--companion-slot, 0px) + 28px); }
 .rail .rlist > .empty { padding: 10px 12px; font-size: 12.5px; color: var(--wb-muted-fg); }
 .rail .rws + .rws { margin-top: 8px; }
 .rail .wsbar { display: flex; align-items: center; gap: 8px; padding: 3px 12px; min-height: 28px; background: var(--wb-topic); color: var(--wb-on-topic); cursor: pointer; user-select: none; }
@@ -568,6 +571,8 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 @keyframes attn-breathe-ring { 0%, 100% { opacity: .25; } 50% { opacity: .85; } }
 :root[data-animation-paused] .rail .rs.attn::before,
 :root[data-animation-paused] .rail .rs.attn .hb::after { animation-play-state: paused; }
+html.rpop-open .rail .rs.attn::before,
+html.rpop-open .rail .rs.attn .hb::after { animation-play-state: paused; }
 @media (prefers-reduced-motion: reduce) {
   .rail .rs.attn::before { animation: none !important; opacity: .16; }
   .rail .rs.attn .hb::after { animation: none !important; box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-accent-policy) 55%, transparent); }
@@ -989,10 +994,10 @@ button.bgbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-o
 .rpop .dc-sw:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: 2px; border-radius: 6px; }
 .rpop .dc-sw:disabled { opacity: .45; cursor: not-allowed; }
 .rpop .dc-sw i { width: 28px; height: 16px; border-radius: 999px; background: var(--wb-line); position: relative; transition: background-color .12s; flex: none; }
-.rpop .dc-sw i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--wb-card); box-shadow: 0 1px 2px rgb(0 0 0 / .22); transition: left .12s, background-color .12s; }
+.rpop .dc-sw i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--wb-card); box-shadow: 0 1px 2px rgb(0 0 0 / .22); transition: transform .12s, background-color .12s; }
 .rpop .dc-sw[aria-checked="true"] { color: var(--wb-fg); }
 .rpop .dc-sw[aria-checked="true"] i { background: color-mix(in srgb, var(--wb-primary) 55%, var(--wb-muted)); }
-.rpop .dc-sw[aria-checked="true"] i::after { left: 14px; background: var(--wb-primary); }
+.rpop .dc-sw[aria-checked="true"] i::after { transform: translateX(12px); background: var(--wb-primary); }
 .rpop .dcdesc { margin: 0; font-size: 11.5px; color: var(--wb-muted-fg); line-height: 1.4; }
 .rpop .dcpend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 7px 9px; border-radius: 8px; background: color-mix(in srgb, var(--wb-warn) 12%, var(--wb-card)); font-size: 11.5px; color: var(--wb-fg); }
 .rpop .dcpend[hidden] { display: none; }
@@ -1024,9 +1029,9 @@ button.bgbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-o
 .rpop .spconv-sw:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: 2px; border-radius: 6px; }
 .rpop .spconv-sw:disabled { opacity: .45; cursor: not-allowed; }
 .rpop .spconv-sw i { width: 28px; height: 16px; border-radius: 999px; background: var(--wb-line); position: relative; transition: background-color .12s; flex: none; }
-.rpop .spconv-sw i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--wb-card); box-shadow: 0 1px 2px rgb(0 0 0 / .22); transition: left .12s, background-color .12s; }
+.rpop .spconv-sw i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--wb-card); box-shadow: 0 1px 2px rgb(0 0 0 / .22); transition: transform .12s, background-color .12s; }
 .rpop .spconv-sw[aria-checked="true"] i { background: color-mix(in srgb, var(--wb-primary) 55%, var(--wb-muted)); }
-.rpop .spconv-sw[aria-checked="true"] i::after { left: 14px; background: var(--wb-primary); }
+.rpop .spconv-sw[aria-checked="true"] i::after { transform: translateX(12px); background: var(--wb-primary); }
 .rpop .spconv-hint { margin: 0; font-size: 11.5px; color: var(--wb-muted-fg); text-align: left; }
 .rpop .spconv-restart { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 8px; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--wb-warn) 16%, var(--wb-card)); color: color-mix(in srgb, var(--wb-warn-ink) 88%, var(--wb-fg)); font-size: 11.5px; }
 .rpop .spconv-restart[hidden] { display: none; }
@@ -1115,95 +1120,66 @@ button.bgbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-o
 .rail .rfoot > .btn.gear .i { width: 14px; height: 14px; flex: none; }
 .rail .rfoot > .btn.gear:hover { background: var(--wb-muted); color: var(--wb-fg); }
 
-/* ===== Bottom-Left Dedicated Companion Slot (>= 1600px) =====
-   In >=1600px 3-column mode with VRM companion docked, the left rail splits
-   into a clean flex column:
-     1) .rail-session-panel (flex: 1 1 0; min-height: 0) — the elevated
-        Material card holding Sessions + bounded details.rws-unreg + .rfoot.
-     2) #rail-companion-slot (flex: 0 0 auto; width: 100%) — a self-contained,
-        borderless tonal stage anchored flush to the column's bottom edge so
-        toggling details.rws-unreg produces strictly 0px vertical shift. */
+/* ===== Seamless Z-Layered Foreground Companion Slot (>= 1600px) =====
+   Variant A unified --wb-card rail: .rlist runs the full height of the rail
+   (z-index: 1) with dynamic bottom scroll padding matching --companion-slot +
+   clearance, while #rail-companion-slot floats transparently in the foreground
+   at bottom: 0 (z-index: 4; pointer-events: none) so scrolled rows pass cleanly
+   behind the Companion's silhouette with true click/wheel pass-through. */
 .rail .rail-companion-slot {
-  flex: 0 0 auto;
-  position: relative;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 4;
   width: 100%;
   box-sizing: border-box;
   display: none;
-  overflow: hidden;
+  overflow: visible;
   pointer-events: none;
   border: 0;
-  border-radius: var(--wb-radius) var(--wb-radius) 0 0;
-  background:
-    radial-gradient(
-      118% 90% at 50% 96%,
-      color-mix(in srgb, var(--wb-primary) 11%, transparent) 0%,
-      transparent 72%
-    ),
-    linear-gradient(
-      to bottom,
-      color-mix(in srgb, var(--wb-card) 52%, var(--wb-bg)) 0%,
-      color-mix(in srgb, var(--wb-muted) 58%, var(--wb-bg)) 100%
-    );
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--wb-fg) 6%, transparent);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 @media (min-width: 1600px) {
   .dbody > .rail[data-companion-dock="rail-slot"],
   :root[data-settings-shell] #rail[data-companion-dock="rail-slot"] {
-    margin-bottom: -12px;
-    background: transparent;
-    box-shadow: none;
-    border-radius: 0;
-    overflow: visible;
+    background: var(--wb-card);
+    border-radius: var(--wb-radius) var(--wb-radius) 0 0;
+    box-shadow: var(--wb-shadow);
+    overflow: hidden;
   }
   .dash:not(.live):not(.history) .rail[data-companion-dock="rail-slot"] {
     max-height: calc(100vh - 12px);
     max-height: calc(100dvh - 12px);
   }
   .rail[data-companion-dock="rail-slot"] > .r-rail {
-    gap: 8px;
+    gap: 0;
   }
   .rail[data-companion-dock="rail-slot"] .rail-session-panel {
-    background: var(--wb-card);
-    border-radius: var(--wb-radius);
-    box-shadow: var(--wb-shadow);
+    background: transparent;
+    border-radius: 0;
+    box-shadow: none;
   }
   .rail[data-companion-dock="rail-slot"] .rail-companion-slot {
     display: block;
     height: var(--companion-slot, 240px);
-  }
-  .rail[data-companion-dock="rail-slot"] details.rws-unreg {
-    flex: 0 1 auto;
-    min-height: 0;
-    max-height: 48%;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-  .rail[data-companion-dock="rail-slot"] details.rws-unreg > summary.unreg-sum {
-    flex: none;
-  }
-  .rail[data-companion-dock="rail-slot"] details.rws-unreg[open] > .unreg-body {
-    flex: 1 1 auto;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-  .rail[data-companion-dock="rail-slot"] .unreg-list {
-    flex: 1 1 auto;
-    min-height: 0;
-    max-height: min(220px, max(96px, calc(100vh - 560px)));
   }
 }
 @media (max-width: 1599.98px) {
   .rail .rail-companion-slot { display: none !important; }
 }
 
-/* ===== Bottom Collapsible Unregistered Workspace Admission Panel ===== */
+/* ===== Inline Collapsible Unregistered Workspace Admission Panel =====
+   Lives inside #rlist directly after registered workspaces (before #rlist's
+   bottom scroll clearance) so sparse rails have no mid-rail void and rich rails
+   scroll it cleanly above the foreground Companion overlay. */
 .rail details.rws-unreg {
   flex: none;
-  border-top: 1px solid var(--wb-line);
-  background: color-mix(in srgb, var(--wb-muted) 26%, var(--wb-card));
+  margin-top: 8px;
+  border-top: 0;
+  background: transparent;
 }
 
 .rail details.rws-unreg > summary.unreg-sum {
@@ -1211,16 +1187,17 @@ button.bgbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-o
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 32px;
-  padding: 5px 10px 5px 10px;
+  min-height: 28px;
+  padding: 4px 12px;
   cursor: pointer;
   user-select: none;
+  background: color-mix(in srgb, var(--wb-topic) 54%, transparent);
   color: var(--wb-muted-fg);
   font-size: 12px;
   font-weight: 700;
 }
 .rail details.rws-unreg > summary.unreg-sum::-webkit-details-marker { display: none; }
-.rail details.rws-unreg > summary.unreg-sum:hover { background: var(--wb-wash); color: var(--wb-fg); }
+.rail details.rws-unreg > summary.unreg-sum:hover { background: color-mix(in srgb, var(--wb-topic) 86%, transparent); color: var(--wb-fg); }
 .rail details.rws-unreg > summary.unreg-sum:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: -2px; }
 
 .rail .unreg-chev { width: 12px; height: 12px; flex: none; transition: transform .14s ease; opacity: .78; }
@@ -1257,9 +1234,9 @@ button.bgbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-o
 }
 
 .rail .unreg-body {
-  border-top: 1px solid var(--wb-line);
-  background: var(--wb-card);
-  padding-bottom: 4px;
+  border-top: 0;
+  background: transparent;
+  padding: 4px 0 4px;
 }
 
 .rail .unreg-toolbar {
@@ -1303,8 +1280,6 @@ button.bgbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-o
 .rail .unreg-filter::placeholder { color: var(--wb-muted-fg); }
 
 .rail .unreg-list {
-  max-height: 260px;
-  overflow-y: auto;
   overflow-x: hidden;
   padding: 0 4px 2px;
 }
@@ -1511,7 +1486,7 @@ button.bgbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-o
 .d-board-dial[hidden] { display: none !important; }
 .d-board-dial:hover,
 .d-board-dial:focus-within,
-.d-board-dial[data-scrub] { width: 28px; border-radius: 13px; background: color-mix(in srgb, var(--wb-card) 84%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-fg) 13%, transparent), var(--wb-shadow-hi); }
+.d-board-dial[data-scrub] { width: 28px; border-radius: 13px; background: color-mix(in srgb, var(--wb-card) 94%, var(--wb-bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-fg) 13%, transparent), var(--wb-shadow-hi); }
 :root[data-overview] .d-board-dial,
 :root[data-gal-away] .d-board-dial,
 :root[data-file-preview] .d-board-dial,

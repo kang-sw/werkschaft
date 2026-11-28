@@ -35,11 +35,13 @@ async function measureToolbar(page) {
     const row = face.firstElementChild;
     const overview = row.querySelector('.board-overview');
     const overviewRect = overview ? rect(overview) : null;
-    const actButtons = [...row.querySelectorAll('.board-acts .board-action')].map(n => ({
-      cls: n.className,
-      rect: rect(n),
-      clipped: n.scrollWidth > n.clientWidth + 1
-    }));
+    const actButtons = [...row.querySelectorAll('.board-acts .board-action')]
+      .filter(n => n.getClientRects().length > 0)
+      .map(n => ({
+        cls: n.className,
+        rect: rect(n),
+        clipped: n.scrollWidth > n.clientWidth + 1
+      }));
     const actions = [
       ...(overview ? [{ cls: overview.className, rect: overviewRect, clipped: overview.scrollWidth > overview.clientWidth + 1 }] : []),
       ...actButtons
@@ -124,16 +126,30 @@ async function measureToolbar(page) {
 
 async function setExactToolbarWidth(page, target) {
   // Adjust viewport so .board-toolbar has exact outer width = target.
-  // Above 1600px viewport the docked rail (~356px) joins, so start wide enough
-  // for large targets to land cleanly at target.
-  const startVW = target >= 1540 ? target + 400 : target + 40;
+  // Layout is always auto (split 5fr/7fr from 1100px, tabs below 1100px), and
+  // above 1600px the docked rail (~288px) and Band 4 gallery (~540px) join, so
+  // iterate with slope estimation to converge cleanly across both regimes.
+  const startVW = target >= 1100 ? Math.round(target / 0.58) + 880 : target + 40;
   await page.setViewportSize({ width: startVW, height: 800 });
-  for (let i = 0; i < 8; i++) {
+  let prevVW = null, prevW = null;
+  for (let i = 0; i < 16; i++) {
     await settle(page);
+    if (!(await page.locator('#bcol').isVisible())) {
+      await page.locator('[data-tab="board"]').first().click();
+      await settle(page);
+    }
     const actual = (await page.locator('.board-toolbar').boundingBox()).width;
     if (Math.abs(actual - target) < 0.25) return actual;
     const cur = page.viewportSize().width;
-    await page.setViewportSize({ width: Math.max(320, Math.round(cur + target - actual)), height: 800 });
+    let slope = 1;
+    if (prevVW !== null && cur !== prevVW && Math.abs(actual - prevW) > 0.5) {
+      slope = Math.max(0.35, Math.min(1.2, (actual - prevW) / (cur - prevVW)));
+    }
+    prevVW = cur;
+    prevW = actual;
+    const next = Math.max(320, Math.round(cur + (target - actual) / slope));
+    if (next === cur) return actual;
+    await page.setViewportSize({ width: next, height: 800 });
   }
   await settle(page);
   return (await page.locator('.board-toolbar').boundingBox()).width;

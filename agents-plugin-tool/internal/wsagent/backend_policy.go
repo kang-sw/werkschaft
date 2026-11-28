@@ -4,6 +4,7 @@ import (
 	"maps"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wspiruntime"
 )
 
 // The runner never branches on a harness name. What differs between harnesses
@@ -147,6 +148,12 @@ type LifecyclePolicy struct {
 	// native session state that must be redirected into a pool-owned temporary
 	// directory (StartSpec.ephemeralStateDir) and deleted on eviction/close.
 	EphemeralIsolatedStateDir bool
+	// RestartLeadOnPermissionChange marks an external-process backend whose
+	// lead permission enforcement switches via launch-time flags rather than
+	// an in-stream native mode RPC: StartSpec.PermissionLevel is propagated
+	// on every lead launch, and live lead permission changes restart the
+	// process at the turn boundary.
+	RestartLeadOnPermissionChange bool
 }
 
 // ExecOptIn names an exec-cutover opt-in: the config Key that must say on and
@@ -252,6 +259,12 @@ type accountSlotContinuity interface {
 // the active account slot's config directory from the runner's registry.
 type slotHomeBinder interface {
 	withSlotHomeResolver(resolve func() string) Backend
+}
+
+// piRuntimeBinder is implemented by a backend that consumes the daemon's
+// shared managed Pi runtime manager.
+type piRuntimeBinder interface {
+	withPiRuntime(mgr *wspiruntime.Manager) Backend
 }
 
 func (r *Runner) slotContinuity(backend string) accountSlotContinuity {

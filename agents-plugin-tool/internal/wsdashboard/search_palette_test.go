@@ -77,7 +77,7 @@ func TestSearchDrawerSplitOwnership(t *testing.T) {
 	}{
 		{"dashboard.js", "dashboard-drawer.js", []string{"function drApply(anim)", "var sbody = null, shandle = null;"}},
 		{"dashboard.js", "dashboard-tracker.js", []string{"function paletteSearch(o)"}},
-		{"dashboard.css", "dashboard-drawer.css", []string{".dr-search-handle {", ".dr-fold.search {"}},
+		{"dashboard.css", "dashboard-drawer.css", []string{".dr-search-handle {", "\n.dr-fold.search {"}},
 	} {
 		whole, err := dashboardTestAsset("assets/" + tc.logical)
 		if err != nil {

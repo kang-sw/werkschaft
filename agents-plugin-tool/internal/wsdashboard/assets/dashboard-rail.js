@@ -35,13 +35,6 @@
   var railGate = WsRail ? WsRail.swapGate(function () { return !!rdrag || railEditing() || railSaving > 0 || !!(window.WsHoldConfirm && window.WsHoldConfirm.isHolding()) || boardScrolling(); }) : null;
   var RAIL_WIDE = window.matchMedia ? window.matchMedia("(min-width: 1600px)") : null;
   var RAIL_SCROLL_KEY = "ws.dashboard.railscroll";
-  var RENAME_NEW = "ws.dashboard.renameNew", renameNewFrame = null;
-  // Reload must not replay an unconsumed creation intent. Frames share the
-  // tab's storage, but only the page owning the rail consumes this marker.
-  try {
-    var nav = window.performance && window.performance.getEntriesByType("navigation")[0];
-    if (!framed && nav && nav.type === "reload") sessionStorage.removeItem(RENAME_NEW);
-  } catch (_) { /* storage may be unavailable */ }
   // rp is the open rail popover (the next blocks): its controller P, kind,
   // what it concerns (ws: a workspace, the folder a new session starts in,
   // the viewed session, or a row menu's session), and the button it hangs
@@ -167,10 +160,9 @@
         b.replaceChildren(gIcon("stop"));
       }
     });
-    if (usageGutter) usageGutter.sync();
+    if (usageGutter && usageGutter.sync() && rp.P && rp.kind === "usage") rp.placeClean = false;
     admissionSync();
     railPopSync();
-    railRenameNew();
     railRevealApply(r, !!(railRevealState && !railRevealState.scrolled));
   }
   // conv-reveal highlight state: survives rail swaps for ~12s (or until click),
@@ -258,35 +250,6 @@
         go(href);
       }
     }
-  }
-  // A creation intent belongs only to this tab and expires after ten seconds.
-  // Wait for the new row (or the shell's new header) and finish navigation's
-  // focus work first. Never fill the default reply-id as a saved label.
-  function railRenameNew() {
-    if (framed || renameNewFrame) return;
-    renameNewFrame = requestAnimationFrame(function () {
-      renameNewFrame = null;
-      var intent;
-      try { intent = JSON.parse(sessionStorage.getItem(RENAME_NEW) || "null"); } catch (_) { return; }
-      if (!intent) return;
-      if (!intent.id || !(Date.now() - intent.at >= 0 && Date.now() - intent.at < 10000)) {
-        try { sessionStorage.removeItem(RENAME_NEW); } catch (_) {}
-        return;
-      }
-      if (rid !== intent.id || (shell && (!shOn || !(shOn.loaded || shOn.ready) || shOn.f.rid !== intent.id))) return;
-      var r = region("rail"), row = r && WsRail.refind(r, { cls: "rs", attr: "data-rid", val: intent.id });
-      var h = region("head"), sn = h && h.querySelector(".sname");
-      if (railWide() ? !row || railEditing() : !sn || labelEditing()) return;
-      try { sessionStorage.removeItem(RENAME_NEW); } catch (_) { return; }
-      if (railWide()) {
-        var ws = row.closest(".rws");
-        if (ws && ws.classList.contains("col")) {
-          colSet.toggle(ws.getAttribute("data-ws"));
-          WsRail.marks(r, railSets, rid);
-        }
-        railRename(row);
-      } else labelStart(labelHead(sn));
-    });
   }
   // railFocus is what holds the focus in the rail before a swap replaces
   // every row: a row's link or one of its buttons, by the row's reply-id;

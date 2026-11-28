@@ -41,7 +41,7 @@ func openAppend(path string) (*os.File, error) {
 	return wsstate.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
 }
 
-func createSegment(path string) (*os.File, error) {
+var createSegment = func(path string) (*os.File, error) {
 	return wsstate.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE|os.O_EXCL, 0o600)
 }
 
@@ -50,7 +50,7 @@ func mkdirPrivate(dir string) error {
 	return os.MkdirAll(dir, 0o700)
 }
 
-func closeFile(f *os.File) error {
+var closeFile = func(f *os.File) error {
 	wsstate.CountFileIO("close")
 	return f.Close()
 }

@@ -441,6 +441,29 @@ test('busy (409) and unsupported (400) errors surface localized inline feedback 
   assert.equal(env.posts.length, 3);
   env.posts[2].done(400, {}, 'harness_unchanged');
   assert.equal(errLine.textContent, 'js.hswitch.err.unchanged');
+
+  // 403 / 404 / generic fallback paths
+  submitBtn.click();
+  assert.equal(env.posts.length, 4);
+  env.posts[3].done(403, {}, '');
+  assert.equal(errLine.textContent, 'js.hswitch.err.forbidden');
+
+  submitBtn.click();
+  assert.equal(env.posts.length, 5);
+  env.posts[4].done(404, {}, '');
+  assert.equal(errLine.textContent, 'js.hswitch.err.notfound');
+
+  submitBtn.click();
+  assert.equal(env.posts.length, 6);
+  env.posts[5].done(500, {}, 'internal failure');
+  assert.equal(errLine.textContent, 'internal failure');
+
+  // openHarnessSwitcher with already-open sess popover reuses it without reopening
+  const opensBefore = env.popOpens.length;
+  sec.open = false;
+  env.ctx.openHarnessSwitcher(env.headChip);
+  assert.equal(env.popOpens.length, opensBefore, 'must not reopen already-open sess popover');
+  assert.equal(sec.open, true, 'must expand harness switch disclosure in open sess popover');
 });
 
 test('switcher and #qcbox button are hidden for durable (harness_switch:false) current harness and child sessions', () => {
@@ -475,6 +498,74 @@ test('switcher and #qcbox button are hidden for durable (harness_switch:false) c
   env.ctx.lead.st = { id: 'lead-1', lead: true, is_child: true, can_control: true, backend: 'alpha', status: 'idle' };
   env.ctx.rp.P.draw();
   assert.equal(sec.hidden, true, 'child session hides switcher');
+});
+
+test('omitted harness_switch (omitempty wire shape) and unknown harnesses fail closed in switcher and #qcbox', () => {
+  const wireChoices = {
+    harnesses: [
+      { harness: 'alpha', lead: true, available: true, harness_switch: true, models: [], efforts: [] },
+      { harness: 'beta', lead: true, available: true, harness_switch: true, models: [], efforts: [] },
+      { harness: 'werk', lead: true, available: true, models: [{ id: 'gpt-5' }], efforts: ['high'] }
+    ]
+  };
+  const werkState = {
+    id: 'lead-werk',
+    lead: true,
+    can_control: true,
+    backend: 'werk',
+    status: 'idle',
+    quota_continuation: { status: 'exhausted', attempts: 6, max_attempts: 6 }
+  };
+
+  // With omitted harness_switch (undefined), both #qcbox button and popover switcher stay hidden.
+  const env = makeEnv({ state: werkState, supChoices: wireChoices });
+  env.ctx.quotaDraw(werkState);
+  assert.equal(env.qcbox.hidden, false, '#qcbox still shows quota card');
+  assert.equal(env.qcbox.querySelector('[data-qc-act="switch-harness"]'), null, '#qcbox hides switch button when harness_switch is omitted');
+
+  env.ctx.railPopOpen('sess', env.headChip);
+  const sec = env.ctx.rp.P.el.querySelector('[data-harness-switch="1"]');
+  assert.equal(sec.hidden, true, 'popover switcher hides when harness_switch is omitted');
+  env.ctx.openHarnessSwitcher(env.headChip);
+  assert.equal(sec.hidden, true, 'openHarnessSwitcher keeps switcher hidden when harness_switch is omitted');
+
+  // Unknown harness absent from supChoices.harnesses also fails closed.
+  const unknownState = {
+    id: 'lead-unknown',
+    lead: true,
+    can_control: true,
+    backend: 'retired-harness',
+    status: 'idle',
+    quota_continuation: { status: 'exhausted', attempts: 6, max_attempts: 6 }
+  };
+  env.ctx.lead.st = unknownState;
+  env.ctx.quotaDraw(unknownState);
+  assert.equal(env.qcbox.querySelector('[data-qc-act="switch-harness"]'), null, '#qcbox hides switch button for unlisted harness');
+  env.ctx.rp.P.draw();
+  assert.equal(sec.hidden, true, 'popover switcher hides for unlisted harness');
+
+  // Late-loaded choices with omitted harness_switch remove the #qcbox button.
+  const envLate = makeEnv({ state: werkState, supChoices: null });
+  envLate.ctx.quotaDraw(werkState);
+  assert.ok(envLate.qcbox.querySelector('[data-qc-act="switch-harness"]'), 'button visible before choices load');
+  envLate.ctx.supChoices = wireChoices;
+  envLate.ctx.quotaDraw(werkState);
+  assert.equal(envLate.qcbox.querySelector('[data-qc-act="switch-harness"]'), null, 'button removed once omitted harness_switch loads');
+
+  // Switchable harness (harness_switch: true) still shows both #qcbox button and switcher.
+  const switchableState = {
+    id: 'lead-alpha',
+    lead: true,
+    can_control: true,
+    backend: 'alpha',
+    status: 'idle',
+    quota_continuation: { status: 'exhausted', attempts: 6, max_attempts: 6 }
+  };
+  env.ctx.lead.st = switchableState;
+  env.ctx.quotaDraw(switchableState);
+  assert.ok(env.qcbox.querySelector('[data-qc-act="switch-harness"]'), '#qcbox shows switch button for harness_switch:true');
+  env.ctx.rp.P.draw();
+  assert.equal(sec.hidden, false, 'popover switcher visible for harness_switch:true');
 });
 
 test('shared rail row popover isolates cross-session switches without corrupting viewed lead.st or other rows', () => {

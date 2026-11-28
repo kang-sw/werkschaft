@@ -151,6 +151,7 @@ func TestUserMessageClockAndMinuteRefresh(t *testing.T) {
 var bad=[]; function check(name,got,want){if(got!==want)bad.push(name+": "+got+" != "+want);}
 var wsI18n={lang:"ko"}; function wsT(k,n){return n+"분 전";}
 var clock=Date.parse("2026-11-15T11:42:00+09:00"), doc={hidden:false},shHidden=false,window={MutationObserver:function(){}},tickSets=null;
+function docHidden(){return !!doc.hidden;}
 var attrs={"data-ms":clock,"data-f":"user","datetime":"2026-11-15T11:42+09:00"};
 var t={getAttribute:function(k){return attrs[k];},textContent:""};
 function q(sel){ if(sel.indexOf("time")===0 && sel.indexOf('data-f="user"')<0)bad.push("tick does not select user clocks"); return sel.indexOf("time")===0?[t]:[]; }

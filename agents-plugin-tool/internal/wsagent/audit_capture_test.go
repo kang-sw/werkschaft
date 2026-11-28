@@ -1487,3 +1487,111 @@ func TestClaudeAuditToolProgress(t *testing.T) {
 		})
 	}
 }
+
+type pinTrackingSink struct {
+	*boundarySink
+	pinMu             sync.Mutex
+	pins              int
+	pinEvents         []string
+	finalizeEntered   chan struct{}
+	finalizeRelease   chan struct{}
+	pinsAtFinalize    int
+	pinsAtRecover     int
+	finalizeSignalled bool
+}
+
+func (s *pinTrackingSink) PinCapture(session string) {
+	s.pinMu.Lock()
+	s.pins++
+	s.pinEvents = append(s.pinEvents, "pin:"+session)
+	s.pinMu.Unlock()
+}
+
+func (s *pinTrackingSink) UnpinCapture(session string) {
+	s.pinMu.Lock()
+	s.pins--
+	s.pinEvents = append(s.pinEvents, "unpin:"+session)
+	s.pinMu.Unlock()
+}
+
+func (s *pinTrackingSink) pinCount() int {
+	s.pinMu.Lock()
+	defer s.pinMu.Unlock()
+	return s.pins
+}
+
+func (s *pinTrackingSink) Recover(session, source string) wsaudit.Recovery {
+	s.pinMu.Lock()
+	s.pinsAtRecover = s.pins
+	s.pinMu.Unlock()
+	return s.boundarySink.Recover(session, source)
+}
+
+func (s *pinTrackingSink) Finalize(ctx context.Context, session, source string, boundary uint64) error {
+	s.pinMu.Lock()
+	s.pinsAtFinalize = s.pins
+	first := !s.finalizeSignalled
+	s.finalizeSignalled = true
+	s.pinMu.Unlock()
+	if first && s.finalizeEntered != nil {
+		close(s.finalizeEntered)
+		<-s.finalizeRelease
+	}
+	return s.boundarySink.Finalize(ctx, session, source, boundary)
+}
+
+// TestAuditCapturePinHeldUntilRunDrainsAndFinalizes pins the capture pin
+// boundary: newAuditCapture pins before Recover and run, streamProcess.closeAudit
+// does not unpin early, and auditCapture.run releases the pin in a defer only
+// after draining, flushing, and calling finalize, before closing c.done.
+func TestAuditCapturePinHeldUntilRunDrainsAndFinalizes(t *testing.T) {
+	sink := &pinTrackingSink{
+		boundarySink:    newBoundarySink(),
+		finalizeEntered: make(chan struct{}),
+		finalizeRelease: make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(sink.finalizeRelease) }) }
+	t.Cleanup(release)
+
+	r := newAuditRig(t, sink, "h1")
+	if got := sink.pinCount(); got != 1 {
+		t.Fatalf("pins after start = %d, want 1", got)
+	}
+	sink.pinMu.Lock()
+	pinsAtRecover := sink.pinsAtRecover
+	sink.pinMu.Unlock()
+	if pinsAtRecover != 1 {
+		t.Fatalf("pins at Recover = %d, want 1 (pin must precede Recover)", pinsAtRecover)
+	}
+
+	// Queue a line and immediately close capture via streamProcess.finish
+	// (which calls closeAudit -> c.close()), holding run inside Finalize.
+	r.kept(`{"type":"system","subtype":"status","status":"before-close"}`)
+	<-sink.finalizeEntered
+	r.p.closeAudit()
+	// Give the goroutine a moment; pin MUST still be held while Finalize blocks.
+	time.Sleep(15 * time.Millisecond)
+	if got := sink.pinCount(); got != 1 {
+		t.Fatalf("pins dropped to %d on closeAudit before run finished finalizing", got)
+	}
+	sink.pinMu.Lock()
+	pinsAtFinalize := sink.pinsAtFinalize
+	sink.pinMu.Unlock()
+	if pinsAtFinalize != 1 {
+		t.Fatalf("pins observed during Finalize = %d, want 1", pinsAtFinalize)
+	}
+
+	release()
+	r.end()
+	// By the time r.end() returns (<-c.done), UnpinCapture must already have run.
+	if got := sink.pinCount(); got != 0 {
+		t.Fatalf("pins after capture done = %d, want 0", got)
+	}
+	sink.pinMu.Lock()
+	evLog := slices.Clone(sink.pinEvents)
+	sink.pinMu.Unlock()
+	if !slices.Equal(evLog, []string{"pin:s1", "unpin:s1"}) {
+		t.Fatalf("pin lifecycle = %v, want [pin:s1 unpin:s1]", evLog)
+	}
+}

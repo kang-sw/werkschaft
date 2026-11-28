@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Werkschaft · Group ② 내장 Werk 런타임 — 2-Tab 시각화 (v3)</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<div class="m-bar" role="toolbar" aria-label="목업 컨트롤">
+  <div class="m-row">
+    <span class="m-badge">MOCKUP · V3</span>
+    <div class="m-group">
+      <span class="m-lbl">시나리오</span>
+      <div class="m-seg" id="m-scn">
+        <button class="m-opt is-on" type="button" data-v="normal">정상 주간</button>
+        <button class="m-opt" type="button" data-v="topup">충전 주간 (+$100)</button>
+        <button class="m-opt" type="button" data-v="low">저잔고 ($4.20)</button>
+      </div>
+    </div>
+    <div class="m-group">
+      <span class="m-lbl">테마</span>
+      <div class="m-seg" id="m-theme">
+        <button class="m-opt is-on" type="button" data-v="dark">다크</button>
+        <button class="m-opt" type="button" data-v="light">라이트</button>
+      </div>
+    </div>
+    <div class="m-group">
+      <span class="m-lbl">팝업 폭</span>
+      <div class="m-seg" id="m-w">
+        <button class="m-opt is-on" type="button" data-v="680">680px</button>
+        <button class="m-opt" type="button" data-v="480">480px</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<main class="m-stage" id="m-stage">
+  <div class="stage-well">
+    <div class="m-host" id="host"></div>
+  </div>
+</main>
+
+<script src="./app.js"></script>
+</body>
+</html>

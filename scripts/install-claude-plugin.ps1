@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 # Windows one-shot installer for the ws Claude plugin local-devenv dogfood loop.
 #
-# Mirrors the plugin-registration portion of install.sh (snapshot copy +
+# Mirrors the macOS/Linux scripts/install-claude-plugin.sh installer (snapshot copy +
 # marketplace.json + settings.json + known_marketplaces.json) and additionally
 # writes the gitignored .local-devenv-runtime marker so the launcher builds the
 # Go runtime from THIS clone on cold-load (260622-feat-windows-local-devenv-autobuild).

@@ -651,6 +651,7 @@ test('shell reveals frame early on ready+head without waiting for iframe load an
     },
     querySelectorAll: () => [],
     addEventListener() {},
+    dispatchEvent() {},
   };
   const loc = { origin: 'http://h:1', href: 'http://h:1/s/a', pathname: '/s/a', search: '', hash: '' };
   const hist = {
@@ -673,6 +674,7 @@ test('shell reveals frame early on ready+head without waiting for iframe load an
   };
   const ctx = {
     Map, Set, URL, URLSearchParams, Object, Array, Math, Date, JSON, Promise, Number,
+    CustomEvent: function CustomEvent(type, init) { this.type = type; this.detail = init && init.detail; },
     window: win, doc, location: loc, history: hist,
     root: rootEl,
     shell: true, framed: false, rid: 'a',
@@ -680,7 +682,7 @@ test('shell reveals frame early on ready+head without waiting for iframe load an
     $: id => doc.getElementById(id),
     q: () => [],
     region: () => null,
-    railMarks() {}, railOpen() {}, railShown: () => false, railPopClose() {}, railRenameNew() {}, railSettingsMark() {},
+    railMarks() {}, railOpen() {}, railShown: () => false, railPopClose() {}, railSettingsMark() {},
     railBtn: null, hdNavigated() {},
     labelEditing: () => false, labelEnd() {},
     setTheme() {},
@@ -777,7 +779,7 @@ test('shell reveals frame early on ready+head without waiting for iframe load an
   let stagedCallbacksRan = 0;
   const fCtx = {
     Array, WeakMap,
-    framed: true, shHidden: false,
+    framed: true, compact: false, shHidden: false,
     mountList: [], mountTask: false, mountTimer: 0,
     frameWins: new WeakMap(),
     performance: { now: () => 0 },

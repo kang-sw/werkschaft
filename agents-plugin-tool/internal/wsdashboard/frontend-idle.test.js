@@ -392,6 +392,7 @@ test('explicit state attributes sync across consent banner, settings popover, au
     rpKey: () => 'settings',
     railPopBtn: () => btn,
     railPopPlace() {},
+    railPopScrim() {},
     setLayout() {}, setInput() {}, markTheme() {}, markLang() {}
   };
   vm.createContext(popCtx);

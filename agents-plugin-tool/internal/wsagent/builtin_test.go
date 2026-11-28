@@ -63,7 +63,7 @@ func TestBuiltinSupportProfilesResolve(t *testing.T) {
 // TestBuiltinAgentWorkerProfiles: each worker harness has an internal
 // agent-worker profile with the common ws tools and any backend additions.
 func TestBuiltinAgentWorkerProfiles(t *testing.T) {
-	for backend, tools := range map[string][]string{BackendClaude: AgentClaudeTools, BackendAgy: nil, BackendCodex: nil, BackendWerk: nil} {
+	for backend, tools := range map[string][]string{BackendClaude: AgentClaudeTools, BackendAgy: nil, BackendCodex: nil, BackendWerk: nil, BackendPiRPC: nil} {
 		name := AgentWorkerProfile(backend)
 		rp, err := ResolveProfile(testConfig(t), t.TempDir(), name)
 		if err != nil {
@@ -103,7 +103,7 @@ func TestBuiltinAgentWorkerProfiles(t *testing.T) {
 func TestBuiltinLeadProfilesResolve(t *testing.T) {
 	opts := testConfig(t)
 	root := t.TempDir()
-	for backend, name := range map[string]string{BackendClaude: LeadProfileClaude, BackendCodex: LeadProfileCodex, BackendAgy: LeadProfileAgy, BackendWerk: LeadProfileWerk} {
+	for backend, name := range map[string]string{BackendClaude: LeadProfileClaude, BackendCodex: LeadProfileCodex, BackendAgy: LeadProfileAgy, BackendWerk: LeadProfileWerk, BackendPiRPC: LeadProfilePiRPC} {
 		if LeadProfileFor(backend) != name {
 			t.Fatalf("LeadProfileFor(%s) = %q, want %q", backend, LeadProfileFor(backend), name)
 		}

@@ -2623,10 +2623,30 @@ separate `long` invocation when explicitly requested.
 Workflow `.github/workflows/ws-mcp-release.yml` requires a successful CI run
 on the tagged commit, allowing only the two named long jobs to be skipped.
 It cross-compiles assets, uploads workflow artifacts, and publishes GitHub
-release assets for pushed `v*` tags. Pull requests touching workflow or
+release assets for pushed `v*` tags (passing the resolved build version to
+both the native build and `windows-smoke`). Pull requests touching workflow or
 plugin/runtime paths run checks without publishing. This project's
 `ai-docs/ship/ws.md` records the owner's long-test choice and requires those
 jobs to succeed when requested.
+
+Workflow `.github/workflows/ws-canary.yml` provides a one-click
+`workflow_dispatch` canary build directly from `develop` without merging to
+`main`, cutting an ephemeral branch, or pushing tags manually.
+`agents-plugin-tool/scripts/resolve-canary-version.py` resolves the build plan
+and emits non-blocking `::warning::` annotations if `develop` is ahead of the
+review-watermark frontier (`ai-docs/.review-ledger.md`):
+
+- `mode=artifact` builds `ws-mcp-assets` and `werkschaft-tauri-assets` at
+  `<current-core>-canary.0` (skipping CI by default unless `run_ci=true`). It
+  defaults to evaluation signing (`signing=eval`, `WERKSCHAFT_EVALUATION=1`),
+  and restricts `signing=production` to `refs/heads/develop`.
+- `mode=prerelease` enforces `refs/heads/develop`, runs `.github/workflows/ws-mcp-ci.yml`
+  via `workflow_call`, selects the next patch core `X.Y.(Z+1)` (never a minor
+  bump, failing fast if `v<next-patch-core>` already exists) and next monotonic
+  `v<next-patch-core>-canary.<N>` (`N >= 1`), runs `bump-ws-version.sh`
+  ephemerally in `build`, `windows-smoke`, and `werkschaft-tauri-build.yml`
+  `package` checkouts (via `bump_core`), and publishes an atomic
+  draft-then-undraft GitHub prerelease targeting `GITHUB_SHA`.
 
 ## Local Devenv Repair
 
@@ -2635,7 +2655,7 @@ gitignored `.local-devenv-runtime` marker in the plugin directory is the only
 opt-in: with no marker the launcher takes the normal release path whatever the
 plugin's location. A valid contract selects source repair for a missing or
 incompatible runtime when the plugin runs from a per-user host plugin tree (`~/.codex/plugins/cache/kang-sw-devenv/<ws|wsflow>/`,
-`~/.claude/plugins/cache/kang-sw-devenv/<ws|wsflow>/`, or the install.sh
+`~/.claude/plugins/cache/kang-sw-devenv/<ws|wsflow>/`, or the `scripts/install-claude-plugin.sh`
 snapshot under `~/.claude/plugins/ws-plugin/<ws|wsflow>/`), or straight from
 its source checkout, i.e. when the plugin directory lies inside the marker's own
 `source_root` (resolved paths; case-insensitive on Windows). Both the Codex and
@@ -2683,7 +2703,7 @@ patch match to a **same-minor** match: a locally built runtime is accepted when
 its `(major, minor)` equals the installed snapshot's `plugin_version`, regardless
 of patch (a `-dev` suffix is ignored). The live source version routinely drifts a
 few patches ahead of the installed snapshot's `runtime.json` between
-`install.sh update` runs, and the exact-match gate would otherwise reject the
+`scripts/install-claude-plugin.sh` runs, and the exact-match gate would otherwise reject the
 freshly built runtime after every local patch bump, breaking the MCP server until
 a re-snapshot. A different minor or major is still rejected, because a minor bump
 is a real contract change that must go through a re-snapshot. Released/downloaded
@@ -2709,14 +2729,14 @@ copy it into the plugin cache:
    }
    ```
 
-2. Run `./install.sh update`. The snapshot step copies the marker into the
+2. Run `./scripts/install-claude-plugin.sh`. The snapshot step copies the marker into the
    plugin snapshot and `claude plugin install` carries it into the versioned
    cache, so the next MCP launch can build when no compatible runtime exists.
 
 After setup, edit source and run `python3 scripts/dev.py rerun daemon` at the
 coordinated swap time to build, stage and seed the selected runtime. Reconnecting
 alone reuses it and reports source drift. To disable local
-mode, delete the marker and re-run `install.sh update` (the launcher reverts to
+mode, delete the marker and re-run `./scripts/install-claude-plugin.sh` (the launcher reverts to
 the cache/release path).
 
 This path exists only for the repository-local Codex or Claude plugin

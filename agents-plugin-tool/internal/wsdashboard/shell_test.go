@@ -40,7 +40,9 @@ func TestSessionURLServesTheShellAroundItsFramedPage(t *testing.T) {
 		t.Error("rail.js does not load in the shell's head")
 	}
 	_, afterRail, _ := strings.Cut(body, `data-premark>`)
-	if i := strings.Index(afterRail, "</aside><script>"); i < 0 || !strings.Contains(afterRail[i:i+600], "R.marks(") {
+	if i := strings.Index(afterRail, "</aside><script>"); i < 0 {
+		t.Error("no inline script applies the rail's marks right after the rail")
+	} else if script, _, ok := strings.Cut(afterRail[i:], "</script>"); !ok || !strings.Contains(script, "R.marks(") {
 		t.Error("no inline script applies the rail's marks right after the rail")
 	}
 

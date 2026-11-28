@@ -87,7 +87,7 @@ func deniedBasePaths(homes []string) []string {
 		{"APPDATA", "GitHub CLI"}, {"APPDATA", "gcloud"},
 		// Retained name check: the providers' own credential locations, denied by name
 		// (TestFSLocalDeniedProviderCredentials).
-		{"CODEX_HOME", "auth.json"}, {"CLAUDE_CONFIG_DIR", ".credentials.json"},
+		{"CODEX_HOME", "auth.json"}, {"CLAUDE_CONFIG_DIR", ".credentials.json"}, {"PI_CODING_AGENT_DIR", "auth.json"},
 	} {
 		if dir := os.Getenv(c.key); dir != "" {
 			add(filepath.Join(dir, c.name))

@@ -1273,7 +1273,6 @@
     shTop.style.setProperty("--sh-stage-side", side ? side + "px" : "");
     // Headerless fallback clears stale session controls, not their box.
     if (m) shTop.style.minHeight = m.top + "px";
-    railRenameNew();
   }
   // shLayout takes the shown frame's pinned column and its backdrop's dim.
   function shLayout(ent) {
@@ -1627,11 +1626,10 @@
         headDirty = false;
         var top = doc.querySelector(".dwrap > .top"), h = region("head"), qs = $("qsslot");
         var topCS = top ? getComputedStyle(top) : null;
-        var rootCS = top ? getComputedStyle(root) : null;
-        var hasRGP = !!(rootCS && typeof rootCS.getPropertyValue === "function");
-        var drhw = hasRGP ? (parseFloat(rootCS.getPropertyValue("--drhw")) || 0) : 0;
-        var tkhw = hasRGP ? (parseFloat(rootCS.getPropertyValue("--tkhw")) || 0) : 0;
-        var dpad = hasRGP ? (parseFloat(rootCS.getPropertyValue("--dpad")) || 16) : 16;
+        var hasGP = !!(topCS && typeof topCS.getPropertyValue === "function");
+        var drhw = hasGP ? (parseFloat(topCS.getPropertyValue("--drhw")) || 0) : 0;
+        var tkhw = hasGP ? (parseFloat(topCS.getPropertyValue("--tkhw")) || 0) : 0;
+        var dpad = hasGP ? (parseFloat(topCS.getPropertyValue("--dpad")) || 16) : 16;
         var handlesW = (drhw > 0 || tkhw > 0) ? Math.ceil(drhw + tkhw + dpad) : 0;
         head = top ? {
           html: h ? h.innerHTML : null, qs: qs ? inline(qs) : "",

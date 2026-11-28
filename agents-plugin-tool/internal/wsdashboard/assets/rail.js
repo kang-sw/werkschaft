@@ -1394,9 +1394,15 @@
     win = win || window;
     if (!top) return;
     var fit = function () { topFit(top, win); };
+    var frame = 0;
+    var deferFit = function () {
+      if (typeof win.requestAnimationFrame !== "function") { fit(); return; }
+      if (frame) return;
+      frame = win.requestAnimationFrame(function () { frame = 0; fit(); });
+    };
     var inSlot = function (rec) { var n = rec.target; n = n && n.nodeType !== 1 ? n.parentNode : n; return !!(n && n.closest && n.closest(".qsslot")); };
     if (win.ResizeObserver) {
-      var ro = new win.ResizeObserver(fit), slot = top.querySelector(".qsslot"), left = top.querySelector(":scope > .top-left");
+      var ro = new win.ResizeObserver(deferFit), slot = top.querySelector(".qsslot"), left = top.querySelector(":scope > .top-left");
       ro.observe(top);
       if (left) ro.observe(left);
       if (slot) ro.observe(slot); // its search handle is a strip item
@@ -1436,8 +1442,14 @@
     win = win || window;
     if (!bar) return;
     var fit = function () { botFit(bar, win); };
+    var frame = 0;
+    var deferFit = function () {
+      if (typeof win.requestAnimationFrame !== "function") { fit(); return; }
+      if (frame) return;
+      frame = win.requestAnimationFrame(function () { frame = 0; fit(); });
+    };
     if (win.ResizeObserver) {
-      var ro = new win.ResizeObserver(fit);
+      var ro = new win.ResizeObserver(deferFit);
       ro.observe(bar);
       var right = bar.querySelector("#slot-bot-right, .bot-right");
       if (right) ro.observe(right);

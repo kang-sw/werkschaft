@@ -29,6 +29,168 @@
     return lang;
   }
 
+  var BOUNDARY_PUNCT_RE = /^[.,!?;:"'()\[\]\u3002\u3001\uff0c\uff0e\uff01\uff1f\uff1a\uff1b\u2026\u300c\u300d\u300e\u300f\u201c\u201d\u2018\u2019]+|[.,!?;:"'()\[\]\u3002\u3001\uff0c\uff0e\uff01\uff1f\uff1a\uff1b\u2026\u300c\u300d\u300e\u300f\u201c\u201d\u2018\u2019]+$/g;
+  var SEP_PUNCT_OR_WS_RE = /^[.,!?;:\u3002\u3001\uff0c\uff0e\uff01\uff1f\uff1a\uff1b\u2026\s]$/;
+  var TRAILING_SEP_PUNCT_RE = /[.,!?;:\u3002\u3001\uff0c\uff0e\uff01\uff1f\uff1a\uff1b\u2026\s]+$/;
+
+  function normalizeNFC(s) {
+    var str = String(s == null ? "" : s);
+    return typeof str.normalize === "function" ? str.normalize("NFC") : str;
+  }
+
+  function tokensWithEnd(nfcStr) {
+    var out = [];
+    var i = 0;
+    var n = nfcStr.length;
+    while (i < n) {
+      while (i < n && /\s/.test(nfcStr.charAt(i))) i++;
+      if (i >= n) break;
+      var start = i;
+      while (i < n && !/\s/.test(nfcStr.charAt(i))) i++;
+      var norm = nfcStr.slice(start, i).replace(BOUNDARY_PUNCT_RE, "").toLowerCase();
+      if (norm) out.push({ norm: norm, end: i });
+    }
+    return out;
+  }
+
+  function advancePastSep(str, pos) {
+    while (pos < str.length && SEP_PUNCT_OR_WS_RE.test(str.charAt(pos))) pos++;
+    return str.slice(pos);
+  }
+
+  // Trade-off: an identical single-word repetition right across a pause is treated
+  // as flicker re-emission rather than intentional duplicate dictation.
+  function stripCommittedPrefix(committedJoined, rawNext) {
+    var cNfc = normalizeNFC(committedJoined).trim();
+    if (!cNfc) return { matched: false, rest: rawNext };
+    var iTrim = normalizeNFC(rawNext).replace(/^\s+/, "");
+    if (!iTrim) return { matched: false, rest: rawNext };
+    var cTokens = tokensWithEnd(cNfc);
+    if (!cTokens.length) return { matched: false, rest: rawNext };
+    var iTokens = tokensWithEnd(iTrim);
+    if (iTokens.length >= cTokens.length) {
+      var match = true;
+      for (var k = 0; k < cTokens.length; k++) {
+        if (iTokens[k].norm !== cTokens[k].norm) {
+          match = false;
+          break;
+        }
+      }
+      if (match) {
+        return { matched: true, rest: advancePastSep(iTrim, iTokens[cTokens.length - 1].end) };
+      }
+    }
+    var cCore = cNfc.replace(TRAILING_SEP_PUNCT_RE, "");
+    if (cCore && cCore !== cNfc && iTrim.indexOf(cNfc) === 0) {
+      return { matched: true, rest: advancePastSep(iTrim, cNfc.length) };
+    }
+    if (cCore && iTrim.indexOf(cCore) === 0) {
+      var nextCh = iTrim.charAt(cCore.length);
+      if (!nextCh || SEP_PUNCT_OR_WS_RE.test(nextCh)) {
+        return { matched: true, rest: advancePastSep(iTrim, cCore.length) };
+      }
+    }
+    return { matched: false, rest: rawNext };
+  }
+
+  function stripCommittedSegmentsPrefix(segments, rawNext) {
+    for (var start = 0; start < segments.length; start++) {
+      var res = stripCommittedPrefix(segments.slice(start).join(" "), rawNext);
+      if (res.matched) return res.rest;
+    }
+    return rawNext;
+  }
+
+  function isDisjointJump(prev, next) {
+    var prevTrim = normalizeNFC(prev).trim();
+    var nextTrim = normalizeNFC(next).trim();
+    if (!prevTrim || !nextTrim) return false;
+    var prevChars = Array.from(prevTrim);
+    var nextChars = Array.from(nextTrim);
+    var prevTokens = tokensWithEnd(prevTrim);
+    var nextTokens = tokensWithEnd(nextTrim);
+    if (!prevTokens.length || !nextTokens.length) return false;
+    if (prevChars.length < 6 && prevTokens.length < 2) return false;
+    if (nextChars.length * 2 >= prevChars.length) return false;
+    var prefixLen = 0;
+    var minLen = Math.min(prevChars.length, nextChars.length);
+    while (prefixLen < minLen && prevChars[prefixLen].toLowerCase() === nextChars[prefixLen].toLowerCase()) {
+      prefixLen++;
+    }
+    if (prefixLen >= 2) return false;
+    var prevLower = prevTrim.toLowerCase();
+    var nextLower = nextTrim.toLowerCase();
+    if (nextChars.length >= 3 && prevLower.indexOf(nextLower) !== -1) return false;
+    var prevSet = Object.create(null);
+    var prevUnique = 0;
+    for (var i = 0; i < prevTokens.length; i++) {
+      if (!prevSet[prevTokens[i].norm]) {
+        prevSet[prevTokens[i].norm] = true;
+        prevUnique++;
+      }
+    }
+    var nextSet = Object.create(null);
+    var nextUnique = 0;
+    var shared = 0;
+    for (var j = 0; j < nextTokens.length; j++) {
+      var tok = nextTokens[j].norm;
+      if (!nextSet[tok]) {
+        nextSet[tok] = true;
+        nextUnique++;
+        if (prevSet[tok]) shared++;
+      }
+    }
+    if (shared === 0) return true;
+    if (shared >= nextUnique) return false;
+    var union = prevUnique + nextUnique - shared;
+    return prefixLen === 0 && shared * 3 <= union;
+  }
+
+  function createSpeechAccumulator() {
+    var committedSegments = [];
+    var currentPartial = "";
+
+    function currentText() {
+      var committed = committedSegments.join(" ");
+      var cur = currentPartial.trim();
+      if (!committed) return currentPartial;
+      if (!cur) return committed;
+      return committed + " " + cur;
+    }
+
+    function applyIncoming(raw, promoteEmpty) {
+      var next = committedSegments.length && String(raw == null ? "" : raw).trim()
+        ? stripCommittedSegmentsPrefix(committedSegments, raw)
+        : raw;
+      if (!next.trim()) {
+        if (promoteEmpty && currentPartial.trim()) {
+          committedSegments.push(normalizeNFC(currentPartial.trim()));
+          currentPartial = "";
+        }
+        return currentText();
+      }
+      if (isDisjointJump(currentPartial, next)) {
+        committedSegments.push(normalizeNFC(currentPartial.trim()));
+      }
+      currentPartial = next;
+      return currentText();
+    }
+
+    return {
+      reset: function () {
+        committedSegments = [];
+        currentPartial = "";
+      },
+      onPartial: function (raw) {
+        return applyIncoming(raw, true);
+      },
+      onFinal: function (raw) {
+        return applyIncoming(raw, false);
+      },
+      currentText: currentText
+    };
+  }
+
   function createNativeAdapter(opts) {
     opts = opts || {};
     var win = opts.window || window;
@@ -66,9 +228,8 @@
     var sessionActive = false;
     var pendingStop = null;
     var destroyed = false;
-    // Latest partial of the live session: the fallback when a Final arrives
-    // empty (at Stop or unsolicited after a pause).
-    var lastPartial = "";
+    // Accumulated pre-pause segments and live hypothesis for the active session.
+    var speechAcc = createSpeechAccumulator();
     // Rust backstops Stop at 2.5 s; this JS timer is the longer last resort so
     // the controller can never hang in "transcribing".
     var stopTimeoutMs = typeof opts.stopTimeoutMs === "number" ? opts.stopTimeoutMs : 4000;
@@ -168,7 +329,7 @@
       if (t === "hidden") {
         var wasActive = sessionActive || !!pendingStop;
         sessionActive = false;
-        lastPartial = "";
+        speechAcc.reset();
         settleStop(makeVoiceError("cancelled", "window_hidden"));
         if (wasActive && typeof hiddenCb === "function") {
           try { hiddenCb(detail); } catch (e) {}
@@ -178,18 +339,19 @@
       }
       if (t === "partial") {
         if (!sessionActive) return;
-        lastPartial = typeof detail.text === "string" ? detail.text : "";
-        if (typeof partialCb === "function") {
-          try { partialCb(lastPartial); } catch (e) {}
+        var rawPartial = typeof detail.text === "string" ? detail.text : "";
+        var accumulated = speechAcc.onPartial(rawPartial);
+        if (accumulated.trim() && typeof partialCb === "function") {
+          try { partialCb(accumulated); } catch (e) {}
         }
         return;
       }
       if (t === "final") {
-        var finalText = typeof detail.text === "string" ? detail.text : "";
-        if (!finalText.trim() && lastPartial) finalText = lastPartial;
+        var rawFinal = typeof detail.text === "string" ? detail.text : "";
+        var finalText = speechAcc.onFinal(rawFinal);
         var live = sessionActive;
         sessionActive = false;
-        lastPartial = "";
+        speechAcc.reset();
         // No Stop pending: the recognizer finalized on its own (e.g. a pause).
         // Hand the text to the controller rather than dropping it, which would
         // leave it "recording" over a dead session and fail the next Stop.
@@ -199,11 +361,19 @@
         return;
       }
       if (t === "error") {
-        var err = makeVoiceError(detail.code || "recognition_error", detail.reason || detail.code);
-        var hadStop = settleStop(err);
+        var errCode = detail.code || "recognition_error";
+        var err = makeVoiceError(errCode, detail.reason || errCode);
+        var rescued = errCode !== "cancelled" ? speechAcc.currentText().trim() : "";
         var wasSession = sessionActive;
         sessionActive = false;
-        lastPartial = "";
+        speechAcc.reset();
+        if (rescued) {
+          if (!settleStop(null, rescued) && wasSession && typeof autoFinalCb === "function") {
+            try { autoFinalCb(rescued); } catch (e) {}
+          }
+          return;
+        }
+        var hadStop = settleStop(err);
         if (!hadStop && wasSession && typeof asyncErrorCb === "function") {
           try { asyncErrorCb(err); } catch (e) {}
         }
@@ -454,7 +624,7 @@
           }
           activeOwner = { kind: "top" };
           sessionActive = true;
-          lastPartial = "";
+          speechAcc.reset();
           var sent = bridge.start(loc);
           if (sent === false) {
             activeOwner = null;
@@ -464,7 +634,7 @@
           return Promise.resolve();
         }
         sessionActive = true;
-        lastPartial = "";
+        speechAcc.reset();
         if (!sendToTop({ wsVoiceRelay: true, op: "start", locale: loc })) {
           sessionActive = false;
           return Promise.reject(makeVoiceError("bridge_error", "relay_failed"));
@@ -479,8 +649,8 @@
           function abandonStop() {
             if (!pendingStop) return;
             sessionActive = false;
-            var heard = lastPartial;
-            lastPartial = "";
+            var heard = speechAcc.currentText();
+            speechAcc.reset();
             if (isTop && activeOwner && activeOwner.kind === "top") {
               activeOwner = null;
               stopDetachObserver();
@@ -494,6 +664,7 @@
             var bridge = getBridge();
             if (!bridge) {
               sessionActive = false;
+              speechAcc.reset();
               settleStop(makeVoiceError("unavailable", "desktop_only"));
               return;
             }
@@ -501,6 +672,7 @@
           } else {
             if (!sendToTop({ wsVoiceRelay: true, op: "stop" })) {
               sessionActive = false;
+              speechAcc.reset();
               settleStop(makeVoiceError("bridge_error", "relay_failed"));
             }
           }
@@ -509,7 +681,7 @@
       cancel: function () {
         var was = sessionActive || !!pendingStop;
         sessionActive = false;
-        lastPartial = "";
+        speechAcc.reset();
         settleStop(makeVoiceError("cancelled"));
         if (!was) return;
         if (isTop) {

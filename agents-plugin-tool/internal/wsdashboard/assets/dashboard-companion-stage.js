@@ -111,6 +111,7 @@
     const maxSize = limits.max ?? 240;
     const isActive = limits.active || (() => true);
     const invertX = !!limits.invertX;
+    const verticalOnly = !!limits.verticalOnly;
     let preferred = null, active = null, cap = maxSize;
     try {
       const saved = window.localStorage.getItem(key);
@@ -134,7 +135,7 @@
       if (active?.id !== event.pointerId) return;
       const dx = invertX ? active.x - event.clientX : event.clientX - active.x;
       const dy = active.y - event.clientY;
-      update(active.size + (Math.abs(dx) >= Math.abs(dy) ? dx : dy));
+      update(active.size + (verticalOnly ? dy : (Math.abs(dx) >= Math.abs(dy) ? dx : dy)));
     }, options);
     function finish(event) {
       if (active?.id !== event.pointerId) return;
@@ -152,6 +153,7 @@
     }, options);
     return {
       isActive() { return !!active; },
+      hasPreferred() { return preferred !== null; },
       value(fallback, width, height) {
         cap = Math.max(1, Math.min(maxSize, width - 24, height - 24));
         const value = Math.min(preferred ?? fallback, cap);
@@ -281,10 +283,26 @@
       controls.close();
       window.WsCompanionMessenger?.toggle?.(chatBtn);
     }, options);
+    const laptopHit = doc.createElement("button");
+    laptopHit.type = "button";
+    laptopHit.className = "ws-companion-laptop-hit";
+    laptopHit.title = tOr("js.companion.messenger.open", "Open companion messenger");
+    laptopHit.setAttribute("aria-label", laptopHit.title);
+    laptopHit.setAttribute("aria-expanded", "false");
+    laptopHit.setAttribute("aria-pressed", "false");
+    laptopHit.setAttribute("aria-controls", "companion-messenger");
+    laptopHit.hidden = true;
+    laptopHit.addEventListener("click", event => {
+      event.stopPropagation();
+      controls.close();
+      markVrmActivity();
+      window.WsCompanionMessenger?.toggle?.(laptopHit);
+      schedule();
+    }, options);
     const knockFxLayer = doc.createElement("div");
     knockFxLayer.className = "ws-companion-knock-fx";
     knockFxLayer.setAttribute("aria-hidden", "true");
-    hit.append(character, knockFxLayer, grip, chatBtn, gear);
+    hit.append(character, laptopHit, knockFxLayer, grip, chatBtn, gear);
     hit.hidden = true;
     const ctx = canvas.getContext("2d");
     const menu = doc.createElement("div");
@@ -311,6 +329,8 @@
     let home = { x: 60, y: 96 }, arrived = false, custom = null, drag = null, suppressClick = false;
     let vrmPointer = null, lastVrmPointer = null, hitArea = "";
     let companionHover = false;
+    let lastLaptopHitBox = null;
+    const lastLaptopHitStyle = { hidden: true, left: "", top: "", width: "", height: "", source: "" };
     let latestPhoneSnap = null;
     // Phone gesture received while no rig was mounted; replayed after the
     // latest phone snapshot once a rig mounts unless a newer snapshot came.
@@ -343,8 +363,12 @@
       const next = nextIsVrm ? makeAdapter(pack, {
         onReady: () => {
           if (!vrmRailVisible) { next.pause?.(); return; }
+          syncLaptopHit(next.getLaptopBounds?.());
           markVrmActivity();
           invalidated();
+        },
+        onLaptopBoundsChange: bounds => {
+          if (rig === next) syncLaptopHit(bounds);
         },
         onContextLost: () => {
           cancelAnimationFrame(frame);
@@ -439,6 +463,7 @@
 
     const controls = C.quickMenu(node, character, menu, options, {
       returnHome, resetSize, mute, applyPreset, notice, openSettings,
+      extraTriggers: [laptopHit],
       onOpen() {
         placeMenu();
         if (isVrm() && vrmRailVisible) { markVrmActivity(); schedule(); }
@@ -469,7 +494,7 @@
 
     function replayPhoneToRig() {
       if (!rig) return;
-      if (latestPhoneSnap) rig.setPhoneState?.(latestPhoneSnap);
+      if (latestPhoneSnap && !C.reflex?.suppressPhoneSnapshot?.(latestPhoneSnap)) rig.setPhoneState?.(latestPhoneSnap);
       if (pendingPhoneGesture) {
         const g = pendingPhoneGesture;
         pendingPhoneGesture = "";
@@ -665,10 +690,72 @@
     }
 
     const sizing = resizeControl(grip, options, () => size, invalidated, { active: () => !isVrm() });
+    const vrmSizing = resizeControl(grip, options, () => vrmHeight, invalidated, {
+      key: "ws.companion.vrmHeight",
+      min: 152,
+      max: 360,
+      verticalOnly: true,
+      active: () => isVrm()
+    });
 
     function resetSize() {
-      if (!isVrm()) sizing.reset();
+      if (isVrm()) vrmSizing.reset();
+      else sizing.reset();
       controls.close();
+    }
+
+    function applyLaptopHitStyle(hidden, x, y, w, h, source) {
+      if (hidden) {
+        lastLaptopHitBox = null;
+        if (!lastLaptopHitStyle.hidden) {
+          laptopHit.hidden = true;
+          lastLaptopHitStyle.hidden = true;
+        }
+        return;
+      }
+      const lStr = x + "px", tStr = y + "px", wStr = w + "px", hStr = h + "px";
+      if (lastLaptopHitStyle.hidden) { laptopHit.hidden = false; lastLaptopHitStyle.hidden = false; }
+      if (lastLaptopHitStyle.left !== lStr) { laptopHit.style.left = lStr; lastLaptopHitStyle.left = lStr; }
+      if (lastLaptopHitStyle.top !== tStr) { laptopHit.style.top = tStr; lastLaptopHitStyle.top = tStr; }
+      if (lastLaptopHitStyle.width !== wStr) { laptopHit.style.width = wStr; lastLaptopHitStyle.width = wStr; }
+      if (lastLaptopHitStyle.height !== hStr) { laptopHit.style.height = hStr; lastLaptopHitStyle.height = hStr; }
+      if (lastLaptopHitStyle.source !== source) { laptopHit.dataset.source = source; lastLaptopHitStyle.source = source; }
+      lastLaptopHitBox = { x, y, width: w, height: h, source };
+    }
+
+    function syncLaptopHit(boundsOverride) {
+      const dock = node.dataset.dock || "";
+      if (hit.hidden || (isVrm() && (!vrmRailVisible || activeVrmRenderMode() === "roam")) || (!isVrm() && dock !== "rail-2d")) {
+        applyLaptopHitStyle(true, 0, 0, 0, 0, "");
+        return;
+      }
+      const hitW = Math.max(0, Math.round(bodyBox.width > 0 ? bodyBox.width : (isVrm() ? Math.max(0, Math.round(size) - VRM_SPLITTER_TRIM_PX) : size)));
+      const hitH = Math.max(0, Math.round(bodyBox.height > 0 ? bodyBox.height : (isVrm() ? vrmHeight : size)));
+      if (hitW < 24 || hitH < 24) {
+        applyLaptopHitStyle(true, 0, 0, 0, 0, "");
+        return;
+      }
+      if (isVrm()) {
+        const b = boundsOverride !== undefined ? boundsOverride : rig?.getLaptopBounds?.();
+        if (b && Number.isFinite(b.width) && Number.isFinite(b.height) && b.width > 0 && b.height > 0) {
+          const pad = 4;
+          const rawX = Number.isFinite(b.viewportX) && Number.isFinite(bodyBox.x) ? Math.round(b.viewportX - bodyBox.x) : Math.round(b.x || 0);
+          const rawY = Number.isFinite(b.viewportY) && Number.isFinite(bodyBox.y) ? Math.round(b.viewportY - bodyBox.y) : Math.round(b.y || 0);
+          const x1 = clamp(rawX - pad, 0, Math.max(0, hitW - 24));
+          const y1 = clamp(rawY - pad, 0, Math.max(0, hitH - 20));
+          const x2 = clamp(rawX + Math.round(b.width) + pad, x1 + 24, hitW);
+          const y2 = clamp(rawY + Math.round(b.height) + pad, y1 + 20, hitH);
+          applyLaptopHitStyle(false, x1, y1, x2 - x1, y2 - y1, "projected");
+          return;
+        }
+        const fw = Math.min(hitW, Math.max(48, Math.round(hitW * 0.64)));
+        const fh = Math.min(hitH, Math.max(32, Math.round(hitH * 0.24)));
+        applyLaptopHitStyle(false, Math.round((hitW - fw) * 0.5), Math.max(0, hitH - fh - 2), fw, fh, "fallback");
+        return;
+      }
+      const fw = Math.min(hitW, Math.max(40, Math.round(hitW * 0.64)));
+      const fh = Math.min(hitH, Math.max(24, Math.round(hitH * 0.30)));
+      applyLaptopHitStyle(false, Math.round((hitW - fw) * 0.5), Math.max(0, hitH - fh - 2), fw, fh, "fallback");
     }
 
     function packsChanged() { requestPack(true); }
@@ -743,6 +830,13 @@
       return !!(el && el !== node && node.contains(el));
     }
 
+    function isPointInCompanionSlot(clientX, clientY) {
+      if (!Number.isFinite(clientX) || !Number.isFinite(clientY) || hit.hidden) return false;
+      if (!Number.isFinite(bodyBox.x) || !Number.isFinite(bodyBox.y) || !(bodyBox.width > 0) || !(bodyBox.height > 0)) return false;
+      return clientX >= bodyBox.x && clientX <= bodyBox.x + bodyBox.width &&
+        clientY >= bodyBox.y && clientY <= bodyBox.y + bodyBox.height;
+    }
+
     function setCompanionHover(next) {
       const flag = !!next;
       if (companionHover === flag) return;
@@ -780,6 +874,7 @@
       node.dataset.avoiding = "0";
       stageOverlay.hidden = true;
       hit.hidden = true;
+      syncLaptopHit();
       controls.close();
       if (decoration) decoration.hidden = true;
       quipCtrl?.hide?.();
@@ -823,7 +918,9 @@
         vrmRailVisible = true;
         custom = null;
         drag = null;
-        const targetH = computeRailVrmHeight(railRect);
+        const defaultH = computeRailVrmHeight(railRect);
+        const maxRailH = Math.max(152, Math.min(360, Math.round((railRect?.height || vh) * 0.48)));
+        const targetH = Math.round(vrmSizing.value(defaultH, Math.max(vw, 400), maxRailH + 24));
         const slotCss = targetH + "px";
         if (rail.style.getPropertyValue("--companion-slot") !== slotCss) rail.style.setProperty("--companion-slot", slotCss);
         if (rail.dataset.companionDock !== "rail-slot") rail.dataset.companionDock = "rail-slot";
@@ -831,7 +928,7 @@
         if (slotEl.hidden) slotEl.hidden = false;
         const slotRect = slotEl.getBoundingClientRect();
         const nextW = Math.max(160, Math.round(slotRect.width || railRect.width));
-        const nextH = Math.max(140, Math.round(slotRect.height || targetH));
+        const nextH = Math.max(140, Math.round(vrmSizing.hasPreferred() ? targetH : (slotRect.height || targetH)));
         const nextVw = Math.max(64, Math.round(vw));
         const nextVh = Math.max(64, Math.round(vh));
         const nextDpr = Math.min(dpr, 2);
@@ -889,7 +986,14 @@
             markVrmActivity();
           }
         }
-        if (latestPhoneSnap) rig?.setPhoneState?.(latestPhoneSnap);
+        if (latestPhoneSnap && !C.reflex?.suppressPhoneSnapshot?.(latestPhoneSnap)) rig?.setPhoneState?.(latestPhoneSnap);
+        if (slotChanged || !wasVisible) {
+          bodyBox.width = Math.max(0, Math.round(size) - VRM_SPLITTER_TRIM_PX);
+          bodyBox.height = vrmHeight;
+          bodyBox.x = anchorLeft;
+          bodyBox.y = anchorBottom - vrmHeight;
+          syncLaptopHit();
+        }
         window.WsCompanionMessenger?.reposition?.();
         return;
       }
@@ -911,26 +1015,25 @@
           x: clamp(composer.left + size / 2, 12 + size / 2, vw - size / 2),
           y: clamp(composer.y - 2, size, vh - 12)
         } : { x: 12 + size / 2, y: vh - 12, corner: true };
+        syncLaptopHit();
         return;
       }
 
       node.dataset.dock = "rail-2d";
       size = sizing.value(clamp(Math.min(rect.width * 0.44, rect.height * 0.36), 88, 152), vw, vh);
-      const unreg = rail.querySelector(".rws-unreg");
       const footer = rail.querySelector(".rfoot, .r-config-global");
       const reserve = !custom && !drag;
-      const box = unreg?.getBoundingClientRect();
       const slot = Math.ceil(size) + 4;
-      const hasUnreg = !!(unreg && box && box.height > 0);
       rail.style.setProperty("--companion-slot", slot + "px");
       setBeforeUnreg(null);
       if (reserve) {
-        rail.dataset.companionDock = hasUnreg ? "unregistered" : "footer";
+        rail.dataset.companionDock = "footer";
       } else {
         rail.removeAttribute("data-companion-dock");
       }
-      const divider = (hasUnreg ? unreg : footer)?.getBoundingClientRect().top ?? rect.bottom;
+      const divider = footer?.getBoundingClientRect().top ?? rect.bottom;
       home = { x: rect.left + rect.width / 2, y: divider - 2, rail: true };
+      syncLaptopHit();
     }
 
     function invalidated() {
@@ -1056,6 +1159,10 @@
       hit.style.width = width + "px";
       hit.style.height = height + "px";
       hit.style.transform = "translate3d(" + x + "px," + y + "px,0) rotate(" + physical.angle + "rad) scale(" + physical.sx + "," + physical.sy + ")";
+      if (node.dataset.dock === "rail-2d") {
+        const w2 = Math.round(width) + "px", h2 = Math.round(height) + "px";
+        if (w2 !== lastHitW || h2 !== lastHitH) { lastHitW = w2; lastHitH = h2; syncLaptopHit(); }
+      }
       canvas.style.width = canvas.style.height = size + "px";
       canvas.style.left = -b[0] * size + "px";
       canvas.style.top = -b[1] * size + "px";
@@ -1418,7 +1525,7 @@
       if (isCompanionTarget(event.target)) setCompanionHover(true);
     }, { ...options, passive: true });
     node.addEventListener("pointerout", event => {
-      if (!isCompanionTarget(event.relatedTarget)) {
+      if (!isCompanionTarget(event.relatedTarget) && !isPointInCompanionSlot(event.clientX, event.clientY)) {
         setCompanionHover(false);
         setHitArea("");
       }
@@ -1428,7 +1535,7 @@
       cursor.x = event.clientX;
       cursor.y = event.clientY;
       trackVrmPointerMove(event);
-      setCompanionHover(isCompanionTarget(event.target));
+      setCompanionHover(isCompanionTarget(event.target) || isPointInCompanionSlot(event.clientX, event.clientY));
       if (isVrm() && vrmRailVisible) {
         if (isCharacterSurfaceTarget(event.target)) {
           setHitArea(hitTestVrmPoint(event.clientX, event.clientY));
@@ -1588,6 +1695,7 @@
         },
         getChatButton() { return chatBtn; },
         isToggleTarget(target, event) {
+          if (target && (target === laptopHit || laptopHit.contains(target))) return true;
           if (!isVrm() || !vrmRailVisible || hit.hidden) return false;
           if (!isCharacterSurfaceTarget(target)) return false;
           const x = event?.clientX, y = event?.clientY;
@@ -1597,8 +1705,11 @@
         openSettings: openSettings || null,
         onOpenChange(isOpen) {
           C.messengerPresence?.set?.(isOpen);
-          chatBtn.setAttribute("aria-expanded", isOpen ? "true" : "false");
-          chatBtn.setAttribute("aria-pressed", isOpen ? "true" : "false");
+          const flag = isOpen ? "true" : "false";
+          chatBtn.setAttribute("aria-expanded", flag);
+          chatBtn.setAttribute("aria-pressed", flag);
+          laptopHit.setAttribute("aria-expanded", flag);
+          laptopHit.setAttribute("aria-pressed", flag);
           if (isVrm() && vrmRailVisible) {
             markVrmActivity();
             schedule();
@@ -1627,6 +1738,8 @@
       packsChanged, resetSize, returnHome,
       setVrmRenderMode(mode) {
         const res = rig?.setRenderMode?.(mode) ?? "docked";
+        node.dataset.renderMode = res;
+        syncLaptopHit();
         if (isVrm() && vrmRailVisible && !doc.hidden) {
           markVrmActivity();
           lastVrmRenderAt = -Infinity;
@@ -1660,6 +1773,7 @@
           vrmBreakoutActive,
           vrmTargetFps,
           hitBox: { x: bodyBox.x, y: bodyBox.y, width: bodyBox.width, height: bodyBox.height },
+          laptopHitBox: lastLaptopHitBox ? { ...lastLaptopHitBox } : null,
           unreadClient: latestPhoneSnap?.unreadClient || 0,
           messengerOpen: !!window.WsCompanionMessenger?.isOpen?.(),
           vrm: rig?.debugState?.() || null,

@@ -1,0 +1,1877 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Werkschaft — Companion Rail Seamless Layout v2 (Z-Layered Overlay)</title>
+  <style>
+    /* =====================================================================
+       Canonical Werkschaft Tokens (from dashboard-style.md & page.css)
+       ===================================================================== */
+    :root {
+      --wb-bg: #f3f3f0;
+      --wb-card: #ffffff;
+      --wb-muted: #e9e8e3;
+      --wb-topic: #e3e4e8;
+      --wb-on-topic: #1b1d21;
+      --wb-fg: #1b1d21;
+      --wb-muted-fg: #5f646b;
+      --wb-primary: #2b62d9;
+      --wb-primary-fg: #ffffff;
+      --wb-ok: #1d7348;
+      --wb-warn: #c27a00;
+      --wb-warn-ink: #a35f00;
+      --wb-fail: #c0262d;
+      --wb-line: color-mix(in srgb, var(--wb-fg) 16%, transparent);
+      --wb-wash: color-mix(in srgb, var(--wb-fg) 6%, transparent);
+      --wb-shadow: 0 1px 2px rgb(0 0 0 / .14), 0 2px 6px rgb(0 0 0 / .06);
+      --wb-shadow-hi: 0 2px 4px rgb(0 0 0 / .16), 0 6px 18px rgb(0 0 0 / .10);
+      --d-shell-bg: #e7e7e2;
+      --d-stage-bg: #f4f4f1;
+      --stage-rim: color-mix(in srgb, var(--wb-fg) 8%, transparent);
+      --wb-radius: 12px;
+      --wb-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+      --wb-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      --rail-w: 280px;
+      --rail-h: 680px;
+      --companion-h: 224px;
+      --companion-drop: drop-shadow(0 6px 14px rgb(0 0 0 / .18)) drop-shadow(0 1px 3px rgb(0 0 0 / .12));
+    }
+
+    :root[data-theme="dark"] {
+      --wb-bg: #141518;
+      --wb-card: #1e2024;
+      --wb-muted: #2b2d32;
+      --wb-topic: #2a2d33;
+      --wb-on-topic: #e4e5e8;
+      --wb-fg: #e7e7e4;
+      --wb-muted-fg: #a2a6ad;
+      --wb-primary: #7aa2ff;
+      --wb-primary-fg: #0c1424;
+      --wb-ok: #6cc39a;
+      --wb-warn: #e0a36c;
+      --wb-warn-ink: #e0a36c;
+      --wb-fail: #f0797e;
+      --wb-line: color-mix(in srgb, var(--wb-fg) 16%, transparent);
+      --wb-wash: color-mix(in srgb, var(--wb-fg) 6%, transparent);
+      --wb-shadow: 0 1px 2px rgb(0 0 0 / .5), 0 2px 8px rgb(0 0 0 / .3);
+      --wb-shadow-hi: 0 2px 4px rgb(0 0 0 / .55), 0 8px 22px rgb(0 0 0 / .4);
+      --d-shell-bg: #111216;
+      --d-stage-bg: #16181d;
+      --companion-drop: drop-shadow(0 8px 18px rgb(0 0 0 / .52)) drop-shadow(0 2px 5px rgb(0 0 0 / .38));
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      min-height: 100%;
+      background: var(--wb-bg);
+      color: var(--wb-fg);
+      font-family: var(--wb-sans);
+      font-size: 14px;
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .page-shell {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 14px 18px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    /* =====================================================================
+       Compact Minimal Top Toolbar
+       ===================================================================== */
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 12px;
+      padding: 10px 14px;
+      background: var(--wb-card);
+      border-radius: var(--wb-radius);
+      box-shadow: var(--wb-shadow);
+    }
+
+    .toolbar-title {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      margin-right: auto;
+      min-width: 240px;
+    }
+
+    .toolbar-title h1 {
+      margin: 0;
+      font-size: 13.5px;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+      color: var(--wb-fg);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .v2-tag {
+      display: inline-flex;
+      align-items: center;
+      height: 18px;
+      padding: 0 6px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--wb-primary) 18%, transparent);
+      color: var(--wb-primary);
+      font-size: 10.5px;
+      font-weight: 800;
+    }
+
+    .toolbar-title p {
+      margin: 0;
+      font-size: 11.5px;
+      color: var(--wb-muted-fg);
+    }
+
+    .controls-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .ctrl-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      padding: 2px;
+      border-radius: 8px;
+      background: var(--wb-muted);
+    }
+
+    .ctrl-lbl {
+      font-size: 10.5px;
+      font-weight: 700;
+      color: var(--wb-muted-fg);
+      padding: 0 5px 0 7px;
+      user-select: none;
+      white-space: nowrap;
+    }
+
+    .seg-btn {
+      border: 0;
+      background: transparent;
+      color: var(--wb-muted-fg);
+      font-family: var(--wb-sans);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background .12s ease, color .12s ease;
+    }
+
+    .seg-btn:hover {
+      color: var(--wb-fg);
+      background: var(--wb-wash);
+    }
+
+    .seg-btn[aria-pressed="true"] {
+      background: var(--wb-card);
+      color: var(--wb-fg);
+      box-shadow: 0 1px 2px rgb(0 0 0 / .18);
+    }
+
+    .seg-btn.accent[aria-pressed="true"] {
+      background: color-mix(in srgb, var(--wb-primary) 18%, var(--wb-card));
+      color: var(--wb-primary);
+    }
+
+    .seg-btn:focus-visible {
+      outline: 1.5px solid var(--wb-primary);
+      outline-offset: 1px;
+    }
+
+    /* =====================================================================
+       Side-by-side Comparison Grid
+       ===================================================================== */
+    .compare-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      align-items: start;
+    }
+
+    @media (max-width: 780px) {
+      .compare-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .col-card {
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      padding: 12px 14px 13px;
+      background: var(--d-shell-bg);
+      border-radius: 14px;
+      box-shadow: inset 0 0 0 1px var(--stage-rim);
+    }
+
+    .col-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 24px;
+    }
+
+    .col-head-left {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+    }
+
+    .col-badge {
+      display: inline-flex;
+      align-items: center;
+      height: 20px;
+      padding: 0 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.01em;
+      white-space: nowrap;
+    }
+
+    .col-badge.current {
+      background: var(--wb-muted);
+      color: var(--wb-muted-fg);
+    }
+
+    .col-badge.proposed {
+      background: color-mix(in srgb, var(--wb-primary) 18%, var(--wb-card));
+      color: var(--wb-primary);
+    }
+
+    .col-sub {
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--wb-muted-fg);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .dim-pill {
+      font-family: var(--wb-mono);
+      font-size: 10.5px;
+      font-weight: 700;
+      color: var(--wb-muted-fg);
+      background: color-mix(in srgb, var(--wb-card) 65%, transparent);
+      padding: 2px 7px;
+      border-radius: 5px;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    /* Simulated Werkschaft Canvas Frame hosting the 280 x 680 rail */
+    .canvas-stage {
+      position: relative;
+      display: flex;
+      align-items: stretch;
+      gap: 8px;
+      padding: 10px 10px 0 10px;
+      height: calc(var(--rail-h) + 10px);
+      background: var(--wb-bg);
+      border-radius: 12px;
+      box-shadow: inset 0 0 0 1px var(--stage-rim);
+      overflow: hidden;
+    }
+
+    .stage-sliver {
+      flex: 1 1 0;
+      min-width: 30px;
+      margin-bottom: 10px;
+      border-radius: var(--wb-radius);
+      background: var(--d-stage-bg);
+      box-shadow: inset 0 0 0 1px var(--stage-rim);
+      display: flex;
+      flex-direction: column;
+      padding: 12px 10px;
+      gap: 9px;
+      opacity: 0.78;
+    }
+
+    .stage-sliver-bar {
+      height: 10px;
+      width: 64%;
+      border-radius: 999px;
+      background: var(--wb-muted);
+    }
+
+    .stage-sliver-card {
+      height: 68px;
+      border-radius: 9px;
+      background: var(--wb-card);
+      box-shadow: var(--wb-shadow);
+    }
+
+    .stage-sliver-card.sm {
+      height: 44px;
+      opacity: 0.68;
+    }
+
+    @media (max-width: 940px) {
+      .stage-sliver {
+        display: none;
+      }
+      .canvas-stage {
+        justify-content: center;
+        padding-right: 10px;
+      }
+    }
+
+    /* =====================================================================
+       Shared 280px Rail Anatomy (mirrors dashboard-rail.css faithfully)
+       ===================================================================== */
+    .rail {
+      width: var(--rail-w);
+      height: var(--rail-h);
+      flex: 0 0 var(--rail-w);
+      min-height: 0;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+
+    .rail > .r-rail {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+
+    .rail-session-panel {
+      flex: 1 1 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .rlist {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding-bottom: 12px;
+      display: flex;
+      flex-direction: column;
+      scrollbar-width: thin;
+      scrollbar-color: color-mix(in srgb, var(--wb-fg) 18%, transparent) transparent;
+    }
+
+    .rlist::-webkit-scrollbar {
+      width: 5px;
+    }
+    .rlist::-webkit-scrollbar-thumb {
+      background: color-mix(in srgb, var(--wb-fg) 18%, transparent);
+      border-radius: 999px;
+    }
+
+    /* Workspace section */
+    .rws + .rws {
+      margin-top: 8px;
+    }
+
+    .wsbar {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 3px 12px;
+      min-height: 28px;
+      background: var(--wb-topic);
+      color: var(--wb-on-topic);
+      user-select: none;
+      cursor: pointer;
+    }
+
+    .wsbar:hover {
+      filter: brightness(1.06);
+    }
+
+    .wstog {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex: 1 1 0;
+      min-width: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .wsi {
+      display: inline-flex;
+      flex: none;
+      opacity: 0.82;
+      color: var(--wb-muted-fg);
+    }
+
+    .wsi svg {
+      width: 13px;
+      height: 13px;
+      display: block;
+    }
+
+    .wsbar .nm {
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+      letter-spacing: -0.005em;
+    }
+
+    .wsbar .pp {
+      font-family: var(--wb-mono);
+      font-size: 11px;
+      opacity: 0.65;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+      flex: 0 1 auto;
+    }
+
+    .memo-count {
+      flex: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      height: 18px;
+      padding: 0 7px;
+      border: 0;
+      border-radius: 999px;
+      background: rgb(127 127 127 / .25);
+      color: var(--wb-on-topic);
+      font-size: 11px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      opacity: 0.86;
+    }
+
+    .memo-count svg {
+      width: 10px;
+      height: 10px;
+      opacity: 0.82;
+    }
+
+    .wsbar .ct {
+      flex: none;
+      min-width: 22px;
+      height: 18px;
+      padding: 0 7px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: rgb(127 127 127 / .28);
+      font-size: 11px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .wsbar .ct.live {
+      background: color-mix(in srgb, var(--wb-primary) 24%, transparent);
+      color: var(--wb-primary);
+    }
+
+    .wsbody {
+      padding-top: 2px;
+    }
+
+    .rwt {
+      padding: 4px 0 2px;
+    }
+
+    .rwt.empty .wthd {
+      opacity: 0.64;
+    }
+
+    .wthd {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 2px 12px 2px 28px;
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--wb-muted-fg);
+      min-width: 0;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+
+    .wthd:hover {
+      background: var(--wb-wash);
+    }
+
+    .wthd .i {
+      width: 12px;
+      height: 12px;
+      flex: none;
+    }
+
+    .wthd .wtroot {
+      display: inline-flex;
+      flex: 0 0 auto;
+      opacity: 0.85;
+    }
+
+    .wthd .wtroot .i {
+      width: 10px;
+      height: 10px;
+    }
+
+    .wthd .br {
+      font-family: var(--wb-mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--wb-fg);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+
+    .wthd .wf {
+      font-size: 11.5px;
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+      flex: 0 1 auto;
+    }
+
+    .wthd .gs {
+      margin-left: auto;
+      font-weight: 600;
+      font-size: 10.5px;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      opacity: 0.78;
+    }
+
+    /* Session rows */
+    .rsessions {
+      margin: 2px 8px 0 33px;
+      padding-left: 0;
+      border-left: 2px solid var(--wb-muted);
+    }
+
+    .rs {
+      position: relative;
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      padding: 4px 8px 4px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background .1s ease;
+    }
+
+    .rs:hover {
+      background: color-mix(in srgb, var(--wb-primary) 8%, var(--wb-card));
+    }
+
+    .rs.cur {
+      background: color-mix(in srgb, var(--wb-primary) 13%, transparent);
+    }
+
+    .rs.cur::before {
+      content: "";
+      position: absolute;
+      left: 2px;
+      top: 5px;
+      bottom: 5px;
+      width: 2.5px;
+      border-radius: 999px;
+      background: var(--wb-primary);
+    }
+
+    .hb {
+      flex: none;
+      width: 16px;
+      height: 16px;
+      margin-top: 1px;
+      border-radius: 5px;
+      display: grid;
+      place-items: center;
+      font-family: var(--wb-mono);
+      font-size: 9.5px;
+      font-weight: 800;
+      background: color-mix(in srgb, var(--wb-primary) 20%, var(--wb-muted));
+      color: var(--wb-primary);
+    }
+
+    .hb.idle {
+      background: var(--wb-muted);
+      color: var(--wb-muted-fg);
+      opacity: 0.72;
+    }
+
+    .hb.work {
+      box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 55%, transparent);
+    }
+
+    .drbody {
+      flex: 1 1 0;
+      min-width: 0;
+    }
+
+    .s1 {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .rid {
+      font-family: var(--wb-sans);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--wb-primary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+
+    .rs.cur .rid {
+      color: var(--wb-fg);
+      font-weight: 700;
+    }
+
+    .rs.stopped .rid {
+      color: var(--wb-muted-fg);
+    }
+
+    .when {
+      flex: none;
+      font-size: 10.5px;
+      color: var(--wb-muted-fg);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .s2 {
+      font-size: 11px;
+      color: var(--wb-muted-fg);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* =====================================================================
+       Unregistered Workspaces Panel
+       ===================================================================== */
+    details.rws-unreg {
+      flex: none;
+    }
+
+    details.rws-unreg > summary.unreg-sum {
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 32px;
+      padding: 5px 10px;
+      cursor: pointer;
+      user-select: none;
+      color: var(--wb-muted-fg);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    details.rws-unreg > summary.unreg-sum::-webkit-details-marker {
+      display: none;
+    }
+
+    details.rws-unreg > summary.unreg-sum:hover {
+      background: var(--wb-wash);
+      color: var(--wb-fg);
+    }
+
+    details.rws-unreg > summary.unreg-sum:focus-visible {
+      outline: 1.5px solid var(--wb-primary);
+      outline-offset: -2px;
+    }
+
+    .unreg-chev {
+      width: 12px;
+      height: 12px;
+      flex: none;
+      transition: transform .14s ease;
+      opacity: 0.78;
+    }
+
+    details.rws-unreg[open] > summary.unreg-sum .unreg-chev {
+      transform: rotate(90deg);
+    }
+
+    .unreg-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex: none;
+      background: color-mix(in srgb, var(--wb-warn) 78%, var(--wb-muted-fg));
+      opacity: 0.88;
+    }
+
+    .unreg-dot.zero {
+      background: var(--wb-muted-fg);
+      opacity: 0.38;
+    }
+
+    .unreg-lbl {
+      flex: 1 1 0;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 11.5px;
+    }
+
+    details.rws-unreg[open] > summary.unreg-sum .unreg-lbl {
+      color: var(--wb-fg);
+    }
+
+    .unreg-count {
+      flex: none;
+      min-width: 20px;
+      height: 18px;
+      padding: 0 6px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--wb-muted);
+      color: var(--wb-muted-fg);
+      font-size: 11px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .unreg-body {
+      padding: 4px 8px 6px;
+      display: grid;
+      gap: 4px;
+    }
+
+    .unreg-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 6px;
+      border-radius: 7px;
+      background: var(--wb-wash);
+    }
+
+    .unreg-tgs {
+      display: inline-flex;
+      gap: 3px;
+      flex: none;
+    }
+
+    .unreg-tg {
+      width: 19px;
+      height: 19px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid var(--wb-line);
+      border-radius: 5px;
+      background: var(--wb-card);
+      color: var(--wb-muted-fg);
+      font-size: 10px;
+      font-weight: 700;
+      padding: 0;
+      cursor: pointer;
+    }
+
+    .unreg-tg.ap:hover {
+      color: var(--wb-ok);
+      border-color: color-mix(in srgb, var(--wb-ok) 50%, transparent);
+    }
+
+    .unreg-tg.rj:hover {
+      color: var(--wb-fail);
+      border-color: color-mix(in srgb, var(--wb-fail) 50%, transparent);
+    }
+
+    .unreg-info {
+      flex: 1 1 0;
+      min-width: 0;
+      display: grid;
+      gap: 1px;
+    }
+
+    .unreg-name {
+      font-size: 11.5px;
+      font-weight: 700;
+      color: var(--wb-fg);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .unreg-path {
+      font-family: var(--wb-mono);
+      font-size: 9.5px;
+      color: var(--wb-muted-fg);
+      opacity: 0.85;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .unreg-scount {
+      flex: none;
+      height: 17px;
+      padding: 0 6px;
+      border-radius: 999px;
+      background: var(--wb-card);
+      border: 1px solid var(--wb-line);
+      color: var(--wb-muted-fg);
+      font-size: 10px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    /* =====================================================================
+       LEFT COLUMN: 현재 (Current — 상하 분할 + 박스)
+       ===================================================================== */
+    .rail-current > .r-rail {
+      gap: 8px;
+    }
+
+    .rail-current .rail-session-panel {
+      background: var(--wb-card);
+      border-radius: var(--wb-radius);
+      box-shadow: var(--wb-shadow);
+    }
+
+    .rail-current details.rws-unreg {
+      border-top: 1px solid var(--wb-line);
+      background: color-mix(in srgb, var(--wb-muted) 26%, var(--wb-card));
+    }
+
+    .rail-current details.rws-unreg[open] > .unreg-body {
+      border-top: 1px solid var(--wb-line);
+      background: var(--wb-card);
+    }
+
+    .rail-current .rail-companion-slot {
+      flex: 0 0 auto;
+      position: relative;
+      width: 100%;
+      height: var(--companion-h);
+      overflow: hidden;
+      pointer-events: none;
+      border: 0;
+      border-radius: var(--wb-radius) var(--wb-radius) 0 0;
+      background:
+        radial-gradient(
+          118% 90% at 50% 96%,
+          color-mix(in srgb, var(--wb-primary) 11%, transparent) 0%,
+          transparent 72%
+        ),
+        linear-gradient(
+          to bottom,
+          color-mix(in srgb, var(--wb-card) 52%, var(--wb-bg)) 0%,
+          color-mix(in srgb, var(--wb-muted) 58%, var(--wb-bg)) 100%
+        );
+      box-shadow: inset 0 1px 0 color-mix(in srgb, var(--wb-fg) 6%, transparent);
+    }
+
+    /* =====================================================================
+       RIGHT COLUMN: 신규 v2 (Z-겹침 전경 컴패니언 + 하단 스크롤 마진)
+       - .rlist spans 100% of rail height behind Companion (z-index: 1)
+       - .rlist has generous padding-bottom (~companionH + 24px = 248px)
+         so bottom items always scroll completely clear above Companion's head
+       - Companion overlay is position: absolute; bottom: 0; z-index: 4;
+         pointer-events: none; with pointer-events: auto only on SVG silhouette
+       ===================================================================== */
+    .rail-proposed {
+      transition: background .18s ease, box-shadow .18s ease, border-radius .18s ease;
+    }
+
+    /* Variant A: 통합 카드 (--wb-card) */
+    .rail-proposed[data-variant="a"] {
+      background: var(--wb-card);
+      border-radius: var(--wb-radius) var(--wb-radius) 0 0;
+      box-shadow: var(--wb-shadow);
+      overflow: hidden;
+    }
+
+    /* Variant B: 배경 투과 (--wb-bg) */
+    .rail-proposed[data-variant="b"] {
+      background: var(--wb-bg);
+      border-radius: 0;
+      box-shadow: none;
+      overflow: hidden;
+    }
+
+    .rail-proposed[data-variant="b"] .wsbar {
+      border-radius: 6px;
+    }
+
+    /* Full-height scrollable list spanning behind the foreground Companion */
+    .rail-proposed .rlist-z {
+      position: relative;
+      z-index: 1;
+      height: 100%;
+      flex: 1 1 0;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      /* Guaranteed clearance margin: companion height (224px) + 28px breathing room */
+      padding-bottom: 252px;
+      scroll-padding-bottom: 252px;
+    }
+
+    /* Inline unregistered section right below last workspace, BEFORE bottom scroll margin */
+    .rail-proposed details.rws-unreg.inline-unreg {
+      margin-top: 8px;
+      border-top: 0;
+      background: transparent;
+    }
+
+    .rail-proposed details.rws-unreg.inline-unreg > summary.unreg-sum {
+      min-height: 28px;
+      padding: 4px 12px;
+      background: color-mix(in srgb, var(--wb-topic) 54%, transparent);
+      border-radius: 0;
+    }
+
+    .rail-proposed[data-variant="b"] details.rws-unreg.inline-unreg > summary.unreg-sum {
+      border-radius: 6px;
+    }
+
+    .rail-proposed details.rws-unreg.inline-unreg > summary.unreg-sum:hover {
+      background: color-mix(in srgb, var(--wb-topic) 86%, transparent);
+    }
+
+    .rail-proposed details.rws-unreg.inline-unreg > .unreg-body {
+      padding: 6px 8px 4px 12px;
+      background: transparent;
+    }
+
+    /* Foreground Z-Layered Companion Overlay (pointer pass-through by default!) */
+    .companion-z-overlay {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: var(--companion-h);
+      z-index: 4;
+      pointer-events: none;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+    }
+
+    .companion-stage {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      pointer-events: none;
+    }
+
+    .companion-art {
+      width: 100%;
+      height: 100%;
+      display: block;
+      overflow: visible;
+      pointer-events: none;
+      transition: transform .28s cubic-bezier(.2, .8, .2, 1), filter .2s ease;
+    }
+
+    /* Silhouette hit-zone: ONLY actual character/laptop/phone shapes intercept hover/click */
+    .rail-proposed .companion-hit {
+      pointer-events: auto;
+      cursor: pointer;
+    }
+
+    /* Subtle drop shadow behind silhouette so dark hair/hoodie separate crisply over overlapping rows */
+    .rail-proposed.shadow-on .companion-art {
+      filter: var(--companion-drop);
+    }
+
+    /* Bottom feather toggle (default OFF for crisp edge, ON for soft dissolve) */
+    .rail-proposed.fade-on .companion-art {
+      -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 84%, transparent 100%);
+      mask-image: linear-gradient(to bottom, #000 0%, #000 84%, transparent 100%);
+    }
+
+    /* Quiet hover quick-pill that appears only when hovering the character silhouette itself */
+    .companion-hover-hud {
+      position: absolute;
+      right: 8px;
+      bottom: 8px;
+      z-index: 5;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 7px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--wb-card) 86%, transparent);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      box-shadow: var(--wb-shadow-hi), inset 0 0 0 1px var(--wb-line);
+      color: var(--wb-muted-fg);
+      font-size: 10px;
+      font-weight: 700;
+      opacity: 0;
+      transform: translateY(3px);
+      transition: opacity .15s ease, transform .15s ease;
+      pointer-events: none;
+    }
+
+    .companion-hover-hud .dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--wb-ok);
+    }
+
+    .companion-z-overlay.char-hovered .companion-hover-hud {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* Micro-motion */
+    @keyframes companion-breathe {
+      0%, 100% { transform: translateY(0px) scale(1); }
+      50% { transform: translateY(-2px) scale(1.004); }
+    }
+
+    @keyframes phone-float {
+      0%, 100% { transform: translateY(0px) rotate(-2.2deg); }
+      50% { transform: translateY(-3.2px) rotate(-1.2deg); }
+    }
+
+    @keyframes cam-pulse {
+      0%, 100% { opacity: 0.72; }
+      50% { opacity: 1; }
+    }
+
+    .motion-on .companion-figure {
+      transform-box: fill-box;
+      transform-origin: 50% 90%;
+      animation: companion-breathe 4.4s ease-in-out infinite;
+    }
+
+    .motion-on .companion-phone {
+      transform-box: fill-box;
+      transform-origin: 50% 50%;
+      animation: phone-float 3.8s ease-in-out infinite;
+    }
+
+    .motion-on .laptop-cam-glow {
+      animation: cam-pulse 2.8s ease-in-out infinite;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .motion-on .companion-figure,
+      .motion-on .companion-phone,
+      .motion-on .laptop-cam-glow {
+        animation: none;
+      }
+      .companion-art {
+        transition: none;
+      }
+    }
+
+    /* Subtle annotation callout strip under each preview */
+    .col-notes {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--wb-muted-fg);
+      padding-top: 2px;
+    }
+
+    .note-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 7px;
+      border-radius: 6px;
+      background: color-mix(in srgb, var(--wb-card) 68%, transparent);
+    }
+
+    .note-chip strong {
+      color: var(--wb-fg);
+      font-weight: 700;
+    }
+
+    .pass-toast {
+      color: var(--wb-primary);
+      font-weight: 700;
+    }
+  </style>
+</head>
+<body>
+  <div class="page-shell">
+    <!-- Clean Minimal Top Toolbar -->
+    <header class="toolbar" aria-label="v2 비교 컨트롤">
+      <div class="toolbar-title">
+        <h1>Companion Rail Seamless Layout <span class="v2-tag">v2 · Z-겹침 전경</span></h1>
+        <p>전체 높이 스크롤 목록(.rlist) 위를 컴패니언 실루엣이 전경 오버레이로 떠 있고, 투명 여백은 아래 행으로 클릭·휠 투과</p>
+      </div>
+
+      <div class="controls-row">
+        <div class="ctrl-group" role="group" aria-label="스크롤 및 밀도 프리셋">
+          <span class="ctrl-lbl">상태</span>
+          <button type="button" class="seg-btn accent" data-ctrl="preset" data-val="sparse" aria-pressed="false">여유 공간</button>
+          <button type="button" class="seg-btn accent" data-ctrl="preset" data-val="overlap" aria-pressed="true">목록 겹침 (기본)</button>
+          <button type="button" class="seg-btn accent" data-ctrl="preset" data-val="bottom" aria-pressed="false">최하단 스크롤</button>
+        </div>
+
+        <div class="ctrl-group" role="group" aria-label="새 레이아웃 표면 안">
+          <span class="ctrl-lbl">표면</span>
+          <button type="button" class="seg-btn accent" data-ctrl="variant" data-val="a" aria-pressed="true">A안 · 통합 카드 (--wb-card)</button>
+          <button type="button" class="seg-btn accent" data-ctrl="variant" data-val="b" aria-pressed="false">B안 · 배경 투과 (--wb-bg)</button>
+        </div>
+
+        <div class="ctrl-group" role="group" aria-label="테마">
+          <span class="ctrl-lbl">테마</span>
+          <button type="button" class="seg-btn" data-ctrl="theme" data-val="dark" aria-pressed="true">다크</button>
+          <button type="button" class="seg-btn" data-ctrl="theme" data-val="light" aria-pressed="false">라이트</button>
+        </div>
+
+        <div class="ctrl-group" role="group" aria-label="미등록 워크스페이스">
+          <span class="ctrl-lbl">미등록</span>
+          <button type="button" class="seg-btn" data-ctrl="unreg" data-val="closed" aria-pressed="true">미등록 접힘</button>
+          <button type="button" class="seg-btn" data-ctrl="unreg" data-val="open" aria-pressed="false">미등록 펼침</button>
+        </div>
+
+        <div class="ctrl-group" role="group" aria-label="전경 컴패니언 처리">
+          <span class="ctrl-lbl">전경</span>
+          <button type="button" class="seg-btn" data-ctrl="fade" data-val="off" aria-pressed="true">하단 페이드 OFF</button>
+          <button type="button" class="seg-btn" data-ctrl="shadow" data-val="on" aria-pressed="true">뒤 그림자: 미세 드롭섀도</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Side-by-Side Comparison -->
+    <main class="compare-grid">
+      <!-- LEFT: 현재 (상하 분할 + 박스) -->
+      <section class="col-card" aria-label="현재 레이아웃">
+        <div class="col-head">
+          <div class="col-head-left">
+            <span class="col-badge current">현재 (상하 분할 + 박스)</span>
+            <span class="col-sub">목록 카드가 컴패니언 위에서 잘림 · 8px 갭</span>
+          </div>
+          <span class="dim-pill">280×680</span>
+        </div>
+
+        <div class="canvas-stage">
+          <aside class="rail rail-current" aria-label="현재 좌측 레일">
+            <div class="r-rail">
+              <div class="rail-session-panel">
+                <div class="rlist" id="list-current"></div>
+                <details class="rws-unreg" data-sync-unreg>
+                  <summary class="unreg-sum">
+                    <svg class="unreg-chev" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
+                    <span class="unreg-dot zero"></span>
+                    <span class="unreg-lbl">미등록 워크스페이스</span>
+                    <span class="unreg-count">0</span>
+                  </summary>
+                  <div class="unreg-body" data-slot="unreg-items-current"></div>
+                </details>
+              </div>
+
+              <div class="rail-companion-slot">
+                <div class="companion-stage motion-on" data-companion-host></div>
+              </div>
+            </div>
+          </aside>
+
+          <div class="stage-sliver" aria-hidden="true">
+            <div class="stage-sliver-bar"></div>
+            <div class="stage-sliver-card"></div>
+            <div class="stage-sliver-card sm"></div>
+          </div>
+        </div>
+
+        <div class="col-notes">
+          <span class="note-chip"><strong>구조</strong> flex 2단 분할 (목록 영역 높이 축소)</span>
+          <span class="note-chip"><strong>컴패니언</strong> 별도 라운드 박스 + 상단 헤어라인</span>
+        </div>
+      </section>
+
+      <!-- RIGHT: 신규 v2 (Z-겹침 전경 컴패니언 + 하단 스크롤 마진) -->
+      <section class="col-card" aria-label="신규 v2 레이아웃">
+        <div class="col-head">
+          <div class="col-head-left">
+            <span class="col-badge proposed">신규 v2 (Z-겹침 전경)</span>
+            <span class="col-sub" id="proposed-sub">A안 · 통합 카드 (--wb-card) + 하단 스크롤 마진 252px</span>
+          </div>
+          <span class="dim-pill" id="proposed-pill">z:1 목록 / z:4 전경</span>
+        </div>
+
+        <div class="canvas-stage">
+          <aside class="rail rail-proposed shadow-on" id="rail-proposed" data-variant="a" aria-label="신규 v2 좌측 레일">
+            <div class="r-rail">
+              <!-- Full-height .rlist spanning behind Companion -->
+              <div class="rlist rlist-z" id="list-proposed"></div>
+
+              <!-- Foreground Z-layered Companion Overlay (pointer-events: none wrapper) -->
+              <div class="companion-z-overlay" id="companion-z-overlay">
+                <div class="companion-stage motion-on" data-companion-host data-hit-mode="silhouette"></div>
+                <div class="companion-hover-hud" aria-hidden="true">
+                  <span class="dot"></span>
+                  <span>Companion · 여백 클릭/휠 투과</span>
+                </div>
+              </div>
+            </div>
+          </aside>
+
+          <div class="stage-sliver" aria-hidden="true">
+            <div class="stage-sliver-bar"></div>
+            <div class="stage-sliver-card"></div>
+            <div class="stage-sliver-card sm"></div>
+          </div>
+        </div>
+
+        <div class="col-notes">
+          <span class="note-chip"><strong>Z-겹침</strong> 머리·어깨 양옆 행 클릭/호버 투과</span>
+          <span class="note-chip"><strong>마우스 휠</strong> 레일 위 어디서든 배경 목록 스크롤</span>
+          <span class="note-chip pass-toast" id="interaction-readout">행 hover/click &amp; 휠 스크롤 테스트 가능</span>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Shared Inline SVG Companion Template (pure alpha, zero background box) -->
+  <template id="tpl-companion-svg">
+    <svg class="companion-art" viewBox="0 0 280 224" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="VRM Companion 전경 오버레이">
+      <defs>
+        <linearGradient id="hair-base" x1="140" y1="14" x2="140" y2="140" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#efece9"/>
+          <stop offset="48%" stop-color="#dcd7d2"/>
+          <stop offset="100%" stop-color="#bdb6b0"/>
+        </linearGradient>
+        <linearGradient id="hair-shadow" x1="140" y1="28" x2="140" y2="144" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#b5aea8"/>
+          <stop offset="100%" stop-color="#8b837e"/>
+        </linearGradient>
+        <linearGradient id="hair-sheen" x1="94" y1="40" x2="186" y2="52" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0"/>
+          <stop offset="28%" stop-color="#ffffff" stop-opacity="0.58"/>
+          <stop offset="52%" stop-color="#fffaf5" stop-opacity="0.72"/>
+          <stop offset="76%" stop-color="#ffffff" stop-opacity="0.45"/>
+          <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+        </linearGradient>
+
+        <linearGradient id="skin-grad" x1="140" y1="60" x2="140" y2="140" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#f5e6df"/>
+          <stop offset="75%" stop-color="#f0ddd5"/>
+          <stop offset="100%" stop-color="#dfc7be"/>
+        </linearGradient>
+        <radialGradient id="cheek-blush" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0%" stop-color="#e59a95" stop-opacity="0.34"/>
+          <stop offset="100%" stop-color="#e59a95" stop-opacity="0"/>
+        </radialGradient>
+
+        <linearGradient id="iris-grad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#765828"/>
+          <stop offset="48%" stop-color="#a88340"/>
+          <stop offset="100%" stop-color="#d2b46d"/>
+        </linearGradient>
+
+        <linearGradient id="hoodie-main" x1="140" y1="116" x2="140" y2="224" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#27292e"/>
+          <stop offset="55%" stop-color="#1e2024"/>
+          <stop offset="100%" stop-color="#17181c"/>
+        </linearGradient>
+        <linearGradient id="hoodie-collar" x1="140" y1="110" x2="140" y2="168" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#2c2e34"/>
+          <stop offset="100%" stop-color="#1b1c20"/>
+        </linearGradient>
+
+        <linearGradient id="laptop-rim" x1="60" y1="181" x2="216" y2="181" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#4e5564"/>
+          <stop offset="50%" stop-color="#6e778b"/>
+          <stop offset="100%" stop-color="#49505e"/>
+        </linearGradient>
+        <linearGradient id="laptop-body" x1="138" y1="184" x2="138" y2="224" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#353b47"/>
+          <stop offset="50%" stop-color="#282c36"/>
+          <stop offset="100%" stop-color="#1d2028"/>
+        </linearGradient>
+        <radialGradient id="cam-halo" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0%" stop-color="#dde5ff" stop-opacity="0.95"/>
+          <stop offset="45%" stop-color="#9fb4ff" stop-opacity="0.45"/>
+          <stop offset="100%" stop-color="#9fb4ff" stop-opacity="0"/>
+        </radialGradient>
+
+        <linearGradient id="phone-case" x1="216" y1="164" x2="252" y2="218" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#2d3c5c"/>
+          <stop offset="100%" stop-color="#192236"/>
+        </linearGradient>
+        <linearGradient id="phone-screen" x1="220" y1="168" x2="248" y2="214" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#1d2942"/>
+          <stop offset="100%" stop-color="#141c2e"/>
+        </linearGradient>
+      </defs>
+
+      <!-- ONLY rendered shapes inside .companion-hit receive pointer events;
+           all surrounding transparent alpha passes straight through to .rlist -->
+      <g class="companion-hit">
+        <g class="companion-figure">
+          <!-- Back Hair Volume -->
+          <path d="M90 68 C86 97, 84 120, 88 136 C96 141, 108 142, 118 140 L162 140 C172 142, 184 141, 192 136 C196 120, 194 97, 190 68 C185 33, 166 17, 140 17 C114 17, 95 33, 90 68 Z" fill="url(#hair-shadow)" stroke="rgb(95 88 83 / .28)" stroke-width="0.7"/>
+
+          <!-- Oversized Charcoal Hoodie Body -->
+          <path d="M40 224 C45 184, 62 150, 92 133 C106 126, 122 123, 140 123 C158 123, 174 126, 188 133 C218 150, 232 184, 236 224 Z" fill="url(#hoodie-main)" stroke="#353840" stroke-width="0.9"/>
+
+          <path d="M62 202 C72 172, 86 152, 102 143" stroke="#2f3239" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
+          <path d="M216 202 C206 172, 192 152, 178 143" stroke="#2f3239" stroke-width="1.2" stroke-linecap="round" opacity="0.65"/>
+
+          <!-- Hood Collar -->
+          <path d="M90 132 C94 114, 111 107, 140 107 C169 107, 186 114, 190 132 C185 152, 165 166, 140 167 C115 166, 95 152, 90 132 Z" fill="url(#hoodie-collar)" stroke="#3b3f48" stroke-width="0.9"/>
+          <path d="M100 129 C105 117, 120 112, 140 112 C160 112, 175 117, 180 129 C174 144, 158 154, 140 154 C122 154, 106 144, 100 129 Z" fill="#141519"/>
+
+          <!-- Neck -->
+          <path d="M128 112 L128 133 C128 140, 133 146, 140 146 C147 146, 152 140, 152 133 L152 112 Z" fill="url(#skin-grad)"/>
+          <path d="M128 116 C134 122, 146 122, 152 116 L152 123 C145 128, 135 128, 128 123 Z" fill="#cfb5ac" opacity="0.55"/>
+
+          <!-- Drawstrings -->
+          <path d="M123 154 C122 166, 121 176, 121 184" stroke="#111216" stroke-width="2.4" stroke-linecap="round"/>
+          <path d="M157 154 C158 166, 159 176, 159 184" stroke="#111216" stroke-width="2.4" stroke-linecap="round"/>
+          <path d="M123 154 C122 166, 121 176, 121 184" stroke="#30333b" stroke-width="0.8" stroke-linecap="round"/>
+          <path d="M157 154 C158 166, 159 176, 159 184" stroke="#30333b" stroke-width="0.8" stroke-linecap="round"/>
+
+          <!-- Inner Side Locks -->
+          <path d="M98 84 C96 108, 98 130, 106 143 C109 136, 111 126, 110 108 Z" fill="#9a938e"/>
+          <path d="M182 84 C184 108, 182 130, 174 143 C171 136, 169 126, 170 108 Z" fill="#9a938e"/>
+
+          <!-- Face -->
+          <path d="M107 68 C106 88, 108 105, 116 116 C123 126, 133 131, 140 131 C147 131, 157 126, 164 116 C172 105, 174 88, 173 68 C172 44, 158 32, 140 32 C122 32, 108 44, 107 68 Z" fill="url(#skin-grad)"/>
+
+          <ellipse cx="118" cy="105" rx="9" ry="5" fill="url(#cheek-blush)"/>
+          <ellipse cx="162" cy="105" rx="9" ry="5" fill="url(#cheek-blush)"/>
+
+          <!-- Eyes -->
+          <g>
+            <path d="M113 94 C116 89.5, 125 89.5, 129 93.5 C128 99.5, 123.5 102, 118.5 101.5 C114.5 101, 113 97.5, 113 94 Z" fill="#fbf9f7"/>
+            <ellipse cx="121.2" cy="96" rx="5.1" ry="5.5" fill="url(#iris-grad)"/>
+            <ellipse cx="121.2" cy="95.5" rx="2.3" ry="2.7" fill="#2e2010"/>
+            <circle cx="119.2" cy="93.4" r="1.45" fill="#ffffff"/>
+            <circle cx="123.3" cy="98.2" r="0.75" fill="#ffffff" opacity="0.88"/>
+            <path d="M112 93.2 C115.5 88.4, 125.5 88.6, 130.2 93.2" stroke="#362c29" stroke-width="2.1" stroke-linecap="round"/>
+            <path d="M114.5 87.8 C118.5 86.2, 123.5 86.4, 127.5 88.2" stroke="#887a74" stroke-width="0.9" stroke-linecap="round" opacity="0.75"/>
+          </g>
+
+          <g>
+            <path d="M151 93.5 C155 89.5, 164 89.5, 167 94 C167 97.5, 165.5 101, 161.5 101.5 C156.5 102, 152 99.5, 151 93.5 Z" fill="#fbf9f7"/>
+            <ellipse cx="158.8" cy="96" rx="5.1" ry="5.5" fill="url(#iris-grad)"/>
+            <ellipse cx="158.8" cy="95.5" rx="2.3" ry="2.7" fill="#2e2010"/>
+            <circle cx="156.8" cy="93.4" r="1.45" fill="#ffffff"/>
+            <circle cx="160.9" cy="98.2" r="0.75" fill="#ffffff" opacity="0.88"/>
+            <path d="M149.8 93.2 C154.5 88.6, 164.5 88.4, 168 93.2" stroke="#362c29" stroke-width="2.1" stroke-linecap="round"/>
+            <path d="M152.5 88.2 C156.5 86.4, 161.5 86.2, 165.5 87.8" stroke="#887a74" stroke-width="0.9" stroke-linecap="round" opacity="0.75"/>
+          </g>
+
+          <path d="M113 83 C118 81.2, 124 81.5, 129 83.5" stroke="#8a817c" stroke-width="1.15" stroke-linecap="round" opacity="0.75"/>
+          <path d="M151 83.5 C156 81.5, 162 81.2, 167 83" stroke="#8a817c" stroke-width="1.15" stroke-linecap="round" opacity="0.75"/>
+
+          <path d="M139.2 107.5 C139.8 108.8, 140.6 108.8, 141 107.5" stroke="#c9aba1" stroke-width="1.1" stroke-linecap="round"/>
+          <path d="M134.5 117.5 C137.5 119.6, 142.5 119.6, 145.5 117.5" stroke="#b98680" stroke-width="1.25" stroke-linecap="round"/>
+
+          <!-- Front Hair Crown & Side Bob Locks -->
+          <path d="M90 72 C90 34, 111 15, 140 15 C169 15, 190 34, 190 72 C191 98, 188 120, 180 136 C177 124, 177 104, 175 86 C173 71, 169 60, 163 54 C156 48, 148 46, 140 46 C132 46, 124 48, 117 54 C111 60, 107 71, 105 86 C103 104, 103 124, 100 136 C92 120, 89 98, 90 72 Z" fill="url(#hair-base)" stroke="rgb(95 88 83 / .26)" stroke-width="0.65"/>
+
+          <!-- Layered Wispy Bangs -->
+          <path d="M107 54 C104 67, 105 80, 109 90 C111 78, 115 66, 121 58 Z" fill="url(#hair-base)"/>
+          <path d="M119 44 C115 60, 115 76, 122 89 C124 75, 127 64, 132 54 Z" fill="url(#hair-base)"/>
+          <path d="M131 40 C129 58, 130 77, 136 93 C138 78, 141 64, 143 48 Z" fill="url(#hair-base)"/>
+          <path d="M142 40 C142 58, 143 76, 147 91 C150 76, 152 60, 151 44 Z" fill="url(#hair-base)"/>
+          <path d="M150 44 C154 60, 156 76, 159 89 C163 76, 163 61, 160 48 Z" fill="url(#hair-base)"/>
+          <path d="M159 54 C164 66, 168 78, 171 90 C174 80, 175 67, 173 54 Z" fill="url(#hair-base)"/>
+
+          <!-- Side Bob Cheek Strands -->
+          <path d="M96 78 C94 100, 97 124, 105 140 C108 126, 106 104, 105 84 Z" fill="url(#hair-base)"/>
+          <path d="M184 78 C186 100, 183 124, 175 140 C172 126, 174 104, 175 84 Z" fill="url(#hair-base)"/>
+
+          <!-- Specular Ribbon & Strand Lines -->
+          <path d="M97 48 C112 40, 168 40, 183 48 C176 54, 158 50, 140 50 C122 50, 104 54, 97 48 Z" fill="url(#hair-sheen)"/>
+          <path d="M126 22 C134 19, 146 19, 154 22" stroke="#ffffff" stroke-width="1.3" stroke-linecap="round" opacity="0.55"/>
+          <path d="M108 47 C102 66, 100 90, 101 116" stroke="#9d958f" stroke-width="0.7" opacity="0.55"/>
+          <path d="M172 47 C178 66, 180 90, 179 116" stroke="#9d958f" stroke-width="0.7" opacity="0.55"/>
+          <path d="M136 44 C133 62, 134 78, 137 91" stroke="#a79f99" stroke-width="0.7" opacity="0.55"/>
+          <path d="M148 45 C149 62, 148 76, 146 88" stroke="#a79f99" stroke-width="0.7" opacity="0.55"/>
+        </g>
+
+        <!-- Foreground Laptop Lid -->
+        <g>
+          <rect x="61" y="181" width="158" height="44" rx="10" fill="url(#laptop-body)"/>
+          <path d="M62 191 C62 185.2, 66.2 181, 72 181 L208 181 C213.8 181, 218 185.2, 218 191" stroke="url(#laptop-rim)" stroke-width="2.2" fill="none"/>
+          <rect x="64" y="183" width="152" height="40" rx="8.5" stroke="rgb(255 255 255 / .08)" stroke-width="0.8"/>
+
+          <circle class="laptop-cam-glow" cx="140" cy="187.5" r="10" fill="url(#cam-halo)"/>
+          <rect class="laptop-cam-glow" x="135" y="186" width="10" height="3.2" rx="1.6" fill="#dce3ff"/>
+          <circle cx="140" cy="187.6" r="1" fill="#ffffff"/>
+        </g>
+
+        <!-- Floating Dark-Blue Smartphone -->
+        <g class="companion-phone">
+          <rect x="217" y="164" width="33" height="54" rx="5.5" fill="url(#phone-case)" stroke="#4c6088" stroke-width="1"/>
+          <rect x="219.5" y="167" width="28" height="47.5" rx="3.5" fill="url(#phone-screen)"/>
+          <rect x="229" y="168.8" width="9" height="1.4" rx="0.7" fill="#4f638a" opacity="0.75"/>
+          <rect x="222" y="173" width="14" height="3.2" rx="1.6" fill="#5e87e6" opacity="0.85"/>
+          <rect x="222" y="178" width="19" height="2.4" rx="1.2" fill="#3a5284" opacity="0.85"/>
+          <rect x="226" y="183.5" width="18" height="5" rx="2.2" fill="#5076cc" opacity="0.9"/>
+          <rect x="222" y="191" width="15" height="2.6" rx="1.3" fill="#354b78" opacity="0.8"/>
+          <rect x="229" y="196.5" width="15" height="6.5" rx="2.4" fill="#d7ceb8" opacity="0.92"/>
+          <rect x="232" y="198.5" width="9" height="1.2" rx="0.6" fill="#6f6756" opacity="0.7"/>
+          <rect x="232" y="200.6" width="6" height="1.2" rx="0.6" fill="#6f6756" opacity="0.55"/>
+          <rect x="222" y="206" width="16" height="2.4" rx="1.2" fill="#3e598e" opacity="0.75"/>
+          <rect x="228" y="211.8" width="11" height="1.4" rx="0.7" fill="#5f7bb5" opacity="0.55"/>
+        </g>
+      </g>
+    </svg>
+  </template>
+
+  <script>
+    (function () {
+      const state = {
+        preset: "overlap",   // "sparse" | "overlap" | "bottom"
+        variant: "a",        // "a" (--wb-card) | "b" (--wb-bg)
+        theme: "dark",       // "dark" | "light"
+        unreg: "closed",     // "closed" | "open"
+        fade: "off",         // "off" (default) | "on"
+        shadow: "on",        // "on" (default subtle drop shadow) | "off"
+        selectedSessionId: "s-devenv-1"
+      };
+
+      const ICONS = {
+        repo: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.5A1.5 1.5 0 0 1 4.5 1H13v13H4.5A1.5 1.5 0 0 1 3 12.5v-10z"/><path d="M3 12.5A1.5 1.5 0 0 1 4.5 11H13"/><path d="M6.5 4.5h3.5"/></svg>',
+        folder: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.8 4.2A1.2 1.2 0 0 1 3 3h3.1l1.4 1.5H13a1.2 1.2 0 0 1 1.2 1.2v6.1A1.2 1.2 0 0 1 13 13H3a1.2 1.2 0 0 1-1.2-1.2V4.2z"/></svg>',
+        memo: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="2.2" y="2.5" width="11.6" height="11" rx="1.6"/><path d="M4.8 5.5h6.4M4.8 8h6.4M4.8 10.5h4.2"/></svg>',
+        branch: '<svg class="i" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="4.5" cy="3.5" r="1.6"/><circle cx="4.5" cy="12.5" r="1.6"/><circle cx="11.5" cy="6" r="1.6"/><path d="M4.5 5.1v5.8"/><path d="M11.5 7.6c0 2.4-2 3.2-7 3.2"/></svg>',
+        chev: '<svg class="unreg-chev" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>'
+      };
+
+      const SPARSE_WORKSPACES = [
+        {
+          name: "AI-Projects",
+          path: "/",
+          repo: true,
+          memos: 0,
+          live: 0,
+          worktrees: [
+            { branch: "main", root: true, folder: "루트", sessions: [] }
+          ]
+        },
+        {
+          name: "gotto-hando",
+          path: "",
+          repo: true,
+          memos: 0,
+          live: 0,
+          worktrees: []
+        },
+        {
+          name: "sheetloader",
+          path: "/",
+          repo: true,
+          memos: 0,
+          live: 0,
+          worktrees: [
+            { branch: "implement/captur...", root: true, folder: "...", sessions: [] }
+          ]
+        }
+      ];
+
+      const OVERLAP_WORKSPACES = [
+        {
+          name: "AI-Projects",
+          path: "/",
+          repo: true,
+          memos: 1,
+          live: 1,
+          worktrees: [
+            {
+              branch: "main",
+              root: true,
+              folder: "루트",
+              changes: "±3",
+              sessions: [
+                { id: "s-ai-1", badge: "A", name: "roadmap-triage", time: "14m", msg: "주간 목표 티켓 정리 완료", work: false }
+              ]
+            }
+          ]
+        },
+        {
+          name: "gotto-hando",
+          path: "",
+          repo: true,
+          memos: 0,
+          live: 0,
+          worktrees: []
+        },
+        {
+          name: "sheetloader",
+          path: "/",
+          repo: true,
+          memos: 0,
+          live: 2,
+          worktrees: [
+            {
+              branch: "implement/capture-v2",
+              root: true,
+              folder: "루트",
+              changes: "±7",
+              sessions: [
+                { id: "s-sheet-1", badge: "C", name: "ocr-batch-worker", time: "4m", msg: "표 경계 탐지 테스트 통과", work: true },
+                { id: "s-sheet-2", badge: "A", name: "xlsx-export-fix", time: "32m", msg: "셀 병합 오프셋 패치 대기", work: false }
+              ]
+            }
+          ]
+        },
+        {
+          name: "devenv",
+          path: "~/devenv",
+          repo: true,
+          memos: 2,
+          live: 4,
+          worktrees: [
+            {
+              branch: "develop",
+              root: true,
+              folder: "루트",
+              changes: "±5",
+              sessions: [
+                { id: "s-devenv-1", badge: "A", name: "companion-rail-v2", time: "1m", msg: "Z-겹침 전경 오버레이 레이아웃", work: true },
+                { id: "s-devenv-2", badge: "C", name: "rail-css-audit", time: "8m", msg: "dashboard-rail.css padding 검증", work: false }
+              ]
+            },
+            {
+              branch: "feat/companion-dock",
+              root: false,
+              folder: "companion-dock",
+              changes: "±12",
+              sessions: [
+                { id: "s-devenv-3", badge: "A", name: "vrm-alpha-pass", time: "15m", msg: "alpha:true 포인터 투과 테스트", work: true },
+                { id: "s-devenv-4", badge: "C", name: "unreg-collapse", time: "1h", msg: "대기 중", work: false, stopped: true }
+              ]
+            }
+          ]
+        },
+        {
+          name: "werkschaft-ui",
+          path: "~/ui",
+          repo: true,
+          memos: 1,
+          live: 2,
+          worktrees: [
+            {
+              branch: "feat/hud-polish",
+              root: true,
+              folder: "루트",
+              changes: "±2",
+              sessions: [
+                { id: "s-ui-1", badge: "A", name: "material-tonal-audit", time: "22m", msg: "라이트/다크 토큰 대비 확인", work: false },
+                { id: "s-ui-2", badge: "C", name: "scroll-padding-sync", time: "45m", msg: "최하단 여백 252px 확보", work: false }
+              ]
+            }
+          ]
+        }
+      ];
+
+      const UNREG_SAMPLES = [
+        { name: "scratch-notes", path: "~/work/scratch-notes", sessions: 1 },
+        { name: "legacy-cli", path: "~/archive/legacy-cli", sessions: 2 }
+      ];
+
+      function renderWorkspacesMarkup(list) {
+        return list.map(ws => {
+          const wtMarkup = ws.worktrees.map(wt => {
+            const emptyCls = wt.sessions.length ? "" : " empty";
+            const rootIcon = wt.root ? `<span class="wtroot" title="루트">${ICONS.repo}</span>` : "";
+            const gs = wt.changes ? `<span class="gs">${wt.changes}</span>` : "";
+            const sessMarkup = wt.sessions.length
+              ? `<div class="rsessions">${wt.sessions.map(s => {
+                  const isCur = s.id === state.selectedSessionId;
+                  return `
+                  <div class="rs${isCur ? " cur" : ""}${s.stopped ? " stopped" : ""}" data-session-id="${s.id}" data-session-name="${s.name}">
+                    <span class="hb${s.work ? " work" : " idle"}">${s.badge}</span>
+                    <div class="drbody">
+                      <div class="s1">
+                        <span class="rid">${s.name}</span>
+                        <span class="when">${s.time}</span>
+                      </div>
+                      ${s.stopped ? "" : `<div class="s2">${s.msg}</div>`}
+                    </div>
+                  </div>`;
+                }).join("")}</div>`
+              : "";
+            return `
+              <div class="rwt${emptyCls}">
+                <div class="wthd">
+                  ${ICONS.branch}
+                  <span class="br">${wt.branch}</span>
+                  ${rootIcon}
+                  <span class="wf">· ${wt.folder}</span>
+                  ${gs}
+                </div>
+                ${sessMarkup}
+              </div>`;
+          }).join("");
+
+          return `
+            <section class="rws">
+              <div class="wsbar">
+                <button type="button" class="wstog" tabindex="-1">
+                  <span class="wsi">${ws.repo ? ICONS.repo : ICONS.folder}</span>
+                  <span class="nm">${ws.name}</span>
+                  ${ws.path ? `<span class="pp">${ws.path}</span>` : ""}
+                </button>
+                <span class="memo-count" aria-label="메모">${ICONS.memo}<span>${ws.memos}</span></span>
+                <span class="ct${ws.live > 0 ? " live" : ""}">${ws.live}</span>
+              </div>
+              ${wtMarkup ? `<div class="wsbody">${wtMarkup}</div>` : ""}
+            </section>`;
+        }).join("");
+      }
+
+      function renderUnregBodyMarkup() {
+        return UNREG_SAMPLES.map(item => `
+          <div class="unreg-row">
+            <div class="unreg-tgs">
+              <button type="button" class="unreg-tg ap" title="승인" aria-label="${item.name} 승인">✓</button>
+              <button type="button" class="unreg-tg rj" title="거부" aria-label="${item.name} 거부">✕</button>
+            </div>
+            <div class="unreg-info">
+              <span class="unreg-name">${item.name}</span>
+              <span class="unreg-path">${item.path}</span>
+            </div>
+            <span class="unreg-scount" title="세션 수">${item.sessions}</span>
+          </div>`).join("");
+      }
+
+      function renderProposedInlineUnreg() {
+        const isOpen = state.unreg === "open";
+        const count = isOpen ? UNREG_SAMPLES.length : 0;
+        return `
+          <details class="rws-unreg inline-unreg" data-sync-unreg ${isOpen ? "open" : ""}>
+            <summary class="unreg-sum">
+              ${ICONS.chev}
+              <span class="unreg-dot${count === 0 ? " zero" : ""}"></span>
+              <span class="unreg-lbl">미등록 워크스페이스</span>
+              <span class="unreg-count">${count}</span>
+            </summary>
+            <div class="unreg-body">${renderUnregBodyMarkup()}</div>
+          </details>`;
+      }
+
+      function mountCompanions() {
+        const tpl = document.getElementById("tpl-companion-svg");
+        document.querySelectorAll("[data-companion-host]").forEach((host, idx) => {
+          const frag = tpl.content.cloneNode(true);
+          const svg = frag.querySelector("svg");
+          const prefix = "c" + idx + "-";
+          svg.querySelectorAll("defs [id]").forEach(node => {
+            const oldId = node.getAttribute("id");
+            const newId = prefix + oldId;
+            node.setAttribute("id", newId);
+            svg.querySelectorAll("[fill='url(#" + oldId + ")']").forEach(el => el.setAttribute("fill", "url(#" + newId + ")"));
+            svg.querySelectorAll("[stroke='url(#" + oldId + ")']").forEach(el => el.setAttribute("stroke", "url(#" + newId + ")"));
+          });
+          host.innerHTML = "";
+          host.appendChild(frag);
+        });
+      }
+
+      function applyPresetScroll(preserveScroll) {
+        if (preserveScroll) return;
+        const listCurrent = document.getElementById("list-current");
+        const listProposed = document.getElementById("list-proposed");
+
+        if (state.preset === "sparse") {
+          listCurrent.scrollTop = 0;
+          listProposed.scrollTop = 0;
+        } else if (state.preset === "overlap") {
+          // Scroll partway so devenv / werkschaft-ui rows visibly pass behind Companion's hair & shoulders
+          listCurrent.scrollTop = 140;
+          listProposed.scrollTop = 104;
+        } else if (state.preset === "bottom") {
+          // Max scroll: proves padding-bottom lifts last workspace + unregistered cleanly above Companion's head
+          listCurrent.scrollTop = listCurrent.scrollHeight;
+          listProposed.scrollTop = listProposed.scrollHeight;
+        }
+      }
+
+      function syncUI(opts) {
+        const preserveScroll = opts && opts.preserveScroll;
+        document.documentElement.setAttribute("data-theme", state.theme);
+
+        const workspaces = state.preset === "sparse" ? SPARSE_WORKSPACES : OVERLAP_WORKSPACES;
+        const wsMarkup = renderWorkspacesMarkup(workspaces);
+
+        const listCurrent = document.getElementById("list-current");
+        const listProposed = document.getElementById("list-proposed");
+        const prevCurScroll = listCurrent.scrollTop;
+        const prevPropScroll = listProposed.scrollTop;
+
+        listCurrent.innerHTML = wsMarkup;
+        listProposed.innerHTML = wsMarkup + renderProposedInlineUnreg();
+
+        if (preserveScroll) {
+          listCurrent.scrollTop = prevCurScroll;
+          listProposed.scrollTop = prevPropScroll;
+        }
+
+        // Sync Current column unregistered details
+        const isOpen = state.unreg === "open";
+        const count = isOpen ? UNREG_SAMPLES.length : 0;
+        const currentUnreg = document.querySelector(".rail-current details.rws-unreg");
+        currentUnreg.open = isOpen;
+        currentUnreg.querySelector(".unreg-dot").classList.toggle("zero", count === 0);
+        currentUnreg.querySelector(".unreg-count").textContent = String(count);
+        currentUnreg.querySelector('[data-slot="unreg-items-current"]').innerHTML = renderUnregBodyMarkup();
+
+        // Proposed variant A vs B + fade + shadow
+        const railProposed = document.getElementById("rail-proposed");
+        railProposed.setAttribute("data-variant", state.variant);
+        railProposed.classList.toggle("fade-on", state.fade === "on");
+        railProposed.classList.toggle("shadow-on", state.shadow === "on");
+
+        const subEl = document.getElementById("proposed-sub");
+        if (state.variant === "a") {
+          subEl.textContent = "A안 · 통합 카드 (--wb-card) + 하단 스크롤 마진 252px";
+        } else {
+          subEl.textContent = "B안 · 배경 투과 (--wb-bg) + 하단 스크롤 마진 252px";
+        }
+
+        // Update toolbar button states
+        document.querySelectorAll("[data-ctrl]").forEach(btn => {
+          const key = btn.getAttribute("data-ctrl");
+          const val = btn.getAttribute("data-val");
+          if (key === "fade") {
+            const on = state.fade === "on";
+            btn.setAttribute("aria-pressed", String(on));
+            btn.textContent = on ? "하단 소프트 페이드 ON" : "하단 페이드 OFF";
+          } else if (key === "shadow") {
+            const on = state.shadow === "on";
+            btn.setAttribute("aria-pressed", String(on));
+            btn.textContent = on ? "뒤 그림자: 미세 드롭섀도" : "뒤 그림자: 없음";
+          } else {
+            btn.setAttribute("aria-pressed", String(state[key] === val));
+          }
+        });
+
+        requestAnimationFrame(() => applyPresetScroll(preserveScroll));
+      }
+
+      // Toolbar clicks
+      document.querySelector(".toolbar").addEventListener("click", e => {
+        const btn = e.target.closest("[data-ctrl]");
+        if (!btn) return;
+        const key = btn.getAttribute("data-ctrl");
+        if (key === "fade") {
+          state.fade = state.fade === "on" ? "off" : "on";
+          syncUI({ preserveScroll: true });
+          return;
+        }
+        if (key === "shadow") {
+          state.shadow = state.shadow === "on" ? "off" : "on";
+          syncUI({ preserveScroll: true });
+          return;
+        }
+        const preserve = key === "theme" || key === "variant" || key === "unreg";
+        state[key] = btn.getAttribute("data-val");
+        syncUI({ preserveScroll: preserve });
+      });
+
+      // Clicking "> ● 미등록 워크스페이스" directly inside either rail toggles both in sync
+      document.addEventListener("click", e => {
+        const sum = e.target.closest("details.rws-unreg > summary.unreg-sum");
+        if (!sum) return;
+        e.preventDefault();
+        state.unreg = state.unreg === "open" ? "closed" : "open";
+        syncUI({ preserveScroll: true });
+      });
+
+      // Demonstrate click pass-through on rows behind/around Companion!
+      document.addEventListener("click", e => {
+        const row = e.target.closest(".rs[data-session-id]");
+        if (!row) return;
+        state.selectedSessionId = row.getAttribute("data-session-id");
+        const name = row.getAttribute("data-session-name");
+        const readout = document.getElementById("interaction-readout");
+        if (readout) {
+          readout.textContent = "클릭 투과 선택됨: " + name;
+        }
+        syncUI({ preserveScroll: true });
+      });
+
+      // Demonstrate hover & wheel pass-through even over Companion silhouette
+      const proposedRail = document.getElementById("rail-proposed");
+      const companionOverlay = document.getElementById("companion-z-overlay");
+      const readout = document.getElementById("interaction-readout");
+
+      proposedRail.addEventListener("mouseover", e => {
+        const hit = e.target.closest(".companion-hit");
+        if (hit) {
+          companionOverlay.classList.add("char-hovered");
+          readout.textContent = "Companion 실루엣 호버 (캐릭터 위 휠은 배경 스크롤)";
+          return;
+        }
+        companionOverlay.classList.remove("char-hovered");
+        const row = e.target.closest(".rs[data-session-name]");
+        if (row) {
+          readout.textContent = "배경 행 hover 투과: " + row.getAttribute("data-session-name");
+        }
+      });
+
+      proposedRail.addEventListener("mouseleave", () => {
+        companionOverlay.classList.remove("char-hovered");
+      });
+
+      // Forward wheel scrolling from anywhere over the Z-overlay (even over character body) to .rlist-z
+      proposedRail.addEventListener("wheel", e => {
+        const listProposed = document.getElementById("list-proposed");
+        if (!e.target.closest("#list-proposed")) {
+          listProposed.scrollTop += e.deltaY;
+          e.preventDefault();
+        }
+      }, { passive: false });
+
+      mountCompanions();
+      syncUI({ preserveScroll: false });
+    })();
+  </script>
+</body>
+</html>

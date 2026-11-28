@@ -105,13 +105,13 @@ function keydown(k){return {target:target(),key:k,preventDefault:function(){this
 }
 
 func TestConversationPresentationMergePreservesIdentityAndDisclosures(t *testing.T) {
-	src := whiteboardBridgeFunctions(t, string(mustAsset(t, "dashboard.js")), "entryKeys", "mergeEntries", "gapped", "evictEntries")
+	src := whiteboardBridgeFunctions(t, string(mustAsset(t, "dashboard.js")), "entryKeys", "emitAuditEvent", "turnSummaryEl", "absorbedMarker", "dedupTurn", "callSummary", "childByClass", "liveCallStore", "liveCallStashPut", "liveCallStashTake", "preserveTurnOpen", "flushCallDetailsUpdated", "collectCallDetails", "applyHandoffOpen", "syncCallSummary", "syncCallDetails", "graftLiveCalls", "mergeEntries", "gapped", "evictEntries")
 	runNode(t, "conversation keyed insertion", `
 var bad=[],ENTRY_CAP=150,restored=[];
 function check(label,got,want){if(JSON.stringify(got)!==JSON.stringify(want))bad.push(label+': '+JSON.stringify(got));}
 function restoreOpen(n){restored.push(n.key);}function fmtTimes(){}
-function entry(key,state){return {key:key,state:state||null,open:true,raw:'<script>diagnostic stays text</script>',getAttribute:function(a){return a==='data-entry'?this.key:a==='data-mail-wake'?this.state:null;}};}
-function box(nodes){var b={children:nodes||[],insertBefore:function(n,next){var i=next?this.children.indexOf(next):this.children.length;this.children.splice(i,0,n);this.sync();},replaceChild:function(n,old){this.children[this.children.indexOf(old)]=n;this.sync();},removeChild:function(n){this.children.splice(this.children.indexOf(n),1);this.sync();},sync:function(){var ns=this.children;this.firstChild=this.firstElementChild=ns[0];this.lastElementChild=ns[ns.length-1];ns.forEach(function(n,i){n.previousElementSibling=ns[i-1]||null;n.nextSibling=ns[i+1]||null;});}};b.sync();return b;}
+function entry(key,state){return {key:key,state:state||null,open:true,raw:'<script>diagnostic stays text</script>',getAttribute:function(a){return a==='data-entry'?this.key:a==='data-mail-wake'?this.state:null;},hasAttribute:function(){return false;},matches:function(){return false;}};}
+function box(nodes){var b={children:nodes||[],querySelectorAll:function(){return [];},insertBefore:function(n,next){var i=next?this.children.indexOf(next):this.children.length;this.children.splice(i,0,n);this.sync();},replaceChild:function(n,old){this.children[this.children.indexOf(old)]=n;this.sync();},removeChild:function(n){this.children.splice(this.children.indexOf(n),1);this.sync();},sync:function(){var ns=this.children;this.firstChild=this.firstElementChild=ns[0];this.lastElementChild=ns[ns.length-1];ns.forEach(function(n,i){n.previousElementSibling=ns[i-1]||null;n.nextSibling=ns[i+1]||null;});}};b.sync();return b;}
 `+src+`
 var mail=entry('02'),wake=entry('03'),shown=box([mail,wake]);
 mergeEntries(shown,box([entry('03'),entry('04')]));

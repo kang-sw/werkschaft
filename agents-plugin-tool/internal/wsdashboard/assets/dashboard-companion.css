@@ -1,3 +1,14 @@
+:root {
+  --companion-drop: drop-shadow(0 6px 14px rgb(0 0 0 / .18)) drop-shadow(0 1px 3px rgb(0 0 0 / .12));
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --companion-drop: drop-shadow(0 8px 18px rgb(0 0 0 / .52)) drop-shadow(0 2px 5px rgb(0 0 0 / .38));
+  }
+}
+:root[data-theme="dark"] {
+  --companion-drop: drop-shadow(0 8px 18px rgb(0 0 0 / .52)) drop-shadow(0 2px 5px rgb(0 0 0 / .38));
+}
 .ws-companion {
   position: fixed;
   inset: 0;
@@ -194,26 +205,57 @@
 .ws-companion-fx { font: 800 17px/1 system-ui, sans-serif; text-shadow: 0 1px 2px var(--wb-card); }
 .ws-companion-fx > span { display: inline-block; }
 .ws-companion-fx[data-kind="particles"] > span:not(:first-child) { position: absolute; left: 0; }
-.rail[data-companion-dock="unregistered"] details.rws-unreg { margin-top: var(--companion-slot); }
 .rail[data-companion-dock="footer"] .rfoot { margin-top: var(--companion-slot); }
-.rail[data-companion-dock="footer"]:not(:has(.rfoot)) .rail-session-panel { padding-bottom: var(--companion-slot); }
 
-/* Pure-VRM left-rail bust dock (>= 1600px): borderless transparent WebGL canvas
-   anchored over #rail-companion-slot with a soft bottom dissolve fade. */
+/* Interactive laptop click target (projected from 3D Box3 or lower-center desk
+   fallback when laptop prop is absent/hidden): opens Companion Messenger while
+   keeping the surrounding transparent overlay pass-through to .rlist below. */
+.ws-companion-laptop-hit {
+  position: absolute;
+  z-index: 2;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+.ws-companion-laptop-hit:focus-visible {
+  outline: 2px solid var(--wb-primary);
+  outline-offset: 2px;
+  background: color-mix(in srgb, var(--wb-primary) 12%, transparent);
+}
+
+/* Pure-VRM left-rail foreground overlay (>= 1600px): true pointer & wheel
+   pass-through on the hit shell, character layer, and WebGL canvas so .rlist
+   rows beside/above the silhouette remain directly clickable and scrollable.
+   Only the projected laptop hit-zone and bottom hover controls capture
+   pointer events. */
+.ws-companion[data-dock="rail-slot"] .ws-companion-hit,
+.ws-companion[data-dock="rail-slot"] .ws-companion-character {
+  pointer-events: none;
+}
+.ws-companion[data-dock="rail-slot"][data-render-mode="roam"] .ws-companion-character {
+  pointer-events: auto;
+}
 .ws-companion[data-dock="rail-slot"] .ws-companion-character,
 .ws-companion[data-dock="rail-slot"] .ws-companion-character:active {
-  cursor: pointer;
-}
-.ws-companion[data-dock="rail-slot"] .ws-companion-hit[data-area="character"] .ws-companion-character,
-.ws-companion[data-dock="rail-slot"] .ws-companion-hit[data-area="character"] .ws-companion-character:active {
   cursor: default;
 }
-.ws-companion[data-dock="rail-slot"] .ws-companion-hit[data-area="messenger"] .ws-companion-character,
-.ws-companion[data-dock="rail-slot"] .ws-companion-hit[data-area="messenger"] .ws-companion-character:active {
-  cursor: pointer;
+.ws-companion[data-dock="rail-slot"] .ws-companion-vrm-canvas-wrap {
+  filter: var(--companion-drop);
+  pointer-events: none;
 }
-.ws-companion[data-dock="rail-slot"] .ws-companion-resize {
+.ws-companion[data-dock="rail-slot"] .ws-dissolve-grid {
   display: none;
+}
+.ws-companion[data-dock="rail-2d"] .ws-companion-hit,
+.ws-companion[data-dock="rail-2d"] .ws-companion-character {
+  pointer-events: none;
+}
+.ws-companion[data-dock="rail-2d"] :is(.ws-companion-gear, .ws-companion-resize, .ws-companion-chat-btn, .ws-companion-laptop-hit) {
+  pointer-events: auto;
 }
 .ws-companion-vrm-wrap {
   position: relative;
@@ -319,33 +361,40 @@
   pointer-events: none;
 }
 .ws-companion[data-renderer="vrm"] .ws-companion-resize {
-  left: 2px;
+  left: 4px;
   right: auto;
-  top: 2px;
-  z-index: 2;
+  top: auto;
+  bottom: 4px;
+  z-index: 4;
   width: 22px;
   height: 22px;
-  cursor: nwse-resize;
-  transform: scaleX(-1);
+  cursor: ns-resize;
+  transform: none;
+  pointer-events: auto;
 }
 .ws-companion[data-renderer="vrm"] .ws-companion-gear {
-  top: 2px;
-  right: 2px;
-  z-index: 3;
+  top: auto;
+  bottom: 4px;
+  right: 4px;
+  z-index: 4;
   width: 22px;
   height: 22px;
+  pointer-events: auto;
 }
 .ws-companion[data-renderer="vrm"] .ws-companion-chat-btn {
-  top: 2px;
-  right: 28px;
-  z-index: 3;
+  top: auto;
+  bottom: 4px;
+  right: 30px;
+  z-index: 4;
   width: 22px;
   height: 22px;
   border-radius: 6px;
+  pointer-events: auto;
 }
+.ws-companion[data-renderer="vrm"][data-hover="1"] :is(.ws-companion-gear, .ws-companion-resize, .ws-companion-chat-btn),
 .ws-companion[data-renderer="vrm"] .ws-companion-hit:is(:hover, :focus-within) :is(.ws-companion-gear, .ws-companion-resize, .ws-companion-chat-btn) {
-  opacity: 0.72;
-  background: color-mix(in srgb, var(--wb-card) 78%, transparent);
+  opacity: 0.78;
+  background: color-mix(in srgb, var(--wb-card) 82%, transparent);
 }
 .ws-companion[data-renderer="vrm"] .ws-companion-hit :is(.ws-companion-gear, .ws-companion-resize, .ws-companion-chat-btn):is(:hover, :active, :focus-visible),
 .ws-companion[data-renderer="vrm"] .ws-companion-gear[aria-expanded="true"],

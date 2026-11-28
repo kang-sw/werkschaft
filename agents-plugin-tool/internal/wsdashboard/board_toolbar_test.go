@@ -78,7 +78,7 @@ page.W.overview(false);
 check("exit keeps the current layout", [page.W.isDocked(B), page.layouts], [true, [true, false, true]]);
 c.pin(true); c.pin(false); c.close(); first("card pin/unpin/close keep toolbar first");
 clickPin(B); first("unpin keeps toolbar first");
-check("the last undock leaves the wide empty slot", [gal.hidden, page.states[page.states.length - 1].empty, page.layouts], [false, true, [true, false, true, false]]);
+check("the last undock keeps the gallery column with system pages", [gal.hidden, page.states[page.states.length - 1].empty, page.layouts], [false, false, [true, false, true]]);
 var nextMore = more(2); nextMore.setAttribute("data-closed-more", "4");
 B = topic("b", 400); X = topic("x", 0, true);
 swap([B, X, topic("y", 0, true), nextMore, reply()]); first("weave and settle keep toolbar first");

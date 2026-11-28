@@ -231,5 +231,5 @@ test('framed main script uses one shared content-addressed static request', () =
   const drop = lifecycle.match(/function shDrop\(ent, leaving\) \{[^]*?ent\.el\.remove\(\);/)[0];
   assert(drop.indexOf('wsSaveSessionView();') < drop.indexOf('ent.el.remove();'));
   assert(!lifecycle.includes('location.replace("about:blank")'));
-  assert(lifecycle.includes('  restoreSessionView();\n  nearTop();'));
+  assert(lifecycle.includes('  restoreSessionView();\n  if (typeof entryJumpFromHash === "function") entryJumpFromHash();\n  nearTop();'));
 });

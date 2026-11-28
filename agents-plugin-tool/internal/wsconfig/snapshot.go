@@ -41,19 +41,22 @@ type TierLayer struct {
 func InspectTier(files map[Scope]Config, tier, harness string) TierInspection {
 	global, project := files[ScopeGlobal], files[ScopeProject]
 	result := TierInspection{Scope: ScopeBuiltin, Layers: make(map[Scope]TierLayer, 2)}
-	if harness == "werk" {
-		// werk has no builtin tier defaults and agent.spawn rejects unconfigured
-		// werk tiers rather than falling back to default/codex.
+	if harness == "werk" || harness == "pi-rpc" {
+		// werk and pi-rpc have no builtin tier defaults and reject unconfigured
+		// tiers rather than falling back to default/codex.
 		for _, scope := range []Scope{ScopeProject, ScopeGlobal} {
-			if own, ok := files[scope].Agents.ModelAliases[tier]["werk"]; ok {
+			if own, ok := files[scope].Agents.ModelAliases[tier][harness]; ok {
 				effective := own
-				if (effective.Backend == "" || effective.Backend == "werk") && effective.Provider == "" {
+				if harness == "werk" && (effective.Backend == "" || effective.Backend == "werk") && effective.Provider == "" {
 					effective.Provider = WerkDefaultProvider
 				}
+				if harness == "pi-rpc" && effective.Backend == "" && effective.Model != "" {
+					effective.Backend = "pi-rpc"
+				}
 				selected := own
-				result.Layers[scope] = TierLayer{Value: effective, Bucket: "werk", Selected: &selected}
+				result.Layers[scope] = TierLayer{Value: effective, Bucket: harness, Selected: &selected}
 				if result.Scope == ScopeBuiltin {
-					result.Value, result.Bucket, result.Scope = effective, "werk", scope
+					result.Value, result.Bucket, result.Scope = effective, harness, scope
 				}
 			}
 		}

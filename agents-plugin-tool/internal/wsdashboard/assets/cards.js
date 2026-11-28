@@ -184,7 +184,17 @@
     toolbarFit.contentSig = "";
     toolbarFit.probing = false;
     window.addEventListener("resize", function () { fitToolbar(false); });
-    if (window.ResizeObserver) new window.ResizeObserver(function () { fitToolbar(false); }).observe(toolbar);
+    if (window.ResizeObserver) {
+      // fitToolbar toggles data-toolbar-fit on toolbar itself (2-row 50px <->
+      // 1-row 34px); mutating the observed element's height synchronously
+      // during ResizeObserver delivery causes an undelivered-notification loop.
+      var fitFrame = 0;
+      new window.ResizeObserver(function () {
+        if (typeof requestAnimationFrame !== "function") { fitToolbar(false); return; }
+        if (fitFrame) return;
+        fitFrame = requestAnimationFrame(function () { fitFrame = 0; fitToolbar(false); });
+      }).observe(toolbar);
+    }
     if (window.MutationObserver) {
       new window.MutationObserver(function (records) {
         for (var i = 0; i < records.length; i++) {

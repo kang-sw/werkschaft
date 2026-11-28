@@ -82,7 +82,7 @@ REPO_NAMES = (
     "agents-plugin-wsflow",
     "agents-plugin",
     "claude-plugin/",
-    "install.sh",
+    "scripts/install-claude-plugin.sh",
     "skill-authoring",
     "wsflow-mirroring",
 )

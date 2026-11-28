@@ -12,9 +12,10 @@
   }
   function harnessSwitchCurrentSupported(curBackend) {
     var cur = String(curBackend || "");
-    if (!cur || !supChoices || !Array.isArray(supChoices.harnesses)) return true;
+    if (!cur) return false;
+    if (!supChoices || !Array.isArray(supChoices.harnesses)) return true;
     var h = typeof supHarness === "function" ? supHarness(cur) : null;
-    return !h || h.harness_switch !== false;
+    return !!(h && h.harness_switch === true);
   }
   function harnessSwitchErr(status, text) {
     var raw = String(text || "").trim();

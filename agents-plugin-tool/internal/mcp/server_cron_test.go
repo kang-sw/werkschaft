@@ -400,7 +400,7 @@ func TestCronToolSchemaInventoryAndShippedText(t *testing.T) {
 	// Shipped text names nothing of this repository and no namespace form that
 	// the other distribution would have to rewrite.
 	description, _ := cron["description"].(string)
-	for _, leak := range []string{"ws/", "wsflow", "ws:", "agents-plugin", "ai-docs", "ticket", "devenv", "install.sh"} {
+	for _, leak := range []string{"ws/", "wsflow", "ws:", "agents-plugin", "ai-docs", "ticket", "devenv", "scripts/install-claude-plugin.sh"} {
 		if strings.Contains(description, leak) {
 			t.Errorf("cron description contains %q", leak)
 		}

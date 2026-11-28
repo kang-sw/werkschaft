@@ -259,7 +259,7 @@ async function run(browser, { lang, scheme }) {
     await view.waitForSelector('.xchip[data-xid="exec_e1"]');
     await openChip(view, 'exec_e1');
     await view.click('.xpeek [data-xact="pin"]');
-    await view.click('#shandle');
+    await page.click('#tkqs');
     await view.waitForSelector('.drawer.open', { state: 'attached' });
     await view.locator('.xp-tab[aria-selected="true"]').focus();
     await page.keyboard.press('Escape');
@@ -267,7 +267,7 @@ async function run(browser, { lang, scheme }) {
     assert.equal(await view.locator('.drawer.open').count(), 1, 'I4: the HUD Escape leaves the drawer open');
     await sleep(150);
     await view.evaluate(() => document.querySelector('.xchip[data-xid="exec_e1"]').focus());
-    await view.evaluate(() => document.getElementById('shandle').blur());
+    await view.evaluate(() => { const sh = document.getElementById('shandle'); if (sh) sh.blur(); const qi = document.getElementById('tkqin'); if (qi) qi.blur(); });
     await view.evaluate(() => { const c = document.querySelector('.xchip[data-xid="exec_e1"]'); if (c) c.blur(); document.body.focus(); });
     await page.keyboard.press('Escape');
     await view.waitForFunction(() => !document.querySelector('.drawer.open'), null, { timeout: 4000 });

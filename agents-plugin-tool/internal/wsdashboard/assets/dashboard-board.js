@@ -184,6 +184,8 @@
           // The morph retains unchanged topic nodes, including hydrated closed
           // pages. Their image frames still follow the board's external-file stamp.
           if (window.wbHistory && window.wbHistory.refreshImages) window.wbHistory.refreshImages(doc);
+        } else if (name === "convlive") {
+          swapConvLive(el, html);
         } else {
           el.innerHTML = html;
           if (name === "rail" && WsRail) railHoverUpdates = WsRail.hoverUpdates(el);
@@ -828,7 +830,15 @@
       });
       filePreview.el = previewPane;
       if (window.ResizeObserver) {
-        var previewResize = new ResizeObserver(sizeFileSurfaces);
+        var previewResizeFrame = 0;
+        var previewResize = new ResizeObserver(function () {
+          if (typeof requestAnimationFrame !== "function") { sizeFileSurfaces(); return; }
+          if (previewResizeFrame) return;
+          previewResizeFrame = requestAnimationFrame(function () {
+            previewResizeFrame = 0;
+            sizeFileSurfaces();
+          });
+        });
         previewResize.observe(grid);
         if (chead) previewResize.observe(chead);
         if (dbody) previewResize.observe(dbody);

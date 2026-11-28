@@ -523,10 +523,13 @@
     const CHAR_BOUNDS_TTL_MS = 120;
     const cachedCharBounds = { x: 0, y: 0, width: 0, height: 0, viewportX: 0, viewportY: 0 };
     let hasCachedCharBounds = false, charBoundsDirty = true, lastCharBoundsAt = -Infinity;
+    let cachedLaptopBounds = null, laptopBoundsDirty = true, lastLaptopVisible = null;
+    const invalidateBounds = () => { charBoundsDirty = true; lastCharBoundsAt = -Infinity; laptopBoundsDirty = true; };
     let vrmaClips = new Map(), vrmaLoading = new Set(), vrmaFailed = new Set();
     const loadCancel = new AbortController();
     const clipRt = typeof C.vrmClip?.createPackClipRuntime === "function" ? C.vrmClip.createPackClipRuntime(pack, loadCancel.signal) : null;
-    let armChains = null, activeSentinelKey = "", activeVrmaIsSentinel = false;
+    let armChains = null, activeSentinelKey = "", activeVrmaIsSentinel = false, activeVrmaClip = null, activeVrmaLoop = true, activeVrmaCacheKey = "";
+    let vrmaSyncGen = 0, wantedVrmaKey = "", wantedVrmaCacheKey = "", clipTriggerSeq = 0;
     let width = LOGICAL_W, height = LOGICAL_H, dpr = 1;
     let overlayMode = false;
     let viewport = { width: LOGICAL_W, height: LOGICAL_H, dpr: 1 };
@@ -574,11 +577,18 @@
     }
 
     function disposeVrmOnly() {
+      vrmaSyncGen++;
+      wantedVrmaKey = "";
+      wantedVrmaCacheKey = "";
       if (activeVrmaAction) {
         activeVrmaAction.stop();
         activeVrmaAction = null;
         activeVrmaKey = "";
       }
+      activeVrmaIsSentinel = false;
+      activeVrmaClip = null;
+      activeVrmaLoop = true;
+      activeVrmaCacheKey = "";
       if (mixer) {
         mixer.stopAllAction();
         mixer = null;
@@ -592,8 +602,8 @@
       }
       vrm = null;
       hasCachedCharBounds = false;
-      charBoundsDirty = true;
-      lastCharBoundsAt = -Infinity;
+      cachedLaptopBounds = null;
+      invalidateBounds();
       boneRotations.clear();
     }
 
@@ -942,6 +952,7 @@
       cameraFraming.qa = C.vrmStudio.measureFraming(THREE, camera, cameraFraming);
       coLead?.layoutProp(cameraFraming, camera);
       studio?.attachPropEnvironment(coLead?.getPropObjects?.());
+      laptopBoundsDirty = true;
       calibFrames = 6;
       calibPasses = 0;
     }
@@ -970,6 +981,7 @@
       calibPasses++;
       calibFrames = 2;
       coLead?.layoutProp(fr, camera);
+      laptopBoundsDirty = true;
     }
 
     async function parseVrmBuffer(buffer) {
@@ -1003,9 +1015,7 @@
       applyImmediateStandPose(loaded, isVrm0);
       if (C.vrmIk) armChains = { left: C.vrmIk.measureArmChain(loaded, "left", THREE), right: C.vrmIk.measureArmChain(loaded, "right", THREE) };
       autoFrameBust(loaded);
-      charBoundsDirty = true;
-      lastCharBoundsAt = -Infinity;
-
+      invalidateBounds();
       setOverlay("");
       renderTick(0.016, gaze, null, activeBeatMeta);
       options.onReady?.();
@@ -1056,6 +1066,12 @@
       const clipFile = clipEntry && clipEntry.source !== "animations" ? (clipEntry.file || "") : "";
       const cacheKey = clipFile ? ("clip:" + clipFile) : key;
       const wanted = key && !vrmaFailed.has(cacheKey) && (clipFile || (pack?.animations && Object.hasOwn(pack.animations, key))) ? key : "";
+      const wantedCache = wanted ? cacheKey : "";
+      if (wanted !== wantedVrmaKey || wantedCache !== wantedVrmaCacheKey) {
+        vrmaSyncGen++;
+        wantedVrmaKey = wanted;
+        wantedVrmaCacheKey = wantedCache;
+      }
       if (!wanted) {
         if (activeVrmaAction) {
           syncBoneCacheFromRig();
@@ -1064,23 +1080,37 @@
           activeVrmaAction = null;
           activeVrmaKey = "";
           activeVrmaIsSentinel = false;
+          activeVrmaClip = null;
+          activeVrmaLoop = true;
+          activeVrmaCacheKey = "";
           resetExtraVrmaBones();
         }
         return;
       }
-      if (wanted === activeVrmaKey && activeVrmaAction) return;
+      const isOneShot = !!(clipEntry && clipEntry.loop === false);
+      if (wanted === activeVrmaKey && activeVrmaAction && activeVrmaCacheKey === cacheKey && activeVrmaLoop === !isOneShot) return;
       const clip = vrmaClips.get(cacheKey);
       if (!clip) {
+        const gen = vrmaSyncGen;
         ensureVrmaClip(wanted, clipFile).then(loaded => {
-          if (loaded && !disposed) syncVrma(wanted, clipEntry, isSentinel);
+          if (loaded && !disposed && gen === vrmaSyncGen && wantedVrmaKey === wanted && wantedVrmaCacheKey === cacheKey) {
+            syncVrma(wanted, clipEntry, isSentinel);
+          }
         });
         return;
       }
       const nextAction = mixer.clipAction(clip);
       nextAction.reset();
-      if (clipEntry && clipEntry.loop === false && runtime?.THREE?.LoopOnce !== undefined) {
-        nextAction.setLoop(runtime.THREE.LoopOnce, 1);
+      if (isOneShot) {
+        if (runtime?.THREE?.LoopOnce !== undefined && typeof nextAction.setLoop === "function") {
+          nextAction.setLoop(runtime.THREE.LoopOnce, 1);
+        }
         nextAction.clampWhenFinished = true;
+      } else {
+        if (runtime?.THREE?.LoopRepeat !== undefined && typeof nextAction.setLoop === "function") {
+          nextAction.setLoop(runtime.THREE.LoopRepeat, Infinity);
+        }
+        nextAction.clampWhenFinished = false;
       }
       nextAction.fadeIn(0.18);
       nextAction.play();
@@ -1090,6 +1120,19 @@
       activeVrmaAction = nextAction;
       activeVrmaKey = wanted;
       activeVrmaIsSentinel = !!isSentinel;
+      activeVrmaClip = clip;
+      activeVrmaLoop = !isOneShot;
+      activeVrmaCacheKey = cacheKey;
+    }
+
+    function isVrmaOneShotActive() {
+      if (!activeVrmaAction || activeVrmaIsSentinel) return false;
+      if (!activeVrmaLoop) {
+        if (typeof activeVrmaAction.isRunning === "function" && !activeVrmaAction.isRunning()) return false;
+        const dur = activeVrmaAction.getClip?.()?.duration ?? activeVrmaClip?.duration;
+        if (Number.isFinite(dur) && dur > 0 && Number.isFinite(activeVrmaAction.time) && activeVrmaAction.time >= dur - 1e-4) return false;
+      }
+      return true;
     }
 
     function syncBoneCacheFromRig() {
@@ -1250,7 +1293,7 @@
         });
       }
       activeSentinelKey = coState?.activeSentinel || "";
-      const clipSync = clipRt ? clipRt.sync(activeGesture, activeSentinelKey, durs => coLead?.setSentinelDurations?.(durs)) : null;
+      const clipSync = clipRt ? clipRt.sync(activeGesture, activeSentinelKey, durs => coLead?.setSentinelDurations?.(durs), clipTriggerSeq) : null;
       const legacyVrmaKey = !clipSync?.vrmaEntry && !clipSync?.clipEntry
         ? ((activeGesture && pack?.animations && Object.hasOwn(pack.animations, activeGesture))
             ? activeGesture
@@ -1401,6 +1444,7 @@
       } else if (charBoundsDirty) {
         updateCharacterBounds(performance.now());
       }
+      syncLaptopBoundsIfDirty();
       renderDizzyFxOverlay(coState);
       framesRendered++;
     }
@@ -1467,60 +1511,63 @@
         }
         if (!projectedCount || mMaxX <= 0 || mMinX >= w || mMaxY <= 0 || mMinY >= h) return;
 
-        const cMinX = mMinX < 0 ? 0 : mMinX;
-        const cMaxX = mMaxX > w ? w : mMaxX;
-        const cMinY = mMinY < 0 ? 0 : mMinY;
-        const cMaxY = mMaxY > h ? h : mMaxY;
+        const cMinX = mMinX < 0 ? 0 : mMinX, cMaxX = mMaxX > w ? w : mMaxX;
+        const cMinY = mMinY < 0 ? 0 : mMinY, cMaxY = mMaxY > h ? h : mMaxY;
         if (cMaxX <= cMinX || cMaxY <= cMinY) return;
-
         if (cMinX < uMinX) uMinX = cMinX;
         if (cMaxX > uMaxX) uMaxX = cMaxX;
         if (cMinY < uMinY) uMinY = cMinY;
         if (cMaxY > uMaxY) uMaxY = cMaxY;
         anyVisible = true;
       });
-
-      if (!anyVisible || uMaxX <= uMinX || uMaxY <= uMinY) {
-        hasCachedCharBounds = false;
-        return false;
-      }
-
-      const x1 = C.clamp(Math.floor(uMinX), 0, w);
-      const y1 = C.clamp(Math.floor(uMinY), 0, h);
-      const x2 = C.clamp(Math.ceil(uMaxX), 0, w);
-      const y2 = C.clamp(Math.ceil(uMaxY), 0, h);
-      if (x2 <= x1 || y2 <= y1) {
-        hasCachedCharBounds = false;
-        return false;
-      }
-      const vpX = R.left + x1;
-      const vpY = R.top + y1;
-      cachedCharBounds.viewportX = vpX;
-      cachedCharBounds.viewportY = vpY;
-      cachedCharBounds.x = overlayMode ? Math.round(vpX - anchorRect.left) : x1;
-      cachedCharBounds.y = overlayMode ? Math.round(vpY - anchorRect.top) : y1;
-      cachedCharBounds.width = x2 - x1;
-      cachedCharBounds.height = y2 - y1;
+      if (!anyVisible || uMaxX <= uMinX || uMaxY <= uMinY) { hasCachedCharBounds = false; return false; }
+      const x1 = C.clamp(Math.floor(uMinX), 0, w), y1 = C.clamp(Math.floor(uMinY), 0, h);
+      const x2 = C.clamp(Math.ceil(uMaxX), 0, w), y2 = C.clamp(Math.ceil(uMaxY), 0, h);
+      if (x2 <= x1 || y2 <= y1) { hasCachedCharBounds = false; return false; }
+      const vpX = R.left + x1, vpY = R.top + y1;
+      Object.assign(cachedCharBounds, {
+        viewportX: vpX, viewportY: vpY,
+        x: overlayMode ? Math.round(vpX - anchorRect.left) : x1,
+        y: overlayMode ? Math.round(vpY - anchorRect.top) : y1,
+        width: x2 - x1, height: y2 - y1
+      });
       hasCachedCharBounds = true;
       return true;
+    }
+
+    function updateLaptopBounds() {
+      laptopBoundsDirty = false;
+      const prev = cachedLaptopBounds;
+      let next = null;
+      if (!disposed && camera && coLead?.projectLaptopBounds) {
+        const R = activeScissorRect || { left: 0, top: 0, width: Math.max(64, Math.round(width)), height: Math.max(64, Math.round(height)) };
+        if (overlayMode) applyAsymmetricProjection(R);
+        next = coLead.projectLaptopBounds(camera, R, anchorRect, overlayMode, projMeshBox, projCornerVec);
+      }
+      cachedLaptopBounds = next;
+      const changed = (!!prev !== !!next) || (prev && next && (prev.x !== next.x || prev.y !== next.y || prev.width !== next.width || prev.height !== next.height || prev.viewportX !== next.viewportX || prev.viewportY !== next.viewportY));
+      if (changed) options.onLaptopBoundsChange?.(next ? { ...next } : null);
+      return next;
+    }
+
+    function syncLaptopBoundsIfDirty() {
+      const lapObj = coLead?.getLaptopObject?.();
+      const lapVis = !!(lapObj && lapObj.visible !== false);
+      if (lapVis !== lastLaptopVisible) { lastLaptopVisible = lapVis; laptopBoundsDirty = true; }
+      if (laptopBoundsDirty) updateLaptopBounds();
+    }
+
+    function getLaptopBounds() {
+      if (disposed || !camera) return null;
+      syncLaptopBoundsIfDirty();
+      return cachedLaptopBounds ? { ...cachedLaptopBounds } : null;
     }
 
     function getCharacterBounds() {
       if (disposed || !vrm || !camera) return null;
       const nowMs = performance.now();
-      if (charBoundsDirty || lastCharBoundsAt === -Infinity || nowMs - lastCharBoundsAt >= CHAR_BOUNDS_TTL_MS) {
-        updateCharacterBounds(nowMs);
-      }
-      return hasCachedCharBounds
-        ? {
-            x: cachedCharBounds.x,
-            y: cachedCharBounds.y,
-            width: cachedCharBounds.width,
-            height: cachedCharBounds.height,
-            viewportX: cachedCharBounds.viewportX,
-            viewportY: cachedCharBounds.viewportY
-          }
-        : null;
+      if (charBoundsDirty || lastCharBoundsAt === -Infinity || nowMs - lastCharBoundsAt >= CHAR_BOUNDS_TTL_MS) updateCharacterBounds(nowMs);
+      return hasCachedCharBounds ? { ...cachedCharBounds } : null;
     }
 
     function raycastAt(clientX, clientY) {
@@ -1597,20 +1644,10 @@
       fxCanvas.setAttribute("aria-hidden", "true");
       fxCanvas.hidden = true;
       if (fxCanvas.style) {
-        fxCanvas.style.position = "absolute";
-        fxCanvas.style.inset = "0";
-        fxCanvas.style.width = "100%";
-        fxCanvas.style.height = "100%";
-        fxCanvas.style.pointerEvents = "none";
-        fxCanvas.style.zIndex = "1";
+        Object.assign(fxCanvas.style, { position: "absolute", inset: "0", width: "100%", height: "100%", pointerEvents: "none", zIndex: "1" });
       }
       fxCtx = typeof fxCanvas.getContext === "function" ? fxCanvas.getContext("2d") : null;
-      if (overlayMode) {
-        fxCanvas.width = 0;
-        fxCanvas.height = 0;
-      } else {
-        syncFxCanvasSize();
-      }
+      if (overlayMode) { fxCanvas.width = fxCanvas.height = 0; } else syncFxCanvasSize();
 
       overlay = doc.createElement("div");
       overlay.className = "ws-companion-vrm-overlay";
@@ -1780,10 +1817,12 @@
         coLead?.setHover(flag);
       },
       triggerKnock(opts) {
+        clipTriggerSeq++;
         return coLead ? coLead.triggerKnock(opts) : null;
       },
       triggerGesture(name) {
         if (!name) return false;
+        clipTriggerSeq++;
         if (coLead) return coLead.triggerGesture(name);
         bufferGesture(String(name));
         return true;
@@ -1808,8 +1847,7 @@
         dpr = clampedDpr;
         if (changed) {
           applyViewportResize();
-          charBoundsDirty = true;
-          lastCharBoundsAt = -Infinity;
+          invalidateBounds();
         }
         return changed;
       },
@@ -1837,8 +1875,7 @@
             applyCanonicalSlotProjection();
             coLead.layoutProp(cameraFraming, camera);
           }
-          charBoundsDirty = true;
-          lastCharBoundsAt = -Infinity;
+          invalidateBounds();
         }
         return changed;
       },
@@ -1849,8 +1886,7 @@
         syncSlotStyleVars();
         refreshChromeBounds();
         coLead?.setBreakoutState?.(renderMode);
-        charBoundsDirty = true;
-        lastCharBoundsAt = -Infinity;
+        invalidateBounds();
         return renderMode;
       },
       setBleedPadding(pad) {
@@ -1908,14 +1944,14 @@
         const nextAspect = width / Math.max(1, height);
         if (vrm && Math.abs(nextAspect - prevAspect) > 0.01) autoFrameBust(vrm);
         else if (vrm && coLead) coLead.layoutProp(cameraFraming, camera);
-        charBoundsDirty = true;
-        lastCharBoundsAt = -Infinity;
+        invalidateBounds();
       },
       getCharacterBounds,
+      getLaptopBounds,
       pause() { paused = true; },
       resume() { paused = false; },
       isContextLost() { return contextLost; },
-      isClipOneShotActive() { return !!(clipRt?.isOneShotActive?.() || (activeVrmaAction && !activeVrmaIsSentinel)); },
+      isClipOneShotActive() { return !!(clipRt?.isOneShotActive?.() || isVrmaOneShotActive()); },
       setPreset() {},
       setWardrobe() {},
       wardrobe() { return null; },
@@ -1935,6 +1971,7 @@
           surprisedStrategy: exprCtrl.surprisedStrategy,
           framing: { ...cameraFraming },
           projectedBounds: getCharacterBounds(),
+          laptopBounds: getLaptopBounds(),
           renderMetrics: rigApi.getRenderMetrics(),
           coLead: coLead ? coLead.debugState() : null,
           studio: studio ? studio.getState() : null,

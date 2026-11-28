@@ -1710,3 +1710,75 @@ func TestRailFoldedAliasUsesTheListWithTheCustomPool(t *testing.T) {
 		t.Fatalf("worktrees = %+v, want the root only", wts)
 	}
 }
+
+// TestRailSeamlessCompanionOverlayContract pins the owner-approved (1798)=a
+// structural and stylesheet contract: unregistered workspaces render inline
+// inside #rlist directly after registered workspaces, #rail-companion-slot
+// floats transparently in the foreground with pointer-events:none, .rlist
+// reserves dynamic bottom scroll padding bound to --companion-slot, and the
+// projected laptop hit-zone keeps pointer-events:auto over the pass-through
+// stage shell.
+func TestRailSeamlessCompanionOverlayContract(t *testing.T) {
+	view := RailView{
+		CanAdd: true,
+		Workspaces: []RailWorkspace{
+			{Path: "/w/alpha", Name: "alpha", Stored: true},
+		},
+		PendingWorkspaces: []RailWorkspace{
+			{Path: "/w/unreg", Name: "unreg"},
+		},
+	}
+	html := renderNamed(t, "r-rail", view)
+	rlistStart := strings.Index(html, `<div class="rlist" id="rlist"`)
+	wsIdx := strings.Index(html, `<section class="rws"`)
+	unregIdx := strings.Index(html, `<details class="rws-unreg"`)
+	feedbackIdx := strings.Index(html, `<div class="admission-feedback"`)
+	slotIdx := strings.Index(html, `<div id="rail-companion-slot"`)
+	if rlistStart < 0 || wsIdx < 0 || unregIdx < 0 || feedbackIdx < 0 || slotIdx < 0 {
+		t.Fatalf("missing expected rail landmarks in rendered HTML: rlist=%d ws=%d unreg=%d feedback=%d slot=%d", rlistStart, wsIdx, unregIdx, feedbackIdx, slotIdx)
+	}
+	if !(rlistStart < wsIdx && wsIdx < unregIdx && unregIdx < feedbackIdx && feedbackIdx < slotIdx) {
+		t.Fatalf("expected details.rws-unreg inside #rlist after registered workspaces and before admission-feedback/slot: rlist=%d ws=%d unreg=%d feedback=%d slot=%d", rlistStart, wsIdx, unregIdx, feedbackIdx, slotIdx)
+	}
+	// Verify #rlist closes after details.rws-unreg (no premature </div> split before it).
+	between := html[wsIdx:unregIdx]
+	if strings.Count(between, "<section ") != strings.Count(between, "</section>") {
+		t.Fatalf("unexpected unclosed section between registered workspace and details.rws-unreg: %s", between)
+	}
+
+	railCSS, err := os.ReadFile(filepath.Join("assets", "dashboard-rail.css"))
+	if err != nil {
+		t.Fatalf("read dashboard-rail.css: %v", err)
+	}
+	railText := string(railCSS)
+	for _, want := range []string{
+		`.rail[data-companion-dock="rail-slot"] .rlist`,
+		`padding-bottom: calc(var(--companion-slot, 0px) + 28px)`,
+		`position: absolute;`,
+		`z-index: 4;`,
+		`pointer-events: none;`,
+		`background: transparent;`,
+	} {
+		if !strings.Contains(railText, want) {
+			t.Errorf("dashboard-rail.css missing %q", want)
+		}
+	}
+
+	compCSS, err := os.ReadFile(filepath.Join("assets", "dashboard-companion.css"))
+	if err != nil {
+		t.Fatalf("read dashboard-companion.css: %v", err)
+	}
+	compText := string(compCSS)
+	for _, want := range []string{
+		`.ws-companion-laptop-hit`,
+		`pointer-events: auto;`,
+		`.ws-companion[data-dock="rail-slot"] .ws-companion-hit,`,
+		`.ws-companion[data-dock="rail-slot"] .ws-companion-character {`,
+		`.ws-companion[data-dock="rail-slot"] .ws-companion-vrm-canvas-wrap`,
+		`filter: var(--companion-drop);`,
+	} {
+		if !strings.Contains(compText, want) {
+			t.Errorf("dashboard-companion.css missing %q", want)
+		}
+	}
+}

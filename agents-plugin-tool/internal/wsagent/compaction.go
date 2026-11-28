@@ -993,6 +993,9 @@ postCompact:
 			note = insertBeforeRestoreClose(note, held)
 		}
 		text := note + "\n\nContinue the work that was pending."
+		if c.rec.Lead {
+			text = c.appendAmbient(text, c.rec.WhiteboardOnly)
+		}
 		c.compactResume = false
 		if err := c.sendStandalonePrompt(!c.compactResumeInternal, func() error { return c.proc.Send(text) }); err != nil {
 			c.compactResumeInternal = false
@@ -1021,6 +1024,9 @@ postCompact:
 			return false
 		}
 		text := c.renderPendingNote(c.compactNote)
+		if c.rec.Lead {
+			text = c.appendAmbient(text, c.rec.WhiteboardOnly)
+		}
 		if err := c.sendStandalonePrompt(true, func() error { return c.proc.Send(text) }); err != nil {
 			if checkout, ok := releasedInput(err); ok {
 				c.dropReleasedInput("restore turn", checkout)
@@ -1328,6 +1334,27 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 			}
 		}
 
+		c.compactRotated = true
+		c.queueRestore(RestoreCompaction)
+		c.appendRestoreInstructions()
+		c.compactRotated = false
+		if strings.TrimSpace(c.compactNote) != "" {
+			c.compactNote += "\n\n" + checkpoint
+		} else {
+			c.compactNote = checkpoint
+		}
+		pending := pendingCompactionFromState(c.compactNote, c.compactResume, c.compactResumeInternal, trigger)
+		if switchState != nil {
+			// Commit the switched record before emitting CompactEnd so a WAL/disk
+			// persistence failure rolls back and emits CompactFailed instead of
+			// publishing a falsely completed compaction.
+			if err := c.commitHarnessSwitch(switchState, req.target, pending); err != nil {
+				retireErr := c.retireCompactionProcess()
+				c.rollbackHarnessSwitch(switchState, noteBefore)
+				return errors.Join(fmt.Errorf("persist switched record: %w", err), retireErr)
+			}
+		}
+
 		prevPostRotationNoShrink := c.compactPostRotationNoShrink
 		c.compactOrigin = trigger
 		c.compactCommand = false
@@ -1345,26 +1372,16 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 			c.compactPostRotationCheck = true
 			c.compactPostRotationNoShrink = prevPostRotationNoShrink + 1
 		}
-		if trigger == wslive.TriggerAuto {
-			c.compactTurnRotations++
-		} else {
-			c.compactTurnRotations = 0
+		if req.target == nil {
+			if trigger == wslive.TriggerAuto {
+				c.compactTurnRotations++
+			} else {
+				c.compactTurnRotations = 0
+			}
 		}
-		if strings.TrimSpace(c.compactNote) != "" {
-			c.compactNote += "\n\n" + checkpoint
-		} else {
-			c.compactNote = checkpoint
-		}
-		pending := pendingCompactionFromState(c.compactNote, c.compactResume, c.compactResumeInternal, trigger)
 		c.accountSlotBoundaryPending = false
 		c.slot2aVerifyPending = false
-		if switchState != nil {
-			if err := c.commitHarnessSwitch(switchState, req.target, pending); err != nil {
-				retireErr := c.retireCompactionProcess()
-				c.rollbackHarnessSwitch(switchState, noteBefore)
-				return errors.Join(fmt.Errorf("persist switched record: %w", err), retireErr)
-			}
-		} else {
+		if switchState == nil {
 			c.update(func(rec *Record) {
 				sends := rec.Sends
 				saved := clonePendingCompaction(pending)
@@ -1693,6 +1710,7 @@ func (c *conv) compactEvent(ev wslive.Event) {
 			return
 		}
 		c.compacting = false
+		c.passive.clearAdvisory()
 		completed = true
 		origin := c.compactOrigin
 		if origin == "" {
@@ -1732,14 +1750,16 @@ func (c *conv) compactEvent(ev wslive.Event) {
 		c.compactAwaitTurn = true
 		c.compactPrevTokens = 0
 		c.compactAdvised, c.compactM1Issued, c.compactM2Issued, c.compactHardIssued, c.compactUsageFresh = false, false, false, false, false
-		c.queueRestore(RestoreCompaction)
-		c.appendRestoreInstructions()
+		if !c.compactRotated {
+			c.queueRestore(RestoreCompaction)
+			c.appendRestoreInstructions()
+		}
 		if !c.compactRotated && !c.replaying && !c.r.durableProcess(c.rec.Backend) && c.hasPendingAccountSlot() {
 			// Never tear down mid-turn during native auto-compaction; defer the
 			// cold-restart commit until endTurn -> compactIdle() (D6).
 			c.accountSlotBoundaryPending = true
 		}
-		if !c.rec.Lead && !c.r.durableProcess(c.rec.Backend) && c.compactResume && !c.replaying && c.rec.PendingCompaction != nil {
+		if !c.compactRotated && !c.rec.Lead && !c.r.durableProcess(c.rec.Backend) && c.compactResume && !c.replaying && c.rec.PendingCompaction != nil {
 			c.persistWorkerPendingCompaction(compactStageCompleted, 0)
 		}
 	}

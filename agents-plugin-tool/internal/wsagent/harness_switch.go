@@ -373,6 +373,25 @@ func (c *conv) beginHarnessSwitch(target *harnessTarget) *harnessSwitchState {
 	return s
 }
 
+func (c *conv) restoreSwitchRecordLocked(prev Record) {
+	c.rec.Profile = prev.Profile
+	c.rec.Backend = prev.Backend
+	c.rec.Model = prev.Model
+	c.rec.Effort = prev.Effort
+	c.rec.Provider = prev.Provider
+	c.rec.SessionID = prev.SessionID
+	c.rec.SessionFile = prev.SessionFile
+	c.rec.PermissionMode = prev.PermissionMode
+	c.rec.AccountSlotID = prev.AccountSlotID
+	c.rec.PendingAccountSlotID = prev.PendingAccountSlotID
+	c.rec.AgyBypass = prev.AgyBypass
+	c.rec.QuotaContinuation = cloneQuotaContinuation(prev.QuotaContinuation)
+	c.rec.Tier = prev.Tier
+	c.rec.PluginIsolation = prev.PluginIsolation
+	c.rec.PluginWarning = prev.PluginWarning
+	c.rec.PendingCompaction = clonePendingCompaction(prev.PendingCompaction)
+}
+
 // rollbackHarnessSwitch restores c.rec and loop state after a failed target
 // start or audit commit without persisting target fields to disk.
 func (c *conv) rollbackHarnessSwitch(s *harnessSwitchState, noteBefore string) {
@@ -383,21 +402,7 @@ func (c *conv) rollbackHarnessSwitch(s *harnessSwitchState, noteBefore string) {
 
 	c.wmu.Lock()
 	c.mu.Lock()
-	c.rec.Profile = s.prevRec.Profile
-	c.rec.Backend = s.prevRec.Backend
-	c.rec.Model = s.prevRec.Model
-	c.rec.Effort = s.prevRec.Effort
-	c.rec.Provider = s.prevRec.Provider
-	c.rec.SessionID = s.prevRec.SessionID
-	c.rec.SessionFile = s.prevRec.SessionFile
-	c.rec.PermissionMode = s.prevRec.PermissionMode
-	c.rec.AccountSlotID = s.prevRec.AccountSlotID
-	c.rec.PendingAccountSlotID = s.prevRec.PendingAccountSlotID
-	c.rec.AgyBypass = s.prevRec.AgyBypass
-	c.rec.QuotaContinuation = cloneQuotaContinuation(s.prevRec.QuotaContinuation)
-	c.rec.Tier = s.prevRec.Tier
-	c.rec.PluginIsolation = s.prevRec.PluginIsolation
-	c.rec.PluginWarning = s.prevRec.PluginWarning
+	c.restoreSwitchRecordLocked(s.prevRec)
 	c.rec.HolderID = ""
 	c.rec.HostPID = 0
 	c.rec.HolderSeq = 0
@@ -489,10 +494,19 @@ func (c *conv) commitHarnessSwitch(s *harnessSwitchState, target *harnessTarget,
 	c.syncStateLocked()
 	c.mu.Unlock()
 	err := c.persistRecord()
-	c.wmu.Unlock()
 	if err != nil {
+		// Restore deferred persistence and source harness fields under wmu before
+		// returning so retireCompactionProcess() -> releaseHolder() cannot persist
+		// or register the aborted target harness before rollbackHarnessSwitch() runs.
+		c.deferRecordPersist = true
+		c.mu.Lock()
+		c.restoreSwitchRecordLocked(s.prevRec)
+		c.syncStateLocked()
+		c.mu.Unlock()
+		c.wmu.Unlock()
 		return err
 	}
+	c.wmu.Unlock()
 
 	c.setStatus(func() {
 		c.contextTokens = nil

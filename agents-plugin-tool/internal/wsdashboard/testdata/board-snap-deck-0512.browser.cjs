@@ -246,6 +246,7 @@ function buildBootstrapScript(savedCards) {
       var filesSheet = null, filesTab = null, fpane = null, chead = null, convo = $("convo"), grid = $("grid");
       var NEAR = "100%", FAR = "400%", mountList = [], mountTask = false, topicNear = {}, topicRO = null;
       var TL_REGIONS = {}, tlHeld = {}, LAYOUT_KEY = "ws.layout", cardIdentity = "t0512", shStage = null;
+      function shellMemo() { return null; }
       var headHeld = null, railMinGen = 0, railRendered = null, railHoverUpdates = null;
       var TAB = { board: "board", entries: "convo", convlive: "convo" };
       function $(id) { return doc.getElementById(id); }
@@ -270,6 +271,8 @@ function buildBootstrapScript(savedCards) {
       function tabShown() { return true; }
       function setTab() {}
       function setCtab() {}
+      function toggleStageFill() {}
+      function docHidden() { return !!doc.hidden; }
       function visible() { return true; }
       function pinned() { return false; }
       function pinConvo() {}

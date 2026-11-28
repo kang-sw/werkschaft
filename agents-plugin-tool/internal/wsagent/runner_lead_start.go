@@ -260,7 +260,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	c.setStatus(func() { c.convHistoryAccessEffective = convHistoryEffective })
 	c.r.markMCPConvHistoryAccess(rec.ReplyID, convHistoryEffective)
 	cutover = spec.ExecCutover
-	if durable {
+	if durable || life.RestartLeadOnPermissionChange {
 		spec.PermissionLevel = level
 	}
 	if source == "explicit" {

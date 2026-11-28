@@ -5,7 +5,7 @@ summary: Native-Windows source-build dogfood / Phase C cold-load acceptance proc
 # Windows source-build dogfood
 
 How to dogfood a branch's `ws` plugin on a native Windows host with an automatic
-source-build loop, mirroring the Linux `install.sh` flow. Used for
+source-build loop, mirroring the macOS/Linux `scripts/install-claude-plugin.sh` flow. Used for
 `260622-chore-windows-shipping-hardening` Phase C and any later Windows cold-load
 verification.
 
@@ -18,8 +18,8 @@ the Windows host is required regardless: the Go module (`agents-plugin-tool/`) i
 not part of the `agents-plugin/` plugin package, so the source must be physically
 present to build.
 
-`scripts/install-claude-plugin.ps1` is the Windows equivalent of `install.sh`'s
-plugin registration: it snapshots `agents-plugin/` into
+`scripts/install-claude-plugin.ps1` is the Windows equivalent of `scripts/install-claude-plugin.sh`:
+it snapshots `agents-plugin/` into
 `%USERPROFILE%\.claude\plugins\ws-plugin\ws`, generates `marketplace.json`, patches
 `settings.json` + `known_marketplaces.json`, and writes the marker pointing at the
 clone. After that, every Claude Code restart rebuilds the runtime from the clone
@@ -89,3 +89,44 @@ restart. `WS_MCP_LAUNCHER_DEBUG=1` prints cold-load diagnostics to stderr.
 
 Live-host safety: kill only PID/job-scoped subtrees. Never image-name kill
 (`taskkill /IM`) or sweep — a dogfooding host may run a live `claude.exe`.
+
+## Remote headless verification over SSH tunnel (`scripts/win-tunnel-smoke.py`)
+
+Verify a branch's Windows `ws-mcp.exe` dashboard daemon from macOS over SSH +
+`ssh -L` + headless Chromium (Playwright), including when the Windows host's
+display is off or console is locked.
+
+- **Target host:** set `WS_WIN_HOST=<user>@<host>` or pass `--host <user>@<host>`.
+  Do not commit machine-local hosts or usernames; local values live in the
+  gitignored `ai-docs/manuals/local-machine-context.local.md`.
+- **What it does:**
+  1. Generates embedded package assets and cross-compiles `ws-mcp.exe`
+     (`GOOS=windows GOARCH=amd64 CGO_ENABLED=0`) from `agents-plugin-tool/`,
+     unless `--remote-binary <win-path>` is given.
+  2. Creates an isolated `%TEMP%\ws-tunnel-smoke-<nonce>` directory on Windows
+     over SSH (`BatchMode=yes`, `ConnectTimeout=10`), copies `ws-mcp.exe` into
+     it, and starts `ws-mcp.exe dashboard --port <remote-port>` detached with
+     `WS_CACHE_HOME` and `WS_CONFIG_HOME` pointing inside that scratch dir.
+  3. Opens `ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:<local>:127.0.0.1:<remote>`,
+     waits for `GET /health` (matching the launched PID), and reads the scratch
+     `endpoint.json` token without printing it.
+  4. Exercises `POST /auth/cookie`, `GET /`, `GET /settings`,
+     `GET /settings?frame=1`, and single-use `POST /auth/link` (`?login=<code>`),
+     then runs macOS headless Chromium (resolved via `WS_PLAYWRIGHT_MODULE` or
+     `~/.npm/_npx/*/node_modules/playwright`) against `/` and `/settings` to
+     assert non-empty DOM, zero `pageerror` / console errors / HTTP 5xx / `401`
+     or `403`, and live `/rail/events` WebSocket frame delivery.
+  5. Always tears down in `finally` (and on `SIGINT`/`SIGTERM`): authenticated
+     `POST /shutdown`, local tunnel termination, exact-PID `taskkill /PID <pid> /T /F`
+     fallback if still running (never `/IM`), and removal of only the scratch dir.
+
+```bash
+# Default: cross-compile current worktree, run HTTP + Playwright checks, clean up
+WS_WIN_HOST=<user>@<host> python3 scripts/win-tunnel-smoke.py
+
+# HTTP-only (skip Playwright Chromium)
+WS_WIN_HOST=<user>@<host> python3 scripts/win-tunnel-smoke.py --no-browser
+
+# Keep tunnel open with a fresh one-time login URL until Ctrl+C
+WS_WIN_HOST=<user>@<host> python3 scripts/win-tunnel-smoke.py --keep-open
+```

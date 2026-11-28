@@ -380,6 +380,7 @@ func (c *conv) beginTurn(quiet bool) {
 	})
 	c.apply(wslive.Event{Kind: wslive.KindTurnStart}, quiet)
 	c.reply, c.replayTurnError = "", ""
+	c.snapshotBoardRevision()
 	if !quiet {
 		// There is no newly drained input, so the turn keeps the last mark.
 		if !c.compactCommand && !c.compactInternalTurn {
@@ -499,6 +500,8 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 	if turnErr != "" {
 		c.setStatus(func() { c.lastErr = turnErr })
 	}
+	// settleTurn clears the reply; the whiteboard nudge judges it afterwards.
+	turnReply := c.reply
 	if c.compactInternalTurn {
 		c.compactInternalTurn = false
 		c.reply = ""
@@ -516,6 +519,9 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 			c.r.notify(c.rec.ReplyID, c.rec.Root)
 			c.retryDurableTurn()
 			return
+		}
+		if !wasCompacting {
+			c.stageWhiteboardNudge(turnErr, turnReply)
 		}
 		if c.r.lifecycle(c.rec.Backend).TurnActivity && c.r.opts.AgyActivity != nil {
 			c.r.opts.AgyActivity()
@@ -577,11 +583,16 @@ func (c *conv) addApproval(a ApprovalRequest, quiet bool) {
 		// daemon allows or refuses it now, and it is never parked (see
 		// companion_permission.go). A replay or a quiet event parks it for
 		// the rejoin's end (settleCompanionPending).
-		if !c.settleCompanionApproval(a) {
+		if err := c.settleCompanionApproval(a); err != nil {
 			// The process still waits on a request nobody can answer and
 			// nothing is parked for the watchdogs: stop it so the companion
-			// restarts instead of waiting forever.
-			c.approvalFailed(errNoApprovalAnswer)
+			// restarts instead of waiting forever, preserving any transport
+			// write error sendApproval already recorded in c.lastErr.
+			if errors.Is(err, errNoApprovalAnswer) || c.lastErr == "" {
+				c.approvalFailed(errNoApprovalAnswer)
+			} else if c.proc != nil {
+				c.stopProcess("")
+			}
 		}
 		return
 	}
@@ -1406,7 +1417,7 @@ func (c *conv) applySettings() {
 	rec := c.record()
 	restart := false
 	controls := controlsFor(c.proc)
-	if permission && (!rec.Lead || c.r.durableProcess(rec.Backend)) {
+	if permission && (!rec.Lead || c.r.durableProcess(rec.Backend) || c.r.lifecycle(rec.Backend).RestartLeadOnPermissionChange) {
 		restart = true
 	}
 	if model && !restart && controls.SetModel(rec.Model) != nil {

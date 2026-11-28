@@ -98,3 +98,71 @@ func TestAuditStartupSweepConsultsTheRegistry(t *testing.T) {
 		t.Fatalf("the heartbeating session's ring was removed at startup: %v", err)
 	}
 }
+
+// TestAuditSessionSeenDoesNotPreloadRings pins that seeing registered sessions
+// (including historical or ended sessions on startup) records last-seen via
+// Touch without preloading their audit rings into memory or opening segment
+// handles.
+func TestAuditSessionSeenDoesNotPreloadRings(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	// Seed three existing session rings on disk, then restart the daemon.
+	seed := &Daemon{dir: dir, log: io.Discard}
+	seed.openAudit(io.Discard)
+	if seed.audit == nil {
+		t.Fatal("seed audit store did not open")
+	}
+	for _, id := range []string{"hist-1", "hist-2", "hist-3"} {
+		ev, err := wsaudit.NewEnvelope(id, "claude", now, wsaudit.KindToolCall)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ev.ID = "ev-" + id
+		ev.Seq = 1
+		if err := seed.AuditSink().Append(ctx, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := seed.AuditStore().Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	seed.closeAudit()
+
+	d := &Daemon{dir: dir, log: io.Discard}
+	d.openAudit(io.Discard)
+	if d.audit == nil {
+		t.Fatal("audit store did not open")
+	}
+	t.Cleanup(d.closeAudit)
+
+	seenAt := now.Add(time.Minute)
+	for _, id := range []string{"hist-1", "hist-2", "hist-3"} {
+		d.auditSessionSeen(Registration{
+			ReplyID:      id,
+			RegisteredAt: now.Format(time.RFC3339),
+			HeartbeatAt:  seenAt.Format(time.RFC3339),
+		})
+	}
+	if err := d.AuditStore().Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.AuditStore().LoadedRings(); got != 0 {
+		t.Fatalf("auditSessionSeen loaded %d rings, want 0", got)
+	}
+	if index := readAuditIndex(t, dir); !strings.Contains(index, "hist-1") || !strings.Contains(index, seenAt.Format(time.RFC3339)) {
+		t.Fatalf("auditSessionSeen did not record Touch in index:\n%s", index)
+	}
+	// Queries still answer via the cold View path without loading the ring.
+	v, err := d.AuditStore().View(ctx, "hist-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Events) != 1 || v.Events[0].ID != "ev-hist-2" {
+		t.Fatalf("cold View = %+v, want ev-hist-2", v.Events)
+	}
+	if got := d.AuditStore().LoadedRings(); got != 0 {
+		t.Fatalf("cold View loaded %d rings, want 0", got)
+	}
+}

@@ -56,3 +56,5 @@ agents-plugin-tool/internal/wswhiteboard/assets/mermaid/mermaid.min.js linguist-
 /agents-plugin-tool/internal/wsdashboard/assets/terminal.js ws-size-guard=1300
 # Owner (1568)=b 2026-11-24: single //go:embed Python script at 2199 lines; raise its own soft limit.
 /agents-plugin-tool/internal/wsholder/holder.py ws-size-guard=2700
+# Owner (1799)=a 2026-11-28: auto-generated esbuild bundle (Three.js/TransformControls); exempt from the size guard.
+/agents-plugin-tool/internal/wsdashboard/assets/companion-rig-studio-runtime.mjs -ws-size-guard

@@ -391,13 +391,18 @@ func setAgentsTierForHarness(opts Options, global bool, tier, backend, model, ha
 	if err != nil {
 		return Config{}, err
 	}
-	if backend == "" {
-		backend = InferBackend(model)
-	}
-
 	key, err := aliasTargetKey(harness)
 	if err != nil {
 		return Config{}, err
+	}
+	if backend == "" {
+		if key == "pi-rpc" {
+			if hasModelInput {
+				backend = "pi-rpc"
+			}
+		} else {
+			backend = InferBackend(model)
+		}
 	}
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if err := ValidateTierProvider(key, provider); err != nil {
@@ -420,9 +425,11 @@ func setAgentsTierForHarness(opts Options, global bool, tier, backend, model, ha
 			stored.Agents.ModelAliases[tier] = map[string]AgentTier{}
 		}
 		existing := effective.Agents.ModelAliases[tier][key]
-		if fallback, ok := effective.Agents.Tiers[tier]; ok {
-			if strings.TrimSpace(existing.Backend) == "" && strings.TrimSpace(existing.Model) == "" {
-				existing = fallback
+		if key != "pi-rpc" {
+			if fallback, ok := effective.Agents.Tiers[tier]; ok {
+				if strings.TrimSpace(existing.Backend) == "" && strings.TrimSpace(existing.Model) == "" {
+					existing = fallback
+				}
 			}
 		}
 		mapping := AgentTier{}
@@ -435,7 +442,11 @@ func setAgentsTierForHarness(opts Options, global bool, tier, backend, model, ha
 		if model != "" {
 			mapping.Model = model
 			if backend == "" {
-				mapping.Backend = InferBackend(model)
+				if key == "pi-rpc" {
+					mapping.Backend = "pi-rpc"
+				} else {
+					mapping.Backend = InferBackend(model)
+				}
 			}
 		}
 		if hasEffort {
@@ -485,7 +496,7 @@ func ResolveAgentForHarnessConfig(opts Options, tier, backend, model, harness st
 		return "", "", "", err
 	}
 	effort := ""
-	if mapping, _, ok := resolveAliasMapping(cfg, tier, backend, harness); ok {
+	if mapping, source, ok := resolveAliasMapping(cfg, tier, backend, harness); ok {
 		if useAliasMappingForBackend(backend, mapping) {
 			if model == "" {
 				model = strings.TrimSpace(mapping.Model)
@@ -494,7 +505,11 @@ func ResolveAgentForHarnessConfig(opts Options, tier, backend, model, harness st
 				backend = strings.TrimSpace(mapping.Backend)
 			}
 			if backend == "" {
-				backend = InferBackend(model)
+				if source == "pi-rpc" {
+					backend = "pi-rpc"
+				} else {
+					backend = InferBackend(model)
+				}
 			}
 			effort = strings.TrimSpace(mapping.Effort)
 		}
@@ -530,7 +545,11 @@ func ResolveAgentTierForHarness(opts Options, tier, harness string) (backend, mo
 	model = strings.TrimSpace(mapping.Model)
 	effort = strings.TrimSpace(mapping.Effort)
 	if backend == "" {
-		backend = InferBackend(model)
+		if source == "pi-rpc" {
+			backend = "pi-rpc"
+		} else {
+			backend = InferBackend(model)
+		}
 	}
 	return backend, model, effort, source, nil
 }
@@ -768,6 +787,8 @@ func normalizedHarness(value string) string {
 		return "claude"
 	case "pi":
 		return "pi"
+	case "pi-rpc":
+		return "pi-rpc"
 	case "agy":
 		return "agy"
 	case "werk":
@@ -785,7 +806,7 @@ func aliasTargetKey(harness string) (string, error) {
 	if key := normalizedHarness(value); key != "" {
 		return key, nil
 	}
-	return "", fmt.Errorf("harness must be codex, claude, pi, agy, werk, or default")
+	return "", fmt.Errorf("harness must be codex, claude, pi, pi-rpc, agy, werk, or default")
 }
 
 func normalizeOptionalEffort(values ...string) (string, bool, error) {

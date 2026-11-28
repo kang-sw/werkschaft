@@ -64,7 +64,10 @@ const [base, shots] = process.argv.slice(2);
           const fold = secondTurn.querySelector('[data-conv-turn-folded]');
           if (fold) fold.hidden = false;
           const counts = secondTurn.querySelector('.turn-audit-counts');
-          if (counts) counts.textContent = 'system 10 · think 2 · mcp 4 · read 12 · write 8 · extra-long-audit-segment';
+          if (counts) {
+            counts.textContent = 'system 10 · think 2 · mcp 4 · read 12 · write 8 · extra-long-audit-segment';
+            counts.hidden = false;
+          }
           void secondTurn.offsetWidth;
         }
         return {

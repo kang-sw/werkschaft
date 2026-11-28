@@ -7,7 +7,6 @@ const { chromium } = require(process.env.WS_PLAYWRIGHT_MODULE);
 const [base, shots] = process.argv.slice(2);
 const row = id => `#r-rail .rs[data-rid="${id}"]`;
 const menu = '.rpop.rmenu:not([hidden])';
-const marker = 'ws.dashboard.renameNew';
 
 async function until(fn, message) {
   for (let i = 0; i < 150; i++) {
@@ -82,24 +81,30 @@ async function toggle(page, id, on, keyboard = false) {
 async function order(page) {
   return page.locator(row('plainrow')).evaluate(e => [...e.parentNode.children].filter(e => e.classList.contains('rs') && !e.classList.contains('ended')).map(e => e.dataset.rid));
 }
-async function create(page) {
+async function create(page, label = '') {
   await showRail(page);
   await page.locator('#r-rail .rnew').first().click();
+  if (label) await page.locator('.rpop:not([hidden]) .ns-label-in').fill(label);
   const response = page.waitForResponse(r => r.url().endsWith('/agents/leads') && r.request().method() === 'POST');
+  const labelSave = label.trim()
+    ? page.waitForResponse(r => /\/s\/[^/]+\/label$/.test(r.url()) && r.request().method() === 'POST')
+    : null;
   await page.locator('.rpop:not([hidden]) .go').click();
   const r = await response;
   assert.equal(r.status(), 201);
   const { id } = await r.json();
+  if (labelSave) assert.equal((await labelSave).status(), 200);
   await page.waitForURL(base + '/s/' + id);
   return id;
 }
-async function editing(page, id, wide) {
-  const input = page.locator(wide ? row(id) + ' .drinp' : '#r-head .sinp');
-  await input.waitFor();
-  await until(() => input.evaluate(e => e === document.activeElement), 'new-session rename must keep focus after shell navigation');
-  assert.deepEqual(await input.evaluate(e => [e.value, e.placeholder, e.selectionStart, e.selectionEnd]), ['', id, 0, 0], 'default name stays a placeholder; empty text is selected');
-  assert.equal(await page.evaluate(key => sessionStorage.getItem(key), marker), null, 'creation intent consumed once');
-  return input;
+async function settleNoAutoRename(page, id) {
+  await page.waitForFunction(
+    rid => document.documentElement.getAttribute('data-rid') === rid && !!document.querySelector('#r-head .sname'),
+    id
+  );
+  await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+  assert.equal(await page.locator('#r-rail .drinp, #r-head .sinp').count(), 0, 'new session does not enter rename mode');
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('ws.dashboard.renameNew')), null, 'no creation rename intent stored');
 }
 
 (async () => {
@@ -193,32 +198,35 @@ async function editing(page, id, wide) {
       await until(async () => await badge.count() === 0, 'failed favorite restores badge');
       await until(async () => await page.locator(row('agentsrow')).getAttribute('data-star') === '0', 'failed favorite restores row state');
       await page.unroute('**/rail/layout');
-      // Wide rail: new row at the end, empty input focused (not reply-id
-      // as a label), and default name retained on blur/Escape/empty Enter.
+      // Wide rail: new row at the end, no auto-rename for blank or labeled
+      // creation, and manual rename (.drren) remains intact.
       await page.setViewportSize({ width: 1680, height: 900 });
       let id = await create(page);
-      let input = await editing(page, id, true);
+      await settleNoAutoRename(page, id);
+      await page.locator(row(id)).waitFor();
       assert.equal((await order(page)).at(-1), id, 'new row appended at group end');
-      await shot(page, `rename-${theme}-1680`);
-      await input.fill('discard on blur');
-      await input.evaluate(e => e.blur());
-      assert.equal(await page.locator(row(id) + ' .rid').textContent(), id, 'blur keeps default name');
-      // Another tab sees the session but has no creation intent.
+      assert.equal(await page.locator(row(id) + ' .rid').textContent(), id, 'blank label keeps reply-id');
+      assert.equal(await page.locator(row(id) + ' .drren').getAttribute('data-label'), '', 'blank creation stores no label');
+      // Another tab sees the session and also does not enter rename mode.
       const peer = await ctx.newPage();
       await peer.goto(base + '/s/' + id);
       await peer.locator('#r-head .sname').waitFor();
       assert.equal(await peer.locator('.drinp, #r-head .sinp').count(), 0, 'sessions created elsewhere do not rename');
       await peer.close();
-      id = await create(page);
-      input = await editing(page, id, true);
-      await input.press('Enter');
-      await until(async () => await page.locator('.drinp').count() === 0, 'empty Enter closes rename');
-      assert.equal(await page.locator(row(id) + ' .drren').getAttribute('data-label'), '', 'empty Enter stores no default label');
-      // The shared rename editor also selects the whole existing label.
+      // Creating with a provided label also skips auto-rename and renders the label.
+      id = await create(page, '모달 라벨');
+      await settleNoAutoRename(page, id);
+      await page.locator(row(id)).waitFor();
+      assert.equal(await page.locator(row(id) + ' .rid').textContent(), '모달 라벨', 'provided label renders in rail');
+      assert.equal(await page.locator('#r-head .snm').textContent(), '모달 라벨', 'provided label renders in header');
+      // Manual rail rename (.drren) still opens, focuses, saves, and selects full existing label.
       await page.locator(row(id) + ' .rid').hover();
       await page.locator(row(id) + ' .drren').click();
-      await page.locator(row(id) + ' .drinp').fill('selected name');
-      await page.locator(row(id) + ' .drinp').press('Enter');
+      let input = page.locator(row(id) + ' .drinp');
+      await input.waitFor();
+      await until(() => input.evaluate(e => e === document.activeElement), 'manual rail rename focuses input');
+      await input.fill('selected name');
+      await input.press('Enter');
       await until(async () => await page.locator(row(id) + ' .rid').textContent() === 'selected name', 'rename saved');
       await page.locator(row(id) + ' .rid').hover();
       await page.locator(row(id) + ' .drren').click();
@@ -226,13 +234,23 @@ async function editing(page, id, wide) {
       await input.waitFor();
       assert.deepEqual(await input.evaluate(e => [e.selectionStart, e.selectionEnd]), [0, 'selected name'.length], 'existing label fully selected');
       await input.press('Escape');
-      // Collapse defaults to the shell header and closes the overlay.
+      await until(async () => await page.locator(row(id) + ' .drinp').count() === 0, 'Escape closes manual rail rename');
+      // Collapsed rail: blank or labeled creation keeps rail closed and does not
+      // enter header rename; manual header rename (.sren) still works.
       for (const width of [1280, 760]) {
         await page.setViewportSize({ width, height: 900 });
         id = await create(page);
-        input = await editing(page, id, false);
+        await settleNoAutoRename(page, id);
         assert.equal(await page.locator(row(id)).isVisible(), false, 'collapsed rail stays closed');
-        await shot(page, `rename-${theme}-${width}`);
+        assert.equal(await page.locator('#r-head .snm').textContent(), id, 'blank label keeps reply-id in header');
+        id = await create(page, '접힌 라벨');
+        await settleNoAutoRename(page, id);
+        assert.equal(await page.locator(row(id)).isVisible(), false, 'collapsed rail stays closed');
+        assert.equal(await page.locator('#r-head .snm').textContent(), '접힌 라벨', 'provided label shows in header');
+        await page.locator('#r-head .sren').click();
+        input = page.locator('#r-head .sinp');
+        await input.waitFor();
+        await until(() => input.evaluate(e => e === document.activeElement), 'manual header rename focuses input');
         if (width === 1280) {
           await input.fill('저장한 세션');
           const saved = page.waitForResponse(r => r.url().endsWith('/s/' + id + '/label') && r.request().method() === 'POST');
@@ -242,28 +260,16 @@ async function editing(page, id, wide) {
         } else {
           await input.fill('discard on escape');
           await input.press('Escape');
-          assert.equal(await page.locator('#r-head .snm').textContent(), id, 'Escape keeps default name');
+          assert.equal(await page.locator('#r-head .snm').textContent(), '접힌 라벨', 'Escape keeps prior label');
         }
         await page.reload();
         await page.locator('#r-head .sname').waitFor();
-        assert.equal(await page.locator('.drinp, #r-head .sinp').count(), 0, 'reload never repeats consumed rename');
+        assert.equal(await page.locator('.drinp, #r-head .sinp').count(), 0, 'reload stays out of rename mode');
       }
-      // Even an unconsumed marker is discarded on reload, and stale intent
-      // is discarded when the rail next marks its rows.
-      await page.evaluate(({ key, id }) => sessionStorage.setItem(key, JSON.stringify({ id, at: Date.now() })), { key: marker, id });
-      await page.reload();
-      await page.locator('#r-head .sname').waitFor();
-      assert.equal(await page.locator('.drinp, #r-head .sinp').count(), 0, 'reload discards unconsumed creation intent');
-      assert.equal(await page.evaluate(key => sessionStorage.getItem(key), marker), null);
-      await page.evaluate(({ key, id }) => sessionStorage.setItem(key, JSON.stringify({ id, at: Date.now() - 11000 })), { key: marker, id });
-      await showRail(page);
-      await page.locator(row('plainrow') + ' .kidtog').click();
-      await until(async () => await page.evaluate(key => sessionStorage.getItem(key), marker) === null, 'expired intent cleared');
-      assert.equal(await page.locator('.drinp, #r-head .sinp').count(), 0, 'expired creation intent never opens rename');
       await ctx.close();
     }
     assert.deepEqual(errors, [], 'no browser page errors');
-    console.log('PASS: favorite menu/badge/persistence/rollback, 6px count-free spacing, one-shot rename after create (wide/header), cancel/save/reload/tab boundaries');
+    console.log('PASS: favorite menu/badge/persistence/rollback, 6px count-free spacing, no auto-rename after create (blank/labeled, wide/header), manual rename intact');
   } finally {
     await browser.close();
   }

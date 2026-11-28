@@ -12,6 +12,10 @@ on:
       updater_public_key:
         type: string
         required: true
+      bump_core:
+        type: string
+        required: false
+        default: ""
     secrets:
       signing_key:
         required: true
@@ -57,6 +61,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+
+      - name: Apply ephemeral canary core version
+        if: inputs.bump_core != ''
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        env:
+          BUMP_CORE: ${{ inputs.bump_core }}
+        run: sh agents-plugin-tool/scripts/bump-ws-version.sh "$BUMP_CORE"
 
       - name: Set up pinned Rust toolchain
         run: |

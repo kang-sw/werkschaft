@@ -2,14 +2,13 @@ name: ws-mcp CI
 
 # Runs the default Go test group on Linux and Windows, and the Werkschaft shell's
 # Rust tests on macOS and Windows when the shell changed, for pull requests that touch
-# the tooling or plugin trees and on manual dispatch (`gh workflow run ws-mcp-ci.yml --ref
-# develop`). A develop push starts no run; the ship flow dispatches this
-# workflow on the exact commit it is about to tag, so a Windows-specific failure
-# is caught before release. It is also the release's only test run: the
-# tagged release workflow does not re-run the suite and instead refuses to
-# publish unless this workflow succeeded on the tagged commit. It publishes
-# nothing; the release workflow remains the sole path that builds and uploads
-# release assets.
+# the tooling or plugin trees, `workflow_call` from `ws-canary.yml`, and manual
+# dispatch (`gh workflow run ws-mcp-ci.yml --ref develop`). A develop push starts no
+# run; the ship flow dispatches this workflow on the exact commit it is about to tag,
+# so a Windows-specific failure is caught before release. It is also the release's only
+# test run: the tagged release workflow does not re-run the suite and instead refuses to
+# publish unless this workflow succeeded on the tagged commit. It publishes nothing; the
+# release workflow remains the sole path that builds and uploads release assets.
 #
 # Manual debug runs may pass `windows_shard` to run a single Windows shard
 # alone; that skips Linux, desktop, long, and the remaining Windows shards so
@@ -22,6 +21,12 @@ on:
       - "agents-plugin-tool/**"
       - "agents-plugin/**"
       - "agents-plugin-wsflow/**"
+  workflow_call:
+    inputs:
+      long_tests:
+        description: "Also run the long test group"
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       long_tests:
@@ -159,7 +164,7 @@ jobs:
   # dispatch run on a tagged commit always runs and passes the desktop tests.
   desktop-changes:
     name: desktop change detection
-    if: github.event_name != 'workflow_dispatch' || inputs.windows_shard == '' || inputs.windows_shard == 'all'
+    if: github.event_name != 'workflow_dispatch' || !inputs.windows_shard || inputs.windows_shard == 'all'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -228,7 +233,7 @@ jobs:
   # so the release gate can allow exactly these two skips.
   long-ubuntu:
     name: go test (ubuntu-latest, long)
-    if: github.event_name == 'workflow_dispatch' && inputs.long_tests == true && (inputs.windows_shard == '' || inputs.windows_shard == 'all')
+    if: inputs.long_tests == true && (!inputs.windows_shard || inputs.windows_shard == 'all')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     defaults:
@@ -260,7 +265,7 @@ jobs:
 
   long-windows:
     name: go test (windows-latest, long)
-    if: github.event_name == 'workflow_dispatch' && inputs.long_tests == true && (inputs.windows_shard == '' || inputs.windows_shard == 'all')
+    if: inputs.long_tests == true && (!inputs.windows_shard || inputs.windows_shard == 'all')
     runs-on: windows-latest
     timeout-minutes: 25
     defaults:
