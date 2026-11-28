@@ -500,6 +500,9 @@
         }
       }
     },
+    "261128-feat-ws-pi-rpc-managed-runtime-and-backend": {
+      "registered_at": "2026-11-28T13:05:13Z"
+    },
     "261128-refactor-ws-auditstore-handle-eviction-and-lazy-index": {
       "registered_at": "2026-11-28T11:39:31Z"
     },
