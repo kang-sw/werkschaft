@@ -756,6 +756,7 @@
         if (popup?.contains(target)) return;
         const btn = opts?.getChatButton?.();
         if (btn && (btn === target || btn.contains(target))) return;
+        if (opts?.isToggleTarget?.(target, event)) return;
         close();
       }, sig);
 

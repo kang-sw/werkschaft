@@ -333,6 +333,7 @@ test("Step 4 Phase 1: direct VRM click performs cosmetic glass knock and NEVER o
       prop() { return { data: null, drawable: false, draw() {} }; },
       setGaze() {}, resize() {}, pause() {}, resume() {},
       setPreset() {}, setWardrobe() {}, wardrobe() { return null; },
+      getCharacterBounds() { return { x: 90, y: 30, width: 160, height: 200 }; },
       getCoLeadState() { return { mode: "typing", sleepyWeight: 0 }; },
       triggerKnock(opts) { knockCalls.push(opts); return { kind: "knock_startle", count: knockCalls.length, wokeFromSleepy: false }; },
       setPhoneState(snap) { phoneCalls.push(snap); },
@@ -552,4 +553,197 @@ test("Step 4 Phase 1: messenger popup anchoring, Variant D rail widths, viewport
   assert.equal(M.isOpen(), false, "Escape must close unpinned messenger");
 
   M.dispose();
+});
+
+test("Stage VRM slot expanded messenger toggle: outside bbox toggles once, inside knocks only, drag >6px ignored, null bounds toggles, pointermove updates data-area without layout reads", async () => {
+  let now = 0, raf = null, rafId = 0;
+  const docListeners = {};
+  const doc = {
+    hidden: false,
+    documentElement: { dataset: { rid: "s1" }, classList: { contains: () => false }, hasAttribute: () => true },
+    body: null,
+    getElementById: id => id === "rail" ? railEl : null,
+    createElement: tag => makeFakeElement(tag, doc),
+    createElementNS: (_ns, tag) => makeFakeElement(tag, doc),
+    addEventListener(type, fn, opts) {
+      (docListeners[type] ||= []).push(fn);
+      if (opts && opts.signal) {
+        opts.signal.addEventListener("abort", () => {
+          docListeners[type] = (docListeners[type] || []).filter(f => f !== fn);
+        });
+      }
+    }
+  };
+  doc.body = makeFakeElement("body", doc);
+  const slotEl = makeFakeElement("div", doc);
+  slotEl.id = "rail-companion-slot";
+  slotEl.hidden = true;
+  slotEl.getBoundingClientRect = () => slotEl.hidden
+    ? { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }
+    : { left: 12, top: 720, right: 352, bottom: 960, width: 340, height: 240 };
+  const railEl = makeFakeElement("aside", doc);
+  railEl.id = "rail";
+  railEl.getBoundingClientRect = () => ({ left: 12, top: 12, right: 352, bottom: 960, width: 340, height: 948 });
+  railEl.querySelector = sel => sel === "#rail-companion-slot" ? slotEl : null;
+  railEl.querySelectorAll = sel => sel.includes("#rail-companion-slot") ? [slotEl] : [];
+
+  let currentBounds = { x: 90, y: 30, width: 160, height: 200 };
+  const knockCalls = [];
+  const { C, M } = loadCompanionWithMessenger({
+    document: doc,
+    getComputedStyle: () => ({ visibility: "visible", display: "flex" }),
+    window: {
+      innerWidth: 1680,
+      innerHeight: 960,
+      devicePixelRatio: 2,
+      matchMedia: () => ({ matches: true, addEventListener() {} }),
+      localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+      addEventListener() {},
+      WsShell: { companionContext: () => ({ routeKind: "home", activity: "idle", landmarks: {}, events: [], rightColActive: false, drawerOpen: false }) },
+      wsCompanionModalRows: []
+    },
+    ResizeObserver: class { observe() {} disconnect() {} },
+    MutationObserver: class { observe() {} disconnect() {} },
+    performance: { now: () => now },
+    wsT: k => k,
+    requestAnimationFrame: fn => { raf = fn; return ++rafId; },
+    cancelAnimationFrame: () => { raf = null; },
+    fetch: async url => {
+      if (url.startsWith("/api/companion/packs?")) {
+        return { ok: true, json: async () => ({ resolvedAuto: { packId: "vrm1" }, packs: [{ id: "vrm1", rev: "rv1", renderer: "vrm", schema: "ws-companion-vrm/v1" }] }) };
+      }
+      if (url === "/api/companion/packs") {
+        return { ok: true, json: async () => ({ packs: [{ id: "vrm1", rev: "rv1", renderer: "vrm", schema: "ws-companion-vrm/v1" }] }) };
+      }
+      if (url.includes("/vrm1/pack.json")) {
+        return { ok: true, json: async () => ({ schema: "ws-companion-vrm/v1", id: "vrm1", model: "a.vrm" }) };
+      }
+      return { ok: true, json: async () => ({ seq: 1, state: "laptop_ambient", posture: "laptop", messages: [], unreadClient: 0, unreadAgent: 0, tier1Summary: [] }) };
+    }
+  });
+
+  C.quickMenu = () => ({ rebuild() {}, measure() {}, place() {}, close() {} });
+  C.makeVrmAdapter = () => {
+    const viewObj = {
+      pose: "stand", gesture: null, expression: "idle", props: [],
+      handAnchor: [120, 170], articulatedDrag: false, seat: 1, bounds: [0, 0, 1, 1],
+      render() {}
+    };
+    return {
+      renderer: "vrm", width: 340, height: 240,
+      mount() { return Promise.resolve(); },
+      view() { return viewObj; },
+      prop() { return { data: null, drawable: false, draw() {} }; },
+      setGaze() {}, resize() {}, pause() {}, resume() {},
+      setPreset() {}, setWardrobe() {}, wardrobe() { return null; },
+      getCharacterBounds() { return currentBounds; },
+      getCoLeadState() { return { mode: "typing", sleepyWeight: 0 }; },
+      triggerKnock(opts) { knockCalls.push(opts); return { kind: "knock_startle", count: knockCalls.length, wokeFromSleepy: false }; },
+      setPhoneState() {},
+      dispose() {}
+    };
+  };
+
+  const stage = C.mount({ pack: "vrm1", preset: "" }, () => {}, () => {});
+  for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r));
+  if (raf) { now += 40; raf(now); }
+
+  const companionRoot = doc.body.children.find(el => el.className === "ws-companion");
+  const hitEl = companionRoot.all().find(el => el.className === "ws-companion-hit");
+  const characterBtn = companionRoot.all().find(el => el.className === "ws-companion-character");
+  const chatBtn = companionRoot.all().find(el => el.id === "companion-chat-btn");
+
+  const dispatchDoc = event => {
+    for (const fn of [...(docListeners[event.type] || [])]) fn(event);
+  };
+  const clickAt = (target, x, y, dx = 0, dy = 0, button = 0) => {
+    const pd = { type: "pointerdown", pointerId: 1, button, target, clientX: x, clientY: y };
+    target.dispatchEvent(pd);
+    dispatchDoc(pd);
+    if (dx || dy) {
+      const pm = { type: "pointermove", pointerId: 1, target, clientX: x + dx, clientY: y + dy };
+      target.dispatchEvent(pm);
+      dispatchDoc(pm);
+    }
+    const pu = { type: "pointerup", pointerId: 1, button, target, clientX: x + dx, clientY: y + dy };
+    target.dispatchEvent(pu);
+    dispatchDoc(pu);
+    target.dispatchEvent({ type: "click", button, target, clientX: x + dx, clientY: y + dy, stopPropagation() {} });
+  };
+
+  // Track open/close transitions via chatBtn aria-expanded updates so double-toggles are caught.
+  let openCalls = 0, closeCalls = 0;
+  const origSetAttr = chatBtn.setAttribute.bind(chatBtn);
+  chatBtn.setAttribute = (k, v) => {
+    if (k === "aria-expanded") {
+      if (v === "true") openCalls++;
+      else if (v === "false") closeCalls++;
+    }
+    return origSetAttr(k, v);
+  };
+
+  // (a) Click outside character bbox opens messenger and never knocks.
+  assert.equal(M.isOpen(), false);
+  clickAt(characterBtn, 40, 760); // local (28, 40) -> outside [90..250, 30..230]
+  assert.equal(M.isOpen(), true, "click outside character bbox must open messenger");
+  assert.equal(openCalls, 1);
+  assert.equal(closeCalls, 0);
+  assert.equal(knockCalls.length, 0, "click outside character bbox must NOT knock");
+
+  // (b) Click outside character bbox again closes messenger once (never closes on pointerdown then reopens on click).
+  clickAt(characterBtn, 320, 780); // local (308, 60) -> outside bbox
+  assert.equal(M.isOpen(), false, "second click outside character bbox must close messenger");
+  assert.equal(openCalls, 1);
+  assert.equal(closeCalls, 1);
+  assert.equal(knockCalls.length, 0);
+
+  // (c) Click inside character bbox knocks and NEVER opens messenger.
+  clickAt(characterBtn, 180, 820); // local (168, 100) -> inside bbox
+  assert.equal(M.isOpen(), false, "click inside character bbox must NOT open messenger");
+  assert.equal(knockCalls.length, 1, "click inside character bbox must knock");
+
+  // (d) Pointer drag > 6px outside bbox does NOT toggle messenger.
+  clickAt(characterBtn, 40, 760, 12, 0);
+  assert.equal(M.isOpen(), false, "drag > 6px outside bbox must NOT toggle messenger");
+  assert.equal(openCalls, 1);
+
+  // Small jitter <= 6px still counts as a toggle click.
+  clickAt(characterBtn, 40, 760, 3, 4); // hypot = 5 <= 6
+  assert.equal(M.isOpen(), true, "click with <= 6px jitter must still toggle open");
+  assert.equal(openCalls, 2);
+
+  // Non-primary button does not toggle.
+  clickAt(characterBtn, 40, 760, 0, 0, 2);
+  assert.equal(M.isOpen(), true, "secondary button must not toggle messenger");
+
+  // (e) #companion-chat-btn toggles once (closes, then opens).
+  clickAt(chatBtn, 310, 745);
+  assert.equal(M.isOpen(), false, "#companion-chat-btn must close messenger once");
+  assert.equal(closeCalls, 2);
+  clickAt(chatBtn, 310, 745);
+  assert.equal(M.isOpen(), true, "#companion-chat-btn must open messenger once");
+  assert.equal(openCalls, 3);
+  clickAt(chatBtn, 310, 745);
+  assert.equal(M.isOpen(), false);
+
+  // (f) VRM loading / absent (null bounds): stage click outside HUD buttons toggles messenger gracefully.
+  currentBounds = null;
+  assert.equal(stage.debugState().projectedBounds, null);
+  clickAt(characterBtn, 180, 820);
+  assert.equal(M.isOpen(), true, "stage click when character bounds are null must toggle open");
+  clickAt(characterBtn, 180, 820);
+  assert.equal(M.isOpen(), false, "stage click when character bounds are null must toggle closed");
+  assert.equal(knockCalls.length, 1);
+
+  // (g) pointermove updates hit.dataset.area without calling getBoundingClientRect().
+  currentBounds = { x: 90, y: 30, width: 160, height: 200 };
+  let rectReads = 0;
+  hitEl.getBoundingClientRect = () => { rectReads++; return { left: 12, top: 720, right: 352, bottom: 960, width: 340, height: 240 }; };
+  characterBtn.dispatchEvent({ type: "pointermove", target: characterBtn, clientX: 40, clientY: 760 });
+  assert.equal(hitEl.dataset.area, "messenger");
+  characterBtn.dispatchEvent({ type: "pointermove", target: characterBtn, clientX: 180, clientY: 820 });
+  assert.equal(hitEl.dataset.area, "character");
+  assert.equal(rectReads, 0, "pointermove hit-test must use cached bodyBox without DOM getBoundingClientRect reads");
+
+  stage.dispose();
 });
