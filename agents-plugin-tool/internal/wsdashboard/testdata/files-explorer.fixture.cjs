@@ -566,7 +566,7 @@ async function multiSelectChecks() {
   check('current side-tree folder is highlighted and breadcrumb names each segment', [core.at('[data-path="src"]').classList.contains('cur'), core.at('[data-path="src"]').getAttribute('aria-current'), core.at('.fcrumb-root .froot').textContent, core.at('.fcrumb-trail .fcrumb').textContent], [true, 'location', 'core', 'src']);
   core.at('.fcrumb-trail .fcrumb').click();
   check('breadcrumb keeps directory navigation reachable', core.instance.location().dir, 'src');
-  check('expanded side tree omits nested files but the directory pane keeps them', [core.all('.fr[data-path]').map(n => n.getAttribute('data-path')), !!core.at('[data-entry="src/child.go"]')], [['src'], true]);
+  check('expanded side tree omits nested files but the directory pane keeps them', [core.all('.fr[data-path]').map(n => n.getAttribute('data-path')), !!core.at('[data-entry="src/child.go"]')], [['src', 'ignored'], true]);
   core.all('.fview-modes button')[1].click(); core.at('.fopen-card').click();
   check('open-as-card forwards active directory', opened, [{ root: '', dir: 'src' }]);
   core.all('.ftab-select')[0].click();

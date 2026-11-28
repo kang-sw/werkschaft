@@ -1148,7 +1148,12 @@
       }
     }
   }
+  var freeStageRaf = 0;
   function freeUpdateMoreAndStage(board, list, winEnd, yEnd, hEnd, keepRunway) {
+    if (typeof freeStageRaf !== "undefined" && freeStageRaf) {
+      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(freeStageRaf);
+      freeStageRaf = 0;
+    }
     var moreBtn = board && board.querySelector ? board.querySelector("button.closed-more[data-closed-next]:not([hidden]):not([data-state-filtered])") : null;
     var stageH = FREE_RUNWAY_HEIGHT;
     if (winEnd === list.length - 1) {
@@ -1550,7 +1555,22 @@
     }
     if (freeWinEnd === list.length - 1) {
       var lastCard = list[freeWinEnd], yEnd = freePos.get(lastCard);
-      if (yEnd !== undefined) freeUpdateMoreAndStage(board, list, freeWinEnd, yEnd, freeLaidHeight(lastCard), !!freeIdleTimer);
+      if (yEnd !== undefined) {
+        // #r-board is shallower than its observed topic cards and is itself
+        // observed by cards.js; defer stage minHeight writes out of RO delivery.
+        if (typeof requestAnimationFrame !== "function") {
+          freeUpdateMoreAndStage(board, list, freeWinEnd, yEnd, freeLaidHeight(lastCard), !!freeIdleTimer);
+        } else if (!freeStageRaf) {
+          freeStageRaf = requestAnimationFrame(function () {
+            freeStageRaf = 0;
+            if (!freeActive || freeSuspended) return;
+            var curBoard = region("board"), curList = anchorCards();
+            if (!curBoard || !curList.length || freeWinEnd !== curList.length - 1) return;
+            var curLast = curList[freeWinEnd], curY = freePos.get(curLast);
+            if (curY !== undefined) freeUpdateMoreAndStage(curBoard, curList, freeWinEnd, curY, freeLaidHeight(curLast), !!freeIdleTimer);
+          });
+        }
+      }
     }
     freePinLayout();
   }

@@ -255,6 +255,8 @@ function buildBootstrapScript(opts = {}) {
       function tabShown() { return true; }
       function setTab() {}
       function setCtab() {}
+      function toggleStageFill() {}
+      function docHidden() { return !!doc.hidden; }
       function visible() { return true; }
       function pinned() { return false; }
       function pinConvo() {}
@@ -1007,7 +1009,7 @@ test('Phase 3 Band 3 (3-col) regression: Quick Look stays off in 3-col and toggl
     assert.equal(band3Open.hasPreviewAttr, false, 'Band 3 Overview must NOT set data-overview-preview');
     assert.equal(band3Open.previewHostCount, 0, 'Band 3 Overview must NOT mount .overview-preview');
     assert.equal(band3Open.placeholderCount, 0);
-    assert.equal(band3Open.galHidden, true, 'Band 3 with 0 docked pages must keep #bgal hidden');
+    assert.equal(band3Open.galHidden, false, 'Band 3 keeps #bgal mounted for system pages in narrow mode');
     assert.equal(band3Open.t2InBoard, true);
 
     // Hovering and pressing ArrowDown in Band 3 must still NOT open Quick Look.
@@ -1099,7 +1101,7 @@ test('Phase 3 Band 3 (3-col) regression: Quick Look stays off in 3-col and toggl
     assert.equal(band3Down.placeholderCount, 0);
     assert.equal(band3Down.t3InBoard, true, 'previewed topic must be restored to #r-board on Band 4 -> Band 3 teardown');
     assert.equal(band3Down.t3HasLiveAttr, false, 'restored topic must not retain data-overview-live');
-    assert.equal(band3Down.galHidden, true, '#bgal.hidden must re-sync to true in Band 3 with 0 docked pages');
+    assert.equal(band3Down.galHidden, false, '#bgal stays mounted in Band 3 narrow mode for system pages');
 
     assert.deepEqual(errors, []);
     await context.close();

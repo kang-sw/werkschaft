@@ -16,6 +16,7 @@ function fixture(cacheLimit = 0, deepHash = '', opts = {}) {
   let clock = 0, timerId = 0;
   const timers = new Map();
   const context = vm.createContext({ URL, console,
+    CustomEvent: function CustomEvent(type, init) { this.type = type; this.detail = init && init.detail; },
     setTimeout(fn, ms) { const id = ++timerId; timers.set(id, {fn, at: clock + ms}); return id; },
     clearTimeout(id) { timers.delete(id); }
   });

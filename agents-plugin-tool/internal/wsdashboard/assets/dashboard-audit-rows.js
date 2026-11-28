@@ -512,6 +512,8 @@
         if (counts) {
           var label = auTurnLabel(items);
           if (counts.textContent !== label) { counts.textContent = label; changed = true; }
+          var hide = !label;
+          if (counts.hidden !== hide) { counts.hidden = hide; changed = true; }
         }
         var body = auDirectItems(footer);
         if (!body) return;

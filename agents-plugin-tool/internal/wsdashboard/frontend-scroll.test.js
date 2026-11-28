@@ -27,7 +27,7 @@ test('scroll restoration coalesces read phase, keeps owners and pinned conversat
 test('conversation pagination supersedes an older queued WS scroll restoration', () => {
   const frames = [], convo = { isConnected: true, scrollTop: 80, scrollHeight: 1000 };
   const context = { Map, convo, stick: false, requestAnimationFrame(fn) { frames.push(fn); return 1; },
-    window: { addEventListener() {} }, epoch: 1, histEpoch: 1, histBusy: true, histEnd: false, box: {}, prevOldestAt: '',
+    window: { addEventListener() {} }, epoch: 1, histEpoch: 1, histBusy: true, histEnd: false, box: {}, opts: {}, prevOldestAt: '',
     frag: html => html, mergeEntries() { convo.scrollHeight += 1500; return []; },
     sweepOutImgs() {}, mermaid() {}, emitAuditEvent() {}, nearTop() {}, res: { before: 'e1' }
   };

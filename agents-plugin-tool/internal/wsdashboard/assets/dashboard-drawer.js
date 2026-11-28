@@ -157,7 +157,15 @@
     // follows its bottom edge, and composer growth keeps the clearance.
     window.addEventListener("resize", function () { drApply(false); });
     if (window.ResizeObserver) {
-      var drGeometry = new ResizeObserver(function () { drApply(false); });
+      var drGeoFrame = 0;
+      var drGeometry = new ResizeObserver(function () {
+        if (typeof requestAnimationFrame !== "function") { drApply(false); return; }
+        if (drGeoFrame) return;
+        drGeoFrame = requestAnimationFrame(function () {
+          drGeoFrame = 0;
+          if (drawer.isConnected) drApply(false);
+        });
+      });
       if (drheader) drGeometry.observe(drheader);
       if ($("composer")) drGeometry.observe($("composer"));
     }

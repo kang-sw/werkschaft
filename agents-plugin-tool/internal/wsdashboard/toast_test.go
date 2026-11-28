@@ -210,6 +210,7 @@ func TestTabLabelCount(t *testing.T) {
 	block = strings.TrimSuffix(block, "var sseOn = true;")
 	runNode(t, "session tab label", tlAskSrc(t, string(data))+tabLabelPrelude+boardBoxSrc(t, string(data))+dashboardJSBlock(t, "\n  var TREE_SLOT =", "\n  function treeRowKey(")+dashboardFuncs(t, "keyedInputHTML", "treeInputHTML")+`
 var mode = "session";
+function docHidden() { return !!doc.hidden; }
 var R = new N(), A = new N(), B = new N();
 var treeSel = {}; treeSel[PERM] = [new N({ up: A }), new N({ up: A }), new N({ up: B })]; treeSel[".agent.root"] = [R];
 REG.tree = new N({ sel: treeSel, attrs: { "data-h": "t1" } });

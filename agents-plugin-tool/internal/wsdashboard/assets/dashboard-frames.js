@@ -151,12 +151,25 @@
   // graft into a kept part drops the mark with the part's old attributes
   // (frameGraft) and lays it out in full; the bandBoard after the graft
   // watches it again.
+  var cvPending = [], cvFrame = 0;
+  function cvFlush() {
+    cvFrame = 0;
+    var nodes = cvPending;
+    cvPending = [];
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i] && nodes[i].isConnected) nodes[i].setAttribute("data-wbcv", "");
+    }
+  }
   var cvRO = window.ResizeObserver ? new ResizeObserver(function (list) {
     list.forEach(function (e) {
       if (!e.contentRect.height) return;
       cvRO.unobserve(e.target);
-      e.target.setAttribute("data-wbcv", "");
+      if (typeof requestAnimationFrame !== "function") { e.target.setAttribute("data-wbcv", ""); return; }
+      cvPending.push(e.target);
     });
+    if (cvPending.length && !cvFrame && typeof requestAnimationFrame === "function") {
+      cvFrame = requestAnimationFrame(cvFlush);
+    }
   }) : null;
   function cvWatch(t) {
     if (!cvRO) return;

@@ -269,7 +269,8 @@ var framesBox = { kids: [first], appendChild: function (f) { this.kids.push(f); 
 var doc = { title: "a - Werkschaft (alpha)",
   querySelector: function (sel) { return sel === "#frames > iframe" ? first : sel === ".dwrap > .top" ? top : null; },
   createElement: function () { return new Frame(); },
-  addEventListener: function () {} };
+  addEventListener: function () {},
+  dispatchEvent: function () {} };
 function $(id) { return id === "frames" ? framesBox : null; }
 var attrs = {};
 var root = { setAttribute: function (k, v) { attrs[k] = v; }, removeAttribute: function (k) { delete attrs[k]; }, hasAttribute: function (k) { return k in attrs; }, style: { setProperty: function () {} } };

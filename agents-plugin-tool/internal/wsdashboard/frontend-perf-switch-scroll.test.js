@@ -651,6 +651,7 @@ test('shell reveals frame early on ready+head without waiting for iframe load an
     },
     querySelectorAll: () => [],
     addEventListener() {},
+    dispatchEvent() {},
   };
   const loc = { origin: 'http://h:1', href: 'http://h:1/s/a', pathname: '/s/a', search: '', hash: '' };
   const hist = {
@@ -673,6 +674,7 @@ test('shell reveals frame early on ready+head without waiting for iframe load an
   };
   const ctx = {
     Map, Set, URL, URLSearchParams, Object, Array, Math, Date, JSON, Promise, Number,
+    CustomEvent: function CustomEvent(type, init) { this.type = type; this.detail = init && init.detail; },
     window: win, doc, location: loc, history: hist,
     root: rootEl,
     shell: true, framed: false, rid: 'a',

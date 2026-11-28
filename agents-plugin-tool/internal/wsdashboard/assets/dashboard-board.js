@@ -828,7 +828,15 @@
       });
       filePreview.el = previewPane;
       if (window.ResizeObserver) {
-        var previewResize = new ResizeObserver(sizeFileSurfaces);
+        var previewResizeFrame = 0;
+        var previewResize = new ResizeObserver(function () {
+          if (typeof requestAnimationFrame !== "function") { sizeFileSurfaces(); return; }
+          if (previewResizeFrame) return;
+          previewResizeFrame = requestAnimationFrame(function () {
+            previewResizeFrame = 0;
+            sizeFileSurfaces();
+          });
+        });
         previewResize.observe(grid);
         if (chead) previewResize.observe(chead);
         if (dbody) previewResize.observe(dbody);
