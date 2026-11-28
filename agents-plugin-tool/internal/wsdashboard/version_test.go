@@ -1,6 +1,8 @@
 package wsdashboard
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -38,8 +40,9 @@ func TestCompareVersions(t *testing.T) {
 
 // TestStageExecutableCopiesAndPrunes: the daemon's binary copy is
 // content-addressed and reused for the same content; staging leaves the
-// other copies alone. Singleton ownership and age do not establish process
-// exit or accepted/rollback retention, so even old artifacts stay.
+// other copies alone, and the background prune removes only expired
+// ws-mcp-dashboard-<sha16> builds (and their sidecars) beyond the pin set
+// and the newest five. Foreign files, directories and symlinks always stay.
 func TestStageExecutableCopiesAndPrunes(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "ws-mcp.exe")
 	if err := os.WriteFile(src, []byte("binary-v1"), 0o755); err != nil {
@@ -71,34 +74,74 @@ func TestStageExecutableCopiesAndPrunes(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("bin dir holds %v, want the v1 copy kept beside v2 (the running daemon may be v1)", entries)
 	}
-	// Another launcher's staging in flight: a temp file and a fresh copy.
-	tmp := filepath.Join(binDir, ".ws-mcp-dashboard-other.123.tmp")
-	young := filepath.Join(binDir, "ws-mcp-dashboard-young.exe")
-	for _, path := range []string{tmp, young} {
-		if err := os.WriteFile(path, []byte("in flight"), 0o755); err != nil {
+	dir := filepath.Dir(binDir)
+	ago := func(path string, age time.Duration) {
+		t.Helper()
+		at := time.Now().Add(-age)
+		if err := os.Chtimes(path, at, at); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// Age alone proves neither process-use nor rollback safety.
-	old := time.Now().Add(-24 * time.Hour)
-	if err := os.Chtimes(first, old, old); err != nil {
-		t.Fatal(err)
+	day := 24 * time.Hour
+	// Nothing is expired yet, and the newest-five rule keeps both copies.
+	PruneStagedExecutables(dir, second)
+	for _, path := range []string{first, second} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("the prune removed %s: %v", path, err)
+		}
 	}
-	PruneStagedExecutables(filepath.Dir(binDir), second)
-	// Include an unknown metadata file, a directory and a symlink: none is
-	// disposable just because it lives beside a launcher-owned executable.
-	metadata := first + ".metadata.json"
+
+	// Foreign entries beside the builds: another launcher's staging in flight
+	// (a temp file and a not-yet-hashed name), unknown metadata, a directory
+	// and a symlink. None is disposable, however old.
+	tmp := filepath.Join(binDir, ".ws-mcp-dashboard-other.123.tmp")
+	young := filepath.Join(binDir, "ws-mcp-dashboard-young.exe")
+	metadata := filepath.Join(binDir, "other.metadata.json")
 	foreign := filepath.Join(binDir, "electron-package")
-	if err := os.WriteFile(metadata, []byte(`{"accepted":true}`), 0o600); err != nil {
-		t.Fatal(err)
+	link := filepath.Join(binDir, "ws-mcp-dashboard-0123456789abcdef.exe")
+	for _, path := range []string{tmp, young, metadata} {
+		if err := os.WriteFile(path, []byte("in flight"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		ago(path, 60*day)
 	}
 	if err := os.Mkdir(foreign, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(binDir, "ws-mcp-dashboard-link.exe")
+	ago(foreign, 60*day)
 	linked := os.Symlink(first, link) == nil
-	PruneStagedExecutables(filepath.Dir(binDir), second)
-	for _, path := range []string{first, second, tmp, young, metadata, foreign} {
+
+	// Six expired builds, each with a launcher sidecar, older than v1 (8 days).
+	ago(first, 8*day)
+	if err := os.WriteFile(first+".metadata.json", []byte(`{"accepted":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ago(first+".metadata.json", 8*day)
+	var fakes []string
+	for i := 0; i < 6; i++ {
+		path := filepath.Join(binDir, fmt.Sprintf("ws-mcp-dashboard-%016x.exe", 0xf0+i))
+		if err := os.WriteFile(path, []byte("old build"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path+".metadata.json", []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		ago(path, time.Duration(9+i)*day)
+		ago(path+".metadata.json", time.Duration(9+i)*day)
+		fakes = append(fakes, path)
+	}
+	PruneStagedExecutables(dir, second)
+	// Newest five: second, first (8d), and the 9/10/11-day builds. The 12, 13
+	// and 14-day builds are expired and beyond them: gone with their sidecars.
+	for i, path := range fakes {
+		want := i < 3
+		for _, p := range []string{path, path + ".metadata.json"} {
+			if _, err := os.Stat(p); (err == nil) != want {
+				t.Errorf("%s present = %v, want %v", filepath.Base(p), err == nil, want)
+			}
+		}
+	}
+	for _, path := range []string{first, first + ".metadata.json", second, tmp, young, metadata, foreign} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("the prune removed %s: %v", path, err)
 		}
@@ -108,15 +151,41 @@ func TestStageExecutableCopiesAndPrunes(t *testing.T) {
 			t.Fatalf("prune removed symlink: %v", err)
 		}
 	}
-	// A daemon that runs from outside the staged directory (POSIX, where
-	// the Go side never stages) prunes nothing.
-	if err := os.Chtimes(young, old, old); err != nil {
+
+	// Beyond the newest five and a month old, v1 survives while the restart
+	// record names it: the pin set outranks age.
+	ago(first, 40*day)
+	for i := 0; i < 2; i++ { // two newer builds push v1 past the newest five
+		path := filepath.Join(binDir, fmt.Sprintf("ws-mcp-dashboard-%016x.exe", 0xe0+i))
+		if err := os.WriteFile(path, []byte("newer build"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		ago(path, time.Duration(2+i)*day)
+	}
+	record, err := json.Marshal(runningExecutable{1, first, "1.0.0", "", 0})
+	if err != nil {
 		t.Fatal(err)
 	}
-	before, _ := os.ReadDir(binDir)
-	PruneStagedExecutables(filepath.Dir(binDir), src)
-	if entries, _ = os.ReadDir(binDir); len(entries) != len(before) {
-		t.Fatalf("a prune from outside the bin dir changed it: %v", entries)
+	if err := os.WriteFile(filepath.Join(dir, RunningExecutableFile), record, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	PruneStagedExecutables(dir, second)
+	if _, err := os.Stat(first); err != nil {
+		t.Fatalf("the build recorded for restart was pruned: %v", err)
+	}
+	// Without the record only the running daemon's own build is safe.
+	if err := os.Remove(filepath.Join(dir, RunningExecutableFile)); err != nil {
+		t.Fatal(err)
+	}
+	PruneStagedExecutables(dir, second)
+	if _, err := os.Stat(first); !os.IsNotExist(err) {
+		t.Fatalf("an unpinned expired build beyond the newest five survived: %v", err)
+	}
+	if _, err := os.Stat(first + ".metadata.json"); !os.IsNotExist(err) {
+		t.Fatalf("the pruned build's sidecar survived: %v", err)
+	}
+	if _, err := os.Stat(second); err != nil {
+		t.Fatalf("the running build was pruned: %v", err)
 	}
 }
 

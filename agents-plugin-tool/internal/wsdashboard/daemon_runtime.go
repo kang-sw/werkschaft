@@ -170,6 +170,14 @@ func (d *Daemon) poll(interval time.Duration) {
 	defer ticker.Stop()
 	clock := time.NewTicker(min(indexClockInterval, interval))
 	defer clock.Stop()
+	// A long-running daemon expires old sessions itself instead of waiting
+	// for the next ws-mcp start to ask (registration pruning).
+	pruneEvery := d.sessionPruneEvery
+	if pruneEvery <= 0 {
+		pruneEvery = sessionPruneEveryDefault
+	}
+	prune := time.NewTicker(pruneEvery)
+	defer prune.Stop()
 	for {
 		select {
 		case <-d.stop:
@@ -179,6 +187,8 @@ func (d *Daemon) poll(interval time.Duration) {
 			d.pokeHires()
 		case <-clock.C:
 			d.index.RefreshClock()
+		case <-prune.C:
+			d.pruneSessionsTick(time.Now())
 		}
 	}
 }
@@ -223,6 +233,9 @@ func (d *Daemon) Close() {
 		}
 		if d.pollDone != nil {
 			<-d.pollDone
+		}
+		if d.gcDone != nil {
+			<-d.gcDone
 		}
 		if d.leadNudges != nil {
 			d.leadNudges.Close()

@@ -2280,8 +2280,17 @@ Finding and starting the daemon (`DaemonLink` in the launcher):
    On replacements through `Ensure`, the successor
    reports readiness before the starter requests an incumbent drain.
    Staging reuses matching hashes and failed copies clean only their own temp
-   file. Settled artifacts remain: neither age nor singleton ownership proves
-   process exit or accepted/rollback safety, and no retention index exists.
+   file. Settled artifacts are collected only by the daemon's background cache
+   GC (startup plus every 6 h; `WS_CACHE_GC=off` and `WS_CACHE_GC_*` override
+   it), never on a start path: it keeps the running executable, the macOS
+   stable `ws-mcp-dashboard`, the build `last-running-executable.json` names,
+   builds under 24 h, every non-`ws-mcp-dashboard-<sha16>` entry, and the
+   newest five builds, and removes older builds past 7 d with their
+   `.metadata.json` sidecars. The same pass trims `dashboard/rollback/`
+   (7 d / newest 3) and the wsstate-owned `proj/` areas (`review-paths`,
+   `report-paths`, `prompt-paths`, `tmp` 14 d; `shared/docs` 30 d; 2 GiB LRU
+   cap each; deleted `project@worktree` directories after 14 d with no
+   session naming them); anything under 24 h is skipped.
    The launcher then waits up to
    `DefaultStartWait` + 5 s (Windows
    + 10 s) for a healthy daemon and applies the replace rule to the one

@@ -134,9 +134,11 @@ func DaemonExecutable(exe, dir string) (string, error) {
 // StageExecutable copies exe into binDir under a content-addressed name,
 // reusing an existing copy. Other entries are left alone: one of them is
 // the executable the running daemon was started from (it respawns itself
-// from that path on a LAN mode change), and the daemon that holds the lock
-// retains settled copies until their process-use and rollback safety can be
-// established (PruneStagedExecutables). The launcher stages the same names.
+// from that path on a LAN mode change). Old copies are collected in the
+// background by the daemon that holds the lock, around an explicit pin set
+// (PruneStagedExecutables, cache_gc.go). The launcher stages the same names;
+// each failed copy cleans only its own temp file in copyExecutable (and the
+// Python launcher's stage_daemon_binary).
 func StageExecutable(exe, binDir string) (string, error) {
 	target, _, err := stageExecutable(exe, binDir)
 	return target, err
@@ -163,16 +165,6 @@ func stageExecutable(exe, binDir string) (string, string, error) {
 	}
 	return target, sum, nil
 }
-
-// PruneStagedExecutables currently retains every settled artifact. Holding
-// the singleton does not prove the previous draining process has exited, or
-// that an unused executable is not an accepted/rollback target. There is no
-// authoritative retention source yet. Never infer it from age, a hash-shaped
-// name, or missing metadata; directories, symlinks and unknown metadata are
-// not ours to remove either. Each failed copy cleans only its own temp file
-// in copyExecutable (and the Python launcher's stage_daemon_binary).
-// Keep the entry point for callers, without inventing a retention API.
-func PruneStagedExecutables(dir, exe string) {}
 
 // ExecutableContentHash is the sha256 of the file at path, the daemon's
 // content identity for /health (HealthInfo.ContentHash); "" when the file

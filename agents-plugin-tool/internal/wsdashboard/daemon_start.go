@@ -187,6 +187,8 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		pprof:           opts.Pprof,
 		buildTime:       opts.BuildTime,
 		contentHash:     opts.ContentHash,
+		executable:      opts.Executable,
+		sessionPruneEvery: opts.sessionPruneEvery,
 		proxy:           opts.Proxy,
 		openSystem:      opts.openSystem,
 		hostFiles:       opts.hostFiles,
@@ -425,6 +427,21 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		close(accepting)
 		go d.reloadAgentGlobalConfig()
 	}}
+	// Decide the cache GC loop and create its done channel before Serve
+	// starts: a Serve failure calls Close from its own goroutine, and Close
+	// reads gcDone. The loop itself starts below, and Close then waits for it
+	// to observe the stop.
+	var gcCfg *CacheGCConfig
+	if _, ok := cacheRootOf(opts.Dir); ok {
+		cfg := CacheGCConfigFromEnv(os.Getenv)
+		if opts.CacheGC != nil {
+			cfg = *opts.CacheGC
+		}
+		if cfg.Enabled {
+			gcCfg = &cfg
+			d.gcDone = make(chan struct{})
+		}
+	}
 	go func() {
 		if err := d.server.Serve(serving); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintf(d.log, "dashboard: serve: %v\n", err)
@@ -439,6 +456,11 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		d.pokeHires()
 	}
 	go d.web.run(webSweepEvery)
+	// Background cache GC: asynchronous, after startup, then slowly. The
+	// loop's done channel was created before Serve started.
+	if gcCfg != nil {
+		go d.cacheGCLoop(*gcCfg)
+	}
 	// The holder scans start only now, under the single-instance lock: a
 	// predecessor has let go of its holders before this daemon attaches.
 	if d.holders != nil {

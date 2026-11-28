@@ -338,10 +338,10 @@ func dashboardCommand(args []string) {
 		}
 	})
 	wsdashboard.LogDevAssets(logw, devRoot)
-	// Settled copies remain available for surviving launchers and rollback.
-	if exe != "" {
-		wsdashboard.PruneStagedExecutables(dir, exe)
-	}
+	// Old staged builds, rollback entries and proj/ artifacts are collected
+	// by the daemon's background cache GC (wsdashboard.CacheGCConfig), never
+	// on this startup path; the running build and the one recorded for
+	// restart are pinned.
 	trackerChanged.set(daemon.TrackerChanged)
 	agyActivity.set(daemon.AgyActivity)
 	quotaFn := daemon.QuotaResetAt
