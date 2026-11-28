@@ -28,6 +28,9 @@ func (c *conv) handle(ev Event) {
 			c.lineOpen = 0
 		}
 	}
+	if !quiet && !c.replaying && (ev.TurnStart || ev.Live != nil || ev.ToolBoundary) {
+		c.notifyCompanionActivity()
+	}
 	switch {
 	case ev.LineEnd:
 		c.lineEnd(ev.Seq)
@@ -134,6 +137,9 @@ func (c *conv) handle(ev Event) {
 		c.setStatus(func() { c.lastErr = ev.Fatal.Error() })
 		fmt.Fprintf(c.r.opts.Log, "agent %s: %v\n", c.rec.ReplyID, ev.Fatal)
 		c.stopProcess("")
+		if !c.closed && !c.quitting && c.rec.CompanionRole != "" && c.r.opts.OnCompanionClose != nil {
+			c.r.opts.OnCompanionClose(c.rec.CompanionRole, c.rec.ReplyID, c.rec.WSKey, "crash")
+		}
 	case ev.TurnStart:
 		c.summaryStart(ev)
 		if quiet && c.rec.Parent != nil && ev.Seq <= c.rec.TurnStartSeq {
@@ -849,6 +855,9 @@ func (c *conv) processExited() {
 		}
 	})
 	c.processEnded()
+	if !c.closed && !c.quitting && c.rec.CompanionRole != "" && c.r.opts.OnCompanionClose != nil {
+		c.r.opts.OnCompanionClose(c.rec.CompanionRole, c.rec.ReplyID, c.rec.WSKey, "crash")
+	}
 	if !c.closed && !c.quitting {
 		c.releaseHeld()
 	}
@@ -1503,6 +1512,32 @@ func (c *conv) finishClose() {
 	}
 	c.signalSettled()
 	c.watched()
+	if c.rec.CompanionRole != "" && c.r.opts.OnCompanionClose != nil {
+		c.r.opts.OnCompanionClose(c.rec.CompanionRole, c.rec.ReplyID, c.rec.WSKey, "close")
+	}
+}
+
+func (c *conv) notifyCompanionActivity() {
+	fn := c.r.opts.OnCompanionActivity
+	if fn == nil {
+		return
+	}
+	if c.rec.CompanionRole != "" {
+		fn(c.rec.CompanionRole, c.rec.ReplyID, c.rec.WSKey)
+		return
+	}
+	parent := c.rec.Parent
+	for depth := 0; parent != nil && depth < 8; depth++ {
+		prec, ok := c.r.recordOf(parent.ReplyID)
+		if !ok {
+			break
+		}
+		if prec.CompanionRole != "" {
+			fn(prec.CompanionRole, prec.ReplyID, prec.WSKey)
+			return
+		}
+		parent = prec.Parent
+	}
 }
 
 // harnessReported resolves the backend's catalog profile at the version

@@ -74,7 +74,7 @@ func (a *AgentKeyStore) MintLead(root string) (string, error) {
 // written again with the same key in the split layout, and a record rooted
 // elsewhere or of another scope is an error.
 func (a *AgentKeyStore) Ensure(root, key string) error {
-	return a.ensure(root, key, roleDelegate)
+	return a.ensure(root, key, roleDelegate, "")
 }
 
 // LeadRoot is root's canonical git root, the root MintLead records; it
@@ -86,7 +86,30 @@ func (a *AgentKeyStore) LeadRoot(root string) (string, error) {
 // EnsureLead is Ensure for a hosted lead session's key: canonical is the
 // root MintLead recorded (LeadRoot).
 func (a *AgentKeyStore) EnsureLead(canonical, key string) error {
-	return a.ensure(canonical, key, roleLead)
+	return a.ensure(canonical, key, roleLead, "")
+}
+
+// MintCompanionLead creates a parent-less lead key carrying a companion
+// capability marker ("companion-body" or "companion-work"). Unlike MintLead,
+// root may be any directory (the daemon state directory or a workspace root);
+// when root is inside a git worktree it normalizes to its canonical git root.
+func (a *AgentKeyStore) MintCompanionLead(root, role string) (string, error) {
+	if role != CompanionRoleBody && role != CompanionRoleWork {
+		return "", fmt.Errorf("invalid companion role %q", role)
+	}
+	canonical := root
+	if gitRoot, err := canonicalSetupRoot(wsgit.ExecRunner{}, root); err == nil && gitRoot != "" {
+		canonical = gitRoot
+	}
+	return a.store.mintWithCompanionRole(canonical, roleLead, "", "", role)
+}
+
+// EnsureCompanionLead keeps a companion session key usable with its marker.
+func (a *AgentKeyStore) EnsureCompanionLead(canonical, key, role string) error {
+	if role != CompanionRoleBody && role != CompanionRoleWork {
+		return fmt.Errorf("invalid companion role %q", role)
+	}
+	return a.ensure(canonical, key, roleLead, role)
 }
 
 // LeadSession finds the parent-less lead key rooted at root whose reply-id
@@ -107,7 +130,7 @@ func (a *AgentKeyStore) LeadSession(root, replyID string) (wsagent.LeadSession, 
 			continue
 		}
 		record, ok := a.store.readRecord(d, key, partKey)
-		if !ok || record.Root != root || record.Scope != string(roleLead) || record.Parent != "" {
+		if !ok || record.Root != root || record.Scope != string(roleLead) || record.Parent != "" || record.CompanionRole != "" {
 			continue
 		}
 		return wsagent.LeadSession{Key: key, Root: record.Root, Harness: record.Harness, Session: record.HarnessSession, Cwd: record.HarnessCwd}, true
@@ -115,7 +138,7 @@ func (a *AgentKeyStore) LeadSession(root, replyID string) (wsagent.LeadSession, 
 	return wsagent.LeadSession{}, false
 }
 
-func (a *AgentKeyStore) ensure(root, key string, scope toolRole) error {
+func (a *AgentKeyStore) ensure(root, key string, scope toolRole, companionRole string) error {
 	if !sessionKeyFilenamePattern.MatchString(key) {
 		return fmt.Errorf("malformed session key")
 	}
@@ -124,13 +147,19 @@ func (a *AgentKeyStore) ensure(root, key string, scope toolRole) error {
 		return err
 	}
 	if record, ok := a.store.readRecord(d, key, partKey); ok {
-		if record.Root != root || record.Scope != string(scope) || record.Parent != "" {
+		if record.Root != root || record.Scope != string(scope) || record.Parent != "" || record.CompanionRole != companionRole {
 			return fmt.Errorf("session key record is not this conversation's (root %s, scope %s)", record.Root, record.Scope)
 		}
 		a.store.touch(d, key)
+		a.store.rememberCompanionRole(key, companionRole)
 		return nil
 	}
-	payload, err := json.Marshal(sessionKeyRecord{SchemaVersion: sessionRecordSchemaVersion, Root: root, Scope: string(scope)})
+	payload, err := json.Marshal(sessionKeyRecord{
+		SchemaVersion: sessionRecordSchemaVersion,
+		Root:          root,
+		Scope:         string(scope),
+		CompanionRole: companionRole,
+	})
 	if err != nil {
 		return err
 	}
@@ -141,5 +170,6 @@ func (a *AgentKeyStore) ensure(root, key string, scope toolRole) error {
 	if !claimed {
 		return fmt.Errorf("session key record exists but is unreadable")
 	}
+	a.store.rememberCompanionRole(key, companionRole)
 	return nil
 }

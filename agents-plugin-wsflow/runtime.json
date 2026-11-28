@@ -104,6 +104,8 @@
     "companion.phone_read": ">=0.53.2-dev <0.54.0",
     "companion.phone_send": ">=0.53.2-dev <0.54.0",
     "companion.phone_putdown": ">=0.53.2-dev <0.54.0",
+    "companion.delegate_work": ">=0.53.2-dev <0.54.0",
+    "delegation.report": ">=0.53.2-dev <0.54.0",
     "conv.sessions": ">=0.53.2-dev <0.54.0",
     "conv.search": ">=0.53.2-dev <0.54.0",
     "conv.history": ">=0.53.2-dev <0.54.0",

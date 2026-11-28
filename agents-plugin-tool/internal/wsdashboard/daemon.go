@@ -319,6 +319,9 @@ type Daemon struct {
 	convBackfillWG          sync.WaitGroup
 	// companionPhone holds the in-memory 4-state embodiment & phone messenger store.
 	companionPhone CompanionPhoneStore
+	// companionWake, when bound by cmd/ws-mcp, wakes the Tier-1 companion burst
+	// session on incoming user messages or release with unread inbox.
+	companionWake atomic.Pointer[func(reason string)]
 	// director is the companion agent director (companion_director.go).
 	director      companionDirector
 	agents        AgentHost

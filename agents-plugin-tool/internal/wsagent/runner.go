@@ -54,6 +54,14 @@ type LeadKeyStore interface {
 	LeadSession(root, replyID string) (session LeadSession, ok bool)
 }
 
+// CompanionLeadKeyStore is an optional LeadKeyStore extension implemented by
+// ws-mcp's AgentKeyStore to mint and maintain companion-scoped lead keys
+// ("companion-body" or "companion-work") without requiring a git worktree root.
+type CompanionLeadKeyStore interface {
+	MintCompanionLead(root, role string) (string, error)
+	EnsureCompanionLead(canonical, key, role string) error
+}
+
 // LeadSession is a terminal lead session as its ws key record describes it.
 type LeadSession struct {
 	// Key is the session's lead key and Root its canonical git root.
@@ -247,6 +255,18 @@ type Options struct {
 	// this daemon's exit cut off. Closing the conversation reports nothing.
 	// It runs on the conversation's loop and must not block on the runner.
 	Report func(TurnReport)
+	// OnCompanionTurnEnd, when not nil, is called when a companion-role
+	// conversation's turn settles (normal turn end, start failure, or
+	// process-loss turn failure). Must not block on the runner.
+	OnCompanionTurnEnd func(role, replyID, wsKey, status, errText string)
+	// OnCompanionActivity, when not nil, is called on live turn activity of a
+	// companion session or of a child spawned by a companion session (used to
+	// renew sliding lease/delegation deadlines). Must not block on the runner.
+	OnCompanionActivity func(role, replyID, wsKey string)
+	// OnCompanionClose, when not nil, is called when a companion-role
+	// conversation closes or its backend process exits unexpectedly
+	// (reason: "close" or "crash"). Must not block on the runner.
+	OnCompanionClose func(role, replyID, wsKey, reason string)
 	// LiveHost is the daemon's in-memory snapshot hand-off. The daemon sets
 	// it before Start; nil keeps the legacy file-only projection.
 	LiveHost wsdashboard.LiveHost

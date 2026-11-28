@@ -86,6 +86,26 @@ func composeLeadInstructions(dir string, rec Record, manual, steer string, comma
 	return path, nil
 }
 
+// composeCompanionInstructions writes the instruction file for a daemon-managed
+// companion hosted session (Tier-1 companion-body or Tier-2 companion-work).
+// It injects the minted ws session key and the companion prompt directly,
+// bypassing the standard lead workflow manual.
+func composeCompanionInstructions(dir string, rec Record) (string, error) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Your ws session key is `%s`. Pass it as the `session_key` argument of every ws tool call. "+
+		"This hosted session already has a key; do not mint a replacement.", rec.WSKey)
+	if prompt := strings.TrimSpace(rec.CompanionSystemPrompt); prompt != "" {
+		b.WriteString("\n\n")
+		b.WriteString(prompt)
+	}
+	b.WriteByte('\n')
+	path := filepath.Join(dir, "instructions.md")
+	if err := writeFileAtomic(path, []byte(b.String()), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 // leadManual is the workflow manual rec's lead reads from its first turn
 // (Options.LeadManual), or "" when the daemon supplies no renderer or the
 // render failed, which is logged: the lead then starts with its key alone.

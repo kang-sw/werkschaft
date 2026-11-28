@@ -9,6 +9,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: b8d24c75c8c621fb
 sage-review-completeness-reviewed: b8d24c75c8c621fb
+completed: 2026-11-28
 ---
 
 # Werk Usage Metrics: OpenRouter Balance/Spend & OpenAI/Codex Unification
@@ -168,6 +169,10 @@ Phase 1 spike executed as a codebase audit plus Codex CLI token inspection; owne
 2. **Record spike verdict:**
    - Recorded in `## Spike Findings`. Phase 4 takes the conservative path: remote probe attempted only when the claim is present and the probe is accepted, otherwise automatic local fallback.
 
+### Result (83b6741c) - 2026-11-28
+
+Closed as an audit spike prior to implementation (see `## Spike Findings`). Codex CLI token inspection confirmed `https://api.openai.com/auth.chatgpt_account_id`; live `werk` OpenAI SIWC token claim presence and `wham/usage` acceptance remain deferred to post-merge live dogfood verification per `(1811)`.
+
 ### Phase 2: `werk` `LineUsage.Model`, Compaction Usage, and `wsmeta` SQLite Deltas
 
 1. **Emit `Model` on `LineUsage` and capture compaction usage:**
@@ -188,6 +193,14 @@ Phase 1 spike executed as a codebase audit plus Codex CLI token inspection; owne
      compaction), `wsmeta` SQLite delta persistence/reload, and zero-transcript-scan
      `/rail/usage` read checks.
 
+### Result (757ca9cc) - 2026-11-28
+
+- **Delivered (`757ca9cc`, follow-up fix `4a55bafc`):**
+  - `werk/agent.go`, `werk/responses.go`, `werk/compaction.go`: populated `Line.Model` on `LineUsage` from `Response.Model` (falling back to the request model) and emitted `LineUsage` with `Compaction: true` from `compactModelProse`. Follow-up `4a55bafc` excludes out-of-band compaction `LineUsage` lines from advancing `wsagent/audit_werk.go`'s `RequestChain`.
+  - `wsmeta/werk_usage.go`: added additive T0 table `werk_model_usage` (`SchemaVersion` remains 1), keyed by `(provider, account_key, model)` with `Snapshot.WerkModelUsage` and `AddWerkModelUsageDeltas` `(1809)`.
+  - `wsagent/werk_loop.go` + `wsdashboard/plan_usage_werk.go`: wired `onUsage` callback carrying the turn-pinned `ClientID` for OpenAI SIWC into an in-memory map with 30s debounced SQLite delta flushing and shutdown flush on `close()`/`Daemon.Close`.
+- **Verification:** `go test -race ./internal/werk/... ./internal/wsmeta/...`, `go test -race ./internal/wsagent -run 'TestWerk|TestLoop|TestUsage'`, and `go test -race ./internal/wsdashboard -run 'TestPlanUsage|TestAccount'` passed.
+
 ### Phase 3: OpenRouter `/credits` + `/key` Probe and Hybrid Topbar Card
 
 *Depends on Phase 2 per-model `wsmeta` aggregation.*
@@ -207,6 +220,15 @@ Phase 1 spike executed as a codebase audit plus Codex CLI token inspection; owne
    - Go tests (HTTP fixtures/mocks; a live key is optional) covering `/credits` `401`/`403` with `/key` `2xx`, debounced
      background refresh, and frontend/browser tests for OpenRouter card and
      per-model popover rendering.
+
+### Result (d5876de7) - 2026-11-28
+
+- **Delivered (`3c5e1df5`, `d5876de7`, review fix `4a55bafc`):**
+  - `wscred/openrouter_usage.go`: added `ProbeOpenRouterUsage` querying `/api/v1/key` and `/api/v1/credits`; `/credits` `401`/`403` sets `CreditsRestricted` without failing the probe or altering `checkOpenRouter` key verification.
+  - `wsdashboard/plan_usage_openrouter.go`: added 10m-debounced viewer-driven refresh, generation-tracked cache invalidation on `accountChanged()`, and additive `/rail/usage` `openrouter` entry combining remote balance/limits/spend with Phase 2 per-model rows.
+  - `assets/usage.js`, `usage.css`, `dashboard.css`, and all 11 `wsi18n/tables/*.json`: added compact handle metric (balance/remaining/daily/local-cost) and hybrid popover card with cost-first per-model table. Review fix `4a55bafc` changed the local-only cost handle label from `day` to `Cost`.
+- **Deviation / clarification vs `(1812)`:** `wscred` defines `background_consent` exclusively on OpenAI SIWC ChatGPT-plan accounts (no consent field exists on OpenRouter API keys or Settings → Account). OpenRouter's `/credits` + `/key` refresh therefore uses the existing viewer-driven, 10m-debounced `planUsageStore.refresh` path (zero background polling when no dashboard viewer is connected, matching Codex CLI and AgY), while OpenAI SIWC strictly enforces `background_consent`.
+- **Verification:** `node --check usage.js`, `node --test usage.test.js` (35/35 pass), `go test -race ./internal/wscred/... ./internal/wsi18n/...`, and `go test -race ./internal/wsdashboard -run 'TestPlanUsage|TestAccount'` passed with HTTP fixtures/mocks.
 
 ### Phase 4: Workspace-ID Matched `Codex / OpenAI` Unification vs `Werk (OpenAI)` Card
 
@@ -231,3 +253,16 @@ Phase 1 spike executed as a codebase audit plus Codex CLI token inspection; owne
    - Go tests for matching vs mismatched workspace IDs, same-email
      multi-workspace separation, `background_consent=false` gating, and
      frontend card rendering tests.
+
+### Result (d5876de7) - 2026-11-28
+
+- **Delivered (`3c5e1df5`, `d5876de7`, review fix `4a55bafc`):**
+  - `wscred/openai_oauth.go`, `wscred/openai_store.go`, `wscred/openai_usage.go`: extracted `https://api.openai.com/auth.chatgpt_account_id` (from `id_token`, falling back to `access_token` JWT) into Type 5 `openAIAccount.AccountID` only; exposed process-salted HMAC `AccountMatchToken`, `MaskOpenAIAccountLabel`, `ActiveOpenAIUsageIdentity`, and `ProbeOpenAIPlanUsage` (strictly gating network calls on `plan_enabled`, `background_consent`, `ErrOpenAIPlanPaused`, and claim presence, with automatic `auth_rejected` fallback on `401`/`403` without mutating saved credentials).
+  - `wsdashboard/plan_usage_openai.go`, `plan_usage.go`, `plan_usage_probe.go`, `plan_usage_history.go`: consumed companion `261127-feat-ws-harness-account-switcher-and-slot-continuity` D10 slot-aware Codex home resolver (`configHome("CODEX_HOME", ".codex")`) and `invalidateSlots()` to cache the Codex CLI match token in `usageDetectMemo` (zero `/rail/usage` disk I/O). Exact match emits additive `codex_openai` (`Codex / OpenAI`) reusing the single Codex `wham/usage` probe and projecting `"codex"` history; mismatch or unverified claim keeps `"codex"` unchanged and emits separate `werk_openai` (`Werk (OpenAI)`) with masked label, token-first per-model rows filtered by active `ClientID`, and conservative `wham/usage` probe / local fallback. Review fix `4a55bafc` derives unified `werk.mode` from live window presence instead of hardcoding `"remote"`.
+  - `assets/usage.js`, `usage.css`, `dashboard.css`, and all 11 `wsi18n/tables/*.json`: rendered unified `codex_openai` and separated `werk_openai` cards without topbar-only positioning assumptions.
+- **Verification & post-merge follow-up `(1811)`:** All fixture/mock Go (`-race`), JS (`usage.test.js` 35/35), 11-locale `wsi18n`, `GOOS=windows go vet ./...`, and `go build ./cmd/ws-mcp` checks passed. Live SIWC dogfood verification after owner re-login remains a recorded post-merge verification item to be appended as an Edition per `(1811)`.
+
+
+## Resolution (2026-11-28)
+
+Implemented Phases 2–4 (following Phase 1 audit spike), addressed code-review-lite findings, and verified all Go (-race), JS (usage.test.js), 11-locale wsi18n, Windows vet, and ws-mcp build checks. Live SIWC dogfood after owner re-login remains a recorded post-merge Edition per (1811).

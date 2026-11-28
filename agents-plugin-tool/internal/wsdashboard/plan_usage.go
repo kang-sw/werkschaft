@@ -31,15 +31,18 @@ type planUsageWindow struct {
 	Disabled bool    `json:"disabled,omitempty"`
 }
 type planUsageEntry struct {
-	Harness string            `json:"harness"`
-	Group   string            `json:"group,omitempty"`
-	Label   string            `json:"label,omitempty"`
-	Pending bool              `json:"pending,omitempty"`
-	Plan    string            `json:"plan,omitempty"`
-	Source  string            `json:"source,omitempty"`
-	Status  string            `json:"status,omitempty"`
-	AsOf    int64             `json:"asOf,omitempty"`
-	Windows []planUsageWindow `json:"windows"`
+	Harness      string               `json:"harness"`
+	Group        string               `json:"group,omitempty"`
+	Label        string               `json:"label,omitempty"`
+	AccountLabel string               `json:"accountLabel,omitempty"`
+	Pending      bool                 `json:"pending,omitempty"`
+	Plan         string               `json:"plan,omitempty"`
+	Source       string               `json:"source,omitempty"`
+	Status       string               `json:"status,omitempty"`
+	AsOf         int64                `json:"asOf,omitempty"`
+	Windows      []planUsageWindow    `json:"windows"`
+	OpenRouter   *openRouterUsageView `json:"openrouter,omitempty"`
+	Werk         *werkUsageView       `json:"werk,omitempty"`
 }
 type planUsageStore struct {
 	mu          sync.Mutex
@@ -103,6 +106,29 @@ type planUsageStore struct {
 	detected     usageDetectMemo
 	gptSlotID    string
 	claudeSlotID string
+	// Werk per-model usage aggregates (RAM cache + debounced wsmeta WAL deltas).
+	// Guarded by mu.
+	werkUsage         map[wsmeta.WerkModelUsageKey]wsmeta.WerkModelUsage
+	werkPending       map[wsmeta.WerkModelUsageKey]wsmeta.WerkModelUsage
+	werkFlushTimer    *time.Timer
+	werkFlushDebounce time.Duration
+	// Optional credential store (*wscred.Store in production; fake in tests) for
+	// OpenRouter and OpenAI SIWC usage probes. Set before use, read-only.
+	credentials any
+	// OpenRouter /key + /credits probe cache and 10m debounce. Guarded by mu.
+	openRouterSnap      *wscred.OpenRouterUsageSnapshot
+	openRouterStatus    string
+	openRouterLastProbe time.Time
+	openRouterProbing   bool
+	openRouterGen       uint64
+	openRouterDebounce  time.Duration
+	// Werk OpenAI SIWC conservative wham/usage probe cache and 10m debounce.
+	// Guarded by mu.
+	werkOpenAIClientID  string
+	werkOpenAIProbe     *wscred.OpenAIPlanUsageResult
+	werkOpenAILastProbe time.Time
+	werkOpenAIProbing   bool
+	werkOpenAIDebounce  time.Duration
 }
 
 // invalidateSlots drops the memoized credential detection and resets cached
@@ -133,6 +159,8 @@ func (s *planUsageStore) invalidateSlots() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.detected = usageDetectMemo{}
+	s.openRouterLastProbe = time.Time{}
+	s.resetWerkOpenAILocked()
 	if claudeActive != "" {
 		prev := s.claudeSlotID
 		if prev == "" {
@@ -165,10 +193,11 @@ type usageCredStat struct {
 	modTime int64
 }
 type usageDetectMemo struct {
-	ok    bool
-	stats [2]usageCredStat
-	plan  string
-	codex bool
+	ok              bool
+	stats           [2]usageCredStat
+	plan            string
+	codex           bool
+	codexMatchToken string
 }
 
 func (s *planUsageStore) write(name string, data []byte) error {
@@ -257,6 +286,7 @@ func (s *planUsageStore) loadFromMetaLocked(snap *wsmeta.Snapshot) {
 	s.loadHistoryFromMetaLocked(&s.hist, defaultHistorySpec, snap)
 	s.loadHistoryFromMetaLocked(&s.codexHist, codexFiveHourHistorySpec, snap)
 	s.loadHistoryFromMetaLocked(&s.agyHist, agyHistorySpec, snap)
+	s.loadWerkUsageFromMetaLocked(snap)
 }
 
 // beginClose marks the store closed and cancels its daemon-lifetime context so
@@ -267,6 +297,7 @@ func (s *planUsageStore) beginClose() {
 	}
 	s.mu.Lock()
 	s.closed = true
+	s.stopWerkFlushLocked()
 	cancel := s.lifetimeCancel
 	s.mu.Unlock()
 	if cancel != nil {
@@ -289,6 +320,7 @@ func (s *planUsageStore) waitClose(ctx context.Context) {
 	case <-done:
 	case <-ctx.Done():
 	}
+	_ = s.flushWerkUsage(ctx)
 }
 
 func (s *planUsageStore) close(ctx context.Context) {
@@ -470,6 +502,11 @@ func (s *planUsageStore) configHome(key, fallback string) string {
 // Stat-confirmed absence is cacheable; a read failure is not, so transient
 // credential access failures remain retryable even without metadata changes.
 func (s *planUsageStore) detect() (claudePlan string, codexLogin bool) {
+	claudePlan, codexLogin, _ = s.detectWithCodexMatch()
+	return claudePlan, codexLogin
+}
+
+func (s *planUsageStore) detectWithCodexMatch() (claudePlan string, codexLogin bool, codexMatchToken string) {
 	paths := [2]string{
 		// Retained name check: each provider's own credential location, read to learn
 		// whether the provider is signed in (TestPlanUsageCodexHomeSelection).
@@ -494,7 +531,7 @@ func (s *planUsageStore) detect() (claudePlan string, codexLogin bool) {
 	m := s.detected
 	s.mu.Unlock()
 	if cacheable && m.ok && m.stats == stats {
-		return m.plan, m.codex
+		return m.plan, m.codex, m.codexMatchToken
 	}
 	readJSON := func(index int, out any) bool {
 		if stats[index].missing {
@@ -521,16 +558,27 @@ func (s *planUsageStore) detect() (claudePlan string, codexLogin bool) {
 		claudePlan = claude.OAuth.Plan
 	}
 	var codex struct {
-		Mode   string    `json:"auth_mode"`
-		Tokens *struct{} `json:"tokens"`
+		Mode   string `json:"auth_mode"`
+		Tokens *struct {
+			Account string `json:"account_id"`
+		} `json:"tokens"`
 	}
 	if readJSON(1, &codex) {
 		codexLogin = codex.Mode == "chatgpt" || (codex.Mode == "" && codex.Tokens != nil)
+		if codexLogin && codex.Tokens != nil {
+			codexMatchToken = wscred.AccountMatchToken(codex.Tokens.Account)
+		}
 	}
 	// Stat precedes read, so a replace in between memoizes newer content under
 	// an older stat and costs only one extra read next time.
 	s.mu.Lock()
-	s.detected = usageDetectMemo{ok: cacheable, stats: stats, plan: claudePlan, codex: codexLogin}
+	s.detected = usageDetectMemo{
+		ok:              cacheable,
+		stats:           stats,
+		plan:            claudePlan,
+		codex:           codexLogin,
+		codexMatchToken: codexMatchToken,
+	}
 	s.mu.Unlock()
 	return
 }
@@ -555,7 +603,15 @@ func currentUsage(e planUsageEntry, now int64) planUsageEntry {
 // ChatGPT-account reader "codex" (agy labels its own in plan_usage_agy.go).
 // These are persisted names, not behavior branches (1881 survivor).
 func (s *planUsageStore) entries() []planUsageEntry {
-	plan, codex := s.detect()
+	plan, codex, codexMatch := s.detectWithCodexMatch()
+	werkID, hasOpenAI := s.openAIUsageIdentity()
+	var orConfigured, orRejected bool
+	var orMasked string
+	var orGen uint64
+	if orStore := s.openRouterStore(); orStore != nil {
+		orConfigured, orMasked, orRejected, orGen = orStore.OpenRouterUsageMeta()
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.nowTime().UnixMilli()
@@ -566,12 +622,22 @@ func (s *planUsageStore) entries() []planUsageEntry {
 		c.Plan = plan
 		out = append(out, currentUsage(c, now))
 	}
-	if codex {
-		x := s.gpt
-		x.Harness = "codex"
-		out = append(out, currentUsage(x, now))
+	if matchesCodexAndWerkOpenAI(codex, codexMatch, werkID) {
+		out = append(out, s.unifiedCodexOpenAIEntryLocked(now, werkID))
+	} else {
+		if codex {
+			x := s.gpt
+			x.Harness = "codex"
+			out = append(out, currentUsage(x, now))
+		}
+		if hasOpenAI && werkID.Configured {
+			out = append(out, s.werkOpenAIEntryLocked(now, werkID))
+		}
 	}
 	out = append(out, s.agyEntriesLocked(now)...)
+	if orEntry, ok := s.openRouterEntryWithMetaLocked(orConfigured, orMasked, orRejected, orGen); ok {
+		out = append(out, orEntry)
+	}
 	return out
 }
 

@@ -76,6 +76,9 @@ type ServerOptions struct {
 	// phone messenger host. When nil and Live implements CompanionHost,
 	// NewServerWithOptions binds Live automatically.
 	Companion CompanionHost
+	// CompanionDelegation bridges ws/companion.delegate_work and
+	// ws/delegation.report to the daemon's in-memory delegation runtime.
+	CompanionDelegation CompanionDelegationHost
 	// Conv is the dashboard daemon's conversation history search/read/reveal
 	// host. When nil and Live implements ConvHost, NewServerWithOptions binds
 	// Live automatically.
@@ -260,6 +263,7 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 			s.companion = host
 		}
 	}
+	s.companionDelegation = opts.CompanionDelegation
 	s.conv = opts.Conv
 	if s.conv == nil && opts.Live != nil {
 		if host, ok := opts.Live.(ConvHost); ok {
@@ -430,6 +434,13 @@ func (s *Server) resolveHostedSession() string {
 		return ""
 	}
 	key := strings.TrimSpace(s.getenv(envHostedSessionKey))
+	// A daemon-authenticated HTTP MCP connection (durable or external) already
+	// bound s.conversation from its per-session token; when its key's reply-id
+	// matches that authenticated conversation, honor it directly even when the
+	// durable process has no separate OS harness PID (OwnerPID == 0).
+	if s.conversation != "" && key != "" && wsmailbox.ReplyID(key) == s.conversation {
+		return key
+	}
 	row := strings.TrimSpace(s.getenv(envHostedSessionRow))
 	harness := s.harnessPID()
 	if key == "" || row == "" || harness <= 0 {

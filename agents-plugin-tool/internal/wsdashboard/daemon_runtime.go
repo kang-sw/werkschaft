@@ -104,6 +104,16 @@ func (d *Daemon) AgyActivity() {
 	d.agyActivity(nil)
 }
 
+// RecordWerkUsage accumulates one completed werk model response's token and
+// cost figures into the daemon's in-memory per-model usage store and schedules
+// a debounced wsmeta SQLite flush.
+func (d *Daemon) RecordWerkUsage(delta WerkUsageDelta) {
+	if d == nil || d.planUsage == nil {
+		return
+	}
+	d.planUsage.recordWerkUsage(delta)
+}
+
 // QuotaResetAt returns a cached future quota reset timestamp (epoch ms) from
 // the daemon's in-memory plan usage store, or 0 when unavailable.
 func (d *Daemon) QuotaResetAt(backend, model string) int64 {
@@ -273,6 +283,13 @@ func (d *Daemon) Close() {
 			runFlush(d.beforeUnlock)
 		}
 		flushWG.Wait()
+		// Flush any final werk per-model usage deltas emitted while agents were
+		// closing before shutting down SQLite.
+		if d.planUsage != nil {
+			if err := d.planUsage.flushWerkUsage(context.Background()); err != nil {
+				fmt.Fprintf(d.log, "dashboard: flush werk usage: %v\n", err)
+			}
+		}
 		// Close SQLite only after every HTTP route, poller, ack checker,
 		// usage probe, runner, and BeforeUnlock hook (including tracker
 		// hooks) has drained, and strictly before releasing dashboard.lock

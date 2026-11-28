@@ -361,6 +361,7 @@
       stateFilter = value;
       opt.save(opt.key + ".state-filter", value);
       countTopics();
+      if (window.WsBoardAnchor && window.WsBoardAnchor.reveal) window.WsBoardAnchor.reveal(true);
       if (dismiss) stateUI.close(true);
       else if (focus) (stateUI.inline.hidden && stateUI.inline.contains(focus) ? stateUI.trigger : focus).focus({ preventScroll: true });
       if (after) after();
@@ -716,6 +717,67 @@
       if (n.style && n.style.top) n.style.top = "";
       if (n.removeAttribute) n.removeAttribute("data-wb-offwindow");
     }
+  }
+  // suspendFreeNode lifts inline free-canvas top and ResizeObserver tracking
+  // while a node is drawn fixed ([data-max]), keeping its free-canvas Y and
+  // laid height so restore lands at the pre-maximize scroll position.
+  function suspendFreeNode(n) {
+    if (!n || n.nodeType !== 1) return;
+    if (window.WsBoardAnchor && window.WsBoardAnchor.releaseNode) {
+      window.WsBoardAnchor.releaseNode(n, { keepCoords: true });
+    } else {
+      if (n.style && n.style.top) n.style.top = "";
+      if (n.removeAttribute) n.removeAttribute("data-wb-offwindow");
+    }
+  }
+  function captureFreeOffset(n) {
+    var anchor = window.WsBoardAnchor;
+    if (!n || !board || !board.contains(n) || !anchor || !anchor.free || !anchor.free()) return undefined;
+    var col = doc.getElementById("bcol");
+    var info = anchor.windowInfo && anchor.windowInfo();
+    var y = info && info.posOf ? info.posOf(n) : undefined;
+    return col && typeof y === "number" ? y - col.scrollTop : undefined;
+  }
+  function restoreFreeNode(el, freeOffset) {
+    var anchor = window.WsBoardAnchor;
+    if (!anchor || !anchor.settle) return false;
+    if (!el || !el.isConnected || !board || !board.contains(el) || !anchor.free || !anchor.free()) {
+      anchor.settle();
+      return false;
+    }
+    var hasOffset = typeof freeOffset === "number" && isFinite(freeOffset);
+    var info = anchor.windowInfo && anchor.windowInfo();
+    var idx = info && info.indexOf ? info.indexOf(el) : -1;
+    var inWindow = !!(info && idx >= info.start && idx <= info.end);
+    if (!inWindow && anchor.select) {
+      var jumpOpt = { keep: true, fullVirtual: true };
+      if (hasOffset) jumpOpt.jumpOffset = freeOffset;
+      if (anchor.select(el, jumpOpt)) return true;
+    }
+    anchor.settle();
+    var col = doc.getElementById("bcol");
+    info = anchor.windowInfo && anchor.windowInfo();
+    var y = info && info.posOf ? info.posOf(el) : undefined;
+    if (typeof y === "number" && col) {
+      if (hasOffset) {
+        var curH = info && info.heightOf ? info.heightOf(el) : 0;
+        var effOffset = freeOffset;
+        if (curH > 0 && effOffset < 0 && -effOffset >= curH - 1) {
+          effOffset = -Math.max(0, curH - 120);
+        }
+        var maxScroll = Math.max(0, col.scrollHeight - col.clientHeight);
+        var target = Math.max(0, Math.min(maxScroll, Math.round(y - effOffset)));
+        if (Math.abs(col.scrollTop - target) > 0.5) col.scrollTop = target;
+        return true;
+      }
+      if (!anchor.visibleCards || anchor.visibleCards().indexOf(el) >= 0) return true;
+    }
+    if (anchor.select) {
+      var selOpt = { keep: true, fullVirtual: true };
+      if (hasOffset) selOpt.jumpOffset = freeOffset;
+      return !!anchor.select(el, selOpt);
+    }
+    return false;
   }
   function arrange(moved) {
     if (!board) return;
@@ -2330,24 +2392,19 @@
         was.owner.hidden();
         if (was.back.isConnected) was.back.focus({ preventScroll: true });
       } else if (was instanceof Card) {
+        var cardFreeOffset = was._freeOffset;
+        delete was._freeOffset;
         was.el.removeAttribute("data-max");
         if (was.kind === "explorer") doc.body.removeAttribute("data-explorer-max");
         was.el.removeAttribute("data-float");
         was.el.style.height = "";
         was.sized();
-        if (window.WsBoardAnchor && window.WsBoardAnchor.settle) window.WsBoardAnchor.settle();
-        if (was.maxBtn.isConnected) was.maxBtn.focus();
+        restoreFreeNode(was.el, cardFreeOffset);
+        if (was.maxBtn.isConnected) was.maxBtn.focus({ preventScroll: true });
       } else {
-        var origin = was.panelHosts && was.panelHosts[0];
+        var origin = was.topic ? (was.el && was.el.isConnected ? was.el : null) : (was.panelHosts && was.panelHosts[0]);
         var back = shrink(was);
-        var anchor = window.WsBoardAnchor;
-        if (anchor && anchor.settle) {
-          // A fixed panel can stay in view while its topic leaves the board
-          // viewport. Bring that topic back before returning focus to it.
-          var moved = back && origin && board.contains(origin) && anchor.free && anchor.free()
-            && anchor.visibleCards().indexOf(origin) < 0;
-          if (!moved || !anchor.select(origin, { keep: true })) anchor.settle();
-        }
+        restoreFreeNode(origin, was.freeOffset);
         if (back) back.focus({ preventScroll: true });
       }
     }
@@ -2383,7 +2440,8 @@
       if (m) m.focus({ preventScroll: true });
       return;
     }
-    releaseFreeNode(c.el);
+    c._freeOffset = captureFreeOffset(c.el);
+    suspendFreeNode(c.el);
     c.el.style.height = c.el.getBoundingClientRect().height + "px";
     c.el.setAttribute("data-max", "");
     if (c.kind === "explorer") doc.body.setAttribute("data-explorer-max", "");
@@ -2432,7 +2490,8 @@
     sizeSheet(t);
     if (n.hasAttribute("data-max")) return;
     if (t.topic) {
-      releaseFreeNode(n);
+      if (t.freeOffset === undefined) t.freeOffset = captureFreeOffset(n);
+      suspendFreeNode(n);
       if (window.WsBoardAnchor && window.WsBoardAnchor.hydrate) window.WsBoardAnchor.hydrate(n, { immediate: true });
     }
     if (t.topic) {
@@ -2446,6 +2505,7 @@
       var sec = n.closest && n.closest("section.topic");
       var hosts = [];
       if (sec) {
+        if (t.freeOffset === undefined) t.freeOffset = captureFreeOffset(sec);
         hosts.push(sec);
         for (var p = n.parentNode; p && p !== sec; p = p.parentNode) {
           if (p.parentNode === sec && !p.classList.contains("tophead")) { hosts.push(p); break; }
@@ -2470,7 +2530,10 @@
   function shrink(t) {
     var n = t.el && t.el.isConnected ? t.el : null;
     if (t.el) shrinkNode(t);
-    (t.scroll || []).forEach(function (s) { s[0].scrollTop = s[1]; });
+    var skipFreeCol = t.topic && typeof t.freeOffset === "number" && isFinite(t.freeOffset)
+      && window.WsBoardAnchor && window.WsBoardAnchor.free && window.WsBoardAnchor.free()
+      ? doc.getElementById("bcol") : null;
+    (t.scroll || []).forEach(function (s) { if (s[0] !== skipFreeCol) s[0].scrollTop = s[1]; });
     return n ? sheetBtn(n, "d-max") : null;
   }
   // follow draws a large board node large again after a board update: on

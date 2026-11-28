@@ -307,9 +307,9 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
    harness icon at 49px; a row's grip takes the 14px between the guide line
    and its harness icon */
 .rail .rsessions { margin: 0 8px 0 33px; padding-left: 0; border-left: 2px solid var(--wb-muted); }
-.rail .rended .rsessions { margin: 0; padding: 0; border: 0; }
-/* the fold row under a group's live rows: two halves, archived and ended,
-   one tri-state radio (none, archived, or ended open; rail.js marks) */
+/* the fold row under a group's live rows: two buttons, archived and ended,
+   each opening a popup of its rows (.rfpop, below); the .rended lists beside
+   the row are only the popup's hidden source and never show */
 .rail .rfold { display: flex; align-items: stretch; padding: 4px 8px 2px 14px; font-size: 11.5px; color: var(--wb-muted-fg); }
 .rail .rfh { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; white-space: nowrap; }
 .rail .rfh + .rfh { padding-left: 10px; border-left: 1px solid var(--wb-muted); }
@@ -328,10 +328,7 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rail .rfh.d-rdrop-arch, .rail .rfh.d-rdrop-del { border-radius: 5px; opacity: 1; }
 .rail .rfh.d-rdrop-arch { color: var(--wb-primary); background: color-mix(in srgb, var(--wb-primary) 16%, transparent); }
 .rail .rfh.d-rdrop-del { color: var(--wb-fail); background: color-mix(in srgb, var(--wb-fail) 14%, transparent); }
-.rail .rended.d-rdrop-list { border-radius: 6px; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 45%, transparent); background: color-mix(in srgb, var(--wb-primary) 6%, transparent); }
-.rail .rended[data-k="del"].d-rdrop-list { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-fail) 45%, transparent); background: color-mix(in srgb, var(--wb-fail) 6%, transparent); }
-.rail .rfold + .rended { margin-top: 2px; }
-.rail .rended:not(.on) { display: none; }
+.rail .rended { display: none; }
 .rail .rs { position: relative; display: flex; align-items: flex-start; gap: 0; padding-left: 14px; border-radius: 6px; }
 .rail .rs:hover { background: color-mix(in srgb, var(--wb-primary) 6%, var(--wb-card)); }
 /* Owner exception: crisp neon primary outline on the selected rail row so it stays
@@ -511,22 +508,23 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rail .rs.cur .qdot { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card)); }
 /* Unread attention: three fast flashes (0.38s * 3 = 1.14s) on arrival, then
    a seamless transition into a continuous 1Hz gradient pulse; server-replaced
-   rows mount with .attn alone and start directly in the 1Hz pulse. The
-   question dot's z-index keeps it above both overlays. */
+   or reordered rows inherit --attn-t / --attn-breathe-delay so their phase
+   continues without restarting. The question dot's z-index keeps it above both
+   overlays. */
 .rail .rs.attn::before {
   content: ""; position: absolute; inset: 0; border-radius: 6px; pointer-events: none;
   background: linear-gradient(90deg, var(--wb-accent-policy) 0%, color-mix(in srgb, var(--wb-accent-policy) 68%, transparent) 60%, color-mix(in srgb, var(--wb-accent-policy) 18%, transparent) 100%);
   opacity: .04;
-  animation: attn-breathe 1s ease-in-out infinite;
+  animation: attn-breathe 1s ease-in-out var(--attn-breathe-delay, 0s) infinite;
 }
 .rail .rs.attn .hb::after {
   content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
   box-shadow: 0 0 0 3px var(--wb-accent-policy);
   opacity: .25;
-  animation: attn-breathe-ring 1s ease-in-out infinite;
+  animation: attn-breathe-ring 1s ease-in-out var(--attn-breathe-delay, 0s) infinite;
 }
-.rail .rs.attn.attn-flash::before { animation: attn-flash .38s ease-in-out 3, attn-breathe 1s ease-in-out 1.14s infinite; }
-.rail .rs.attn.attn-flash .hb::after { animation: attn-flash-ring .38s ease-in-out 3, attn-breathe-ring 1s ease-in-out 1.14s infinite; }
+.rail .rs.attn.attn-flash::before { animation: attn-flash .38s ease-in-out calc(-1 * var(--attn-t, 0s)) 3, attn-breathe 1s ease-in-out calc(1.14s - var(--attn-t, 0s)) infinite; }
+.rail .rs.attn.attn-flash .hb::after { animation: attn-flash-ring .38s ease-in-out calc(-1 * var(--attn-t, 0s)) 3, attn-breathe-ring 1s ease-in-out calc(1.14s - var(--attn-t, 0s)) infinite; }
 @keyframes attn-flash { 0%, 100% { opacity: .04; } 50% { opacity: .44; } }
 @keyframes attn-breathe { 0%, 100% { opacity: .04; } 50% { opacity: .28; } }
 /* The ring's shadow is static and only its opacity moves, so the pulse stays
@@ -562,6 +560,27 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rpop.shp { position: fixed; z-index: calc(var(--z-popovers, 60) + 1); width: 320px; box-sizing: border-box; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); overflow: auto; gap: 9px; pointer-events: none; }
 .rpop.shp * { pointer-events: none; }
 .rpop.shp[hidden] { display: none; }
+/* The archived/deleted popup (rpFoldMake): hangs from the fold row as wide as
+   the rail; the list is bounded and scrolls on its own, so a long history
+   never moves the live rows. It sits inside .rail, so its copied rows take
+   the rail's own row styles; the rows carry no grip. */
+.rpop.rfpop { gap: 8px; padding: 10px 10px 8px; overflow: hidden; min-width: 0; }
+.rfpop .rfphd { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.rfpop .rfpt { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 800; }
+.rfpop .rfx { flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--wb-muted-fg); cursor: pointer; }
+.rfpop .rfx .i { width: 14px; height: 14px; }
+.rfpop .rfx:hover { background: var(--wb-muted); color: var(--wb-fg); }
+.rfpop .rfx:focus-visible, .rfpop .rftab:focus-visible, .rfpop .rfq:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: 1px; }
+.rfpop .rftabs { display: flex; gap: 2px; padding: 2px; border-radius: 999px; background: var(--wb-muted); }
+.rfpop .rftab { flex: 1 1 0; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 4px; font: inherit; font-size: 12px; font-weight: 600; border: 0; border-radius: 999px; padding: 3px 8px; background: transparent; color: var(--wb-muted-fg); cursor: pointer; white-space: nowrap; }
+.rfpop .rftab .i { width: 12px; height: 12px; stroke-width: 1.7; flex: none; }
+.rfpop .rftab .d-n { font-variant-numeric: tabular-nums; }
+.rfpop .rftab[aria-selected="true"] { background: var(--wb-card); color: var(--wb-fg); box-shadow: var(--wb-shadow); }
+.rfpop .rftab:disabled { opacity: .45; cursor: default; }
+.rfpop .rfq { font: inherit; font-size: 12.5px; width: 100%; min-width: 0; box-sizing: border-box; border: 0; border-radius: 8px; padding: 5px 9px; background: var(--wb-muted); color: inherit; }
+.rfpop .rflist { max-height: min(60vh, 420px); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; min-width: 0; margin: 0 -4px; padding: 0 4px; }
+.rfpop .rflist .rs { padding-left: 6px; }
+.rfpop .rfnone { margin: 0; padding: 14px 4px; text-align: center; font-size: 12px; color: var(--wb-muted-fg); }
 .shp-hd { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .shp-nm { font-size: 13px; font-weight: 800; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shp-hd .phase, .shp-hd .chip { margin-left: auto; height: 18px; font-size: 11px; padding: 0 7px 0 6px; gap: 5px; flex: none; }

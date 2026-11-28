@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="dark" data-preset="wide" data-rail-collapsed="true">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Werkschaft Dashboard — Standalone Git Page in Always-Open #bgal</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <!-- Inline SVG Symbol Sprite (Zero External Dependencies) -->
+  <svg xmlns="http://www.w3.org/2000/svg" hidden aria-hidden="true" style="display:none">
+    <symbol id="i-branch" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="4.5" cy="3.6" r="1.6"/><circle cx="4.5" cy="12.4" r="1.6"/><circle cx="11.5" cy="5.6" r="1.6"/>
+      <path d="M4.5 5.2v5.6M11.5 7.2c0 2.5-2 3.2-7 3.2"/>
+    </symbol>
+    <symbol id="i-hammer" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9.6 3.4 12.6 6.4 10.7 8.3 7.7 5.3z"/><path d="M8.6 6.2 3.2 11.6a1.1 1.1 0 0 0 1.6 1.6L10.2 7.8"/>
+    </symbol>
+    <symbol id="i-trophy" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5 3h6v4a3 3 0 0 1-6 0zM5 4.2H3a1.5 1.5 0 0 0 0 3h2M11 4.2h2a1.5 1.5 0 0 1 0 3h-2M8 10v3M5.5 13h5"/>
+    </symbol>
+    <symbol id="i-folder" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2.2 4.2A1.2 1.2 0 0 1 3.4 3h3l1.4 1.6h4.8a1.2 1.2 0 0 1 1.2 1.2v6a1.2 1.2 0 0 1-1.2 1.2H3.4a1.2 1.2 0 0 1-1.2-1.2z"/>
+    </symbol>
+    <symbol id="i-fetch" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 2.5v7.5M5 7.3 8 10.3l3-3M3 12.8h10"/>
+    </symbol>
+    <symbol id="i-pull" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 2.5v8.5M4.8 7.8 8 11l3.2-3.2M3.2 13.2h9.6"/>
+    </symbol>
+    <symbol id="i-push" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 13.2V4.7M4.8 7.9 8 4.7l3.2 3.2M3.2 2.8h9.6"/>
+    </symbol>
+    <symbol id="i-refresh" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M13 8a5 5 0 1 1-1.4-3.5M13 2.5v2.8h-2.8"/>
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3.2 8.4 6.4 11.6 12.8 4.6"/>
+    </symbol>
+    <symbol id="i-copy" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="5.4" y="5.4" width="7.8" height="7.8" rx="1.4"/><path d="M3.6 10.6H3a1.2 1.2 0 0 1-1.2-1.2V3A1.2 1.2 0 0 1 3 1.8h6.4a1.2 1.2 0 0 1 1.2 1.2v.6"/>
+    </symbol>
+    <symbol id="i-x" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 4l8 8M12 4l-8 8"/>
+    </symbol>
+    <symbol id="i-chev" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 4.5 6 7.5l3-3"/>
+    </symbol>
+    <symbol id="i-shield" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 2.2 13 4.2v3.7c0 3.1-2.1 5.1-5 5.9-2.9-.8-5-2.8-5-5.9V4.2z"/>
+      <path d="m5.8 8.2 1.5 1.5 3-3.2"/>
+    </symbol>
+    <symbol id="i-diff" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4.5 3.5v4M2.5 5.5h4M9.5 10.5h4M3 13l10-10"/>
+    </symbol>
+    <symbol id="i-trash" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 4.5h10M6.2 4.5V3.1c0-.5.4-.9.9-.9h1.8c.5 0 .9.4.9.9v1.4M4.4 4.5l.7 8.4c.1.6.5 1.1 1.1 1.1h3.6c.6 0 1-.5 1.1-1.1l.7-8.4"/>
+    </symbol>
+    <symbol id="i-commit" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="8" cy="8" r="2.6"/><path d="M2 8h3.4M10.6 8H14"/>
+    </symbol>
+    <symbol id="i-jump" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4.5 11.5 11.5 4.5M6.2 4.5h5.3v5.3"/>
+    </symbol>
+  </svg>
+
+  <!-- Interactive Mockup Switcher Bar -->
+  <header class="m-bar" role="banner" aria-label="Standalone Git Page 목업 프리셋 바">
+    <div class="m-bar-left">
+      <span class="m-badge">TRACK 2B · GIT</span>
+      <div class="m-tabs" role="tablist" aria-label="뷰 프리셋 선택">
+        <button type="button" class="m-tab is-on" role="tab" data-preset="wide" aria-selected="true">Wide 3-Region (900px)</button>
+        <button type="button" class="m-tab" role="tab" data-preset="narrow" aria-selected="false">Narrow 3-Tab (380px)</button>
+        <button type="button" class="m-tab" role="tab" data-preset="busy" aria-selected="false">Scanning / Busy State</button>
+      </div>
+    </div>
+
+    <div class="m-bar-right">
+      <span class="m-metric" id="m-bgal-width" title="#bgal 현재 폭 · 좌측 경계 드래그로 Wide(>=720px) <-> Narrow(360-719px) 실시간 전환">#bgal · 900px · Wide</span>
+      <button type="button" class="m-ctrl" id="m-theme-toggle" aria-pressed="false" title="다크 / 라이트 테마 전환">
+        <svg class="ic ic-moon" viewBox="0 0 16 16" aria-hidden="true"><path d="M12.8 10.2A5.5 5.5 0 0 1 5.8 3.2a5.5 5.5 0 1 0 7 7z"/></svg>
+        <svg class="ic ic-sun" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1"/></svg>
+        <span id="m-theme-lbl">Dark</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Variant D Outer Dashboard Shell -->
+  <div class="ws-app" id="ws-app">
+    <!-- Topbar (36px, Per-Session Scope) -->
+    <header class="shell-top" aria-label="세션 상단 바">
+      <div class="top-left">
+        <button type="button" class="t-tool" id="railbtn" title="세션 레일 접기/펼치기" aria-label="세션 레일 접기/펼치기" aria-expanded="false">
+          <svg class="ic" viewBox="0 0 16 16"><rect x="1.8" y="2.5" width="12.4" height="11" rx="1.4"/><line x1="5.6" y1="2.5" x2="5.6" y2="13.5"/></svg>
+        </button>
+
+        <button type="button" class="t-seg tph-parent" title="부모 세션 (메인)">
+          <svg class="ic-sm tph-up" viewBox="0 0 16 16"><path d="M11 11 5 5M5 10V5h5"/></svg>
+          <span>메인</span>
+        </button>
+
+        <span class="crumb-sep" aria-hidden="true">›</span>
+
+        <div class="tph-id">
+          <span class="tph-r1">devenv</span>
+          <span class="tph-slash" aria-hidden="true">/</span>
+          <span class="sname">
+            <span class="snm">기능 2</span>
+            <span class="sseq">#42</span>
+          </span>
+        </div>
+
+        <div class="slot-top-left">
+          <span class="worktree-path" title="현재 브랜치: develop">
+            <svg class="ic-xs"><use href="#i-branch"/></svg>
+            <span class="br-txt">develop</span>
+          </span>
+          <span class="tph-hs">
+            <span class="hb sm" data-h="agy"></span>
+            <span class="hs-lbl">agy · high</span>
+          </span>
+          <span class="sse">
+            <span class="sse-dot" aria-hidden="true"></span>
+            <span>Live</span>
+          </span>
+        </div>
+      </div>
+
+      <div class="top-center">
+        <button type="button" class="tkqs-btn" title="빠른 검색 (⌘K)">
+          <svg class="ic" viewBox="0 0 16 16"><circle cx="7.2" cy="7.2" r="4.3"/><path d="m10.5 10.5 3.2 3.2"/></svg>
+          <span class="tkqs-ph">세션·티켓·커밋 검색…</span>
+          <kbd class="tkqs-kbd">⌘K</kbd>
+        </button>
+      </div>
+
+      <div class="top-right">
+        <div class="stage-drawers" role="group" aria-label="전역 티켓 및 드로어 컨트롤">
+          <div class="tk-handle">
+            <button type="button" class="tk-pill" title="티켓 트래커">
+              <svg class="ic" viewBox="0 0 16 16"><rect x="2.2" y="2.5" width="11.6" height="11" rx="1.6"/><line x1="5" y1="6" x2="11" y2="6"/><line x1="5" y1="9.2" x2="9" y2="9.2"/></svg>
+              <span>티켓</span>
+              <span class="tk-cnt">4</span>
+            </button>
+          </div>
+          <!-- #ghandle retired: Git now lives permanently inside Always-Open #bgal -->
+          <button type="button" class="t-seg t-drawer-btn" title="임시 레거시 워크패널 드로어">
+            <svg class="ic" viewBox="0 0 16 16"><rect x="1.8" y="2.5" width="12.4" height="11" rx="1.4"/><line x1="10.2" y1="2.5" x2="10.2" y2="13.5"/></svg>
+            <span class="t-lbl">드로어</span>
+            <span class="dr-dot" aria-hidden="true"></span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Workbench Body -->
+    <div class="ws-body" id="ws-body">
+      <!-- Optional Collapsible Left Session Rail -->
+      <aside class="rail" id="rail" aria-label="세션 레일">
+        <div class="rail-session-panel">
+          <div class="rhd">
+            <b class="rtitle">세션</b>
+            <span class="rsp"></span>
+            <span class="chip-live"><i class="dot"></i>2</span>
+          </div>
+          <div class="rlist">
+            <section class="rws">
+              <div class="wsbar">
+                <svg class="ic-chev"><use href="#i-chev"/></svg>
+                <span class="nm">devenv</span>
+                <span class="ws-counts"><span class="ct">3</span></span>
+              </div>
+              <div class="wthd">
+                <svg class="ic-xs"><use href="#i-branch"/></svg>
+                <span class="br">develop</span>
+                <span class="gs">±5</span>
+              </div>
+              <div class="rsessions">
+                <div class="rs">
+                  <span class="hb" data-h="agy"></span>
+                  <div class="rs-body">
+                    <div class="rs-line1"><span class="rs-name">메인</span><span class="rs-when">2분</span></div>
+                    <div class="rs-sub">Track 2B Git 페이지 확정</div>
+                  </div>
+                </div>
+                <div class="rs cur">
+                  <span class="hb" data-h="agy"></span>
+                  <div class="rs-body">
+                    <div class="rs-line1"><span class="rs-name">기능 2</span><span class="rs-when live">지금</span></div>
+                    <div class="rs-sub">Standalone Git Page (#bgal)</div>
+                  </div>
+                </div>
+                <div class="rs">
+                  <span class="hb" data-h="claude"></span>
+                  <div class="rs-body">
+                    <div class="rs-line1"><span class="rs-name">기능 1</span><span class="rs-when">8분</span></div>
+                    <div class="rs-sub">impl/develop/account-slots</div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Variant D Inset Rounded Stage Well -->
+      <div class="stage-well">
+        <main class="stage" id="stage" aria-label="대시보드 스테이지">
+          <!-- Left Context Pane: Session Conversation + Approved Decisions Summary -->
+          <section class="pane-context" aria-label="세션 대화 및 승인된 결정 컨텍스트">
+            <div class="chat-card">
+              <div class="ctabs">
+                <div class="ctabs-l">
+                  <button type="button" class="ctab is-on">대화</button>
+                  <button type="button" class="ctab">화이트보드</button>
+                </div>
+                <div class="ctabs-r">
+                  <span class="meta-pill">승인 <strong>4/4</strong></span>
+                </div>
+              </div>
+
+              <div class="cstream">
+                <div class="pin-card">
+                  <div class="pin-hd">
+                    <strong>Standalone Git Page — Owner-Approved</strong>
+                    <span class="pin-ctx">#bgal</span>
+                  </div>
+                  <p class="pin-txt">상시 오픈 갤러리(<code>#bgal</code>)의 고정 시스템 페이지 <strong>Git</strong>은 상단 액션 + 클릭 가능한 <strong>Review Ledger</strong> 스트립, Wide(<code>&ge;720px</code>) 3-영역, Narrow(<code>360–719px</code>) 3-탭 및 수동 <strong>WalkDir</strong> 스캔을 구현합니다.</p>
+                </div>
+
+                <div class="dec-list">
+                  <div class="dec-item">
+                    <span class="dec-id">(1725)=a</span>
+                    <div><strong>Wide 3-Region 구성</strong> — 좌측 커밋 그래프(52%), 우상단 변경·Diff(54%), 우하단 워크트리 풀(46%)</div>
+                  </div>
+                  <div class="dec-item">
+                    <span class="dec-id">(1726)=a</span>
+                    <div><strong>Review Ledger 클릭 점프</strong> — 워터마크 필 클릭 시 마지막 리뷰 프론티어(<code>4c72b9d</code>)로 부드럽게 점프 &amp; 하이라이트</div>
+                  </div>
+                  <div class="dec-item">
+                    <span class="dec-id">(1728)=a</span>
+                    <div><strong>Narrow 3-Tab 세그먼트</strong> — <code>360–719px</code>에서 <code>그래프 | 변경·Diff | 워크트리</code> 전환, 프론티어 점프 시 그래프 탭 자동 전환</div>
+                  </div>
+                  <div class="dec-item">
+                    <span class="dec-id">(1729)=a</span>
+                    <div><strong>워크트리 수동 전체 스캔</strong> — 경량 목록 즉시 로드(<code>—</code>), 대형 새로 고침 버튼 클릭 시에만 <code>WalkDir</code> 용량 스캔</div>
+                  </div>
+                </div>
+
+                <article class="msg">
+                  <div class="mh">
+                    <span class="m-av"></span>
+                    <strong>리드</strong>
+                    <span class="m-time">11:36</span>
+                  </div>
+                  <div class="mb">
+                    <p>우측 <code>#bgal</code> 좌측 경계를 드래그하거나 상단 프리셋에서 <strong>Narrow 3-Tab (380px)</strong>로 전환해 반응형 3-탭과 프론티어 자동 점프를 확인해 보세요.</p>
+                  </div>
+                </article>
+              </div>
+
+              <div class="composer">
+                <div class="cfield">
+                  <div class="cinput">Review 필 클릭 → <code>4c72b9d</code> 점프, 워크트리 대형 새로 고침 → 용량 스캔<span class="caret"></span></div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Always-Open Pinned Gallery (#bgal) with .gal-rail on the RIGHT edge -->
+          <aside class="bgal" id="bgal" data-active-page="git" aria-label="상시 오픈 도킹 갤러리 (#bgal)">
+            <!-- Draggable Left Resize Edge Handle -->
+            <div class="bp-edge" id="bgal-edge" role="separator" aria-orientation="vertical" aria-label="도킹 갤러리 너비 조절" tabindex="0" title="좌우 드래그로 #bgal 너비 조절 (360px–1080px)"></div>
+
+            <!-- Gallery Viewport (Left of .gal-rail so .gal-rail sits on right edge) -->
+            <div class="gal-viewport" id="gal-viewport">
+              <!-- ACTIVE SYSTEM PAGE: Standalone Git Page -->
+              <section class="gal-page is-active" data-page-panel="git" aria-label="Git 시스템 페이지">
+                <div class="git-page" id="git-page">
+                  <!-- Top Action & Review Ledger Strip (Always Visible across Wide & Narrow) -->
+                  <header class="git-strip" aria-label="브랜치 액션 및 리뷰 레저 바">
+                    <div class="git-strip-main">
+                      <!-- Branch + Upstream Sync -->
+                      <div class="git-branch-box" title="현재 브랜치: develop → origin/develop (앞섬 1, 뒤처짐 0)">
+                        <span class="git-br-badge">
+                          <svg class="ic-sm"><use href="#i-branch"/></svg>
+                          <span class="git-br-name" id="git-br-name">develop</span>
+                        </span>
+                        <span class="git-up-sync" id="git-up-sync">
+                          <span class="git-up-ref">origin/develop</span>
+                          <b class="up" id="git-ahead">↑1</b>
+                          <b class="dn muted" id="git-behind">↓0</b>
+                        </span>
+                      </div>
+
+                      <!-- Compact Actions: Fetch, Pull, Push -->
+                      <div class="git-actions" role="group" aria-label="원격 저장소 액션">
+                        <button type="button" class="gact-btn" data-git-act="fetch" data-busy-lbl="Fetching…" title="원격 브랜치 상태 가져오기 (git fetch)">
+                          <svg class="ic-xs"><use href="#i-fetch"/></svg>
+                          <span>Fetch</span>
+                        </button>
+                        <button type="button" class="gact-btn" data-git-act="pull" data-busy-lbl="Pulling…" title="원격 변경 사항 당겨오기 (git pull)">
+                          <svg class="ic-xs"><use href="#i-pull"/></svg>
+                          <span>Pull</span>
+                        </button>
+                        <button type="button" class="gact-btn is-primary" data-git-act="push" data-busy-lbl="Pushing…" title="로컬 커밋 1건 푸시 (git push)">
+                          <svg class="ic-xs"><use href="#i-push"/></svg>
+                          <span>Push</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <!-- Clickable Review Ledger / Watermark Pill ((1726)=a) -->
+                    <button type="button" class="review-pill is-warn" id="review-ledger-pill"
+                      title="클릭하여 마지막 리뷰 프론티어 커밋 (4c72b9d)로 점프 · Narrow에서는 그래프 탭으로 자동 전환">
+                      <span class="rp-dot" aria-hidden="true"></span>
+                      <svg class="ic-xs rp-ic"><use href="#i-shield"/></svg>
+                      <span class="rp-full">
+                        <strong class="rp-k">Review:</strong>
+                        <span class="rp-stat">12 merges</span>
+                        <span class="rp-sep">·</span>
+                        <span class="rp-delta"><em class="add">+4,820</em> / <em class="del">-1,910</em></span>
+                        <span class="rp-sep">·</span>
+                        <span class="rp-verdict">pass @ <code class="rp-sha">4c72b9d</code></span>
+                      </span>
+                      <span class="rp-compact">
+                        <strong class="rp-k">Review</strong>
+                        <span class="rp-stat">12m</span>
+                        <span class="rp-delta"><em class="add">+4.8k</em>/<em class="del">-1.9k</em></span>
+                        <span class="rp-verdict">pass@<code>4c72b9d</code></span>
+                      </span>
+                      <svg class="ic-xs rp-jump" aria-hidden="true"><use href="#i-jump"/></svg>
+                    </button>
+                  </header>
+
+                  <!-- Inline Action Feedback Banner (hidden when idle) -->
+                  <div class="git-feedback" id="git-feedback" hidden role="status" aria-live="polite"></div>
+
+                  <!-- Narrow-Only 3-Tab Segmented Switch ((1728)=a, shown <= 719px) -->
+                  <div class="git-narrow-tabs" id="git-narrow-tabs" role="tablist" aria-label="Git 섹션 탭 전환">
+                    <button type="button" class="gntab is-on" role="tab" data-git-tab="graph" aria-selected="true">
+                      <svg class="ic-xs"><use href="#i-commit"/></svg>
+                      <span>그래프</span>
+                    </button>
+                    <button type="button" class="gntab" role="tab" data-git-tab="diff" aria-selected="false">
+                      <svg class="ic-xs"><use href="#i-diff"/></svg>
+                      <span>변경·Diff</span>
+                      <span class="gntab-cnt" id="tab-diff-cnt">5</span>
+                    </button>
+                    <button type="button" class="gntab" role="tab" data-git-tab="worktrees" aria-selected="false">
+                      <svg class="ic-xs"><use href="#i-folder"/></svg>
+                      <span>워크트리</span>
+                      <span class="gntab-cnt" id="tab-wt-cnt">4</span>
+                    </button>
+                  </div>
+
+                  <!-- Main 3-Region Workspace (Wide: 2-Col 3-Region Grid / Narrow: Active Tab 100% Height) -->
+                  <div class="git-regions" id="git-regions" data-active-tab="graph">
+                    <!-- REGION 1 (Left 52%, Full Height): Git Commit Graph (#glog) -->
+                    <section class="git-card glog" id="glog" data-region="graph" aria-label="Git 커밋 그래프">
+                      <header class="gcard-hd">
+                        <svg class="ic-sm gcard-ic"><use href="#i-commit"/></svg>
+                        <h2 class="gcard-title">커밋 그래프</h2>
+                        <span class="gcard-chip" id="glcount">16+</span>
+                        <span class="gcard-sp"></span>
+                        <button type="button" class="frontier-mini-btn" id="frontier-mini-btn" title="리뷰 프론티어 커밋 4c72b9d로 바로 스크롤">
+                          <span class="fm-dot"></span>
+                          <span>Frontier 4c72b9d</span>
+                        </button>
+                      </header>
+
+                      <div class="glscroll" id="glscroll">
+                        <div class="glcols" aria-hidden="true">
+                          <span>Graph</span>
+                          <span>Commit</span>
+                          <span class="col-author">Author</span>
+                          <span class="r">Age</span>
+                          <span class="r">Hash</span>
+                        </div>
+                        <div class="glrows" id="glrows">
+                          <!-- Rendered by app.js -->
+                        </div>
+                      </div>
+                    </section>
+
+                    <!-- REGION 2 (Top-Right 54% Height): Working Tree Changes / Diff (#gpanel) -->
+                    <section class="git-card gpanel" id="gpanel" data-region="diff" aria-label="워킹 트리 변경 사항">
+                      <header class="gcard-hd">
+                        <svg class="ic-sm gcard-ic"><use href="#i-diff"/></svg>
+                        <h2 class="gcard-title">변경 · Diff</h2>
+                        <span class="gcard-chip" id="gdiff-cnt">5</span>
+                        <span class="gcard-sp"></span>
+                        <span class="gpanel-sum" id="gpanel-sum">
+                          <em class="add">+184</em>
+                          <em class="del">−42</em>
+                        </span>
+                      </header>
+
+                      <div class="gfiles" id="gfiles">
+                        <!-- Rendered by app.js -->
+                      </div>
+                    </section>
+
+                    <!-- REGION 3 (Bottom-Right 46% Height): Pooled Worktrees ((1729)=a) -->
+                    <section class="git-card wtcard" id="wtcard" data-region="worktrees" aria-label="워크트리 풀">
+                      <header class="gcard-hd">
+                        <svg class="ic-sm gcard-ic"><use href="#i-folder"/></svg>
+                        <h2 class="gcard-title">워크트리 풀</h2>
+                        <span class="gcard-chip" id="wtcount" title="임대 중 2 / 전체 4">2/4</span>
+                        <span class="gcard-sp"></span>
+                        <span class="wt-mode-pill is-light" id="wt-mode-pill" title="초기 목록은 디바운스된 경량 조회만 수행하며 디스크 용량(WalkDir)은 스캔하지 않습니다">
+                          <span class="wt-mode-dot" aria-hidden="true"></span>
+                          <span id="wt-mode-txt">경량 목록 · 용량 미스캔</span>
+                        </span>
+                      </header>
+
+                      <!-- Prominent, Unmistakable Large Manual Scan Button ((1729)=a) -->
+                      <div class="wt-scan-bar">
+                        <button type="button" class="wt-scan-btn" id="wt-scan-btn" aria-live="polite">
+                          <span class="wt-scan-prog" id="wt-scan-prog" aria-hidden="true"></span>
+                          <span class="wt-scan-ic" id="wt-scan-ic">
+                            <svg class="ic-sm"><use href="#i-refresh"/></svg>
+                          </span>
+                          <span class="wt-scan-copy">
+                            <strong class="wt-scan-title" id="wt-scan-title">워크트리 새로 고침 (용량 · 상태 전체 스캔)</strong>
+                            <span class="wt-scan-sub" id="wt-scan-sub">경량 목록은 디스크를 읽지 않습니다 · 클릭 시 WalkDir 스캔 실행</span>
+                          </span>
+                          <span class="wt-scan-tag" id="wt-scan-tag">WalkDir</span>
+                        </button>
+                      </div>
+
+                      <div class="wtlist" id="wtlist">
+                        <!-- Rendered by app.js -->
+                      </div>
+
+                      <footer class="wtfoot">
+                        <span class="wtnote" id="wtnote">용량 스캔 후 stale 워크트리 정리 가능량을 확인할 수 있습니다.</span>
+                        <button type="button" class="wtclean" id="wtclean" title="세션에 유휴/stale 워크트리 정리 요청 전송">
+                          <svg class="ic-xs"><use href="#i-trash"/></svg>
+                          <span>Cleanup 요청</span>
+                        </button>
+                      </footer>
+                    </section>
+                  </div>
+
+                  <!-- Subtle Floating Toast for Frontier Jump & Pagination Notice -->
+                  <div class="git-toast" id="git-toast" hidden role="status" aria-live="polite"></div>
+                </div>
+              </section>
+
+              <!-- Secondary Preview Stubs when clicking other .gal-rail dots -->
+              <section class="gal-page" data-page-panel="main" aria-label="홈 메인 화이트보드">
+                <div class="stub-page">
+                  <div class="stub-head">
+                    <span class="stub-badge">홈 · Page 0</span>
+                    <h3>메인 화이트보드 (3-Panel)</h3>
+                    <p>3-Panel(Narrow) 모드에서 <code>.gal-rail</code> 최상단 <code>⌂</code> 버튼으로 메인 화이트보드와 갤러리 페이지를 즉시 전환합니다.</p>
+                    <button type="button" class="stub-back-btn" data-return-git>Git 페이지로 돌아가기 →</button>
+                  </div>
+                </div>
+              </section>
+
+              <section class="gal-page" data-page-panel="ticketmap" aria-label="티켓 맵 시스템 페이지">
+                <div class="stub-page">
+                  <div class="stub-head">
+                    <span class="stub-badge">시스템 페이지</span>
+                    <h3>Ticket Map (Track 2A)</h3>
+                    <p>상시 오픈 <code>#bgal</code>의 첫 번째 고정 시스템 페이지입니다. 이 목업은 Track 2B <strong>Git</strong> 페이지 검증용입니다.</p>
+                    <button type="button" class="stub-back-btn" data-return-git>Git 페이지로 돌아가기 →</button>
+                  </div>
+                </div>
+              </section>
+
+              <section class="gal-page" data-page-panel="workpanel" aria-label="Workpanel 시스템 페이지">
+                <div class="stub-page">
+                  <div class="stub-head">
+                    <span class="stub-badge">시스템 페이지</span>
+                    <h3>Workpanel (Track 2C 예정)</h3>
+                    <p>Todo · Agenda · Notes · Holders 세션 작업 메모리 허브 슬롯입니다.</p>
+                    <button type="button" class="stub-back-btn" data-return-git>Git 페이지로 돌아가기 →</button>
+                  </div>
+                </div>
+              </section>
+
+              <section class="gal-page" data-page-panel="p1" aria-label="사용자 핀 페이지 1">
+                <div class="stub-page">
+                  <div class="stub-head">
+                    <span class="stub-badge">사용자 핀 페이지 · p1</span>
+                    <h3>핀 고정 토픽 (2분할)</h3>
+                    <p>사용자가 화이트보드에서 핀 고정한 토픽과 카드가 시스템 페이지와 공존합니다.</p>
+                    <button type="button" class="stub-back-btn" data-return-git>Git 페이지로 돌아가기 →</button>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <!-- Permanent 34px .gal-rail on the RIGHT Edge of #bgal -->
+            <nav class="gal-rail" id="gal-rail" aria-label="갤러리 페이지 전환 레일">
+              <button type="button" class="gal-rzone" id="gal-prev" title="이전 페이지" aria-label="이전 페이지">▲</button>
+
+              <div class="gal-dots" id="gal-dots" role="tablist" aria-orientation="vertical">
+                <!-- Page 0: Home (visible in 3-panel / Narrow mode) -->
+                <button type="button" class="gal-dot main" data-page="main" data-label="홈 · 메인 화이트보드 (3-Panel)" role="tab" aria-selected="false" aria-label="메인 보드 (Home)">⌂</button>
+
+                <!-- User Pinned Pages (FIRST) -->
+                <button type="button" class="gal-dot page" data-page="p1" data-label="사용자 핀 페이지 1 (2분할)" role="tab" aria-selected="false" aria-label="사용자 핀 페이지 1">
+                  <svg class="gal-dot-icon d-gal-impl" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M5.2 4.2 2 8l3.2 3.8M10.8 4.2 14 8l-3.2 3.8M8.8 3.2 7.2 12.8"/>
+                  </svg>
+                  <svg class="gal-dot-icon d-gal-discuss" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M2.6 3.6h10.8v7.2H6.8L3.8 13v-2.2H2.6z"/>
+                  </svg>
+                </button>
+
+                <!-- + Drop Slot -->
+                <button type="button" class="gal-dot empty" data-page="p1" data-label="새 페이지 드롭 슬롯 (+)" aria-label="새 페이지 드롭 슬롯">+</button>
+
+                <span class="gal-sep" aria-hidden="true"></span>
+
+                <!-- Fixed System Pages (BELOW separator: Workpanel -> Ticket Map -> Git) -->
+                <div class="gal-group-sys" aria-label="고정 시스템 페이지">
+                  <button type="button" class="gal-dot sys" data-page="workpanel" data-label="Workpanel · 고정 시스템 페이지" role="tab" aria-selected="false" aria-label="Workpanel">
+                    <svg class="gal-dot-icon" viewBox="0 0 16 16" aria-hidden="true">
+                      <rect x="2.2" y="2.6" width="11.6" height="10.8" rx="1.6"/>
+                      <line x1="2.2" y1="6.4" x2="13.8" y2="6.4"/><line x1="7.8" y1="6.4" x2="7.8" y2="13.4"/>
+                    </svg>
+                  </button>
+
+                  <button type="button" class="gal-dot sys" data-page="ticketmap" data-label="Ticket Map · 고정 시스템 페이지" role="tab" aria-selected="false" aria-label="Ticket Map">
+                    <svg class="gal-dot-icon" viewBox="0 0 16 16" aria-hidden="true">
+                      <circle cx="4.2" cy="4.8" r="1.8"/><circle cx="11.8" cy="4.2" r="1.8"/><circle cx="8.2" cy="11.6" r="2"/>
+                      <path d="M5.8 5.5 7.4 9.8M10.8 5.7 9.1 9.8M6 4.6l4-.3"/>
+                    </svg>
+                  </button>
+
+                  <button type="button" class="gal-dot sys active" data-page="git" data-label="Git · 변경 5 · Review 12 merges" role="tab" aria-selected="true" aria-label="Git (활성)">
+                    <svg class="gal-dot-icon" viewBox="0 0 16 16" aria-hidden="true">
+                      <circle cx="4.8" cy="3.8" r="1.6"/><circle cx="4.8" cy="12.2" r="1.6"/><circle cx="11.4" cy="5.8" r="1.6"/>
+                      <path d="M4.8 5.4v5.2M11.4 7.4c0 2.4-2 3-6.6 3"/>
+                    </svg>
+                    <span class="gal-sys-pip" aria-hidden="true"></span>
+                  </button>
+                </div>
+              </div>
+
+              <button type="button" class="gal-rzone" id="gal-next" title="다음 페이지" aria-label="다음 페이지">▼</button>
+            </nav>
+          </aside>
+        </main>
+      </div>
+    </div>
+
+    <!-- Bottom Global Status Bar (26px) -->
+    <footer class="shell-bottom" aria-label="전역 하단 상태 바">
+      <div class="bot-left">
+        <span class="bot-chip">홈</span>
+        <span class="bot-chip">전역 설정</span>
+      </div>
+      <div class="bot-center">
+        <span class="talert">
+          <span class="talert-dot" aria-hidden="true"></span>
+          <span>Track 2B Standalone Git Page · #bgal 상시 도킹</span>
+        </span>
+      </div>
+      <div class="bot-right">
+        <span class="usage-pill">
+          <span class="hb sm" data-h="agy"></span>
+          <span>Werk</span>
+          <strong>46%</strong>
+          <span class="u-slot-chip">work</span>
+        </span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Commit Hover Tooltip (.gltip) -->
+  <div class="gltip" id="gltip" hidden role="tooltip"></div>
+
+  <!-- Rail Dot Hover Popover (.gal-pop) -->
+  <div class="gal-pop" id="gal-pop" hidden data-side="left"></div>
+
+  <!-- Simulated #gwin-back Commit & Working-Tree Diff Modal Popup -->
+  <div class="gwin-back" id="gwin-back" hidden>
+    <div class="gwin" id="gwin" role="dialog" aria-modal="true" aria-labelledby="gwsubj" tabindex="-1">
+      <div class="gw-top">
+        <div class="gw-head">
+          <h2 id="gwsubj">Commit Title</h2>
+          <div class="gw-acts">
+            <button type="button" class="idcopy" id="gw-copy" title="전체 커밋 해시 복사">
+              <svg class="ic-xs"><use href="#i-copy"/></svg>
+              <span>해시 복사</span>
+            </button>
+            <button type="button" class="ia" id="gw-close" title="닫기 (Esc)" aria-label="모달 닫기">
+              <svg class="ic"><use href="#i-x"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="gw-chips" id="gw-chips"></div>
+        <dl class="gw-meta" id="gw-meta"></dl>
+        <pre class="gw-msg" id="gw-msg" hidden></pre>
+      </div>
+      <div class="gw-body">
+        <div class="gw-diff" id="gw-diff"></div>
+        <aside class="gw-files" id="gw-files" aria-label="변경된 파일 목록"></aside>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

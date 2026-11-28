@@ -205,6 +205,16 @@
     return !!el && el.getAttribute("data-star") === "1";
   }
 
+  // markAttnResync flags a moved session row (or rows inside a moved container)
+  // so attention.mark() re-syncs its CSS animation phase after DOM reinsertion.
+  function markAttnResync(n) {
+    if (!n) return;
+    if (hasClass(n, "rs")) { n.wsAttnResync = true; return; }
+    if (n.querySelectorAll) {
+      Array.prototype.forEach.call(n.querySelectorAll(".rs"), function (r) { r.wsAttnResync = true; });
+    }
+  }
+
   // drop moves item (a live session row, worktree group or workspace section) next to
   // ref, a sibling of its kind, before it or (after) after it, and reports
   // whether it moved. It refuses a ref in another list (a session never
@@ -215,6 +225,7 @@
     var kind = hasClass(item, "rws") ? "rws" : hasClass(item, "rwt") ? "rwt" : "rs";
     if (!hasClass(ref, kind) || hasClass(item, "ended") || hasClass(ref, "ended") || (kind === "rs" && starred(item) !== starred(ref))) return false;
     item.parentNode.insertBefore(item, after ? ref.nextSibling : ref);
+    markAttnResync(item);
     return true;
   }
 
@@ -343,8 +354,9 @@
     var undo = [], from = item.parentNode, kids = kidsOf(item), group = rowGroup(item), had = attr(item, "data-g");
     function put(n, box, next) {
       var p = n.parentNode, s = n.nextSibling;
-      undo.push(function () { if (p) p.insertBefore(n, s); else if (n.parentNode) n.parentNode.removeChild(n); });
+      undo.push(function () { if (p) { p.insertBefore(n, s); markAttnResync(n); } else if (n.parentNode) n.parentNode.removeChild(n); });
       box.insertBefore(n, next);
+      markAttnResync(n);
     }
     var box = ref.parentNode, next = ref;
     if (zone === "after") next = (kidsOf(ref) || ref).nextSibling;
@@ -695,52 +707,165 @@
   }
 
   // attention is tab-memory only, independent of the persistent question
-  // dot. First observations (including a reconnect's full rail) baseline
-  // silently. Replaced rows retain the flag but never replay its flash.
+  // dot. First observations (and long-disconnect full rails) baseline
+  // silently. Replaced or reordered rows preserve their pause-aware animation
+  // phase via negative CSS animation-delay (--attn-t during the 1.14s flash
+  // intro, --attn-breathe-delay after) and never replay a finished flash.
+  // Absent rows stay in seen for ATTN_ABSENT_GRACE_MS (30s) so a transient
+  // drop across a daemon restart neither false-triggers nor drops new asks.
   // flashDone drops .attn-flash once its three flashes end. Left on, the
   // delayed breathe overlaps the flash on the same opacity, the browser
   // refuses to composite it, and the long-lived pulse repaints the gradient on
   // the main thread each frame. Without the class the breathe starts alone
   // from the opacity the flash ended on, so the hand-over stays seamless.
-  function flashDone(row) {
-    if (!row.addEventListener) return;
-    row.addEventListener("animationend", function done(e) {
-      if (e.animationName !== "attn-flash" && e.animationName !== "attn-flash-ring") return;
-      row.removeEventListener("animationend", done);
-      row.classList.remove("attn-flash");
-    });
+  var ATTN_FLASH_MS = 1140;
+  var ATTN_BREATHE_MS = 1000;
+  var ATTN_ABSENT_GRACE_MS = 30000;
+  function attnSec(ms) {
+    var s = Math.round(ms) / 1000;
+    return (s === 0 ? 0 : s) + "s";
   }
-  function attention() {
+  function setAttnProp(row, name, value) {
+    if (!row || !row.style) return;
+    if (value === null || value === "") {
+      if (row.style.removeProperty) row.style.removeProperty(name);
+      else delete row.style[name];
+    } else if (row.style.setProperty) {
+      row.style.setProperty(name, value);
+    } else {
+      row.style[name] = value;
+    }
+  }
+  function clearFlashListener(row) {
+    if (!row || !row.wsAttnFlashEnd) return;
+    if (row.removeEventListener) row.removeEventListener("animationend", row.wsAttnFlashEnd);
+    row.wsAttnFlashEnd = null;
+  }
+  function flashDone(row, entry) {
+    clearFlashListener(row);
+    if (!row.addEventListener) return;
+    function done(e) {
+      if (e.animationName !== "attn-flash" && e.animationName !== "attn-flash-ring") return;
+      clearFlashListener(row);
+      row.classList.remove("attn-flash");
+      setAttnProp(row, "--attn-t", null);
+      if (entry) entry.flashDone = true;
+    }
+    row.wsAttnFlashEnd = done;
+    row.addEventListener("animationend", done);
+  }
+  function attention(opts) {
+    var nowFn = typeof opts === "function" ? opts : (opts && typeof opts.now === "function" ? opts.now : Date.now);
+    var paused = !!(opts && typeof opts === "object" && opts.paused);
+    var pausedAt = paused ? nowFn() : null;
+    var pausedTotal = 0;
     var seen = Object.create(null);
     var asks = rowAsks;
+    function activeNow() {
+      var t = nowFn();
+      return t - pausedTotal - (paused ? Math.max(0, t - pausedAt) : 0);
+    }
+    function setPaused(next) {
+      next = !!next;
+      if (next === paused) return;
+      var t = nowFn();
+      if (next) {
+        paused = true;
+        pausedAt = t;
+      } else {
+        pausedTotal += Math.max(0, t - pausedAt);
+        paused = false;
+        pausedAt = null;
+      }
+    }
     function observe(rows, rid, baseline) {
-      var kept = Object.create(null);
+      var now = nowFn();
+      var present = Object.create(null);
       rows.forEach(function (row) {
         var id = row.getAttribute("data-rid"), ids = asks(row), prev = seen[id];
-        if (!ids) return; // Old server: neither baseline nor flag.
+        if (prev && prev.missingSince !== null && prev.missingSince !== undefined && now - prev.missingSince > ATTN_ABSENT_GRACE_MS) {
+          delete seen[id];
+          prev = null;
+        }
+        if (!ids) { delete seen[id]; return; } // Old server: neither baseline nor flag.
+        present[id] = true;
         var fresh = !baseline && !!prev && !prev.flagged && id !== rid && Array.from(ids).some(function (n) { return !prev.asks.has(n); });
-        kept[id] = { asks: ids, flagged: id !== rid && (fresh || !!(prev && prev.flagged)), flash: fresh || !!(prev && prev.flash) };
+        var flagged = id !== rid && (fresh || !!(prev && prev.flagged));
+        var flash = flagged && (fresh || !!(prev && prev.flash));
+        var startedAt = flagged ? (fresh ? null : (prev && prev.startedAt !== undefined ? prev.startedAt : null)) : null;
+        var flashFinished = flagged && !fresh && !!(prev && prev.flashDone);
+        seen[id] = {
+          asks: ids,
+          flagged: flagged,
+          flash: flash,
+          startedAt: startedAt,
+          flashDone: flashFinished,
+          missingSince: null
+        };
       });
-      seen = kept;
+      Object.keys(seen).forEach(function (id) {
+        if (present[id]) return;
+        var entry = seen[id];
+        if (entry.missingSince === null || entry.missingSince === undefined) entry.missingSince = now;
+        else if (now - entry.missingSince > ATTN_ABSENT_GRACE_MS) delete seen[id];
+      });
     }
     function mark(rows, rid, hint) {
+      var now = nowFn(), actNow = activeNow();
       rows.forEach(function (row) {
         var id = row.getAttribute("data-rid"), ids = asks(row), prev = seen[id];
+        if (prev && prev.missingSince !== null && prev.missingSince !== undefined && now - prev.missingSince > ATTN_ABSENT_GRACE_MS) {
+          delete seen[id];
+          prev = null;
+        }
         if (!ids) { delete seen[id]; prev = null; }
-        else if (!prev) prev = seen[id] = { asks: ids, flagged: false, flash: false };
-        if (prev && id === rid) { prev.flagged = false; prev.flash = false; }
+        else if (!prev) prev = seen[id] = { asks: ids, flagged: false, flash: false, startedAt: null, flashDone: false, missingSince: null };
+        else prev.missingSince = null;
+        if (prev && id === rid) { prev.flagged = false; prev.flash = false; prev.startedAt = null; prev.flashDone = false; }
         var on = !!prev && prev.flagged, link = row.querySelector(".rl");
-        // A running flash stays on its original node. A server replacement
-        // has no .attn class, so an existing flag goes straight to settled.
-        if (!on || !row.classList.contains("attn")) row.classList.remove("attn-flash");
-        row.classList.toggle("attn", on);
-        if (on && prev.flash) { row.classList.add("attn-flash"); flashDone(row); prev.flash = false; }
+        var hadAttn = row.classList.contains("attn");
+        var resync = !!row.wsAttnResync;
+        if (resync) row.wsAttnResync = false;
+        if (!on) {
+          clearFlashListener(row);
+          row.classList.remove("attn-flash");
+          row.classList.remove("attn");
+          setAttnProp(row, "--attn-t", null);
+          setAttnProp(row, "--attn-breathe-delay", null);
+        } else if (prev.flash) {
+          prev.flash = false;
+          prev.flashDone = false;
+          prev.startedAt = actNow;
+          setAttnProp(row, "--attn-t", null);
+          setAttnProp(row, "--attn-breathe-delay", null);
+          row.classList.add("attn");
+          row.classList.add("attn-flash");
+          flashDone(row, prev);
+        } else if (!hadAttn || resync) {
+          if (prev.startedAt === null || prev.startedAt === undefined) prev.startedAt = actNow;
+          var elapsed = Math.max(0, actNow - prev.startedAt);
+          row.classList.add("attn");
+          if (!prev.flashDone && elapsed < ATTN_FLASH_MS) {
+            setAttnProp(row, "--attn-breathe-delay", null);
+            setAttnProp(row, "--attn-t", attnSec(elapsed));
+            row.classList.add("attn-flash");
+            flashDone(row, prev);
+          } else {
+            prev.flashDone = true;
+            clearFlashListener(row);
+            row.classList.remove("attn-flash");
+            setAttnProp(row, "--attn-t", null);
+            var phase = Math.max(0, elapsed - ATTN_FLASH_MS) % ATTN_BREATHE_MS;
+            setAttnProp(row, "--attn-breathe-delay", attnSec(-phase));
+          }
+        }
         if (link) { if (on) link.setAttribute("title", hint); else link.removeAttribute("title"); }
       });
     }
     return {
       observe: observe,
       mark: mark,
+      setPaused: setPaused,
       sync: function (rows, rid, hint) { observe(rows, rid); mark(rows, rid, hint); }
     };
   }
@@ -804,10 +929,9 @@
   }
   // marks applies the stored marks (s, state) to the rendered rail region
   // r: marks the viewed session's row (rid), collapses the collapsed
-  // workspaces and parents, and opens the ended folds left open. The page
-  // script runs it after every rail swap; the iframe shell also runs it as
-  // soon as the rail is parsed, before the first paint, so a reload never
-  // shows a fold the browser keeps closed open.
+  // workspaces and parents. The page script runs it after every rail swap;
+  // the iframe shell also runs it as soon as the rail is parsed, before the
+  // first paint. (The archived and ended lists open as a popup, not here.)
   function marks(r, s, rid) {
     function all(sel) { return Array.prototype.slice.call(r.querySelectorAll(sel)); }
     markCurrent(all(".rs"), rid);
@@ -821,36 +945,25 @@
       if (row) { if (col) row.classList.add("kcol"); else row.classList.remove("kcol"); }
       tog.setAttribute("aria-expanded", String(!col));
     });
-    all(".rfold[data-key]").forEach(function (f) {
-      var key = f.getAttribute("data-key") || "";
-      foldShow(f, s.ended.has(FOLD_KEYS.arch + key) ? "arch" : s.ended.has(FOLD_KEYS.del + key) ? "del" : "");
-    });
   }
   // A group's fold row (.rfold, data-key its path) has two halves, archived
-  // ("arch") and ended ("del"), acting as one tri-state radio: none, one,
-  // or the other list open. The pick is kept in the ended-fold set under
-  // FOLD_KEYS' prefix and the path; "rended:" is the key the single ended
-  // fold kept before the split, so a fold left open stays open.
-  var FOLD_KEYS = { arch: "rarch:", del: "rended:" };
-  // foldShow opens the fold row f's list open ("arch", "del", or "" for
-  // none); a disabled half (no rows) never opens.
-  function foldShow(f, open) {
-    var halves = Array.prototype.slice.call(f.querySelectorAll(".rfh")), on = "";
-    halves.forEach(function (b) { if (b.getAttribute("data-k") === open && !b.disabled) on = open; });
-    halves.forEach(function (b) { b.setAttribute("aria-expanded", String(!!on && b.getAttribute("data-k") === on)); });
-    (f.parentNode ? Array.prototype.slice.call(f.parentNode.children) : []).forEach(function (l) {
-      if (!l.classList.contains("rended")) return;
-      if (on && l.getAttribute("data-k") === on) l.classList.add("on"); else l.classList.remove("on");
-    });
+  // ("arch") and ended ("del"). Each opens a floating popup (dashboard-rail-
+  // popovers.js, rpFoldMake) that lists the half's rows, copied from the
+  // server-rendered .rended source beside the row; the source itself never
+  // shows. foldMatch is the popup's filter: every blank-separated word of
+  // query, lowercased, must occur in hay (a row's reply-id, harness, and
+  // text); an empty query matches all.
+  function foldMatch(hay, query) {
+    var h = String(hay || "").toLowerCase(), words = String(query || "").toLowerCase().split(/\s+/);
+    for (var i = 0; i < words.length; i++) if (words[i] && h.indexOf(words[i]) < 0) return false;
+    return true;
   }
-  // foldPick is a click on the fold half: it opens its list and closes the
-  // other, or closes its own list when open, and keeps the pick (s, state).
-  function foldPick(s, half) {
-    var f = half.parentNode, key = f.getAttribute("data-key") || "", k = half.getAttribute("data-k") || "";
-    var on = !half.disabled && half.getAttribute("aria-expanded") !== "true";
-    s.ended.put(FOLD_KEYS.arch + key, on && k === "arch");
-    s.ended.put(FOLD_KEYS.del + key, on && k === "del");
-    foldShow(f, on ? k : "");
+  // foldSource is the hidden .rended list of kind k ("arch" or "del") that
+  // fold row f's group rendered beside it, or null when it has none.
+  function foldSource(f, k) {
+    var sibs = f && f.parentNode ? Array.prototype.slice.call(f.parentNode.children) : [];
+    for (var i = 0; i < sibs.length; i++) if (sibs[i].classList.contains("rended") && sibs[i].getAttribute("data-k") === k) return sibs[i];
+    return null;
   }
 
   // REVIVE_MOVES are the ways an ended row brings its session back (its
@@ -1087,8 +1200,18 @@
     })) return null;
     updates.forEach(function (u) { u.old.replaceWith(u.node); if (u.id) live[u.id] = u.node; });
     if (reordered) {
-      var slots = previous.order.map(function (id) { var slot = doc.createComment("row"); live[id].replaceWith(slot); return slot; });
-      slots.forEach(function (slot, i) { slot.replaceWith(live[next.order[i]]); });
+      var slots = previous.order.map(function (id, i) {
+        if (id === next.order[i]) return null;
+        var slot = doc.createComment("row");
+        live[id].replaceWith(slot);
+        return slot;
+      });
+      slots.forEach(function (slot, i) {
+        if (!slot) return;
+        var node = live[next.order[i]];
+        node.wsAttnResync = true;
+        slot.replaceWith(node);
+      });
     }
     return visible;
   }
@@ -1303,7 +1426,8 @@
     endedOpen: endedOpen,
     state: state,
     marks: marks,
-    foldPick: foldPick,
+    foldMatch: foldMatch,
+    foldSource: foldSource,
     drop: drop,
     dropRefusal: dropRefusal,
     kidsCollapsed: kidsCollapsed,

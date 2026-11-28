@@ -125,8 +125,8 @@ func TestRailLifecycle(t *testing.T) {
 	html := string(region.HTML)
 	for _, want := range []string{
 		`<div class="rfold" role="group" aria-label="접힌 세션" data-key="` + filepath.Clean("/w/repo") + `">`,
-		`class="rfh" data-k="arch" aria-expanded="false" title="보관된 세션 2개"><svg class="i" aria-hidden="true"><use href="#i-archive"/></svg>보관 <span class="d-n">2</span></button>`,
-		`class="rfh" data-k="del" aria-expanded="false" title="삭제된 세션 3개"><svg class="i" aria-hidden="true"><use href="#i-clock"/></svg>삭제됨 <span class="d-n">3</span></button>`,
+		`class="rfh" data-k="arch" aria-haspopup="dialog" aria-expanded="false" title="보관된 세션 2개"><svg class="i" aria-hidden="true"><use href="#i-archive"/></svg>보관 <span class="d-n">2</span></button>`,
+		`class="rfh" data-k="del" aria-haspopup="dialog" aria-expanded="false" title="삭제된 세션 3개"><svg class="i" aria-hidden="true"><use href="#i-clock"/></svg>삭제됨 <span class="d-n">3</span></button>`,
 		`<div class="rended" data-k="arch"><div class="rsessions"><div class="rs ended stopped archived hosted-row" data-rid="archived"`,
 		`<div class="rended" data-k="del"><div class="rsessions"><div class="rs ended" data-rid="deleted"`,
 		`<div class="rs stopped hosted-row" data-rid="hostexit"`,
@@ -161,7 +161,7 @@ func TestRailLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if html := string(region.HTML); !strings.Contains(html, `data-k="arch" aria-expanded="false" title="0 archived" disabled>`) || strings.Contains(html, `data-k="del" aria-expanded="false" title="1 deleted" disabled`) {
+	if html := string(region.HTML); !strings.Contains(html, `data-k="arch" aria-haspopup="dialog" aria-expanded="false" title="0 archived" disabled>`) || strings.Contains(html, `data-k="del" aria-haspopup="dialog" aria-expanded="false" title="1 deleted" disabled`) {
 		t.Errorf("an empty archived half must be disabled and the deleted half enabled:\n%s", html)
 	}
 }

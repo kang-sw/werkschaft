@@ -1649,6 +1649,9 @@
         shUnstage();
         showRegions();
         mountFramesPaced(doc);
+        // The shown frame, a cached one returning with stale scroll/positions, and
+        // the board swap showRegions just applied all lay out only after this turn.
+        if (typeof boardRevealSchedule === "function") boardRevealSchedule();
         tickTimes();
         if (typeof entryJumpRunPending === "function") entryJumpRunPending();
         if (shTrackerRev !== null) { var rev = shTrackerRev; shTrackerRev = null; trackerNudge(rev); }

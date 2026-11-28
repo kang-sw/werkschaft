@@ -10,13 +10,14 @@ import (
 // Authority and lineage come only from the key store. Display nesting and a
 // conversation's ParentRef never participate in selection.
 type sessionContext struct {
-	key       string
-	scope     toolRole
-	parent    string
-	root      string
-	hosted    bool
-	found     bool
-	transient bool // cached activity inspection could not read the record
+	key           string
+	scope         toolRole
+	parent        string
+	root          string
+	companionRole string
+	hosted        bool
+	found         bool
+	transient     bool // cached activity inspection could not read the record
 }
 
 type sessionAccessMode string
@@ -137,7 +138,7 @@ func (s *Server) resolveSession(in sessionAccess) (sessionContext, error) {
 	out := sessionContext{key: in.key, hosted: hosted != "" && in.key == hosted}
 	if entry, ok := s.sessions.lookup(in.key); ok {
 		out.found = true
-		out.root, out.scope, out.parent = entry.root, entry.scope, entry.parent
+		out.root, out.scope, out.parent, out.companionRole = entry.root, entry.scope, entry.parent, entry.companionRole
 		// Retain the adoption path's second, mutex-serialized read and activity
 		// touch even though no consumer needs its harness metadata.
 		_, _ = s.sessions.readStateWithError(in.key, partKey)
@@ -146,7 +147,7 @@ func (s *Server) resolveSession(in sessionAccess) (sessionContext, error) {
 }
 
 func contextForEntry(key string, entry sessionEntry, found bool) sessionContext {
-	return sessionContext{key: key, root: entry.root, scope: entry.scope, parent: entry.parent, found: found}
+	return sessionContext{key: key, root: entry.root, scope: entry.scope, parent: entry.parent, companionRole: entry.companionRole, found: found}
 }
 
 // lookupSession adapts existing identity-only consumers to the shared resolver
@@ -157,7 +158,7 @@ func (s *Server) lookupSession(key string) (sessionEntry, bool) {
 }
 
 func (c sessionContext) entry() sessionEntry {
-	return sessionEntry{root: c.root, scope: c.scope, parent: c.parent}
+	return sessionEntry{root: c.root, scope: c.scope, parent: c.parent, companionRole: c.companionRole}
 }
 
 // intakeSession preserves the adapter-only cache and its bounded revocation.

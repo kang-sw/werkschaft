@@ -13,15 +13,17 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wskey"
+	"github.com/kang-sw/devenv/internal/wsmailbox"
 	"github.com/kang-sw/devenv/internal/wswhiteboard"
 )
 
 // sessionEntry associates a canonical repository root and a capability scope
 // with an ephemeral session key minted by the session-bootstrap tool.
 type sessionEntry struct {
-	root   string
-	scope  toolRole
-	parent string
+	root          string
+	scope         toolRole
+	parent        string
+	companionRole string
 }
 
 // isTopLevelLead reports whether the entry is a top-level lead: lead scope with
@@ -94,6 +96,11 @@ type sessionKeyRecord struct {
 	Harness        string `json:"harness,omitempty"`
 	HarnessSession string `json:"harness_session,omitempty"`
 	HarnessCwd     string `json:"harness_cwd,omitempty"`
+	// CompanionRole marks daemon-managed companion sessions ("companion-body"
+	// for Tier-1 embodied persona, "companion-work" for Tier-2 hidden work
+	// brain). Empty for all ordinary sessions. T0 additive: older binaries
+	// ignore unknown fields; new binaries treat absent field as "".
+	CompanionRole string `json:"companion_role,omitempty"`
 }
 
 // sessionRecord is a session's whole record in memory: key.json plus its
@@ -210,6 +217,30 @@ type sessionStore struct {
 	policyParent sync.Map
 }
 
+// knownCompanionReplyIDs caches reply-ids known to belong to companion-body or
+// companion-work sessions across all sessionStore instances in this process so
+// mailbox.lookup_peers and dashboard contacts hide them without scanning disk.
+var knownCompanionReplyIDs sync.Map
+
+func (s *sessionStore) rememberCompanionRole(key, companionRole string) {
+	if companionRole == "" || key == "" {
+		return
+	}
+	knownCompanionReplyIDs.Store(wsmailbox.ReplyID(key), struct{}{})
+}
+
+func (s *sessionStore) isCompanionReplyID(replyID string) bool {
+	return isKnownCompanionReplyID(replyID)
+}
+
+func isKnownCompanionReplyID(replyID string) bool {
+	if replyID == "" {
+		return false
+	}
+	_, ok := knownCompanionReplyIDs.Load(replyID)
+	return ok
+}
+
 func newSessionStore() *sessionStore {
 	return &sessionStore{}
 }
@@ -228,6 +259,12 @@ func (s *sessionStore) mint(root string, scope toolRole, parent string) (string,
 // mintWithPolicyParent is mint for a key that also inherits session-scope
 // overrides from policyParent (session_policy_parent.go).
 func (s *sessionStore) mintWithPolicyParent(root string, scope toolRole, parent, policyParent string) (string, error) {
+	return s.mintWithCompanionRole(root, scope, parent, policyParent, "")
+}
+
+// mintWithCompanionRole mints a key carrying an optional companion capability
+// marker ("companion-body" or "companion-work").
+func (s *sessionStore) mintWithCompanionRole(root string, scope toolRole, parent, policyParent, companionRole string) (string, error) {
 	d, err := s.dirs()
 	if err != nil {
 		return "", err
@@ -241,6 +278,7 @@ func (s *sessionStore) mintWithPolicyParent(root string, scope toolRole, parent,
 		Root:          root,
 		Scope:         string(scope),
 		Parent:        parent,
+		CompanionRole: companionRole,
 	})
 	if err != nil {
 		return "", err
@@ -268,6 +306,9 @@ func (s *sessionStore) mintWithPolicyParent(root string, scope toolRole, parent,
 					return "", err
 				}
 			}
+			if companionRole != "" {
+				s.rememberCompanionRole(candidate, companionRole)
+			}
 			return candidate, nil
 		}
 		// rare collision; generate a fresh candidate and retry
@@ -290,10 +331,14 @@ func (s *sessionStore) lookup(key string) (sessionEntry, bool) {
 		return sessionEntry{}, false
 	}
 	s.touch(d, key)
+	if record.CompanionRole != "" {
+		s.rememberCompanionRole(key, record.CompanionRole)
+	}
 	return sessionEntry{
-		root:   record.Root,
-		scope:  toolRole(record.Scope),
-		parent: record.Parent,
+		root:          record.Root,
+		scope:         toolRole(record.Scope),
+		parent:        record.Parent,
+		companionRole: record.CompanionRole,
 	}, true
 }
 
@@ -313,7 +358,10 @@ func (s *sessionStore) inspect(key string) (entry sessionEntry, found, transient
 	if err != nil {
 		return sessionEntry{}, false, false
 	}
-	return sessionEntry{root: record.Root, scope: toolRole(record.Scope), parent: record.Parent}, true, false
+	if record.CompanionRole != "" {
+		s.rememberCompanionRole(key, record.CompanionRole)
+	}
+	return sessionEntry{root: record.Root, scope: toolRole(record.Scope), parent: record.Parent, companionRole: record.CompanionRole}, true, false
 }
 
 // intakeRecheck is how long the intake cache trusts that a key still

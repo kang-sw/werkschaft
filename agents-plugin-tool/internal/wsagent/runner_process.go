@@ -366,8 +366,9 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 		}
 	}
 	c.dirtyModel, c.dirtyEffort, c.dirtyPermission = false, false, false
-	if def.ListInIndex != rec.Listed {
-		c.update(func(rec *Record) { rec.Listed = def.ListInIndex })
+	wantListed := def.ListInIndex && rec.CompanionRole == ""
+	if wantListed != rec.Listed {
+		c.update(func(rec *Record) { rec.Listed = wantListed })
 		c.writeRegistration()
 	}
 	if rec.SessionID != "" || rec.SessionFile != "" {
