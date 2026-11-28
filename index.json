@@ -460,7 +460,14 @@
       "registered_at": "2026-11-27T04:40:52Z"
     },
     "261127-feat-ws-companion-layered-agents-and-naming": {
-      "registered_at": "2026-11-27T01:26:29Z"
+      "registered_at": "2026-11-27T01:26:29Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-28T02:00:58Z"
+      }
     },
     "261127-feat-ws-non-git-directory-workspace-support": {
       "registered_at": "2026-11-27T05:13:44Z"
