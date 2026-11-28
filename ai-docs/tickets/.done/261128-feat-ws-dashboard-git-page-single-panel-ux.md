@@ -4,6 +4,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-completeness-reviewed: 8ffa517ec01c28cc
 sage-review-design-reviewed: 8ffa517ec01c28cc
+completed: 2026-11-28
 ---
 
 # Git Page: Single Full-Width Graph Panel, Synthetic UNSTAGED Row, Icon Toolbar, and Worktrees Popover
@@ -161,3 +162,40 @@ Verification (all must pass; a skipped Chromium run must be reported as skipped,
 - `cd agents-plugin-tool && GOOS=windows go vet ./...`
 - `cd agents-plugin-tool/internal/wsdashboard/assets && wc -l dashboard-git.js dashboard-gitpage.js dashboard-git.css dashboard-gitpage.css` shows `<= 1142`, `<= 395`, `<= 226`, `<= 190` respectively.
 - Manual/browser check of the acceptance behaviours: single full-width panel at narrow and wide widths, clean tree has no `UNSTAGED` row, dirty tree shows it above `HEAD`, `gwin` Refresh updates in place, Worktrees popover open/close paths, and zero pool requests on page open.
+
+### Result (7df7fcb) - 2026-11-28
+
+What landed (commits `64af2a962` implementation, `7df7fcb0b` review fix; base `8345246cf`):
+
+- **Template, page, and popover.** The Git page now has the strip plus one full-width `#glog` card at every width. The `.gp-tabs`, `#gpanel`, and root `data-tab` are gone, and so is the `.gp-regions` wrapper (nothing needed it).
+  - Fetch, pull, and push are square icon buttons with `title` and `aria-label`, reusing the `git.fetch` / `git.pull` / `git.push.go` keys. Both narrow-width `.gact` rules are deleted, so the icons stay visible at 380px.
+  - The Worktrees toggle (`#gpwtbtn`, with `#wtcount` showing leased/total, e.g. `2/5`) and its popover live in a relative wrapper in `.gp-strip`. The popover's controller is the new `dashboard-gitpage-wt.js` (146 lines), registered in `pages.go` and in `TestDashboardAssetSourceAssembly`.
+  - The first popover open reads `GET /worktrees?no_size=1`; the page itself reads the pool zero times when it opens. `gpWtCount` is deleted, along with its call in `wtDraw`.
+- **Synthetic `UNSTAGED` row.** It follows the Decisions contract: `glDraw` shifts the slots and draws a hollow dashed node, moving it to a stub lane at `gl.width` when a lane from above enters `HEAD`.
+  - Unborn and missing `HEAD`, and an empty log behind the `gl.loaded && !gl.busy` guard, all fall back to slot 0.
+  - The row carries `role="button"` and an `aria-label`. Counts read `300+` when the server cut a group, and the `.gla`/`.glt`/`.glh` cells stay empty.
+  - The dirty signature makes an unchanged status a no-op and patches changed counts in place. Only a clean/dirty transition redraws.
+  - The row opens `gwin` in worktree mode with a Refresh button that follows the whole contract. `gitLoad(done)` answers each caller exactly once, including a superseded read and any failure. Refresh bumps `gw.seq`, keeps focus, restores the active file and `scrollTop`, and calls `gwNote(..., true)` on error.
+- **i18n.** The orphaned keys are removed from all 11 tables and `js.wt.count` is kept. Every JS-drawn string uses a `js.*` key.
+
+Decisions (cosmetic or contract-preserving):
+
+- **Kept `git.drawer`.** The pinned `testdata/pre_effects/dashboard.tmpl` fixture still references it.
+- **Worktrees button always renders.** With no `.Worktrees` it shows the `.gp-none` no-pool line inside the popover. The ticket keeps that no-pool line, which the `{{if .Worktrees}}` wording would otherwise hide.
+- **Refresh shows busy without `disabled`.** It uses a `busy` class plus `aria-busy`/`aria-disabled`, because a disabled button drops focus (Chromium caught this).
+- **`gwClose` focus fallback goes to the first `.glr` row.** `#glrows` cannot take focus.
+- **`glFail` keeps the synthetic row.** It clears the commits and shows the error next to the row.
+- **The hash column hides at <=460px**, so the subject column keeps priority.
+- **The unit test extracts functions by name** instead of by marker block; the `var hdTermClosing` / `function hdFail(` markers are untouched.
+
+Review: one `code-review-lite` pass (claude.medium). One Important finding: a draw throw or a body-read rejection could leave `gitLoad(done)` uncalled and Refresh stuck busy. It is fixed in `7df7fcb`, with node tests that fail against the old line. The Minor findings were judged and documented in that commit's AI Context: `git.drawer`, the focus fallback, the always-rendered button, and `#gmsg` not being cleared by a successful re-read (clearing it would wipe action notes).
+
+Verification:
+
+- `wc -l`: dashboard-git.js 1142, dashboard-gitpage.js 316, dashboard-gitpage-wt.js 146, dashboard-git.css 226, dashboard-gitpage.css 179. All are within the 1142/395/226/190 budgets.
+- `WS_PLAYWRIGHT_MODULE=… go test -count=1 -v ./internal/wsdashboard -run 'TestGitPageBrowser|TestWorktreesCardOnTheGitPage|TestGitPageMarkup|TestGitPanelCompactActionsAndCleanState|TestDashboardAssetSourceAssembly|TestGitGraphWorktreeRow'`: all PASS. `TestGitPageBrowser` ran in real Chromium (36.24s) across dark/light × 900/380 plus two no-repo sessions; the 380px subject column measured 238px against a 20ch floor of 151px.
+- `go test -count=1 ./internal/wsi18n/...`: ok.
+- `node --test …/*.test.js …/testdata/*.test.cjs`: 1069 tests, 25 fail. The failing set is identical to a `git archive` export of base `8345246cf` (shell, composer, idle, and session-load tests; pre-existing and untouched). The new `git-graph-worktree-row.test.cjs` passes 11/11.
+- `GOOS=windows go vet ./...`: rc=0.
+- `go test -count=1 -timeout 45m ./internal/wsdashboard/... ./internal/wsi18n/...`: wsi18n ok. wsdashboard FAIL (624s) on exactly 12 tests outside the git page: TestBoardKeepWiring, TestBoardToolbarPlacementAndCounts, TestConversationPresentationMergePreservesIdentityAndDisclosures, TestFilesExplorerInstances, TestFreshSessionLoadClient, TestSearchDrawerSplitOwnership, TestSessionURLServesTheShellAroundItsFramedPage, TestShellPostLayout, TestShellSwitchesFramesThroughItsGlue, TestTabLabelCount, TestTickTimesKeepsItsSetsUntilThePageChanges, TestUserMessageClockAndMinuteRefresh. All 12 fail identically on a `git archive` export of base `8345246cf`, so they are pre-existing and not caused by this change. With the default 10m timeout, the package's wall time (>10m) trips the alarm on an unrelated test; `-timeout 45m` avoids that.
+- Visual: screenshots under `WS_GITPAGE_SHOTS` (wide/narrow × dark/light, plus busy, worktree, worktrees, frontier, and norepo) were inspected. The popover fits within 380px and the worktree window overlays the graph.
