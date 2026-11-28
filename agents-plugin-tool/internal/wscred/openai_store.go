@@ -23,7 +23,7 @@ type openAIAccount struct {
 	Issuer       string    `json:"issuer"`
 	Subject      string    `json:"subject"`
 	Email        string    `json:"email"`
-	AccountID    string    `json:"account_id,omitempty"`
+	AccountID    string    `json:"account_id"`
 	IDToken      string    `json:"id_token"`
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token"`

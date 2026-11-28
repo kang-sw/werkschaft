@@ -144,7 +144,7 @@ function loadCompanionWithMessenger(globals = {}) {
   });
   // Keep globalThis aliases consistent with browser window.
   context.globalThis = context;
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-colead", "vrm", "stage", "messenger"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-fx", "vrm-studio", "vrm-props", "vrm-pose", "vrm-colead", "vrm", "stage", "messenger"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return { C: context.window.WsCompanion, M: context.window.WsCompanionMessenger, context };
@@ -227,9 +227,11 @@ test("Step 4 Phase 1: 3D desk smartphone posture choreography (buzz -> pickup ->
   }
   assert.equal(out.phonePose, "held");
   assert.equal(out.phoneFaceDown, false);
-  // Verify phone-side arm raises cleanly from lowered resting pose.
-  assert.ok(out.boneTargets.leftUpperArm[2] > -1.05, `phone-side arm should raise cleanly (got z=${out.boneTargets.leftUpperArm[2]})`);
-  assert.ok(out.boneTargets.leftLowerArm[1] < -1.15, `phone-side forearm should flex toward chest (got y=${out.boneTargets.leftLowerArm[1]})`);
+  // Phase 2 palm grip: elbow stays tucked at the side while the forearm folds up
+  // and twists so the palm (phone screen) faces the face at upper-chest height.
+  assert.ok(out.boneTargets.leftUpperArm[1] > 0.4, `phone-side upper arm should swing the elbow in (got y=${out.boneTargets.leftUpperArm[1]})`);
+  assert.ok(out.boneTargets.leftLowerArm[1] < -1.6, `phone-side forearm should fold up toward the chest (got y=${out.boneTargets.leftLowerArm[1]})`);
+  assert.ok(out.boneTargets.leftLowerArm[0] > 0.9, `phone-side forearm should twist the palm toward the face (got x=${out.boneTargets.leftLowerArm[0]})`);
 
   // 3. Normal putdown -> returns smoothly to desk face-up.
   co.setPhoneState({ state: "laptop_ambient", posture: "laptop", unreadAgent: 0, phoneFaceDown: false });

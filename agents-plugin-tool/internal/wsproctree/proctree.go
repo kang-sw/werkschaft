@@ -184,7 +184,13 @@ func parseStat(line string, hz, pageSize int64) (Proc, error) {
 		rss = 0
 	}
 	ticks := utime + stime
-	cpu := time.Duration(ticks) * time.Second / time.Duration(hz)
+	// Split whole seconds from the remainder: ticks*time.Second overflows int64
+	// beyond ~9.2e9 ticks (e.g. long-lived processes at hz=100 or hz=1000).
+	var cpu time.Duration
+	if hz > 0 && ticks > 0 {
+		sec, rem := ticks/hz, ticks%hz
+		cpu = time.Duration(sec)*time.Second + time.Duration(rem)*time.Second/time.Duration(hz)
+	}
 	return Proc{PID: pid, PPID: ppid, Name: line[open+1 : close], RSS: uint64(rss * pageSize), CPU: cpu}, nil
 }
 

@@ -412,6 +412,102 @@ func (r *Runner) AccountSlotConversations(harness string) []wsdashboard.AccountS
 	return out
 }
 
+func (c *conv) applyQueuedAccountSlot(harness, target string) (queued, skipped bool) {
+	if c.closed || c.rec.ClosedAt != "" || c.rec.handedOff() || c.rec.Backend != harness {
+		return false, false
+	}
+	cur := wscred.NormalizeAccountSlotID(c.rec.AccountSlotID)
+	if cur == target {
+		if c.rec.PendingAccountSlotID != "" {
+			c.update(func(r *Record) { r.PendingAccountSlotID = "" })
+			c.changed(false)
+			c.watched()
+		}
+		return false, true
+	}
+	c.update(func(r *Record) { r.PendingAccountSlotID = target })
+	c.changed(false)
+	c.watched()
+	return true, false
+}
+
+func (r *Runner) queueParkedAccountSlot(id, harness, target string) (queued, skipped bool) {
+	for {
+		r.mu.Lock()
+		if ch := r.parkedWrite[id]; ch != nil {
+			r.mu.Unlock()
+			<-ch
+			continue
+		}
+		if ch := r.unparking[id]; ch != nil {
+			r.mu.Unlock()
+			<-ch
+			continue
+		}
+		if c := r.convs[id]; c != nil {
+			r.mu.Unlock()
+			var q, s bool
+			if !c.do(func() {
+				q, s = c.applyQueuedAccountSlot(harness, target)
+			}) {
+				if c.isParkedOut() {
+					continue
+				}
+				return false, false
+			}
+			return q, s
+		}
+		rec, stillParked := r.closed[id]
+		if !stillParked || !r.parked[id] || rec.Backend != harness || rec.ClosedAt != "" || rec.handedOff() {
+			r.mu.Unlock()
+			return false, false
+		}
+		cur := wscred.NormalizeAccountSlotID(rec.AccountSlotID)
+		changed := false
+		if cur == target {
+			if rec.PendingAccountSlotID != "" {
+				rec.PendingAccountSlotID = ""
+				changed = true
+			}
+			skipped = true
+		} else {
+			rec.PendingAccountSlotID = target
+			changed = true
+			queued = true
+		}
+		if !changed {
+			r.mu.Unlock()
+			return queued, skipped
+		}
+		r.closed[id] = rec
+		if r.closedRows != nil {
+			r.closedRows[id] = r.parkedState(rec)
+		}
+		ch := make(chan struct{})
+		if r.parkedWrite == nil {
+			r.parkedWrite = map[string]chan struct{}{}
+		}
+		r.parkedWrite[id] = ch
+		hook := r.opts.beforeParkedAccountSlotWrite
+		r.mu.Unlock()
+
+		func() {
+			defer func() {
+				r.mu.Lock()
+				delete(r.parkedWrite, id)
+				r.mu.Unlock()
+				close(ch)
+			}()
+			if hook != nil {
+				hook(id)
+			}
+			dir := wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID)
+			_ = r.persistAgentRecord(dir, rec)
+		}()
+		return queued, skipped
+	}
+}
+
 // QueueHarnessAccountSlot implements wsdashboard.AgentAccountSlotHost (D13):
 // fans out PendingAccountSlotID to every open conversation (leads, resident
 // workers, and parked workers) of harness. Already-on-target conversations are
@@ -448,25 +544,14 @@ func (r *Runner) QueueHarnessAccountSlot(harness, slotID string) (queued, skippe
 			continue
 		}
 		var didQueue, didSkip bool
-		c.do(func() {
-			if c.closed || c.rec.ClosedAt != "" || c.rec.handedOff() {
-				return
+		if !c.do(func() {
+			didQueue, didSkip = c.applyQueuedAccountSlot(harness, target)
+		}) {
+			if c.isParkedOut() {
+				parkedIDs = append(parkedIDs, rec.ReplyID)
 			}
-			cur := wscred.NormalizeAccountSlotID(c.rec.AccountSlotID)
-			if cur == target {
-				if c.rec.PendingAccountSlotID != "" {
-					c.update(func(r *Record) { r.PendingAccountSlotID = "" })
-					c.changed(false)
-					c.watched()
-				}
-				didSkip = true
-				return
-			}
-			c.update(func(r *Record) { r.PendingAccountSlotID = target })
-			c.changed(false)
-			c.watched()
-			didQueue = true
-		})
+			continue
+		}
 		if didQueue {
 			queued++
 		} else if didSkip {
@@ -475,123 +560,94 @@ func (r *Runner) QueueHarnessAccountSlot(harness, slotID string) (queued, skippe
 	}
 
 	for _, id := range parkedIDs {
-		r.mu.Lock()
-		rec, stillParked := r.closed[id]
-		if !stillParked || !r.parked[id] || rec.Backend != harness || rec.ClosedAt != "" || rec.handedOff() {
-			r.mu.Unlock()
-			continue
-		}
-		cur := wscred.NormalizeAccountSlotID(rec.AccountSlotID)
-		changed := false
-		if cur == target {
-			if rec.PendingAccountSlotID != "" {
-				rec.PendingAccountSlotID = ""
-				changed = true
-			}
-			skipped++
-		} else {
-			rec.PendingAccountSlotID = target
-			changed = true
+		didQueue, didSkip := r.queueParkedAccountSlot(id, harness, target)
+		if didQueue {
 			queued++
-		}
-		if changed {
-			r.closed[id] = rec
-			if r.closedRows != nil {
-				r.closedRows[id] = r.parkedState(rec)
-			}
-		}
-		r.mu.Unlock()
-		if changed {
-			dir := wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID)
-			_ = r.persistAgentRecord(dir, rec)
+		} else if didSkip {
+			skipped++
 		}
 	}
 	return queued, skipped, nil
 }
 
-func (r *Runner) lookupClosedRecord(id string) (Record, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	rec, ok := r.closed[id]
-	return rec, ok
-}
-
 // QueueConversationAccountSlot queues PendingAccountSlotID on one open
 // conversation (applied at the next compaction or /clear boundary, D6/D11).
 func (r *Runner) QueueConversationAccountSlot(id, slotID string) (wsdashboard.AccountSlotSwitchResult, error) {
-	c := r.conv(id)
-	if c == nil {
-		if rec, ok := r.lookupClosedRecord(id); ok {
-			return wsdashboard.AccountSlotSwitchResult{}, endedError(rec)
+	for {
+		c, err := r.open(id)
+		if err != nil {
+			return wsdashboard.AccountSlotSwitchResult{}, err
 		}
-		return wsdashboard.AccountSlotSwitchResult{}, errUnknown
-	}
-	var res wsdashboard.AccountSlotSwitchResult
-	var err error
-	if !c.do(func() {
-		rec := c.record()
-		if c.closed || rec.ClosedAt != "" || rec.handedOff() {
-			err = endedError(rec)
-			return
-		}
-		if !wscred.SupportedSlotHarness(rec.Backend) {
-			err = badRequest("account_slot_unsupported")
-			return
-		}
-		target := wscred.NormalizeAccountSlotID(slotID)
-		if r.opts.AccountSlots != nil {
-			if _, ok := r.opts.AccountSlots.ResolveSlot(rec.Backend, target); !ok {
-				err = &requestError{status: http.StatusNotFound, msg: "account_slot_not_found"}
+		var res wsdashboard.AccountSlotSwitchResult
+		if !c.do(func() {
+			rec := c.record()
+			if c.closed || rec.ClosedAt != "" || rec.handedOff() {
+				err = endedError(rec)
 				return
 			}
-		}
-		cur := wscred.NormalizeAccountSlotID(rec.AccountSlotID)
-		if cur == target {
-			if rec.PendingAccountSlotID != "" {
-				c.update(func(r *Record) { r.PendingAccountSlotID = "" })
-				c.changed(false)
-				c.watched()
+			if !wscred.SupportedSlotHarness(rec.Backend) {
+				err = badRequest("account_slot_unsupported")
+				return
 			}
+			target := wscred.NormalizeAccountSlotID(slotID)
+			if r.opts.AccountSlots != nil {
+				if _, ok := r.opts.AccountSlots.ResolveSlot(rec.Backend, target); !ok {
+					err = &requestError{status: http.StatusNotFound, msg: "account_slot_not_found"}
+					return
+				}
+			}
+			cur := wscred.NormalizeAccountSlotID(rec.AccountSlotID)
+			if cur == target {
+				if rec.PendingAccountSlotID != "" {
+					c.update(func(r *Record) { r.PendingAccountSlotID = "" })
+					c.changed(false)
+					c.watched()
+				}
+				res = wsdashboard.AccountSlotSwitchResult{
+					ConversationID: rec.ReplyID,
+					AccountSlotID:  cur,
+					Mode:           "unchanged",
+				}
+				return
+			}
+			c.update(func(r *Record) { r.PendingAccountSlotID = target })
+			c.changed(false)
+			c.watched()
 			res = wsdashboard.AccountSlotSwitchResult{
-				ConversationID: rec.ReplyID,
-				AccountSlotID:  cur,
-				Mode:           "unchanged",
+				ConversationID:       rec.ReplyID,
+				AccountSlotID:        cur,
+				PendingAccountSlotID: target,
+				Mode:                 "queued",
 			}
-			return
+		}) {
+			if c.isParkedOut() {
+				continue
+			}
+			return wsdashboard.AccountSlotSwitchResult{}, endedError(c.record())
 		}
-		c.update(func(r *Record) { r.PendingAccountSlotID = target })
-		c.changed(false)
-		c.watched()
-		res = wsdashboard.AccountSlotSwitchResult{
-			ConversationID:       rec.ReplyID,
-			AccountSlotID:        cur,
-			PendingAccountSlotID: target,
-			Mode:                 "queued",
-		}
-	}) {
-		return wsdashboard.AccountSlotSwitchResult{}, errClosed
+		return res, err
 	}
-	return res, err
 }
 
 // SwitchConversationAccountSlotNow performs an immediate Stop+Restart switch
 // (2a -> 2b) on one open conversation (D2/D11).
 func (r *Runner) SwitchConversationAccountSlotNow(id, slotID string) (wsdashboard.AccountSlotSwitchResult, error) {
-	c := r.conv(id)
-	if c == nil {
-		if rec, ok := r.lookupClosedRecord(id); ok {
-			return wsdashboard.AccountSlotSwitchResult{}, endedError(rec)
+	for {
+		c, err := r.open(id)
+		if err != nil {
+			return wsdashboard.AccountSlotSwitchResult{}, err
 		}
-		return wsdashboard.AccountSlotSwitchResult{}, errUnknown
+		var res wsdashboard.AccountSlotSwitchResult
+		if !c.do(func() {
+			res, err = c.switchAccountSlotNow(slotID)
+		}) {
+			if c.isParkedOut() {
+				continue
+			}
+			return wsdashboard.AccountSlotSwitchResult{}, endedError(c.record())
+		}
+		return res, err
 	}
-	var res wsdashboard.AccountSlotSwitchResult
-	var err error
-	if !c.do(func() {
-		res, err = c.switchAccountSlotNow(slotID)
-	}) {
-		return wsdashboard.AccountSlotSwitchResult{}, errClosed
-	}
-	return res, err
 }
 
 var _ wsdashboard.AgentAccountSlotHost = (*Runner)(nil)

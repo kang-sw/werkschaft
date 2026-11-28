@@ -15,7 +15,7 @@ function loadCompanion(globals = {}) {
     ...globals
   });
   context.window = context.window || {};
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-colead", "vrm", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-fx", "vrm-studio", "vrm-props", "vrm-pose", "vrm-colead", "vrm", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return { C: context.window.WsCompanion, context };
@@ -1779,4 +1779,411 @@ test("Step 3: 2D anime dizzy FX layout clamps safely inside rail bounds and draw
     assert.equal(fxCanvas.hidden, true, `VRM ${metaVer}: returning to typing must hide .ws-companion-vrm-fx canvas`);
     rig.dispose();
   }
+});
+
+test("Phase 1 overlay: modular contracts, pixel-continuous asymmetric frustum, zero-resize anchor updates, shrink-clear, and raycastAt", async () => {
+  const { C } = loadCompanion();
+  assert.equal(typeof C.vrmDizzyFx?.drawDizzyFx, "function", "vrm-fx module exported");
+  assert.equal(typeof C.vrmOverlayMath?.computeAsymmetricFrustum, "function", "vrmOverlayMath exported");
+  assert.equal(typeof C.vrmCoLeadProps?.createCoLeadProps, "function", "vrm-props module exported");
+  assert.equal(typeof C.vrmCoLeadPose?.computeCoLeadTargets, "function", "vrm-pose module exported");
+  assert.equal(typeof C.createVrmCoLead, "function", "vrm-colead module exported");
+  assert.equal(typeof C.vrmCoLeadMath?.computeCoLeadTargets, "function", "vrmCoLeadMath preserved");
+
+  // 1. Pixel-continuity theorem: a 3D view-space point projects to the exact same viewport pixel
+  //    whether rendered in docked, bleed, or full-viewport roam frustums.
+  const anchor = { left: 0, top: 694, width: 280, height: 240 };
+  const rects = [
+    anchor,
+    { left: 0, top: 646, width: 328, height: 288 },
+    { left: 0, top: 36, width: 1680, height: 898 }
+  ];
+  const vx = 0.08, vy = -0.05, vz = -1.85;
+  const projectedPixels = rects.map(r => {
+    const f = C.vrmOverlayMath.computeAsymmetricFrustum(anchor, r, 0.08, 25, 26);
+    const ndcX = (2 * f.near * vx / (-vz) - (f.right + f.left)) / (f.right - f.left);
+    const ndcY = (2 * f.near * vy / (-vz) - (f.top + f.bottom)) / (f.top - f.bottom);
+    return {
+      x: r.left + (ndcX * 0.5 + 0.5) * r.width,
+      y: r.top + (-ndcY * 0.5 + 0.5) * r.height
+    };
+  });
+  for (let i = 1; i < projectedPixels.length; i++) {
+    assert.ok(Math.abs(projectedPixels[i].x - projectedPixels[0].x) < 1e-9, `pixel X drifted for rect ${i}`);
+    assert.ok(Math.abs(projectedPixels[i].y - projectedPixels[0].y) < 1e-9, `pixel Y drifted for rect ${i}`);
+  }
+
+  // 2. Zero-resize backing store + 3-mode scissor + shrink-clear (exact prevR y-flip & clear-before-render order) + lazy FX canvas + .shell-bottom clamp + raycastAt.
+  let setSizeCalls = 0;
+  const glOps = [];
+  const fakeThree = makeFakeVrmRuntime("1");
+  const OrigRenderer = fakeThree.runtime.THREE.WebGLRenderer;
+  fakeThree.runtime.THREE.WebGLRenderer = class extends OrigRenderer {
+    setSize(w, h, updateStyle) { setSizeCalls++; super.setSize(w, h, updateStyle); }
+    setScissorTest(flag) { this._scissorTest = !!flag; }
+    setScissor(x, y, w, h) { this._lastScissor = { x, y, w, h }; glOps.push({ op: "scissor", x, y, w, h }); }
+    setViewport(x, y, w, h) { this._lastViewport = { x, y, w, h }; }
+    clear() { glOps.push({ op: "clear", test: !!this._scissorTest, scissor: this._lastScissor ? { ...this._lastScissor } : null }); }
+    render(scene, camera) {
+      glOps.push({ op: "render", test: !!this._scissorTest, scissor: this._lastScissor ? { ...this._lastScissor } : null });
+      return super.render(scene, camera);
+    }
+  };
+  fakeThree.runtime.THREE.Vector2 = class { constructor(x = 0, y = 0) { this.x = x; this.y = y; } set(x, y) { this.x = x; this.y = y; return this; } };
+  fakeThree.runtime.THREE.Raycaster = class {
+    setFromCamera(ndc) { this._ndc = { x: ndc.x, y: ndc.y }; }
+    intersectObject() {
+      return Math.abs(this._ndc.x) < 0.35 && Math.abs(this._ndc.y) < 0.35
+        ? [{ distance: 1.5, object: { name: "body" } }]
+        : [];
+    }
+  };
+  const OrigCam = fakeThree.runtime.THREE.PerspectiveCamera;
+  fakeThree.runtime.THREE.PerspectiveCamera = class extends OrigCam {
+    constructor(fov, aspect, near, far) {
+      super(fov, aspect, near, far);
+      this.projectionMatrix = { makePerspective(l, r, t, b, n, f) { this.frustum = { l, r, t, b, n, f }; return this; } };
+      this.projectionMatrixInverse = { copy() { return this; }, invert() { return this; } };
+    }
+  };
+
+  const botBar = { getBoundingClientRect: () => ({ left: 0, top: 934, width: 1680, height: 26 }) };
+  const topBar = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 1680, height: 36 }) };
+  const doc = {
+    documentElement: { dataset: { rid: "s1" }, getAttribute: () => "s1" },
+    createElement: tag => makeFakeElement(tag, doc),
+    querySelector: sel => sel === ".shell-bottom" ? botBar : (sel.includes(".shell-top") ? topBar : null),
+    addEventListener() {}
+  };
+  const { C: C2 } = loadCompanion({
+    document: doc,
+    window: { innerWidth: 1680, innerHeight: 960, devicePixelRatio: 2, addEventListener() {} },
+    fetch: async () => ({ ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer })
+  });
+  C2.vrmRuntimeLoader = async () => fakeThree.runtime;
+
+  const container = makeFakeElement("div", doc);
+  const rig = C2.makeVrmRig({ id: "vrm-overlay-1", rev: "r1", renderer: "vrm", modelFile: "a.vrm", manifest: {}, expressionMap: {}, animations: {} });
+  await rig.mount(container, {
+    width: 280, height: 240, dpr: 2,
+    viewport: { width: 1680, height: 960, dpr: 2 },
+    anchorRect: { left: 0, top: 694, width: 280, height: 240 }
+  });
+  const initialSetSize = setSizeCalls;
+  assert.equal(rig.getRenderMetrics().viewportResizeCount, 1);
+
+  // Overlay 2D FX canvas stays lazily unallocated (0x0) while idle/hidden.
+  const fxCanvas = container.all().find(el => el.className === "ws-companion-vrm-fx");
+  assert.ok(fxCanvas);
+  assert.equal(fxCanvas.hidden, true);
+  assert.equal(fxCanvas.width, 0, "hidden overlay 2D FX canvas must remain 0x0 until an FX plays");
+  assert.equal(fxCanvas.height, 0);
+
+  // Rail width drags (220px -> 360px -> 280px) must trigger ZERO renderer.setSize calls!
+  for (const w of [220, 360, 280]) {
+    rig.setAnchorRect({ left: 0, top: 694, width: w, height: 240 });
+    rig.view("stand", null, "idle", []).render(0.05, { x: 0, y: 0 }, null, {});
+  }
+  assert.equal(setSizeCalls, initialSetSize, "rail width drags must never reallocate WebGL backing store");
+  assert.equal(rig.getRenderMetrics().viewportResizeCount, 1);
+  assert.ok(rig.getRenderMetrics().anchorUpdateCount >= 3);
+
+  // docked -> bleed (clamped above .shell-bottom at 934px) -> roam -> docked (verify exact shrink-clear prevR + clear-before-render order!).
+  rig.setRenderMode("bleed");
+  rig.setBleedPadding({ top: 48, right: 48, bottom: 48, left: 24 });
+  rig.view("stand", null, "idle", []).render(0.10, { x: 0, y: 0 }, null, {});
+  const bleedMetrics = rig.getRenderMetrics();
+  assert.equal(bleedMetrics.mode, "bleed");
+  assert.equal(rig.getRenderMode(), "bleed");
+  assert.equal(container.dataset.renderMode, "bleed");
+  assert.ok(bleedMetrics.scissorRect.top + bleedMetrics.scissorRect.height <= 960 - 26,
+    `bleed scissor bottom must clamp above .shell-bottom: ${JSON.stringify(bleedMetrics.scissorRect)}`);
+  assert.equal(bleedMetrics.scissorRect.width, 280 + 48);
+  assert.equal(rig.getCoLeadState().breakoutActive, true);
+
+  rig.setRenderMode("roam");
+  rig.view("stand", null, "idle", []).render(0.15, { x: 0, y: 0 }, null, {});
+  const roamRect = rig.getRenderMetrics().scissorRect;
+  assert.equal(rig.getRenderMetrics().mode, "roam");
+  assert.ok(roamRect.top + roamRect.height <= 934);
+
+  const shrinkBefore = rig.getRenderMetrics().shrinkClearCount;
+  glOps.length = 0;
+  rig.setRenderMode("docked");
+  rig.view("stand", null, "idle", []).render(0.20, { x: 0, y: 0 }, null, {});
+  const dockedMetrics = rig.getRenderMetrics();
+  assert.equal(dockedMetrics.mode, "docked");
+  assert.equal(container.dataset.renderMode, "docked");
+  assert.ok(dockedMetrics.shrinkClearCount > shrinkBefore, "shrinking from roam back to docked must clear prevR");
+  assert.equal(rig.getCoLeadState().breakoutActive, false);
+
+  // Assert exact GL ordering & y-flipped coordinates: clear(prevR) strictly BEFORE render(dockedR).
+  const clearIdx = glOps.findIndex(op => op.op === "clear");
+  const renderIdx = glOps.findIndex(op => op.op === "render");
+  assert.ok(clearIdx >= 0 && renderIdx > clearIdx, `shrink-clear must issue clear before render: ${JSON.stringify(glOps)}`);
+  const expectedPrevY = 960 - (roamRect.top + roamRect.height);
+  assert.equal(glOps[clearIdx].test, true, "shrink-clear must keep scissorTest enabled");
+  assert.deepEqual(glOps[clearIdx].scissor, {
+    x: roamRect.left, y: expectedPrevY, w: roamRect.width, h: roamRect.height
+  }, "shrink-clear must clear the exact previous scissor rect with flipped WebGL y");
+  const dockedRect = dockedMetrics.scissorRect;
+  const expectedDockedY = 960 - (dockedRect.top + dockedRect.height);
+  assert.deepEqual(glOps[renderIdx].scissor, {
+    x: dockedRect.left, y: expectedDockedY, w: dockedRect.width, h: dockedRect.height
+  }, "post-clear render must use the new docked scissor rect with flipped WebGL y");
+
+  // Also verify explicit bleed -> docked shrink-clear coordinates and order.
+  rig.setRenderMode("bleed");
+  rig.view("stand", null, "idle", []).render(0.25, { x: 0, y: 0 }, null, {});
+  const bleedPrev = rig.getRenderMetrics().scissorRect;
+  glOps.length = 0;
+  rig.setRenderMode("docked");
+  rig.view("stand", null, "idle", []).render(0.30, { x: 0, y: 0 }, null, {});
+  const bClearIdx = glOps.findIndex(op => op.op === "clear");
+  const bRenderIdx = glOps.findIndex(op => op.op === "render");
+  assert.ok(bClearIdx >= 0 && bRenderIdx > bClearIdx, "bleed -> docked must clear before render");
+  assert.deepEqual(glOps[bClearIdx].scissor, {
+    x: bleedPrev.left, y: 960 - (bleedPrev.top + bleedPrev.height), w: bleedPrev.width, h: bleedPrev.height
+  }, "bleed -> docked shrink-clear must clear the exact bleed scissor rect");
+
+  // raycastAt hits character center, misses edge, and reports outside beyond active scissor.
+  const centerRay = rig.raycastAt(140, 694 + 120);
+  assert.equal(centerRay.hit, true);
+  assert.equal(centerRay.area, "character");
+  const edgeRay = rig.raycastAt(10, 694 + 10);
+  assert.equal(edgeRay.hit, false);
+  assert.equal(edgeRay.area, "messenger");
+  const outsideRay = rig.raycastAt(900, 200);
+  assert.equal(outsideRay.hit, false);
+  assert.equal(outsideRay.area, "outside");
+
+  rig.dispose();
+});
+
+test("Phase 1 stage: 4px splitter trim, 60fps breakout tier -> 30/6fps docked drop, roam hit-box tracking, and roam raycastAt click path", async () => {
+  let raf = null;
+  let pendingTimer = null;
+  let nowPerf = 1000;
+  let slotW = 280;
+  const winListeners = {};
+  const doc = {
+    hidden: false,
+    body: null,
+    documentElement: {
+      dataset: { rid: "s1" },
+      style: { setProperty() {}, removeProperty() {} },
+      hasAttribute: () => false,
+      getAttribute: () => "s1"
+    },
+    createElement: tag => makeFakeElement(tag, doc),
+    createElementNS: (_ns, tag) => makeFakeElement(tag, doc),
+    getElementById: id => id === "rail" ? railEl : (id === "rail-companion-slot" ? slotEl : null),
+    querySelector: sel => sel === "#rail" || sel === ".rail" ? railEl : (sel === "#rail-companion-slot" ? slotEl : null),
+    querySelectorAll: () => [],
+    addEventListener() {},
+    removeEventListener() {}
+  };
+  doc.body = makeFakeElement("body", doc);
+
+  const railEl = makeFakeElement("aside", doc);
+  railEl.id = "rail";
+  railEl.className = "rail";
+  railEl.getBoundingClientRect = () => ({ left: 0, top: 36, right: slotW, bottom: 934, width: slotW, height: 898 });
+  const slotEl = makeFakeElement("div", doc);
+  slotEl.id = "rail-companion-slot";
+  slotEl.className = "rail-companion-slot";
+  slotEl.hidden = true;
+  slotEl.getBoundingClientRect = () => slotEl.hidden
+    ? { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }
+    : { left: 0, top: 694, right: slotW, bottom: 934, width: slotW, height: 240 };
+  railEl.append(slotEl);
+  railEl.querySelector = sel => sel === "#rail-companion-slot" ? slotEl : null;
+  railEl.querySelectorAll = sel => sel.includes("#rail-companion-slot") ? [slotEl] : [];
+
+  let renderMode = "docked";
+  let renders = 0;
+  let setViewportCalls = 0;
+  let anchorUpdates = 0;
+  let knockCalls = 0;
+  let messengerToggles = 0;
+  const raycastCalls = [];
+  let raycastNextHit = true;
+  let roamBounds = { x: 420, y: -394, width: 156, height: 228, viewportX: 420, viewportY: 300 };
+
+  const fakeRig = {
+    renderer: "vrm",
+    mount() {},
+    view(pose, gesture, expression) {
+      return {
+        pose, gesture, expression, props: [], handAnchor: [140, 140], articulatedDrag: false, seat: 1, bounds: [0, 0, 1, 1],
+        render() { renders++; return null; }
+      };
+    },
+    prop() { return { data: null, drawable: false, draw() {} }; },
+    setGaze() {},
+    setViewport() { setViewportCalls++; return true; },
+    setAnchorRect() { anchorUpdates++; return true; },
+    setRenderMode(m) { renderMode = m === "bleed" || m === "roam" ? m : "docked"; return renderMode; },
+    getRenderMode() { return renderMode; },
+    getRenderMetrics() { return { mode: renderMode, overlayMode: true }; },
+    getCoLeadState() { return { breakoutActive: renderMode !== "docked", knockActive: false, swapActive: false, dizzyActive: false, phoneMode: "desk" }; },
+    getCharacterBounds() {
+      return renderMode === "roam"
+        ? { ...roamBounds }
+        : { x: 70, y: 20, width: 140, height: 200, viewportX: 70, viewportY: 714 };
+    },
+    raycastAt(x, y) {
+      raycastCalls.push({ x, y });
+      return { hit: raycastNextHit, area: raycastNextHit ? "character" : "messenger", clientX: x, clientY: y };
+    },
+    triggerKnock() { knockCalls++; return { kind: "knock_startle", count: knockCalls, wokeFromSleepy: false }; },
+    isContextLost() { return false; },
+    debugState() { return { loaded: true, contextLost: false }; },
+    pause() {},
+    resume() {},
+    dispose() {}
+  };
+
+  const win = {
+    innerWidth: 1680,
+    innerHeight: 960,
+    devicePixelRatio: 2,
+    location: { search: "" },
+    matchMedia: q => ({ matches: q.includes("1600"), addEventListener() {}, removeEventListener() {} }),
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    addEventListener(name, fn) { (winListeners[name] = winListeners[name] || []).push(fn); },
+    removeEventListener() {},
+    requestAnimationFrame(fn) { raf = fn; return 1; },
+    cancelAnimationFrame() { raf = null; },
+    ResizeObserver: class { observe() {} disconnect() {} },
+    MutationObserver: class { observe() {} disconnect() {} },
+    WsShell: { companionContext: () => ({ routeKind: "home", activity: "idle", sessionId: "s1", landmarks: {}, events: [] }) },
+    WsCompanionMessenger: { mount() {}, toggle() { messengerToggles++; return true; }, isOpen: () => false, dispose() {} },
+    performance: { now: () => nowPerf }
+  };
+
+  const { C } = loadCompanion({
+    document: doc,
+    window: win,
+    getComputedStyle: () => ({ visibility: "visible", display: "flex" }),
+    ResizeObserver: win.ResizeObserver,
+    MutationObserver: win.MutationObserver,
+    OffscreenCanvas: class {
+      constructor(w, h) { this.width = w; this.height = h; }
+      getContext() { return { canvas: this, clearRect() {}, drawImage() {}, save() {}, restore() {}, getImageData: () => ({ data: [] }) }; }
+    },
+    wsT: k => k,
+    performance: { now: () => nowPerf },
+    requestAnimationFrame: win.requestAnimationFrame,
+    cancelAnimationFrame: win.cancelAnimationFrame,
+    setTimeout: (fn, ms) => { pendingTimer = { fn, ms }; return 1; },
+    clearTimeout: () => { pendingTimer = null; },
+    fetch: async () => ({ ok: true, status: 200, json: async () => ({}) })
+  });
+  C.packLoader = onReady => ({
+    load() {
+      Promise.resolve().then(() => onReady({
+        id: "vrm-stage-p1", rev: "r1", renderer: "vrm", modelFile: "a.vrm",
+        manifest: { scenarios: [], timing: {} }, expressionMap: {}, animations: {}
+      }, null));
+    },
+    dispose() {}
+  });
+  C.makeVrmRig = () => fakeRig;
+
+  const stage = C.mount({ pack: "vrm-stage-p1", enabled: true }, { rail: railEl });
+  for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r));
+
+  const step = dtMs => {
+    const fn = raf;
+    raf = null;
+    nowPerf += dtMs;
+    if (fn) fn(nowPerf);
+  };
+  step(16);
+
+  const rootNode = doc.body.children[0];
+  const hitEl = rootNode.all().find(el => el.className === "ws-companion-hit");
+  const charBtn = rootNode.all().find(el => el.className === "ws-companion-character");
+  assert.ok(hitEl && charBtn);
+
+  // (a) 4px splitter trim on docked hit box + zero setViewport across rail width drags.
+  assert.equal(hitEl.style.width, "276px", "docked .ws-companion-hit must trim 4px for .rail-splitter (280 - 4)");
+  const vpCallsBefore = setViewportCalls;
+  slotW = 360;
+  for (const fn of winListeners.resize || []) fn();
+  step(40);
+  assert.equal(hitEl.style.width, "356px", "resized rail slot 360px must keep 4px splitter trim (356px)");
+  slotW = 280;
+  for (const fn of winListeners.resize || []) fn();
+  step(40);
+  assert.equal(hitEl.style.width, "276px");
+  assert.equal(setViewportCalls, vpCallsBefore, "rail width drags must call setAnchorRect, never setViewport");
+  assert.ok(anchorUpdates >= 2);
+
+  // (b) Breakout 60fps tier in bleed/roam -> drops back to 30fps active docked and 6fps idle docked.
+  stage.setVrmRenderMode("bleed");
+  step(16);
+  assert.equal(stage.debugState().vrmBreakoutActive, true);
+  assert.equal(stage.debugState().vrmTargetFps, 60);
+  const rendersAtBleedStart = renders;
+  // Advance 5 frames at 16.7ms (60fps): every frame should render (not throttled to 30fps).
+  for (let i = 0; i < 5; i++) step(16.7);
+  assert.equal(renders - rendersAtBleedStart, 5, "bleed mode must render at 60fps (every 16.7ms frame)");
+
+  // Switch to roam: still 60fps, and (c) hit-box tracks roam viewport character bounds.
+  stage.setVrmRenderMode("roam");
+  step(16.7);
+  assert.equal(stage.debugState().vrmTargetFps, 60);
+  assert.equal(hitEl.style.width, "156px", "roam hit width must track character bounds width");
+  assert.equal(hitEl.style.height, "228px", "roam hit height must track character bounds height");
+  assert.ok(hitEl.style.transform.includes("translate3d(420px,300px,0)"),
+    `roam hit transform must track viewportX/viewportY, got ${hitEl.style.transform}`);
+
+  // (d) Roam click path invokes rig.raycastAt: hit triggers knock (not messenger), miss does nothing.
+  raycastNextHit = true;
+  charBtn.dispatchEvent({ type: "click", button: 0, clientX: 480, clientY: 390 });
+  assert.equal(raycastCalls.length, 1);
+  assert.deepEqual(raycastCalls[0], { x: 480, y: 390 });
+  assert.equal(knockCalls, 1, "roam raycast hit must trigger knock");
+  assert.equal(messengerToggles, 0, "roam raycast hit must never open messenger");
+
+  raycastNextHit = false;
+  charBtn.dispatchEvent({ type: "click", button: 0, clientX: 425, clientY: 305 });
+  assert.equal(raycastCalls.length, 2);
+  assert.equal(knockCalls, 1, "roam raycast miss must not trigger knock");
+  assert.equal(messengerToggles, 0, "roam raycast miss must not open messenger");
+
+  // Return to docked -> drops immediately to 30fps active, then 6fps idle after 5s.
+  stage.setVrmRenderMode("docked");
+  step(16.7);
+  assert.equal(stage.debugState().vrmBreakoutActive, false);
+  assert.equal(stage.debugState().vrmTargetFps, 30, "returning to docked must drop targetFps to 30fps active");
+  assert.equal(hitEl.style.width, "276px", "returning to docked must restore 4px-trimmed slot hit width");
+  const dockedActiveRenders = renders;
+  step(16); // throttled by 30fps (33.3ms - 5.5ms slack = 27.8ms)
+  assert.equal(renders, dockedActiveRenders, "docked 30fps tier must throttle a 16ms frame");
+  step(34);
+  assert.equal(renders, dockedActiveRenders + 1, "docked 30fps tier must render after 34ms");
+
+  // After > 5000ms idle with no activity, drops to 6fps idle tier (uses idleTimer instead of 60Hz rAF).
+  step(5500);
+  assert.equal(stage.debugState().vrmIdleMode, true);
+  assert.equal(stage.debugState().vrmTargetFps, 6, "idle docked VRM must drop to 6fps tier");
+  assert.equal(raf, null, "6fps idle tier must sleep on setTimeout instead of spinning 60Hz rAF");
+  assert.ok(pendingTimer && pendingTimer.ms >= 120 && pendingTimer.ms <= 200,
+    `6fps idle timer delay should be ~167ms, got ${pendingTimer?.ms}`);
+  const idleRenders = renders;
+  const fireTimer = pendingTimer.fn;
+  pendingTimer = null;
+  fireTimer();
+  step(40); // throttled if fired too early (< 162.7ms)
+  assert.equal(renders, idleRenders, "6fps idle tier must throttle a 40ms frame");
+  const fireTimer2 = pendingTimer.fn;
+  pendingTimer = null;
+  fireTimer2();
+  step(170);
+  assert.equal(renders, idleRenders + 1, "6fps idle tier must render after ~170ms");
+
+  stage.dispose();
 });

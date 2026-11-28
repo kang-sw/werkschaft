@@ -219,6 +219,11 @@ func (r *Runner) unparkWithGen(id string, gen uint64, checkGen bool) *conv {
 			<-ch
 			continue
 		}
+		if ch := r.parkedWrite[id]; ch != nil {
+			r.mu.Unlock()
+			<-ch
+			continue
+		}
 		if r.closing {
 			r.mu.Unlock()
 			return nil

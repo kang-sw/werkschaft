@@ -337,6 +337,8 @@ type Options struct {
 	removeRetiredPiArchive func(string) error // archive removal fault in tests
 	// suppressReportDelivery simulates loss after settlement commits in tests.
 	suppressReportDelivery func(Record) bool
+	// beforeParkedAccountSlotWrite pauses parked account-slot persistence in tests.
+	beforeParkedAccountSlotWrite func(id string)
 }
 
 // Runner hosts the agent conversations of one dashboard daemon.
@@ -419,10 +421,11 @@ type Runner struct {
 	// channel per node while an expiry cascade is closing its tree, fencing
 	// concurrent spawns against publishing live children under an expiring
 	// ancestor. All under mu.
-	parked    map[string]bool
-	parkStop  map[string]func()
-	unparking map[string]chan struct{}
-	expiring  map[string]chan struct{}
+	parked      map[string]bool
+	parkStop    map[string]func()
+	unparking   map[string]chan struct{}
+	parkedWrite map[string]chan struct{}
+	expiring    map[string]chan struct{}
 	// convGen counts resident/parked incarnation transitions per reply-id under
 	// mu so expiry fences detect any unpark, re-park, or reopen since snapshot.
 	convGen map[string]uint64

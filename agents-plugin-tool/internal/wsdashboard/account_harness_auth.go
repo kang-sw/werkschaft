@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/kang-sw/devenv/internal/wscred"
@@ -89,7 +90,6 @@ func (m *harnessAuthManager) stop() {
 	m.mu.Lock()
 	m.closed = true
 	cancel := m.cancel
-	cmd := m.cmd
 	stdin := m.stdin
 	m.stdin = nil
 	m.mu.Unlock()
@@ -98,11 +98,9 @@ func (m *harnessAuthManager) stop() {
 		_ = stdin.Close()
 		m.stdinMu.Unlock()
 	}
+	// Cancelling the context kills the process tree through cmd.Cancel.
 	if cancel != nil {
 		cancel()
-	}
-	if cmd != nil {
-		killSlotLoginProcessTree(cmd)
 	}
 }
 
@@ -251,8 +249,15 @@ func (d *Daemon) runHarnessAuth(
 	openBrowser func(string) error,
 ) {
 	m := &d.harnessAuth
-	cmd := exec.Command(exe, args...)
+	// CommandContext guarantees Cancel never fires after Wait has reaped the
+	// child, so the process-group kill can never hit a recycled PID/PGID.
+	cmd := exec.CommandContext(ctx, exe, args...)
 	configureSlotLoginCmd(cmd)
+	cmd.Cancel = func() error {
+		killSlotLoginProcessTree(cmd)
+		return nil
+	}
+	cmd.WaitDelay = 2 * time.Second
 	if len(env) > 0 {
 		cmd.Env = env
 	}
@@ -275,6 +280,16 @@ func (d *Daemon) runHarnessAuth(
 	}
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
+		// CommandContext refuses to start once ctx is done; keep the cancel and
+		// timeout outcomes distinct from a missing CLI.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if errors.Is(ctxErr, context.DeadlineExceeded) {
+				d.finishHarnessAuth(attempt, "failed", "timed_out")
+			} else {
+				d.finishHarnessAuth(attempt, "cancelled", "")
+			}
+			return
+		}
 		d.finishHarnessAuth(attempt, "failed", "cli_unavailable")
 		return
 	}
@@ -291,15 +306,6 @@ func (d *Daemon) runHarnessAuth(
 		_ = stdin.Close()
 	}
 	m.mu.Unlock()
-
-	waitDone := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			killSlotLoginProcessTree(cmd)
-		case <-waitDone:
-		}
-	}()
 
 	var openOnce sync.Once
 	scanStream := func(r io.Reader) {
@@ -349,7 +355,6 @@ func (d *Daemon) runHarnessAuth(
 	scanWG.Wait()
 
 	waitErr := cmd.Wait()
-	close(waitDone)
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		if errors.Is(ctxErr, context.DeadlineExceeded) {
@@ -511,14 +516,10 @@ func (d *Daemon) handleAccountHarnessAuthCancel(w http.ResponseWriter, r *http.R
 	}
 	m.state.State = "cancelling"
 	cancel := m.cancel
-	cmd := m.cmd
 	resp := m.state
 	m.mu.Unlock()
 
 	cancel()
-	if cmd != nil {
-		killSlotLoginProcessTree(cmd)
-	}
 	writeJSON(w, http.StatusAccepted, resp)
 }
 

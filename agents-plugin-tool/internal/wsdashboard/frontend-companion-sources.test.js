@@ -540,7 +540,7 @@ test("companion disabled runs zero WebGL contexts and zero extra fetches", async
     },
     wsT: k => k
   });
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-colead", "vrm", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-fx", "vrm-studio", "vrm-props", "vrm-pose", "vrm-colead", "vrm", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   const origMount = context.window.WsCompanion.mount;

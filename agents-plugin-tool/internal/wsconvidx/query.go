@@ -162,6 +162,8 @@ func (s *Store) runSearchQuery(ctx context.Context, ftsExpr, rawQuery string, p 
 	terms := extractHighlightTerms(rawQuery)
 	hits := []SearchHit{}
 	err := s.read(ctx, func(db *sql.DB) error {
+		// s.read may retry the closure; drop rows from a failed attempt.
+		hits = hits[:0]
 		rows, err := db.QueryContext(ctx, sqlStr, args...)
 		if err != nil {
 			return err
@@ -280,6 +282,8 @@ func (s *Store) History(ctx context.Context, p HistoryParams) (HistoryResult, er
 
 	var items []HistoryItem
 	err := s.read(ctx, func(db *sql.DB) error {
+		// s.read may retry the closure; drop rows from a failed attempt.
+		items = items[:0]
 		rows, err := db.QueryContext(ctx, sqlStr, args...)
 		if err != nil {
 			return err
