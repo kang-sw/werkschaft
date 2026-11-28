@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="dark" data-preset="wide-tm" data-gal="col" data-rail-collapsed="false">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Werkschaft Dashboard — Track 2A: Always-Open #bgal &amp; Docked Ticket Map</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <!-- Unobtrusive Top Demo Switcher Bar -->
+  <header class="m-bar" role="banner" aria-label="Track 2A 목업 프리셋 전환 바">
+    <div class="m-bar-left">
+      <span class="m-badge">TRACK 2A</span>
+      <div class="m-tabs" role="tablist" aria-label="레이아웃 프리셋 선택">
+        <button type="button" class="m-tab is-on" role="tab" data-preset="wide-tm" aria-selected="true">4-Panel 1920px (Ticket Map)</button>
+        <button type="button" class="m-tab" role="tab" data-preset="narrow-col" aria-selected="false">Narrow Col 380px (Stress Test)</button>
+        <button type="button" class="m-tab" role="tab" data-preset="three-panel" aria-selected="false">3-Panel 1440px (Page 0 = ⌂)</button>
+        <button type="button" class="m-tab" role="tab" data-preset="fullscreen" aria-selected="false">Fullscreen (#tmback Overlay)</button>
+      </div>
+    </div>
+
+    <div class="m-bar-right">
+      <span class="m-metric" id="m-bgal-width" title="도킹 갤러리(#bgal) 현재 폭 · 좌측 경계 드래그로 실시간 조절 가능">#bgal · 540px</span>
+      <button type="button" class="m-ctrl" id="m-sheet-toggle" aria-pressed="true" title="도킹 인스펙터 바텀 시트 열기/접기">
+        <span class="m-dot"></span>
+        <span id="m-sheet-lbl">인스펙터 ON</span>
+      </button>
+      <button type="button" class="m-ctrl" id="m-theme-toggle" aria-pressed="false" title="다크 / 라이트 테마 전환">
+        <svg class="ic ic-moon" viewBox="0 0 16 16" aria-hidden="true"><path d="M12.8 10.2A5.5 5.5 0 0 1 5.8 3.2a5.5 5.5 0 1 0 7 7z"/></svg>
+        <svg class="ic ic-sun" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1"/></svg>
+        <span id="m-theme-lbl">Dark</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Outer Frame Wrapper (centers 1440px in 3-Panel preset on wide monitors) -->
+  <div class="ws-viewport-frame" id="ws-viewport-frame">
+    <!-- Variant D Outer Shell -->
+    <div class="ws-app" id="ws-app">
+      <!-- Topbar (36px, 3-Column True Center Grid) -->
+      <header class="shell-top" aria-label="세션 상단 바">
+        <div class="top-left">
+          <button type="button" class="t-tool" id="railbtn" title="세션 레일 접기/펼치기" aria-label="세션 레일 접기/펼치기" aria-expanded="true">
+            <svg class="ic" viewBox="0 0 16 16"><rect x="1.8" y="2.5" width="12.4" height="11" rx="1.4"/><line x1="5.6" y1="2.5" x2="5.6" y2="13.5"/></svg>
+          </button>
+
+          <button type="button" class="t-seg tph-parent" title="부모 세션으로 이동 (메인)">
+            <svg class="ic-sm tph-up" viewBox="0 0 16 16"><path d="M11 11 5 5M5 10V5h5"/></svg>
+            <span class="tph-pn">메인</span>
+          </button>
+
+          <span class="crumb-sep" aria-hidden="true">›</span>
+
+          <div class="tph-id">
+            <span class="tph-r1">devenv</span>
+            <span class="tph-slash" aria-hidden="true">/</span>
+            <span class="sname">
+              <button type="button" class="snm" id="top-session-name" title="세션 이름 · 클릭하여 주소 복사">트랙2A</button>
+              <span class="sseq">#48</span>
+            </span>
+          </div>
+
+          <div class="slot-top-left">
+            <span class="worktree-path" title="현재 브랜치: impl/develop/gallery-ticketmap">
+              <svg class="ic-xs" viewBox="0 0 16 16"><circle cx="4.5" cy="3.8" r="1.5"/><circle cx="4.5" cy="12.2" r="1.5"/><circle cx="11.5" cy="5.8" r="1.5"/><path d="M4.5 5.3v5.4M11.5 7.3c0 2.6-2 3.2-7 3.2"/></svg>
+              <span class="br-txt">develop</span>
+            </span>
+            <span class="tph-hs" title="하네스: agy · high">
+              <span class="hb sm" data-h="agy"></span>
+              <span class="hs-lbl">agy · high</span>
+            </span>
+            <span class="sse" title="실시간 SSE 스트림 연결됨">
+              <span class="sse-dot" aria-hidden="true"></span>
+              <span class="sse-lbl">Live</span>
+            </span>
+          </div>
+        </div>
+
+        <!-- Top-Center: True Center Search Trigger -->
+        <div class="top-center">
+          <button type="button" class="tkqs-btn" id="tkqs" title="세션 · 티켓 · 화이트보드 빠른 검색 (⌘K)">
+            <svg class="ic" viewBox="0 0 16 16"><circle cx="7.2" cy="7.2" r="4.3"/><path d="m10.5 10.5 3.2 3.2"/></svg>
+            <span class="tkqs-ph">세션·티켓·화이트보드 검색…</span>
+            <kbd class="tkqs-kbd">⌘K</kbd>
+          </button>
+        </div>
+
+        <!-- Top-Right: #tkhandles + Temporary Legacy #ghandle & #drhandle (#thandle RETIRED!) -->
+        <div class="top-right">
+          <div class="stage-drawers" id="tkhandles" role="group" aria-label="전역 티켓 및 임시 레거시 드로어 핸들">
+            <!-- #thandle is RETIRED — Ticket Map lives permanently inside #bgal -->
+            <div class="tk-handle" role="group" aria-label="전역 티켓 트래커">
+              <button type="button" class="tk-pill" id="tk-open" title="전역 티켓 트래커 (#tkhandles)">
+                <svg class="ic" viewBox="0 0 16 16"><rect x="2.2" y="2.5" width="11.6" height="11" rx="1.6"/><line x1="5" y1="6" x2="11" y2="6"/><line x1="5" y1="9.2" x2="9" y2="9.2"/></svg>
+                <span>티켓</span>
+                <span class="tk-cnt">4</span>
+              </button>
+              <button type="button" class="tk-add" id="tkadd" title="새 티켓 작성" aria-label="새 티켓 작성">
+                <svg class="ic-xs" viewBox="0 0 16 16"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>
+              </button>
+            </div>
+
+            <button type="button" class="t-seg t-drawer-btn is-legacy" id="ghandle" title="임시 레거시 Git 드로어 (#ghandle — Track 2B 이관 전까지 유지)">
+              <svg class="ic" viewBox="0 0 16 16"><circle cx="4.5" cy="3.8" r="1.5"/><circle cx="4.5" cy="12.2" r="1.5"/><circle cx="11.5" cy="5.8" r="1.5"/><path d="M4.5 5.3v5.4M11.5 7.3c0 2.6-2 3.2-7 3.2"/></svg>
+              <span class="t-lbl">Git</span>
+              <span class="legacy-dot" aria-hidden="true"></span>
+            </button>
+
+            <button type="button" class="t-seg t-drawer-btn is-legacy" id="drhandle" title="임시 레거시 워크패널 드로어 (#drhandle — Track 2C 이관 전까지 유지)">
+              <svg class="ic" viewBox="0 0 16 16"><rect x="1.8" y="2.5" width="12.4" height="11" rx="1.4"/><line x1="10.2" y1="2.5" x2="10.2" y2="13.5"/></svg>
+              <span class="t-lbl">드로어</span>
+              <span class="dr-dot" aria-hidden="true"></span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <!-- Main Body: Seamless Left Rail + 12px Rounded Stage Well -->
+      <div class="ws-body" id="ws-body">
+        <!-- Seamless Left Session Rail (280px) + Fixed #rail-companion-slot -->
+        <aside class="rail" id="rail" data-companion-dock="rail-slot" aria-label="세션 레일">
+          <div class="rail-session-panel">
+            <div class="rhd">
+              <b class="rtitle">세션</b>
+              <button type="button" class="radd" title="워크스페이스 추가" aria-label="워크스페이스 추가">
+                <svg class="ic-xs" viewBox="0 0 16 16"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>
+              </button>
+              <span class="rsp"></span>
+              <span class="chip-live"><i class="dot"></i>2</span>
+              <span class="chip-perm">승인 1</span>
+              <button type="button" class="rref" title="세션 새로고침" aria-label="세션 새로고침">
+                <svg class="ic" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.4-3.5M13 2.5v2.7h-2.7"/></svg>
+              </button>
+            </div>
+
+            <div class="rlist">
+              <section class="rws">
+                <button type="button" class="wsbar" aria-expanded="true">
+                  <svg class="ic-chev" viewBox="0 0 12 12"><path d="M3 4.5 6 7.5l3-3"/></svg>
+                  <svg class="ic wsi" viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><line x1="2" y1="6" x2="14" y2="6"/></svg>
+                  <span class="nm">devenv</span>
+                  <span class="pp">/Users/kang-sw/devenv</span>
+                  <span class="ws-counts"><span class="ct">4</span></span>
+                </button>
+                <div class="wsbody">
+                  <div class="rwt">
+                    <div class="wthd">
+                      <svg class="ic" viewBox="0 0 16 16"><circle cx="4.5" cy="3.8" r="1.5"/><circle cx="4.5" cy="12.2" r="1.5"/><circle cx="11.5" cy="5.8" r="1.5"/><path d="M4.5 5.3v5.4M11.5 7.3c0 2.6-2 3.2-7 3.2"/></svg>
+                      <span class="br">develop</span>
+                      <span class="wf">· 루트</span>
+                      <span class="gs">±14</span>
+                    </div>
+                    <div class="rsessions">
+                      <div class="rs-group">
+                        <button type="button" class="rs">
+                          <span class="hb" data-h="agy"></span>
+                          <span class="rs-body">
+                            <span class="rs-line1">
+                              <span class="rs-name">메인</span>
+                              <span class="rs-perm-pill">승인</span>
+                              <span class="rs-when">1분</span>
+                            </span>
+                            <span class="rs-meta">
+                              <span class="rs-kids-pill">▾ 2 <em>1</em></span>
+                              <span class="rs-sub">Track 1 Variant D 확정 · 2A 착수</span>
+                            </span>
+                          </span>
+                        </button>
+                        <div class="rkids">
+                          <button type="button" class="rs">
+                            <span class="hb" data-h="claude"></span>
+                            <span class="rs-body">
+                              <span class="rs-line1">
+                                <span class="rs-name">컴패니언</span>
+                                <span class="rs-when">4분</span>
+                              </span>
+                            </span>
+                          </button>
+                          <button type="button" class="rs cur" aria-current="page">
+                            <span class="hb" data-h="agy"></span>
+                            <span class="rs-body">
+                              <span class="rs-line1">
+                                <span class="rs-name">트랙2A</span>
+                                <span class="rs-when live">지금</span>
+                              </span>
+                              <span class="rs-sub">#bgal 상시 도킹 + 티켓 맵</span>
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+                      <button type="button" class="rs">
+                        <span class="hb" data-h="codex"></span>
+                        <span class="rs-body">
+                          <span class="rs-line1">
+                            <span class="rs-name">히스토리 API</span>
+                            <span class="rs-when">12분</span>
+                          </span>
+                          <span class="rs-sub">conv-history 페이징 테스트 통과</span>
+                        </span>
+                      </button>
+                      <div class="rfold">
+                        <button type="button" class="rfh" aria-expanded="false">보관 <strong>9</strong></button>
+                        <button type="button" class="rfh" aria-expanded="false">삭제됨 <strong>21</strong></button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="rws is-col">
+                <button type="button" class="wsbar" aria-expanded="false">
+                  <svg class="ic-chev" viewBox="0 0 12 12"><path d="M3 4.5 6 7.5l3-3"/></svg>
+                  <svg class="ic wsi" viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><line x1="2" y1="6" x2="14" y2="6"/></svg>
+                  <span class="nm">gunpowder-odyssey</span>
+                  <span class="pp">/Users/kang-sw...</span>
+                  <span class="ws-counts"><span class="ct muted">0</span></span>
+                </button>
+              </section>
+
+              <section class="rws is-col">
+                <button type="button" class="wsbar" aria-expanded="false">
+                  <svg class="ic-chev" viewBox="0 0 12 12"><path d="M3 4.5 6 7.5l3-3"/></svg>
+                  <svg class="ic wsi" viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><line x1="2" y1="6" x2="14" y2="6"/></svg>
+                  <span class="nm">sheetloader</span>
+                  <span class="pp">/Users/kang-sw...</span>
+                  <span class="ws-counts"><span class="ct muted">0</span></span>
+                </button>
+              </section>
+            </div>
+          </div>
+
+          <!-- Fixed Bottom-Left #rail-companion-slot ((148)=a) -->
+          <div class="rail-companion-slot" id="rail-companion-slot" aria-label="좌측 레일 하단 고정 2D 컴패니언 독">
+            <div class="comp-stage">
+              <button type="button" class="comp-msg-btn" title="컴패니언 메신저 열기 (미읽음 1)" aria-label="컴패니언 메신저 열기">
+                <svg class="ic-xs" viewBox="0 0 16 16"><path d="M2.5 3.5h11v7.5H6.8L3.6 13.4V11H2.5z"/></svg>
+                <span class="comp-unread">1</span>
+              </button>
+              <div class="comp-figure" aria-hidden="true">
+                <svg class="comp-svg" viewBox="0 0 64 56" width="50" height="44">
+                  <ellipse cx="32" cy="51" rx="16" ry="3" fill="currentColor" opacity=".16"/>
+                  <line x1="10" y1="51" x2="54" y2="51" stroke="currentColor" stroke-opacity=".18" stroke-width="1.2" stroke-linecap="round"/>
+                  <g class="comp-body-anim">
+                    <path d="M22 49c1.2-9.5 4.2-13.5 10-13.5s8.8 4 10 13.5z" fill="#3b7be8" opacity=".88"/>
+                    <path d="M27.5 36.2 32 41.5l4.5-5.3" fill="none" stroke="#d2dcf6" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                    <circle cx="32" cy="23.5" r="11.5" fill="#f2d5bf"/>
+                    <path d="M19.5 23c0-8.2 5.3-13.5 12.5-13.5S44.5 14.8 44.5 23c0 3-.8 5.2-2.1 6.8-.8-3.8-2.8-6-5.2-6.8-1.4 2.1-3.4 3.2-5.2 3.2s-3.8-1.1-5.2-3.2c-2.4.8-4.4 3-5.2 6.8-1.3-1.6-2.1-3.8-2.1-6.8z" fill="#d4846a"/>
+                    <circle cx="28" cy="25.2" r="1.5" fill="#23252c"/>
+                    <circle cx="36" cy="25.2" r="1.5" fill="#23252c"/>
+                    <circle cx="28.5" cy="24.7" r=".45" fill="#fff"/>
+                    <circle cx="36.5" cy="24.7" r=".45" fill="#fff"/>
+                    <path d="M30.4 28.8c.9.9 2.3.9 3.2 0" fill="none" stroke="#8a5444" stroke-width="1.2" stroke-linecap="round"/>
+                  </g>
+                </svg>
+              </div>
+              <div class="comp-info">
+                <div class="comp-speech">"티켓 맵이 우측 #bgal에 상주해요!"</div>
+                <div class="comp-meta-row">
+                  <span class="comp-tag"><i class="dot"></i>대기 중 · 2D</span>
+                  <span class="comp-slot-note">148=a</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <!-- Variant D Signature: Inset 12px Rounded Stage Well -->
+        <div class="stage-well">
+          <main class="stage" id="stage" aria-label="대시보드 본문 스테이지">
+            <!-- Column 1: Chat Card -->
+            <section class="pane-chat" aria-label="대화 영역">
+              <div class="chat-card">
+                <div class="ctabs">
+                  <div class="ctabs-l">
+                    <button type="button" class="ctab is-on">
+                      <svg class="ic-xs" viewBox="0 0 12 12"><path d="M1.8 2.4h8.4v5.8H4.6L2.4 10V8.2h-.6z"/></svg>
+                      <span>대화</span>
+                    </button>
+                    <button type="button" class="ctab">
+                      <svg class="ic-xs" viewBox="0 0 12 12"><path d="M2.5 1.8h4.5l2.5 2.5v5.9h-7z"/></svg>
+                      <span>파일</span>
+                    </button>
+                  </div>
+                  <div class="ctabs-r">
+                    <span class="meta-pill">✉ <strong>14</strong></span>
+                  </div>
+                </div>
+
+                <div class="cstream">
+                  <div class="pin-card">
+                    <div class="pin-hd">
+                      <strong>Track 2A: 상시 오픈 #bgal + 도킹 티켓 맵</strong>
+                      <span class="pin-ctx">(1715)=a</span>
+                    </div>
+                    <p class="pin-txt">우측 <code>#bgal</code>은 빈 점선 플레이스홀더 없이 항상 열린 상태로 <strong>고정 시스템 페이지(티켓 맵 · Git · Workpanel)</strong>와 <strong>사용자 핀 페이지(<code>p1</code>)</strong>를 공존시킵니다. 상단 우측 <code>#thandle</code>은 은퇴했습니다.</p>
+                  </div>
+
+                  <article class="msg">
+                    <div class="mh">
+                      <span class="m-av"></span>
+                      <strong>리드</strong>
+                      <span class="m-time">11:18</span>
+                    </div>
+                    <div class="mb">
+                      <p>4-Panel(1920px)에서는 <code>#bgal</code>이 기본으로 <strong>티켓 맵</strong>을 전체 채움으로 보여주고, 3-Panel(1440px)에서는 <code>#bcol</code> 좌측의 영구 <code>.gal-rail</code>에서 <code>⌂</code>(메인 보드)와 티켓 맵·Git·Workpanel·<code>p1</code>을 즉시 전환합니다.</p>
+                      <p>도킹 상태에서는 <code>340px</code> 우측 사이드바 대신 하단 <strong>바텀 시트 인스펙터</strong>가 열리고, 우상단 <code>⤢</code> 버튼으로 기존 전체화면 <code>#tmback</code> 오버레이로 확장할 수 있습니다.</p>
+                    </div>
+                    <div class="m-trace">
+                      <span class="tr-ok">✓</span>
+                      <span>└ #thandle retired · @container toolbar · #tmback synced</span>
+                      <span class="m-time">11:19 ›</span>
+                    </div>
+                  </article>
+
+                  <article class="msg">
+                    <div class="mh">
+                      <span class="m-av"></span>
+                      <strong>리드</strong>
+                      <span class="m-time">11:22</span>
+                    </div>
+                    <div class="mb">
+                      <p>상단 프리뷰 바에서 <strong>Narrow Col 380px</strong>로 전환하거나 <code>#bgal</code> 좌측 경계를 드래그해 툴바와 바텀 시트가 <code>0px</code> 오버플로로 압축되는지 확인해 보세요.</p>
+                    </div>
+                  </article>
+                </div>
+
+                <div class="composer">
+                  <div class="comp-hud">
+                    <span class="ctx-pct">42%</span>
+                    <span class="ctx-bar"><i style="width: 42%"></i></span>
+                    <span class="ctx-tok">96.4K / 230K</span>
+                  </div>
+                  <div class="cfield">
+                    <div class="cinput" id="composer-input">티켓 맵 노드 클릭 시 바텀 시트 인스펙터가 바로 열리고 @ 멘션도 입력됩니다.<span class="caret"></span></div>
+                    <button type="button" class="csend" title="전송" aria-label="전송">
+                      <svg class="ic" viewBox="0 0 16 16"><path d="M2.5 8 13.5 2.8 10.6 13.5 8 9.2z"/></svg>
+                    </button>
+                  </div>
+                  <div class="cfoot">
+                    <span class="cf-chip">gemini-4-neon ⌄</span>
+                    <span class="cf-chip">high ⌄</span>
+                    <span class="cf-sp"></span>
+                    <span class="cf-mode"><i class="dot"></i>화이트보드</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- Column 2: Main Whiteboard (#bcol) — in 3-Panel mode, #bgal overlays this column cleanly -->
+            <section class="pane-board" id="bcol" aria-label="메인 화이트보드 영역">
+              <div class="bcol-main" id="bcol-main">
+                <div class="wb-card wb-topic-header">
+                  <div class="tbar">
+                    <div class="tbar-l">
+                      <strong class="tname">Track 2A: Always-Open #bgal &amp; Docked Ticket Map</strong>
+                      <span class="tcnt">2</span>
+                    </div>
+                    <div class="tbar-r">
+                      <span class="t-chip ok">✓ (1715)=a</span>
+                      <span class="t-chip">#thandle 은퇴</span>
+                    </div>
+                  </div>
+                  <div class="wb-subbar">
+                    <span class="is-lit">• 고정 시스템 페이지 (티켓 맵 · Git · Workpanel)</span>
+                    <span>• 사용자 핀 (p1) + 드롭 슬롯 (+) 공존</span>
+                  </div>
+                </div>
+
+                <div class="wb-scroll">
+                  <article class="wb-card">
+                    <header class="card-hd">
+                      <span class="badge-l">L</span>
+                      <strong class="card-hd-title">Track 2A 핵심 변경 계약 요약</strong>
+                      <span class="pill-open">설계 검증</span>
+                    </header>
+                    <div class="wb-card-body">
+                      <ul class="wb-spec-list">
+                        <li><strong>상단 핸들 정리:</strong> <code>#thandle</code> 제거 완료. 전역 <code>#tkhandles</code> + 임시 레거시 <code>#ghandle</code>/<code>#drhandle</code>만 유지.</li>
+                        <li><strong>상시 노출 <code>.gal-rail</code>:</strong> 4-Panel에서는 4열 상시 오픈(기본: 티켓 맵), 3-Panel(1440px)에서는 <code>Page 0 = ⌂</code>(메인 보드) 포함 영구 스트립.</li>
+                        <li><strong>컨테이너 쿼리 툴바:</strong> <code>540px</code>과 <code>380px</code> 모두에서 0px 오버플로 유지. 도킹 중 단축키(<code>1/2///Esc</code>)는 패널 포커스 한정.</li>
+                        <li><strong>바텀 시트 ↔ 전체화면 <code>#tmback</code>:</strong> 도킹 시 하단 시트 인스펙터, 우상단 <code>⤢</code> 클릭 시 <code>340px</code> 우측 인스펙터 포함 전체화면 오버레이 전환.</li>
+                      </ul>
+                    </div>
+                  </article>
+
+                  <article class="wb-card">
+                    <header class="card-hd">
+                      <span class="badge-p">P</span>
+                      <strong class="card-hd-title">열린 UX 선택지 (화이트보드 결정 대기)</strong>
+                      <span class="card-hd-meta">3건</span>
+                    </header>
+                    <div class="wb-card-body">
+                      <div class="wb-choice-row">
+                        <span class="wb-ck">Q1</span>
+                        <div><strong>바텀 시트 기본 상태:</strong> 첫 진입 시 선택된 티켓으로 시트 자동 오픈 vs 노드 클릭 시에만 오픈</div>
+                      </div>
+                      <div class="wb-choice-row">
+                        <span class="wb-ck">Q2</span>
+                        <div><strong><code>.gal-rail</code> 시스템 vs 사용자 핀 구분:</strong> 얇은 가로 구분선 + 미세한 각진 아이콘 칩 vs 별도 섹션 라벨</div>
+                      </div>
+                      <div class="wb-choice-row">
+                        <span class="wb-ck">Q3</span>
+                        <div><strong>380px 좁은 열 상태 필터:</strong> 5개 초소형 도트+카운트 필 인라인 유지 vs 단일 필터 팝오버 버튼 접기</div>
+                      </div>
+                    </div>
+                  </article>
+                </div>
+              </div>
+            </section>
+
+            <!-- Column 3 (4th Panel in Wide / Overlays #bcol in 3-Panel): Always-Open #bgal -->
+            <aside class="bgal" id="bgal" aria-label="상시 오픈 도킹 갤러리 (#bgal)">
+              <!-- Left Resize Edge Handle (4-Panel Wide Mode) -->
+              <div class="bp-edge" id="bgal-edge" role="separator" aria-orientation="vertical" aria-label="도킹 갤러리 너비 조절" tabindex="0" title="드래그하여 #bgal 너비 조절 (360px–680px)"></div>
+
+              <!-- Permanent 34px .gal-rail Vertical Strip -->
+              <nav class="gal-rail" id="gal-rail" aria-label="갤러리 페이지 전환 레일">
+                <button type="button" class="gal-rzone" id="gal-prev" title="이전 페이지" aria-label="이전 페이지">▲</button>
+
+                <div class="gal-dots" id="gal-dots" role="tablist" aria-orientation="vertical">
+                  <!-- Page 0: Main Board (visible in 3-Panel <1600px mode) -->
+                  <button type="button" class="gal-dot main" data-page="main" role="tab" aria-selected="false" aria-label="메인 보드 (Page 0)">⌂</button>
+
+                  <!-- User Pinned Topic/Card Pages -->
+                  <button type="button" class="gal-dot page" data-page="p1" role="tab" aria-selected="false" aria-label="사용자 핀 페이지 1 (2분할 토픽)">
+                    <svg class="gal-dot-icon d-gal-impl" viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M5.2 4.2 2 8l3.2 3.8M10.8 4.2 14 8l-3.2 3.8M8.8 3.2 7.2 12.8"/>
+                    </svg>
+                    <svg class="gal-dot-icon d-gal-discuss" viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M2.6 3.6h10.8v7.2H6.8L3.8 13v-2.2H2.6z"/>
+                    </svg>
+                  </button>
+
+                  <!-- + Drop Slot -->
+                  <button type="button" class="gal-dot empty" data-page="plus" role="tab" aria-selected="false" aria-label="새 페이지 드롭 슬롯 (+)">+</button>
+
+                  <span class="gal-sep" aria-hidden="true"></span>
+
+                  <!-- Fixed System Pages (Non-unpinnable, no × button): Workpanel, Ticket Map, Git -->
+                  <div class="gal-group gal-group-sys" aria-label="고정 시스템 페이지">
+                    <button type="button" class="gal-dot sys" data-page="workpanel" role="tab" aria-selected="false" aria-label="Workpanel (Track 2A 스캐폴드)">
+                      <svg class="gal-dot-icon" viewBox="0 0 16 16" aria-hidden="true">
+                        <rect x="2.2" y="2.6" width="11.6" height="10.8" rx="1.6"/>
+                        <line x1="2.2" y1="6.4" x2="13.8" y2="6.4"/>
+                        <line x1="7.8" y1="6.4" x2="7.8" y2="13.4"/>
+                      </svg>
+                    </button>
+
+                    <button type="button" class="gal-dot sys active" data-page="ticketmap" role="tab" aria-selected="true" aria-label="티켓 맵 (고정 시스템 페이지)">
+                      <svg class="gal-dot-icon" viewBox="0 0 16 16" aria-hidden="true">
+                        <circle cx="4.2" cy="4.8" r="1.8"/>
+                        <circle cx="11.8" cy="4.2" r="1.8"/>
+                        <circle cx="8.2" cy="11.6" r="2"/>
+                        <path d="M5.8 5.5 7.4 9.8M10.8 5.7 9.1 9.8M6 4.6l4-.3"/>
+                      </svg>
+                    </button>
+
+                    <button type="button" class="gal-dot sys" data-page="git" role="tab" aria-selected="false" aria-label="Git (Track 2B 예정)">
+                      <svg class="gal-dot-icon" viewBox="0 0 16 16" aria-hidden="true">
+                        <circle cx="4.8" cy="3.8" r="1.6"/>
+                        <circle cx="4.8" cy="12.2" r="1.6"/>
+                        <circle cx="11.4" cy="5.8" r="1.6"/>
+                        <path d="M4.8 5.4v5.2M11.4 7.4c0 2.4-2 3-6.6 3"/>
+                      </svg>
+                      <span class="gal-sys-pip" aria-hidden="true"></span>
+                    </button>
+                  </div>
+                </div>
+
+                <button type="button" class="gal-rzone" id="gal-next" title="다음 페이지" aria-label="다음 페이지">▼</button>
+              </nav>
+
+              <!-- Gallery Page Viewport -->
+              <div class="gal-viewport" id="gal-viewport">
+                <!-- SYSTEM PAGE 1: Dedicated Full-Fill Ticket Map -->
+                <section class="gal-page is-active" data-page-panel="ticketmap" aria-label="도킹 티켓 맵">
+                  <div class="tm-docked" id="tm-docked" tabindex="0">
+                    <!-- Container-Query Responsive Toolbar -->
+                    <div class="tm-bar" id="tm-dock-bar">
+                      <div class="tm-bar-row1">
+                        <!-- Segmented View Toggle: 1 Hierarchy (View B) | 2 Graph (View C) -->
+                        <div class="d-tm-seg" role="group" aria-label="뷰 전환">
+                          <button type="button" class="d-tm-segb" data-tm-view="b" aria-pressed="false" title="1 · 계층/매트릭스 보기 (View B)">
+                            <kbd class="d-tm-kbd">1</kbd>
+                            <span class="tm-seg-lbl">계층</span>
+                          </button>
+                          <button type="button" class="d-tm-segb" data-tm-view="c" aria-pressed="true" title="2 · 관계 그래프 보기 (View C)">
+                            <kbd class="d-tm-kbd">2</kbd>
+                            <span class="tm-seg-lbl">그래프</span>
+                          </button>
+                        </div>
+
+                        <!-- Search Input (/) -->
+                        <div class="d-tm-search tm-dock-search">
+                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3.3 3.3" stroke-linecap="round"/></svg>
+                          <input type="search" id="tm-dock-q" placeholder="티켓 검색…" aria-label="티켓 검색" autocomplete="off" />
+                          <span class="d-tm-hc" id="tm-dock-hc"><kbd class="d-tm-kbd">/</kbd></span>
+                        </div>
+
+                        <!-- Cluster Filter Popover Trigger -->
+                        <div class="d-tm-clwrap">
+                          <button type="button" class="d-tm-btn tm-cl-btn" id="tm-dock-cl-btn" aria-expanded="false" aria-controls="tm-dock-cl-pop" title="클러스터 필터">
+                            <span class="d-tm-cdot" style="--d-tm-h: 215"></span>
+                            <span class="tm-btn-lbl">클러스터</span>
+                            <span class="d-tm-n" id="tm-dock-cl-cnt">4</span>
+                          </button>
+                          <div class="d-tm-pop" id="tm-dock-cl-pop" hidden></div>
+                        </div>
+
+                        <!-- Refresh Button -->
+                        <button type="button" class="d-tm-btn d-tm-icon" id="tm-dock-refresh" title="티켓 맵 새로고침" aria-label="티켓 맵 새로고침">
+                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M13 8a5 5 0 1 1-1.4-3.5M13 2.5v2.7h-2.7"/></svg>
+                        </button>
+
+                        <!-- Clear Top-Right Fullscreen Expand Button (⤢) -->
+                        <button type="button" class="d-tm-btn d-tm-icon tm-expand-btn" id="tm-dock-expand" title="전체 화면 오버레이로 펼치기 (#tmback)" aria-label="전체 화면 오버레이로 펼치기">
+                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.8 2.6h3.6v3.6M6.2 13.4H2.6V9.8M13.4 2.6 9.2 6.8M2.6 13.4l4.2-4.2"/></svg>
+                        </button>
+                      </div>
+
+                      <!-- Row 2: Compact Status Filter Pills + Container-Scoped Shortcut Indicator -->
+                      <div class="tm-bar-row2">
+                        <div class="d-tm-pills tm-dock-pills" id="tm-dock-pills" role="group" aria-label="상태 필터">
+                          <!-- Populated by app.js -->
+                        </div>
+
+                        <div class="tm-scope-ind" id="tm-scope-ind" title="도킹 모드에서는 티켓 맵 패널이 포커스된 동안에만 1, 2, /, Esc 단축키가 동작합니다 (전역 키 트랩 없음)">
+                          <span class="tm-scope-dot" aria-hidden="true"></span>
+                          <span class="tm-scope-txt">포커스 단축키</span>
+                          <span class="tm-scope-keys"><kbd class="d-tm-kbd">1</kbd><kbd class="d-tm-kbd">2</kbd><kbd class="d-tm-kbd">/</kbd></span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- Ticket Map Interactive Stage + Collapsible Bottom-Sheet Inspector -->
+                    <div class="tm-dock-stage">
+                      <div class="tm-dock-views">
+                        <!-- View C: SVG Constellation Graph -->
+                        <div class="d-tm-view d-tm-vc" id="tm-dock-view-c"></div>
+                        <!-- View B: Responsive Hierarchy / Matrix -->
+                        <div class="d-tm-view d-tm-vb" id="tm-dock-view-b" hidden></div>
+                      </div>
+
+                      <!-- Collapsible Docked Bottom-Sheet Inspector (~42% height, replaces 340px right sidebar) -->
+                      <section class="tm-sheet" id="tm-dock-sheet" aria-label="티켓 상세 바텀 시트 인스펙터">
+                        <div class="tm-sheet-bar">
+                          <button type="button" class="tm-sheet-grip-btn" id="tm-sheet-collapse" title="바텀 시트 높이 전환 / 접기" aria-label="바텀 시트 접기">
+                            <span class="tm-sheet-grip" aria-hidden="true"></span>
+                          </button>
+                          <span class="tm-sheet-kicker">INSPECTOR</span>
+                          <span class="tm-sheet-stem" id="tm-sheet-stem">261128-feat-gallery-always-open-ticketmap</span>
+                          <div class="tm-sheet-acts">
+                            <button type="button" class="tm-sheet-ibtn" id="tm-sheet-open-full" title="전체 화면 오버레이(#tmback)에서 인스펙터 보기" aria-label="전체 화면으로 보기">
+                              <svg class="ic-xs" viewBox="0 0 16 16"><path d="M9.8 2.6h3.6v3.6M6.2 13.4H2.6V9.8M13.4 2.6 9.2 6.8M2.6 13.4l4.2-4.2"/></svg>
+                            </button>
+                            <button type="button" class="tm-sheet-ibtn" id="tm-sheet-close" title="인스펙터 닫기 (Esc)" aria-label="인스펙터 닫기">×</button>
+                          </div>
+                        </div>
+                        <div class="tm-sheet-body" id="tm-dock-insp-body"></div>
+                      </section>
+                    </div>
+                  </div>
+                </section>
+
+                <!-- SYSTEM PAGE 2: Git Upcoming Placeholder (Track 2B) -->
+                <section class="gal-page" data-page-panel="git" aria-label="Git 고정 시스템 페이지 (Track 2B 예정)">
+                  <div class="sys-placeholder-page">
+                    <header class="sys-ph-head">
+                      <div class="sys-ph-title-row">
+                        <span class="sys-ph-icon git">
+                          <svg class="ic" viewBox="0 0 16 16"><circle cx="4.5" cy="3.8" r="1.5"/><circle cx="4.5" cy="12.2" r="1.5"/><circle cx="11.5" cy="5.8" r="1.5"/><path d="M4.5 5.3v5.4M11.5 7.3c0 2.6-2 3.2-7 3.2"/></svg>
+                        </span>
+                        <div>
+                          <h2 class="sys-ph-h">Git</h2>
+                          <p class="sys-ph-sub">고정 시스템 페이지 · 상시 도킹 슬롯 예약</p>
+                        </div>
+                        <span class="sys-ph-badge upcoming">Track 2B 예정</span>
+                      </div>
+                      <div class="sys-ph-banner">
+                        <span class="banner-dot"></span>
+                        <span>이관 완료 전까지 상단 우측 임시 레거시 <code>#ghandle</code> 드로어가 계속 동작합니다.</span>
+                      </div>
+                    </header>
+
+                    <div class="sys-ph-body">
+                      <div class="git-3region-grid">
+                        <div class="ph-zone">
+                          <div class="ph-zone-hd">
+                            <strong>1. Graph</strong>
+                            <span class="mono-dim">커밋 그래프 · 브랜치 레인</span>
+                          </div>
+                          <div class="ph-zone-sketch git-sketch-graph" aria-hidden="true">
+                            <div class="sk-row"><i class="sk-node ok"></i><span class="sk-line w70"></span><span class="sk-tag">develop</span></div>
+                            <div class="sk-row"><i class="sk-node pri"></i><span class="sk-line w55"></span><span class="sk-tag">impl/2a</span></div>
+                            <div class="sk-row"><i class="sk-node"></i><span class="sk-line w80"></span></div>
+                          </div>
+                        </div>
+
+                        <div class="ph-zone">
+                          <div class="ph-zone-hd">
+                            <strong>2. Diff</strong>
+                            <span class="mono-dim">변경 파일 트리 · 인라인/분할 Diff</span>
+                          </div>
+                          <div class="ph-zone-sketch" aria-hidden="true">
+                            <div class="sk-diff add">+ dashboard-rail.css · always-open #bgal</div>
+                            <div class="sk-diff del">- #thandle top-right handle retired</div>
+                            <div class="sk-diff">+ dashboard-ticketmap.css · @container bar</div>
+                          </div>
+                        </div>
+
+                        <div class="ph-zone">
+                          <div class="ph-zone-hd">
+                            <strong>3. Worktrees</strong>
+                            <span class="mono-dim">워크트리 상태 · 브랜치 전환 · 정리</span>
+                          </div>
+                          <div class="ph-zone-sketch" aria-hidden="true">
+                            <div class="sk-row"><span class="sk-pill">root</span><span class="mono-dim">develop · ±14</span></div>
+                            <div class="sk-row"><span class="sk-pill">wt</span><span class="mono-dim">impl/develop/gallery-git · clean</span></div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <footer class="sys-ph-foot">
+                      <span class="mono-dim">261128-feat-gallery-git-page</span>
+                      <button type="button" class="sys-jump-btn" data-jump-ticket="261128-feat-gallery-git-page">티켓 맵에서 보기 →</button>
+                    </footer>
+                  </div>
+                </section>
+
+                <!-- SYSTEM PAGE 3: Workpanel Scaffold Page (Track 2A Scaffold -> Track 2C) -->
+                <section class="gal-page" data-page-panel="workpanel" aria-label="Workpanel 스캐폴드 페이지">
+                  <div class="sys-placeholder-page">
+                    <header class="sys-ph-head">
+                      <div class="sys-ph-title-row">
+                        <span class="sys-ph-icon wp">
+                          <svg class="ic" viewBox="0 0 16 16"><rect x="2.2" y="2.6" width="11.6" height="10.8" rx="1.6"/><line x1="2.2" y1="6.4" x2="13.8" y2="6.4"/><line x1="7.8" y1="6.4" x2="7.8" y2="13.4"/></svg>
+                        </span>
+                        <div>
+                          <h2 class="sys-ph-h">Workpanel</h2>
+                          <p class="sys-ph-sub">고정 시스템 페이지 · 세션 작업 메모리 허브</p>
+                        </div>
+                        <span class="sys-ph-badge scaffold">Track 2A Scaffold</span>
+                      </div>
+                      <div class="sys-ph-banner">
+                        <span class="banner-dot ok"></span>
+                        <span>레거시 <code>#drhandle</code> 드로어는 <code>gallery-workpanel-design</code> 이관 전까지 상단 우측에서 활성 상태로 유지됩니다.</span>
+                      </div>
+                    </header>
+
+                    <div class="sys-ph-body">
+                      <div class="wp-4zone-grid">
+                        <div class="ph-zone">
+                          <div class="ph-zone-hd">
+                            <strong>Todo</strong>
+                            <span class="ph-chip">ws/todo.*</span>
+                          </div>
+                          <p class="ph-zone-desc">세션 순서 체크리스트, 진행(wip)/완료(done)/보류(defer) 상태 및 다음 단계 지침 영역.</p>
+                        </div>
+
+                        <div class="ph-zone">
+                          <div class="ph-zone-hd">
+                            <strong>Agenda</strong>
+                            <span class="ph-chip">ws/agenda.*</span>
+                          </div>
+                          <p class="ph-zone-desc">세션 작업 맥락, 구현 결정 요약 및 리쥼/컴팩트 복원 블롭 표시 영역.</p>
+                        </div>
+
+                        <div class="ph-zone">
+                          <div class="ph-zone-hd">
+                            <strong>Notes</strong>
+                            <span class="ph-chip">ws/note.*</span>
+                          </div>
+                          <p class="ph-zone-desc"><code>session / worktree / repo / clone</code> 레이어별 영구 메모 탐색 및 빠른 조회.</p>
+                        </div>
+
+                        <div class="ph-zone">
+                          <div class="ph-zone-hd">
+                            <strong>Manuals</strong>
+                            <span class="ph-chip">ai-docs/manuals/</span>
+                          </div>
+                          <p class="ph-zone-desc">프로젝트 규칙, 스타일 가이드, 호환성 티어 매뉴얼 즉석 열람 및 핀 연동.</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <footer class="sys-ph-foot">
+                      <span class="mono-dim">후속 설계: gallery-workpanel-design</span>
+                      <button type="button" class="sys-jump-btn" data-jump-ticket="261128-research-gallery-workpanel-design">설계 티켓 보기 →</button>
+                    </footer>
+                  </div>
+                </section>
+
+                <!-- USER PINNED PAGE: p1 (2-Pane Vertical Split Whiteboard Topic Cards) -->
+                <section class="gal-page" data-page-panel="p1" aria-label="사용자 핀 페이지 p1">
+                  <div class="gal-split col">
+                    <div class="gal-pane">
+                      <section class="topic docked-topic">
+                        <header class="tophead">
+                          <span class="gal-pop-card-dot" style="background: var(--gal-st-impl)"></span>
+                          <strong class="tophead-title">Track 2A 도킹 갤러리 구현 체크</strong>
+                          <span class="tophead-state impl">구현</span>
+                          <button type="button" class="tophead-unpin" data-unpin-demo="p1-top" title="화이트보드로 고정 해제 (사용자 핀 페이지 전용)" aria-label="고정 해제">×</button>
+                        </header>
+                        <div class="gal-pbody docked-body">
+                          <p class="docked-p">사용자 핀 페이지는 구분선 위에서 고정 시스템 페이지와 독립 공존하며, 각 토픽 카드에 <strong>고정 해제(×)</strong>와 분할 리사이즈 디바이더를 유지합니다.</p>
+                          <div class="docked-kv">
+                            <span><code>.gal-rail</code> 폭</span><strong>34px 고정</strong>
+                            <span>시스템 페이지</span><strong>Workpanel · 티켓 맵 · Git (구분선 아래 · 해제 불가)</strong>
+                            <span>사용자 페이지</span><strong>p1 (2분할) + 드롭 슬롯 (+)</strong>
+                          </div>
+                        </div>
+                      </section>
+                    </div>
+
+                    <div class="gal-div" role="separator" aria-orientation="horizontal" aria-label="분할 창 높이 조절"></div>
+
+                    <div class="gal-pane">
+                      <section class="topic docked-topic">
+                        <header class="tophead">
+                          <span class="gal-pop-card-dot" style="background: var(--gal-st-discuss)"></span>
+                          <strong class="tophead-title">380px 좁은 열 툴바 압축 논의</strong>
+                          <span class="tophead-state discuss">논의</span>
+                          <button type="button" class="tophead-unpin" data-unpin-demo="p1-bot" title="화이트보드로 고정 해제 (사용자 핀 페이지 전용)" aria-label="고정 해제">×</button>
+                        </header>
+                        <div class="gal-pbody docked-body">
+                          <p class="docked-p"><code>@container tm-pane (max-width: 440px)</code>에서 뷰 탭 텍스트를 숨기고 <code>1/2</code> 키캡을 유지하며, <code>⤢</code> 전체화면 버튼은 우상단에 고정 배치합니다.</p>
+                          <div class="docked-note">✓ 4-Panel 380px 스트레스 테스트에서 0px 오버플로 검증</div>
+                        </div>
+                      </section>
+                    </div>
+                  </div>
+                </section>
+
+                <!-- + DROP SLOT PAGE -->
+                <section class="gal-page" data-page-panel="plus" aria-label="새 사용자 페이지 드롭 슬롯">
+                  <div class="gal-plus-wrap">
+                    <div class="gal-plus">
+                      <div class="gal-plus-ic">+</div>
+                      <strong>새 사용자 핀 페이지 (p2)</strong>
+                      <p>화이트보드의 토픽이나 카드를 이 영역이나 <code>.gal-rail</code>의 <code>+</code> 버튼으로 드래그해 고정하세요.<br/>고정 시스템 페이지(Workpanel · 티켓 맵 · Git)는 구분선 아래에 항상 유지됩니다.</p>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </aside>
+          </main>
+        </div>
+      </div>
+
+      <!-- Seamless Bottom Status Bar (26px, Global Only) -->
+      <footer class="shell-bottom" aria-label="전역 하단 상태 바">
+        <div class="bot-left">
+          <div class="global-utils" role="group" aria-label="전역 유틸리티">
+            <button type="button" class="util-btn" title="홈">
+              <svg class="ic" viewBox="0 0 16 16"><path d="M2.5 7.2 8 2.6l5.5 4.6V13a.8.8 0 0 1-.8.8H9.8V9.6H6.2v4.2H3.3a.8.8 0 0 1-.8-.8z"/></svg>
+              <span>홈</span>
+            </button>
+            <button type="button" class="util-btn" title="전역 설정">
+              <svg class="ic" viewBox="0 0 16 16"><line x1="2.5" y1="5" x2="13.5" y2="5"/><circle cx="5.5" cy="5" r="1.5" fill="currentColor"/><line x1="2.5" y1="11" x2="13.5" y2="11"/><circle cx="10.5" cy="11" r="1.5" fill="currentColor"/></svg>
+              <span>전역 설정</span>
+            </button>
+            <button type="button" class="util-btn icon-only" id="gear" title="빠른 메뉴 (#gear)" aria-label="빠른 메뉴">
+              <svg class="ic" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 2v1.6M8 12.4V14M2 8h1.6M12.4 8H14M3.8 3.8l1.1 1.1M11.1 11.1l1.1 1.1M12.2 3.8l-1.1 1.1M4.9 11.1l-1.1 1.1"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="bot-center">
+          <div class="talert" role="status">
+            <span class="talert-dot" aria-hidden="true"></span>
+            <span>전역 알림 · 메인 세션 승인 대기 <strong>1건</strong></span>
+          </div>
+        </div>
+
+        <div class="bot-right">
+          <button type="button" class="usage-toggle" title="전역 플랜 사용량 및 원클릭 계정 슬롯 전환">
+            <span class="u-item"><span class="hb sm" data-h="claude"></span><span class="u-lbl">Claude</span><span class="u-main"><span class="u-k">주</span><strong>81%</strong></span></span>
+            <span class="u-div" aria-hidden="true"></span>
+            <span class="u-item"><span class="hb sm" data-h="codex"></span><span class="u-lbl">Codex</span><span class="u-main"><span class="u-k">주</span><strong>14%</strong></span></span>
+            <span class="u-div" aria-hidden="true"></span>
+            <span class="u-item"><span class="hb sm" data-h="werk"></span><span class="u-lbl">Werk</span><span class="u-main"><span class="u-k">5h</span><strong>12%</strong></span><span class="u-main"><span class="u-k">주</span><strong>46%</strong></span></span>
+            <span class="u-slot-chip">work</span>
+          </button>
+        </div>
+      </footer>
+    </div>
+  </div>
+
+  <!-- .gal-rail Hover Preview Popover (Single reused fixed popover) -->
+  <div class="gal-pop" id="gal-pop" data-side="left" data-mode="pill" hidden></div>
+
+  <!-- Live Full-Viewport #tmback Overlay (Opened via ⤢ or Fullscreen preset) -->
+  <div class="d-tm-back" id="tmback" role="dialog" aria-modal="true" aria-label="티켓 맵 전체 화면 오버레이" hidden>
+    <header class="d-tm-bar">
+      <div class="d-tm-brand">
+        <i class="d-tm-logo" aria-hidden="true"></i>
+        <span>티켓 맵</span>
+      </div>
+
+      <div class="d-tm-seg" role="group" aria-label="전체 화면 뷰 전환">
+        <button type="button" class="d-tm-segb" data-tm-view="b" aria-pressed="false">
+          <kbd class="d-tm-kbd">1</kbd>
+          <span>계층 · 매트릭스</span>
+        </button>
+        <button type="button" class="d-tm-segb" data-tm-view="c" aria-pressed="true">
+          <kbd class="d-tm-kbd">2</kbd>
+          <span>관계 그래프</span>
+        </button>
+      </div>
+
+      <div class="d-tm-search">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3.3 3.3" stroke-linecap="round"/></svg>
+        <input type="search" id="tm-full-q" placeholder="티켓·클러스터·태그 검색…" aria-label="전체 화면 티켓 검색" autocomplete="off" />
+        <span class="d-tm-hc" id="tm-full-hc"><kbd class="d-tm-kbd">/</kbd></span>
+      </div>
+
+      <div class="d-tm-pills" id="tm-full-pills" role="group" aria-label="전체 화면 상태 필터"></div>
+
+      <div class="d-tm-clwrap">
+        <button type="button" class="d-tm-btn" id="tm-full-cl-btn" aria-expanded="false" aria-controls="tm-full-cl-pop">
+          <span class="d-tm-cdot" style="--d-tm-h: 215"></span>
+          <span>클러스터</span>
+          <span class="d-tm-n" id="tm-full-cl-cnt">4</span>
+        </button>
+        <div class="d-tm-pop" id="tm-full-cl-pop" hidden></div>
+      </div>
+
+      <span class="d-tm-spacer"></span>
+
+      <span class="d-tm-stats" id="tm-full-stats">12개 티켓 · 4개 클러스터</span>
+
+      <button type="button" class="d-tm-btn" id="tm-full-refresh" title="새로고침">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M13 8a5 5 0 1 1-1.4-3.5M13 2.5v2.7h-2.7"/></svg>
+        <span>새로고침</span>
+      </button>
+
+      <button type="button" class="d-tm-btn tm-close-overlay-btn" id="tm-full-close" title="도킹 뷰로 돌아가기 (Esc)">
+        <span>도킹으로 닫기</span>
+        <kbd class="d-tm-kbd">Esc</kbd>
+      </button>
+    </header>
+
+    <div class="d-tm-stage">
+      <div class="d-tm-views">
+        <div class="d-tm-view d-tm-vc" id="tm-full-view-c"></div>
+        <div class="d-tm-view d-tm-vb" id="tm-full-view-b" hidden></div>
+      </div>
+
+      <!-- Full 340px Right-Side .d-tm-insp Inspector -->
+      <aside class="d-tm-insp" id="tm-full-insp" aria-label="티켓 인스펙터">
+        <div class="d-tm-ih">
+          <span>인스펙터</span>
+          <button type="button" class="d-tm-imin" id="tm-full-imin" title="인스펙터 접기/펼치기" aria-label="인스펙터 접기/펼치기">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg>
+          </button>
+        </div>
+        <div class="d-tm-ib" id="tm-full-insp-body"></div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- Full View Markdown Preview Modal (.d-tm-full) -->
+  <div class="d-tm-full" id="tm-full-modal" role="dialog" aria-modal="true" aria-label="티켓 전문 미리보기" hidden>
+    <div class="d-tm-fbox">
+      <header class="d-tm-fhead">
+        <h3 class="d-tm-ftitle" id="tm-fmodal-title">티켓 제목</h3>
+        <button type="button" class="d-tm-btn" id="tm-fmodal-close">닫기 <kbd class="d-tm-kbd">Esc</kbd></button>
+      </header>
+      <div class="d-tm-fbody" id="tm-fmodal-body"></div>
+    </div>
+  </div>
+
+  <!-- Shared Hover Tooltip for Graph Nodes -->
+  <div class="d-tm-ctip" id="tm-ctip" role="tooltip"></div>
+
+  <!-- Micro Toast -->
+  <div class="mini-toast" id="mini-toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>
