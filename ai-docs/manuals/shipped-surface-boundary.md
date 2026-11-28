@@ -32,7 +32,7 @@ Concretely, shipped text MUST NOT name:
   (`ai-docs/ref/worktree-ticket-scope.md`, the `skill-authoring` manual, this
   manual), or this repository's own layout and tooling: `agents-plugin/`,
   `agents-plugin-tool/`, `agents-plugin-wsflow/`, `claude-plugin/`,
-  `install.sh`, `wsflow-mirroring`.
+  `scripts/install-claude-plugin.sh`, `wsflow-mirroring`.
 - this repository's migration vocabulary as a rule: migration anchor,
   native-subagent pivot, spawn-removal, host-neutral migration, adapter
   boundaries, retired Claude tree, Codex-first.

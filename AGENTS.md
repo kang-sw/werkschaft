@@ -316,13 +316,14 @@ ai-docs/tickets/.dropped/
   MCP/tooling source: `agents-plugin-tool/`. Retired Claude source material:
   `ai-docs/ref/claude-home-legacy.md` and git history.
 - **Project map / topology.**
-  - `./install.sh update` handles first-time install and settings patching on
-    a new machine.
+  - `./scripts/install-claude-plugin.sh` handles Claude plugin snapshot
+    syncing and settings registration on macOS/Linux (Windows equivalent:
+    `scripts/install-claude-plugin.ps1`).
   - Root `CLAUDE.md` is the only live Claude compatibility shim and points at
     `AGENTS.md`.
-  - `install.sh` snapshots only `agents-plugin/` for Claude-compatible plugin
-    installs when Claude Code is available; it intentionally does not install
-    wsflow into Claude.
+  - `scripts/install-claude-plugin.sh` snapshots only `agents-plugin/` for
+    Claude-compatible plugin installs when Claude Code is available; it
+    intentionally does not install wsflow into Claude.
   - `agents-plugin/` is registered through `.agents/plugins/marketplace.json`.
   - `agents-plugin-wsflow/` is a conservative-default distribution of the
     same product: Codex/Claude manifests, package-local MCP env, its own
@@ -333,8 +334,8 @@ ai-docs/tickets/.dropped/
     skill-shim drift.
   - `.agents/plugins/marketplace.json` exposes both `ws` and `wsflow` as local
     Codex plugin entries; `.claude-plugin/marketplace.json` exposes both
-    packages for manual Claude marketplace installation while `install.sh`
-    still installs only `ws`.
+    packages for manual Claude marketplace installation while
+    `scripts/install-claude-plugin.sh` still installs only `ws`.
   - Codex plugin refresh and plugin-managed MCP config behavior:
     `ai-docs/manuals/codex-integration.md`.
   - `ai-docs/.old/` is the Git-tracked project archive for inactive reference

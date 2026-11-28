@@ -5,7 +5,7 @@ summary: Native-Windows source-build dogfood / Phase C cold-load acceptance proc
 # Windows source-build dogfood
 
 How to dogfood a branch's `ws` plugin on a native Windows host with an automatic
-source-build loop, mirroring the Linux `install.sh` flow. Used for
+source-build loop, mirroring the macOS/Linux `scripts/install-claude-plugin.sh` flow. Used for
 `260622-chore-windows-shipping-hardening` Phase C and any later Windows cold-load
 verification.
 
@@ -18,8 +18,8 @@ the Windows host is required regardless: the Go module (`agents-plugin-tool/`) i
 not part of the `agents-plugin/` plugin package, so the source must be physically
 present to build.
 
-`scripts/install-claude-plugin.ps1` is the Windows equivalent of `install.sh`'s
-plugin registration: it snapshots `agents-plugin/` into
+`scripts/install-claude-plugin.ps1` is the Windows equivalent of `scripts/install-claude-plugin.sh`:
+it snapshots `agents-plugin/` into
 `%USERPROFILE%\.claude\plugins\ws-plugin\ws`, generates `marketplace.json`, patches
 `settings.json` + `known_marketplaces.json`, and writes the marker pointing at the
 clone. After that, every Claude Code restart rebuilds the runtime from the clone
