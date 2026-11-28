@@ -165,6 +165,9 @@ function verifyMacVoicePlist(plist) {
   if (!plist || typeof plist.NSMicrophoneUsageDescription !== 'string' || !plist.NSMicrophoneUsageDescription.trim()) {
     throw new Error('macOS bundle Info.plist is missing a non-empty NSMicrophoneUsageDescription');
   }
+  if (typeof plist.NSSpeechRecognitionUsageDescription !== 'string' || !plist.NSSpeechRecognitionUsageDescription.trim()) {
+    throw new Error('macOS bundle Info.plist is missing a non-empty NSSpeechRecognitionUsageDescription');
+  }
 }
 
 function verifyMacVoiceEntitlements(entitlements) {

@@ -382,6 +382,7 @@ pub fn strip_popup(webview: Webview, menu: String, x: f64, y: f64) -> Result<(),
 #[tauri::command(async)]
 pub fn strip_minimize(webview: Webview) -> Result<(), String> {
     let main = from_strip(&webview)?;
+    crate::speech::teardown(webview.app_handle(), "minimized");
     let _ = dashboard_webview(&main).set_focus();
     main.minimize().map_err(|error| error.to_string())
 }

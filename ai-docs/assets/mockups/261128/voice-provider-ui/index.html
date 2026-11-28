@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>음성 API 제공자 · 목업</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body data-view="split">
+
+<!-- 시뮬레이터 컨트롤 바 (제품 UI 아님) -->
+<header class="sim" id="sim" aria-label="시뮬레이터 컨트롤">
+  <span class="sim-tag">시뮬레이터</span>
+  <div class="sim-group"><span class="sim-lbl">테마</span>
+    <div class="seg2" role="group" aria-label="테마">
+      <button data-sim="theme" data-val="light">라이트</button>
+      <button data-sim="theme" data-val="dark">다크</button>
+    </div></div>
+  <div class="sim-group"><span class="sim-lbl">환경</span>
+    <div class="seg2" role="group" aria-label="환경">
+      <button data-sim="env" data-val="mac">데스크톱 (macOS)</button>
+      <button data-sim="env" data-val="win">데스크톱 (Windows)</button>
+      <button data-sim="env" data-val="web">웹 브라우저</button>
+    </div></div>
+  <div class="sim-group" id="simStt"><span class="sim-lbl">네이티브 STT</span>
+    <div class="seg2" role="group" aria-label="네이티브 STT">
+      <button data-sim="nativeStt" data-val="available">사용 가능</button>
+      <button data-sim="nativeStt" data-val="denied">권한 거부</button>
+      <button data-sim="nativeStt" data-val="offline">언어팩 없음</button>
+    </div></div>
+  <div class="sim-group"><span class="sim-lbl">상단 LLM 키</span>
+    <div class="seg2" role="group" aria-label="상단 LLM OpenRouter 키">
+      <button data-sim="llmKey" data-val="true">구성됨</button>
+      <button data-sim="llmKey" data-val="false">미구성</button>
+    </div></div>
+  <div class="sim-group"><span class="sim-lbl">보기</span>
+    <div class="seg2" role="group" aria-label="보기">
+      <button data-sim="view" data-val="split">분할 미리보기</button>
+      <button data-sim="view" data-val="settings">설정</button>
+      <button data-sim="view" data-val="composer">컴포저</button>
+    </div></div>
+</header>
+
+<main class="stage" id="stage">
+
+  <!-- 계정 설정 -->
+  <section class="pane pane-settings" id="paneSettings" aria-label="계정 설정">
+    <div class="phead">
+      <div class="ptitle">설정</div>
+      <span class="route" id="route">/settings?section=account</span>
+      <span class="envchip" id="envChipS"></span>
+    </div>
+    <div class="pscroll" id="settingsScroll">
+      <h2 class="sec-h">계정</h2>
+
+      <div class="card llmcard" id="llmCard"></div>
+
+      <section class="card vsec" id="voiceSection" aria-labelledby="voiceTitle" tabindex="-1">
+        <div class="vsec-head">
+          <h3 id="voiceTitle">음성 API 제공자</h3>
+          <span class="vsec-sub">음성 입력에 쓸 제공자를 우선순위대로 정렬합니다. 왼쪽부터 사용 가능한 첫 제공자가 선택됩니다.</span>
+        </div>
+        <div class="pl-wrap">
+          <div class="pl" id="pl" role="list" aria-label="음성 제공자 우선순위"></div>
+        </div>
+        <div class="pl-hint"><span class="kbd">드래그</span> 또는 포커스 후 <span class="kbd">←</span><span class="kbd">→</span> 로 순서 변경</div>
+        <div class="sr-only" id="plLive" aria-live="polite"></div>
+        <div class="prows" id="prows"></div>
+      </section>
+    </div>
+  </section>
+
+  <!-- 컴포저 -->
+  <section class="pane pane-composer" id="paneComposer" aria-label="컴포저 미리보기">
+    <div class="phead">
+      <div class="ptitle">작업 대화</div>
+      <span class="provchip" id="provChip"></span>
+      <span class="envchip" id="envChipC"></span>
+    </div>
+    <div class="convo" id="convo">
+      <div class="msg them"><div class="mh">에이전트 · 14:02</div><div class="mb">로그인 플로우 리팩터링 마쳤습니다. 다음으로 배포 전 점검 항목을 정리할까요?</div></div>
+      <div class="msg me"><div class="mh">나 · 14:03</div><div class="mb">네, 체크리스트부터 만들어 주세요.</div></div>
+    </div>
+    <div class="composer" id="composer">
+      <div class="cfield">
+        <div class="ced" id="cfield" contenteditable="true" role="textbox" aria-multiline="true" aria-label="메시지 입력" data-ph="메시지를 입력하세요 — 마이크 버튼을 누르거나 Space를 0.5초간 길게 눌러 음성으로 입력"></div>
+      </div>
+      <div class="cbar">
+        <button class="cvox" id="cvox" type="button" data-state="idle" aria-label="음성 입력">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14.5a3.2 3.2 0 0 0 3.2-3.2V6.2a3.2 3.2 0 0 0-6.4 0v5.1a3.2 3.2 0 0 0 3.2 3.2Zm5.4-3.2a.9.9 0 0 1 1.8 0 7.2 7.2 0 0 1-6.3 7.14V20.5h2.1a.9.9 0 0 1 0 1.8H9a.9.9 0 0 1 0-1.8h2.1v-2.06A7.2 7.2 0 0 1 4.8 11.3a.9.9 0 0 1 1.8 0 5.4 5.4 0 0 0 10.8 0Z"/></svg>
+          <span class="cvox-dot" aria-hidden="true"></span>
+          <span class="tip" id="cvoxTip" role="tooltip"></span>
+        </button>
+        <span class="ptt" id="ptt"><span class="fill"></span><span class="key">Space</span><span class="ptt-t" id="pttText">0.5초 길게 눌러 음성 입력</span></span>
+        <span class="grow"></span>
+        <button class="csend" id="csend" type="button" aria-label="전송">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.4 20.4 21 12 3.4 3.6l.02 6.5L15 12 3.42 13.9z"/></svg>
+        </button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- OpenRouter(음성) 구성 모달 -->
+<div class="scrim" id="scrim" hidden>
+  <div class="dlg" id="dlg" role="dialog" aria-modal="true" aria-labelledby="dlgTitle"></div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="./mock-api.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>

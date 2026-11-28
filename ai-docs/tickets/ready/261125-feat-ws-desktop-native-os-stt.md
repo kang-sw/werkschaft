@@ -90,7 +90,7 @@ On 2026-11-28 the owner confirmed `(17)=a` to promote and implement this ticket 
 
 ## Visual Reference
 
-Not yet approved. Per the mockup-first gate in `## Constraints`, the lead produces the interactive mockup under `ai-docs/assets/mockups/YYMMDD/<topic>/index.html` and the owner approves it on the whiteboard; the approved path is recorded here before Phase 4 starts.
+Approved by owner (`(1818)=ok`, 2026-11-28): `ai-docs/assets/mockups/261128/voice-provider-ui/index.html` (interactive mockup with `styles.css`, `app.js`, and `mock-api.js`). Owner refinement on Spacebar 0.5 s hold PTT: when PTT activates, collapse consecutive horizontal spaces immediately preceding the caret down to 1 space when preceded by non-space text on the line, or to empty (`""`) at the start of an empty composer/line.
 
 ## Phases
 
