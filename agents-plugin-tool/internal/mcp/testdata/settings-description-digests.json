@@ -39,7 +39,9 @@
   "agents-plugin/dashboard-config-manifest.json#dashboard.lan_enabled": "cd05a6b51944142e",
   "agents-plugin/dashboard-config-manifest.json#dashboard.mailbox_undelivered_minutes": "df012b3541664716",
   "agents-plugin/dashboard-config-manifest.json#dashboard.port": "d2acc5be1e2d0838",
-  "agents-plugin/dashboard-config-manifest.json#dashboard.voice_backend": "c0ec9c6f477ccaeb",
+  "agents-plugin/dashboard-config-manifest.json#dashboard.voice_backend": "4c97f51591ef5abe",
+  "agents-plugin/dashboard-config-manifest.json#dashboard.voice_backend_order": "134e71ffef319cfc",
   "agents-plugin/dashboard-config-manifest.json#dashboard.voice_language": "7147d79fb041bd7e",
-  "agents-plugin/dashboard-config-manifest.json#dashboard.voice_model": "03ab49926821bb7b"
+  "agents-plugin/dashboard-config-manifest.json#dashboard.voice_model": "03ab49926821bb7b",
+  "agents-plugin/dashboard-config-manifest.json#dashboard.voice_openrouter_shared_key": "a9fc30cf3b38a373"
 }

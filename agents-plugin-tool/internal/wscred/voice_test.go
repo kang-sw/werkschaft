@@ -21,10 +21,15 @@ func TestVoiceOnlyProvidersStoreMaskAndPreserveUnknownFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	openRouterVoiceKey := "sk-or-v1-fixture-voice-5555"
 	openAIKey := "sk-proj-fixture-voice-9876"
 	groqKey := "gsk_fixture_voice_key_4321"
 
-	res, err := s.Apply(Change{Op: OpSet, Provider: ProviderOpenAIAPI, APIKey: NewSecret(openAIKey)})
+	res, err := s.Apply(Change{Op: OpSet, Provider: ProviderOpenRouterVoice, APIKey: NewSecret(openRouterVoiceKey)})
+	if err != nil || !res.Changed || !res.Status.Configured || res.Status.Masked != "sk-or-...5555" {
+		t.Fatalf("set openrouter_voice = %+v, %v", res, err)
+	}
+	res, err = s.Apply(Change{Op: OpSet, Provider: ProviderOpenAIAPI, APIKey: NewSecret(openAIKey)})
 	if err != nil || !res.Changed || !res.Status.Configured || res.Status.Masked != "sk-...9876" {
 		t.Fatalf("set openai_api = %+v, %v", res, err)
 	}
@@ -33,7 +38,7 @@ func TestVoiceOnlyProvidersStoreMaskAndPreserveUnknownFields(t *testing.T) {
 		t.Fatalf("set groq = %+v, %v", res, err)
 	}
 
-	if !IsVoiceOnly(ProviderOpenAIAPI) || !IsVoiceOnly(ProviderGroq) || IsVoiceOnly(ProviderOpenRouter) || IsVoiceOnly(ProviderOpenAI) {
+	if !IsVoiceOnly(ProviderOpenRouterVoice) || !IsVoiceOnly(ProviderOpenAIAPI) || !IsVoiceOnly(ProviderGroq) || IsVoiceOnly(ProviderOpenRouter) || IsVoiceOnly(ProviderOpenAI) {
 		t.Fatalf("IsVoiceOnly flags incorrect")
 	}
 
@@ -55,13 +60,16 @@ func TestVoiceOnlyProvidersStoreMaskAndPreserveUnknownFields(t *testing.T) {
 
 func TestServeTokenRefusesVoiceOnlyProviders(t *testing.T) {
 	s := testStore(t)
+	if _, err := s.Apply(Change{Op: OpSet, Provider: ProviderOpenRouterVoice, APIKey: NewSecret("sk-or-v1-fixture-voice-5555")}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.Apply(Change{Op: OpSet, Provider: ProviderOpenAIAPI, APIKey: NewSecret("sk-proj-fixture-voice-9876")}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Apply(Change{Op: OpSet, Provider: ProviderGroq, APIKey: NewSecret("gsk_fixture_voice_key_4321")}); err != nil {
 		t.Fatal(err)
 	}
-	for _, pid := range []ProviderID{ProviderOpenAIAPI, ProviderGroq} {
+	for _, pid := range []ProviderID{ProviderOpenRouterVoice, ProviderOpenAIAPI, ProviderGroq} {
 		t.Run(string(pid), func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, TokenRoutePath, bytes.NewBufferString(`{"provider":"`+string(pid)+`"}`))
 			w := httptest.NewRecorder()
