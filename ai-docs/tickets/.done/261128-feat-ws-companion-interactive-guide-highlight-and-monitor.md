@@ -8,6 +8,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: e9bdcd6e86f9a1a7
 sage-review-completeness-reviewed: e9bdcd6e86f9a1a7
+completed: 2026-11-28
 ---
 
 # Companion Interactive Guide — `ws/daemon.highlight` + `ws/daemon.monitor`
@@ -511,3 +512,8 @@ Remaining `-race` failures, none from this branch (none of their inputs are touc
   - The `s.intake` ServeStdio race hits TestSessionKeyResolvesRoot, TestMailboxRecvConcurrentCallsNeverDoubleDeliver and TestServeStdioDoesNotBlockToolsListBehindLongCall.
   - TestDashboardSettingsCatalog expects 28 dashboard keys; develop's 049b88cce made it 30.
   - TestServeStdioConfigShow fails on macOS: the response path is `/var/folders/…` but the test expects the canonical `/private/var/…`.
+
+
+## Resolution (2026-11-28)
+
+Phase 1 (ws/daemon.highlight, ws/daemon.monitor, guide monitor registry, companion-body 4-alias guide subset) and Phase 2 (dashboard-daemon-guide.js/.css overlay, cross-iframe projection, structural monitor hooks, stop chip, 11-locale i18n, Node 10/10 & real Chromium Playwright TestDaemonGuideBrowser PASS, code-review-lite 0 Critical/Important) implemented and verified on impl/develop/companion-interactive-guide (335f9f635). T0 transparent.
