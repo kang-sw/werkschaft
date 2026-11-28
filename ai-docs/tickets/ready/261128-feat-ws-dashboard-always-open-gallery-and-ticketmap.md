@@ -156,6 +156,22 @@ Two sequential phases: Phase 1 establishes the always-open `#bgal` container, `.
 
 **Phase 1 done when:** `.gal-rail` order matches the spec; `.bp-edge` drags `--bgal-w` within 350–720px and persists; `#bgal` is never `0px` with 0 pins; Home `⌂` appears only below 1600px; the Workpanel and Git scaffolds render in Dark and Light; `#p-tickets` and `#p-mailbox` are absent while `#ghandle`, `#drhandle`, and `#thandle` still work; at `>= 1600px` the gallery shows one active page with `data-pincol` set even at 0 pins; the pager order is `[Home] → user pages → + → workpanel → ticketmap → git`; the active system page persists under its own `localStorage` key with `WsGallery` v1 storage unchanged; the Node and Go suites named in item 5 pass.
 
+### Result (1a3abf50) - 2026-11-28
+
+- **Landed (`0368c0ef`, `1a3abf50`):**
+  - Made `#bgal` always open on session pages (`data-gal="col"` + `data-pincol` at `>= 1600px` in non-tabs layout; `data-gal="narrow"` overlay with Page 0 = Home `⌂` below `1600px` or in tabs layout), retiring `--boardw`/`data-boardw`/`bw`/`bb` and sizing Band 4 via `--bgal-w` / `--bgal-eff-w` (`350px–720px`, default `540px`, RAF-throttled `.bp-edge` drag persisted globally in `ws.dashboard.bgal.w`, holding `#convo` track width via `freezeConvo()` during `.bp-edge` drags).
+  - Structured `.gal-rail` in exact top-to-bottom order (`[Home ⌂ (<1600px)]` → `[user pages]` → `[+]` → `.gal-sep` → `.gal-group-sys[workpanel, ticketmap, git]`) with `WsGalPreview` support for both user and system pages and pager order `[Home (narrow)] → user pages → + → workpanel → ticketmap → git`. Active system page persists in its own `localStorage` key, leaving `WsGallery` v1 `{v, active, pages, rev}` unchanged (defaulting wide idle view to `ticketmap`).
+  - Mounted Material tonal Workpanel, Git, and Phase 1 Ticket Map placeholder system pages (with `ticketMap.open()` button and `#thandle` kept live until Phase 2).
+  - Retired `#p-tickets` (including `ticketIdeaSync` / `panelTab("tickets")`) and `#p-mailbox` (`panelTab("mailbox")`) from `#drawer` and served dashboard panels (`dashboard_page.go`, `dashboard-drawer.js`, `dashboard-drawer.css`) while keeping `todo`, `agenda`, `worktrees`, `holders`, `notes`, `#ghandle`, `#drhandle`, and `#thandle` intact.
+- **Verification:**
+  - `node --test internal/wsdashboard/frontend-drawer.test.js internal/wsdashboard/testdata/gallery-state.test.cjs internal/wsdashboard/testdata/gallery-frame-wheel.test.cjs internal/wsdashboard/testdata/overview-preview-shape.test.cjs internal/wsdashboard/stage-fill.test.js internal/wsdashboard/frontend-geometry.test.js`: PASS (47/47).
+  - `GOOS=windows go vet ./...`: PASS.
+  - `go test ./internal/wsdashboard/...` (all `pincol_width_test.go`, `cards_test.go`, `css_collision_test.go`, `drawer_height_test.go`, `i18n_test.go`, `TestGalleryModel`, `TestOverview*`, `TestPanelRows*`): PASS.
+  - `WS_RSRC_DEV_CHECKOUT=... go test -run 'TestDashboardFingerprint|TestDashboardReadPage|TestDashboardBoardMemo|TestDashboardBoardTopicCache|TestDashboardTicket|TestWhiteboard' ./internal/mcp/...`: PASS.
+  - Playwright Chromium: `TestGalleryBrowser` PASS (42/42), `TestPanelRowsBrowser` PASS, `TestBand3BoardWidthDoesNotLeakBrowser` PASS.
+  - Visual comparison: `phase1-shots/{dark-1920,light-1920,dark-1280}.png` & `phase1-empty/{empty-idle-dark,empty-widened-light}.png` vs `ai-docs/assets/mockups/261128/gallery-ticketmap-always-open/index.html` (`mockup-dark-1920.png`, `mockup-dark-1440.png`): match for Phase 1 scope (always-open 4-col and narrow `.gal-rail` layout, ordering, tonal capsule, Dark/Light parity; Ticket Map body intentionally shows Phase 1 placeholder until Phase 2).
+- **Review (`code-review-lite`, clean with 3 minor remaining):** No Critical or Important findings. Minor notes recorded: `#thandle` stays visible even on empty-ticket projects until Phase 2 retires it (`dashboard-drawer.js:124`); `--bgal-eff-w` updates on `relayout`/drag rather than live `--rail-w` CSS mutation (`cards.js:2985`); `whiteboard_tools.go` retains harmless `dirtiedBy` triggers for `tickets`/`mailbox`.
+
 ### Phase 2: Full-Fill Docked Ticket Map, Bottom-Sheet Inspector, #tmback Sync, and #thandle Retirement
 
 1. **Full-fill Docked Ticket Map host (`dashboard-ticketmap.js`, `dashboard-ticketmap.css`, `cards.js`):**
