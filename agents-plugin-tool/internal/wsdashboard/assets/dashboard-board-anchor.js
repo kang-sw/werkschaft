@@ -1017,6 +1017,10 @@
         if (moreBtn.style && moreBtn.style.top) moreBtn.style.top = "";
       }
     }
+    if (freeStageRaf && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(freeStageRaf);
+      freeStageRaf = 0;
+    }
     freeActive = false;
     freeWinStart = 0;
     freeWinEnd = -1;
