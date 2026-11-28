@@ -168,7 +168,8 @@ func dashboardCommand(args []string) {
 	} else {
 		accountSlots = wscred.NewAccountSlotRegistry(slotsPath)
 	}
-	agents := newAgentRunnerWithHooks(dir, logw, trackerChanged.call, agyActivity.call, callQuotaResetAt, callOnHired, callWerkUsage, companionHooks, holders, boards, labels.label, credentials, accountSlots)
+	piRuntime := wspiruntime.NewManager(wspiruntime.Options{})
+	agents := newAgentRunnerWithHooks(dir, logw, trackerChanged.call, agyActivity.call, callQuotaResetAt, callOnHired, callWerkUsage, companionHooks, holders, boards, labels.label, credentials, accountSlots, piRuntime)
 	// The hosted exec jobs bind after the runner starts (openHostedExec):
 	// until then no held report is released and no session sleeps.
 	agents.ExpectExecJobs()
@@ -253,6 +254,11 @@ func dashboardCommand(args []string) {
 		Credentials:       credentials,
 		AccountSlots:      accountSlots,
 		SlotAuthPreflight: wsagent.SlotAuthPreflight,
+		PiRuntime:         piRuntime,
+		OnPiRuntimeChanged: func() {
+			wsagent.ClearPiRPCChoices("")
+			support.InvalidateChoices("")
+		},
 		LeadNudges:        nudges,
 		Tracker:        &dashboardTracker{h: tracker, err: trackerErr, unregistered: func() { support.CloseUnregistered() }},
 		Holders:        holders,
@@ -653,17 +659,19 @@ type companionRunnerHooks struct {
 }
 
 func newAgentRunnerWithHired(dir string, logw io.Writer, trackerChanged, agyActivity func(), quotaResetAt func(backend, model string) int64, onHired func(replyID, requestID, label string), onWerkUsage func(wsdashboard.WerkUsageDelta), holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials *wscred.Store, accountSlots *wscred.AccountSlotRegistry) *wsagent.Runner {
-	return newAgentRunnerWithHooks(dir, logw, trackerChanged, agyActivity, quotaResetAt, onHired, onWerkUsage, companionRunnerHooks{}, holders, boards, labels, credentials, accountSlots)
+	return newAgentRunnerWithHooks(dir, logw, trackerChanged, agyActivity, quotaResetAt, onHired, onWerkUsage, companionRunnerHooks{}, holders, boards, labels, credentials, accountSlots, nil)
 }
 
-func newAgentRunnerWithHooks(dir string, logw io.Writer, trackerChanged, agyActivity func(), quotaResetAt func(backend, model string) int64, onHired func(replyID, requestID, label string), onWerkUsage func(wsdashboard.WerkUsageDelta), companion companionRunnerHooks, holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials *wscred.Store, accountSlots *wscred.AccountSlotRegistry) *wsagent.Runner {
+func newAgentRunnerWithHooks(dir string, logw io.Writer, trackerChanged, agyActivity func(), quotaResetAt func(backend, model string) int64, onHired func(replyID, requestID, label string), onWerkUsage func(wsdashboard.WerkUsageDelta), companion companionRunnerHooks, holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials *wscred.Store, accountSlots *wscred.AccountSlotRegistry, piRuntime *wspiruntime.Manager) *wsagent.Runner {
 	modelWaitSeconds := wsagent.DefaultAgyModelWaitTimeoutSeconds
 	modelWaitRetries := wsagent.DefaultAgyModelWaitRetries
 	if name, _, err := wsagent.ResolveHostedPackage(); err == nil && name == "wsflow" {
 		modelWaitSeconds = 0
 	}
 	keys := mcp.NewAgentKeyStore(boards)
-	piRuntime := wspiruntime.NewManager(wspiruntime.Options{})
+	if piRuntime == nil {
+		piRuntime = wspiruntime.NewManager(wspiruntime.Options{})
+	}
 	backends := wsagent.WithPiRuntime(wsagent.BuiltinBackendRegistrations(), piRuntime)
 	var loadProviderConfig func(wsconfig.Options) error
 	if credentials != nil {

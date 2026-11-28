@@ -43,6 +43,9 @@ type accountStatus struct {
 	SlotSignIn     *accountSlotSignInStatus            `json:"slot_sign_in,omitempty"`
 	HarnessAuth    []harnessAuthSnapshot               `json:"harness_auth,omitempty"`
 	Conversations  []AccountSlotConversation           `json:"conversations,omitempty"`
+	// Retained name check: /api/account/status JSON members for managed Pi runtime and ephemeral PTY login (TestPiAccountStatusAndRuntimeRoutes).
+	PiRuntime      *piRuntimeStatusView                `json:"pi_runtime,omitempty"`
+	PiLogin        *piLoginStatus                      `json:"pi_login,omitempty"`
 }
 
 func accountError(w http.ResponseWriter, status int, code string) {
@@ -88,6 +91,9 @@ func (d *Daemon) handleAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	action := r.URL.Path[len(accountPrefix):]
+	if d.handleAccountPi(w, r, action) {
+		return
+	}
 	method := http.MethodPost
 	if action == "status" || action == "sign-in/status" || action == "slots/sign-in/status" || action == "harness-auth/status" {
 		method = http.MethodGet
@@ -125,7 +131,7 @@ func (d *Daemon) handleAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	store, ok := d.credentials.(browserCredentialStore)
 	if !ok {
-		if action == "status" && (d.accountSlots != nil || d.planUsage != nil) {
+		if action == "status" && (d.accountSlots != nil || d.planUsage != nil || d.piRuntime != nil) {
 			d.handleAccountStatus(w, r, nil)
 			return
 		}
@@ -208,6 +214,7 @@ func (d *Daemon) handleAccountStatus(w http.ResponseWriter, r *http.Request, sto
 	if host, ok := d.agents.(AgentAccountSlotHost); ok {
 		status.Conversations = host.AccountSlotConversations("")
 	}
+	d.populatePiAccountStatus(&status)
 	writeJSON(w, http.StatusOK, status)
 }
 

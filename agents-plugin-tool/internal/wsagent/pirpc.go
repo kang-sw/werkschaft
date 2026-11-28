@@ -269,6 +269,19 @@ func cachedPiRPCChoices(home string) ([]ModelChoice, []string, bool) {
 	return slices.Clone(entry.models), slices.Clone(entry.efforts), true
 }
 
+// ClearPiRPCChoices clears cached Pi RPC model and thinking-level choices.
+// An empty home clears every cached home; a non-empty home clears only that
+// normalized PI_CODING_AGENT_DIR entry.
+func ClearPiRPCChoices(home string) {
+	pirpcChoices.Lock()
+	defer pirpcChoices.Unlock()
+	if strings.TrimSpace(home) == "" {
+		clear(pirpcChoices.byHome)
+		return
+	}
+	delete(pirpcChoices.byHome, normalizePiRPCHomeKey(home))
+}
+
 var pirpcProbeTimeout = 10 * time.Second
 
 // Choices returns cached model and thinking-level choices for the active
@@ -344,6 +357,7 @@ func probePiRPCChoices(ctx context.Context, binPath, home string) ([]ModelChoice
 
 	var models []ModelChoice
 	var efforts []string
+	var modelsErr string
 	gotModels, gotEfforts := false, false
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 64<<10), 16<<20)
@@ -357,6 +371,11 @@ func probePiRPCChoices(ctx context.Context, binPath, home string) ([]ModelChoice
 			gotModels = true
 			if resp.Success {
 				models = parsePiRPCModels(resp.Data)
+			} else {
+				modelsErr = strings.TrimSpace(resp.Error)
+				if modelsErr == "" {
+					modelsErr = "pi rpc get_available_models failed"
+				}
 			}
 		case "probe-thinking":
 			gotEfforts = true
@@ -373,6 +392,12 @@ func probePiRPCChoices(ctx context.Context, binPath, home string) ([]ModelChoice
 	}
 	if err := probeCtx.Err(); err != nil && (!gotModels || !gotEfforts) {
 		return nil, efforts, err
+	}
+	if modelsErr != "" {
+		return nil, efforts, errors.New(modelsErr)
+	}
+	if !gotModels {
+		return nil, efforts, errors.New("pi rpc get_available_models failed")
 	}
 	return models, efforts, nil
 }

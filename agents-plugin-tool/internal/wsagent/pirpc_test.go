@@ -24,8 +24,9 @@ import (
 )
 
 const (
-	pirpcStandinLogEnv  = "WSAGENT_PIRPC_STANDIN_LOG"
-	pirpcStandinHoldEnv = "WSAGENT_PIRPC_HOLD_TURN"
+	pirpcStandinLogEnv       = "WSAGENT_PIRPC_STANDIN_LOG"
+	pirpcStandinHoldEnv      = "WSAGENT_PIRPC_HOLD_TURN"
+	pirpcStandinModelsErrEnv = "WSAGENT_PIRPC_MODELS_ERR"
 )
 
 // pirpcStandin is the test binary's Pi `--mode rpc` stand-in, supporting strict
@@ -102,6 +103,20 @@ func pirpcStandin(logPath string) {
 				},
 			})
 		case "get_available_models":
+			if failMode := os.Getenv(pirpcStandinModelsErrEnv); failMode != "" {
+				errMsg := failMode
+				if failMode == "EMPTY" {
+					errMsg = ""
+				}
+				_ = outEnc.Encode(map[string]any{
+					"id":      req.ID,
+					"type":    "response",
+					"command": "get_available_models",
+					"success": false,
+					"error":   errMsg,
+				})
+				continue
+			}
 			replyOK(req.ID, "get_available_models", map[string]any{
 				"models": []map[string]any{
 					{"provider": "openrouter", "id": "anthropic/claude-3.7-sonnet", "name": "Claude 3.7 Sonnet", "reasoning": true, "contextWindow": 200000},
@@ -869,5 +884,147 @@ func TestPiRPCMapperFinalUsageCorrelatedToSettlementID(t *testing.T) {
 	evs = m.mapLine([]byte(`{"id":"`+settledID2+`","type":"response","command":"get_session_stats","success":true,"data":{"tokens":{"total":200},"cost":0.04}}`), replies)
 	if len(evs) != 1 || !evs[0].FinalUsage {
 		t.Fatalf("second settlement stats events = %+v, want single event with FinalUsage=true", evs)
+	}
+}
+
+func TestPiRPCChoicesErrorPropagationFailTTLAndInvalidation(t *testing.T) {
+	pirpcChoices.Lock()
+	saved := pirpcChoices.byHome
+	pirpcChoices.byHome = nil
+	pirpcChoices.Unlock()
+	t.Cleanup(func() {
+		pirpcChoices.Lock()
+		pirpcChoices.byHome = saved
+		pirpcChoices.Unlock()
+	})
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	homeA := filepath.Join(t.TempDir(), "pi-a")
+	homeB := filepath.Join(t.TempDir(), "pi-b")
+	logPath := filepath.Join(t.TempDir(), "probe-err.jsonl")
+	t.Setenv(pirpcStandinLogEnv, logPath)
+
+	// 1. Explicit resp.Error propagates as a non-nil error.
+	t.Setenv(pirpcStandinModelsErrEnv, "no credentials configured")
+	bA := PiRPCBackend{
+		Runtime:     wspiruntime.NewManager(wspiruntime.Options{CacheRoot: t.TempDir()}),
+		Command:     exe,
+		ResolveHome: func() string { return homeA },
+	}
+	models, _, err := bA.Choices(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "no credentials configured") {
+		t.Fatalf("Choices with resp.Error = (%+v, %v), want error containing 'no credentials configured'", models, err)
+	}
+
+	// 2. Empty resp.Error falls back to default message.
+	t.Setenv(pirpcStandinModelsErrEnv, "EMPTY")
+	models, _, err = bA.Choices(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "pi rpc get_available_models failed") {
+		t.Fatalf("Choices with empty resp.Error = (%+v, %v), want fallback error", models, err)
+	}
+
+	// 3. Support.listChoices caches failed pi-rpc probe under choicesFailTTL (30s),
+	// not choicesTTL (5m), and InvalidateChoices + ClearPiRPCChoices force immediate refresh.
+	now := time.Date(2026, 11, 29, 2, 0, 0, 0, time.UTC)
+	probeCalls := 0
+	var bWrap = PiRPCBackend{
+		Runtime:     wspiruntime.NewManager(wspiruntime.Options{CacheRoot: t.TempDir()}),
+		Command:     exe,
+		ResolveHome: func() string { return homeA },
+	}
+	regs := BuiltinBackendRegistrations()
+	piReg := regs[BackendPiRPC]
+	piReg.Backend = bWrap
+	regs[BackendPiRPC] = piReg
+	runner := NewRunner(Options{
+		Dir:      t.TempDir(),
+		Backends: regs,
+	})
+	s := NewSupport(SupportOptions{
+		Runner: runner,
+		Dir:    t.TempDir(),
+		Now:    func() time.Time { return now },
+	})
+
+	t.Setenv(pirpcStandinModelsErrEnv, "auth required")
+	_ = os.Remove(logPath)
+	first := s.Choices(context.Background())
+	h1 := harnessByName(t, first, BackendPiRPC)
+	if h1.Error == "" || len(h1.Models) != 0 {
+		t.Fatalf("failed pi-rpc Support.Choices = %+v, want error and empty models", h1)
+	}
+	if _, statErr := os.Stat(logPath); statErr != nil {
+		t.Fatalf("expected initial probe invocation: %v", statErr)
+	}
+
+	// Within choicesFailTTL: cached failure reused without spawning.
+	_ = os.Remove(logPath)
+	now = now.Add(choicesFailTTL - time.Second)
+	t.Setenv(pirpcStandinModelsErrEnv, "")
+	cachedFail := harnessByName(t, s.Choices(context.Background()), BackendPiRPC)
+	if cachedFail.Error == "" {
+		t.Fatalf("expected cached failure before choicesFailTTL, got %+v", cachedFail)
+	}
+	if _, statErr := os.Stat(logPath); !os.IsNotExist(statErr) {
+		t.Fatal("probe unexpectedly re-ran before choicesFailTTL")
+	}
+
+	// Past choicesFailTTL (still well below choicesTTL): re-probes and succeeds.
+	now = now.Add(2 * time.Second)
+	recovered := harnessByName(t, s.Choices(context.Background()), BackendPiRPC)
+	if recovered.Error != "" || len(recovered.Models) != 2 {
+		t.Fatalf("recovered pi-rpc Support.Choices = %+v, want 2 models without error", recovered)
+	}
+
+	// 4. ClearPiRPCChoices(homeA) drops only homeA; ClearPiRPCChoices("") drops all.
+	bB := PiRPCBackend{
+		Runtime:     bA.Runtime,
+		Command:     exe,
+		ResolveHome: func() string { return homeB },
+	}
+	if _, _, err := bB.Choices(context.Background()); err != nil {
+		t.Fatalf("populate homeB choices: %v", err)
+	}
+	ClearPiRPCChoices(homeA)
+	if _, _, ok := cachedPiRPCChoices(homeA); ok {
+		t.Fatal("ClearPiRPCChoices(homeA) did not clear homeA")
+	}
+	if _, _, ok := cachedPiRPCChoices(homeB); !ok {
+		t.Fatal("ClearPiRPCChoices(homeA) unexpectedly cleared homeB")
+	}
+	ClearPiRPCChoices("")
+	if _, _, ok := cachedPiRPCChoices(homeB); ok {
+		t.Fatal("ClearPiRPCChoices('') did not clear all entries")
+	}
+
+	// 5. Support.InvalidateChoices forces immediate re-probe even within choicesTTL.
+	_ = os.Remove(logPath)
+	if h := harnessByName(t, s.Choices(context.Background()), BackendPiRPC); len(h.Models) != 2 {
+		t.Fatalf("warm Support.Choices = %+v", h)
+	}
+	if _, statErr := os.Stat(logPath); !os.IsNotExist(statErr) {
+		t.Fatal("warm Support.Choices unexpectedly spawned before InvalidateChoices")
+	}
+	s.InvalidateChoices(BackendPiRPC)
+	if h := harnessByName(t, s.Choices(context.Background()), BackendPiRPC); len(h.Models) != 2 {
+		t.Fatalf("post-InvalidateChoices Support.Choices = %+v", h)
+	}
+	if _, statErr := os.Stat(logPath); statErr != nil {
+		t.Fatalf("InvalidateChoices(pi-rpc) did not trigger re-probe: %v", statErr)
+	}
+	_ = probeCalls
+
+	// InvalidateChoices("") clears every harness cache entry.
+	ClearPiRPCChoices("")
+	_ = os.Remove(logPath)
+	s.InvalidateChoices("")
+	if h := harnessByName(t, s.Choices(context.Background()), BackendPiRPC); len(h.Models) != 2 {
+		t.Fatalf("post-InvalidateChoices('') Support.Choices = %+v", h)
+	}
+	if _, statErr := os.Stat(logPath); statErr != nil {
+		t.Fatalf("InvalidateChoices('') did not trigger re-probe: %v", statErr)
 	}
 }

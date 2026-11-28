@@ -229,6 +229,8 @@ var harnessNameAllowlist = func() []nameSite {
 		site("internal/wsdashboard/plan_usage_probe.go", "CODEX_HOME", 1, classExternal, "the provider's credential directory variable", "TestPlanUsageCodexHomeSelection"),
 		site("internal/wsdashboard/plan_usage_probe.go", ".codex", 1, classExternal, "the provider's credential directory", "TestPlanUsageCodexHomeSelection"),
 		site("internal/wsdashboard/plan_usage_probe.go", "codex_cli_rs", 1, classExternal, "the provider's usage endpoint originator header", "TestPlanUsageIgnoresPiLogin"),
+		site("internal/wsdashboard/account_routes.go", `json:"pi_runtime,omitempty"`, 1, classExternal, "managed Pi runtime status JSON field on /api/account/status", "TestPiAccountRoutesAccessControlAndStatus"),
+		site("internal/wsdashboard/account_routes.go", `json:"pi_login,omitempty"`, 1, classExternal, "ephemeral Pi PTY login status JSON field on /api/account/status", "TestPiAccountRoutesAccessControlAndStatus"),
 	)
 
 	// cmd/ws-mcp
@@ -266,6 +268,8 @@ var (
 		regexp.MustCompile(`^internal/mcp/pi_[a-z0-9_]*\.go$`),
 		// The Agy usage provider.
 		regexp.MustCompile(`^internal/wsdashboard/plan_usage_agy\.go$`),
+		// Managed Pi runtime and ephemeral PTY login dashboard endpoints.
+		regexp.MustCompile(`^internal/wsdashboard/account_pi_[a-z0-9_]*\.go$`),
 	}
 	harnessWord  = regexp.MustCompile(`(?i)claude|codex|agy|antigravity|(^|[^a-z0-9])(pi|werk)([^a-z0-9]|$)`)
 	harnessExact = regexp.MustCompile(`(?i)^(claude|codex|agy|antigravity|pi|pi-rpc|werk)$`)

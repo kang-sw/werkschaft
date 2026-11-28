@@ -164,9 +164,15 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		slotAuthPreflight: opts.SlotAuthPreflight,
 		slotLoginCmd:       opts.slotLoginCmd,
 		slotSignInTimeout:  opts.slotSignInTimeout,
-		harnessAuthCmd:     opts.harnessAuthCmd,
-		harnessAuthTimeout: opts.harnessAuthTimeout,
-		config:            opts.Config,
+		harnessAuthCmd:         opts.harnessAuthCmd,
+		harnessAuthTimeout:     opts.harnessAuthTimeout,
+		piRuntime:              opts.PiRuntime,
+		onPiRuntimeChanged:     opts.OnPiRuntimeChanged,
+		piLoginTimeout:         opts.piLoginTimeout,
+		piLoginIdleTimeout:     opts.piLoginIdleTimeout,
+		piLoginDisconnectGrace: opts.piLoginDisconnectGrace,
+		piLoginCommand:         opts.piLoginCommand,
+		config:                 opts.Config,
 		harnesses:       opts.Harnesses,
 		cardBound:       opts.CardBound,
 		execJobs:        opts.ExecJobs,
@@ -216,6 +222,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 			StartedAt:     time.Now().UTC().Format(time.RFC3339),
 		},
 	}
+	d.piLogin.daemon = d
 	if d.accountSlots != nil {
 		if err := d.accountSlots.Load(); err != nil {
 			fmt.Fprintf(logw, "dashboard: load account slots: %v\n", err)
@@ -278,6 +285,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		// (Run, below), so they see a predecessor's terminals attach.
 		d.terminals = newTerminals(host, logw)
 		host.AddSink(d.terminals)
+		host.AddSink(&d.piLogin)
 		if d.shell = opts.terminalShell; d.shell == nil {
 			d.shell = daemonShell
 		}
@@ -446,6 +454,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 			if d.terminals != nil {
 				d.terminals.firstScan()
 			}
+			d.sweepOrphanPiLoginHolders()
 			d.holders.Run()
 		}()
 	}

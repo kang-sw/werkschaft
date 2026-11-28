@@ -104,3 +104,44 @@ func TestAccountSlotPiRPCD10ResolutionAndT0Preservation(t *testing.T) {
 		t.Fatalf("persisted slots missing pi-rpc work slot: %+v", doc.Slots)
 	}
 }
+
+func TestSlotAuthReadyPiRPC(t *testing.T) {
+	if slices.Contains(SlotLoginHarnesses(), "pi-rpc") {
+		t.Fatalf("SlotLoginHarnesses() must remain codex/claude only, got %v", SlotLoginHarnesses())
+	}
+
+	cases := []struct {
+		name    string
+		content *string
+		want    bool
+	}{
+		{name: "missing file", content: nil, want: false},
+		{name: "invalid json", content: ptrString("{not-json"), want: false},
+		{name: "empty object", content: ptrString("{}"), want: false},
+		{name: "empty provider object", content: ptrString(`{"openai":{}}`), want: false},
+		{name: "whitespace and non-string values only", content: ptrString(`{"openai":{"type":"   ","expires":1700000000,"active":true}}`), want: false},
+		{name: "provider entry not object", content: ptrString(`{"openai":"sk-raw"}`), want: false},
+		{name: "valid api key", content: ptrString(`{"openai":{"type":"api_key","key":"sk-test-secret"}}`), want: true},
+		{name: "valid oauth credentials", content: ptrString(`{"anthropic":{"type":"oauth","access":"tok-access","refresh":"tok-refresh"}}`), want: true},
+		{name: "mixed empty and valid provider", content: ptrString(`{"openai":{},"openrouter":{"key":"or-key"}}`), want: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.content != nil {
+				if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte(*tc.content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := SlotAuthReady("pi-rpc", dir); got != tc.want {
+				t.Fatalf("SlotAuthReady(pi-rpc) = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if SlotAuthReady("pi-rpc", "") {
+		t.Fatal("SlotAuthReady(pi-rpc, '') = true, want false")
+	}
+}
+
+func ptrString(s string) *string { return &s }
