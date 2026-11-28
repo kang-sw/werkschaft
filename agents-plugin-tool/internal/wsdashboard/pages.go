@@ -75,6 +75,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-frames.js",
 	"dashboard-git.js",
 	"dashboard-gitpage.js",
+	"dashboard-gitpage-wt.js",
 	"dashboard-tracker.js",
 	"dashboard-selection.js",
 	"dashboard-stream.js",
