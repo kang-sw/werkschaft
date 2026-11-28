@@ -1007,6 +1007,8 @@
       setSentinelDurations,
       setCalibration: props.setCalibration,
       getPropAnchorWorld: props.getPropAnchorWorld,
+      getLaptopObject: props.getLaptopObject,
+      projectLaptopBounds: props.projectLaptopBounds,
       getPropObjects: props.getPropObjects,
       getCoLeadState,
       debugState: getCoLeadState,

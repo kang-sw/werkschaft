@@ -641,8 +641,10 @@
 :root[data-shell] .rail .rcap {
   bottom: 10px;
 }
+:root[data-shell] .rail[data-companion-dock="rail-slot"] .rcap,
 :root[data-shell] .rail[data-companion-dock="footer"] .rcap {
   bottom: calc(var(--companion-slot, 0px) + 10px);
+  z-index: 5;
 }
 
 /* Rail drag splitter (docked >= 1600px expanded only). */
@@ -670,13 +672,13 @@
     margin-right: 0;
   }
 
-  /* Seamless outer chrome rail starting below --toph and ending at --botbar-h.
+  /* Variant A unified --wb-card rail starting below --toph and ending at --botbar-h.
      Preserve overflow: hidden on .rail (companion overlay contract). */
   :root[data-shell] .dbody > .rail {
     margin: 0;
-    background: transparent;
-    box-shadow: none;
-    border-radius: 0;
+    background: var(--wb-card);
+    box-shadow: var(--wb-shadow);
+    border-radius: var(--wb-radius) var(--wb-radius) 0 0;
     overflow: hidden;
   }
   :root[data-frame] .dbody > .rail-ph {
@@ -699,14 +701,14 @@
     border-radius: 0;
   }
   :root[data-shell] .rail .rs {
-    --rs-ground: var(--d-shell-bg);
+    --rs-ground: var(--wb-card);
   }
   :root[data-shell] .rail .rs:hover {
-    background: color-mix(in srgb, var(--wb-fg) 6%, transparent);
-    --rs-ground: color-mix(in srgb, var(--wb-fg) 6%, var(--d-shell-bg));
+    background: color-mix(in srgb, var(--wb-primary) 6%, var(--wb-card));
+    --rs-ground: color-mix(in srgb, var(--wb-primary) 6%, var(--wb-card));
   }
   :root[data-shell] .rail .rs.cur {
-    --rs-ground: color-mix(in srgb, var(--wb-primary) 13%, var(--d-shell-bg));
+    --rs-ground: color-mix(in srgb, var(--wb-primary) 13%, var(--wb-card));
   }
 
   /* Docked rail splitter straddling x = --rail-w. */

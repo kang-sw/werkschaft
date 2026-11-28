@@ -1,14 +1,16 @@
 (function (C) {
   "use strict";
 
-  function quickMenu(node, hit, menu, options, { returnHome, resetSize, mute, applyPreset, presets, reloadPack, notice, openSettings, onOpen }) {
+  function quickMenu(node, hit, menu, options, { returnHome, resetSize, mute, applyPreset, presets, reloadPack, notice, openSettings, onOpen, extraTriggers }) {
     const doc = document, signal = options.signal;
-    let width = 0, height = 0;
+    const triggers = [hit].concat(Array.isArray(extraTriggers) ? extraTriggers.filter(Boolean) : []);
+    let width = 0, height = 0, activeTrigger = hit;
     function canWrite() { return doc.documentElement.hasAttribute("data-sysopen"); }
     function measure() { width = menu.offsetWidth; height = menu.offsetHeight; }
     function close() { menu.hidden = true; hit.setAttribute("aria-expanded", "false"); }
     function openMenu(event) {
       event.preventDefault();
+      activeTrigger = event.currentTarget || hit;
       rebuild();
       menu.hidden = false;
       measure();
@@ -16,13 +18,15 @@
       hit.setAttribute("aria-expanded", "true");
       menu.querySelector("button")?.focus({ preventScroll: true });
     }
-    hit.addEventListener("contextmenu", openMenu, options);
-    hit.addEventListener("keydown", event => {
-      if (event.key === "ContextMenu" || event.key === "F10" && event.shiftKey) openMenu(event);
-    }, options);
+    for (const trig of triggers) {
+      trig.addEventListener("contextmenu", openMenu, options);
+      trig.addEventListener("keydown", event => {
+        if (event.key === "ContextMenu" || event.key === "F10" && event.shiftKey) openMenu(event);
+      }, options);
+    }
     doc.addEventListener("pointerdown", event => { if (!node.contains(event.target)) close(); }, options);
     doc.addEventListener("keydown", event => {
-      if (event.key === "Escape" && !menu.hidden) { close(); hit.focus({ preventScroll: true }); }
+      if (event.key === "Escape" && !menu.hidden) { close(); (activeTrigger || hit).focus({ preventScroll: true }); }
     }, options);
 
     async function reload() {
