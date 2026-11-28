@@ -118,6 +118,16 @@ func (c *conv) settleCompanionPending() {
 		}
 		if c.settleCompanionApproval(a) {
 			c.dropApproval(a.ID, false)
+			continue
 		}
+		// Drop all non-exec approvals and fail closed so no unanswerable
+		// prompt stays parked to wedge the companion turn or watchdogs.
+		for _, rem := range slices.Clone(c.approvals) {
+			if _, daemon := c.execAnswers[rem.ID]; !daemon {
+				c.dropApproval(rem.ID, false)
+			}
+		}
+		c.approvalFailed(errNoApprovalAnswer)
+		return
 	}
 }
