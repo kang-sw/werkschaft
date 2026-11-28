@@ -514,7 +514,14 @@
       }
     },
     "261129-feat-ws-cache-large-growth-gc": {
-      "registered_at": "2026-11-28T16:15:15Z"
+      "registered_at": "2026-11-28T16:15:15Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "closed",
+        "touched_at": "2026-11-28T16:38:00Z"
+      }
     },
     "261129-feat-ws-pi-rpc-account-ui-and-pty-login": {
       "registered_at": "2026-11-28T16:25:31Z"
