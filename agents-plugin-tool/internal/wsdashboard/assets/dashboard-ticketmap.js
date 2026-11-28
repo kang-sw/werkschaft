@@ -854,7 +854,8 @@
       // survived focuses it again (View C keeps any selection).
       if (S.sel !== null && (wasFocus || S.view === "C")) v.focus(S.sel);
       else S.sel = null;
-      if (v.show) v.show();
+      // A dock left during the fetch stays hidden; showView shows it later.
+      if (v.show && (isOpen() || dockVis)) v.show();
     }
 
     // --- Full View and the file-card hand-off --------------------------

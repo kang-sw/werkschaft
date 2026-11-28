@@ -106,11 +106,13 @@ async function dockSession(browser, theme, galW) {
   await page.goto(base + '/s/livesession');
   const fr = await frameOf(page);
   await fr.locator('#tmdock').waitFor({ state: 'attached' });
-  await page.waitForTimeout(400);
-  if (!(await dockShown(fr))) {
-    await fr.evaluate(() => document.activeElement && document.activeElement.blur && document.activeElement.blur());
-    await page.keyboard.press('Control+b');
+  // A wide idle view shows the docked Ticket Map by default, unprompted.
+  let shownByDefault = false;
+  for (let i = 0; i < 40 && !shownByDefault; i++) {
+    shownByDefault = await dockShown(fr);
+    if (!shownByDefault) await page.waitForTimeout(100);
   }
+  assert.equal(shownByDefault, true, `${tag}: the wide idle view shows the docked Ticket Map by default`);
   await fr.locator('#tmdock #tmvb .d-tm-card').first().waitFor({ state: 'visible' });
   await raf2(fr);
   assert.equal(await fr.evaluate(() => !!window.__tmap), true, `${tag}: the map's test hooks`);
