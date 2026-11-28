@@ -78,7 +78,8 @@ func (a *Agent) compactWithSummary(ctx context.Context, lead *wscompact.LeadSumm
 		}
 		prose = make([]string, len(lead.Prose))
 		for i, text := range lead.Prose {
-			prose[i] = boundedText(Scrub(text, a.cfg.SummarySecrets...), wscompact.ProseFieldBytes)
+			// The lead's own prose is carried whole; only model-generated prose is bounded.
+			prose[i] = Scrub(text, a.cfg.SummarySecrets...)
 		}
 		rereads = a.compactRereads(lead.Paths)
 	} else {

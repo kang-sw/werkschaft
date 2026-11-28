@@ -643,6 +643,7 @@ func (s *Server) Close() {
 		s.stopWorkerWatch()
 	}
 	s.live.close()
+	s.compactDrafts.reset()
 	d := &s.dashboard
 	d.mu.Lock()
 	if d.nudges != nil && !d.nudgesClosed {

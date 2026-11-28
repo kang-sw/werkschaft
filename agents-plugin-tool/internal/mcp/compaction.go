@@ -3,9 +3,11 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wscompact"
@@ -184,15 +186,19 @@ func parseCompactAgendaUpdates(sessionKey, target string, raw any) ([]agendaUpda
 	}
 	sort.Strings(rawKeys)
 
+	// Every problem is collected so one retry can fix them all.
+	var problems []string
 	seen := make(map[string]bool, len(rawKeys))
 	ops := make([]agendaUpdateOp, 0, len(rawKeys))
 	for _, rawKey := range rawKeys {
 		trimmed := strings.TrimSpace(rawKey)
 		if trimmed == "" {
-			return nil, fmt.Errorf("compact: agenda_updates key must be non-empty")
+			problems = append(problems, "key must be non-empty")
+			continue
 		}
 		if seen[trimmed] {
-			return nil, fmt.Errorf("compact: agenda_updates contains duplicate key %q", trimmed)
+			problems = append(problems, fmt.Sprintf("duplicate key %q", trimmed))
+			continue
 		}
 		seen[trimmed] = true
 
@@ -203,33 +209,46 @@ func parseCompactAgendaUpdates(sessionKey, target string, raw any) ([]agendaUpda
 		}
 		obj, ok := entry.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("compact: agenda_updates[%q] must be null or {value, merge?}", trimmed)
+			problems = append(problems, fmt.Sprintf("[%q] must be null or {value, merge?}", trimmed))
+			continue
 		}
-		for field := range obj {
+		bad := false
+		for _, field := range sortedKeys(obj) {
 			if field != "value" && field != "merge" {
-				return nil, fmt.Errorf("compact: agenda_updates[%q] has unknown field %q (allowed: value, merge)", trimmed, field)
+				problems = append(problems, fmt.Sprintf("[%q] has unknown field %q (allowed: value, merge)", trimmed, field))
+				bad = true
 			}
 		}
 		value, hasValue := obj["value"]
 		if !hasValue {
-			return nil, fmt.Errorf("compact: agenda_updates[%q].value is required", trimmed)
+			problems = append(problems, fmt.Sprintf("[%q].value is required", trimmed))
+			bad = true
 		}
 		merge := false
 		if rawMerge, present := obj["merge"]; present && rawMerge != nil {
 			b, isBool := rawMerge.(bool)
 			if !isBool {
-				return nil, fmt.Errorf("compact: agenda_updates[%q].merge must be a boolean", trimmed)
+				problems = append(problems, fmt.Sprintf("[%q].merge must be a boolean", trimmed))
+				bad = true
 			}
 			merge = b
 		}
-		if _, isObj := value.(map[string]any); merge && !isObj {
-			return nil, fmt.Errorf("compact: agenda_updates[%q].value must be a JSON object when merge is true", trimmed)
+		if _, isObj := value.(map[string]any); hasValue && merge && !isObj {
+			problems = append(problems, fmt.Sprintf("[%q].value must be a JSON object when merge is true", trimmed))
+			bad = true
+		}
+		if bad {
+			continue
 		}
 		encoded, err := json.Marshal(value)
 		if err != nil {
-			return nil, fmt.Errorf("compact: agenda_updates[%q].value is not JSON-encodable: %w", trimmed, err)
+			problems = append(problems, fmt.Sprintf("[%q].value is not JSON-encodable: %v", trimmed, err))
+			continue
 		}
 		ops = append(ops, agendaUpdateOp{key: trimmed, value: encoded, merge: merge})
+	}
+	if len(problems) > 0 {
+		return nil, fmt.Errorf("compact: agenda_updates has %d error(s): %s", len(problems), strings.Join(problems, "; "))
 	}
 	sort.Slice(ops, func(i, j int) bool { return ops[i].key < ops[j].key })
 	return ops, nil
@@ -247,28 +266,48 @@ func (s *Server) handleCompact(ctx context.Context, id json.RawMessage, args map
 	if b, ok := args["resume"].(bool); ok {
 		resume = &b
 	}
+	selfCompact := target == "" || target == key
 	var (
 		hasLeadSummary bool
 		prose          *wscompact.LeadSummary
+		supplied       *wscompact.LeadDraft
+		warnings       []string
+		leadErr        error
 	)
-	if value, present := args["lead_summary"]; present {
-		hasLeadSummary = true
+	if value, present := args["lead_summary"]; present && value != nil {
 		raw, err := json.Marshal(value)
 		if err != nil {
 			return toolTextResponse(id, "", fmt.Errorf("invalid lead_summary: %w", err))
 		}
-		prose, err = wscompact.ParseLeadSummary(raw)
-		if err != nil {
-			return toolTextResponse(id, "", err)
-		}
+		supplied, warnings, leadErr = wscompact.ParseLeadSummaryDraft(raw)
 	}
 	var agendaOps []agendaUpdateOp
+	var agendaErr error
 	if rawUpdates, present := args["agenda_updates"]; present && rawUpdates != nil {
-		var err error
-		agendaOps, err = parseCompactAgendaUpdates(key, target, rawUpdates)
-		if err != nil {
-			return toolTextResponse(id, "", err)
+		agendaOps, agendaErr = parseCompactAgendaUpdates(key, target, rawUpdates)
+	}
+	if leadErr != nil || agendaErr != nil {
+		var problems []string
+		if leadErr != nil {
+			problems = append(problems, "compact: "+leadErr.Error())
 		}
+		if agendaErr != nil {
+			problems = append(problems, agendaErr.Error())
+		}
+		if selfCompact && !supplied.Empty() {
+			s.compactDrafts.merge(key, supplied)
+			problems = append(problems, fmt.Sprintf("Valid lead_summary fields were cached in server memory for %d minutes: fix the errors above and retry omitting lead_summary, or send only the changed fields.", int(compactDraftTTL/time.Minute)))
+		}
+		return toolTextResponse(id, "", errors.New(strings.Join(problems, "\n")))
+	}
+	// A retry's fields overlay the draft a failed call left behind.
+	var cached *wscompact.LeadDraft
+	if selfCompact {
+		cached = s.compactDrafts.get(key)
+	}
+	if supplied != nil || cached != nil {
+		hasLeadSummary = true
+		prose = supplied.Overlay(cached).Summary()
 	}
 	out := wsagent.CompactResult{Status: "unsupported", Reason: "native compaction requires a hosted session"}
 	if hasLeadSummary {
@@ -287,8 +326,12 @@ func (s *Server) handleCompact(ctx context.Context, id json.RawMessage, args map
 			out = wsagent.CompactResult{Status: "error", Reason: err.Error()}
 		}
 	}
+	queued := out.Status == "queued" || out.Status == "pending"
+	if queued && selfCompact {
+		s.compactDrafts.clear(key)
+	}
 	var agendaNote string
-	if (out.Status == "queued" || out.Status == "pending") && len(agendaOps) > 0 {
+	if queued && len(agendaOps) > 0 {
 		var err error
 		agendaNote, err = s.sessions.applyAgendaUpdates(key, agendaOps)
 		if err != nil {
@@ -296,11 +339,17 @@ func (s *Server) handleCompact(ctx context.Context, id json.RawMessage, args map
 		}
 	}
 	if wantsJSON(args) {
-		return toolJSONResponse(id, out, nil)
+		return toolJSONResponse(id, struct {
+			wsagent.CompactResult
+			Warnings []string `json:"warnings,omitempty"`
+		}{out, warnings}, nil)
 	}
 	text := fmt.Sprintf("%s: %s", out.Status, out.Reason)
 	if agendaNote != "" {
 		text += "\n" + agendaNote
+	}
+	if len(warnings) > 0 {
+		text += "\nlead_summary warnings: " + strings.Join(warnings, "; ")
 	}
 	return toolTextResponse(id, text, nil)
 }

@@ -53,6 +53,9 @@ type Server struct {
 	// live holds the dashboard live state of the sessions this process
 	// received adapter intake for (live_snapshot.go).
 	live liveHub
+	// compactDrafts holds rejected compact calls' valid lead_summary fields for
+	// a partial retry (compaction_draft.go).
+	compactDrafts compactDraftCache
 	// intake tracks canonical operations from connection open; direct/file-only
 	// handler callers do not negotiate reasoning_summary_v1.
 	intake *intakeOrder

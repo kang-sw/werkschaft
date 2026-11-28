@@ -1215,7 +1215,8 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 	}
 	prose := make([]string, len(req.lead.Prose))
 	for i, text := range req.lead.Prose {
-		prose[i] = wscompact.BoundedText(wscompact.Scrub(text), wscompact.ProseFieldBytes)
+		// Carried whole: the lead's own prose has no per-field cap (ParseLeadSummaryDraft).
+		prose[i] = wscompact.Scrub(text)
 	}
 	var rereads string
 	if len(req.lead.Paths) > 0 {
