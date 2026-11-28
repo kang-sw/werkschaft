@@ -96,7 +96,31 @@ func TestDaemonControlBrowser(t *testing.T) {
 	f.d.broker.wake(liveDep("livesession"))
 
 	// Test-only control server bridging the Playwright script to the real
-	// in-process Daemon.DaemonTabs and Daemon.DaemonCurl methods.
+	// in-process Daemon.DaemonTabs, DaemonCurl, DaemonDOM, and DaemonUI methods.
+	writeCtrlResult := func(w http.ResponseWriter, resp any, err error) {
+		if err != nil {
+			var dcErr *DaemonControlError
+			if errors.As(err, &dcErr) {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"ok":      false,
+					"error":   dcErr.Code,
+					"reason":  dcErr.Reason,
+					"message": dcErr.Message,
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":      false,
+				"error":   "internal",
+				"message": err.Error(),
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":       true,
+			"response": resp,
+		})
+	}
 	ctrl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -111,28 +135,27 @@ func TestDaemonControlBrowser(t *testing.T) {
 			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 			defer cancel()
 			resp, err := f.d.DaemonCurl(ctx, req)
-			if err != nil {
-				var dcErr *DaemonControlError
-				if errors.As(err, &dcErr) {
-					_ = json.NewEncoder(w).Encode(map[string]any{
-						"ok":      false,
-						"error":   dcErr.Code,
-						"reason":  dcErr.Reason,
-						"message": dcErr.Message,
-					})
-					return
-				}
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"ok":      false,
-					"error":   "internal",
-					"message": err.Error(),
-				})
+			writeCtrlResult(w, resp, err)
+		case "/ctrl/dom":
+			var req DaemonDOMRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"ok":       true,
-				"response": resp,
-			})
+			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+			defer cancel()
+			resp, err := f.d.DaemonDOM(ctx, req)
+			writeCtrlResult(w, resp, err)
+		case "/ctrl/ui":
+			var req DaemonUIRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+			defer cancel()
+			resp, err := f.d.DaemonUI(ctx, req)
+			writeCtrlResult(w, resp, err)
 		default:
 			http.NotFound(w, r)
 		}

@@ -13,12 +13,19 @@ import (
 
 const (
 	daemonCurlTool = "daemon.curl"
+	daemonTabsTool = "daemon.tabs"
+	daemonDOMTool  = "daemon.dom"
+	daemonUITool   = "daemon.ui"
 )
 
 // DaemonControlHost bridges the MCP server to the dashboard daemon's local
-// loopback curl and multi-tab bridge confirmation layer (wsdashboard.Daemon).
+// loopback curl, multi-tab registry, semantic DOM/UI bridge, and 1-click
+// confirmation layer (wsdashboard.Daemon).
 type DaemonControlHost interface {
 	DaemonCurl(ctx context.Context, req wsdashboard.DaemonCurlRequest) (wsdashboard.DaemonCurlResponse, error)
+	DaemonTabs() []wsdashboard.DaemonTabInfo
+	DaemonDOM(ctx context.Context, req wsdashboard.DaemonDOMRequest) (wsdashboard.DaemonDOMSnapshot, error)
+	DaemonUI(ctx context.Context, req wsdashboard.DaemonUIRequest) (wsdashboard.DaemonUIResponse, error)
 }
 
 func isDaemonControlTool(name string) bool {
@@ -58,6 +65,55 @@ func daemonControlTools() []map[string]any {
 					"tab_id": stringProperty("Optional explicit local dashboard tab ID for routing a confirmation banner."),
 				},
 				"required": []string{"method", "path"},
+			},
+		},
+		{
+			"name":        daemonTabsTool,
+			"description": "List connected local dashboard shell tabs ordered from most recently focused visible tab first (opted-in top-level hosted leads only). Runs immediately without confirmation.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_key": stringProperty(sessionKeyPropertyDescription),
+				},
+			},
+		},
+		{
+			"name":        daemonDOMTool,
+			"description": "Capture a bounded semantic/accessibility DOM snapshot of the targeted local dashboard tab (most recently focused visible tab by default, or explicit tab_id). Includes active route, framed session, modal state, stable data-ws-* attributes, and ephemeral ref handles bound to snapshot generation (invalidated by the next snapshot or navigation). Hard caps: 64 KiB and 1500 nodes. Excludes confirmation banners and masks password/secret inputs and credentials.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_key":      stringProperty(sessionKeyPropertyDescription),
+					"tab_id":           stringProperty("Optional explicit local dashboard tab ID (defaults to most recently focused visible tab)."),
+					"scope":            enumStringProperty("Subtree scope to snapshot: all (default: shell + active frame + open settings modal), shell, frame, or settings.", []string{"all", "shell", "frame", "settings"}),
+					"interactive_only": map[string]any{"type": "boolean", "description": "When true, include only interactive controls and landmarks."},
+					"max_nodes":        map[string]any{"type": "integer", "description": "Optional node limit clamped to [1, 1500]."},
+				},
+			},
+		},
+		{
+			"name":        daemonUITool,
+			"description": "Drive strictly allowlisted semantic UI actions in the targeted local dashboard tab (zero arbitrary JS eval). Non-destructive actions (navigate, focus_session, open_settings, select_panel) run immediately; mutating actions (click_ref, fill_ref) validate snapshot generation/ref and block up to 120s behind the top-level shell 1-click user confirmation banner.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_key": stringProperty(sessionKeyPropertyDescription),
+					"tab_id":      stringProperty("Optional explicit local dashboard tab ID (defaults to most recently focused visible tab)."),
+					"action":      enumStringProperty("Allowlisted semantic UI action.", []string{"navigate", "focus_session", "open_settings", "select_panel", "click_ref", "fill_ref"}),
+					"path":        stringProperty("For navigate: daemon-relative path starting with '/' (e.g. '/', '/s/<reply_id>', '/s/<reply_id>#entry=<key>', '/settings')."),
+					"reply_id":    stringProperty("For focus_session: session reply ID to focus."),
+					"entry_id":    stringProperty("For focus_session: optional conversation entry ID to reveal (#entry=<entry_id>)."),
+					"scope":       enumStringProperty("For open_settings: optional config scope.", []string{"global", "project", "repo", "session"}),
+					"section":     enumStringProperty("For open_settings: optional settings section.", []string{"workflow", "agents", "tier_routing", "account", "compaction", "adapters", "companion", "profiles", "prompts"}),
+					"target":      stringProperty("For open_settings: optional scope target."),
+					"worktree":    stringProperty("For open_settings: optional worktree context."),
+					"session":     stringProperty("For open_settings: optional session reply ID context."),
+					"panel":       enumStringProperty("For select_panel: semantic dashboard panel to focus or open.", []string{"convo", "conversation", "board", "files", "term", "terminal", "git", "overview", "ticketmap", "rail", "search"}),
+					"ref":         stringProperty("For click_ref / fill_ref: ephemeral ref handle from the active daemon.dom snapshot."),
+					"generation":  map[string]any{"type": "integer", "description": "Optional snapshot generation to assert against the tab's active snapshot."},
+					"value":       stringProperty("For fill_ref: text value to fill into the referenced input (max 64 KiB; masked in confirmation summary for sensitive inputs)."),
+				},
+				"required": []string{"action"},
 			},
 		},
 	}
@@ -126,9 +182,141 @@ func (s *Server) handleDaemonTool(ctx context.Context, id json.RawMessage, name 
 	switch name {
 	case daemonCurlTool:
 		return s.handleDaemonCurl(ctx, id, args)
+	case daemonTabsTool:
+		return s.handleDaemonTabs(id)
+	case daemonDOMTool:
+		return s.handleDaemonDOM(ctx, id, args)
+	case daemonUITool:
+		return s.handleDaemonUI(ctx, id, args)
 	default:
 		return errorResponse(id, -32602, fmt.Sprintf("unknown tool: %s", name))
 	}
+}
+
+func (s *Server) handleDaemonTabs(id json.RawMessage) response {
+	tabs := s.daemonControl.DaemonTabs()
+	if tabs == nil {
+		tabs = []wsdashboard.DaemonTabInfo{}
+	}
+	return toolJSONResponse(id, map[string]any{"tabs": tabs}, nil)
+}
+
+func (s *Server) handleDaemonDOM(ctx context.Context, id json.RawMessage, args map[string]any) response {
+	req := wsdashboard.DaemonDOMRequest{}
+	if v, err := optionalStringArg(daemonDOMTool, "tab_id", args); err != nil {
+		return toolTextResponse(id, "", err)
+	} else {
+		req.TabID = v
+	}
+	if v, err := optionalStringArg(daemonDOMTool, "scope", args); err != nil {
+		return toolTextResponse(id, "", err)
+	} else {
+		req.Scope = v
+	}
+	if raw, present := args["interactive_only"]; present && raw != nil {
+		b, ok := raw.(bool)
+		if !ok {
+			return toolTextResponse(id, "", fmt.Errorf("%s: interactive_only must be a boolean", daemonDOMTool))
+		}
+		req.InteractiveOnly = b
+	}
+	if raw, present := args["max_nodes"]; present && raw != nil {
+		n, ok := positiveIntArg(raw)
+		if !ok {
+			return toolTextResponse(id, "", fmt.Errorf("%s: max_nodes must be a positive integer", daemonDOMTool))
+		}
+		req.MaxNodes = n
+	}
+	snap, err := s.daemonControl.DaemonDOM(ctx, req)
+	if err != nil {
+		return daemonControlErrorResponse(id, err)
+	}
+	return toolJSONResponse(id, snap, nil)
+}
+
+func (s *Server) handleDaemonUI(ctx context.Context, id json.RawMessage, args map[string]any) response {
+	action, err := stringArg(daemonUITool, "action", args)
+	if err != nil {
+		return toolTextResponse(id, "", err)
+	}
+	req := wsdashboard.DaemonUIRequest{Action: action}
+	for _, field := range []struct {
+		key string
+		dst *string
+	}{
+		{"tab_id", &req.TabID},
+		{"path", &req.Path},
+		{"reply_id", &req.ReplyID},
+		{"entry_id", &req.EntryID},
+		{"scope", &req.Scope},
+		{"section", &req.Section},
+		{"target", &req.Target},
+		{"worktree", &req.Worktree},
+		{"session", &req.Session},
+		{"panel", &req.Panel},
+		{"ref", &req.Ref},
+		{"value", &req.Value},
+	} {
+		v, err := optionalStringArg(daemonUITool, field.key, args)
+		if err != nil {
+			return toolTextResponse(id, "", err)
+		}
+		*field.dst = v
+	}
+	if raw, present := args["generation"]; present && raw != nil {
+		n, ok := positiveIntArg(raw)
+		if !ok {
+			return toolTextResponse(id, "", fmt.Errorf("%s: generation must be a positive integer", daemonUITool))
+		}
+		req.Generation = uint64(n)
+	}
+	resp, err := s.daemonControl.DaemonUI(ctx, req)
+	if err != nil {
+		return daemonControlErrorResponse(id, err)
+	}
+	return toolJSONResponse(id, resp, nil)
+}
+
+func daemonControlErrorResponse(id json.RawMessage, err error) response {
+	if dce, ok := wsdashboard.IsDaemonControlError(err); ok {
+		raw, _ := json.Marshal(dce)
+		return toolErrorTextResponse(id, string(raw))
+	}
+	return toolTextResponse(id, "", err)
+}
+
+func optionalStringArg(toolName, key string, args map[string]any) (string, error) {
+	raw, present := args[key]
+	if !present || raw == nil {
+		return "", nil
+	}
+	v, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("%s: %s must be a string", toolName, key)
+	}
+	return v, nil
+}
+
+func positiveIntArg(raw any) (int, bool) {
+	switch v := raw.(type) {
+	case float64:
+		if v >= 1 && v == float64(int(v)) {
+			return int(v), true
+		}
+	case int:
+		if v >= 1 {
+			return v, true
+		}
+	case int64:
+		if v >= 1 {
+			return int(v), true
+		}
+	case json.Number:
+		if n, err := v.Int64(); err == nil && n >= 1 {
+			return int(n), true
+		}
+	}
+	return 0, false
 }
 
 func (s *Server) handleDaemonCurl(ctx context.Context, id json.RawMessage, args map[string]any) response {

@@ -1392,6 +1392,8 @@
           WsJank.ingest(m.stall);
         } else if (m.wsShell === "jank-minor" && typeof WsJank !== "undefined" && WsJank) {
           WsJank.ingestMinor(m);
+        } else if (m.wsShell === "daemon-bridge-res" && typeof handleDaemonBridgeRes === "function") {
+          handleDaemonBridgeRes(e.source, m);
         }
         return;
       }
@@ -1466,6 +1468,9 @@
           break;
         case "jank-minor":
           if (typeof WsJank !== "undefined" && WsJank) WsJank.ingestMinor(m);
+          break;
+        case "daemon-bridge-res":
+          if (typeof handleDaemonBridgeRes === "function") handleDaemonBridgeRes(e.source, m);
           break;
       }
     });
@@ -1668,6 +1673,7 @@
       else if (m.wsShell === "theme") setTheme(m.theme, true);
       else if (m.wsShell === "rail-open") { if (typeof tkApi !== "undefined" && tkApi && tkApi.closeStore) tkApi.closeStore(); }
       else if (m.wsShell === "sync") { sent = {}; queueHead(); shPost("title", { title: doc.title }); }
+      else if (m.wsShell === "daemon-bridge-req") { if (typeof handleDaemonFrameBridgeReq === "function") handleDaemonFrameBridgeReq(m); }
     });
     queue();
     if (typeof WsJank !== "undefined" && WsJank) {

@@ -14,10 +14,18 @@ import (
 )
 
 type fakeDaemonControlHost struct {
-	lastReq wsdashboard.DaemonCurlRequest
-	calls   int
-	resp    wsdashboard.DaemonCurlResponse
-	err     error
+	lastReq    wsdashboard.DaemonCurlRequest
+	lastDOMReq wsdashboard.DaemonDOMRequest
+	lastUIReq  wsdashboard.DaemonUIRequest
+	calls      int
+	tabsCalls  int
+	domCalls   int
+	uiCalls    int
+	resp       wsdashboard.DaemonCurlResponse
+	tabsResp   []wsdashboard.DaemonTabInfo
+	domResp    wsdashboard.DaemonDOMSnapshot
+	uiResp     wsdashboard.DaemonUIResponse
+	err        error
 }
 
 func (f *fakeDaemonControlHost) DaemonCurl(_ context.Context, req wsdashboard.DaemonCurlRequest) (wsdashboard.DaemonCurlResponse, error) {
@@ -27,6 +35,29 @@ func (f *fakeDaemonControlHost) DaemonCurl(_ context.Context, req wsdashboard.Da
 		return wsdashboard.DaemonCurlResponse{}, f.err
 	}
 	return f.resp, nil
+}
+
+func (f *fakeDaemonControlHost) DaemonTabs() []wsdashboard.DaemonTabInfo {
+	f.tabsCalls++
+	return f.tabsResp
+}
+
+func (f *fakeDaemonControlHost) DaemonDOM(_ context.Context, req wsdashboard.DaemonDOMRequest) (wsdashboard.DaemonDOMSnapshot, error) {
+	f.domCalls++
+	f.lastDOMReq = req
+	if f.err != nil {
+		return wsdashboard.DaemonDOMSnapshot{}, f.err
+	}
+	return f.domResp, nil
+}
+
+func (f *fakeDaemonControlHost) DaemonUI(_ context.Context, req wsdashboard.DaemonUIRequest) (wsdashboard.DaemonUIResponse, error) {
+	f.uiCalls++
+	f.lastUIReq = req
+	if f.err != nil {
+		return wsdashboard.DaemonUIResponse{}, f.err
+	}
+	return f.uiResp, nil
 }
 
 type fakePostureCompanionHost struct {
@@ -280,14 +311,16 @@ func TestDaemonControlCompanionPostureHandsBusyLock(t *testing.T) {
 }
 
 func TestDaemonControlHostedRenderAndLeadToolNames(t *testing.T) {
-	if !slices.Contains(LeadToolNames(), daemonCurlTool) {
-		t.Fatal("daemon.curl missing from LeadToolNames")
-	}
-	if !isLeadOnlyTool(daemonCurlTool) {
-		t.Fatal("daemon.curl must be in isLeadOnlyTool")
+	for _, tool := range []string{daemonCurlTool, daemonTabsTool, daemonDOMTool, daemonUITool} {
+		if !slices.Contains(LeadToolNames(), tool) {
+			t.Fatalf("%s missing from LeadToolNames", tool)
+		}
+		if !isLeadOnlyTool(tool) {
+			t.Fatalf("%s must be in isLeadOnlyTool", tool)
+		}
 	}
 
-	// Agy HostedRender includes daemon_curl [direct] ONLY when the lead opted in.
+	// Agy HostedRender includes daemon_* [direct] ONLY when the lead opted in.
 	setupWorkflowManualNoteEnv(t)
 	root := t.TempDir()
 	initGit(t, root)
@@ -314,8 +347,10 @@ func TestDaemonControlHostedRenderAndLeadToolNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderLeadManual (off): %v", err)
 	}
-	if strings.Contains(offManual, "daemon_curl") {
-		t.Fatalf("default-off agy manual unexpectedly listed daemon_curl")
+	for _, alias := range []string{"daemon_curl", "daemon_tabs", "daemon_dom", "daemon_ui"} {
+		if strings.Contains(offManual, alias) {
+			t.Fatalf("default-off agy manual unexpectedly listed %s", alias)
+		}
 	}
 
 	records.Set(wsagent.Record{
@@ -326,7 +361,53 @@ func TestDaemonControlHostedRenderAndLeadToolNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderLeadManual (on): %v", err)
 	}
-	if !strings.Contains(onManual, "daemon_curl [direct]") {
-		t.Fatalf("opted-in agy manual missing 'daemon_curl [direct]'")
+	for _, alias := range []string{"daemon_curl [direct]", "daemon_tabs [direct]", "daemon_dom [direct]", "daemon_ui [direct]"} {
+		if !strings.Contains(onManual, alias) {
+			t.Fatalf("opted-in agy manual missing %q", alias)
+		}
+	}
+}
+
+func TestDaemonControlTabsDOMAndUIDispatchAndErrors(t *testing.T) {
+	regs := descriptorRegistrations()
+	s, f := hostedBackendConnection(t, wsagent.BackendClaude, regs)
+	defer s.Close()
+	rec, _ := f.records.RecordByReplyID(s.conversation)
+	rec.DashboardControlAccess = true
+	f.records.Set(rec)
+	s.dashboardControlEffective = true
+	host := &fakeDaemonControlHost{
+		tabsResp: []wsdashboard.DaemonTabInfo{{TabID: "tab-1", Visible: true, Focused: true, ActiveRoute: "/s/abc"}},
+		domResp:  wsdashboard.DaemonDOMSnapshot{TabID: "tab-1", Generation: 3, Route: "/s/abc", NodeCount: 2, ByteSize: 120},
+		uiResp:   wsdashboard.DaemonUIResponse{OK: true, Action: "click_ref", TabID: "tab-1", Ref: "g3-r1"},
+	}
+	s.daemonControl = host
+
+	names := daemonTestListedToolNames(t, s)
+	for _, want := range []string{daemonCurlTool, daemonTabsTool, daemonDOMTool, daemonUITool} {
+		if !names[want] {
+			t.Fatalf("opted-in tools/list missing %s", want)
+		}
+	}
+
+	resTabs := callToolOnce(t, s, 30, daemonTabsTool, map[string]any{})
+	if toolIsError(t, resTabs) || host.tabsCalls != 1 || !strings.Contains(resTabs, "tab-1") {
+		t.Fatalf("daemon.tabs failed: res=%s calls=%d", resTabs, host.tabsCalls)
+	}
+
+	resDOM := callToolOnce(t, s, 31, daemonDOMTool, map[string]any{"tab_id": "tab-1", "scope": "frame", "interactive_only": true, "max_nodes": 50})
+	if toolIsError(t, resDOM) || host.domCalls != 1 || host.lastDOMReq.Scope != "frame" || !host.lastDOMReq.InteractiveOnly || host.lastDOMReq.MaxNodes != 50 {
+		t.Fatalf("daemon.dom failed: res=%s req=%+v", resDOM, host.lastDOMReq)
+	}
+
+	resUI := callToolOnce(t, s, 32, daemonUITool, map[string]any{"tab_id": "tab-1", "action": "click_ref", "ref": "g3-r1", "generation": 3})
+	if toolIsError(t, resUI) || host.uiCalls != 1 || host.lastUIReq.Action != "click_ref" || host.lastUIReq.Ref != "g3-r1" || host.lastUIReq.Generation != 3 {
+		t.Fatalf("daemon.ui failed: res=%s req=%+v", resUI, host.lastUIReq)
+	}
+
+	host.err = &wsdashboard.DaemonControlError{Code: "stale_ref", Message: "stale"}
+	resStale := callToolOnce(t, s, 33, daemonUITool, map[string]any{"action": "click_ref", "ref": "g1-r1"})
+	if !toolIsError(t, resStale) || !strings.Contains(resStale, "stale_ref") {
+		t.Fatalf("expected stale_ref error, got %s", resStale)
 	}
 }

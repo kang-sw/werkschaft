@@ -325,6 +325,164 @@ const CHOICES_WITH_DC = {
     await dcStop.click();
     await waitFor('stop POST sent', () => S.posts.some(p => p.path === '/agents/livesession/stop'));
     await waitFor('restart banner hides after stop', () => dcPending.isHidden());
+    await page2.keyboard.press('Escape');
+    await waitFor('session popover closed', () => sessPop.isHidden());
+
+    // --- Part 4: Phase 2 — daemon.tabs, cross-frame daemon.dom (password/token
+    // masking + exclusion + refs), and daemon.ui (immediate nav/panel/settings +
+    // 1-Click gated click_ref/fill_ref + stale_ref/ref_not_found).
+    const tabsResp = await ctrlJSON('/ctrl/tabs');
+    assert.ok(tabsResp.tabs.length >= 2 && tabsResp.tabs[0].tab_id === tab2, `expected page2 first in daemon.tabs: ${JSON.stringify(tabsResp)}`);
+
+    // Mount a probe form inside the active framed session document to exercise
+    // cross-frame semantic snapshot, password/secret masking, credential URL
+    // redaction, exclusion, and click_ref / fill_ref over WsShell postMessage.
+    await page2.evaluate(() => {
+      const iframe = document.querySelector('.sframe.on');
+      const fd = iframe.contentDocument;
+      const box = fd.createElement('div');
+      box.id = 'dc-phase2-probe';
+      box.setAttribute('data-ws-probe', 'phase2');
+      box.innerHTML = [
+        '<button type="button" data-ws-probe-btn="1">Probe Action</button>',
+        '<input type="text" aria-label="Probe Note" data-ws-probe-note="1" value="initial-note" />',
+        '<input type="password" aria-label="Vault Password" data-ws-probe-pw="1" value="top-secret-pw-999" />',
+        '<input type="text" name="api_token" aria-label="API Token" data-ws-probe-tok="1" value="sk-live-secret-token-1234567890" />',
+        '<a href="/s/livesession?token=lanSecret999" data-ws-probe-link="1">Bearer mySecretBearer123456</a>',
+        '<div data-ws-dom-exclude="1"><button type="button">Excluded Secret Button</button></div>'
+      ].join('');
+      const btn = box.querySelector('[data-ws-probe-btn="1"]');
+      btn.dataset.clicks = '0';
+      btn.addEventListener('click', () => { btn.dataset.clicks = String(Number(btn.dataset.clicks || '0') + 1); });
+      const note = box.querySelector('[data-ws-probe-note="1"]');
+      note.dataset.events = '0';
+      note.addEventListener('input', () => { note.dataset.events = String(Number(note.dataset.events || '0') + 1); });
+      fd.body.appendChild(box);
+    });
+
+    const dom1Res = await ctrlJSON('/ctrl/dom', {});
+    assert.equal(dom1Res.ok, true, `daemon.dom failed: ${JSON.stringify(dom1Res)}`);
+    const snap1 = dom1Res.response;
+    assert.equal(snap1.tab_id, tab2);
+    assert.ok(snap1.generation >= 1);
+    assert.equal(snap1.frame && snap1.frame.reply_id, 'livesession');
+    assert.ok(snap1.byte_size > 0 && snap1.byte_size <= 65536, `byte_size out of bounds: ${snap1.byte_size}`);
+    assert.ok(snap1.node_count > 0 && snap1.node_count <= 1500, `node_count out of bounds: ${snap1.node_count}`);
+    assert.ok(snap1.nodes.some(n => n.scope === 'shell'), 'expected shell scope nodes');
+    assert.ok(snap1.nodes.some(n => n.scope === 'frame'), 'expected frame scope nodes');
+
+    const snap1JSON = JSON.stringify(snap1);
+    for (const leaked of ['top-secret-pw-999', 'sk-live-secret-token-1234567890', 'lanSecret999', 'mySecretBearer123456', 'Excluded Secret Button']) {
+      assert.equal(snap1JSON.includes(leaked), false, `daemon.dom leaked ${leaked}`);
+    }
+    const probeBtnNode = snap1.nodes.find(n => n.data_ws && n.data_ws['data-ws-probe-btn'] === '1');
+    const probeNoteNode = snap1.nodes.find(n => n.data_ws && n.data_ws['data-ws-probe-note'] === '1');
+    const probePwNode = snap1.nodes.find(n => n.data_ws && n.data_ws['data-ws-probe-pw'] === '1');
+    const probeTokNode = snap1.nodes.find(n => n.data_ws && n.data_ws['data-ws-probe-tok'] === '1');
+    const probeLinkNode = snap1.nodes.find(n => n.data_ws && n.data_ws['data-ws-probe-link'] === '1');
+    assert.ok(probeBtnNode && probeBtnNode.ref, 'missing probe button ref');
+    assert.ok(probeNoteNode && probeNoteNode.ref, 'missing probe note ref');
+    assert.ok(probePwNode && probePwNode.ref && probePwNode.masked === true && probePwNode.value === '[REDACTED]', `bad pw node: ${JSON.stringify(probePwNode)}`);
+    assert.ok(probeTokNode && probeTokNode.masked === true && probeTokNode.value === '[REDACTED]', `bad tok node: ${JSON.stringify(probeTokNode)}`);
+    assert.ok(probeLinkNode && probeLinkNode.href.includes('[REDACTED]') && probeLinkNode.name.includes('[REDACTED]'), `bad link node: ${JSON.stringify(probeLinkNode)}`);
+
+    // 4a. Gated click_ref: Deny leaves button unclicked; Approve clicks framed button.
+    const denyClick = ctrlJSON('/ctrl/ui', { action: 'click_ref', ref: probeBtnNode.ref, generation: snap1.generation });
+    await confirm2.waitFor();
+    assert.equal(await page1.locator('section[data-daemon-confirm]').isHidden(), true, 'unfocused tab must not show click_ref banner');
+    assert.ok((await confirm2.textContent()).includes('Probe Action'), 'banner must show ref accessible name');
+    await confirm2.locator('[data-daemon-confirm-action="deny"]').click();
+    const denyClickRes = await denyClick;
+    assert.equal(denyClickRes.ok, false);
+    assert.equal(denyClickRes.error, 'denied');
+    await waitFor('banner hidden after click_ref deny', () => page2.locator('section[data-daemon-confirm]').isHidden());
+    assert.equal(await page2.evaluate(() => document.querySelector('.sframe.on').contentDocument.querySelector('[data-ws-probe-btn="1"]').dataset.clicks), '0');
+
+    const okClick = ctrlJSON('/ctrl/ui', { action: 'click_ref', ref: probeBtnNode.ref, generation: snap1.generation });
+    await confirm2.waitFor();
+    await confirm2.locator('[data-daemon-confirm-action="approve"]').click();
+    const okClickRes = await okClick;
+    assert.equal(okClickRes.ok, true, `approved click_ref failed: ${JSON.stringify(okClickRes)}`);
+    assert.equal(await page2.evaluate(() => document.querySelector('.sframe.on').contentDocument.querySelector('[data-ws-probe-btn="1"]').dataset.clicks), '1');
+    await waitFor('banner hidden after click_ref approve', () => page2.locator('section[data-daemon-confirm]').isHidden());
+
+    // 4b. Gated fill_ref on normal input and password input (password summary masked in banner).
+    const okFill = ctrlJSON('/ctrl/ui', { action: 'fill_ref', ref: probeNoteNode.ref, value: 'updated-by-daemon-ui' });
+    await confirm2.waitFor();
+    assert.ok((await confirm2.textContent()).includes('updated-by-daemon-ui'), 'banner must show non-sensitive fill summary');
+    await confirm2.locator('[data-daemon-confirm-action="approve"]').click();
+    const okFillRes = await okFill;
+    assert.equal(okFillRes.ok, true, `approved fill_ref failed: ${JSON.stringify(okFillRes)}`);
+    const noteAfter = await page2.evaluate(() => {
+      const el = document.querySelector('.sframe.on').contentDocument.querySelector('[data-ws-probe-note="1"]');
+      return { value: el.value, events: el.dataset.events };
+    });
+    assert.equal(noteAfter.value, 'updated-by-daemon-ui');
+    assert.ok(Number(noteAfter.events) >= 1, 'fill_ref must dispatch input event');
+    await waitFor('banner hidden after fill_ref approve', () => page2.locator('section[data-daemon-confirm]').isHidden());
+
+    const pwFill = ctrlJSON('/ctrl/ui', { action: 'fill_ref', ref: probePwNode.ref, value: 'new-secret-pw-777' });
+    await confirm2.waitFor();
+    const pwBannerText = await confirm2.textContent();
+    assert.equal(pwBannerText.includes('new-secret-pw-777'), false, 'password fill_ref banner must NEVER display plaintext');
+    assert.ok(pwBannerText.includes('[REDACTED]'), 'password fill_ref banner must show [REDACTED]');
+    await confirm2.locator('[data-daemon-confirm-action="approve"]').click();
+    const pwFillRes = await pwFill;
+    assert.equal(pwFillRes.ok, true);
+    assert.equal(pwFillRes.response.masked, true);
+    assert.equal(await page2.evaluate(() => document.querySelector('.sframe.on').contentDocument.querySelector('[data-ws-probe-pw="1"]').value), 'new-secret-pw-777');
+    await waitFor('banner hidden after pw fill_ref', () => page2.locator('section[data-daemon-confirm]').isHidden());
+
+    // 4c. Next snapshot invalidates old generation refs -> stale_ref without banner;
+    // bogus ref in current generation -> ref_not_found without banner.
+    const dom2Res = await ctrlJSON('/ctrl/dom', { interactive_only: true });
+    assert.equal(dom2Res.ok, true);
+    assert.equal(dom2Res.response.generation, snap1.generation + 1);
+    const staleRes = await ctrlJSON('/ctrl/ui', { action: 'click_ref', ref: probeBtnNode.ref });
+    assert.equal(staleRes.ok, false);
+    assert.equal(staleRes.error, 'stale_ref');
+    assert.equal(await page2.locator('section[data-daemon-confirm]').isHidden(), true);
+
+    const missingRefRes = await ctrlJSON('/ctrl/ui', { action: 'click_ref', ref: `g${dom2Res.response.generation}-r99999` });
+    assert.equal(missingRefRes.ok, false);
+    assert.equal(missingRefRes.error, 'ref_not_found');
+
+    // 4d. Immediate semantic actions: select_panel, open_settings, focus_session (#entry=), navigate.
+    const selBoard = await ctrlJSON('/ctrl/ui', { action: 'select_panel', panel: 'board' });
+    assert.equal(selBoard.ok, true, `select_panel board failed: ${JSON.stringify(selBoard)}`);
+    assert.equal(await page2.evaluate(() => document.querySelector('.sframe.on').contentDocument.getElementById('grid').getAttribute('data-tab')), 'board');
+    const selConvo = await ctrlJSON('/ctrl/ui', { action: 'select_panel', panel: 'convo' });
+    assert.equal(selConvo.ok, true);
+    assert.equal(await page2.evaluate(() => document.querySelector('.sframe.on').contentDocument.getElementById('grid').getAttribute('data-tab')), 'convo');
+
+    const openSet = await ctrlJSON('/ctrl/ui', { action: 'open_settings', scope: 'global', section: 'workflow' });
+    assert.equal(openSet.ok, true, `open_settings failed: ${JSON.stringify(openSet)}`);
+    await page2.locator('#workflow-settings[open] iframe').waitFor();
+    await waitFor('settings iframe loaded', async () => {
+      return page2.evaluate(() => {
+        const f = document.querySelector('#workflow-settings iframe');
+        return !!(f && f.contentDocument && f.contentDocument.querySelector('[data-settings-view]'));
+      });
+    });
+    const domWithSet = await ctrlJSON('/ctrl/dom', { scope: 'all' });
+    assert.equal(domWithSet.ok, true);
+    assert.equal(domWithSet.response.modals.settings_open, true);
+    assert.ok(domWithSet.response.nodes.some(n => n.scope === 'settings'), 'expected settings scope nodes when modal open');
+
+    const focusSess = await ctrlJSON('/ctrl/ui', { action: 'focus_session', reply_id: 'reposession', entry_id: 'e42' });
+    assert.equal(focusSess.ok, true, `focus_session failed: ${JSON.stringify(focusSess)}`);
+    await waitFor('shell navigated to reposession#entry=e42', () => page2.evaluate(() => location.pathname === '/s/reposession' && location.hash === '#entry=e42'));
+    assert.equal(await page2.locator('#workflow-settings[open]').count(), 0, 'focus_session should close open settings modal');
+
+    // Navigation invalidated domWithSet refs -> stale_ref immediately.
+    const postNavRef = domWithSet.response.nodes.find(n => n.ref);
+    const postNavClick = await ctrlJSON('/ctrl/ui', { action: 'click_ref', ref: postNavRef.ref });
+    assert.equal(postNavClick.ok, false);
+    assert.equal(postNavClick.error, 'stale_ref');
+
+    const navBack = await ctrlJSON('/ctrl/ui', { action: 'navigate', path: '/s/livesession' });
+    assert.equal(navBack.ok, true, `navigate back failed: ${JSON.stringify(navBack)}`);
+    await waitFor('shell navigated back to livesession', () => page2.evaluate(() => location.pathname === '/s/livesession'));
 
     assert.deepEqual(errors, [], `unexpected page errors: ${errors.join('\n')}`);
     console.log('daemon-control browser acceptance passed');

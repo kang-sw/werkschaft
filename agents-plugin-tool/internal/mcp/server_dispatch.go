@@ -1715,7 +1715,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		return s.handleCompanionTool(req.ID, params.Name, params.Arguments, callerKey, caller, callerFound)
 	case delegationReportTool:
 		return s.handleDelegationReport(req.ID, params.Arguments, callerKey, caller, callerFound)
-	case daemonCurlTool:
+	case daemonCurlTool, daemonTabsTool, daemonDOMTool, daemonUITool:
 		return s.handleDaemonTool(ctx, req.ID, params.Name, params.Arguments)
 	case "mailbox.send":
 		return s.handleMailboxSend(req.ID, params.Arguments)

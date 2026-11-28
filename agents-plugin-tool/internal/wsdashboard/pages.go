@@ -77,6 +77,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-selection.js",
 	"dashboard-stream.js",
 	"dashboard-daemon-confirm.js",
+	"dashboard-daemon-bridge.js",
 	"dashboard-rail.js",
 	"dashboard-workspace-admission.js",
 	"dashboard-rail-popovers.js",

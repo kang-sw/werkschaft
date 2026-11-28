@@ -126,6 +126,26 @@ type daemonBridge struct {
 	pending  map[string]*bridgePending
 }
 
+type daemonRefInfo struct {
+	Ref       string
+	Scope     string
+	Role      string
+	Tag       string
+	Label     string
+	Sensitive bool
+	InputType string
+	Excluded  bool
+}
+
+type daemonSnapshotState struct {
+	generation  uint64
+	navVersion  uint64
+	route       string
+	replyID     string
+	invalidated bool
+	refs        map[string]daemonRefInfo
+}
+
 type daemonBridgeStream struct {
 	b             *daemonBridge
 	streamID      uint64
@@ -140,6 +160,9 @@ type daemonBridgeStream struct {
 	activeReplyID string
 	capabilities  DaemonTabCapabilities
 	pushCh        chan bridgePushEvent
+	nextSnapGen   uint64
+	navVersion    uint64
+	snapshot      *daemonSnapshotState
 }
 
 func (b *daemonBridge) newStream(initialTabID string, initialVisible, optIn bool) *daemonBridgeStream {
@@ -184,6 +207,7 @@ func (s *daemonBridgeStream) close() {
 		return
 	}
 	s.closed = true
+	s.snapshot = nil
 	if s.registered && s.tabID != "" && b.tabs[s.tabID] == s {
 		delete(b.tabs, s.tabID)
 	}
@@ -281,11 +305,23 @@ func (s *daemonBridgeStream) handleFrame(frame string) {
 		b.focusSeq++
 		s.focusSeq = b.focusSeq
 	}
+	navigated := false
 	if msg.ActiveRoute != nil {
-		s.activeRoute = clampString(*msg.ActiveRoute, daemonRouteMaxLen)
+		nextRoute := clampString(*msg.ActiveRoute, daemonRouteMaxLen)
+		if s.activeRoute != "" && nextRoute != s.activeRoute {
+			navigated = true
+		}
+		s.activeRoute = nextRoute
 	}
 	if msg.ActiveReplyID != nil {
-		s.activeReplyID = clampString(*msg.ActiveReplyID, daemonReplyIDMaxLen)
+		nextReply := clampString(*msg.ActiveReplyID, daemonReplyIDMaxLen)
+		if s.activeReplyID != "" && nextReply != s.activeReplyID {
+			navigated = true
+		}
+		s.activeReplyID = nextReply
+	}
+	if navigated {
+		s.invalidateSnapshotLocked()
 	}
 	if msg.Capabilities != nil {
 		if msg.Capabilities.NativeCapture != nil {
