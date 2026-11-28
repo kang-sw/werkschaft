@@ -697,9 +697,9 @@
           width: anchorRect.width + ROAM_AABB_PADDING * 2,
           height: anchorRect.height + ROAM_AABB_PADDING * 2
         };
-        return { rect: clampRectToChrome(union || fallback, bounds), bounds };
+        return { rect: clampRectToChrome(union || fallback, bounds), bounds, primaryBounds: union?.primary || null };
       }
-      return { rect: clampRectToChrome(anchorRect, bounds), bounds };
+      return { rect: clampRectToChrome(anchorRect, bounds), bounds, primaryBounds: null };
     }
 
     function initSceneAndRenderer(rt) {
@@ -771,7 +771,7 @@
     }
 
     function applyViewportResize(force = false) {
-      syncFxCanvasSize();
+      if (fxCanvas && !fxCanvas.hidden) syncFxCanvasSize();
       syncSlotStyleVars();
       refreshChromeBounds();
       if (!renderer || !camera) return;
@@ -1065,6 +1065,10 @@
           fxCtx.setTransform?.(1, 0, 0, 1, 0, 0);
           fxCtx.clearRect?.(0, 0, fxCanvas.width || width, fxCanvas.height || height);
           fxCanvas.hidden = true;
+          if (overlayMode) {
+            fxCanvas.width = 0;
+            fxCanvas.height = 0;
+          }
         }
         return;
       }
@@ -1311,7 +1315,7 @@
           coLead.syncPhoneToHand(handPosVec);
         }
       }
-      const { rect: R, bounds } = computeActiveScissorRect();
+      const { rect: R, bounds, primaryBounds } = computeActiveScissorRect();
       activeScissorRect = R;
       if (overlayMode) {
         if (needsFullClear) {
@@ -1335,7 +1339,19 @@
         prevScissorRect = { left: R.left, top: R.top, width: R.width, height: R.height };
       }
       renderer.render(scene, camera);
-      if (charBoundsDirty || renderMode === "roam") updateCharacterBounds(performance.now());
+      if (renderMode === "roam" && primaryBounds) {
+        cachedCharBounds.viewportX = primaryBounds.left;
+        cachedCharBounds.viewportY = primaryBounds.top;
+        cachedCharBounds.x = Math.round(primaryBounds.left - anchorRect.left);
+        cachedCharBounds.y = Math.round(primaryBounds.top - anchorRect.top);
+        cachedCharBounds.width = primaryBounds.width;
+        cachedCharBounds.height = primaryBounds.height;
+        hasCachedCharBounds = true;
+        charBoundsDirty = false;
+        lastCharBoundsAt = performance.now();
+      } else if (charBoundsDirty) {
+        updateCharacterBounds(performance.now());
+      }
       renderDizzyFxOverlay(coState);
       framesRendered++;
     }
@@ -1540,7 +1556,12 @@
         fxCanvas.style.zIndex = "1";
       }
       fxCtx = typeof fxCanvas.getContext === "function" ? fxCanvas.getContext("2d") : null;
-      syncFxCanvasSize();
+      if (overlayMode) {
+        fxCanvas.width = 0;
+        fxCanvas.height = 0;
+      } else {
+        syncFxCanvasSize();
+      }
 
       overlay = doc.createElement("div");
       overlay.className = "ws-companion-vrm-overlay";
@@ -1790,6 +1811,9 @@
           };
         }
         return { ...bleedPadding };
+      },
+      getRenderMode() {
+        return renderMode;
       },
       getRenderMetrics() {
         return {

@@ -290,7 +290,7 @@
     const railEvents = railSignals(), pairs = signalPairs();
     let currentConfig = config, preset = config.preset;
     let frame = 0, idleTimer = 0, last = 0, now = 0, viewStart = 0, lastBusy = 0, nextIdle = 45000;
-    let lastVrmRenderAt = -Infinity, lastVrmActivityAt = 0, vrmIdleMode = false, lastVrmGazeX = 0, lastVrmGazeY = 0;
+    let lastVrmRenderAt = -Infinity, lastVrmActivityAt = 0, vrmIdleMode = false, vrmBreakoutActive = false, vrmTargetFps = VRM_ACTIVE_FPS, lastVrmGazeX = 0, lastVrmGazeY = 0;
     let vrmRailVisible = false, cursorSeen = false, lastVrmW = 0, lastVrmH = 0, lastVrmDpr = 0;
     let lastVrmVw = 0, lastVrmVh = 0, lastVrmAnchorLeft = NaN, lastVrmAnchorTop = NaN;
     let beat = null, viewBeat, viewPlaying, prop, fx, propCanvas, propCtx, decoration, quip, quipWidth = 0, quipHeight = 28, fxWidth = 36, fxHeight = 24, lastCount;
@@ -636,29 +636,32 @@
       else hit.removeAttribute("data-area");
     }
 
+    function activeVrmRenderMode() {
+      return rig?.getRenderMode?.() || rig?.getRenderMetrics?.()?.mode || "docked";
+    }
+
     function hitTestVrmPoint(clientX, clientY) {
       if (!isVrm() || !vrmRailVisible || hit.hidden) return null;
       if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+      const mode = activeVrmRenderMode();
       const bounds = rig?.getCharacterBounds?.();
       if (!bounds || !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height) ||
           bounds.width <= 0 || bounds.height <= 0) {
-        const mode = rig?.getRenderMetrics?.()?.mode || "docked";
         return mode === "roam" ? null : "messenger";
       }
       if (Number.isFinite(bounds.viewportX) && Number.isFinite(bounds.viewportY)) {
         const inside = clientX >= bounds.viewportX && clientX <= bounds.viewportX + bounds.width &&
           clientY >= bounds.viewportY && clientY <= bounds.viewportY + bounds.height;
-        const mode = rig?.getRenderMetrics?.()?.mode || "docked";
         return inside ? "character" : (mode === "roam" ? null : "messenger");
       }
-      if (!Number.isFinite(bounds.x) || !Number.isFinite(bounds.y)) return "messenger";
+      if (!Number.isFinite(bounds.x) || !Number.isFinite(bounds.y)) return mode === "roam" ? null : "messenger";
       const bx = Number.isFinite(bodyBox.x) ? bodyBox.x : home.x - size / 2;
       const by = Number.isFinite(bodyBox.y) ? bodyBox.y : home.y - vrmHeight;
       const lx = clientX - bx;
       const ly = clientY - by;
       const inside = lx >= bounds.x && lx <= bounds.x + bounds.width &&
         ly >= bounds.y && ly <= bounds.y + bounds.height;
-      return inside ? "character" : "messenger";
+      return inside ? "character" : (mode === "roam" ? null : "messenger");
     }
 
     function isCharacterSurfaceTarget(el) {
@@ -958,8 +961,7 @@
 
     function measureCharacter() {
       if (isVrm()) {
-        const renderMode = rig?.getRenderMetrics?.()?.mode || "docked";
-        if (renderMode === "roam") {
+        if (activeVrmRenderMode() === "roam") {
           const cb = rig?.getCharacterBounds?.();
           if (cb && Number.isFinite(cb.viewportX) && Number.isFinite(cb.viewportY) && cb.width > 0 && cb.height > 0) {
             bodyBox.x = cb.viewportX;
@@ -1232,15 +1234,17 @@
       if (isVrm() && !vrmRailVisible) return;
       if (isVrm()) {
         const co = rig?.getCoLeadState?.();
-        const rm = rig?.getRenderMetrics?.();
-        const breakoutActive = !!(co?.breakoutActive || (rm && rm.mode && rm.mode !== "docked"));
+        const mode = activeVrmRenderMode();
+        const breakoutActive = !!(co?.breakoutActive || (mode && mode !== "docked"));
         const coActive = !!(breakoutActive || (co && (co.knockActive || co.swapActive || co.dizzyActive || (co.phoneMode && co.phoneMode !== "desk"))));
         const activeNow = !!viewPlaying || !!drag?.moving || posture.activity !== "idle" || coActive ||
           Math.abs(position.x - target().x) > 0.5 || Math.abs(position.y - target().y) > 0.5;
         if (activeNow) markVrmActivity();
         const idleElapsed = performance.now() - lastVrmActivityAt;
         vrmIdleMode = !activeNow && idleElapsed >= VRM_IDLE_AFTER_MS;
+        vrmBreakoutActive = breakoutActive;
         const targetFps = breakoutActive ? VRM_BREAKOUT_FPS : (vrmIdleMode ? VRM_IDLE_FPS : VRM_ACTIVE_FPS);
+        vrmTargetFps = targetFps;
         const minInterval = 1000 / targetFps;
         const jitterSlack = targetFps >= 60 ? 2 : (targetFps >= 30 ? 5.5 : 4);
         if (lastVrmRenderAt > -Infinity && stamp - lastVrmRenderAt < minInterval - jitterSlack) {
@@ -1498,7 +1502,7 @@
           if (ptr && (ptr.moved || ptr.button !== 0)) return;
           const hasCoords = Number.isFinite(event?.clientX) && Number.isFinite(event?.clientY) &&
             (event.clientX !== 0 || event.clientY !== 0 || !!ptr);
-          const renderMode = rig?.getRenderMetrics?.()?.mode || "docked";
+          const renderMode = activeVrmRenderMode();
           let area = ptr ? ptr.downArea : (hasCoords ? hitTestVrmPoint(event.clientX, event.clientY) : "character");
           if (renderMode === "roam" && hasCoords && typeof rig?.raycastAt === "function") {
             const ray = rig.raycastAt(event.clientX, event.clientY);
@@ -1607,6 +1611,9 @@
           avoiding: false,
           companionHover,
           vrmIdleMode,
+          vrmBreakoutActive,
+          vrmTargetFps,
+          hitBox: { x: bodyBox.x, y: bodyBox.y, width: bodyBox.width, height: bodyBox.height },
           unreadClient: latestPhoneSnap?.unreadClient || 0,
           messengerOpen: !!window.WsCompanionMessenger?.isOpen?.(),
           vrm: rig?.debugState?.() || null,

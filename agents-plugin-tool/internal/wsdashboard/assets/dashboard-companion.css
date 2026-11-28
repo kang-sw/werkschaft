@@ -6,7 +6,8 @@
   pointer-events: none;
 }
 :root[data-shell][data-fdim] .ws-companion,
-:root[data-shell][data-fdim] .ws-companion-hit {
+:root[data-shell][data-fdim] .ws-companion-hit,
+:root[data-shell][data-fdim] .ws-companion-menu {
   pointer-events: none !important;
 }
 .ws-companion-stage-overlay {

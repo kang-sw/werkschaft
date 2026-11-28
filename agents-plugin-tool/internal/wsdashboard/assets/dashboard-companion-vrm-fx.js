@@ -348,7 +348,7 @@
       if (Number.isFinite(parsed) && parsed >= 0) botbarH = Math.round(parsed);
     }
     let topbarH = 0;
-    const topEl = doc?.querySelector?.(".dwrap > .top, .shell-top, .top");
+    const topEl = doc?.querySelector?.(".dwrap > .top, .shell-top");
     const topRect = topEl && typeof topEl.getBoundingClientRect === "function" ? topEl.getBoundingClientRect() : null;
     if (topRect && Number.isFinite(topRect.height) && topRect.height > 0 && topRect.top <= 2) {
       topbarH = Math.round(topRect.height);
@@ -400,9 +400,13 @@
     camera.updateMatrixWorld?.();
 
     let uMinX = Infinity, uMinY = Infinity, uMaxX = -Infinity, uMaxY = -Infinity;
+    let pMinX = Infinity, pMinY = Infinity, pMaxX = -Infinity, pMaxY = -Infinity;
     let any = false;
-    for (const rootObj of roots) {
+    let anyPrimary = false;
+    for (let rootIdx = 0; rootIdx < roots.length; rootIdx++) {
+      const rootObj = roots[rootIdx];
       if (!rootObj || typeof rootObj.traverse !== "function") continue;
+      const isPrimary = rootIdx === 0;
       rootObj.updateMatrixWorld?.(true);
       rootObj.traverse(obj => {
         if (!obj || !obj.isMesh || obj.visible === false || !obj.geometry) return;
@@ -435,15 +439,31 @@
           if (sy < uMinY) uMinY = sy;
           if (sy > uMaxY) uMaxY = sy;
           any = true;
+          if (isPrimary) {
+            if (sx < pMinX) pMinX = sx;
+            if (sx > pMaxX) pMaxX = sx;
+            if (sy < pMinY) pMinY = sy;
+            if (sy > pMaxY) pMaxY = sy;
+            anyPrimary = true;
+          }
         }
       });
     }
     if (!any || uMaxX <= uMinX || uMaxY <= uMinY) return null;
+    const primary = anyPrimary && pMaxX > pMinX && pMaxY > pMinY
+      ? {
+          left: clamp(Math.floor(pMinX), 0, bounds.vw),
+          top: clamp(Math.floor(pMinY), 0, bounds.vh),
+          width: Math.max(1, clamp(Math.ceil(pMaxX), 0, bounds.vw) - clamp(Math.floor(pMinX), 0, bounds.vw)),
+          height: Math.max(1, clamp(Math.ceil(pMaxY), 0, bounds.vh) - clamp(Math.floor(pMinY), 0, bounds.vh))
+        }
+      : null;
     return {
       left: uMinX - padPx,
       top: uMinY - padPx,
       width: (uMaxX - uMinX) + padPx * 2,
-      height: (uMaxY - uMinY) + padPx * 2
+      height: (uMaxY - uMinY) + padPx * 2,
+      primary
     };
   }
 

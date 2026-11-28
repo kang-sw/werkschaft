@@ -336,6 +336,9 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
       document.documentElement.setAttribute('data-fdim', '');
       const fdimHitPe = getComputedStyle(document.querySelector('.ws-companion-hit')).pointerEvents;
       const fdimRootPe = getComputedStyle(document.querySelector('.ws-companion')).pointerEvents;
+      const fdimMenuPe = getComputedStyle(document.querySelector('.ws-companion-menu')).pointerEvents;
+      const fdimAtSlot = document.elementFromPoint(Math.floor(slot.left + slot.width / 2), Math.floor(slot.top + slot.height / 2));
+      const fdimHitsCompanion = !!(fdimAtSlot && fdimAtSlot.closest?.('.ws-companion'));
       document.documentElement.removeAttribute('data-fdim');
       return {
         resizeCount: m?.viewportResizeCount ?? -1,
@@ -343,16 +346,19 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
         hasSplitter: !!splitter,
         splitterHit: !!(splitter && hitAtSplitter && (hitAtSplitter === splitter || splitter.contains(hitAtSplitter))),
         fdimHitPe,
-        fdimRootPe
+        fdimRootPe,
+        fdimMenuPe,
+        fdimHitsCompanion
       };
     });
     assert.equal(afterDrags.resizeCount, resizeBefore, 'rail width drags 220<->360 must perform zero WebGL viewport resizes');
     assert.equal(afterDrags.contextLost, false, 'rail width drags must cause zero WebGL context loss');
-    if (afterDrags.hasSplitter) {
-      assert.equal(afterDrags.splitterHit, true, '.rail-splitter must remain directly hit-testable alongside #rail-companion-slot');
-    }
+    assert.equal(afterDrags.hasSplitter, true, 'Variant D .rail-splitter must exist in the shell');
+    assert.equal(afterDrags.splitterHit, true, '.rail-splitter must remain directly hit-testable alongside #rail-companion-slot');
     assert.equal(afterDrags.fdimHitPe, 'none', '[data-fdim] must suppress pointer events on .ws-companion-hit');
     assert.equal(afterDrags.fdimRootPe, 'none', '[data-fdim] must suppress pointer events on .ws-companion');
+    assert.equal(afterDrags.fdimMenuPe, 'none', '[data-fdim] must suppress pointer events on .ws-companion-menu');
+    assert.equal(afterDrags.fdimHitsCompanion, false, '[data-fdim] elementFromPoint over slot must not hit .ws-companion');
 
     // Verify docked -> bleed -> roam -> docked scissor clamping above .shell-bottom and zero ghost pixels.
     const scissorCheck = await page.evaluate(async () => {
