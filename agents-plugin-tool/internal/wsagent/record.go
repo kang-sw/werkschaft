@@ -98,6 +98,11 @@ type Record struct {
 	// Retained name check: the persisted Record member older daemons wrote
 	// (TestAgyBypassScopeAndLegacyRecordRewrite).
 	AgyBypass bool `json:"agy_bypass,omitempty"`
+	// DashboardControlAccess opts a hosted lead session into the shared
+	// ws/daemon.* dashboard-control MCP surface (default false). Additive
+	// top-level member on Record; preserved as unknown by older daemons (T0).
+	// Stored only in Record, never in wsdashboard.Registration.
+	DashboardControlAccess bool `json:"dashboard_control_access,omitempty"`
 	// PluginIsolation selects the lead's plugin loadout across restarts.
 	PluginIsolation string `json:"plugin_isolation,omitempty"`
 	// PluginWarning records a bundled-plugin fallback warning, if any.
@@ -235,6 +240,10 @@ type Record struct {
 	MCPURL    string            `json:"mcp_url,omitempty"`
 	MCPEnv    map[string]string `json:"mcp_env,omitempty"`
 	MCPHolder string            `json:"mcp_holder_id,omitempty"`
+	// MCPDashboardControl snapshots DashboardControlAccess at the launch that
+	// drew MCPToken so a daemon restart rejoining the running process keeps
+	// the exact attach-time effective state. Cleared by forgetMCP. Additive (T0).
+	MCPDashboardControl bool `json:"mcp_dashboard_control,omitempty"`
 
 	// ActiveMs is the accumulated duration of closed child turns.
 	ActiveMs     int64           `json:"active_ms,omitempty"`

@@ -338,6 +338,9 @@ type SupportHarness struct {
 	ModelNotice     string        `json:"model_notice,omitempty"`
 	// PermissionLevels advertises lead/settings selection only, not workers.
 	PermissionLevels []PermissionLevel `json:"permission_levels,omitempty"`
+	// DashboardControl advertises support for per-session dashboard_control_access
+	// opt-in on hosted leads (POST /agents/leads*, /agents/<id>/settings/dashboard-control).
+	DashboardControl bool `json:"dashboard_control,omitempty"`
 }
 
 // harnesses resolves the support profiles into the harness list, in
@@ -360,6 +363,7 @@ func (s *Support) harnesses() []SupportHarness {
 		seen[h.Harness] = true
 		reg := s.opts.Runner.opts.Backends[h.Harness]
 		h.Lead = reg.LeadProfile != ""
+		h.DashboardControl = h.Lead
 		h.PermissionModes = append([]string(nil), reg.PermissionModes...)
 		h.PermissionLevels = s.leadPermissionLevels(h.Harness)
 		if err != nil {

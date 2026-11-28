@@ -838,6 +838,16 @@ func (r *Runner) closeOne(id string) (State, error) {
 	return st, nil
 }
 
+// SetDashboardControlAccess toggles a hosted lead conversation's persisted
+// ws/daemon.* dashboard-control opt-in without stopping a running process.
+// Revocation takes effect immediately on server-side MCP dispatch; newly
+// enabling takes effect after the next process start.
+func (r *Runner) SetDashboardControlAccess(id string, enabled bool) (State, error) {
+	return r.act(id, func(c *conv) error {
+		return c.setDashboardControlAccess(enabled)
+	})
+}
+
 // SetSettings changes the conversation's model or effort (nil leaves one
 // unchanged, "" returns it to the harness default). The change applies at
 // the next turn boundary: in-stream when the backend has a control for it,

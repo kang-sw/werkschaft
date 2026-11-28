@@ -111,6 +111,9 @@ type conv struct {
 	// and rejoin.
 	cutoverInstructed int
 	activeMode        string
+	// dashboardControlEffective is the running lead process's attach-time
+	// snapshot of Record.DashboardControlAccess; under mu.
+	dashboardControlEffective bool
 	bgTasks           int
 	background        *int
 	monitors          *int
@@ -1215,6 +1218,12 @@ func (c *conv) stateWithKeyCheck(checkKey bool) State {
 	st.Background, st.Monitors = copyCount(c.background), copyCount(c.monitors)
 	if c.rec.Lead {
 		st.ActiveMode, st.ActionNeeded = c.activeMode, c.actionNeeded
+		st.DashboardControlAccess = c.rec.DashboardControlAccess
+		if c.proc != nil && !c.closed {
+			st.DashboardControlAccessEffective = c.dashboardControlEffective
+		} else {
+			st.DashboardControlAccessEffective = c.rec.DashboardControlAccess
+		}
 		st.Approvals = append([]ApprovalRequest(nil), c.approvals...)
 		if c.failure != nil {
 			f := *c.failure

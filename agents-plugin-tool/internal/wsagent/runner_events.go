@@ -945,7 +945,7 @@ func (c *conv) processEnded() {
 	c.checkAction(false)
 	hadBackgroundTasks := c.bgTasks != 0
 	c.setStatus(func() {
-		c.activeMode, c.bgTasks = "", 0
+		c.activeMode, c.bgTasks, c.dashboardControlEffective = "", 0, false
 		c.background, c.monitors = nil, nil
 	})
 	c.clearProcessMCP()
@@ -1308,6 +1308,25 @@ func (c *conv) checkModelSetting(model *string) error {
 			}
 		}
 	}
+	return nil
+}
+
+func (c *conv) setDashboardControlAccess(enabled bool) error {
+	if !c.rec.Lead {
+		return badRequest("dashboard_control_access applies to a lead session only")
+	}
+	if c.r.isChildRecord(c.record()) {
+		return &requestError{status: http.StatusForbidden, msg: "child session settings are fixed at spawn"}
+	}
+	if c.record().DashboardControlAccess == enabled {
+		return nil
+	}
+	if err := c.update(func(rec *Record) {
+		rec.DashboardControlAccess = enabled
+	}); err != nil {
+		return err
+	}
+	c.changed(false)
 	return nil
 }
 
