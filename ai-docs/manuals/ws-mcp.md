@@ -2655,7 +2655,7 @@ gitignored `.local-devenv-runtime` marker in the plugin directory is the only
 opt-in: with no marker the launcher takes the normal release path whatever the
 plugin's location. A valid contract selects source repair for a missing or
 incompatible runtime when the plugin runs from a per-user host plugin tree (`~/.codex/plugins/cache/kang-sw-devenv/<ws|wsflow>/`,
-`~/.claude/plugins/cache/kang-sw-devenv/<ws|wsflow>/`, or the install.sh
+`~/.claude/plugins/cache/kang-sw-devenv/<ws|wsflow>/`, or the `scripts/install-claude-plugin.sh`
 snapshot under `~/.claude/plugins/ws-plugin/<ws|wsflow>/`), or straight from
 its source checkout, i.e. when the plugin directory lies inside the marker's own
 `source_root` (resolved paths; case-insensitive on Windows). Both the Codex and
@@ -2703,7 +2703,7 @@ patch match to a **same-minor** match: a locally built runtime is accepted when
 its `(major, minor)` equals the installed snapshot's `plugin_version`, regardless
 of patch (a `-dev` suffix is ignored). The live source version routinely drifts a
 few patches ahead of the installed snapshot's `runtime.json` between
-`install.sh update` runs, and the exact-match gate would otherwise reject the
+`scripts/install-claude-plugin.sh` runs, and the exact-match gate would otherwise reject the
 freshly built runtime after every local patch bump, breaking the MCP server until
 a re-snapshot. A different minor or major is still rejected, because a minor bump
 is a real contract change that must go through a re-snapshot. Released/downloaded
@@ -2729,14 +2729,14 @@ copy it into the plugin cache:
    }
    ```
 
-2. Run `./install.sh update`. The snapshot step copies the marker into the
+2. Run `./scripts/install-claude-plugin.sh`. The snapshot step copies the marker into the
    plugin snapshot and `claude plugin install` carries it into the versioned
    cache, so the next MCP launch can build when no compatible runtime exists.
 
 After setup, edit source and run `python3 scripts/dev.py rerun daemon` at the
 coordinated swap time to build, stage and seed the selected runtime. Reconnecting
 alone reuses it and reports source drift. To disable local
-mode, delete the marker and re-run `install.sh update` (the launcher reverts to
+mode, delete the marker and re-run `./scripts/install-claude-plugin.sh` (the launcher reverts to
 the cache/release path).
 
 This path exists only for the repository-local Codex or Claude plugin

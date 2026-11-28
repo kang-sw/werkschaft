@@ -47,6 +47,20 @@ Release:        ship <project> -> release gate -> execute
 
 ### Claude Code
 
+From a local clone (macOS/Linux):
+
+```sh
+./scripts/install-claude-plugin.sh
+```
+
+On Windows (PowerShell):
+
+```powershell
+pwsh -NoProfile -File scripts\install-claude-plugin.ps1
+```
+
+Or via the GitHub marketplace:
+
 ```sh
 claude plugin marketplace add kang-sw/werkschaft
 claude plugin install ws@kang-sw-devenv
@@ -67,37 +81,13 @@ agents-plugin/         ws plugin package
 agents-plugin-wsflow/  wsflow plugin package (conservative defaults)
 agents-plugin-tool/    native ws MCP runtime and tooling source
 ai-docs/               tickets, manuals, references, and repo notes
-nvim/                  Neovim config
-shell/                 tmux, WezTerm, Starship, zsh, helper scripts
 scripts/               repository helper scripts
-tools/                 local Claude session TUIs
 ```
 
 `ai-docs/` is this repository's own workflow instance: `tickets/` by status
 directory, `manuals/` for procedures, `ref/` for static references,
 `ws-notes/` for the tracked note layer, and `WORKFLOW.md` as the plugin-less
 maintenance guide.
-
-## Workstation Setup
-
-This repository also carries a personal workstation configuration: Neovim,
-tmux, WezTerm, Starship, zsh, shell helpers, and the local `claude-watch` and
-`claude-dash` TUIs under `tools/`.
-
-```sh
-git clone https://github.com/kang-sw/werkschaft.git ~/devenv
-cd ~/devenv
-bash install.sh          # idempotent; safe to re-run
-bash install.sh update   # skip packages & sudo, refresh config and symlinks
-```
-
-`install.sh` detects macOS, WSL, and Linux. Full mode installs packages and
-writes config; `update` mode skips package installation and refreshes
-dotfiles, symlinks, and local plugin setup. When Claude Code is available it
-also registers a Claude-compatible snapshot of `agents-plugin/`; it does not
-install `wsflow` into Claude.
-
-> Neovim 0.10+ is required but not installed by the script.
 
 ## Contributing
 

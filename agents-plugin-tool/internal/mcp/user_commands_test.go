@@ -242,7 +242,7 @@ func TestUserCommandToolsAreLeadOnlyForKeys(t *testing.T) {
 func TestUserCommandToolDescriptionsAreShippedText(t *testing.T) {
 	for _, tool := range userCommandTools() {
 		description, _ := tool["description"].(string)
-		for _, leak := range []string{"ws/", "wsflow", "ws:", "agents-plugin", "ai-docs", "ticket", "devenv", "install.sh"} {
+		for _, leak := range []string{"ws/", "wsflow", "ws:", "agents-plugin", "ai-docs", "ticket", "devenv", "scripts/install-claude-plugin.sh"} {
 			if strings.Contains(description, leak) {
 				t.Errorf("%v description contains %q", tool["name"], leak)
 			}
