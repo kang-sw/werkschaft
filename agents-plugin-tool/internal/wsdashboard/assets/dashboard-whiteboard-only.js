@@ -7,7 +7,7 @@
 // is OFF whatever is stored.
   var WBONLY_KEY = "ws.dashboard.whiteboardFirst." + rid;
   function wbButton() { return $("wbonly"); }
-  function wbStored() { try { return localStorage.getItem(WBONLY_KEY) === "on"; } catch (e) { return false; } }
+  function wbStored() { try { var v = localStorage.getItem(WBONLY_KEY); return v === "on" || v === "1"; } catch (e) { return false; } }
   function wbStore(on) { try { if (on) localStorage.setItem(WBONLY_KEY, "on"); else localStorage.removeItem(WBONLY_KEY); } catch (e) {} }
   // wbOnlyOn is the mode as the page shows it: the toggle's pressed state.
   function wbOnlyOn() { var b = wbButton(); return !!b && b.getAttribute("aria-pressed") === "true"; }

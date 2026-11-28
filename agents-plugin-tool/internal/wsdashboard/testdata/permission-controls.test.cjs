@@ -113,7 +113,8 @@ function world() {
     railOpen() {}, railPopPlace() {}, notifAsk() {}, saveDraft() {}, go: href => events.push(['go', href]),
     toast: t => events.push(['toast', t]), railPopClose() { events.push('close'); },
     archErr: (a, st, s) => s, leadDraw() {}, leadFetch() {}, hostedPage: false, handedPage: false,
-    rid: 'viewed', lead: { st: null }, rp: { P: null }, q: () => [], sseOn: false
+    rid: 'viewed', lead: { st: null }, rp: { P: null }, q: () => [], sseOn: false,
+    stopNeedsHold: new Set(), railMarks() {}
   };
   ctx.rpLive = (p, gen) => p.live !== false && p.gen === gen;
   vm.createContext(ctx);
@@ -172,7 +173,7 @@ function dialogParts(d) {
   f.start.click();
   assert.equal(w.posts.length, 1);
   assert.equal(w.posts[0].route, '/agents/leads');
-  assert.deepEqual(w.posts[0].body, { root: '/repo', harness: 'claude', plugin_isolation: 'default', permission_mode: 'auto' });
+  assert.deepEqual(w.posts[0].body, { root: '/repo', harness: 'claude', plugin_isolation: 'default', permission_mode: 'auto', conv_history_access: false });
   assert.equal(w.fetches.length, 0, 'the default start needs no preflight');
   assert(!f.seg.all(n => n.attrs['data-harness'] === 'pi').length);
 }
@@ -193,7 +194,7 @@ function dialogParts(d) {
   f.pickMode('plan');
   f.start.click();
   assert.equal(w.fetches.length, 0);
-  assert.deepEqual(w.posts[0].body, { root: '/repo', harness: 'claude', plugin_isolation: 'default', permission_mode: 'plan' }, 'native controls keep working under Advanced');
+  assert.deepEqual(w.posts[0].body, { root: '/repo', harness: 'claude', plugin_isolation: 'default', permission_mode: 'plan', conv_history_access: false }, 'native controls keep working under Advanced');
 }
 
 // 3. The three levels: each decides the native mode (the row fixed, the
@@ -213,7 +214,7 @@ for (const [level, native] of [['read-only', 'plan'], ['workdir-write', 'acceptE
   w.choices(choices());
   assert.equal(w.posts.length, 1);
   assert.equal(w.posts[0].route, '/agents/leads/permission');
-  assert.deepEqual(w.posts[0].body, { root: '/repo', harness: 'claude', plugin_isolation: 'default', permission_level: level });
+  assert.deepEqual(w.posts[0].body, { root: '/repo', harness: 'claude', plugin_isolation: 'default', permission_level: level, conv_history_access: false });
   w.posts[0].done(201, { id: 'made' }, '');
   assert.deepEqual(w.events.slice(-1), [['go', '/s/made']]);
   // Back to the default the user's own native pick returns.
@@ -236,7 +237,7 @@ for (const [level, native] of [['read-only', 'plan'], ['workdir-write', 'acceptE
   f.start.click();
   w.choices(choices());
   assert.equal(w.posts[0].route, '/agents/leads/permission');
-  assert.deepEqual(w.posts[0].body, { root: '/repo', harness: 'codex', plugin_isolation: 'default', permission_level: 'workdir-write' });
+  assert.deepEqual(w.posts[0].body, { root: '/repo', harness: 'codex', plugin_isolation: 'default', permission_level: 'workdir-write', conv_history_access: false });
 }
 
 // 4. Full: Start opens the warning and sends nothing; cancel leaves the
@@ -279,7 +280,7 @@ for (const [level, native] of [['read-only', 'plan'], ['workdir-write', 'acceptE
   assert.equal(w.posts.length, 0);
   w.choices(choices());
   assert.equal(w.posts[0].route, '/agents/leads/permission');
-  assert.deepEqual(w.posts[0].body, { root: '/repo', harness: 'claude', plugin_isolation: 'default', permission_level: 'full', permission_full_ack: true });
+  assert.deepEqual(w.posts[0].body, { root: '/repo', harness: 'claude', plugin_isolation: 'default', permission_level: 'full', permission_full_ack: true, conv_history_access: false });
   // leadBody never acknowledges without the grant, nor for another level.
   assert.equal('permission_full_ack' in w.ctx.WsRail.leadBody('/r', { harness: 'claude', level: 'full' }), false);
   assert.equal('permission_full_ack' in w.ctx.WsRail.leadBody('/r', { harness: 'claude', level: 'read-only', ack: true }), false);
@@ -538,6 +539,47 @@ const rowsOf = m => m.state.children.map(n => n.textContent);
   b.choices(choices(LEVELS, LEVELS, { lead: false }));
   assert.equal(b.posts.length, 0, 'non-lead harness cannot authorize /settings/permission');
   assert.equal(byCls(s.p.el, 'err').textContent, 'js.perm.unsent');
+}
+{
+  // 8. Existing-session conv_history_access toggle: lead-only, posts plain
+  // /agents/<id>/settings without stopping the process, shows the restart
+  // banner + Stop now button only while running and effective != persisted.
+  const w = world();
+  const m = menu(w, { ...base, process: true, conv_history_access: false, conv_history_access_effective: false });
+  const convSec = byCls(m.p.el, 'spconv');
+  const convSw = m.p.el.find(n => n.getAttribute('data-conv-history-toggle') === '1');
+  const banner = m.p.el.find(n => n.getAttribute('data-conv-restart-banner') === '1');
+  const stopNow = m.p.el.find(n => n.getAttribute('data-conv-stop-now') === '1');
+  assert.equal(shown(convSec), true, 'lead session shows conv_history_access control');
+  assert.equal(convSw.getAttribute('aria-checked'), 'false');
+  assert.equal(shown(banner), false, 'matching effective/persisted hides restart banner');
+  // Toggle ON -> posts /agents/s1/settings only (no stop, no /settings/permission).
+  convSw.click();
+  assert.equal(w.posts.length, 1);
+  assert.equal(w.posts[0].route, '/agents/s1/settings');
+  assert.deepEqual(w.posts[0].body, { conv_history_access: true });
+  w.posts[0].done(200, { ...base, process: true, conv_history_access: true, conv_history_access_effective: false }, '');
+  assert.equal(convSw.getAttribute('aria-checked'), 'true');
+  assert.equal(shown(banner), true, 'running mismatch reveals restart-needed banner');
+  assert.equal(stopNow.disabled, false);
+  // Stop now button posts /agents/s1/stop.
+  stopNow.click();
+  assert.equal(w.posts.length, 2);
+  assert.equal(w.posts[1].route, '/agents/s1/stop');
+  assert.deepEqual(w.posts[1].body, {});
+  w.posts[1].done(200, { ...base, process: false, conv_history_access: true, conv_history_access_effective: true }, '');
+  assert.equal(shown(banner), false, 'stopped session hides restart-needed banner');
+
+  // Stopped process with mismatched effective flag still hides banner.
+  const w2 = world();
+  const m2 = menu(w2, { ...base, process: false, conv_history_access: true, conv_history_access_effective: false });
+  assert.equal(shown(m2.p.el.find(n => n.getAttribute('data-conv-restart-banner') === '1')), false);
+
+  // Child session hides the conv_history_access toggle completely.
+  const w3 = world();
+  const m3 = menu(w3, { ...base, lead: false, is_child: true, process: true, conv_history_access: false });
+  assert.equal(shown(byCls(m3.p.el, 'spconv')), false, 'child session hides conv_history_access');
+  assert.equal(shown(m3.p.el.find(n => n.getAttribute('data-conv-restart-banner') === '1')), false);
 }
 console.log('permission control cases passed');
 

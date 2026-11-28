@@ -563,6 +563,25 @@
       else body.permission_mode = sel.value;
       act("settings", body);
     }, adv);
+    var convSec = el.appendChild(mk("div", "spsec spconv"));
+    convSec.hidden = true;
+    var convRow = convSec.appendChild(mk("div", "spconv-row"));
+    var convSw = convRow.appendChild(rpBtn("spconv-sw", ""));
+    convSw.setAttribute("role", "switch");
+    convSw.setAttribute("data-conv-history-toggle", "1");
+    convSw.setAttribute("aria-checked", "false");
+    convSw.setAttribute("aria-label", wsT("js.lead.conv_history"));
+    convSw.title = wsT("js.lead.conv_history.hint");
+    convSw.appendChild(mk("i"));
+    convSw.appendChild(mk("span", "spconv-lbl", wsT("js.lead.conv_history")));
+    var convHint = convSec.appendChild(mk("p", "spdesc spconv-hint", wsT("js.lead.conv_history.hint")));
+    var convRestart = convSec.appendChild(mk("div", "spconv-restart"));
+    convRestart.setAttribute("data-conv-restart-banner", "1");
+    convRestart.setAttribute("role", "status");
+    convRestart.hidden = true;
+    convRestart.appendChild(mk("span", "spconv-rtxt", wsT("js.lead.conv_history.restart_needed")));
+    var convStopNow = convRestart.appendChild(rpBtn("spconv-stop", wsT("js.lead.conv_history.stop_now")));
+    convStopNow.setAttribute("data-conv-stop-now", "1");
     el.appendChild(mk("p", "spnote", wsT("js.lead.menu.note")));
     var acts = el.appendChild(mk("div", "spacts"));
     function actBtn(icon, cls, title, hold) {
@@ -763,6 +782,16 @@
         else act("close", {});
       }
     });
+    convSw.addEventListener("click", function () {
+      var st = state();
+      if (P.busy || !st || !st.lead || st.is_child) return;
+      act("settings", { conv_history_access: !st.conv_history_access });
+    });
+    convStopNow.addEventListener("click", function () {
+      var st = state();
+      if (P.busy || !st || !st.process || !st.can_control || leadGone(st)) return;
+      act("stop", {});
+    });
     restart.b.addEventListener("click", function () {
       var n = bgTasks();
       confirmAction("restart", restart.b, n > 0 ? wsTn("js.lead.restart.confirm", n) : "", n);
@@ -784,6 +813,19 @@
       rows.set(String(st.backend || ""), { model: String(st.model || ""), provider: String(st.provider || ""), effort: String(st.effort || ""), mode: String(st.permission_mode || ""), active: st.process ? String(st.active_mode || "") : "" });
       permDraw(st);
       rows.disable(P.busy);
+      var isLead = !!st.lead && !st.is_child;
+      convSec.hidden = !isLead;
+      if (isLead) {
+        var convCur = !!st.conv_history_access;
+        var convEff = typeof st.conv_history_access_effective === "boolean" ? st.conv_history_access_effective : convCur;
+        convSw.setAttribute("aria-checked", String(convCur));
+        convSw.disabled = P.busy;
+        var needRestart = !!st.process && convCur !== convEff;
+        convRestart.hidden = !needRestart;
+        convStopNow.disabled = P.busy || !st.process;
+      } else {
+        convRestart.hidden = true;
+      }
       stop.b.disabled = P.busy || !st.process;
       var safeStop = canClickStop(st);
       var stopSig = (st.process ? "1" : "0") + ":" + (safeStop ? "1" : "0");

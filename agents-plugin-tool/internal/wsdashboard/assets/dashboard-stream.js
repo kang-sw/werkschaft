@@ -512,7 +512,7 @@
         trackerLost();
         retry(connect, 3000);
       },
-      events: { assets: onAssets, "openai-consent": onOpenAIConsent, "account-changed": onAccountChanged, companion: onCompanion, "companion-focus": onCompanionFocus, "companion-command": onCompanionCommand, "companion-phone": onCompanionPhone, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, usercmd: onUsercmd, execjobs: onExecJobs, gone: onGone }
+      events: { assets: onAssets, "openai-consent": onOpenAIConsent, "account-changed": onAccountChanged, companion: onCompanion, "companion-focus": onCompanionFocus, "companion-command": onCompanionCommand, "companion-phone": onCompanionPhone, "conv-reveal": onConvReveal, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, usercmd: onUsercmd, execjobs: onExecJobs, gone: onGone }
     });
     mainStream = st;
     function onOpenAIConsent(event) {
@@ -543,6 +543,10 @@
       if (!shell || !current() || !snapshot) return;
       window.wsCompanionPhoneState = snapshot;
       doc.dispatchEvent(new CustomEvent("ws-companion-phone", { detail: snapshot }));
+    }
+    function onConvReveal(ev) {
+      if (!current() || !ev || typeof ev.replyId !== "string" || !ev.replyId) return;
+      if (typeof railReveal === "function") railReveal(ev);
     }
     function onRegion(ev) {
       if (!current() || !ev) return;

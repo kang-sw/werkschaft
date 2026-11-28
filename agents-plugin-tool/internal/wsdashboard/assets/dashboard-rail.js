@@ -164,6 +164,93 @@
     admissionSync();
     railPopSync();
     railRenameNew();
+    railRevealApply(r, !!(railRevealState && !railRevealState.scrolled));
+  }
+  // conv-reveal highlight state: survives rail swaps for ~12s (or until click),
+  // expands collapsed workspace/parent ancestors, scrolls the row into view,
+  // pulses a compositor-friendly highlight, and shows a clickable Jump badge.
+  var railRevealState = null, railRevealTimer = 0, RAIL_REVEAL_MS = 12000;
+  function railRevealHref(id, entryId) {
+    return "/s/" + encodeURIComponent(id) + (entryId ? "#entry=" + encodeURIComponent(entryId) : "");
+  }
+  function railRevealClear() {
+    if (railRevealTimer) { clearTimeout(railRevealTimer); railRevealTimer = 0; }
+    railRevealState = null;
+    var r = region("rail");
+    if (!r) return;
+    q(".conv-reveal-pulse", r).forEach(function (n) { n.classList.remove("conv-reveal-pulse"); });
+    q(".conv-reveal-jump", r).forEach(function (n) { n.remove(); });
+  }
+  function railRevealExpand(r, row) {
+    var changed = false;
+    var ws = row.closest && row.closest(".rws");
+    if (ws && ws.classList.contains("col") && colSet) {
+      colSet.toggle(ws.getAttribute("data-ws") || "");
+      ws.classList.remove("col");
+      changed = true;
+    }
+    var box = row.parentNode;
+    while (box && box.classList && box.classList.contains("rkids")) {
+      var par = box.previousElementSibling;
+      if (par && par.classList && par.classList.contains("kcol") && kidSet) {
+        kidSet.toggle(par.getAttribute("data-rid") || "");
+        par.classList.remove("kcol");
+        changed = true;
+      }
+      box = par && par.parentNode;
+    }
+    if (changed && WsRail) WsRail.marks(r, railSets, rid);
+  }
+  function railRevealApply(r, shouldScroll) {
+    if (!railRevealState || !r || !WsRail) return;
+    q(".conv-reveal-pulse", r).forEach(function (n) {
+      if (n.getAttribute("data-rid") !== railRevealState.rid) n.classList.remove("conv-reveal-pulse");
+    });
+    q(".conv-reveal-jump", r).forEach(function (n) {
+      if (n.getAttribute("data-conv-reveal-rid") !== railRevealState.rid) n.remove();
+    });
+    var row = WsRail.refind(r, { cls: "rs", attr: "data-rid", val: railRevealState.rid });
+    if (!row) return;
+    railRevealExpand(r, row);
+    row.classList.add("conv-reveal-pulse");
+    var s1 = row.querySelector(".s1") || row;
+    var badge = row.querySelector(".conv-reveal-jump");
+    if (!badge) {
+      badge = mk("a", "conv-reveal-jump", wsT("js.conv.reveal.jump"));
+      var tail = s1.querySelector && s1.querySelector(".drtail");
+      if (tail && tail.parentNode === s1) s1.insertBefore(badge, tail);
+      else s1.appendChild(badge);
+    }
+    badge.href = railRevealState.href;
+    badge.textContent = wsT("js.conv.reveal.jump");
+    badge.title = railRevealState.reason || wsT("js.conv.reveal.jump");
+    badge.setAttribute("data-conv-reveal-rid", railRevealState.rid);
+    badge.setAttribute("data-conv-reveal-entry", railRevealState.entryId || "");
+    if (shouldScroll) {
+      railRevealState.scrolled = true;
+      if ((railWide() || railShown()) && typeof row.scrollIntoView === "function") {
+        row.scrollIntoView({ block: "nearest", behavior: typeof reducedMotion === "function" && reducedMotion() ? "instant" : "smooth" });
+      }
+    }
+  }
+  function railReveal(ev) {
+    var id = ev && typeof ev.replyId === "string" ? ev.replyId.trim() : "";
+    if (!id) return;
+    var entryId = typeof ev.entryId === "string" ? ev.entryId.trim() : "";
+    var reason = typeof ev.reason === "string" ? ev.reason.trim() : "";
+    var href = railRevealHref(id, entryId);
+    railRevealClear();
+    railRevealState = { rid: id, entryId: entryId, reason: reason, href: href, scrolled: false };
+    railRevealTimer = setTimeout(railRevealClear, RAIL_REVEAL_MS);
+    railRevealApply(region("rail"), true);
+    if (ev.focus === true) {
+      var activeTab = !doc.hidden && (typeof doc.hasFocus !== "function" || doc.hasFocus());
+      if (activeTab) {
+        if (!shell) { saveDraft(); if (memoPad) memoPad.remember(); }
+        railOpen(false);
+        go(href);
+      }
+    }
   }
   // A creation intent belongs only to this tab and expires after ten seconds.
   // Wait for the new row (or the shell's new header) and finish navigation's
@@ -199,7 +286,7 @@
   // railRefocus puts it back on the new row after the swap, unless the
   // focus went elsewhere meanwhile. A keyboard move (Alt and an arrow)
   // lands its swap on the row it moved, so the next key still finds it.
-  var RAIL_FOCUS = [".r-config-gear", ".rl", ".kidtog", ".drren", ".drcopy", ".drstop", ".drarch", ".rrev"];
+  var RAIL_FOCUS = [".r-config-gear", ".rl", ".conv-reveal-jump", ".kidtog", ".drren", ".drcopy", ".drstop", ".drarch", ".rrev"];
   function railFocus() {
     var a = doc.activeElement, row = a && railEl && WsRail && railEl.contains(a) && a.closest ? a.closest(".rs") : null;
     if (!row) return null;
@@ -733,6 +820,16 @@
         if (!shell) { saveDraft(); if (memoPad) memoPad.remember(); }
         railOpen(false);
         go("/");
+        return;
+      }
+      var revealJump = t.closest && t.closest(".conv-reveal-jump");
+      if (revealJump && !e.button && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        var jumpHref = revealJump.getAttribute("href") || "";
+        railRevealClear();
+        if (!shell) { saveDraft(); if (memoPad) memoPad.remember(); }
+        railOpen(false);
+        if (jumpHref) go(jumpHref);
         return;
       }
       var pick = t.closest && t.closest("a[href]");
