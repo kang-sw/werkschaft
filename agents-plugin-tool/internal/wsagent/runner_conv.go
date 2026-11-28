@@ -279,6 +279,8 @@ type conv struct {
 	// Test-only hooks for quotaContinuationTimedOut race windows (nil in production).
 	onQuotaAfterFence func()
 	onQuotaBeforeSend func()
+	// Test-only hook to inject record persistence errors (nil in production).
+	onPersistRecord func(Record) error
 
 	// loop-owned, except registration timing below.
 	events          <-chan Event
@@ -1301,6 +1303,13 @@ func (c *conv) persistRecord() error {
 		return nil
 	}
 	rec := c.record()
+	if c.onPersistRecord != nil {
+		if err := c.onPersistRecord(rec); err != nil {
+			c.recordDirty = true
+			fmt.Fprintf(c.r.opts.Log, "agent %s: record write: %v\n", rec.ReplyID, err)
+			return err
+		}
+	}
 	err := c.r.persistAgentRecord(c.dir, rec)
 	c.recordDirty = err != nil
 	if err != nil {

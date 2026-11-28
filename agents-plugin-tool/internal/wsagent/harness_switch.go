@@ -398,6 +398,7 @@ func (c *conv) rollbackHarnessSwitch(s *harnessSwitchState, noteBefore string) {
 	c.rec.Tier = s.prevRec.Tier
 	c.rec.PluginIsolation = s.prevRec.PluginIsolation
 	c.rec.PluginWarning = s.prevRec.PluginWarning
+	c.rec.PendingCompaction = clonePendingCompaction(s.prevRec.PendingCompaction)
 	c.rec.HolderID = ""
 	c.rec.HostPID = 0
 	c.rec.HolderSeq = 0

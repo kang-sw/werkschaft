@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -536,6 +537,116 @@ func TestSwitchHarnessRollbackOnStartAndAuditFailure(t *testing.T) {
 			t.Fatalf("expected resume of claude-sid-audit, got %q", starts[len(starts)-1].SessionID)
 		}
 	})
+
+	t.Run("commit_persistence_failure_rolls_back_and_emits_compact_failed_without_compact_end", func(t *testing.T) {
+		env := newSwitchTestEnv(t, nil)
+		st := env.createLead(BackendClaude, LeadOptions{Model: "claude-opus-4-6"})
+		env.sendAndSettle(st.ID, "before commit fail", env.claude, "claude-sid-persist")
+
+		c := env.runner.resident(st.ID)
+		if c == nil {
+			t.Fatal("resident conv missing")
+		}
+		priorPending := &PendingCompaction{Note: "prior-pending-note", Origin: wslive.TriggerManual}
+		c.do(func() {
+			c.update(func(rec *Record) {
+				rec.PendingCompaction = clonePendingCompaction(priorPending)
+			})
+			c.compactNote = "prior-compact-note"
+			c.compactTokens = 55000
+			c.compactWindow = 100000
+			c.onPersistRecord = func(rec Record) error {
+				if rec.Backend == BackendCodex {
+					return errors.New("simulated wal write failure")
+				}
+				return nil
+			}
+		})
+
+		err := env.runner.SwitchHarness(context.Background(), st.ID, HarnessSwitchSpec{Backend: BackendCodex, Model: "gpt-5-codex"})
+		if err == nil || !strings.Contains(err.Error(), "persist switched record") || !strings.Contains(err.Error(), "simulated wal write failure") {
+			t.Fatalf("expected persist switched record failure, got %v", err)
+		}
+
+		// Target process must have been retired on commit failure.
+		if codexProc := env.codex.latest(); codexProc == nil || !codexProc.closed {
+			t.Fatalf("target process was not retired on persistence failure")
+		}
+
+		// Compaction state must report failure and never increment cmpCount or emit CompactEnd.
+		var (
+			compacting    bool
+			compactCmd    bool
+			compactNote   string
+			compactTokens float64
+			compactWindow float64
+			livePhase     string
+		)
+		c.do(func() {
+			compacting = c.compacting
+			compactCmd = c.compactCommand
+			compactNote = c.compactNote
+			compactTokens = c.compactTokens
+			compactWindow = c.compactWindow
+			livePhase = c.live.st.Snapshot(env.now.UnixMilli()).Lead.Phase
+			c.onPersistRecord = nil
+		})
+		cmpCount, cmpLast := c.compactionCount()
+		if compacting || compactCmd || cmpCount != 0 || cmpLast != "" || livePhase == wslive.PhaseCompacting {
+			t.Fatalf("unexpected compaction state after commit failure: compacting=%v cmd=%v cmpCount=%d cmpLast=%q livePhase=%q",
+				compacting, compactCmd, cmpCount, cmpLast, livePhase)
+		}
+		if compactNote != "prior-compact-note" || compactTokens != 55000 || compactWindow != 100000 {
+			t.Fatalf("source compaction fields not restored: note=%q tokens=%v window=%v",
+				compactNote, compactTokens, compactWindow)
+		}
+
+		page, err := wslive.ReadRingPage(filepath.Join(wsdashboard.SessionDir(env.dir, st.ID), "ring"), "", wslive.RingHistoryCap)
+		if err != nil {
+			t.Fatalf("ReadRingPage: %v", err)
+		}
+		failedEvents, endEvents := 0, 0
+		for _, entry := range page.Records {
+			if entry.Kind == wslive.RingCompact {
+				if entry.CompactFailed {
+					failedEvents++
+				} else {
+					endEvents++
+				}
+			}
+		}
+		if failedEvents != 1 || endEvents != 0 {
+			t.Fatalf("ring compaction events failed=%d end=%d (want failed=1 end=0): %+v", failedEvents, endEvents, page.Records)
+		}
+
+		// Both memory and disk must retain the pre-switch backend, session, and PendingCompaction.
+		cur, err := env.runner.Get(st.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cur.Backend != BackendClaude || cur.Process || cur.Compacting {
+			t.Fatalf("unexpected state after persistence rollback: %+v", cur)
+		}
+		rec := env.diskRecord(st.ID)
+		if rec.Backend != BackendClaude || rec.SessionID != "claude-sid-persist" ||
+			rec.PendingCompaction == nil || rec.PendingCompaction.Note != "prior-pending-note" {
+			t.Fatalf("disk record not rolled back cleanly: %+v", rec)
+		}
+		reg, err := wsdashboard.ReadRegistration(env.dir, st.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reg.Harness != BackendClaude || !reg.HostStopped {
+			t.Fatalf("registration not rolled back: %+v", reg)
+		}
+
+		// Subsequent Send resumes the old native session on Claude.
+		env.sendAndSettle(st.ID, "resume after commit fail", env.claude, "claude-sid-persist")
+		starts, _, _ := env.claude.snapshot()
+		if starts[len(starts)-1].SessionID != "claude-sid-persist" {
+			t.Fatalf("expected resume of claude-sid-persist, got %q", starts[len(starts)-1].SessionID)
+		}
+	})
 }
 
 func TestSwitchHarnessBusyAndQuotaContinuationGuards(t *testing.T) {
@@ -746,6 +857,10 @@ func TestSwitchHarnessValidationAndDefaults(t *testing.T) {
 	}
 	if err := env.runner.SwitchHarness(context.Background(), claudeSt.ID, HarnessSwitchSpec{Backend: BackendCodex, Model: "forbidden-model"}); err == nil {
 		t.Fatal("expected model admission error")
+	}
+	// Non-empty provider rejected on a backend without leadProviderAdmitter -> 400.
+	if err := env.runner.SwitchHarness(context.Background(), claudeSt.ID, HarnessSwitchSpec{Backend: BackendAgy, Provider: "any-prov"}); err == nil {
+		t.Fatal("expected provider unsupported error for backend without leadProviderAdmitter")
 	}
 
 	// Omitted model/effort/provider resolve to target lead profile default, NEVER source values.
@@ -969,31 +1084,77 @@ func TestSwitchCompanionHarnessAndHasUsableHarness(t *testing.T) {
 	}
 	c.do(func() { c.setStatus(func() { c.hidden = false }) })
 
-	// Unknown wsKey -> false.
+	// Broken MCP -> false.
+	c.do(func() { c.setStatus(func() { c.mcpBroken = []string{"ws"} }) })
+	if env.runner.HasUsableHarness(wsKey) {
+		t.Fatal("expected HasUsableHarness == false when mcpBroken is non-empty")
+	}
+	c.do(func() { c.setStatus(func() { c.mcpBroken = nil }) })
+
+	// Unregistered backend -> false.
+	var savedBackend string
+	c.do(func() {
+		c.mu.Lock()
+		savedBackend = c.rec.Backend
+		c.rec.Backend = "unregistered-backend"
+		c.mu.Unlock()
+	})
+	if env.runner.HasUsableHarness(wsKey) {
+		t.Fatal("expected HasUsableHarness == false for unregistered backend")
+	}
+	c.do(func() {
+		c.mu.Lock()
+		c.rec.Backend = savedBackend
+		c.mu.Unlock()
+	})
+
+	// Unknown wsKey -> false / errUnknown.
 	if env.runner.HasUsableHarness("nonexistent-ws-key") {
 		t.Fatal("expected HasUsableHarness == false for unknown wsKey")
 	}
+	if err := env.runner.SwitchCompanionHarness(context.Background(), "nonexistent-ws-key", HarnessSwitchSpec{Backend: BackendClaude}); !errors.Is(err, errUnknown) {
+		t.Fatalf("SwitchCompanionHarness unknown wsKey err = %v, want errUnknown", err)
+	}
 
-	// Closed -> false.
+	// Closed -> false / endedError (409).
 	if _, err := env.runner.CloseConversation(st.ID); err != nil {
 		t.Fatal(err)
 	}
 	if env.runner.HasUsableHarness(wsKey) {
 		t.Fatal("expected HasUsableHarness == false for closed conversation")
 	}
+	var closedErr *requestError
+	if err := env.runner.SwitchCompanionHarness(context.Background(), wsKey, HarnessSwitchSpec{Backend: BackendClaude}); !errors.As(err, &closedErr) || closedErr.status != http.StatusConflict {
+		t.Fatalf("SwitchCompanionHarness closed err = %v, want 409", err)
+	}
 
-	// Parked conversation must return false WITHOUT waking it.
-	parkedID := "parked-conv-1"
+	// Parked conversation must return false from HasUsableHarness WITHOUT waking it,
+	// and SwitchCompanionHarness must unpark and switch it via replyIDByWSKey.
+	parkedID := "parkedconv"
 	parkedKey := "parked-ws-key-1"
+	parkedRec := Record{
+		ReplyID:               parkedID,
+		WSKey:                 parkedKey,
+		Lead:                  true,
+		Backend:               BackendClaude,
+		Profile:               LeadProfileFor(BackendClaude, env.runner.opts.Backends),
+		Root:                  env.root,
+		CreatedAt:             env.now.UTC().Format(time.RFC3339),
+		CompanionRole:         "companion-body",
+		CompanionSystemPrompt: "companion prompt",
+	}
+	parkedDir := wsdashboard.SessionDir(env.dir, parkedID)
+	if err := os.MkdirAll(parkedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.runner.persistAgentRecord(parkedDir, parkedRec); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.runner.writePermissionSelection(parkedID, parkedDir, PermissionWorkdirWrite); err != nil {
+		t.Fatal(err)
+	}
 	env.runner.mu.Lock()
-	if env.runner.parked == nil {
-		env.runner.parked = map[string]bool{}
-	}
-	if env.runner.closed == nil {
-		env.runner.closed = map[string]Record{}
-	}
-	env.runner.parked[parkedID] = true
-	env.runner.closed[parkedID] = Record{ReplyID: parkedID, WSKey: parkedKey, Lead: true, Backend: BackendClaude, Root: env.root}
+	env.runner.registerParkedLocked(parkedRec)
 	env.runner.mu.Unlock()
 	if env.runner.HasUsableHarness(parkedKey) {
 		t.Fatal("expected HasUsableHarness == false for parked conversation")
@@ -1003,6 +1164,15 @@ func TestSwitchCompanionHarnessAndHasUsableHarness(t *testing.T) {
 	env.runner.mu.Unlock()
 	if !stillParked {
 		t.Fatal("HasUsableHarness woke a parked conversation")
+	}
+	if err := env.runner.SwitchCompanionHarness(context.Background(), parkedKey, HarnessSwitchSpec{Backend: BackendCodex}); err != nil {
+		t.Fatalf("SwitchCompanionHarness on parked conversation failed: %v", err)
+	}
+	if env.runner.isParked(parkedID) || env.runner.resident(parkedID) == nil {
+		t.Fatalf("expected parked conversation %s to be unparked and resident after SwitchCompanionHarness", parkedID)
+	}
+	if after := env.diskRecord(parkedID); after.Backend != BackendCodex || after.WSKey != parkedKey {
+		t.Fatalf("unexpected parked record after SwitchCompanionHarness: %+v", after)
 	}
 }
 
