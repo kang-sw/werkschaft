@@ -29,6 +29,16 @@ import (
 	"github.com/kang-sw/devenv/internal/wsaudit"
 )
 
+const (
+	// DefaultIdleTTL is how long an unpinned loaded ring stays resident in
+	// memory with its newest-segment handle open without activity.
+	DefaultIdleTTL = 15 * time.Minute
+	// DefaultMaxLoadedRings caps simultaneously loaded rings (pinned +
+	// unpinned); above it, least-recently-active unpinned rings are unloaded
+	// even within IdleTTL.
+	DefaultMaxLoadedRings = 64
+)
+
 var (
 	// ErrQueueFull drops an envelope the writer has no room for.
 	ErrQueueFull = errors.New("wsauditstore: write queue full; audit event dropped")
@@ -65,6 +75,18 @@ type Options struct {
 	// LastSeen cannot answer yet (a registry not loaded); it calls
 	// RequestSweep once it can.
 	DeferFirstSweep bool
+	// IdleTTL is how long an unpinned loaded ring stays resident without
+	// activity before its handle and in-memory index are released (default
+	// DefaultIdleTTL; negative disables time-based idle unload).
+	IdleTTL time.Duration
+	// MaxLoadedRings caps total loaded rings (pinned + unpinned) before
+	// least-recently-active unpinned rings are unloaded even within IdleTTL
+	// (default DefaultMaxLoadedRings; negative disables the LRU ceiling).
+	MaxLoadedRings int
+	// IdleCheckInterval is how often the writer checks for idle rings to
+	// unload (default min(1m, max(IdleTTL/3, 10ms)) when IdleTTL > 0;
+	// negative disables the periodic idle ticker).
+	IdleCheckInterval time.Duration
 }
 
 type jobKind int
@@ -78,6 +100,7 @@ const (
 	jobDelete
 	jobLoad
 	jobSweep
+	jobUnloadIdle
 	jobBarrier
 )
 
@@ -100,7 +123,8 @@ type job struct {
 }
 
 type jobResult struct {
-	err error
+	err  error
+	ring *ring
 }
 
 // sessionInfo is one ring directory the store knows. ring is nil until the
@@ -111,6 +135,10 @@ type sessionInfo struct {
 	bytes    int64
 	lastSeen time.Time
 	recorded time.Time
+	// lastActive tracks in-memory ring activity (AppendSourced, Recover,
+	// Retained, RecoverCompactionBaseline, pin, unpin) under Store.mu for
+	// idle unload, separate from persisted lastSeen (7-day disk retention).
+	lastActive time.Time
 
 	mu   sync.Mutex
 	ring *ring
@@ -175,11 +203,14 @@ type Store struct {
 	done    chan struct{}
 
 	mu       sync.Mutex
-	sessions map[string]*sessionInfo // by ring directory name
+	sessions map[string]*sessionInfo   // by ring directory name
+	resident map[*sessionInfo]struct{} // rings currently resident in memory
+	pins     map[string]int            // refcounted active captures, by dir name
 	total    int64
 
-	idx   *indexLog                 // writer goroutine only
-	dirty map[*sessionInfo]struct{} // rings with pending control lines; writer only
+	idx        *indexLog                 // writer goroutine only
+	dirty      map[*sessionInfo]struct{} // rings with pending control lines; writer only
+	idleQueued atomic.Bool               // coalesces async jobUnloadIdle from UnpinCapture
 
 	dropped    atomic.Uint64
 	queueDrops atomic.Uint64 // queue-full drops not yet logged
@@ -213,6 +244,15 @@ func Open(opts Options) (*Store, error) {
 	if opts.SweepInterval == 0 {
 		opts.SweepInterval = time.Hour
 	}
+	if opts.IdleTTL == 0 {
+		opts.IdleTTL = DefaultIdleTTL
+	}
+	if opts.MaxLoadedRings == 0 {
+		opts.MaxLoadedRings = DefaultMaxLoadedRings
+	}
+	if opts.IdleCheckInterval == 0 && opts.IdleTTL > 0 {
+		opts.IdleCheckInterval = min(time.Minute, max(opts.IdleTTL/3, 10*time.Millisecond))
+	}
 	limits := opts.Limits
 	if limits == (Limits{}) {
 		limits = DefaultLimits()
@@ -231,7 +271,8 @@ func Open(opts Options) (*Store, error) {
 	s := &Store{
 		opts: opts, limits: limits,
 		wake: make(chan struct{}, 1), done: make(chan struct{}),
-		sessions: map[string]*sessionInfo{}, idx: idx, dirty: map[*sessionInfo]struct{}{},
+		sessions: map[string]*sessionInfo{}, resident: map[*sessionInfo]struct{}{},
+		pins: map[string]int{}, idx: idx, dirty: map[*sessionInfo]struct{}{},
 	}
 	entries, err := readDir(opts.Root)
 	if err != nil {
@@ -394,8 +435,12 @@ func (s *Store) Preload(session string) {
 // load when it is not in memory yet (nil then, and for an unknown session).
 func (s *Store) ledgerOf(session string) *ledger {
 	dir := sessionDirName(wsaudit.NormalizeID(session))
+	now := s.opts.Now()
 	s.mu.Lock()
 	info := s.sessions[dir]
+	if info != nil {
+		info.lastActive = maxTime(info.lastActive, now)
+	}
 	s.mu.Unlock()
 	if info == nil {
 		return nil
@@ -409,6 +454,66 @@ func (s *Store) ledgerOf(session string) *ledger {
 		}
 	}
 	return nil
+}
+
+// PinCapture marks session as having an active capture attached, protecting
+// its ring from idle TTL and LRU ceiling eviction until a matching
+// UnpinCapture runs. Calls are refcounted per session so multiple sources
+// capturing into the same session stay protected until the last detaches.
+func (s *Store) PinCapture(session string) {
+	dir := sessionDirName(wsaudit.NormalizeID(session))
+	now := s.opts.Now()
+	s.mu.Lock()
+	s.pins[dir]++
+	if info := s.sessions[dir]; info != nil {
+		info.lastActive = maxTime(info.lastActive, now)
+	}
+	s.mu.Unlock()
+}
+
+// UnpinCapture releases one active-capture pin on session. When the store is
+// above MaxLoadedRings, it queues an asynchronous idle-eviction pass so
+// unpinned rings drain back under the ceiling without waiting for the next
+// timer tick or write.
+func (s *Store) UnpinCapture(session string) {
+	dir := sessionDirName(wsaudit.NormalizeID(session))
+	now := s.opts.Now()
+	s.mu.Lock()
+	if n := s.pins[dir]; n <= 1 {
+		delete(s.pins, dir)
+	} else {
+		s.pins[dir] = n - 1
+	}
+	if info := s.sessions[dir]; info != nil {
+		info.lastActive = maxTime(info.lastActive, now)
+	}
+	overCap := s.opts.MaxLoadedRings > 0 && len(s.resident) > s.opts.MaxLoadedRings
+	s.mu.Unlock()
+	if overCap && s.idleQueued.CompareAndSwap(false, true) {
+		if err := s.control(job{kind: jobUnloadIdle}); err != nil {
+			s.idleQueued.Store(false)
+		}
+	}
+}
+
+// UnloadIdle runs idle TTL and LRU ring eviction on the writer goroutine and
+// waits for it to finish.
+func (s *Store) UnloadIdle(ctx context.Context) error {
+	_, err := s.call(ctx, job{kind: jobUnloadIdle})
+	return err
+}
+
+// LoadedRings reports how many session rings are currently loaded in memory
+// (holding their in-memory index and newest-segment handle).
+func (s *Store) LoadedRings() int {
+	return s.loadedCount()
+}
+
+func (s *Store) loadedCount() int {
+	s.mu.Lock()
+	n := len(s.resident)
+	s.mu.Unlock()
+	return n
 }
 
 // Finalize advances a source's finalized boundary (wsaudit.Recovery.Boundary).

@@ -98,8 +98,8 @@ func (d *Daemon) auditRegistryLastSeen(session string) (time.Time, bool) {
 }
 
 // auditSessionSeen records a session's registry last-seen time the first
-// time this daemon run sees it, and queues loading its ring (if it has one) so
-// a capture that reattaches finds its recovery state in memory.
+// time this daemon run sees it. Rings stay unloaded until active capture or
+// an explicit recovery query needs them.
 func (d *Daemon) auditSessionSeen(reg Registration) {
 	if d.audit == nil || reg.ReplyID == "" {
 		return
@@ -110,7 +110,6 @@ func (d *Daemon) auditSessionSeen(reg Registration) {
 	d.audit.mu.Unlock()
 	if first {
 		d.audit.store.Touch(reg.ReplyID, reg.LastSeen())
-		d.audit.store.Preload(reg.ReplyID)
 	}
 }
 

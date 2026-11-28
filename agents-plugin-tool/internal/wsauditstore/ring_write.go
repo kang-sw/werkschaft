@@ -189,6 +189,13 @@ func (r *ring) write(payload []byte, segBytes, capBytes int64, room func(n int64
 	}
 	n := int64(len(payload))
 	cur := len(r.segs) - 1
+	if r.file == nil && !r.forceRotate && cur >= 0 && r.segs[cur].size+n <= segBytes {
+		f, err := openAppend(filepath.Join(r.dir, segmentName(r.segs[cur].seq)))
+		if err != nil {
+			return 0, err
+		}
+		r.file = f
+	}
 	if r.file == nil || r.forceRotate || cur < 0 || r.segs[cur].size+n > segBytes {
 		header, err := r.headerLine()
 		if err != nil {

@@ -235,13 +235,9 @@ func (s *Store) Events(ctx context.Context, session string) ([]wsaudit.Envelope,
 // scan calls fn with the session's retained events under the ring's read
 // lock (fn must not keep the slice).
 func (s *Store) scan(ctx context.Context, session string, fn func([]wsaudit.Envelope)) error {
-	info, err := s.loaded(ctx, session)
-	if err != nil || info == nil {
+	r, err := s.loadedRing(ctx, session)
+	if err != nil || r == nil {
 		return err
-	}
-	r := info.view.Load()
-	if r == nil {
-		return nil
 	}
 	r.view.RLock()
 	defer r.view.RUnlock()
@@ -289,13 +285,9 @@ func (s *Store) EventsByCallID(ctx context.Context, session, key string) ([]wsau
 // Capture calls it on reattachment, off the holder and conversation paths.
 // Unlike Recover, it waits for an existing cold ring before answering.
 func (s *Store) RecoverCompactionBaseline(ctx context.Context, session, source string) (boundary, counter uint64, err error) {
-	info, err := s.loaded(ctx, session)
-	if err != nil || info == nil {
+	r, err := s.loadedRing(ctx, session)
+	if err != nil || r == nil {
 		return 0, 0, err
-	}
-	r := info.view.Load()
-	if r == nil {
-		return 0, 0, nil
 	}
 	source = wsaudit.NormalizeID(source)
 	r.view.RLock()
@@ -324,12 +316,42 @@ func (s *Store) RecoverCompactionBaseline(ctx context.Context, session, source s
 	return 0, 0, nil
 }
 
+// loadedRing returns the session's loaded *ring directly (from memory or via
+// jobLoad) and refreshes lastActive under s.mu. Returning *ring directly keeps
+// callers safe even if an unpinned ring is unloaded immediately after jobLoad
+// under MaxLoadedRings pressure.
+func (s *Store) loadedRing(ctx context.Context, session string) (*ring, error) {
+	dir := sessionDirName(wsaudit.NormalizeID(session))
+	now := s.opts.Now()
+	s.mu.Lock()
+	info := s.sessions[dir]
+	if info != nil {
+		info.lastActive = maxTime(info.lastActive, now)
+	}
+	s.mu.Unlock()
+	if info == nil {
+		return nil, nil
+	}
+	if r := info.view.Load(); r != nil {
+		return r, nil
+	}
+	res, err := s.call(ctx, job{kind: jobLoad, session: session})
+	if err != nil {
+		return nil, err
+	}
+	return res.ring, nil
+}
+
 // loaded returns the session's entry with its ring in memory, recovering
 // it through the writer on first use.
 func (s *Store) loaded(ctx context.Context, session string) (*sessionInfo, error) {
 	dir := sessionDirName(wsaudit.NormalizeID(session))
+	now := s.opts.Now()
 	s.mu.Lock()
 	info := s.sessions[dir]
+	if info != nil {
+		info.lastActive = maxTime(info.lastActive, now)
+	}
 	s.mu.Unlock()
 	if info == nil {
 		return nil, nil
