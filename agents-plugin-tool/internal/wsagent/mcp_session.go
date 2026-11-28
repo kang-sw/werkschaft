@@ -92,6 +92,7 @@ type mcpToken struct {
 	// cutover is the backend of a process started under the exec cutover
 	// (markMCPCutover), "" otherwise.
 	cutover                string
+	convHistoryAccess      bool
 	dashboardControlAccess bool
 	fileWrites             *wsfs.FileWriteSession
 	recordExecLaunch       func(context.Context, execjob.ModelLaunch) (bool, error)
@@ -469,10 +470,21 @@ func (r *Runner) resolveMCPToken(token string, connect bool) (wsdashboard.ProxyH
 	// The token is the binding: only this resolution names the conversation.
 	hello.Conversation = t.id
 	hello.ExecCutover = t.cutover
+	hello.ConvHistoryAccess = t.convHistoryAccess
 	hello.DashboardControlAccess = t.dashboardControlAccess
 	hello.FileWrites = t.fileWrites
 	hello.RecordExecLaunch = t.recordExecLaunch
 	return hello, t.void, ""
+}
+
+// markMCPConvHistoryAccess binds the start-time conv_history_access snapshot
+// onto conversation id's current ws-mcp token so tools/list reflects it.
+func (r *Runner) markMCPConvHistoryAccess(id string, on bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if t := r.mcpTokens[r.mcpTokenOf[id]]; t != nil {
+		t.convHistoryAccess = on
+	}
 }
 
 // recordMCPWaitMissLocked only tracks misses while rejoin can still restore
@@ -557,7 +569,7 @@ func mcpSessionEnv(env []string, session *MCPSession) []string {
 
 // forgetMCP clears the record's ws-mcp session (Record.MCPToken).
 func (rec *Record) forgetMCP() {
-	rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder, rec.MCPDashboardControl = "", "", nil, "", false
+	rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder, rec.MCPConvHistoryAccess, rec.MCPDashboardControl = "", "", nil, "", false, false
 }
 
 // mcpURL is the HTTP route a process started now is given, or "" when the

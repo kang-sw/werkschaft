@@ -86,6 +86,12 @@ type State struct {
 
 	// Lead marks a hosted lead session; the fields below are its own.
 	Lead bool `json:"lead,omitempty"`
+	// ConvHistoryAccess is the persisted opt-in flag for conv.* MCP tools.
+	ConvHistoryAccess bool `json:"conv_history_access,omitempty"`
+	// ConvHistoryAccessEffective is the conv_history_access value bound when
+	// the running process attached its MCP token (matches ConvHistoryAccess
+	// when no process is running).
+	ConvHistoryAccessEffective bool `json:"conv_history_access_effective,omitempty"`
 	// IsChild marks a spawned worker or card-bound subordinate session whose
 	// model and effort are fixed at spawn (read-only on HTTP settings writes).
 	IsChild bool `json:"is_child,omitempty"`
@@ -217,7 +223,7 @@ func (r *Runner) closedRecordState(rec Record) State {
 
 // Retained name check: ended state of retained Pi records (TestRetiredPiHoldersKeepRunning).
 func closedState(rec Record) State {
-	st := State{ID: rec.ReplyID, Profile: rec.Profile, Backend: rec.Backend, Root: rec.Root, Status: StatusClosed, Model: rec.Model, Provider: rec.Provider, Effort: rec.Effort, AccountSlotID: rec.AccountSlotID, PendingAccountSlotID: rec.PendingAccountSlotID, Page: "/s/" + rec.ReplyID, CreatedAt: rec.CreatedAt, ClosedAt: rec.ClosedAt, Lead: rec.Lead, PermissionMode: rec.selectedPermissionMode(), Label: rec.Label, Tier: rec.Tier, ActiveMs: rec.ActiveMs}
+	st := State{ID: rec.ReplyID, Profile: rec.Profile, Backend: rec.Backend, Root: rec.Root, Status: StatusClosed, Model: rec.Model, Provider: rec.Provider, Effort: rec.Effort, AccountSlotID: rec.AccountSlotID, PendingAccountSlotID: rec.PendingAccountSlotID, Page: "/s/" + rec.ReplyID, CreatedAt: rec.CreatedAt, ClosedAt: rec.ClosedAt, Lead: rec.Lead, ConvHistoryAccess: rec.ConvHistoryAccess, ConvHistoryAccessEffective: rec.ConvHistoryAccess, PermissionMode: rec.selectedPermissionMode(), Label: rec.Label, Tier: rec.Tier, ActiveMs: rec.ActiveMs}
 	if rec.Lead {
 		if rec.ClosedAt != "" {
 			st.Lifecycle = wsdashboard.SessionPendingDeletion

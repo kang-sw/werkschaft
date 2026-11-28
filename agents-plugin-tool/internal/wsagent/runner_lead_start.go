@@ -241,11 +241,21 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	if spec.MCPSession != nil {
 		c.r.markMCPDashboardControl(rec.ReplyID, dashboardControlEffective)
 	}
+	var convHistoryEffective bool
 	if attach {
 		spec.ExecCutover = c.rejoinExecCutover(rec)
+		if durable {
+			// Durable leads always mint a fresh in-daemon MCP session (never persist MCPToken).
+			convHistoryEffective = rec.Lead && rec.ConvHistoryAccess
+		} else {
+			convHistoryEffective = rec.Lead && rec.MCPToken != "" && rec.MCPHolder == rec.HolderID && rec.MCPConvHistoryAccess
+		}
 	} else {
 		c.decideExecCutover(rec, def, &spec, mcpEnv)
+		convHistoryEffective = rec.Lead && rec.ConvHistoryAccess
 	}
+	c.setStatus(func() { c.convHistoryAccessEffective = convHistoryEffective })
+	c.r.markMCPConvHistoryAccess(rec.ReplyID, convHistoryEffective)
 	cutover = spec.ExecCutover
 	if durable {
 		spec.PermissionLevel = level
@@ -326,7 +336,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		rec.ExecCutoverHolder = cutoverHolder(cutover, id)
 		rec.forgetMCP()
 		if s := spec.MCPSession; s != nil && !durable {
-			rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder, rec.MCPDashboardControl = s.Token, s.URL, mcpEnv, id, dashboardControlEffective
+			rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder, rec.MCPConvHistoryAccess, rec.MCPDashboardControl = s.Token, s.URL, mcpEnv, id, convHistoryEffective, dashboardControlEffective
 		}
 	})
 	c.writeRegistration()

@@ -18,7 +18,7 @@ use windows::{
 
 use crate::{
     accelerator, capture, close, menu_action, navigation, notify, permissions, shell::Connection,
-    strip, strip_msg, updates, webview_setup_failed,
+    speech, strip, strip_msg, updates, webview_setup_failed,
 };
 
 pub fn copy_text(window: &WebviewWindow, text: &str) -> bool {
@@ -196,6 +196,7 @@ unsafe fn install_hooks(
     let epoch = failed.window_epoch();
     let notify_bridge = window.try_state::<Arc<notify::Notifier>>().is_some();
     let capture_bridge = window.try_state::<Arc<capture::Capturer>>().is_some();
+    let speech_bridge = window.try_state::<Arc<speech::Controller>>().is_some();
     // The theme message needs the strip, which exists only on the main window.
     let theme_bridge = window.app_handle().try_state::<strip::Strips>().is_some();
     // Always registered: the recovery page's actions work in a build with no
@@ -230,7 +231,10 @@ unsafe fn install_hooks(
                     let cap = capture_bridge
                         && message.starts_with(capture::PREFIX)
                         && message.len() <= capture::MAX_MESSAGE;
-                    if !update && !notice && !theme && !cap {
+                    let speech_msg = speech_bridge
+                        && message.starts_with(speech::PREFIX)
+                        && message.len() <= speech::MAX_MESSAGE;
+                    if !update && !notice && !theme && !cap && !speech_msg {
                         return Ok(());
                     }
                     let mut raw = PWSTR::null();
@@ -242,6 +246,8 @@ unsafe fn install_hooks(
                             updates::receive(target.clone(), epoch, true, source, &message);
                         } else if cap {
                             capture::receive(target.clone(), epoch, source, &message);
+                        } else if speech_msg {
+                            speech::receive(target.clone(), epoch, source, &message);
                         } else {
                             notify::receive(target.clone(), epoch, source, &message);
                         }

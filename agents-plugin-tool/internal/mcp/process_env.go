@@ -87,6 +87,14 @@ type ServerOptions struct {
 	// ws/daemon.* at MCP token attach (ProxyHello.DashboardControlAccess).
 	// Honored only when Conversation is set.
 	DashboardControlAccess bool
+	// Conv is the dashboard daemon's conversation history search/read/reveal
+	// host. When nil and Live implements ConvHost, NewServerWithOptions binds
+	// Live automatically.
+	Conv ConvHost
+	// ConvHistoryAccess is the process start-time snapshot of the bound hosted
+	// lead's conv_history_access flag (wsdashboard.ProxyHello.ConvHistoryAccess),
+	// gating whether conv.* tools appear in tools/list and agy DirectTools.
+	ConvHistoryAccess bool
 	// EphemeralPool is the dashboard daemon's shared lightweight ephemeral
 	// harness pool used by opt-in dynamic tier routing on agent.spawn. Nil
 	// leaves dynamic tier routing inert (static fallback).
@@ -270,6 +278,12 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 			s.daemonControl = host
 		}
 	}
+	s.conv = opts.Conv
+	if s.conv == nil && opts.Live != nil {
+		if host, ok := opts.Live.(ConvHost); ok {
+			s.conv = host
+		}
+	}
 	s.ephemeralPool = opts.EphemeralPool
 	s.exec, s.conversation = opts.Exec, opts.Conversation
 	s.cron = opts.Cron
@@ -277,6 +291,7 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 	if s.conversation != "" {
 		s.execCutover = opts.ExecCutover
 		s.dashboardControlEffective = opts.DashboardControlAccess
+		s.convHistoryListed = opts.ConvHistoryAccess
 		s.recordExecLaunch = opts.RecordExecLaunch
 		if opts.FileWrites != nil {
 			binding := *opts.FileWrites

@@ -9,6 +9,9 @@ import (
 
 func TestWerkProviderRefusesVoiceOnlyProviders(t *testing.T) {
 	store := wscred.NewStore(filepath.Join(t.TempDir(), "auth", wscred.FileName))
+	if _, err := store.Apply(wscred.Change{Op: wscred.OpSet, Provider: wscred.ProviderOpenRouterVoice, APIKey: wscred.NewSecret("sk-or-v1-fixture-voice-0000")}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.Apply(wscred.Change{Op: wscred.OpSet, Provider: wscred.ProviderOpenAIAPI, APIKey: wscred.NewSecret("sk-proj-fixture-voice-0001")}); err != nil {
 		t.Fatal(err)
 	}
@@ -16,7 +19,7 @@ func TestWerkProviderRefusesVoiceOnlyProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 	backend := WerkBackend{credentials: store}
-	for _, id := range []string{string(wscred.ProviderOpenAIAPI), string(wscred.ProviderGroq)} {
+	for _, id := range []string{string(wscred.ProviderOpenRouterVoice), string(wscred.ProviderOpenAIAPI), string(wscred.ProviderGroq)} {
 		if _, err := backend.werkProvider(id); err == nil {
 			t.Fatalf("werkProvider(%q) succeeded, want refusal for voice-only provider", id)
 		}

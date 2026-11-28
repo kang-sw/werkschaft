@@ -209,7 +209,7 @@ func (s *Server) handleDaemonTool(ctx context.Context, id json.RawMessage, name 
 }
 
 func (s *Server) handleDaemonScreenshot(ctx context.Context, id json.RawMessage, args map[string]any) response {
-	tabID, err := optionalStringArg(daemonScreenshotTool, "tab_id", args)
+	tabID, err := daemonOptionalStringArg(daemonScreenshotTool, "tab_id", args)
 	if err != nil {
 		return toolTextResponse(id, "", err)
 	}
@@ -233,12 +233,12 @@ func (s *Server) handleDaemonTabs(id json.RawMessage) response {
 
 func (s *Server) handleDaemonDOM(ctx context.Context, id json.RawMessage, args map[string]any) response {
 	req := wsdashboard.DaemonDOMRequest{}
-	if v, err := optionalStringArg(daemonDOMTool, "tab_id", args); err != nil {
+	if v, err := daemonOptionalStringArg(daemonDOMTool, "tab_id", args); err != nil {
 		return toolTextResponse(id, "", err)
 	} else {
 		req.TabID = v
 	}
-	if v, err := optionalStringArg(daemonDOMTool, "scope", args); err != nil {
+	if v, err := daemonOptionalStringArg(daemonDOMTool, "scope", args); err != nil {
 		return toolTextResponse(id, "", err)
 	} else {
 		req.Scope = v
@@ -287,7 +287,7 @@ func (s *Server) handleDaemonUI(ctx context.Context, id json.RawMessage, args ma
 		{"ref", &req.Ref},
 		{"value", &req.Value},
 	} {
-		v, err := optionalStringArg(daemonUITool, field.key, args)
+		v, err := daemonOptionalStringArg(daemonUITool, field.key, args)
 		if err != nil {
 			return toolTextResponse(id, "", err)
 		}
@@ -315,7 +315,7 @@ func daemonControlErrorResponse(id json.RawMessage, err error) response {
 	return toolTextResponse(id, "", err)
 }
 
-func optionalStringArg(toolName, key string, args map[string]any) (string, error) {
+func daemonOptionalStringArg(toolName, key string, args map[string]any) (string, error) {
 	raw, present := args[key]
 	if !present || raw == nil {
 		return "", nil

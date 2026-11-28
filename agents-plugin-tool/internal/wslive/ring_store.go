@@ -110,7 +110,68 @@ type ringMem struct {
 var (
 	ringPinsMu sync.Mutex
 	ringPins   = map[string]*ringMem{} // normalized ring dir -> *ringMem
+
+	ringObserversMu  sync.RWMutex
+	ringObservers    = map[uint64]RingObserver{}
+	ringObserverNext uint64
 )
+
+// RingObserver receives incremental ring additions and RingHistoryCap evictions
+// after the ring write commits. Callbacks run outside the ring's mutex so
+// downstream index writers never block conversation ring updates.
+type RingObserver func(dir string, added []RingRecord, evicted []string)
+
+// RegisterRingObserver registers fn to receive added and evicted ring entries
+// across pinned and unpinned writes and external ring syncs. The returned
+// function unregisters fn and is idempotent.
+func RegisterRingObserver(fn RingObserver) func() {
+	if fn == nil {
+		return func() {}
+	}
+	ringObserversMu.Lock()
+	ringObserverNext++
+	id := ringObserverNext
+	ringObservers[id] = fn
+	ringObserversMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			ringObserversMu.Lock()
+			delete(ringObservers, id)
+			ringObserversMu.Unlock()
+		})
+	}
+}
+
+func notifyRingObservers(dir string, added []RingRecord, evicted []string) {
+	if len(added) == 0 && len(evicted) == 0 {
+		return
+	}
+	ringObserversMu.RLock()
+	if len(ringObservers) == 0 {
+		ringObserversMu.RUnlock()
+		return
+	}
+	fns := make([]RingObserver, 0, len(ringObservers))
+	for _, fn := range ringObservers {
+		fns = append(fns, fn)
+	}
+	ringObserversMu.RUnlock()
+
+	cleanDir := filepath.Clean(dir)
+	var addedCopy []RingRecord
+	if len(added) > 0 {
+		addedCopy = append([]RingRecord(nil), added...)
+	}
+	var evictedCopy []string
+	if len(evicted) > 0 {
+		evictedCopy = append([]string(nil), evicted...)
+	}
+	for _, fn := range fns {
+		fn(cleanDir, addedCopy, evictedCopy)
+	}
+}
 
 func normPathKey(path string) string {
 	clean := filepath.Clean(path)
@@ -258,12 +319,13 @@ func SyncExternalRing(dir string) {
 		return
 	}
 	rm.mu.Lock()
-	defer rm.mu.Unlock()
 	if rm.closed || !rm.loaded {
+		rm.mu.Unlock()
 		return
 	}
 	dirEntries, err := wsstate.ReadDir(rm.dir)
 	if err != nil {
+		rm.mu.Unlock()
 		return
 	}
 	var newLegacy []string
@@ -282,6 +344,7 @@ func SyncExternalRing(dir string) {
 		}
 	}
 	if len(newLegacy) == 0 && len(newSegs) == 0 {
+		rm.mu.Unlock()
 		return
 	}
 	sort.Strings(newLegacy)
@@ -311,9 +374,13 @@ func SyncExternalRing(dir string) {
 			rm.forceRotate = true
 		}
 	}
+	var evicted []string
 	if len(added) > 0 {
-		rm.insertRecordsLocked(added)
+		evicted = rm.insertRecordsLocked(added)
 	}
+	cleanDir := rm.dir
+	rm.mu.Unlock()
+	notifyRingObservers(cleanDir, added, evicted)
 }
 
 func (rm *ringMem) ensureLoadedLocked(cutTail bool) error {
@@ -621,7 +688,8 @@ func CopyRingUnion(dest, archived, live string) error {
 		records = records[len(records)-RingHistoryCap:]
 	}
 	writer := ringMem{dir: dest}
-	return errors.Join(writer.appendRecordsLocked(records), writer.close())
+	_, err = writer.appendRecordsLocked(records)
+	return errors.Join(err, writer.close())
 }
 
 func encodeSegmentLines(records []RingRecord, prevMax string) ([]byte, error) {
@@ -731,7 +799,7 @@ func (rm *ringMem) pruneOldSegmentsLocked() {
 	}
 }
 
-func (rm *ringMem) insertRecordsLocked(recs []RingRecord) {
+func (rm *ringMem) insertRecordsLocked(recs []RingRecord) []string {
 	needSort := false
 	for _, rec := range recs {
 		if len(rm.records) > 0 && rec.Name <= rm.records[len(rm.records)-1].Name {
@@ -750,27 +818,35 @@ func (rm *ringMem) insertRecordsLocked(recs []RingRecord) {
 		}
 		rm.records = dedup
 	}
+	var evicted []string
 	if len(rm.records) > RingHistoryCap {
-		rm.records = append([]RingRecord(nil), rm.records[len(rm.records)-RingHistoryCap:]...)
+		drop := len(rm.records) - RingHistoryCap
+		evicted = make([]string, drop)
+		for i := 0; i < drop; i++ {
+			evicted[i] = rm.records[i].Name
+		}
+		rm.records = append([]RingRecord(nil), rm.records[drop:]...)
 	}
 	if len(recs) > 0 {
 		rm.gen++
 	}
+	return evicted
 }
 
-func (rm *ringMem) appendRecordsLocked(records []RingRecord) error {
+func (rm *ringMem) appendRecordsLocked(records []RingRecord) ([]string, error) {
 	if len(records) == 0 {
-		return nil
+		return nil, nil
 	}
+	var evicted []string
 	pos := 0
 	for pos < len(records) {
 		if err := rm.ensureWriterLocked(); err != nil {
-			return err
+			return evicted, err
 		}
 		room := ringSegmentEntries - rm.segEntries
 		if room <= 0 {
 			if err := rm.rotateLocked(true); err != nil {
-				return err
+				return evicted, err
 			}
 			room = ringSegmentEntries
 		}
@@ -784,7 +860,7 @@ func (rm *ringMem) appendRecordsLocked(records []RingRecord) error {
 		}
 		raw, err := encodeSegmentLines(chunk, prevMax)
 		if err != nil {
-			return err
+			return evicted, err
 		}
 		n, werr := rm.file.Write(raw)
 		if werr != nil {
@@ -795,7 +871,7 @@ func (rm *ringMem) appendRecordsLocked(records []RingRecord) error {
 			}
 			_ = rm.file.Close()
 			rm.file = nil
-			return fmt.Errorf("write conversation ring segment: %w", werr)
+			return evicted, fmt.Errorf("write conversation ring segment: %w", werr)
 		}
 		rm.segEntries += len(chunk)
 		rm.segBytes += int64(n)
@@ -807,15 +883,17 @@ func (rm *ringMem) appendRecordsLocked(records []RingRecord) error {
 		if len(rm.segments) > 0 {
 			rm.segments[len(rm.segments)-1].count += len(chunk)
 		}
-		rm.insertRecordsLocked(chunk)
+		if dropped := rm.insertRecordsLocked(chunk); len(dropped) > 0 {
+			evicted = append(evicted, dropped...)
+		}
 		pos += len(chunk)
 		if rm.segEntries >= ringSegmentEntries || rm.segBytes >= ringSegmentBytes {
 			if err := rm.rotateLocked(pos < len(records)); err != nil {
-				return err
+				return evicted, err
 			}
 		}
 	}
-	return nil
+	return evicted, nil
 }
 
 // writeLegacyRingRaw writes one atomic owner-only per-entry .json file and
@@ -854,10 +932,10 @@ func writeLegacyRingRaw(dir, name string, raw []byte) error {
 
 // trimLegacyRing removes only surplus legacy .json files past RingHistoryCap,
 // never touching seg-*.jsonl segment files owned by a daemon writer.
-func trimLegacyRing(dir string) {
+func trimLegacyRing(dir string) []string {
 	entries, err := wsstate.ReadDir(dir)
 	if err != nil {
-		return
+		return nil
 	}
 	var names []string
 	for _, de := range entries {
@@ -866,12 +944,16 @@ func trimLegacyRing(dir string) {
 		}
 	}
 	if len(names) <= RingHistoryCap {
-		return
+		return nil
 	}
 	sort.Strings(names)
-	for _, name := range names[:len(names)-RingHistoryCap] {
+	dropped := names[:len(names)-RingHistoryCap]
+	evicted := make([]string, 0, len(dropped))
+	for _, name := range dropped {
 		_ = os.Remove(filepath.Join(dir, name))
+		evicted = append(evicted, name)
 	}
+	return evicted
 }
 
 func appendRingEntries(dir string, entries []RingEntry) error {
@@ -888,13 +970,21 @@ func appendRingEntries(dir string, entries []RingEntry) error {
 	}
 	if rm := pinnedRing(dir); rm != nil {
 		rm.mu.Lock()
-		defer rm.mu.Unlock()
 		if !rm.closed {
 			if err := rm.ensureLoadedLocked(true); err != nil {
+				rm.mu.Unlock()
 				return err
 			}
-			return rm.appendRecordsLocked(records)
+			evicted, err := rm.appendRecordsLocked(records)
+			cleanDir := rm.dir
+			rm.mu.Unlock()
+			if err != nil {
+				return err
+			}
+			notifyRingObservers(cleanDir, records, evicted)
+			return nil
 		}
+		rm.mu.Unlock()
 	}
 	clean := filepath.Clean(dir)
 	for _, rec := range records {
@@ -906,7 +996,8 @@ func appendRingEntries(dir string, entries []RingEntry) error {
 			return err
 		}
 	}
-	trimLegacyRing(clean)
+	evicted := trimLegacyRing(clean)
+	notifyRingObservers(clean, records, evicted)
 	return nil
 }
 
@@ -926,26 +1017,38 @@ func appendRingNamed(dir, name string, raw []byte) error {
 	rec := RingRecord{RingEntry: entry, Name: name, At: at}
 	if rm := pinnedRing(dir); rm != nil {
 		rm.mu.Lock()
-		defer rm.mu.Unlock()
 		if !rm.closed {
 			if err := rm.ensureLoadedLocked(true); err != nil {
+				rm.mu.Unlock()
 				return err
 			}
 			idx := sort.Search(len(rm.records), func(i int) bool { return rm.records[i].Name >= name })
 			if idx < len(rm.records) && rm.records[idx].Name == name {
 				prior, err := json.Marshal(rm.records[idx].RingEntry)
+				cleanDir := rm.dir
+				rm.mu.Unlock()
 				if err == nil && bytes.Equal(prior, raw) {
+					notifyRingObservers(cleanDir, []RingRecord{rec}, nil)
 					return nil
 				}
 				return fmt.Errorf("immutable summary turn already exists with different bytes")
 			}
-			return rm.appendRecordsLocked([]RingRecord{rec})
+			evicted, err := rm.appendRecordsLocked([]RingRecord{rec})
+			cleanDir := rm.dir
+			rm.mu.Unlock()
+			if err != nil {
+				return err
+			}
+			notifyRingObservers(cleanDir, []RingRecord{rec}, evicted)
+			return nil
 		}
+		rm.mu.Unlock()
 	}
 	clean := filepath.Clean(dir)
 	if existing, found := readRingByName(clean, name); found {
 		prior, err := json.Marshal(existing.RingEntry)
 		if err == nil && bytes.Equal(prior, raw) {
+			notifyRingObservers(clean, []RingRecord{rec}, nil)
 			return nil
 		}
 		return fmt.Errorf("immutable summary turn already exists with different bytes")
@@ -953,7 +1056,8 @@ func appendRingNamed(dir, name string, raw []byte) error {
 	if err := writeLegacyRingRaw(clean, name, raw); err != nil {
 		return err
 	}
-	trimLegacyRing(clean)
+	evicted := trimLegacyRing(clean)
+	notifyRingObservers(clean, []RingRecord{rec}, evicted)
 	return nil
 }
 
@@ -1105,6 +1209,34 @@ func readRingPage(dir, before string, n int) (RingPage, error) {
 		}
 	}
 	return readRingPageWindow(filepath.Clean(dir), before, n)
+}
+
+// ReadRingRecords returns all retained ring records for dir in chronological
+// order (bounded by RingHistoryCap). Pinned rings are copied from RAM without
+// disk reads; unpinned rings load once from disk (used for one-time index
+// backfill and first-touch non-hosted reconciliation).
+func ReadRingRecords(dir string) ([]RingRecord, error) {
+	if rm := pinnedRing(dir); rm != nil {
+		rm.mu.Lock()
+		if !rm.closed {
+			if err := rm.ensureLoadedLocked(false); err != nil {
+				rm.mu.Unlock()
+				return nil, err
+			}
+			out := append([]RingRecord(nil), rm.records...)
+			rm.mu.Unlock()
+			return out, nil
+		}
+		rm.mu.Unlock()
+	}
+	loaded, err := loadRingDir(filepath.Clean(dir), false)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return loaded.records, nil
 }
 
 // readRingPageWindow reads only the window needed to satisfy an unpinned

@@ -72,6 +72,9 @@ type Record struct {
 	// WSKey is a lead key, Root its canonical git root, and the fields
 	// below apply.
 	Lead bool `json:"lead,omitempty"`
+	// ConvHistoryAccess opts this lead session into the conv.* conversation
+	// history MCP tools. Additive top-level member (T0).
+	ConvHistoryAccess bool `json:"conv_history_access,omitempty"`
 	// CompanionRole marks a daemon-managed companion hosted session
 	// ("companion-body" or "companion-work"). Companion sessions stay unlisted
 	// from the session rail, roster, idle-lead sleep list, and mail
@@ -245,10 +248,11 @@ type Record struct {
 	// loaded, whatever is selected now); MCPHolder the holder the token was
 	// drawn for, so a token a later start (by a daemon that keeps the
 	// members without knowing them) left behind is told from a live one.
-	MCPToken  string            `json:"mcp_token_secret,omitempty"`
-	MCPURL    string            `json:"mcp_url,omitempty"`
-	MCPEnv    map[string]string `json:"mcp_env,omitempty"`
-	MCPHolder string            `json:"mcp_holder_id,omitempty"`
+	MCPToken             string            `json:"mcp_token_secret,omitempty"`
+	MCPURL               string            `json:"mcp_url,omitempty"`
+	MCPEnv               map[string]string `json:"mcp_env,omitempty"`
+	MCPHolder            string            `json:"mcp_holder_id,omitempty"`
+	MCPConvHistoryAccess bool              `json:"mcp_conv_history_access,omitempty"`
 	// MCPDashboardControl snapshots DashboardControlAccess at the launch that
 	// drew MCPToken so a daemon restart rejoining the running process keeps
 	// the exact attach-time effective state. Cleared by forgetMCP. Additive (T0).

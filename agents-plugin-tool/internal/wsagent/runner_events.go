@@ -1355,6 +1355,27 @@ func (c *conv) setSettings(model, effort *string) {
 	}
 }
 
+// setConvHistoryAccess persists the lead's conv_history_access flag without
+// stopping or restarting a running process (decision 1640).
+func (c *conv) setConvHistoryAccess(enabled bool) error {
+	if !c.record().Lead {
+		return &requestError{status: http.StatusForbidden, msg: "conv_history_access applies to lead sessions only"}
+	}
+	changed := false
+	if err := c.update(func(rec *Record) {
+		if rec.ConvHistoryAccess != enabled {
+			rec.ConvHistoryAccess = enabled
+			changed = true
+		}
+	}); err != nil {
+		return err
+	}
+	if changed {
+		c.r.notify(c.rec.ReplyID, c.rec.Root)
+	}
+	return nil
+}
+
 // applySettings carries changed settings to the process at a turn
 // boundary: in-stream when the backend can, and only otherwise by stopping
 // the process so the next turn restarts it with the new values on the same

@@ -94,6 +94,10 @@ type ProxyHello struct {
 	// (wsagent.Record.DashboardControlAccess). Set only by trusted in-daemon
 	// token resolution and never decoded from a launcher hello.
 	DashboardControlAccess bool `json:"-"`
+	// ConvHistoryAccess is the start-time opt-in snapshot for conv.* MCP
+	// tool discovery on this hosted lead process; set with Conversation and
+	// never decoded from a launcher's hello.
+	ConvHistoryAccess bool `json:"-"`
 	// FileWrites is populated with the authority and recorder of the
 	// live in-daemon process by its own token resolution.
 	FileWrites *wsfs.FileWriteSession `json:"-"`

@@ -891,6 +891,9 @@
   }
   function freeMeasureHeight(n) {
     if (!n) return FREE_FALLBACK_H;
+    // A maximized sheet is position: fixed at viewport height; never let its
+    // modal box overwrite the card's laid/cached board height.
+    if (n.hasAttribute && n.hasAttribute("data-max")) return freeLaidHeight(n);
     var key = anchorId(n), h = 0;
     var pageHiddenNow = !!(doc && (doc.hidden || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-animation-paused")))) ||
       (typeof shHidden !== "undefined" && !!shHidden);
@@ -952,7 +955,7 @@
       }
     }
   }
-  function freeClearNode(n) {
+  function freeClearNode(n, opts) {
     if (!n || n.nodeType !== 1) return;
     if (freePin && freePin.card === n) freeReleasePin();
     freeSetOffWindow(n, null);
@@ -962,8 +965,10 @@
       try { freeCardRO.unobserve(n); } catch (e) {}
       freeObserved.delete(n);
     }
-    freePos.delete(n);
-    freeLaidH.delete(n);
+    if (!(opts && opts.keepCoords)) {
+      freePos.delete(n);
+      freeLaidH.delete(n);
+    }
   }
   function freeCancelTimers() {
     var wasScrolling = !!(freeScrollRaf || freeIdleTimer);
@@ -1678,7 +1683,9 @@
       var delta = FREE_RUNWAY_MID - yAnchor;
       if (Math.abs(delta) < 1) return;
       for (var i = freeWinStart; i <= freeWinEnd; i++) {
-        var c = list[i], ny = freePos.get(c) + delta;
+        var c = list[i], cy = freePos.get(c);
+        if (cy === undefined) continue;
+        var ny = cy + delta;
         freePos.set(c, ny);
         if (!c.hasAttribute || !c.hasAttribute("data-max")) {
           var topStr = Math.round(ny) + "px";

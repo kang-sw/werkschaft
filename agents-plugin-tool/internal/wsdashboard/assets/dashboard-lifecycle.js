@@ -840,8 +840,18 @@
       else window.top.location.href = u.href;
       return;
     }
+    if (u.origin === location.origin && u.pathname === location.pathname && u.hash === location.hash && /^#entry=/.test(u.hash) && typeof entryJumpFromHash === "function") {
+      entryJumpFromHash(u.hash);
+      return;
+    }
     location.href = u.href;
   }
+  window.wsOpenSettings = function (href, opener) {
+    var u = new URL(href, location.href);
+    if (shell && shOpenSettings(u, opener)) return true;
+    go(u.href);
+    return true;
+  };
   // A plain click on a link the page would load goes through go, but a
   // link to the page's own document (a hash route) and one that opens
   // elsewhere (a target, a download, a modified click).
@@ -910,6 +920,10 @@
     entry.el.remove();
     if (location.pathname === "/settings") history.replaceState(history.state, "", "/");
     railSettingsMark();
+    shFrames.forEach(function (f) {
+      try { f.el.contentWindow.dispatchEvent(new Event("ws-voice-capabilities-refresh")); } catch (x) {}
+    });
+    try { window.dispatchEvent(new Event("ws-voice-capabilities-refresh")); } catch (x) {}
     var focus = entry.focus;
     if (!focus || !focus.isConnected || !focus.getClientRects().length) focus = railBtn;
     if (focus) focus.focus({ preventScroll: true });
@@ -1018,6 +1032,8 @@
         if (ent.loaded || ent.ready) {
           try { ent.el.contentWindow.location.hash = f.hash; } catch (x) { /* unloading */ }
         } else ent.lateHash = f.hash;
+      } else if (/^#entry=/.test(f.hash) && (ent.loaded || ent.ready)) {
+        try { if (ent.el.contentWindow.wsEntryJumpFromHash) ent.el.contentWindow.wsEntryJumpFromHash(f.hash); } catch (x) { /* unloading */ }
       }
       ent.f = f;
       // A pending destination whose ready/load already fired never gets another
@@ -1081,6 +1097,7 @@
     var cached = window.WsShell.cacheLimit && shFrames.filter(function (x) { return (x.loaded || x.ready) && x.f.rid && x.f.path === f.path; })[0];
     if (cached) {
       if (cached.f.hash !== f.hash) try { cached.el.contentWindow.location.hash = f.hash; } catch (e) {}
+      else if (/^#entry=/.test(f.hash)) try { if (cached.el.contentWindow.wsEntryJumpFromHash) cached.el.contentWindow.wsEntryJumpFromHash(f.hash); } catch (e) {}
       cached.f = f;
       shWant = cached;
       shShow(cached, from);
@@ -1656,6 +1673,7 @@
         // the board swap showRegions just applied all lay out only after this turn.
         if (typeof boardRevealSchedule === "function") boardRevealSchedule();
         tickTimes();
+        if (typeof entryJumpRunPending === "function") entryJumpRunPending();
         if (shTrackerRev !== null) { var rev = shTrackerRev; shTrackerRev = null; trackerNudge(rev); }
         queue();
       } else if (m.wsShell === "companion-gate") {
@@ -1758,6 +1776,7 @@
   mermaid();
   pinConvo();
   restoreSessionView();
+  if (typeof entryJumpFromHash === "function") entryJumpFromHash();
   nearTop();
   if (framed) shFrameInit();
   if (shell && window.WsShell) {

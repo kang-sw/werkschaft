@@ -3,6 +3,7 @@ package wsdashboard
 import (
 	"errors"
 	"github.com/gofrs/flock"
+	"github.com/kang-sw/devenv/internal/wsconvidx"
 	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsmeta"
 	"io"
@@ -304,6 +305,23 @@ type Daemon struct {
 	boardExportMaxBytes int64
 	// companionCommands broadcasts agent-director commands to rail streams.
 	companionCommands companionCommandHub
+	// convReveals broadcasts conv.reveal highlight/jump events to rail streams.
+	convReveals convRevealHub
+	// convIdx is the daemon's held Type 4 SQLite FTS5 conversation index
+	// (conv_host.go), opened under dashboard.lock and closed before unlock.
+	convIdx                 *wsconvidx.Store
+	stopRingObserver        func()
+	convDeltaMu             sync.Mutex
+	convDeltaQueue          []convRingDelta
+	convDeltaWake           chan struct{}
+	convDeltaFlush          chan chan struct{}
+	convDeltaStop           chan struct{}
+	convDeltaDone           chan struct{}
+	convBackfillOnce        sync.Once
+	convBackfillMu          sync.Mutex
+	convBackfillInFlight    map[string]struct{}
+	convNonHostedReconciled map[string]bool
+	convBackfillWG          sync.WaitGroup
 	// companionPhone holds the in-memory 4-state embodiment & phone messenger store.
 	companionPhone CompanionPhoneStore
 	// companionWake, when bound by cmd/ws-mcp, wakes the Tier-1 companion burst

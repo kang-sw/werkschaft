@@ -471,6 +471,14 @@
 
   var ASSETS_TRIED = "ws.dashboard.assetsreload";
   var mainStream = null, mainRetry = null, mainProbe = null, mainEpoch = 0, mainPaused = false;
+  // Cold loads and long disconnects (> 60s, e.g. sleep/wake) silently
+  // re-baseline rail attention so stale arrivals never storm; short reconnects
+  // (<= 60s, e.g. daemon swap or delta recovery) preserve seen asks so genuine
+  // new questions arriving during the blip still flag and flash.
+  var RAIL_RECONNECT_GRACE_MS = 60000, railBaselined = false, railDisconnectedAt = null;
+  function railNoteDisconnect() {
+    if (railBaselined && railDisconnectedAt === null) railDisconnectedAt = Date.now();
+  }
   var companionRelay = null, companionStreamReady = !window.WebSocket;
   function companionStream(ready) {
     companionStreamReady = ready;
@@ -480,13 +488,13 @@
     mainEpoch++;
     if (mainRetry !== null) { clearTimeout(mainRetry); mainRetry = null; }
     if (mainProbe) { mainProbe.abort(); mainProbe = null; }
-    if (mainStream) { mainStream.close(); mainStream = null; }
+    if (mainStream) { railNoteDisconnect(); mainStream.close(); mainStream = null; }
   }
   function syncMainStream() {
     // Browser-hidden tabs retain their stream; only cached frames stop it.
     if (shHidden === mainPaused) return;
     mainPaused = shHidden;
-    if (mainPaused) { boardReturnEnd(); stopMainStream(); connected(false); trackerLost(); }
+    if (mainPaused) { railNoteDisconnect(); boardReturnEnd(); stopMainStream(); connected(false); trackerLost(); }
     else { boardReturnShown(); connect(); }
   }
   doc.addEventListener("ws-page-visibility", syncMainStream);
@@ -558,7 +566,7 @@
     // Use its immutable canonical input, never the mounted/staged/pinned DOM.
     var boardHeld = hiddenRegions.board || boardLatest;
     var boardInput = withoutBoard || !boardHeld ? null : (typeof boardHeld.html === "string" ? boardInputFull(boardHeld.html) : boardHeld.html);
-    var railInput = null, treeInput = null, entryInput = null, panelInput = null, railBaseline = true;
+    var railInput = null, treeInput = null, entryInput = null, panelInput = null, railFirst = true;
     // The shell streams the rail alone; a framed session page streams its
     // session without the rail.
     var path = shell ? "/rail/events" : mode === "index" || worktree ? "/events" : "/s/" + rid + "/events";
@@ -570,13 +578,14 @@
       // Reopen with the hashes held now, so a reconnect sends only what
       // changed since.
       drop: function () {
+        railNoteDisconnect();
         if (framed && rid) companionStream(false);
         if (daemonBridgeEnabled && typeof clearDaemonConfirm === "function") clearDaemonConfirm();
         connected(false);
         trackerLost();
         retry(connect, 3000);
       },
-      events: { assets: onAssets, "openai-consent": onOpenAIConsent, "account-changed": onAccountChanged, "daemon-confirm-request": onDaemonConfirmRequest, "daemon-confirm-clear": onDaemonConfirmClear, "daemon-bridge-request": onDaemonBridgeRequest, companion: onCompanion, "companion-focus": onCompanionFocus, "companion-command": onCompanionCommand, "companion-phone": onCompanionPhone, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, usercmd: onUsercmd, execjobs: onExecJobs, gone: onGone }
+      events: { assets: onAssets, "openai-consent": onOpenAIConsent, "account-changed": onAccountChanged, "daemon-confirm-request": onDaemonConfirmRequest, "daemon-confirm-clear": onDaemonConfirmClear, "daemon-bridge-request": onDaemonBridgeRequest, companion: onCompanion, "companion-focus": onCompanionFocus, "companion-command": onCompanionCommand, "companion-phone": onCompanionPhone, "conv-reveal": onConvReveal, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, usercmd: onUsercmd, execjobs: onExecJobs, gone: onGone }
     });
     mainStream = st;
     function onOpenAIConsent(event) {
@@ -622,6 +631,10 @@
       window.wsCompanionPhoneState = snapshot;
       doc.dispatchEvent(new CustomEvent("ws-companion-phone", { detail: snapshot }));
     }
+    function onConvReveal(ev) {
+      if (!current() || !ev || typeof ev.replyId !== "string" || !ev.replyId) return;
+      if (typeof railReveal === "function") railReveal(ev);
+    }
     function onRegion(ev) {
       if (!current() || !ev) return;
       if (worktree && ev.name !== "rail") return;
@@ -657,6 +670,7 @@
     function onPanelRows(ev) {
       var next = panelInputPatch(panelInput, ev);
       if (!next) {
+        railNoteDisconnect();
         st.close(); connected(false);
         retry(connect, 0);
         return;
@@ -667,6 +681,7 @@
     function onEntryRows(ev) {
       var next = entryInputPatch(entryInput, ev);
       if (!next) {
+        railNoteDisconnect();
         st.close(); connected(false);
         retry(connect, 0);
         return;
@@ -677,6 +692,7 @@
     function onTreeRows(ev) {
       var next = treeInputPatch(treeInput, ev);
       if (!next) {
+        railNoteDisconnect();
         st.close(); connected(false);
         retry(connect, 0);
         return;
@@ -688,6 +704,7 @@
       var next = WsRail && WsRail.rowInputPatch(railInput, ev, doc);
       if (!next) {
         // Close before reopening: the new connection always sends a full rail.
+        railNoteDisconnect();
         st.close(); connected(false);
         retry(connect, 0);
         return;
@@ -700,6 +717,7 @@
       if (!next) {
         // This connection's baseline cannot be trusted. Close it before
         // reopening without the board hash; other regions keep their hashes.
+        railNoteDisconnect();
         st.close();
         connected(false);
         retry(function () { connect(true); }, 0);
@@ -713,7 +731,9 @@
       try {
       if (ev.name === "board" && companionRelay) companionRelay.board(ev.html);
       // Observe even held updates: an ask may open and close while hidden
-      // or during a drag. Reconnect's first full rail silently baselines.
+      // or during a drag. Cold loads and long disconnects (> 60s) baseline
+      // silently; short reconnects compare against pre-disconnect seen asks.
+      var railBaseline = ev.name === "rail" && railFirst && (!railBaselined || (railDisconnectedAt !== null && Date.now() - railDisconnectedAt > RAIL_RECONNECT_GRACE_MS));
       var needCompanionRail = !!(shell && window.WsCompanion && window.WsCompanion.observeRail && (!window.WsCompanion.hasRailObserver || window.WsCompanion.hasRailObserver()));
       var fastRailRows = ev.name === "rail" && railAttention && !railBaseline && !needCompanionRail && !pageHidden() && WsRail && WsRail.rowInputAttentionRows
         ? WsRail.rowInputAttentionRows(ev.html)
@@ -723,7 +743,7 @@
       else if (railFrag) railAttention.observe(q(".rs", railFrag), rid, railBaseline);
       if (railFrag && shell) window.WsCompanion?.observeRail?.(railFrag, rid, railBaseline);
       if (railFrag && railBaseline) apScan(railFrag, "rail", true);
-      if (ev.name === "rail") railBaseline = false;
+      if (ev.name === "rail") { railFirst = false; railBaselined = true; railDisconnectedAt = null; }
       // A hidden tab keeps only each region's newest update and applies none;
       // showing the tab applies them (showRegions). The stream stays open, so
       // the light events (tracker) still arrive and act.
@@ -792,6 +812,7 @@
     // failures keep retrying at that cadence until absence is confirmed or
     // the stream can reopen with the hashes held then.
     function onGone() {
+      railNoteDisconnect();
       st.close();
       if (framed && rid) companionStream(false);
       connected(false);

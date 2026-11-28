@@ -24,6 +24,7 @@ use crate::{
     notify,
     permissions::{self, MediaCaptureKind},
     shell::Connection,
+    speech,
     updates,
 };
 
@@ -45,6 +46,7 @@ pub(super) enum Bridge {
     Recovery,
     Notify,
     Capture,
+    Speech,
 }
 
 pub(super) struct BridgeState {
@@ -84,6 +86,7 @@ define_class!(
                     }
                     Bridge::Notify => notify::receive(window, state.epoch, source, &text),
                     Bridge::Capture => capture::receive(window, state.epoch, source, &text),
+                    Bridge::Speech => speech::receive(window, state.epoch, source, &text),
                 }
             }
         }
@@ -189,6 +192,9 @@ define_class!(
 
         #[unsafe(method(webView:didCommitNavigation:))]
         fn committed(&self, webview: &WKWebView, navigation: Option<&WKNavigation>) {
+            if let Some((app, _)) = self.ivars().dashboard.as_ref() {
+                speech::teardown(app, "navigation");
+            }
             if let Some(original) = self.ivars().original.load() {
                 unsafe {
                     original.webView_didCommitNavigation(webview, navigation);

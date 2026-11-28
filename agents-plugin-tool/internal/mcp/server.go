@@ -67,6 +67,8 @@ type Server struct {
 	companionDelegation       CompanionDelegationHost
 	daemonControl             DaemonControlHost
 	dashboardControlEffective bool
+	conv                      ConvHost
+	convHistoryListed         bool
 	ephemeralPool             *wsagent.EphemeralPool
 	stopWorkerWatch func()
 	workerRowKeys   struct {

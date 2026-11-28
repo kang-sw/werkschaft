@@ -508,22 +508,23 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rail .rs.cur .qdot { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card)); }
 /* Unread attention: three fast flashes (0.38s * 3 = 1.14s) on arrival, then
    a seamless transition into a continuous 1Hz gradient pulse; server-replaced
-   rows mount with .attn alone and start directly in the 1Hz pulse. The
-   question dot's z-index keeps it above both overlays. */
+   or reordered rows inherit --attn-t / --attn-breathe-delay so their phase
+   continues without restarting. The question dot's z-index keeps it above both
+   overlays. */
 .rail .rs.attn::before {
   content: ""; position: absolute; inset: 0; border-radius: 6px; pointer-events: none;
   background: linear-gradient(90deg, var(--wb-accent-policy) 0%, color-mix(in srgb, var(--wb-accent-policy) 68%, transparent) 60%, color-mix(in srgb, var(--wb-accent-policy) 18%, transparent) 100%);
   opacity: .04;
-  animation: attn-breathe 1s ease-in-out infinite;
+  animation: attn-breathe 1s ease-in-out var(--attn-breathe-delay, 0s) infinite;
 }
 .rail .rs.attn .hb::after {
   content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
   box-shadow: 0 0 0 3px var(--wb-accent-policy);
   opacity: .25;
-  animation: attn-breathe-ring 1s ease-in-out infinite;
+  animation: attn-breathe-ring 1s ease-in-out var(--attn-breathe-delay, 0s) infinite;
 }
-.rail .rs.attn.attn-flash::before { animation: attn-flash .38s ease-in-out 3, attn-breathe 1s ease-in-out 1.14s infinite; }
-.rail .rs.attn.attn-flash .hb::after { animation: attn-flash-ring .38s ease-in-out 3, attn-breathe-ring 1s ease-in-out 1.14s infinite; }
+.rail .rs.attn.attn-flash::before { animation: attn-flash .38s ease-in-out calc(-1 * var(--attn-t, 0s)) 3, attn-breathe 1s ease-in-out calc(1.14s - var(--attn-t, 0s)) infinite; }
+.rail .rs.attn.attn-flash .hb::after { animation: attn-flash-ring .38s ease-in-out calc(-1 * var(--attn-t, 0s)) 3, attn-breathe-ring 1s ease-in-out calc(1.14s - var(--attn-t, 0s)) infinite; }
 @keyframes attn-flash { 0%, 100% { opacity: .04; } 50% { opacity: .44; } }
 @keyframes attn-breathe { 0%, 100% { opacity: .04; } 50% { opacity: .28; } }
 /* The ring's shadow is static and only its opacity moves, so the pulse stays
@@ -978,6 +979,32 @@ button.bgbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-o
 .chip.pmhead[role="button"] { cursor: pointer; }
 .chip.pmhead[role="button"]:hover { background: color-mix(in srgb, var(--wb-primary) 16%, var(--wb-muted)); }
 .chip.pmhead:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: 1px; }
+/* session popover conversation-history opt-in toggle and inline restart banner */
+.rpop .spconv { display: grid; gap: 5px; padding-top: 6px; border-top: 1px solid var(--wb-muted); min-width: 0; }
+.rpop .spconv[hidden] { display: none; }
+.rpop .spconv-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.rpop .spconv-sw { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; background: none; border: 0; padding: 2px 0; color: var(--wb-fg); font: 600 12.5px/1.3 var(--wb-sans); text-align: left; }
+.rpop .spconv-sw:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: 2px; border-radius: 6px; }
+.rpop .spconv-sw:disabled { opacity: .45; cursor: not-allowed; }
+.rpop .spconv-sw i { width: 28px; height: 16px; border-radius: 999px; background: var(--wb-line); position: relative; transition: background-color .12s; flex: none; }
+.rpop .spconv-sw i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--wb-card); box-shadow: 0 1px 2px rgb(0 0 0 / .22); transition: left .12s, background-color .12s; }
+.rpop .spconv-sw[aria-checked="true"] i { background: color-mix(in srgb, var(--wb-primary) 55%, var(--wb-muted)); }
+.rpop .spconv-sw[aria-checked="true"] i::after { left: 14px; background: var(--wb-primary); }
+.rpop .spconv-hint { margin: 0; font-size: 11.5px; color: var(--wb-muted-fg); text-align: left; }
+.rpop .spconv-restart { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 8px; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--wb-warn) 16%, var(--wb-card)); color: color-mix(in srgb, var(--wb-warn-ink) 88%, var(--wb-fg)); font-size: 11.5px; }
+.rpop .spconv-restart[hidden] { display: none; }
+.rpop .spconv-rtxt { font-weight: 600; flex: 1 1 auto; min-width: 0; }
+.rpop .spconv-stop { position: relative; overflow: hidden; flex: none; border: 0; border-radius: 999px; padding: 3px 9px; background: var(--wb-card); color: var(--wb-fail); font: 700 11px/1.3 var(--wb-sans); cursor: pointer; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-fail) 42%, transparent); }
+.rpop .spconv-stop:hover:not(:disabled) { background: color-mix(in srgb, var(--wb-fail) 14%, var(--wb-card)); }
+.rpop .spconv-stop:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: 1px; }
+.rpop .spconv-stop:disabled { opacity: .45; cursor: not-allowed; }
+/* conv-reveal rail pulse highlight and jump badge */
+.rail .rs.conv-reveal-pulse { position: relative; background: color-mix(in srgb, var(--wb-primary) 14%, var(--wb-card)); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 55%, transparent); }
+.rail .rs.conv-reveal-pulse::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: color-mix(in srgb, var(--wb-primary) 22%, transparent); pointer-events: none; animation: conv-reveal-pulse 1.3s ease-in-out 3; opacity: 0; }
+@keyframes conv-reveal-pulse { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
+.rail .conv-reveal-jump { position: relative; z-index: 2; flex: none; display: inline-flex; align-items: center; padding: 1px 7px; margin-left: 4px; border-radius: 999px; background: var(--wb-primary); color: var(--wb-primary-fg); font: 700 10.5px/16px var(--wb-sans); text-decoration: none; white-space: nowrap; }
+.rail .conv-reveal-jump:hover { opacity: .9; }
+.rail .conv-reveal-jump:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 1px; }
 @media (prefers-reduced-motion: reduce) {
   .rail, .rail-open .rail, .rscrim { transition: none; }
   .bgbadge { animation: none; }
@@ -986,6 +1013,7 @@ button.bgbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-o
   .hb .hbr::before { animation: none; }
   .rail .kidtog .i { transition: none; }
   .rail .drkwork { animation: none; }
+  .rail .rs.conv-reveal-pulse::after { animation: none; opacity: 0; }
 }
 
 

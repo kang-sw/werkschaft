@@ -27,7 +27,7 @@ import (
 // preserved no-op, since the pre-rename tickets.sage_record was reachable by
 // a delegate-scoped key.
 func isLeadOnlyTool(name string) bool {
-	return sessionHireTool(name) || userCommandTool(name) || isPiTool(name) || isAgentTool(name) || isCompanionTool(name) || isDelegationReportTool(name) || isDaemonControlTool(name) || name == bootstrapToolName || name == "workflow_manual" || name == "workflow_state" || name == "tickets.sage_stamp" || name == "tickets.index_init" || name == "git.merge" || name == "worktree.acquire" || name == "worktree.release" || name == "worktree.remove" || name == "worktree.list" || strings.HasPrefix(name, "lead.") || workflowPreferenceWriterTool(name)
+	return sessionHireTool(name) || userCommandTool(name) || isPiTool(name) || isAgentTool(name) || isCompanionTool(name) || isDelegationReportTool(name) || isDaemonControlTool(name) || isConvTool(name) || name == bootstrapToolName || name == "workflow_manual" || name == "workflow_state" || name == "tickets.sage_stamp" || name == "tickets.index_init" || name == "git.merge" || name == "worktree.acquire" || name == "worktree.release" || name == "worktree.remove" || name == "worktree.list" || strings.HasPrefix(name, "lead.") || workflowPreferenceWriterTool(name)
 }
 
 // Companion session capability markers ((1737)=a, (1744)=a, (1740), (1750)).
@@ -230,6 +230,11 @@ func (s *Server) filteredToolsFor(markerEntry sessionEntry, applyMarker bool) []
 			// persisted && effective dashboard_control_access are both true.
 			continue
 		}
+		if isConvTool(name) && !s.convToolsListed() {
+			// Advertised only to a hosted lead whose start-time snapshot
+			// enabled conv_history_access.
+			continue
+		}
 		if isAgentTool(name) {
 			// Listed where a runner answers them, the daemon's or the token
 			// route's; the agentless product mode keeps them, since
@@ -286,6 +291,9 @@ func (s *Server) callDiscoveryTools(key string, entry sessionEntry, found bool) 
 			continue
 		}
 		if s.companionPostureRefusal(name, key, entry, found) != "" {
+			continue
+		}
+		if s.convAccessRefusal(name) != "" {
 			continue
 		}
 		visible = append(visible, tool)

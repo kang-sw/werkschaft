@@ -50,8 +50,22 @@
     return out.join("|");
   }
 
+  function isVoiceSpan(node) {
+    return !!(node && node.nodeType === 1 && node.hasAttribute && node.hasAttribute("data-voice-span"));
+  }
+
+  function hasVoiceSpan(root) {
+    if (!root) return false;
+    if (typeof root.querySelector === "function") return !!root.querySelector("[data-voice-span]");
+    var kids = root.childNodes || [];
+    for (var i = 0; i < kids.length; i++) {
+      if (isVoiceSpan(kids[i]) || hasVoiceSpan(kids[i])) return true;
+    }
+    return false;
+  }
+
   function isMeaningful(node) {
-    return node.nodeType === 1 || (node.nodeType === 3 && node.nodeValue.length > 0);
+    return (node.nodeType === 1 && !isVoiceSpan(node)) || (node.nodeType === 3 && node.nodeValue.length > 0);
   }
 
   function prevMeaningful(node) {
@@ -77,6 +91,10 @@
         return;
       }
       if (n.nodeType !== 1 && n !== root) return;
+      if (isVoiceSpan(n)) {
+        if (endpoint && n.contains && n.contains(endpoint.node)) position = start;
+        return;
+      }
       if (n.nodeType === 1 && n.hasAttribute && n.hasAttribute("data-wsc-kind")) {
         var kind = n.getAttribute("data-wsc-kind");
         var id = n.getAttribute("data-wsc-id") || "";
@@ -494,7 +512,7 @@
     }
 
     function reconcile(force) {
-      if (detached || reconciling || isComposing()) return;
+      if (detached || reconciling || isComposing() || hasVoiceSpan(editorEl)) return;
       reconciling = true;
       try {
         var st = readState();
@@ -537,13 +555,13 @@
     }
 
     function schedule() {
-      if (detached || isComposing() || rafId) return;
+      if (detached || isComposing() || hasVoiceSpan(editorEl) || rafId) return;
       var raf = typeof win.requestAnimationFrame === "function"
         ? win.requestAnimationFrame
         : function (fn) { return setTimeout(fn, 0); };
       rafId = raf(function () {
         rafId = 0;
-        if (!detached && !isComposing()) reconcile(false);
+        if (!detached && !isComposing() && !hasVoiceSpan(editorEl)) reconcile(false);
       });
     }
 
@@ -623,10 +641,16 @@
     }
 
     function onRenderHook() {
-      if (detached || reconciling) return;
+      if (detached || reconciling || hasVoiceSpan(editorEl)) return;
       domDirty = true;
       if (isComposing()) return;
       if (!applyingHistory) recordHistory("other");
+      reconcile(true);
+    }
+
+    function forceReconcileAfterVoice() {
+      if (detached || reconciling || isComposing() || hasVoiceSpan(editorEl)) return;
+      domDirty = true;
       reconcile(true);
     }
 
@@ -643,6 +667,7 @@
     }
 
     editorEl._wsmdRenderHook = onRenderHook;
+    editorEl._wsmdReconcile = forceReconcileAfterVoice;
 
     // Seed initial history baseline and perform initial reconcile if non-empty.
     undoStack.push(captureSnapshot());
@@ -663,6 +688,7 @@
         editorEl.removeEventListener("input", onInput);
       }
       if (editorEl._wsmdRenderHook === onRenderHook) delete editorEl._wsmdRenderHook;
+      if (editorEl._wsmdReconcile === forceReconcileAfterVoice) delete editorEl._wsmdReconcile;
     }
 
     return {
@@ -673,6 +699,7 @@
   }
 
   window.WsMdEditor = {
-    attach: attach
+    attach: attach,
+    readEditorDom: readEditorDom
   };
 })();

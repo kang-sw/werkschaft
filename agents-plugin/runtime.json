@@ -107,7 +107,12 @@
     "daemon.tabs": ">=0.53.2-dev <0.54.0",
     "daemon.dom": ">=0.53.2-dev <0.54.0",
     "daemon.ui": ">=0.53.2-dev <0.54.0",
-    "daemon.screenshot": ">=0.53.2-dev <0.54.0"
+    "daemon.screenshot": ">=0.53.2-dev <0.54.0",
+    "conv.sessions": ">=0.53.2-dev <0.54.0",
+    "conv.search": ">=0.53.2-dev <0.54.0",
+    "conv.history": ">=0.53.2-dev <0.54.0",
+    "conv.read": ">=0.53.2-dev <0.54.0",
+    "conv.reveal": ">=0.53.2-dev <0.54.0"
   },
   "commands": {
     "runtime.info": ">=0.53.2-dev <0.54.0",
