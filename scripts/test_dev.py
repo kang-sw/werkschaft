@@ -654,6 +654,98 @@ class DevLifecycleTest(unittest.TestCase):
             dev.main(["rerun", "daemon", "--local", "--staged", str(self.binary)])
         self.assertEqual(exc.exception.code, 2)
 
+    def test_run_daemon_start_timeout_with_live_replacement_skips_rollback_and_completes(self):
+        probes = {"count": 0}
+
+        def start(argv, **kwargs):
+            self.advance(12.7)
+            self._live_build_time = int(argv[-1])
+            raise dev.subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+        def health(port, timeout):
+            probes["count"] += 1
+            if probes["count"] == 1:
+                return self.old
+            if probes["count"] == 2:
+                # Simulate replacement still finishing startup on first settle probe.
+                return None
+            return dict(self.expected, build_time=self._live_build_time)
+
+        self.run.side_effect = start
+        self.rest.side_effect = health
+        with mock.patch.object(dev, "restore_daemon", side_effect=AssertionError("must not roll back live replacement")), \
+             mock.patch.object(dev, "capture_daemon_process", return_value=None):
+            self.assertEqual(dev.rerun_daemon(local=True, health_window=40), 0)
+        self.run.assert_called_once()
+        self.seed.assert_called_once()
+        self.assertIn("daemon-start recovered", self.out.getvalue())
+        self.assertIn(f"daemon after:  version={self.expected['version']}", self.out.getvalue())
+        self.assert_gate_released()
+
+    def test_run_daemon_start_timeout_with_old_daemon_still_triggers_rollback(self):
+        def start(argv, **kwargs):
+            if argv[0] == self.previous["executable"]:
+                self.health = self.old
+                return self.result()
+            self.advance(12.7)
+            raise dev.subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+        self.run.side_effect = start
+        with mock.patch.object(dev, "capture_daemon_process", return_value=None), \
+             mock.patch.object(self.launcher, "daemon_absence_proven", return_value=True):
+            self.assertEqual(dev.rerun_daemon(local=True, health_window=40), 1)
+        self.assertEqual(self.run.call_count, 2)
+        self.assertEqual(self.run.call_args_list[1].args[0][0], self.previous["executable"])
+        self.seed.assert_not_called()
+        self.assertIn(f"restored version={self.old['version']}", self.err.getvalue())
+        self.assert_gate_released()
+
+    def test_depleted_gate_budget_still_grants_minimum_daemon_start_timeout(self):
+        owner = self.Lock(self.daemon_dir)
+        self.assertTrue(owner.acquire())
+
+        def sleep(seconds):
+            self.advance(seconds)
+            if self.now >= dev.START_TIMEOUT_SECONDS - 12.7 and owner.fd is not None:
+                owner.close()
+                owner.fd = None
+
+        seen_timeouts = []
+
+        def start(argv, **kwargs):
+            seen_timeouts.append(kwargs["timeout"])
+            return self.successful_start(argv, **kwargs)
+
+        self.sleep.side_effect = sleep
+        self.run.side_effect = start
+        try:
+            self.assertEqual(dev.rerun_daemon(local=True, health_window=0), 0)
+        finally:
+            if owner.fd is not None:
+                owner.close()
+        self.assertEqual(seen_timeouts, [dev.MIN_DAEMON_START_TIMEOUT_SECONDS])
+        self.seed.assert_called_once()
+        self.assert_gate_released()
+
+    def test_restore_daemon_refuses_to_clobber_live_replacement(self):
+        live_build_time = 987654321
+        self.health = dict(self.expected, build_time=live_build_time)
+        starter = self.Lock(self.daemon_dir)
+        self.assertTrue(starter.acquire())
+        try:
+            with self.assertRaisesRegex(RuntimeError, "refusing rollback: replacement build is already live"):
+                dev.restore_daemon(
+                    self.launcher,
+                    self.daemon_dir,
+                    self.previous,
+                    None,
+                    replacement_digest=self.digest,
+                    replacement_build_time=live_build_time,
+                )
+        finally:
+            starter.close()
+        self.run.assert_not_called()
+
 
 class EncodingAndStagedMetadataTest(unittest.TestCase):
     def setUp(self):

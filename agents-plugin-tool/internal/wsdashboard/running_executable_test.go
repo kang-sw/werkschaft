@@ -104,3 +104,124 @@ func TestRunningExecutableFailureDoesNotPublishEndpoint(t *testing.T) {
 	}
 	d.Close()
 }
+
+func TestRecordRunningExecutableUsesMatchingStagedCopyWhenLaunchPathOverwritten(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, stagedBinDir)
+	srcDir := t.TempDir()
+
+	oldBin := filepath.Join(srcDir, "ws-mcp-old")
+	newBin := filepath.Join(srcDir, "ws-mcp-new")
+	if err := os.WriteFile(oldBin, []byte("old-daemon-build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newBin, []byte("new-daemon-build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	newHash := ExecutableContentHash(newBin)
+	stagedNew, err := DaemonExecutable(newBin, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagedNew, err = filepath.Abs(stagedNew)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Model macOS bin/ws-mcp-dashboard initially holding the new build at
+	// process startup, then concurrently overwritten with the old build before
+	// dashboard.lock is acquired.
+	launchPath := filepath.Join(binDir, "ws-mcp-dashboard")
+	if err := copyExecutable(oldBin, launchPath); err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := StartDaemon(DaemonOptions{
+		Dir:         dir,
+		Home:        t.TempDir(),
+		Port:        0,
+		Version:     "0.53.2-dev",
+		BuildTime:   789,
+		ContentHash: newHash,
+		Executable:  launchPath,
+		LockWait:    20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("StartDaemon: %v", err)
+	}
+	defer d.Close()
+
+	raw, err := os.ReadFile(filepath.Join(dir, RunningExecutableFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec runningExecutable
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.SHA256 != newHash || rec.Executable != stagedNew || rec.BuildTime != 789 {
+		t.Fatalf("last-running-executable.json = %+v, want sha256=%q executable=%q build_time=789", rec, newHash, stagedNew)
+	}
+	if got := ExecutableContentHash(rec.Executable); got != newHash {
+		t.Fatalf("recorded executable sha256 = %q, want %q", got, newHash)
+	}
+}
+
+func TestRecordRunningExecutableRefusesMismatchedDiskExecutableWhenStagedMissing(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, stagedBinDir)
+	srcDir := t.TempDir()
+
+	oldBin := filepath.Join(srcDir, "ws-mcp-old")
+	newBin := filepath.Join(srcDir, "ws-mcp-new")
+	if err := os.WriteFile(oldBin, []byte("old-daemon-build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newBin, []byte("new-daemon-build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	newHash := ExecutableContentHash(newBin)
+	oldHash := ExecutableContentHash(oldBin)
+
+	// Seed an initial valid record from oldBin, then overwrite launchPath with
+	// oldBin while claiming startup ContentHash == newHash (and no staged newBin).
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	launchPath := filepath.Join(binDir, "ws-mcp-dashboard")
+	if err := copyExecutable(oldBin, launchPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordRunningExecutable(dir, launchPath, oldHash, "0.53.1-dev", 100); err != nil {
+		t.Fatal(err)
+	}
+	priorRaw, err := os.ReadFile(filepath.Join(dir, RunningExecutableFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if d, err := StartDaemon(DaemonOptions{
+		Dir:         dir,
+		Home:        t.TempDir(),
+		Port:        0,
+		Version:     "0.53.2-dev",
+		BuildTime:   200,
+		ContentHash: newHash,
+		Executable:  launchPath,
+		LockWait:    20 * time.Millisecond,
+	}); err == nil {
+		d.Close()
+		t.Fatal("StartDaemon succeeded despite overwritten executable and missing staged copy")
+	}
+
+	afterRaw, err := os.ReadFile(filepath.Join(dir, RunningExecutableFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(afterRaw) != string(priorRaw) {
+		t.Fatalf("last-running-executable.json changed on mismatch failure: got %s, want %s", afterRaw, priorRaw)
+	}
+	if _, err := os.Stat(filepath.Join(dir, endpointFileName)); !os.IsNotExist(err) {
+		t.Fatalf("published %s after recordRunningExecutable mismatch: %v", endpointFileName, err)
+	}
+}
