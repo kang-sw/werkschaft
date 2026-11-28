@@ -381,7 +381,6 @@ func (d *Daemon) CompanionRememberSoul(ctx context.Context, owner, content, kind
 	return d.companionMemoryStore().RememberSoul(ctx, RememberSoulInput{
 		SoulDir:        cfg.SoulDir,
 		SoulID:         cfg.Soul,
-		StarterPersona: d.activePackStarterPersona(),
 		Kind:           strings.TrimSpace(kind),
 		Content:        content,
 		Tags:           tags,

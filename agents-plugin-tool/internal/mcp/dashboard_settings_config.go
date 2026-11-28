@@ -284,6 +284,7 @@ func dashboardCompanionConfig(catalog *wsconfigservice.Catalog, opts wsconfig.Op
 		Sources:              text(wsdashboard.CompanionSourcesKey),
 		Soul:                 text(wsdashboard.CompanionSoulKey),
 		SoulDir:              text(wsdashboard.CompanionSoulDirKey),
+		Lang:                 strings.TrimSpace(overrides[wsconfig.ItemWorkflowLang]),
 	}, nil
 }
 

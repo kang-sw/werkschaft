@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
-
-	"github.com/kang-sw/devenv/internal/wsconfig"
 )
 
 // Companion phone lifecycle states and postures (4-state embodiment contract).
@@ -1265,9 +1263,7 @@ func (d *Daemon) CompanionActivePersona() (*CompanionPersona, string) {
 		lang = pack.persona.QuipLanguage
 	}
 	if lang == "" {
-		if overrides, err := wsconfig.GlobalOverrides(d.companionOptions()); err == nil {
-			lang = overrides[wsconfig.ItemWorkflowLang]
-		}
+		lang = d.companionWorkflowLang()
 	}
 	return pack.persona, lang
 }

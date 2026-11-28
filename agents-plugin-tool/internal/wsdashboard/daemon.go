@@ -339,6 +339,11 @@ type Daemon struct {
 	// companionRecall optionally overrides the per-wake <<<RECALL>>> snippet provider.
 	companionRecallMu sync.RWMutex
 	companionRecall   CompanionRecallProvider
+	// companionBodyPersona* track the persona the live companion-body was
+	// launched with, so a later change rides the next wake as an override.
+	companionBodyPersonaMu       sync.Mutex
+	companionBodyPersonaFP       string
+	companionBodyPersonaDiverged bool
 	// companionWake, when bound by cmd/ws-mcp, wakes the Tier-1 companion burst
 	// session on incoming user messages or release with unread inbox.
 	companionWake atomic.Pointer[func(reason string)]

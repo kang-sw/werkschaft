@@ -118,7 +118,12 @@ What the optional parts do:
   this pack.
 - `persona` gives the character a voice. It is read as quoted text, never as
   instructions. A malformed or too long persona is dropped; the pack still
-  loads.
+  loads. An optional `voice_by_lang` map adds a per-language voice overlay,
+  keyed by a language tag such as `ko` or `pt-BR`; the overlay that matches the
+  reply language is added after `voice`. A malformed entry is dropped alone.
+  Until the user saves their own persona or picks a built-in preset in
+  Settings, the companion follows the active pack's persona; without one it
+  uses the built-in default.
 - Timing and physics extensions (`easings`, `stageEffects`, `propMotions`,
   `physics`, `passive`) are optional open maps.
 
@@ -552,6 +557,8 @@ declares.
 | Pack description | 280 characters |
 | Persona name | 40 characters |
 | Persona voice | 800 characters |
+| Persona `voice_by_lang` entries | 32 |
+| Persona `voice_by_lang` overlay | 800 characters |
 | Source zip download | 64 MiB |
 | External pack zip download | 40 MiB |
 | Download time | 60 s |

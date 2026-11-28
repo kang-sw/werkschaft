@@ -1765,6 +1765,104 @@
     return group;
   }
 
+  // presetLabel picks a preset label for the dashboard locale from a
+  // {locale: text} map (exact, case-insensitive, Chinese script, then base
+  // language), falling back to the English text.
+  function presetLabel(byLang, fallback) {
+    if (!byLang || typeof byLang !== "object") return fallback || "";
+    var root = document.documentElement || {};
+    var lang = String(root.lang || (root.dataset && root.dataset.lang) || "en").replace(/_/g, "-");
+    var lower = lang.toLowerCase();
+    var keys = Object.keys(byLang);
+    var find = function (pred) {
+      for (var i = 0; i < keys.length; i++) {
+        if (pred(keys[i].toLowerCase()) && byLang[keys[i]]) return byLang[keys[i]];
+      }
+      return "";
+    };
+    var hit = find(function (k) { return k === lower; });
+    if (!hit && /^(zh|yue)\b/.test(lower)) {
+      var hant = lower.indexOf("yue") === 0 || /-(hant|tw|hk|mo)\b/.test(lower);
+      hit = find(function (k) { return k === (hant ? "zh-hant" : "zh-hans"); });
+    }
+    if (!hit) {
+      var base = lower.split("-")[0];
+      hit = find(function (k) { return k.split("-")[0] === base; });
+    }
+    return hit || fallback || "";
+  }
+
+  // renderPersonaPresets renders the embedded official persona presets as
+  // one-click picks. Picking one replaces a custom persona.md, so while the
+  // persona is customized each pick needs the shared hold-to-confirm.
+  function renderPersonaPresets(ctx, canManageMemory, soulKey, personaSource) {
+    var presets = (state.soulData && Array.isArray(state.soulData.presets)) ? state.soulData.presets : [];
+    if (!presets.length) return null;
+    var activeId = String((state.soulData && state.soulData.activePresetId) || presets[0].id || "");
+    var custom = personaSource === "user";
+    // A pack persona is in effect: no preset is the one speaking.
+    var packOwned = personaSource === "pack";
+    var row = ctx.el("div", "cs-mem-presets");
+    row.dataset.companionPersonaPresets = "1";
+    row.append(ctx.el("span", "cs-mem-presets-title", ctx.tr("js.settings.companion.memory.persona_presets_title")));
+    var list = ctx.el("div", "cs-mem-preset-list");
+    presets.forEach(function (p) {
+      if (!p || !p.id) return;
+      var title = presetLabel(p.titleByLang, p.title || p.name || p.id);
+      var summary = presetLabel(p.summaryByLang, p.summary || "");
+      var active = !custom && !packOwned && p.id === activeId;
+      var btn = ctx.button("cs-btn sm cs-mem-preset" + (active ? " active" : ""), "");
+      btn.textContent = "";
+      btn.append(ctx.el("span", "cs-mem-preset-title", title));
+      if (summary) btn.append(ctx.el("span", "cs-mem-preset-sub", summary));
+      btn.dataset.companionPersonaPreset = p.id;
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+      var pick = async function () {
+        if (!canManageMemory || state.soulSavingDoc || active) return;
+        state.soulSavingDoc = "persona.md:preset";
+        state.memoryFeedback = null;
+        ctx.rerender();
+        try {
+          var res = await fetchJson("/api/companion/soul", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "preset",
+              soulId: (state.soulData && state.soulData.soulId) || "",
+              presetId: p.id
+            })
+          });
+          if (res.ok) {
+            state.personaDirty = false;
+            state.memoryFeedback = { kind: "ok", text: ctx.tr("js.settings.companion.memory.persona_preset_done", title) };
+            loadSoulState(soulKey, ctx.rerender, true);
+          } else {
+            state.memoryFeedback = { kind: "err", text: extractErrorMessage(res, ctx.tr("js.settings.error.config_error")) };
+          }
+        } catch (e) {
+          state.memoryFeedback = { kind: "err", text: ctx.tr("js.settings.error.config_error") };
+        } finally {
+          state.soulSavingDoc = "";
+          ctx.rerender();
+        }
+      };
+      if (custom && window.WsHoldConfirm) {
+        btn.title = (summary ? summary + " · " : "") + ctx.tr("js.settings.account.hold_hint");
+        window.WsHoldConfirm.attach(btn, { mode: "bar", onConfirm: pick });
+      } else {
+        if (summary) btn.title = summary;
+        btn.addEventListener("click", pick);
+      }
+      btn.disabled = !canManageMemory || !!state.soulSavingDoc;
+      list.append(btn);
+    });
+    row.append(list);
+    if (custom) {
+      row.append(ctx.el("p", "cs-mem-hint cs-mem-preset-warn", ctx.tr("js.settings.companion.memory.persona_preset_replaces_custom")));
+    }
+    return row;
+  }
+
   function renderMemorySoulTab(ctx, canManageMemory, soulKey) {
     var wrap = ctx.el("div", "cs-mem-pane");
     wrap.dataset.companionMemoryPane = "soul";
@@ -1792,6 +1890,69 @@
         var card = ctx.el("div", "cs-mem-card");
         var head = ctx.el("div", "cs-mem-card-head");
         head.append(ctx.el("h4", "mono", ctx.tr(d.titleKey)));
+        var isPersona = d.target === "persona.md";
+        var personaSource = isPersona && state.soulData ? String(state.soulData.personaSource || "") : "";
+        var personaInherited = isPersona && !!(state.soulData && state.soulData.personaInherited);
+        var personaSourceKey = {
+          official: "js.settings.companion.memory.persona_source_official",
+          preset: "js.settings.companion.memory.persona_source_preset",
+          pack: "js.settings.companion.memory.persona_source_pack",
+          user: "js.settings.companion.memory.persona_source_user"
+        }[personaSource];
+        if (personaSourceKey) {
+          var sourcePill = ctx.el("span", "cs-pill cs-mem-persona-source" + (personaInherited ? "" : " ok"),
+            ctx.tr(personaSourceKey));
+          sourcePill.dataset.companionPersonaSource = personaSource;
+          head.append(sourcePill);
+        }
+        // Reset to default drops both a custom persona.md and a picked preset.
+        if (isPersona && (personaSource === "user" || personaSource === "preset")) {
+          var resetLabel = ctx.tr("js.settings.companion.memory.persona_reset");
+          var resetBtn = ctx.button("cs-btn sm ghost cs-mem-reset",
+            state.soulSavingDoc === "persona.md:reset"
+              ? ctx.tr("js.settings.companion.memory.saving")
+              : resetLabel);
+          var doReset = async function () {
+            if (!canManageMemory || state.soulSavingDoc) return;
+            state.soulSavingDoc = "persona.md:reset";
+            state.memoryFeedback = null;
+            ctx.rerender();
+            try {
+              var res = await fetchJson("/api/companion/soul", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  action: "reset",
+                  soulId: (state.soulData && state.soulData.soulId) || "",
+                  target: "persona.md"
+                })
+              });
+              if (res.ok) {
+                state.personaDirty = false;
+                state.memoryFeedback = { kind: "ok", text: ctx.tr("js.settings.companion.memory.persona_reset_done") };
+                loadSoulState(soulKey, ctx.rerender, true);
+              } else {
+                state.memoryFeedback = { kind: "err", text: extractErrorMessage(res, ctx.tr("js.settings.error.config_error")) };
+              }
+            } catch (e) {
+              state.memoryFeedback = { kind: "err", text: ctx.tr("js.settings.error.config_error") };
+            } finally {
+              state.soulSavingDoc = "";
+              ctx.rerender();
+            }
+          };
+          // Reset removes the user's persona.md and preset pick: a destructive
+          // action, so it uses the shared 1.5s hold-to-confirm when available.
+          if (window.WsHoldConfirm) {
+            resetBtn.title = resetLabel + " · " + ctx.tr("js.settings.account.hold_hint");
+            window.WsHoldConfirm.attach(resetBtn, { mode: "bar", onConfirm: doReset });
+          } else {
+            resetBtn.addEventListener("click", doReset);
+          }
+          resetBtn.disabled = !canManageMemory || !!state.soulSavingDoc;
+          resetBtn.dataset.companionPersonaReset = "1";
+          head.append(resetBtn);
+        }
         var saveBtn = ctx.button("cs-btn sm pri",
           state.soulSavingDoc === d.target
             ? ctx.tr("js.settings.companion.memory.saving")
@@ -1831,7 +1992,9 @@
               ctx.rerender();
             }
           });
-        saveBtn.disabled = !canManageMemory || !!state.soulSavingDoc;
+        // An untouched inherited persona is not saved: saving would pin the
+        // live default into a user-owned persona.md.
+        saveBtn.disabled = !canManageMemory || !!state.soulSavingDoc || (personaInherited && !state.personaDirty);
         saveBtn.dataset.companionSoulSave = d.target;
         head.append(saveBtn);
 
@@ -1840,9 +2003,17 @@
         ta.value = d.getValue();
         ta.disabled = !canManageMemory;
         ta.dataset.companionSoulEditor = d.target;
-        ta.addEventListener("input", function () { d.setValue(ta.value); });
+        ta.addEventListener("input", function () {
+          d.setValue(ta.value);
+          if (personaInherited) saveBtn.disabled = !canManageMemory || !!state.soulSavingDoc;
+        });
 
-        card.append(head, ctx.el("p", "cs-mem-hint", ctx.tr(d.hintKey)), ta);
+        card.append(head, ctx.el("p", "cs-mem-hint", ctx.tr(d.hintKey)));
+        if (isPersona) {
+          var presetRow = renderPersonaPresets(ctx, canManageMemory, soulKey, personaSource);
+          if (presetRow) card.append(presetRow);
+        }
+        card.append(ta);
         editorsGrid.append(card);
       })(doc);
     }

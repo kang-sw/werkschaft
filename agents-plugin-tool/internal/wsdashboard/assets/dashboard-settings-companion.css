@@ -986,6 +986,52 @@
   font-weight: 800;
   color: var(--wb-fg);
 }
+.cs-mem-card-head .cs-mem-persona-source { margin-right: auto; }
+.cs-btn:is(.cs-mem-reset, .cs-mem-preset) { position: relative; overflow: hidden; }
+.cs-btn:is(.cs-mem-reset, .cs-mem-preset).d-hold-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--wb-fail) 30%, transparent);
+  transform: scaleX(0);
+  transform-origin: left;
+  pointer-events: none;
+}
+.cs-btn:is(.cs-mem-reset, .cs-mem-preset).d-hold-active::before { animation: cs-mem-hold-bar var(--d-hold-dur, 1500ms) linear forwards; }
+.cs-btn:is(.cs-mem-reset, .cs-mem-preset).d-hold-ready { background: var(--wb-fail); color: var(--wb-card); }
+.cs-btn:is(.cs-mem-reset, .cs-mem-preset).d-hold-ready::before { background: var(--wb-fail); transform: scaleX(1); animation: none; }
+@keyframes cs-mem-hold-bar { to { transform: scaleX(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .cs-btn:is(.cs-mem-reset, .cs-mem-preset).d-hold-active::before { animation: none; transform: scaleX(1); opacity: .45; }
+  .cs-btn:is(.cs-mem-reset, .cs-mem-preset).d-hold-ready::before { opacity: 1; }
+}
+.cs-mem-presets { display: flex; flex-direction: column; gap: 6px; }
+.cs-mem-presets-title { font-size: 11.5px; font-weight: 700; color: var(--wb-muted-fg); }
+.cs-mem-preset-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.cs-btn.cs-mem-preset {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  max-width: 220px;
+  height: auto;
+  padding: 5px 10px;
+  text-align: left;
+}
+.cs-mem-preset-title { font-weight: 700; }
+.cs-mem-preset-sub {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--wb-muted-fg);
+  white-space: normal;
+  line-height: 1.3;
+}
+.cs-btn.cs-mem-preset.active {
+  background: color-mix(in srgb, var(--wb-primary) 16%, transparent);
+  color: var(--wb-fg);
+}
+.cs-btn.cs-mem-preset.d-hold-ready .cs-mem-preset-sub { color: inherit; }
 .cs-mem-hint {
   margin: 0;
   font-size: 11.5px;
