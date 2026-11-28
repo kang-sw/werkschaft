@@ -1311,6 +1311,7 @@ func tools() []map[string]any {
 	toolList = append(toolList, sessionHireTools()...)
 	toolList = append(toolList, userCommandTools()...)
 	toolList = append(toolList, companionTools()...)
+	toolList = append(toolList, daemonControlTools()...)
 	return withSessionKeyToolSchemas(append(toolList, agentToolDefinitions()...))
 }
 

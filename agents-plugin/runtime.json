@@ -100,7 +100,8 @@
     "companion.phone_pickup": ">=0.53.2-dev <0.54.0",
     "companion.phone_read": ">=0.53.2-dev <0.54.0",
     "companion.phone_send": ">=0.53.2-dev <0.54.0",
-    "companion.phone_putdown": ">=0.53.2-dev <0.54.0"
+    "companion.phone_putdown": ">=0.53.2-dev <0.54.0",
+    "daemon.curl": ">=0.53.2-dev <0.54.0"
   },
   "commands": {
     "runtime.info": ">=0.53.2-dev <0.54.0",

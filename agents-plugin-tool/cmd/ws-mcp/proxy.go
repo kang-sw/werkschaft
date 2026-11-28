@@ -186,6 +186,7 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 		if d := h.live.Load(); d != nil {
 			opts.Live = d
 			opts.Companion = d
+			opts.DaemonControl = d
 		}
 		if h.agents != nil {
 			if source, ok := h.agents.(mcp.AgentBackendRegistry); ok {
@@ -217,6 +218,7 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 		opts.UserCommandsDiscovery = h.userCommandsFor(hello.Conversation)
 		opts.Conversation = hello.Conversation
 		opts.ExecCutover = hello.ExecCutover
+		opts.DashboardControlAccess = hello.DashboardControlAccess
 		opts.FileWrites = hello.FileWrites
 		opts.RecordExecLaunch = hello.RecordExecLaunch
 		server := mcp.NewServerWithOptions(opts)

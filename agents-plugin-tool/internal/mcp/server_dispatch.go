@@ -1699,6 +1699,8 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	case companionSpeakTool, companionFaceTool, companionMotionTool,
 		companionPhonePickupTool, companionPhoneReadTool, companionPhoneSendTool, companionPhonePutdownTool:
 		return s.handleCompanionTool(req.ID, params.Name, params.Arguments)
+	case daemonCurlTool:
+		return s.handleDaemonTool(ctx, req.ID, params.Name, params.Arguments)
 	case "mailbox.send":
 		return s.handleMailboxSend(req.ID, params.Arguments)
 	case "mailbox.recv":

@@ -27,7 +27,7 @@ import (
 // preserved no-op, since the pre-rename tickets.sage_record was reachable by
 // a delegate-scoped key.
 func isLeadOnlyTool(name string) bool {
-	return sessionHireTool(name) || userCommandTool(name) || isPiTool(name) || isAgentTool(name) || isCompanionTool(name) || name == bootstrapToolName || name == "workflow_manual" || name == "workflow_state" || name == "tickets.sage_stamp" || name == "tickets.index_init" || name == "git.merge" || name == "worktree.acquire" || name == "worktree.release" || name == "worktree.remove" || name == "worktree.list" || strings.HasPrefix(name, "lead.") || workflowPreferenceWriterTool(name)
+	return sessionHireTool(name) || userCommandTool(name) || isPiTool(name) || isAgentTool(name) || isCompanionTool(name) || isDaemonControlTool(name) || name == bootstrapToolName || name == "workflow_manual" || name == "workflow_state" || name == "tickets.sage_stamp" || name == "tickets.index_init" || name == "git.merge" || name == "worktree.acquire" || name == "worktree.release" || name == "worktree.remove" || name == "worktree.list" || strings.HasPrefix(name, "lead.") || workflowPreferenceWriterTool(name)
 }
 
 func workflowPreferenceWriterTool(name string) bool {
@@ -84,6 +84,11 @@ func (s *Server) filteredTools() []map[string]any {
 		if userCommandTool(name) && !s.userCommandsListed() {
 			// Advertised only to an authenticated open hosted lead: its
 			// trusted binding, not a supplied key, names the session.
+			continue
+		}
+		if isDaemonControlTool(name) && !s.daemonControlListed() {
+			// Advertised only to an opted-in top-level hosted lead whose
+			// persisted && effective dashboard_control_access are both true.
 			continue
 		}
 		if isAgentTool(name) {
@@ -164,6 +169,14 @@ func (s *Server) sessionToolAccess(name, key string, entry sessionEntry) (*suble
 	}
 	if isNoteMutationTool(name) && !entry.isTopLevelLead() {
 		return nil, noteReadOnlyDenial(name)
+	}
+	if isDaemonControlTool(name) {
+		if !entry.isTopLevelLead() {
+			return nil, daemonControlLeadOnlyDenial(name)
+		}
+		if refusal := s.daemonControlCallRefusal(name); refusal != "" {
+			return nil, refusal
+		}
 	}
 	if name == whiteboardLoadTool && !entry.isTopLevelLead() {
 		return nil, whiteboardLeadOnlyDenial(name)

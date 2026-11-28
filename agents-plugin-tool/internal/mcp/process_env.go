@@ -76,6 +76,14 @@ type ServerOptions struct {
 	// phone messenger host. When nil and Live implements CompanionHost,
 	// NewServerWithOptions binds Live automatically.
 	Companion CompanionHost
+	// DaemonControl is the dashboard daemon's local loopback curl and multi-tab
+	// confirmation bridge host. When nil and Live implements DaemonControlHost,
+	// NewServerWithOptions binds Live automatically.
+	DaemonControl DaemonControlHost
+	// DashboardControlAccess snapshots whether this hosted lead opted into
+	// ws/daemon.* at MCP token attach (ProxyHello.DashboardControlAccess).
+	// Honored only when Conversation is set.
+	DashboardControlAccess bool
 	// EphemeralPool is the dashboard daemon's shared lightweight ephemeral
 	// harness pool used by opt-in dynamic tier routing on agent.spawn. Nil
 	// leaves dynamic tier routing inert (static fallback).
@@ -252,12 +260,19 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 			s.companion = host
 		}
 	}
+	s.daemonControl = opts.DaemonControl
+	if s.daemonControl == nil && opts.Live != nil {
+		if host, ok := opts.Live.(DaemonControlHost); ok {
+			s.daemonControl = host
+		}
+	}
 	s.ephemeralPool = opts.EphemeralPool
 	s.exec, s.conversation = opts.Exec, opts.Conversation
 	s.cron = opts.Cron
 	s.userCommands, s.userCommandsDiscovery = opts.UserCommands, opts.UserCommandsDiscovery
 	if s.conversation != "" {
 		s.execCutover = opts.ExecCutover
+		s.dashboardControlEffective = opts.DashboardControlAccess
 		s.recordExecLaunch = opts.RecordExecLaunch
 		if opts.FileWrites != nil {
 			binding := *opts.FileWrites
