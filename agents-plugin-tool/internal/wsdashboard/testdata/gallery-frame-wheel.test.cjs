@@ -28,6 +28,8 @@ assert.ok(frameWheelBranch, 'missing wbDoc === "wheel" branch in dashboard-frame
 assert.doesNotMatch(frameWheelBranch[0], /onFrameWheel\s*\(\s*f[\s\S]*WsBoardAnchor|WsBoardAnchor[\s\S]*onFrameWheel/);
 
 const shippedCards =
+  extractFunc(cardsSrc, 'curPos') +
+  extractFunc(cardsSrc, 'pageElAt') +
   extractVar(cardsSrc, 'OWN') +
   extractVar(cardsSrc, 'PANE_BODY') +
   extractFunc(cardsSrc, 'reach') +
@@ -215,6 +217,9 @@ function makeHarness(opts = {}) {
     viewEl,
     plusEl,
     pageEls,
+    sysActive: null,
+    storedSys: null,
+    sysPageEls: {},
     board,
     homeEl: opts.narrowHome ? bcol : null,
     homeScr: opts.narrowHome ? bcol : null,

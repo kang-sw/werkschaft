@@ -77,7 +77,7 @@ test('closed opener clicks open full sheets and the fold closes back to that ope
       setAttribute(k, v) { this.attrs[k] = v; }, addEventListener(k, fn) { this.listeners[k] = fn; },
       contains: () => false, focus() { c.doc.activeElement = this; } };
   }
-  const nodes = Object.fromEntries(['drawer', 'drsheet', 'drclip', 'drbody', 'gbody', 'sbody', 'drhandle', 'shandle', 'thandle', 'gitRegion', 'drfold'].map(k => [k, node()]));
+  const nodes = Object.fromEntries(['drawer', 'drsheet', 'drclip', 'drbody', 'gbody', 'sbody', 'drhandle', 'shandle', 'gitRegion', 'drfold'].map(k => [k, node()]));
   const git = node(), documentClicks = [], saved = [];
   const c = vm.createContext({ ...nodes, doc: { activeElement: null, addEventListener: (type, fn) => documentClicks.push(fn) },
     ghandle: () => git, drHeaderBottom: () => 48, drMax: () => 812,
@@ -130,42 +130,12 @@ class El {
 function panel() { const p = new El('details'), lanes = new El('div'); lanes.className = 'lanes'; p.appendChild(lanes); return p; }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-test('ideas fetch only on demand; loading, retry, empty, swaps and safe file links', async () => {
-  let p = panel(), finish, fail, requests = [];
-  const c = vm.createContext({ doc: { createElement: tag => new El(tag) }, rid: 'session',
-    $: id => id === 'p-tickets' ? p : null, wsT: k => k,
-    fetch: (url, opts) => { requests.push([url, opts]); return new Promise((resolve, reject) => { finish = resolve; fail = reject; }); } });
-  vm.runInContext(section('  var ideaRows =', '  // drFill stretches'), c);
-  c.ticketIdeaSync(); c.ticketIdeaSync();
-  assert.equal(requests.length, 0);
-  assert.equal(p.querySelector('.lanes').children.length, 1);
-  assert.equal(p.querySelector('button').textContent, 'js.drawer.idea.more');
-  p.querySelector('button').listeners.click(); c.ticketIdeaLoad();
-  assert.equal(requests.length, 1, 'concurrent clicks coalesce');
-  assert.equal(requests[0][0], '/s/session/tickets/idea');
-  assert.equal(requests[0][1].credentials, 'same-origin');
-  assert.equal(p.querySelector('button').disabled, true);
-  p = panel(); c.ticketIdeaSync();
-  assert.equal(p.querySelector('button').disabled, true, 'live swap keeps loading state');
-  finish({ ok: false }); await tick();
-  assert.equal(p.querySelector('button').textContent, 'js.drawer.idea.retry');
-  p.querySelector('button').listeners.click(); fail(new Error('offline')); await tick();
-  assert.equal(p.querySelector('button').disabled, false);
-  p.querySelector('button').listeners.click();
-  finish({ ok: true, json: async () => ({ tickets: [{ category: 'feat', title: '<img onerror=bad()>', stem: 'stem', path: 'ai-docs/tickets/idea/a & b.md', abs: '/project/ai-docs/tickets/idea/a & b.md' }] }) });
-  await tick();
-  assert.equal(p.querySelector('a').textContent, '<img onerror=bad()>');
-  assert.equal(p.querySelector('a').href, '/s/session/file?path=ai-docs%2Ftickets%2Fidea%2Fa%20%26%20b.md');
-  assert.equal(p.querySelector('a').attrs['data-wl'], 'file');
-  assert.equal(p.querySelector('a').attrs['data-rel'], 'ai-docs/tickets/idea/a & b.md');
-  assert.equal(p.querySelector('a').attrs['data-abs'], '/project/ai-docs/tickets/idea/a & b.md');
-  assert.equal(p.querySelector('.csub').textContent, 'stem');
-  p = panel(); c.ticketIdeaSync(); c.ticketIdeaLoad();
-  assert.equal(requests.length, 3, 'loaded ideas survive a live swap without another read');
-  assert.ok(p.querySelector('a'));
-  c.ideaRows = []; c.ticketIdeaRedraw();
-  assert.equal(p.querySelector('.none').textContent, 'js.drawer.idea.empty');
-  assert.equal(p.querySelector('.chip').textContent, '0');
+test('retired #p-tickets and #p-mailbox drawer tabs and ticketIdeaSync are absent', () => {
+  assert.equal(js.includes('panelTab("tickets"'), false);
+  assert.equal(js.includes('panelTab("mailbox"'), false);
+  assert.equal(js.includes('ticketIdeaSync'), false);
+  assert.equal(css.includes('#p-tickets'), false);
+  assert.equal(css.includes('#p-mailbox'), false);
 });
 
 test('notes load cached snapshot then wait, refresh by POST, and render server layers safely', async () => {
@@ -213,16 +183,13 @@ test('wide ticket spans suppress the legacy last-row vertical fill', () => {
   assert.ok(cards.every(card => !card.style.gridRow), 'wide cards retain their two-row dense layout');
 });
 
-test('wide grid uses existing breakpoints and dense ticket span; narrow remains the DOM stack', () => {
+test('wide grid uses existing breakpoints and dense notes span; narrow remains the DOM stack', () => {
   assert.match(css, /@media \(min-width: 1600px\)[\s\S]*?width: min\(1280px,/);
-  const wide = css.slice(css.indexOf('@media (min-width: 760px)'), css.indexOf('.d-ticket-more'));
+  const wide = css.slice(css.indexOf('@media (min-width: 760px)'), css.indexOf('.notes-refresh'));
   assert.match(wide, /grid-auto-flow: dense/);
-  for (const [id, order] of [['agenda', 1], ['tickets', 2], ['holders', 3], ['worktrees', 4], ['todo', 5], ['mailbox', 6], ['notes', 7]]) {
+  for (const [id, order] of [['agenda', 1], ['holders', 2], ['worktrees', 3], ['todo', 4], ['notes', 5]]) {
     assert.ok(wide.includes(`#drbody #p-${id} { order: ${order};`));
   }
-  assert.match(wide, /#p-tickets \{ order: 2; grid-column: span 2;/);
-  assert.match(wide, /#p-notes \{ order: 7; grid-column: span 2;/);
-  assert.match(wide, /\.lanes \{ grid-template-columns: minmax\(0, 1fr\)/);
-  assert.match(wide, /\.csub \{[^}]*text-align: right/);
+  assert.match(wide, /#p-notes \{ order: 5; grid-column: span 2;/);
   assert.match(css, /@media \(max-width: 759px\) \{\s*#drbody \{ display: flex; flex-direction: column; \}\s*\.dr-body details.panel \{ flex: none; overflow: hidden; \}\s*\.dr-body details.panel > summary \{ position: static; \}/);
 });

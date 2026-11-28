@@ -1286,12 +1286,13 @@
     var g = d && (d.getElementById ? d.getElementById("ghandle") : d.querySelector && d.querySelector("#ghandle"));
     return g && !g.disabled ? g : null;
   }
+  // The ticket map is available while it is expanded or its docked page
+  // (#bgal's #tmdock) exists.
   function ticketMapAvailable(d) {
     if (!d) return false;
     var back = d.getElementById ? d.getElementById("tmback") : d.querySelector && d.querySelector("#tmback");
     if (back && !back.hidden) return true;
-    var th = d.getElementById ? d.getElementById("thandle") : d.querySelector && d.querySelector("#thandle");
-    return !!(th && !th.hidden && !th.disabled);
+    return !!(d.getElementById ? d.getElementById("tmdock") : d.querySelector && d.querySelector("#tmdock"));
   }
   function filesSheetOpenEl(d) {
     var s = d && (d.getElementById ? d.getElementById("toolbar-files") : d.querySelector && d.querySelector("#toolbar-files"));
@@ -1334,17 +1335,21 @@
       drSetOpen(openGit, "git");
       return true;
     }
+    // Ctrl+B shows and focuses the docked map (a repeat only refocuses it);
+    // while the map is expanded it returns it to the dock.
     if (kind === "ticketmap") {
-      if (!ticketMapAvailable(doc) || typeof ticketMap === "undefined" || !ticketMap || typeof ticketMap.toggle !== "function") return false;
-      var openMap = !(ticketMap.isOpen && ticketMap.isOpen());
-      if (openMap) {
-        if (typeof window !== "undefined" && window.WsCards && window.WsCards.dismissFiles) window.WsCards.dismissFiles();
-        if (typeof window !== "undefined" && window.WsOverview && window.WsOverview.holding && window.WsOverview.holding()) {
-          window.WsOverview.after(function () { ticketMap.toggle(); });
-          return true;
-        }
+      if (!ticketMapAvailable(doc) || typeof ticketMap === "undefined" || !ticketMap || typeof ticketMap.open !== "function") return false;
+      if (ticketMap.isOpen && ticketMap.isOpen()) {
+        ticketMap.close(false);
+        return true;
       }
-      ticketMap.toggle();
+      if (typeof drawer !== "undefined" && drawer && typeof drOpen !== "undefined" && drOpen && typeof drSetOpen === "function") drSetOpen(false);
+      if (typeof window !== "undefined" && window.WsCards && window.WsCards.dismissFiles) window.WsCards.dismissFiles();
+      if (typeof window !== "undefined" && window.WsOverview && window.WsOverview.holding && window.WsOverview.holding()) {
+        window.WsOverview.after(function () { ticketMap.open(); });
+        return true;
+      }
+      ticketMap.open();
       return true;
     }
     if (kind === "files") {

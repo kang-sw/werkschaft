@@ -1,8 +1,9 @@
 'use strict';
 
 // Ticket map geometry, pure: drRoom's right-edge handle offsets
-// (assets/dashboard-drawer.js) for every combination of present and hidden
-// handles, and View B's layoutHier column solver
+// (assets/dashboard-drawer.js) for every combination of present and absent
+// handles (the ticket map docks in the gallery, so no map handle takes room),
+// and View B's layoutHier column solver
 // (assets/dashboard-ticketmap-viewb.js, the block between "tm:hier-begin"
 // and "tm:hier-end").
 // Run: node --test internal/wsdashboard/testdata/ticketmap-*.test.cjs
@@ -22,7 +23,7 @@ function section(text, start, end) {
 
 // room runs drRoom over one handle set: each width is the handle's measured
 // width, or 0 for an absent one (the panels handle with no panel, no git
-// region, no search handle, a hidden ticket map handle).
+// region, no search handle).
 function room(h) {
   const props = {}, toggles = {};
   const box = width => ({ getBoundingClientRect: () => ({ width }) });
@@ -30,7 +31,6 @@ function room(h) {
     drHas: h.drawer > 0, drRoomW: -1, drGhOff: -1, drFoldW: -1, drFoldGw: -1,
     drhandle: box(h.drawer), gitRegion: box(h.git),
     shandle: h.search ? box(h.search) : null,
-    thandle: h.map === undefined ? null : Object.assign(box(h.map || 35), { hidden: !h.map }),
     ghandle: () => (h.git ? {} : null),
     drheader: { classList: { toggle: (k, on) => { toggles[k] = on; } } },
     doc: { documentElement: { style: { setProperty: (k, v) => { props[k] = v; } } } }
@@ -39,11 +39,11 @@ function room(h) {
   return { props, room: toggles['dr-room'] };
 }
 
-// expect is an independent model: right to left, panels, search, ticket
-// map, git; each present handle sits 6px left of the previous one.
+// expect is an independent model: right to left, panels, search, git; each
+// present handle sits 6px left of the previous one.
 function expect(h) {
-  const order = [['drawer', null], ['search', '--shr'], ['map', '--thr'], ['git', '--ghr']];
-  const want = { '--shr': '0px', '--thr': '0px', '--ghr': '0px' };
+  const order = [['drawer', null], ['search', '--shr'], ['git', '--ghr']];
+  const want = { '--shr': '0px', '--ghr': '0px' };
   let acc = 0;
   for (const [name, prop] of order) {
     const w = h[name] || 0;
@@ -60,33 +60,28 @@ test('drRoom places every handle combination', () => {
   let n = 0;
   for (const drawerW of [0, 178]) {
     for (const search of [0, 35]) {
-      for (const map of [undefined, 0, 35]) {
-        for (const git of [0, 90]) {
-          const h = { drawer: drawerW, search, map, git };
-          const got = room(h), want = expect(h);
-          const label = JSON.stringify(h);
-          for (const k of ['--shr', '--thr', '--ghr', '--drhw']) assert.equal(got.props[k], want[k], label + ' ' + k);
-          assert.equal(got.room, want['--drhw'] !== '0px', label + ' header room');
-          n++;
-        }
+      for (const git of [0, 90]) {
+        const h = { drawer: drawerW, search, git };
+        const got = room(h), want = expect(h);
+        const label = JSON.stringify(h);
+        for (const k of ['--shr', '--ghr', '--drhw']) assert.equal(got.props[k], want[k], label + ' ' + k);
+        assert.equal(got.props['--thr'], undefined, label + ' writes no --thr');
+        assert.equal(got.room, want['--drhw'] !== '0px', label + ' header room');
+        n++;
       }
     }
   }
-  assert.equal(n, 24);
+  assert.equal(n, 8);
 });
 
-test('the ticket map handle sits 6px left of the search handle, and the header reserves it', () => {
-  const got = room({ drawer: 178, search: 35, map: 35, git: 90 }).props;
+test('git sits 6px left of the search handle, and the header reserves both', () => {
+  const got = room({ drawer: 178, search: 35, git: 90 }).props;
   assert.equal(got['--shr'], '184px');
-  assert.equal(got['--thr'], '225px', '178 + 6 + 35 + 6');
-  assert.equal(got['--ghr'], '266px', '225 + 35 + 6');
-  assert.equal(got['--drhw'], '356px');
-  const hidden = room({ drawer: 178, search: 35, map: 0, git: 90 }).props;
-  assert.equal(hidden['--thr'], '0px', 'a hidden handle takes no room');
-  assert.equal(hidden['--ghr'], '225px', 'git follows the search handle directly');
-  const noDrawer = room({ drawer: 0, search: 35, map: 35, git: 0 }).props;
-  assert.equal(noDrawer['--thr'], '41px', 'with the drawer handle hidden it is still 6px left of search');
-  assert.equal(noDrawer['--drhw'], '76px');
+  assert.equal(got['--ghr'], '225px', '178 + 6 + 35 + 6');
+  assert.equal(got['--drhw'], '315px');
+  const noDrawer = room({ drawer: 0, search: 35, git: 0 }).props;
+  assert.equal(noDrawer['--shr'], '0px');
+  assert.equal(noDrawer['--drhw'], '35px');
 });
 
 const hier = vm.createContext({});

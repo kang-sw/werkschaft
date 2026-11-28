@@ -24,6 +24,9 @@ async function openLive(browser, { width, height, colorScheme, record }) {
     if (url.origin !== base) return route.abort();
     if (url.pathname === '/rail/usage') return route.fulfill({ json: { entries: [], warnPercent: 80, critPercent: 95 } });
     if (url.pathname === '/tracker/stores') return route.fulfill({ json: { rev: 1, stores: [] } });
+    // The docked Ticket Map (the wide gallery's default page) reads the
+    // graph on load; this fixture has no ticket tree (its 404 logs an error).
+    if (url.pathname.endsWith('/tickets/graph')) return route.fulfill({ json: { nodes: [] } });
     return route.continue();
   });
   const tab = await context.newPage();
@@ -96,8 +99,10 @@ async function dragSplit(tab, page, dx) {
 (async () => {
   const browser = await chromium.launch({ headless: true });
   try {
-    // 1. 1660x960 (Band 3) with persisted small bb=500, cw=380 (total 888px < 1300px)
-    //    Dark and light captures + .dcv-edge drag keeping total stage constant.
+    // 1. 1660x960 (always-open Band 4) with legacy persisted bb=500, cw=380:
+    //    legacy bb is ignored (no data-boardw/--boardw), #bgal stays open
+    //    (data-gal="col", data-pincol), cw=380 applies to convo, and .dcv-edge
+    //    shifts width between convo and board while keeping the stage and #bgal steady.
     for (const colorScheme of ['dark', 'light']) {
       const { context, tab, page, pageErrors, consoleErrors, failedReqs } = await openLive(browser, {
         width: 1660,
@@ -106,31 +111,34 @@ async function dragSplit(tab, page, dx) {
         record: { cards: [], topics: [], bb: 500, cw: 380 },
       });
       const before = await measure(page);
-      assert.equal(before.gal, null, `${colorScheme} 1660: Band 3 has no 4th column`);
-      assert.equal(before.hasBoardw, true, `${colorScheme} 1660: bb stays loaded in root attr`);
-      assert.equal(before.boardwVar, '500px', `${colorScheme} 1660: --boardw preserved`);
-      assert(Math.abs(before.gridW - 1280) <= 2, `${colorScheme} 1660: .dgrid.live fills Band 3 stage (~1280px, not 888px), got ${before.gridW}`);
+      assert.equal(before.gal, 'col', `${colorScheme} 1660: always-open Band 4 active`);
+      assert.equal(before.pincol, true, `${colorScheme} 1660: data-pincol always set`);
+      assert.equal(before.hasBoardw, false, `${colorScheme} 1660: legacy bb does not write data-boardw`);
+      assert.equal(before.boardwVar, '', `${colorScheme} 1660: legacy bb does not write --boardw`);
+      assert(before.galW >= 350, `${colorScheme} 1660: #bgal always open (${before.galW}px)`);
       assert(Math.abs(before.convoW - 380) <= 2, `${colorScheme} 1660: persisted cw=380 applies to convo, got ${before.convoW}`);
       assert(Math.abs(before.boardW - (before.gridW - 8 - before.convoW)) <= 2, `${colorScheme} 1660: board takes remaining stage width, got ${before.boardW}`);
       if (shots) await tab.screenshot({ path: path.join(shots, `band3-1660-${colorScheme}.png`) });
 
       if (colorScheme === 'dark') {
-        await dragSplit(tab, page, 120);
+        await dragSplit(tab, page, 50);
         const after = await measure(page);
         assert(Math.abs(after.gridW - before.gridW) <= 2, `1660 drag keeps total .dgrid.live width constant (${before.gridW} -> ${after.gridW})`);
-        assert(Math.abs((after.convoW - before.convoW) - 120) <= 2, `1660 drag widens convo by +120px (${before.convoW} -> ${after.convoW})`);
-        assert(Math.abs((before.boardW - after.boardW) - 120) <= 2, `1660 drag narrows board by equal-and-opposite -120px (${before.boardW} -> ${after.boardW})`);
-        assert.equal(after.rec.bb, 500, `1660 drag preserves persisted bb=500, got ${after.rec.bb}`);
+        assert(Math.abs(after.galW - before.galW) <= 2, `1660 drag keeps #bgal width constant (${before.galW} -> ${after.galW})`);
+        assert(Math.abs((after.convoW - before.convoW) - 50) <= 2, `1660 drag widens convo by +50px (${before.convoW} -> ${after.convoW})`);
+        assert(Math.abs((before.boardW - after.boardW) - 50) <= 2, `1660 drag narrows board by equal-and-opposite -50px (${before.boardW} -> ${after.boardW})`);
+        assert.equal(after.hasBoardw, false, '1660 drag never sets data-boardw');
+        assert.equal(after.rec.bb, undefined, `1660 drag does not persist legacy bb, got ${after.rec.bb}`);
       }
       assert.deepEqual(pageErrors, [], `${colorScheme} 1660 pageErrors`);
       assert.deepEqual(consoleErrors, [], `${colorScheme} 1660 consoleErrors (${failedReqs.join(', ')})`);
       await context.close();
     }
 
-    // 2. 1920x960 (Band 3) with persisted bb=600, cw=0 (unresized convo):
-    //    Stage stays centered at 1300px with 5fr/7fr split (NOT 1037px / 429px).
-    //    Dragging .dcv-edge shifts width between convo and board within 1300px.
-    //    Widening to 2560x960 enters Band 4 and still applies persisted bb=600.
+    // 2. 1920x960 (always-open Band 4) with legacy bb=600, cw=0:
+    //    Stage fills the flexible column between rail and 540px #bgal with 5fr/7fr split.
+    //    Dragging .dcv-edge shifts width between convo and board without moving #bgal.
+    //    Widening to 2560x960 stays in Band 4 (data-gal="col") with #bgal at 540px.
     {
       const { context, tab, page, pageErrors, consoleErrors, failedReqs } = await openLive(browser, {
         width: 1920,
@@ -139,40 +147,37 @@ async function dragSplit(tab, page, dx) {
         record: { cards: [], topics: [], bb: 600, cw: 0 },
       });
       const m1920 = await measure(page);
-      assert.equal(m1920.gal, null, '1920: Band 3 has no 4th column');
-      assert.equal(m1920.hasBoardw, true, '1920: data-boardw preserved');
+      assert.equal(m1920.gal, 'col', '1920: always-open Band 4 active');
+      assert.equal(m1920.pincol, true, '1920: data-pincol always set');
+      assert.equal(m1920.hasBoardw, false, '1920: legacy bb ignored');
       assert.equal(m1920.hasConvow, false, '1920: cw=0 leaves data-convow unset');
-      assert(Math.abs(m1920.gridW - 1300) <= 2, `1920: .dgrid.live equals 1300px (not ~1037px), got ${m1920.gridW}`);
-      const leftPad = m1920.gridLeft - (m1920.railRight + 8);
-      const rightPad = m1920.dbodyRight - m1920.gridRight;
-      assert(Math.abs(leftPad - 120) <= 3 && Math.abs(rightPad - 120) <= 3, `1920: stage centered in column 2 (left=${leftPad}, right=${rightPad})`);
-      const wantConvo5fr = Math.round((1300 - 8) * 5 / 12);
-      const wantBoard7fr = Math.round((1300 - 8) * 7 / 12);
+      assert(Math.abs(m1920.galW - 540) <= 2, `1920: #bgal defaults to 540px, got ${m1920.galW}`);
+      const wantConvo5fr = Math.round((m1920.gridW - 8) * 5 / 12);
+      const wantBoard7fr = Math.round((m1920.gridW - 8) * 7 / 12);
       assert(Math.abs(m1920.convoW - wantConvo5fr) <= 2 && Math.abs(m1920.boardW - wantBoard7fr) <= 2,
         `1920: default 5fr/7fr preserved (got ${m1920.convoW}/${m1920.boardW}, want ${wantConvo5fr}/${wantBoard7fr})`);
       if (shots) await tab.screenshot({ path: path.join(shots, 'band3-1920-dark.png') });
 
       await dragSplit(tab, page, 100);
       const dragged = await measure(page);
-      assert(Math.abs(dragged.gridW - 1300) <= 2, `1920 drag keeps .dgrid.live at 1300px, got ${dragged.gridW}`);
+      assert(Math.abs(dragged.gridW - m1920.gridW) <= 2, `1920 drag keeps .dgrid.live constant (${m1920.gridW} -> ${dragged.gridW})`);
+      assert(Math.abs(dragged.galW - m1920.galW) <= 2, `1920 drag keeps #bgal constant (${m1920.galW} -> ${dragged.galW})`);
       assert(Math.abs((dragged.convoW - m1920.convoW) - 100) <= 2, `1920 drag widens convo by +100px (${m1920.convoW} -> ${dragged.convoW})`);
       assert(Math.abs((m1920.boardW - dragged.boardW) - 100) <= 2, `1920 drag narrows board by -100px (${m1920.boardW} -> ${dragged.boardW})`);
-      assert.equal(dragged.rec.bb, 600, `1920 drag keeps persisted bb=600, got ${dragged.rec.bb}`);
 
-      // Reset cw via dblclick so Band 4 also verifies bb=600 with default cw,
-      // then pin a topic and widen to 2560x960 (Band 4).
       const fb = await tab.locator('iframe.sframe.on').boundingBox();
       await tab.mouse.dblclick(fb.x + dragged.edgeCenter.x, fb.y + dragged.edgeCenter.y);
       await page.waitForFunction(() => !document.documentElement.hasAttribute('data-convow'));
 
       await tab.setViewportSize({ width: 2560, height: 960 });
-      await page.waitForFunction(() => document.documentElement.getAttribute('data-gal') === 'empty');
+      await page.waitForFunction(() => innerWidth >= 2500);
       await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
       const m2560 = await measure(page);
-      assert.equal(m2560.gal, 'empty', '2560: widens into Band 4');
-      assert.equal(m2560.hasBoardw, true, '2560: data-boardw still active');
-      assert(Math.abs(m2560.boardW - 600) <= 2, `2560: Band 4 applies persisted bb=600 to board, got ${m2560.boardW}`);
-      assert(m2560.galW >= 280, `2560: 4th gallery column rendered (${m2560.galW}px)`);
+      assert.equal(m2560.gal, 'col', '2560: stays in always-open Band 4');
+      assert.equal(m2560.pincol, true, '2560: data-pincol stays set');
+      assert.equal(m2560.hasBoardw, false, '2560: data-boardw stays unset');
+      assert(Math.abs(m2560.galW - 540) <= 2, `2560: #bgal keeps default 540px (${m2560.galW}px)`);
+      assert(m2560.boardW > m1920.boardW, `2560: flexible board expands with viewport (${m1920.boardW} -> ${m2560.boardW})`);
       if (shots) await tab.screenshot({ path: path.join(shots, 'band4-2560-dark.png') });
 
       assert.deepEqual(pageErrors, [], '1920->2560 pageErrors');
