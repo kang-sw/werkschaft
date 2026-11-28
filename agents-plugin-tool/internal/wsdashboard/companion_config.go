@@ -29,6 +29,12 @@ const (
 	CompanionSourcesKey        = "dashboard.companion_sources"
 	CompanionSoulKey           = "dashboard.companion_soul"
 	CompanionSoulDirKey        = "dashboard.companion_soul_dir"
+	// CompanionBodyTierKey and CompanionWorkTierKey pick the agent tier for
+	// the Lightweight (body) and Work companion sessions. The runtime reads
+	// them at each launch (project over global), so they are not part of the
+	// shell-facing CompanionConfig.
+	CompanionBodyTierKey = "dashboard.companion_body_tier"
+	CompanionWorkTierKey = "dashboard.companion_work_tier"
 
 	companionChangedPath  = "/config/companion-changed"
 	companionConfigHeader = "X-WS-Global-Config"

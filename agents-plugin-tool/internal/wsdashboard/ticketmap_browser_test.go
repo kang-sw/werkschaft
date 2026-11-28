@@ -84,10 +84,10 @@ func startTicketMapBrowser(t *testing.T) *ticketMapEnv {
 		o.Port = 0
 		o.LAN = false
 		o.bindHost = "127.0.0.1"
-		// The slimmed drawer hosts only the worktrees and holders cards
-		// (Workpanel B retired Todo/Agenda/Notes there): a worktree source
-		// keeps the drawer, its handle, and the header's handle room present.
-		o.Worktrees = &fakeWorktrees{}
+		// The slimmed drawer hosts only the holders card (Workpanel B retired
+		// Todo/Agenda/Notes there, the Git page the worktree pool): a holder
+		// host keeps the drawer, its handle, and the header's handle room present.
+		o.Holders = &stateFilterTerminalHost{newFakeHolders()}
 		pf := o.Sessions.(*pageFake)
 		p := pf.page("livesession")
 		p.Board = regions

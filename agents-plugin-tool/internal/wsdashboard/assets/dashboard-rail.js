@@ -13,7 +13,7 @@
   var railEl = $("rail"), railBtn = $("railbtn"), rscrim = $("rscrim"), WsRail = window.WsRail;
   var railHoverUpdates = region("rail") && WsRail ? WsRail.hoverUpdates(region("rail")) : null;
   var railRendered = null; // last applied canonical server input, not client-marked DOM
-  var railAttention = WsRail ? WsRail.attention({ paused: doc.hidden || shHidden }) : null;
+  var railAttention = WsRail ? WsRail.attention({ paused: docHidden() || shHidden }) : null;
   var memoPad = railEl && $("memo-pad") && window.WsMemo ? window.WsMemo.mount(doc, railEl, $("memo-pad"), function (open) { railOpen(open === true); }) : null;
   var stopNeedsHold = new Set();
   var railStore = { load: load, save: save }, railSets = WsRail ? WsRail.state(railStore) : null;

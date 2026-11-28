@@ -22,7 +22,7 @@ test('every sheet fills the available room, ignores stale heights and follows ge
   vm.runInContext(section('  function drHeaderBottom()', '  // drApply lays'), c);
   for (const width of [1920, 760, 759, 420]) {
     c.window.innerWidth = width;
-    for (const mode of ['panels', 'git', 'search']) {
+    for (const mode of ['panels', 'search']) {
       c.drMode = mode;
       assert.equal(c.drMax(), 932, `${mode} at ${width}px keeps composer clearance without an 80vh cap`);
     }
@@ -38,7 +38,8 @@ test('every sheet fills the available room, ignores stale heights and follows ge
 });
 
 test('only the active sheet opener hides; closed handle signals remain in place', () => {
-  assert.match(css, /\.drawer\.open\.panels #drhandle, \.drawer\.open\.search #shandle, \.drawer\.open\.git #r-git \{ visibility: hidden; pointer-events: none; \}/);
+  assert.match(css, /\.drawer\.open\.panels #drhandle, \.drawer\.open\.search #shandle \{ visibility: hidden; pointer-events: none; \}/);
+  assert.doesNotMatch(css, /\.drawer\.open\.git|#r-git/, 'the git sheet retired with the Git page');
   assert.doesNotMatch(css, /cursor: grab|touch-action: none|\.drawer\.drag/);
   assert.match(css, /\.dr-handle\.wait \.dr-wait \{ display: inline-flex; \}/);
   assert.match(js, /drhandle\.addEventListener\("click", function \(\) \{\s*drSetOpen\(!\(drOpen && drMode === "panels"\), "panels"\)/);
@@ -66,8 +67,8 @@ test('the fold button carries the approval wait while the panels sheet hides the
     assert.equal(drfold.attrs['aria-label'], want ? waitLabel : 'js.drawer.fold', 'fold label announces the wait: ' + what);
     assert.equal(drfold.title, drfold.attrs['aria-label']);
   }
-  found = [row(false)]; c.drMode = 'git'; c.drawerWait();
-  assert.equal(drfold.attrs['aria-label'], 'js.drawer.fold', 'the git slot fold does not show or announce the wait');
+  found = [row(false)]; c.drMode = 'search'; c.drawerWait();
+  assert.equal(drfold.attrs['aria-label'], 'js.drawer.fold', 'the search slot fold does not show or announce the wait');
   assert.match(css, /\.drawer\.panels \.dr-fold\.wait \.dr-wait \{ display: inline-flex; \}/);
   assert.match(js, /drFoldWait\.appendChild\(gIcon\("lock"\)\);\s*drfold\.appendChild\(drFoldWait\)/);
 });
@@ -80,21 +81,20 @@ test('closed opener clicks open full sheets and the fold closes back to that ope
       setAttribute(k, v) { this.attrs[k] = v; }, addEventListener(k, fn) { this.listeners[k] = fn; },
       contains: () => false, focus() { c.doc.activeElement = this; } };
   }
-  const nodes = Object.fromEntries(['drawer', 'drsheet', 'drclip', 'drbody', 'gbody', 'sbody', 'drhandle', 'shandle', 'gitRegion', 'drfold'].map(k => [k, node()]));
-  const git = node(), documentClicks = [], saved = [];
+  const nodes = Object.fromEntries(['drawer', 'drsheet', 'drclip', 'drbody', 'sbody', 'drhandle', 'shandle', 'drfold'].map(k => [k, node()]));
+  const documentClicks = [], saved = [];
   const c = vm.createContext({ ...nodes, doc: { activeElement: null, addEventListener: (type, fn) => documentClicks.push(fn) },
-    ghandle: () => git, drHeaderBottom: () => 48, drMax: () => 812,
-    ghSync() {}, drTitle() {}, drFill() {}, wtLoad() {}, hdLoad() {}, gitOpened() {}, drDot() {}, drAnnounce() {},
+    drHeaderBottom: () => 48, drMax: () => 812,
+    drTitle() {}, drFill() {}, hdLoad() {}, drDot() {}, drAnnounce() {},
     wsT: k => k, save: (k, v) => saved.push([k, v]), tkApi: null });
   vm.runInContext(section('  var DR_OPEN =', '  var sbody ='), c);
   c.drHas = true; c.drfold = nodes.drfold;
   vm.runInContext(section('  function drFoldShow(mode)', '  function drTitle()'), c);
-  vm.runInContext(section('  function drApply(anim)', '  // ghSync marks'), c);
+  vm.runInContext(section('  function drApply(anim)', '  // The session drawer and a tracker'), c);
   vm.runInContext(section('  function drSetOpen(open, mode)', '  if (drawer) {'), c);
   vm.runInContext(section('    drhandle.addEventListener("click"', '    // A card\'s title bar'), c);
   for (const [mode, opener, click] of [
     ['panels', nodes.drhandle, () => nodes.drhandle.listeners.click()],
-    ['git', git, () => documentClicks[0]({ target: { closest: () => git } })],
     ['search', nodes.shandle, () => nodes.shandle.listeners.click()]
   ]) {
     click();
@@ -121,17 +121,18 @@ test('retired #p-tickets and #p-mailbox drawer tabs and ticketIdeaSync are absen
   assert.equal(css.includes('#p-mailbox'), false);
 });
 
-test('the retired todo, agenda and notes drawer cards are absent; worktrees and holders stay', () => {
+test('the retired todo, agenda and notes drawer cards are absent; the holders card stays', () => {
   for (const gone of ['panelTab(', 'cardTab("notes")', 'notesLoad', 'notesRender', 'noteslist', 'notesrefresh', 'function drawerWait']) {
     assert.equal(js.includes(gone), false, gone);
   }
-  assert.match(js, /cardTab\("worktrees"\);\s*cardTab\("holders"\);/);
-  assert.match(js, /if \(shown === "panels"\) \{ wtLoad\(\); hdLoad\(\); \}/);
+  assert.match(js, /cardTab\("holders"\);/);
+  assert.equal(js.includes('cardTab("worktrees")'), false, 'the worktree pool is the Git page\'s');
+  assert.match(js, /if \(shown === "panels"\) hdLoad\(\);/);
   for (const gone of ['.notes-', '.notescard', '#p-notes', '#p-todo', '#p-agenda', '.r-panels']) assert.equal(css.includes(gone), false, gone);
   const tmpl = fs.readFileSync(path.join(__dirname, 'assets/dashboard.tmpl'), 'utf8');
   const cards = tmpl.slice(tmpl.indexOf('{{define "drcards"}}'), tmpl.indexOf('{{end}}', tmpl.indexOf('id="p-holders"')) + 7);
-  assert.match(cards, /id="p-worktrees"[\s\S]*id="p-holders"/);
-  assert.equal(/id="p-(notes|todo|agenda|tickets|mailbox)"/.test(cards), false, 'drawer cards are worktrees and holders only');
+  assert.match(cards, /id="p-holders"/);
+  assert.equal(/id="p-(worktrees|notes|todo|agenda|tickets|mailbox)"/.test(cards), false, 'the holders card is the drawer\'s only card');
 });
 
 test('wide ticket spans suppress the legacy last-row vertical fill', () => {
@@ -149,8 +150,9 @@ test('wide grid uses existing breakpoints and dense order; narrow remains the DO
   assert.match(css, /@media \(min-width: 1600px\)[\s\S]*?width: min\(1280px,/);
   const wide = css.slice(css.indexOf('@media (min-width: 760px)'), css.indexOf('@media (max-width: 759px)'));
   assert.match(wide, /grid-auto-flow: dense/);
-  for (const [id, order] of [['holders', 1], ['worktrees', 2]]) {
+  for (const [id, order] of [['holders', 1]]) {
     assert.ok(wide.includes(`#drbody #p-${id} { order: ${order};`));
   }
+  for (const id of ['worktrees', 'agenda', 'todo', 'notes']) assert.equal(css.includes(`#p-${id}`), false, `the drawer no longer orders #p-${id}`);
   assert.match(css, /@media \(max-width: 759px\) \{\s*#drbody \{ display: flex; flex-direction: column; \}\s*\.dr-body details.panel \{ flex: none; overflow: hidden; \}\s*\.dr-body details.panel > summary \{ position: static; \}/);
 });

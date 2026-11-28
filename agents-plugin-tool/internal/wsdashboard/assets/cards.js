@@ -1039,7 +1039,7 @@
       var shell = mk("div", "gal-sys-shell");
       var hd = mk("div", "gal-sys-head");
       var row = mk("div", "gal-sys-title-row");
-      var ic = mk("span", "gal-sys-icon" + (id === "git" ? " git" : ""));
+      var ic = mk("span", "gal-sys-icon");
       ic.innerHTML = sysSvg(id);
       var meta = mk("div", "gal-sys-meta");
       meta.appendChild(mk("h3", "gal-sys-h", SYS_META[id].title));
@@ -1102,11 +1102,20 @@
     tmPg.appendChild(tmDock);
     sysPageEls.ticketmap = tmPg;
 
-    var gitGrid = mk("div", "gal-sys-git-grid");
-    gitGrid.appendChild(makeZone("Commit Graph", "Region 1", "Interactive branch and commit history graph migrates here in Track 2B."));
-    gitGrid.appendChild(makeZone("Working Diff", "Region 2", "Staged and unstaged file diffs remain in #ghandle until gallery-git-page."));
-    gitGrid.appendChild(makeZone("Worktrees", "Region 3", "Worktree pool status and branch controls will consolidate here in Track 2B."));
-    sysPageEls.git = makeScaffold("git", "Track 2B", "upcoming", "Legacy #ghandle stays active until Track 2B (gallery-git-page).", gitGrid, "Open Ticket Map →");
+    // The Git page is a full-fill host as well: the session page's Git page
+    // (dashboard-gitpage.js) moves its root (#gitpage) into it when the page
+    // first shows; Ctrl+G focuses it. A container query on it picks the wide
+    // three-region grid or the narrow tabs.
+    var gitPg = mk("div", "gal-page gal-sys-page gal-sys-gitpage");
+    gitPg.setAttribute("data-page", "git");
+    gitPg.setAttribute("data-page-panel", "git");
+    var gitDock = mk("div", "gp-dock");
+    gitDock.id = "gitdock";
+    gitDock.tabIndex = -1;
+    gitDock.setAttribute("role", "region");
+    gitDock.setAttribute("aria-label", SYS_META.git.title);
+    gitPg.appendChild(gitDock);
+    sysPageEls.git = gitPg;
 
     G.SYS.forEach(function (id) { viewEl.appendChild(sysPageEls[id]); });
   }
@@ -1738,16 +1747,35 @@
     if (col) col.addEventListener("wheel", onHomeWheel, { passive: false });
   }
   // canFitFourCol activates the 4-column layout (rail + stage + always-open
-  // gallery column) iff !tabs and viewport >= WIDE (1600px).
+  // gallery column) iff !tabs, viewport >= WIDE (1600px), and the stage
+  // beside the live left rail leaves spare right width for a column as wide
+  // as the board (the grid at its default width, since the board is no
+  // longer user-resized). Below that the three-column layout stays: the
+  // 34px rail strip on #bcol pages the gallery over the board. Opening room
+  // by collapsing the left rail (readRailReserve) can promote it.
   function canFitFourCol(vw, tabs) {
-    return !tabs && vw >= G.C.WIDE;
+    if (tabs || !(vw >= G.C.WIDE)) return false;
+    var gap = 8, stageW = vw - 32 - readRailReserve();
+    var split = !!(opt && (opt.split || (board && board.closest && board.closest(".dgrid.live, .dgrid.history"))));
+    var worktree = !!(board && board.closest && board.closest(".dgrid.worktree"));
+    var gridW, boardW;
+    if (worktree) {
+      gridW = 1300;
+      boardW = (gridW - gap) * 7 / 12;
+    } else if (!split) {
+      boardW = gridW = 900;
+    } else {
+      gridW = 1300;
+      boardW = convow ? (gridW - gap - Math.max(CONVW_MIN, Math.min(convow, gridW - gap - SPLITB_MIN))) : ((gridW - gap) * 7 / 12);
+    }
+    return stageW - gridW - gap >= boardW;
   }
   // isFourCol tells whether Band 4 (true 4-column mode) is active for the
   // current viewport and layout mode, matching WsGallery.layout's exact rule.
   function isFourCol() {
     if (!opt || !board) return false;
     var m = opt.mode ? opt.mode() : null, vw = m ? +m.width || 0 : 0, tabs = !!(m && m.tabs);
-    return canFitFourCol(vw, tabs);
+    return !tabs && vw >= G.C.WIDE && canFitFourCol(vw, tabs);
   }
   // relayout asks the page what it shows (opt.mode: its width and whether
   // the layout menu shows one column at a time), maps that to the

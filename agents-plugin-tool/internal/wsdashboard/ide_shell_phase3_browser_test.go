@@ -16,7 +16,7 @@ import (
 // Acceptance Playwright checks across 1200x800, 1440x900, and 1920x1080 in Dark
 // and Light themes: 36px 3-column topbar (Per-Session Left / Centered Search /
 // Global Right), zero overlap & 0px overflow, Top-Right click-through to framed
-// handles (#drhandle, #ghandle, .tk-handle/#tkadd) with aligned drawer/tracker
+// handles (#drhandle, .tk-handle/#tkadd) with aligned drawer/tracker
 // slide-out, git-backed vs non-git session .worktree-branch telemetry, clean
 // non-session pages (Home, Settings), Phase 2 minor polishes (#memo-pad bottom
 // clearance & #talert narrow-width cap), and final side-by-side screenshots vs

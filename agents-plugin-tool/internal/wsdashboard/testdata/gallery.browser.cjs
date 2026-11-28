@@ -1300,13 +1300,29 @@ async function routeTerminal(context) {
       assert.deepEqual([l.gal, l.pincol, l.hidden, l.railHidden, l.edge, l.cols], ['col', true, false, false, true, zeroCols], '2560 with a page: the gallery column with its handle, zero column-count jump');
       assert(l.galLeft >= l.right, 'the gallery stands right of the board');
       done.push('2560 always-open 4-col gallery (defaults to ticketmap), zero-jump drag onto system page docks Page 1');
-      // 1800px (>= 1600px): stays in 4-panel col mode with docked rail and always-open gallery column.
-      await tab.setViewportSize({ width: 1800, height: 1000 });
-      await until(async () => (await layout()).w === 1800, 'resize 1800');
-      l = await until(async () => { const v = await layout(); return v.gal === 'col' ? v : null; }, '1800 stays in 4-panel col mode');
-      const shell1800 = await tab.evaluate(() => ({ pincol: document.documentElement.hasAttribute('data-pincol'), railLeft: Math.round(document.getElementById('rail').getBoundingClientRect().left) }));
-      assert.deepEqual([l.gal, l.pincol, shell1800.pincol, shell1800.railLeft], ['col', true, true, 0], '1800 (>=1600): 4-panel col mode with rail permanently docked at left');
-      await shot(tab, 'layout-1800-page');
+      // 1920px (>= 1600px, rail open, no spare width for a 4th column): back to the
+      // 3-column narrow layout with the left rail docked and the 34px .gal-rail strip.
+      await tab.setViewportSize({ width: 1920, height: 1000 });
+      await until(async () => (await layout()).w === 1920, 'resize 1920');
+      l = await until(async () => { const v = await layout(); return v.gal === 'narrow' ? v : null; }, '1920 falls back to the 3-column narrow layout');
+      const shell1920 = await tab.evaluate(() => ({ pincol: document.documentElement.hasAttribute('data-pincol'), railLeft: Math.round(document.getElementById('rail').getBoundingClientRect().left) }));
+      assert.deepEqual([l.gal, l.pincol, shell1920.pincol, shell1920.railLeft], ['narrow', false, false, 0], '1920 (>=1600, no spare width): 3-column narrow layout with the left rail docked');
+      assert.equal(await page.locator('#bgal .gal-dot.main').count(), 1, '1920 shows the Home ⌂ dot');
+      await shot(tab, 'layout-1920-page');
+      // Collapsing the left rail frees width: 2200px has no spare column with the
+      // rail open (needs 2382px) but does with it collapsed (needs 2094px), so
+      // the collapse promotes narrow -> col and expanding demotes it back.
+      await tab.setViewportSize({ width: 2200, height: 1000 });
+      await until(async () => (await layout()).w === 2200, 'resize 2200');
+      l = await until(async () => { const v = await layout(); return v.gal === 'narrow' ? v : null; }, '2200 with the rail open stays narrow');
+      assert.equal(l.pincol, false, '2200 rail open: no pincol');
+      await tab.evaluate(() => window.WsIdeShell.setCollapsed(true));
+      l = await until(async () => { const v = await layout(); return v.gal === 'col' ? v : null; }, 'collapsing the left rail promotes 2200 to the 4th column');
+      assert.equal(l.pincol, true, '2200 rail collapsed: pincol set');
+      await shot(tab, 'layout-2200-rail-collapsed');
+      await tab.evaluate(() => window.WsIdeShell.setCollapsed(false));
+      l = await until(async () => { const v = await layout(); return v.gal === 'narrow' ? v : null; }, 'expanding the left rail demotes 2200 back to narrow');
+      assert.equal(l.pincol, false, '2200 rail expanded again: no pincol');
       // 1400px (< 1600px): overlay rail, 3-panel narrow gallery with Home ⌂.
       await tab.setViewportSize({ width: 1400, height: 1000 });
       await until(async () => (await layout()).w === 1400, 'resize 1400');
@@ -1331,7 +1347,7 @@ async function routeTerminal(context) {
       l = await until(async () => { const v = await layout(); return v.gal === 'narrow' ? v : null; }, 'tabs at 2560 is narrow');
       assert.equal(l.pincol, false, 'tabs never takes the column');
       await shot(tab, 'layout-2560-tabs');
-      done.push('layout modes: 1400 narrow, 1800/2560 4-col always-open, tabs narrow at 2560');
+      done.push('layout modes: 1400/1920 narrow, 2200 narrow until the left rail collapses, 2560 4-col always-open, tabs narrow at 2560');
       assert.deepEqual(errors, []);
       await context.close();
     }
@@ -1417,23 +1433,32 @@ async function routeTerminal(context) {
       done.push('2560 .bp-edge sizer: drags --bgal-w across 350-720px, persists globally, retains across pin/unpin, dblclick resets to 540px');
     }
 
-    // ---- 1800x1000 (>= 1600px) with 0 user pages: always-open 4-col gallery defaulting to ticketmap ----
+    // ---- 1920x1080 (>= 1600px, left rail open, no spare 4th-column width) with 0 user pages: 3-column narrow, ⌂ Home ----
     {
-      const context = await browser.newContext({ viewport: { width: 1800, height: 1000 }, locale: 'en-US', reducedMotion: 'reduce' });
+      const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, locale: 'en-US', reducedMotion: 'reduce' });
       await seed(context, 'livesession', {});
       const { tab, page, errors } = await open(context, 'livesession');
-      const rest = await page.evaluate(() => ({ gal: document.documentElement.getAttribute('data-gal'), pincol: document.documentElement.hasAttribute('data-pincol'), hidden: document.getElementById('bgal').hidden, sys: document.getElementById('bgal').getAttribute('data-sys-active'), home: document.querySelectorAll('#bgal .gal-dot.main').length }));
-      assert.deepEqual(rest, { gal: 'col', pincol: true, hidden: false, sys: 'ticketmap', home: 0 }, '1800 with 0 user pages: always-open 4-col gallery defaulting to ticketmap without Home dot');
+      const rest = await page.evaluate(() => ({ gal: document.documentElement.getAttribute('data-gal'), pincol: document.documentElement.hasAttribute('data-pincol'), hidden: document.getElementById('bgal').hidden, home: document.querySelectorAll('#bgal .gal-dot.main').length, pos: +document.getElementById('bgal').getAttribute('data-pos'), stripW: Math.round(document.querySelector('#bgal .gal-rail').getBoundingClientRect().width) }));
+      assert.deepEqual(rest, { gal: 'narrow', pincol: false, hidden: false, home: 1, pos: -1, stripW: 34 }, '1920 with 0 user pages: 3-column narrow, ⌂ Home active, 34px .gal-rail strip, no pincol');
+      assert.equal(await page.evaluate(() => { const b = document.getElementById('bcol').getBoundingClientRect(); return b.width > 400 && b.height > 300; }), true, '1920 the whiteboard column shows full width on Home');
+      await shot(tab, 'layout-1920-zero');
+      // Ticket Map overlays #bcol from the strip and ⌂ returns to the whiteboard.
+      await page.locator('#bgal .gal-dot.sys[data-sys="ticketmap"]').click();
+      await until(() => page.evaluate(() => document.querySelector('#bgal .gal-sys-page[data-page="ticketmap"]').hasAttribute('data-active')), '1920 ticketmap system page opens');
+      await shot(tab, 'layout-1920-ticketmap');
+      assert.equal(await page.evaluate(() => document.documentElement.getAttribute('data-gal')), 'narrow', '1920 stays narrow with Ticket Map open');
+      await dot(page, -1).click();
+      await until(async () => await pos(page) === -1, '1920 ⌂ returns to the whiteboard');
       const during = await drag(tab, await grip(bar(page, 'beta')), () => center(page.locator('#bgal .gal-dot.empty')), async () => {
         const p = await center(page.locator('#bgal .gal-dot.empty'));
         await tab.mouse.move(p.x, p.y, { steps: 6 });
-        await until(() => page.evaluate(() => document.querySelector('#bgal .gal-dot.empty').classList.contains('drop')), '1800 + dot lights as drop target');
+        await until(() => page.evaluate(() => document.querySelector('#bgal .gal-dot.empty').classList.contains('drop')), '1920 + dot lights as drop target');
         return page.evaluate(() => ({ gal: document.documentElement.getAttribute('data-gal'), pincol: document.documentElement.hasAttribute('data-pincol'), drop: document.querySelector('#bgal .gal-dot.empty').classList.contains('drop') }));
       });
-      assert.deepEqual(during, { gal: 'col', pincol: true, drop: true }, '1800 drag keeps 4-col gallery and lights + dot');
-      await until(async () => JSON.stringify(await pages(page)) === '[["beta"]]', '1800 drop onto + dot docks beta onto Page 1');
-      done.push('1800 zero user pages: always-open 4-col gallery (ticketmap default), drop onto + dot docks');
-      assert.deepEqual(errors, [], 'no page errors (1800 zero pages)');
+      assert.deepEqual(during, { gal: 'narrow', pincol: false, drop: true }, '1920 drag keeps the narrow layout and lights + dot');
+      await until(async () => JSON.stringify(await pages(page)) === '[["beta"]]', '1920 drop onto + dot docks beta onto Page 1');
+      done.push('1920 zero user pages: 3-column narrow (⌂ Home, 34px strip, Ticket Map overlay), drop onto + dot docks');
+      assert.deepEqual(errors, [], 'no page errors (1920 zero pages)');
       await context.close();
     }
 
@@ -1532,15 +1557,17 @@ async function routeTerminal(context) {
         assert.notEqual(colors[0].border, colors[1].border, `${theme}/${width}: active capsule has a primary border`);
         assert.notEqual(colors[0].icon, colors[0].text, `${theme}/${width}: topic state color survives active styling`);
         const gal = await page.evaluate(() => document.documentElement.getAttribute('data-gal'));
-        assert.equal(gal, width >= 1600 ? 'col' : 'narrow', `${theme}/${width}: responsive gallery band`);
+        // 4-col needs spare stage width (rail open: 2382px+), not just 1600px.
+        const four = width >= 2382;
+        assert.equal(gal, four ? 'col' : 'narrow', `${theme}/${width}: responsive gallery band`);
         const geometry = await page.evaluate(() => {
           const box = s => { const e = document.querySelector(s), r = e && e.getBoundingClientRect(); return r && { l: r.left, r: r.right, t: r.top, b: r.bottom }; };
           return { viewport: innerWidth, rail: box('.dbody > .rail'), stage: box('.dbody > .dgrid'), gallery: box('#bgal'), capsule: box('#bgal .gal-dot.page.active') };
         });
         assert(geometry.capsule.l >= geometry.gallery.l && geometry.capsule.r <= geometry.gallery.r, `${theme}/${width}: capsule stays inside gallery`);
         assert(geometry.gallery.l >= 0 && geometry.gallery.r <= width + 1, `${theme}/${width}: gallery stays inside viewport`);
-        if (width >= 1600) assert(geometry.rail.r <= geometry.stage.l + 1, `${theme}/${width}: rail does not overlap stage`);
-        if (width >= 1600) assert(geometry.stage.r <= geometry.gallery.l + 1, `${theme}/${width}: pinned gallery does not overlap stage`);
+        if (four) assert(geometry.rail.r <= geometry.stage.l + 1, `${theme}/${width}: rail does not overlap stage`);
+        if (four) assert(geometry.stage.r <= geometry.gallery.l + 1, `${theme}/${width}: pinned gallery does not overlap stage`);
         await capsules.nth(1).click();
         await until(async () => await pos(page) === 1, 'icon capsule switches page');
         assert.equal(await capsules.nth(1).getAttribute('aria-current'), 'page');

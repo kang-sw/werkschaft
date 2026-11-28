@@ -62,7 +62,9 @@ async function noOverflow(fr, label) {
 }
 
 async function newSession(browser, theme, galW) {
-  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, colorScheme: theme, locale: 'en-US', reducedMotion: 'reduce' });
+  // The always-open gallery column (its stored width honoured) needs the
+  // spare width a 3-column 1920 desktop lacks: 2560x1440, as the dock test.
+  const context = await browser.newContext({ viewport: { width: 2560, height: 1440 }, colorScheme: theme, locale: 'en-US', reducedMotion: 'reduce' });
   await context.addCookies([{ name: 'ws_dashboard_theme', value: theme, url: base }, { name: 'ws_dashboard_lang', value: 'en', url: base }]);
   await context.addInitScript(w => {
     if (self === top) {
@@ -126,7 +128,7 @@ async function liveSession(browser, theme, galW) {
     open: [...document.querySelectorAll('#r-panels > details.panel')].every(p => p.open),
     drawer: [...document.querySelectorAll('#drbody details.panel')].map(p => p.id).sort(),
     notesCard: !!document.getElementById('p-notes'),
-  })), { panels: 1, inDock: true, cards: ['p-todo', 'p-agenda'], open: true, drawer: ['p-holders', 'p-worktrees'], notesCard: false }, `${tag}: panels in the Workpanel, the drawer slimmed`);
+  })), { panels: 1, inDock: true, cards: ['p-todo', 'p-agenda'], open: true, drawer: ['p-holders'], notesCard: false }, `${tag}: panels in the Workpanel, the drawer slimmed`);
   // Todo's progress reads the chip: 1/4.
   const prog = () => fr.evaluate(() => {
     const fill = document.getElementById('wpprog'), bar = fill.closest('[role=progressbar]');
@@ -244,11 +246,11 @@ async function liveSession(browser, theme, galW) {
   await eventually(async () => !(await wait()).slot, `${tag}: wait cleared`);
   assert.deepEqual(await wait(), { slot: false, label: false, handle: false }, `${tag}: cleared everywhere`);
 
-  // 8. The drawer sheet keeps the worktree and holder cards only.
+  // 8. The drawer sheet keeps the holders card only.
   await fr.locator('#drhandle').click();
   await fr.waitForFunction(() => { const b = document.getElementById('drbody'); return !b.hidden && b.getBoundingClientRect().height > 0; });
   assert.deepEqual(await fr.evaluate(() => [...document.querySelectorAll('#drbody > details.panel, #drbody details.panel')].filter(p => p.getClientRects().length).map(p => p.id).sort()),
-    ['p-holders', 'p-worktrees'], `${tag}: the drawer's cards`);
+    ['p-holders'], `${tag}: the drawer's cards`);
   assert.equal(await fr.locator('#shandle').count(), 1, `${tag}: the search handle stays`);
   await fr.locator('#drfold').click();
   await fr.waitForFunction(() => document.getElementById('drhandle').getAttribute('aria-expanded') === 'false');
