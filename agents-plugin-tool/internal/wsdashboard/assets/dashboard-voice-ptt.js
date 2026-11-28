@@ -720,8 +720,66 @@
     return false;
   }
 
+  // Mouse/pen/touch press-and-hold on the mic button: a primary press starts at
+  // once (pressing the dedicated button is explicit intent, so no hold delay) and
+  // the release, wherever it lands (window listeners), stops. canStart gates it
+  // to idle/error with a configured backend; any other press keeps the click
+  // behaviour (stop, cancel, open settings). The synthetic click that follows a
+  // handled press is swallowed by consumeClick; a keyboard click (detail 0) never is.
+  function attachMicPointerPTT(opts) {
+    var btn = opts.button, win = opts.window;
+    var held = null, swallow = false, swallowTimer = null;
+    var setT = opts.setTimeout || function (fn, ms) { return setTimeout(fn, ms); };
+    var clearT = opts.clearTimeout || function (id) { clearTimeout(id); };
+    function release() {
+      if (!held) return;
+      var h = held;
+      held = null;
+      win.removeEventListener("pointerup", onRelease);
+      win.removeEventListener("pointercancel", onRelease);
+      win.removeEventListener("blur", onRelease);
+      try { if (h.id != null && btn.releasePointerCapture) btn.releasePointerCapture(h.id); } catch (e) {}
+      // A click for this press, if any, follows in the same task; later clicks are the user's.
+      swallowTimer = setT(function () { swallow = false; swallowTimer = null; }, 0);
+      opts.onStop();
+    }
+    function onRelease(e) {
+      if (e && e.type !== "blur" && held && e.pointerId != null && held.id != null && e.pointerId !== held.id) return;
+      release();
+    }
+    function onDown(e) {
+      if (held || !e || e.button !== 0 || e.isPrimary === false || !opts.canStart()) return;
+      clearT(swallowTimer);
+      swallowTimer = null;
+      if (typeof e.preventDefault === "function") e.preventDefault();
+      held = { id: e.pointerId == null ? null : e.pointerId };
+      swallow = true;
+      try { if (held.id != null && btn.setPointerCapture) btn.setPointerCapture(held.id); } catch (err) {}
+      win.addEventListener("pointerup", onRelease);
+      win.addEventListener("pointercancel", onRelease);
+      win.addEventListener("blur", onRelease);
+      opts.onStart();
+    }
+    function onSuppressed(e) { if (held && e && typeof e.preventDefault === "function") e.preventDefault(); }
+    btn.addEventListener("pointerdown", onDown);
+    btn.addEventListener("mousedown", onSuppressed);
+    btn.addEventListener("contextmenu", onSuppressed);
+    return {
+      isHeld: function () { return !!held; },
+      consumeClick: function (e) { return swallow && !!e && e.detail !== 0; },
+      destroy: function () {
+        release();
+        clearT(swallowTimer);
+        btn.removeEventListener("pointerdown", onDown);
+        btn.removeEventListener("mousedown", onSuppressed);
+        btn.removeEventListener("contextmenu", onSuppressed);
+      }
+    };
+  }
+
   window.WsVoicePTT = {
     DEFAULT_HOLD_MS: DEFAULT_HOLD_MS,
+    attachMicPointerPTT: attachMicPointerPTT,
     errorLabel: errorLabel,
     createComposerLock: createComposerLock,
     syncMicButton: syncMicButton,

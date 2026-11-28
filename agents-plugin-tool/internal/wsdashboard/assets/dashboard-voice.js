@@ -895,7 +895,9 @@
       controller.start().catch(function () {});
     }
 
-    function onMicClick() {
+    var micPTT = null;
+    function onMicClick(e) {
+      if (micPTT && micPTT.consumeClick(e)) return;
       var st = controller.getState();
       if (st === "recording") {
         controller.stop();
@@ -957,6 +959,15 @@
       });
     }
 
+    // Pointer press-and-hold on the mic button; click stays for keyboard and the non-idle states.
+    if (pttMod && typeof pttMod.attachMicPointerPTT === "function" && win.addEventListener) {
+      micPTT = pttMod.attachMicPointerPTT({
+        button: btn, window: win, setTimeout: opts.setTimeout, clearTimeout: opts.clearTimeout,
+        canStart: function () { var st = controller.getState(); return (st === "idle" || st === "error") && !!controller.getResolvedBackend(); },
+        onStart: startDictation, onStop: function () { controller.stop(); }
+      });
+    }
+
     function onCapabilitiesRefresh() { controller.refreshCapabilities(); }
 
     var wired = [[btn, "click", onMicClick], [doc, "keydown", onKeyDown], [doc, "ws-page-visibility", onPageVisibility],
@@ -971,6 +982,7 @@
       controller: controller, span: spanCtrl, ptt: pttHandle,
       destroy: function () {
         if (pttHandle) pttHandle.destroy();
+        if (micPTT) micPTT.destroy();
         controller.destroy();
         wired.forEach(function (w) { w[0].removeEventListener(w[1], w[2]); });
       }

@@ -1327,6 +1327,150 @@ test('macOS LSR 201 (recognizer_unavailable) shows the unavailable label, not th
   t.handle.destroy();
 });
 
+// #cvox pointer press-and-hold PTT.
+function pointerEnv(extra = {}) {
+  const log = [];
+  const backend = {
+    id: 'native', label: 'OS Native', kind: 'native', available: () => true,
+    start: () => { log.push('start'); return extra.startReject ? Promise.reject(Object.assign(new Error('x'), { code: extra.startReject })) : Promise.resolve(); },
+    stop: () => { log.push('stop'); return Promise.resolve({ text: '말하기' }); },
+    cancel: () => { log.push('cancel'); }
+  };
+  const t = makeCapsulesForwardingPTT({ value: '', backend, extraBackends: extra.extraBackends, order: extra.order });
+  const press = (init) => {
+    const e = new FakeEvent('pointerdown', { button: 0, pointerId: 1, isPrimary: true, pointerType: 'mouse', ...(init || {}) });
+    t.env.btn.dispatchEvent(e);
+    return e;
+  };
+  const release = (type = 'pointerup', target = t.env.window, init) => target.dispatchEvent(new FakeEvent(type, { pointerId: 1, ...(init || {}) }));
+  const click = (detail) => t.env.btn.dispatchEvent(new FakeEvent('click', { detail }));
+  return Object.assign(t, { log, press, release, click });
+}
+
+test('mic button pointer press starts immediately; release anywhere stops once; the trailing click does not restart', async () => {
+  for (const where of ['button', 'window']) {
+    const t = pointerEnv();
+    const e = t.press();
+    assert.equal(e.defaultPrevented, true, 'pointerdown must not steal focus from the composer');
+    await flush();
+    assert.deepEqual(t.log, ['start'], 'no 1s hold delay on the button');
+    assert.equal(t.handle.controller.getState(), 'recording');
+    t.release('pointerup', where === 'button' ? t.env.btn : t.env.window);
+    if (where === 'button') t.env.window.dispatchEvent(new FakeEvent('pointerup', { pointerId: 1 })); // bubbles to window in a browser
+    await flush(); await flush();
+    assert.deepEqual(t.log, ['start', 'stop']);
+    assert.equal(t.env.ctext.value, '말하기');
+    t.click(1); // the click the browser synthesizes after a press released on the button
+    await flush();
+    assert.deepEqual(t.log, ['start', 'stop'], 'the trailing click must not start again');
+    assert.equal(t.handle.controller.getState(), 'idle');
+    t.timers.advance(0);
+    t.click(1); // a later, separate click is an ordinary click again
+    await flush();
+    assert.deepEqual(t.log, ['start', 'stop', 'start']);
+    t.handle.destroy();
+  }
+});
+
+test('mic button pointercancel and window blur stop cleanly; unrelated pointers are ignored', async () => {
+  for (const kind of ['pointercancel', 'blur']) {
+    const t = pointerEnv();
+    t.press();
+    await flush();
+    t.release('pointerup', t.env.window, { pointerId: 9 });
+    assert.equal(t.handle.controller.getState(), 'recording', 'another pointer cannot end this hold');
+    t.release(kind);
+    await flush(); await flush();
+    assert.deepEqual(t.log, ['start', 'stop'], kind);
+    assert.equal(t.handle.controller.getState(), 'idle');
+    t.release('pointerup'); // a duplicate release never stops twice
+    await flush();
+    assert.deepEqual(t.log, ['start', 'stop']);
+    t.handle.destroy();
+  }
+});
+
+test('mic button ignores right/middle presses and non-primary pointers; keyboard click still toggles', async () => {
+  const t = pointerEnv();
+  assert.equal(t.press({ button: 2 }).defaultPrevented, false);
+  t.press({ button: 1 });
+  t.press({ isPrimary: false });
+  await flush();
+  assert.deepEqual(t.log, []);
+  assert.equal(t.handle.controller.getState(), 'idle');
+  t.click(0); // Enter/Space on the focused button
+  await flush();
+  assert.deepEqual(t.log, ['start']);
+  t.click(0);
+  await flush(); await flush();
+  assert.deepEqual(t.log, ['start', 'stop']);
+  // A pointer press while already recording keeps click-to-stop behaviour.
+  t.click(0); await flush();
+  const e = t.press();
+  assert.equal(e.defaultPrevented, false);
+  t.release();
+  t.click(1);
+  await flush(); await flush();
+  assert.deepEqual(t.log, ['start', 'stop', 'start', 'stop']);
+  t.handle.destroy();
+});
+
+test('mic button press starts cleanly from the error state', async () => {
+  const t = pointerEnv({ startReject: 'mic_denied' });
+  t.press();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'error');
+  t.release();
+  await flush();
+  t.timers.advance(0);
+  t.env.window.WsVoiceInput.getBackend('native').start = () => { t.log.push('start2'); return Promise.resolve(); };
+  t.press();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'recording');
+  assert.equal(t.log.filter((x) => x === 'start2').length, 1);
+  t.release();
+  await flush(); await flush();
+  assert.equal(t.handle.controller.getState(), 'idle');
+  assert.equal(t.env.ctext.value, '말하기');
+  t.handle.destroy();
+});
+
+test('mic button hold on a native that falls back: pointerup stops the fallback backend', async () => {
+  const log = [];
+  const router = {
+    id: 'openrouter', label: 'OpenRouter', kind: 'external', available: () => true,
+    start: () => { log.push('router.start'); return Promise.resolve(); },
+    stop: () => { log.push('router.stop'); return Promise.resolve({ text: '폴백' }); },
+    cancel: () => { log.push('router.cancel'); }
+  };
+  const t = pointerEnv({ startReject: 'recognizer_unavailable', extraBackends: [router], order: ['native', 'openrouter'] });
+  t.press();
+  await flush(); await flush();
+  assert.deepEqual(t.log, ['start', 'cancel']);
+  assert.deepEqual(log, ['router.start']);
+  assert.equal(t.handle.controller.getState(), 'recording');
+  t.release();
+  await flush(); await flush();
+  assert.deepEqual(log, ['router.start', 'router.stop']);
+  assert.equal(t.env.ctext.value, '폴백');
+  t.click(1);
+  await flush();
+  assert.deepEqual(log, ['router.start', 'router.stop'], 'trailing click must not restart the fallback');
+  t.handle.destroy();
+});
+
+test('destroy during a held press stops the dictation and drops the listeners', async () => {
+  const t = pointerEnv();
+  t.press();
+  await flush();
+  t.handle.destroy();
+  await flush();
+  assert.equal(t.log.includes('stop') || t.log.includes('cancel'), true);
+  t.press();
+  await flush();
+  assert.equal(t.log.filter((x) => x === 'start').length, 1, 'destroyed handle no longer reacts to the pointer');
+});
+
 test('dismissing the error capsule returns the controller to idle', async () => {
   const t = makeCapsulesForwardingPTT({
     value: '',
