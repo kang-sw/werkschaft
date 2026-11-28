@@ -1,9 +1,11 @@
 package wsagent
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/wscompact"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
@@ -99,4 +101,53 @@ func (r *Runner) IsConversationOpen(id string) bool {
 func (r *Runner) RotateCompanion(wsKey string) CompactResult {
 	resume := false
 	return r.CompactWithSummary(wsKey, "", &resume, emptyWorkerSummary())
+}
+
+// SwitchCompanionHarness switches the hosted session identified by wsKey onto
+// spec's target harness in place (preserving WSKey and ring dialog). Because
+// this is an in-process seam with no user authority, switches that would raise
+// a legacy-derived permission level are refused with 403.
+func (r *Runner) SwitchCompanionHarness(ctx context.Context, wsKey string, spec HarnessSwitchSpec) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	id, ok := r.replyIDByWSKey(wsKey)
+	if !ok {
+		return errUnknown
+	}
+	_, err := r.switchHarness(ctx, id, spec, false)
+	return err
+}
+
+// HasUsableHarness reports whether the resident conversation identified by
+// wsKey currently has a healthy, startable lead harness without waking any
+// parked conversation. A sleeping/idle process (proc == nil) is startable and
+// still usable; closed, hidden, sticky-failure, broken-MCP, quota-exhausted, or
+// unregistered-harness sessions are not.
+func (r *Runner) HasUsableHarness(wsKey string) bool {
+	c := r.residentByWSKey(wsKey)
+	if c == nil {
+		return false
+	}
+	view := c.quotaView()
+	c.mu.Lock()
+	closed := c.closed
+	hidden := c.hidden
+	hasFailure := c.failure != nil
+	mcpBrokenCount := len(c.mcpBroken)
+	backend := c.rec.Backend
+	c.mu.Unlock()
+	if view.closed || closed || hidden || view.failure != nil || hasFailure || mcpBrokenCount != 0 {
+		return false
+	}
+	nowMs := time.Now().UnixMilli()
+	if r.opts.Now != nil {
+		nowMs = r.opts.Now().UnixMilli()
+	}
+	if r.quotaExhausted(view, nowMs) {
+		return false
+	}
+	return LeadProfileFor(backend, r.opts.Backends) != ""
 }
