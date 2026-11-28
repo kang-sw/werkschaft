@@ -60,6 +60,12 @@ DAEMON_PACKAGE = REPO / "agents-plugin-wsflow"
 # One lifecycle budget for starter-gate acquisition, daemon-start and REST
 # confirmation. Builds and seeding stay outside this deadline and the gate.
 START_TIMEOUT_SECONDS = 180.0
+# Minimum timeout for daemon-start --replace so lock-gate contention cannot
+# starve daemon-start below its own 2 * DefaultStartWait (2 * 45s) handoff budget.
+MIN_DAEMON_START_TIMEOUT_SECONDS = 90.0
+# Brief settle window to re-check /health after a daemon-start timeout/failure
+# before concluding the replacement failed and running rollback.
+RECOVERY_SETTLE_SECONDS = 5.0
 HEALTH_WINDOW_SECONDS = 300
 HEALTH_INTERVAL_SECONDS = 20
 ROLLBACK_STOP_SECONDS = 15
@@ -307,6 +313,31 @@ class HealthConfirmationError(RuntimeError):
     pass
 
 
+def matches_expected_daemon(health: dict | None, digest: str, build_time: int | None = None) -> bool:
+    return (health is not None and health.get("content_hash") == digest
+            and (build_time is None or health.get("build_time") == build_time))
+
+
+def recheck_live_replacement(launcher, daemon_dir: Path, digest: str,
+                             *, build_time: int | None = None,
+                             settle_seconds: float = RECOVERY_SETTLE_SECONDS) -> tuple[dict | None, dict | None]:
+    """Poll /health briefly after a daemon-start failure/timeout to detect a live replacement."""
+    deadline = time.monotonic() + settle_seconds
+    while True:
+        remaining = deadline - time.monotonic()
+        probe_timeout = max(0.1, min(3.0, remaining)) if remaining > 0 else 0.5
+        try:
+            endpoint, health = current_health(launcher, daemon_dir, timeout=probe_timeout)
+        except RuntimeError:
+            return None, None
+        if endpoint is not None and matches_expected_daemon(health, digest, build_time):
+            return endpoint, health
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None, None
+        time.sleep(min(0.2, remaining))
+
+
 def confirm_daemon(launcher, daemon_dir: Path, digest: str, deadline: float, report: dict,
                    *, build_time: int | None = None) -> tuple[dict, dict]:
     after = None
@@ -314,8 +345,7 @@ def confirm_daemon(launcher, daemon_dir: Path, digest: str, deadline: float, rep
         endpoint, after = current_health(launcher, daemon_dir, timeout=min(3.0, remaining))
         if time.monotonic() >= deadline:
             break
-        if (after is not None and after.get("content_hash") == digest
-                and (build_time is None or after.get("build_time") == build_time)):
+        if matches_expected_daemon(after, digest, build_time):
             if report["outcome"] == "unavailable":
                 print("daemon-start recovered: expected build confirmed over REST")
             return endpoint, after
@@ -399,7 +429,16 @@ def watch_daemon(launcher, port: int, expected: dict, seconds: float) -> dict:
             return health
 
 
-def restore_daemon(launcher, daemon_dir: Path, previous: dict, stop) -> dict:
+def restore_daemon(launcher, daemon_dir: Path, previous: dict, stop,
+                   *, replacement_digest: str | None = None,
+                   replacement_build_time: int | None = None) -> dict:
+    if replacement_digest is not None:
+        try:
+            _, live = current_health(launcher, daemon_dir, timeout=1.0)
+        except RuntimeError:
+            live = None
+        if matches_expected_daemon(live, replacement_digest, replacement_build_time):
+            raise RuntimeError("refusing rollback: replacement build is already live and healthy on /health")
     deadline = time.monotonic() + ROLLBACK_STOP_SECONDS
     if stop is not None and not stop(ROLLBACK_STOP_SECONDS):
         raise RuntimeError("replacement process did not exit")
@@ -485,16 +524,55 @@ def restart_daemon(launcher, daemon_dir: Path, bin_dir: Path, built: Path, diges
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise RuntimeError("lifecycle deadline expired before daemon-start")
+        start_timeout = max(remaining, MIN_DAEMON_START_TIMEOUT_SECONDS)
+        confirm_deadline = max(deadline, time.monotonic() + start_timeout)
         build_time = int(time.time() * 1000)
         with ExitStack() as process:
             stop = None
             report = None
+            endpoint = None
             after = None
+            target_build_time = build_time if health_window else None
+
+            def rollback_and_report(exc: Exception) -> int:
+                failed = f"{staged.name} ({digest[:12]})"
+                wedged = isinstance(getattr(exc, "__cause__", None), launcher.DaemonHung)
+                try:
+                    restored = restore_daemon(
+                        launcher, daemon_dir, previous, stop,
+                        replacement_digest=None if wedged else digest,
+                        replacement_build_time=None if wedged else target_build_time,
+                    )
+                except (OSError, RuntimeError, subprocess.SubprocessError) as rollback_error:
+                    print(f"error: build {failed} failed ({exc}); rollback to {previous['version']} "
+                          f"failed ({rollback_error}); manual action is needed", file=sys.stderr)
+                else:
+                    print(f"error: build {failed} failed ({exc}); restored {describe(restored)}", file=sys.stderr)
+                return 1
+
             try:
-                report = run_daemon_start(launcher, staged, build_time, timeout=remaining)
-                endpoint, after = confirm_daemon(launcher, daemon_dir, digest, deadline, report,
-                                                 build_time=build_time if health_window else None)
-                if health_window:
+                report = run_daemon_start(launcher, staged, build_time, timeout=start_timeout)
+                endpoint, after = confirm_daemon(launcher, daemon_dir, digest, confirm_deadline, report,
+                                                 build_time=target_build_time)
+            except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                if report is None and (previous is not None or isinstance(exc, subprocess.TimeoutExpired)):
+                    endpoint, after = recheck_live_replacement(
+                        launcher, daemon_dir, digest, build_time=target_build_time,
+                    )
+                if after is not None:
+                    print(f"daemon-start recovered ({exc}): expected build confirmed over /health")
+                else:
+                    if previous is None:
+                        if isinstance(exc, HealthConfirmationError):
+                            print(f"error: {exc}", file=sys.stderr)
+                            return 1
+                        raise
+                    if report is not None:
+                        stop = capture_reported_process(launcher, daemon_dir, process, report, before, digest, build_time)
+                    return rollback_and_report(exc)
+
+            if health_window:
+                try:
                     pid = after.get("pid")
                     if (type(pid) is int and pid > 0 and pid == endpoint.get("pid")
                             and pid != (before or {}).get("pid") and after.get("build_time") == build_time):
@@ -503,25 +581,10 @@ def restart_daemon(launcher, daemon_dir: Path, bin_dir: Path, built: Path, diges
                         except OSError:
                             pass  # A dead process may already have released the lock.
                     after = watch_daemon(launcher, int(endpoint["port"]), after, health_window)
-                print(f"daemon after:  {describe(after)}")
-                return 0
-            except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
-                if previous is None:
-                    if isinstance(exc, HealthConfirmationError):
-                        print(f"error: {exc}", file=sys.stderr)
-                        return 1
-                    raise
-                failed = f"{staged.name} ({digest[:12]})"
-                if after is None and report is not None:
-                    stop = capture_reported_process(launcher, daemon_dir, process, report, before, digest, build_time)
-                try:
-                    restored = restore_daemon(launcher, daemon_dir, previous, stop)
-                except (OSError, RuntimeError, subprocess.SubprocessError) as rollback_error:
-                    print(f"error: build {failed} failed ({exc}); rollback to {previous['version']} "
-                          f"failed ({rollback_error}); manual action is needed", file=sys.stderr)
-                else:
-                    print(f"error: build {failed} failed ({exc}); restored {describe(restored)}", file=sys.stderr)
-                return 1
+                except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                    return rollback_and_report(exc)
+            print(f"daemon after:  {describe(after)}")
+            return 0
     finally:
         starter.close()
 
