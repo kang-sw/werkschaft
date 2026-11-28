@@ -14,6 +14,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsmeta"
+	"github.com/kang-sw/devenv/internal/wspiruntime"
 )
 
 // KeyStore mints and keeps the ws session key of each conversation. The
@@ -331,6 +332,10 @@ type Options struct {
 	// AccountSlots is the daemon's in-memory per-harness account slot registry
 	// (D11). Nil uses the implicit default slot for every conversation.
 	AccountSlots *wscred.AccountSlotRegistry
+	// PiRuntime is the shared managed Pi standalone runtime manager bound to
+	// backends implementing piRuntimeBinder. Nil lets each backend construct a
+	// manager on demand.
+	PiRuntime *wspiruntime.Manager
 	// ExplicitHome mirrors DaemonOptions.Home for the D10 home resolver so an
 	// explicit home suppresses inherited CODEX_HOME / CLAUDE_CONFIG_DIR env.
 	ExplicitHome string

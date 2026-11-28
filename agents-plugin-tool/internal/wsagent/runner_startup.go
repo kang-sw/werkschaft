@@ -43,27 +43,39 @@ func NewRunner(opts Options) *Runner {
 	if opts.Alive == nil {
 		opts.Alive = wsstate.ProcessAlive
 	}
-	if opts.AccountSlots != nil && opts.Backends != nil {
+	if opts.Backends != nil && (opts.AccountSlots != nil || opts.PiRuntime != nil) {
 		var cloned map[string]BackendRegistration
-		for name, reg := range opts.Backends {
-			binder, ok := reg.Backend.(slotHomeBinder)
-			if !ok {
-				continue
-			}
-			harness := name
-			slots := opts.AccountSlots
-			explicitHome := opts.ExplicitHome
-			bound := binder.withSlotHomeResolver(func() string {
-				return wscred.ResolveHarnessHomeFromRegistry(slots, harness, "", explicitHome, nil)
-			})
+		ensureCloned := func() {
 			if cloned == nil {
 				cloned = make(map[string]BackendRegistration, len(opts.Backends))
 				for k, v := range opts.Backends {
 					cloned[k] = v
 				}
 			}
-			reg.Backend = bound
-			cloned[name] = reg
+		}
+		for name, reg := range opts.Backends {
+			changed := false
+			if opts.AccountSlots != nil {
+				if binder, ok := reg.Backend.(slotHomeBinder); ok {
+					harness := name
+					slots := opts.AccountSlots
+					explicitHome := opts.ExplicitHome
+					reg.Backend = binder.withSlotHomeResolver(func() string {
+						return wscred.ResolveHarnessHomeFromRegistry(slots, harness, "", explicitHome, nil)
+					})
+					changed = true
+				}
+			}
+			if opts.PiRuntime != nil {
+				if binder, ok := reg.Backend.(piRuntimeBinder); ok {
+					reg.Backend = binder.withPiRuntime(opts.PiRuntime)
+					changed = true
+				}
+			}
+			if changed {
+				ensureCloned()
+				cloned[name] = reg
+			}
 		}
 		if cloned != nil {
 			opts.Backends = cloned

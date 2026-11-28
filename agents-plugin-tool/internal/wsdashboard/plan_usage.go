@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -190,7 +191,10 @@ func (s *planUsageStore) classifyActiveSlotsLocked(active map[string]string) (cl
 	}
 	if gptActive == "" {
 		for _, h := range harnesses {
-			if !s.harnesses.pushesClaudeUsage(h) && h != claudeHarness {
+			if _, registered := s.harnesses[h]; registered && !s.harnesses.separateFiveHour(h) {
+				continue
+			}
+			if !s.harnesses.pushesClaudeUsage(h) && h != claudeHarness && slices.Contains(wscred.SlotLoginHarnesses(), h) {
 				gptHarness, gptActive = h, active[h]
 				break
 			}

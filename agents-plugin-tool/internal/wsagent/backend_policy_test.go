@@ -64,6 +64,9 @@ func TestBuiltinBackendPolicyTable(t *testing.T) {
 			legacy:    map[string]PermissionLevel{"read-only": PermissionReadOnly, "workspace-write": PermissionWorkdirWrite, "danger-full-access": PermissionFull}},
 		{backend: BackendAgy, terminal: true, admitter: true,
 			lifecycle: LifecyclePolicy{ComposedLeadInstructions: true, LeadHTTPMCP: true, TurnActivity: true, InternalTurns: true, WorkerLog: true, SingleHardCompactionSteer: true, EphemeralIsolatedStateDir: true}},
+		{backend: BackendPiRPC,
+			lifecycle: LifecyclePolicy{ComposedLeadInstructions: true, LeadHTTPMCP: true, ExecReadTools: true, RestartLeadOnPermissionChange: true},
+			fallback:  PermissionWorkdirWrite},
 	} {
 		t.Run(tc.backend, func(t *testing.T) {
 			reg, ok := regs[tc.backend]
@@ -265,6 +268,7 @@ func TestBuiltinDashboardTraits(t *testing.T) {
 		BackendCodex:  {SeparateFiveHourHistory: true, ReplayClientName: "codex"},
 		BackendAgy:    {ReplayClientName: "agy"},
 		BackendWerk:   {ReplayClientName: "ws-werk"},
+		BackendPiRPC:  {ReplayClientName: pirpcBridgeClientName},
 	}
 	runner := policyRunner(BuiltinBackendRegistrations())
 	if got := runner.DashboardHarnesses(); !reflect.DeepEqual(got, want) {
@@ -295,6 +299,7 @@ func TestBuiltinConnectionPolicy(t *testing.T) {
 		BackendCodex:  {named: true},
 		BackendAgy:    {},
 		BackendWerk:   {},
+		BackendPiRPC:  {bridge: pirpcBridgeClientName},
 	}
 	got := map[string]conn{}
 	for _, named := range BuiltinConnections() {

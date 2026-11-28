@@ -22,6 +22,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsholder"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
 	"github.com/kang-sw/devenv/internal/wsmeta"
+	"github.com/kang-sw/devenv/internal/wspiruntime"
 	"github.com/kang-sw/devenv/internal/wstrackerhook"
 	"github.com/kang-sw/devenv/internal/wstrackerhost"
 	"github.com/kang-sw/devenv/internal/wswake"
@@ -662,7 +663,8 @@ func newAgentRunnerWithHooks(dir string, logw io.Writer, trackerChanged, agyActi
 		modelWaitSeconds = 0
 	}
 	keys := mcp.NewAgentKeyStore(boards)
-	backends := wsagent.BuiltinBackendRegistrations()
+	piRuntime := wspiruntime.NewManager(wspiruntime.Options{})
+	backends := wsagent.WithPiRuntime(wsagent.BuiltinBackendRegistrations(), piRuntime)
 	var loadProviderConfig func(wsconfig.Options) error
 	if credentials != nil {
 		backends = wsagent.WithProviderCredentials(backends, credentials, credentialStatus(credentials))
@@ -676,6 +678,7 @@ func newAgentRunnerWithHooks(dir string, logw io.Writer, trackerChanged, agyActi
 	runner = wsagent.NewRunner(wsagent.Options{
 		LoadProviderConfig:         loadProviderConfig,
 		AccountSlots:               accountSlots,
+		PiRuntime:                  piRuntime,
 		Dir:                        dir,
 		DaemonVersion:              version,
 		AgyModelWaitTimeoutSeconds: &modelWaitSeconds,

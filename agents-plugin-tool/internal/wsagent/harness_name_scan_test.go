@@ -194,8 +194,10 @@ var harnessNameAllowlist = func() []nameSite {
 	add(
 		site("internal/wsdashboard/fs_denied.go", "CODEX_HOME", 1, classExternal, "the provider's credential directory variable", credentials),
 		site("internal/wsdashboard/fs_denied.go", "CLAUDE_CONFIG_DIR", 1, classExternal, "the provider's credential directory variable", credentials),
+		site("internal/wsdashboard/fs_denied.go", "PI_CODING_AGENT_DIR", 1, classExternal, "the provider's credential directory variable", credentials),
 		site("internal/wsdashboard/fs_outside.go", ".codex/auth.json", 1, classExternal, "the provider's credential file", credentials),
 		site("internal/wsdashboard/fs_outside.go", ".claude/.credentials.json", 1, classExternal, "the provider's credential file", credentials),
+		site("internal/wsdashboard/fs_outside.go", ".pi/agent/auth.json", 1, classExternal, "the provider's credential file", credentials),
 		site("internal/wsdashboard/conversation_presentation.go", `^\[(?:ws|wsflow) note: from a peer lead session \((?:(?:claude|codex|pi), )?not a worker\), with the same authority as yours\]$`, 1, classPersisted,
 			"stored peer-lead mail text written by earlier versions, which labeled only claude, codex, and pi", "TestConversationPresentationPeerNoteIsDisplayOnly"),
 		site("internal/wsdashboard/pageview.go", "AgentKindPi", 2, classPersisted, "a finished Pi child row is told apart by its persisted agent kind", "TestRetiredPiRowOpensAsEndedHistory"),
@@ -266,9 +268,9 @@ var (
 		regexp.MustCompile(`^internal/wsdashboard/plan_usage_agy\.go$`),
 	}
 	harnessWord  = regexp.MustCompile(`(?i)claude|codex|agy|antigravity|(^|[^a-z0-9])(pi|werk)([^a-z0-9]|$)`)
-	harnessExact = regexp.MustCompile(`(?i)^(claude|codex|agy|antigravity|pi|werk)$`)
-	harnessAlt   = regexp.MustCompile(`(?i)\|(claude|codex|agy|pi|werk)\b|\b(claude|codex|agy|pi|werk)\|`)
-	backendIdent = regexp.MustCompile(`^Backend(Claude|Codex|Agy|Pi|Werk)$`)
+	harnessExact = regexp.MustCompile(`(?i)^(claude|codex|agy|antigravity|pi|pi-rpc|werk)$`)
+	harnessAlt   = regexp.MustCompile(`(?i)\|(claude|codex|agy|pi-rpc|pi|werk)\b|\b(claude|codex|agy|pi-rpc|pi|werk)\|`)
+	backendIdent = regexp.MustCompile(`^Backend(Claude|Codex|Agy|Pi|PiRPC|Werk)$`)
 
 	// decisionCalls are the strings functions whose literal argument is a
 	// comparison operand: a long product name there is a branch, not prose.

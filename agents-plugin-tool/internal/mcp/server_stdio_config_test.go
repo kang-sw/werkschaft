@@ -790,4 +790,14 @@ func TestDetectHarnessFromInitializeParamsPrecedence(t *testing.T) {
 	if got := s.detectHarnessFromInitializeParams(json.RawMessage(`{"clientInfo":{"name":"agy"}}`)); got != wsagent.BackendAgy {
 		t.Fatalf("registered initialize harness = %q, want agy", got)
 	}
+	// New managed Pi RPC bridge resolves to BackendPiRPC via registration
+	// ConnectionPolicy.BridgeClientName, even with decoy substrings, while
+	// legacy ws-pi-bridge continues to resolve to retired BackendPi.
+	rawPiRPC := json.RawMessage(`{
+		"clientInfo": {"name": "ws-pi-rpc-bridge", "version": "codex-compat-claude"},
+		"capabilities": {"note": "decoy codex claude"}
+	}`)
+	if got := (&Server{}).detectHarnessFromInitializeParams(rawPiRPC); got != wsagent.BackendPiRPC {
+		t.Fatalf("detectHarnessFromInitializeParams(ws-pi-rpc-bridge) = %q, want %q", got, wsagent.BackendPiRPC)
+	}
 }

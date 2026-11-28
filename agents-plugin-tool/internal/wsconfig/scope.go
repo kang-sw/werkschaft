@@ -291,25 +291,25 @@ func init() {
 	// Its harness bucket keys carry the same default, or a scope-less bucket
 	// write would land in the unregistered-key default (project).
 	RegisterDefaultScope(ItemWorkflowWhiteboardEnabled, ScopeGlobal)
-	for _, bucket := range []string{"claude", "codex", "pi", "agy", "werk", "all"} {
+	for _, bucket := range []string{"claude", "codex", "pi", "pi-rpc", "agy", "werk", "all"} {
 		RegisterDefaultScope(ItemWorkflowWhiteboardEnabled+"."+bucket, ScopeGlobal)
 	}
 	// workflow.tracker_enabled is the same cross-project habit, so it takes
 	// the same global default on the bare key and every bucket key.
 	RegisterDefaultScope(ItemWorkflowTrackerEnabled, ScopeGlobal)
-	for _, bucket := range []string{"claude", "codex", "pi", "agy", "werk", "all"} {
+	for _, bucket := range []string{"claude", "codex", "pi", "pi-rpc", "agy", "werk", "all"} {
 		RegisterDefaultScope(ItemWorkflowTrackerEnabled+"."+bucket, ScopeGlobal)
 	}
 	// exec.native_tool_removal is a machine-wide rollout switch, global on
 	// the bare key and every bucket key.
 	RegisterDefaultScope(ItemExecNativeToolRemoval, ScopeGlobal)
-	for _, bucket := range []string{"claude", "codex", "pi", "agy", "werk", "all"} {
+	for _, bucket := range []string{"claude", "codex", "pi", "pi-rpc", "agy", "werk", "all"} {
 		RegisterDefaultScope(ItemExecNativeToolRemoval+"."+bucket, ScopeGlobal)
 	}
 	// agent.quota_continuation is a cross-project hosted-lead preference,
 	// global on the bare key and every bucket key.
 	RegisterDefaultScope(ItemAgentQuotaContinuation, ScopeGlobal)
-	for _, bucket := range []string{"claude", "codex", "pi", "agy", "werk", "all"} {
+	for _, bucket := range []string{"claude", "codex", "pi", "pi-rpc", "agy", "werk", "all"} {
 		RegisterDefaultScope(ItemAgentQuotaContinuation+"."+bucket, ScopeGlobal)
 	}
 	RegisterSetCheck([]string{ItemExecNativeToolRemoval + ".werk"}, func(overrides map[string]string) error {
@@ -322,7 +322,7 @@ func init() {
 	// workflow.profile is the same cross-project habit, so it takes the same
 	// global default on the bare key and every bucket key.
 	RegisterDefaultScope(ItemWorkflowProfile, ScopeGlobal)
-	for _, bucket := range []string{"claude", "codex", "pi", "agy", "werk", "all"} {
+	for _, bucket := range []string{"claude", "codex", "pi", "pi-rpc", "agy", "werk", "all"} {
 		RegisterDefaultScope(ItemWorkflowProfile+"."+bucket, ScopeGlobal)
 	}
 	RegisterGlobalOnly(ItemWorkflowSkepticalPosture)

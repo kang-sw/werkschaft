@@ -13,7 +13,7 @@ import (
 
 func TestBuiltinBackendRegistrationDefaults(t *testing.T) {
 	registrations := BuiltinBackendRegistrations()
-	if len(registrations) != 4 {
+	if len(registrations) != 5 {
 		t.Fatalf("builtin registrations = %v", registrations)
 	}
 	wants := []struct {
@@ -26,6 +26,7 @@ func TestBuiltinBackendRegistrationDefaults(t *testing.T) {
 		{BackendCodex, LeadProfileCodex, []string{AgentWorkerProfile(BackendCodex), LeadProfileCodex}, true, CodexCatalog().Compaction},
 		{BackendAgy, LeadProfileAgy, []string{AgentWorkerProfile(BackendAgy), LeadProfileAgy}, true, AgyCatalog().Compaction},
 		{BackendWerk, LeadProfileWerk, []string{AgentWorkerProfile(BackendWerk), LeadProfileWerk}, true, WerkCatalog().Compaction},
+		{BackendPiRPC, LeadProfilePiRPC, []string{AgentWorkerProfile(BackendPiRPC), LeadProfilePiRPC}, true, PiRPCCatalog().Compaction},
 	}
 	for _, want := range wants {
 		t.Run(want.backend, func(t *testing.T) {
@@ -51,7 +52,7 @@ func TestBuiltinBackendRegistrationDefaults(t *testing.T) {
 	if got := BuiltinCompaction("unknown"); got != (CompactionProtocol{}) {
 		t.Errorf("unknown harness compaction = %+v", got)
 	}
-	if names := BuiltinHarnessNames(); !slices.Equal(names, []string{BackendClaude, BackendCodex, BackendAgy, BackendWerk}) {
+	if names := BuiltinHarnessNames(); !slices.Equal(names, []string{BackendClaude, BackendCodex, BackendAgy, BackendWerk, BackendPiRPC}) {
 		t.Errorf("builtin harness order = %v", names)
 	}
 }
@@ -137,6 +138,7 @@ func TestRegisteredBackendAdmission(t *testing.T) {
 		BackendAgy:    {LeadProfile: LeadProfileAgy, PermissionModes: AgyPermissionModes},
 		BackendCodex:  {LeadProfile: LeadProfileCodex, PermissionModes: CodexPermissionModes},
 		BackendWerk:   {LeadProfile: LeadProfileWerk, PermissionModes: []string{werkModeReadOnly, werkModeWorkspaceWrite, werkModeFullAccess}},
+		BackendPiRPC:  {LeadProfile: LeadProfilePiRPC},
 	}
 	if !reflect.DeepEqual(ProfileValueSchema(), ProfileValueSchema(production)) {
 		t.Fatal("production profile schema changed from the builtin-only contract")

@@ -287,7 +287,7 @@ func (c *conv) setPermissionLevel(level PermissionLevel, user, ack bool) error {
 		return err
 	}
 	if rec.Lead {
-		c.dirtyPermission = c.r.durableProcess(rec.Backend)
+		c.dirtyPermission = c.r.durableProcess(rec.Backend) || c.r.lifecycle(rec.Backend).RestartLeadOnPermissionChange
 		if mode := c.r.permissionPolicy(rec.Backend).nativeMode(level); mode != "" {
 			c.update(func(rec *Record) { rec.PermissionMode = mode })
 			c.dirtyMode, c.reconcileMode = true, false
