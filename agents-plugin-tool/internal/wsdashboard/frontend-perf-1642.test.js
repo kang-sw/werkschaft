@@ -138,11 +138,11 @@ function makeEl(tag, opts = {}) {
   return el;
 }
 
-test('#1 drRoom caches --shr and --ghr so unchanged widths skip root custom-property writes', () => {
+test('#1 drRoom caches --shr so unchanged widths skip root custom-property writes', () => {
   const src = readAsset(DASH_ASSETS, 'dashboard-drawer.js');
   const fnSrc = extractFunction(src, 'drRoom');
   const writes = [];
-  let dw = 30, sw = 28, gw = 40;
+  let dw = 30, sw = 28;
   const ctx = {
     drHas: true,
     drRoomW: -1,
@@ -150,8 +150,6 @@ test('#1 drRoom caches --shr and --ghr so unchanged widths skip root custom-prop
     drFoldW: -1,
     drFoldGw: -1,
     drhandle: { getBoundingClientRect: () => ({ width: dw }) },
-    ghandle: () => true,
-    gitRegion: { getBoundingClientRect: () => ({ width: gw }) },
     shandle: { getBoundingClientRect: () => ({ width: sw }) },
     drheader: { classList: makeClassList() },
     doc: {
@@ -163,22 +161,23 @@ test('#1 drRoom caches --shr and --ghr so unchanged widths skip root custom-prop
     }
   };
   vm.runInNewContext(fnSrc, ctx);
+  assert.doesNotMatch(fnSrc, /--ghr|ghandle/, 'the git handle retired with the Git page');
 
   ctx.drRoom();
   assert.deepEqual(
     writes.filter(([k]) => k === '--shr' || k === '--ghr'),
-    [['--shr', '36px'], ['--ghr', '70px']]
+    [['--shr', '36px']]
   );
 
   writes.length = 0;
   ctx.drRoom();
-  assert.deepEqual(writes, [], 'second call with identical widths must not rewrite --shr/--ghr');
+  assert.deepEqual(writes, [], 'second call with identical widths must not rewrite --shr');
 
   dw = 42;
   ctx.drRoom();
   assert.deepEqual(
     writes.filter(([k]) => k === '--shr' || k === '--ghr'),
-    [['--shr', '48px'], ['--ghr', '82px']]
+    [['--shr', '48px']]
   );
 
   writes.length = 0;

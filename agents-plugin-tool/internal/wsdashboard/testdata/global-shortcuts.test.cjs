@@ -33,7 +33,6 @@ function makeHarness(opts = {}) {
     overviewVisible: opts.overviewVisible !== false,
     overviewHolding: !!opts.overviewHolding,
     gitPresent: opts.gitPresent !== false,
-    gitDisabled: !!opts.gitDisabled,
     drOpen: !!opts.drOpen,
     drMode: opts.drMode || 'panels',
     tmapDockPresent: opts.tmapDockPresent !== false,
@@ -49,9 +48,7 @@ function makeHarness(opts = {}) {
     getClientRects: () => (state.overviewVisible ? [{}] : []),
     click: () => { state.events.push('overview:click'); state.overviewHolding = !state.overviewHolding; }
   };
-  const gitHandle = {
-    get disabled() { return state.gitDisabled; }
-  };
+  const gitDock = {};
   const tmapDock = {};
   const tmapBack = {
     get hidden() { return !state.tmapOpen; }
@@ -68,7 +65,7 @@ function makeHarness(opts = {}) {
   let keydownHandler = null;
   const doc = {
     getElementById(id) {
-      if (id === 'ghandle') return state.gitPresent ? gitHandle : null;
+      if (id === 'gitdock') return state.gitPresent ? gitDock : null;
       if (id === 'tmdock') return state.tmapDockPresent ? tmapDock : null;
       if (id === 'tmback') return state.tmapOpen ? tmapBack : null;
       if (id === 'toolbar-files') return filesSheetEl;
@@ -77,7 +74,7 @@ function makeHarness(opts = {}) {
     querySelector(sel) {
       if (sel === '.board-overview') return state.overviewPresent ? overviewBtn : null;
       if (sel === '.board-files') return state.filesBtnPresent ? filesBtn : null;
-      if (sel === '#ghandle') return this.getElementById('ghandle');
+      if (sel === '#gitdock') return this.getElementById('gitdock');
       if (sel === '#tmdock') return this.getElementById('tmdock');
       if (sel === '#tmback') return this.getElementById('tmback');
       if (sel === '#toolbar-files') return this.getElementById('toolbar-files');
@@ -114,6 +111,7 @@ function makeHarness(opts = {}) {
         state.events.push(['tmap:close', !!yieldTo]);
       }
     },
+    gitPage: { open() { state.events.push('gitPage:open'); } },
     railKey() { state.events.push('railKey'); },
     shSend(ent, kind) {
       assert.equal(ent, shOn);
@@ -169,32 +167,29 @@ function makeHarness(opts = {}) {
   return { state, ctx, fire, doc };
 }
 
-test('Ctrl+G toggles git drawer via drSetOpen and ignores non-git sessions', () => {
+test('Ctrl+G shows the Git page idempotently and ignores non-git sessions', () => {
   const h = makeHarness();
   let r = h.fire({ key: 'g' });
   assert.equal(r.prevented, true);
-  assert.deepEqual(r.events, [['drSetOpen', true, 'git']]);
-  assert.equal(h.state.drOpen, true);
-  assert.equal(h.state.drMode, 'git');
+  assert.deepEqual(r.events, ['gitPage:open']);
 
-  // Closing works via drSetOpen(false, "git") even when #ghandle is CSS-hidden.
+  // A repeat only shows and refocuses the page again: no toggle, no drawer.
   r = h.fire({ key: 'G' });
   assert.equal(r.prevented, true);
-  assert.deepEqual(r.events, [['drSetOpen', false, 'git']]);
+  assert.deepEqual(r.events, ['gitPage:open']);
   assert.equal(h.state.drOpen, false);
 
-  // Switching from panels drawer opens git mode directly.
+  // An open panels drawer closes before the page shows.
   h.state.drOpen = true;
   h.state.drMode = 'panels';
   r = h.fire({ key: 'g' });
   assert.equal(r.prevented, true);
-  assert.deepEqual(r.events, [['drSetOpen', true, 'git']]);
+  assert.deepEqual(r.events, [['drSetOpen', false, 'panels'], 'gitPage:open']);
+  assert.equal(h.state.drOpen, false);
 
-  // Non-git session (#ghandle absent) or disabled handle: do nothing, do not swallow.
+  // Non-git session (#gitdock absent): do nothing, do not swallow.
   const noGit = makeHarness({ gitPresent: false });
   assert.deepEqual(noGit.fire({ key: 'g' }), { prevented: false, events: [] });
-  const disabledGit = makeHarness({ gitDisabled: true });
-  assert.deepEqual(disabledGit.fire({ key: 'g' }), { prevented: false, events: [] });
 });
 
 test('Ctrl+B activates the docked Ticket Map, closes the expanded one, and respects unavailability', () => {
@@ -267,13 +262,13 @@ test('open Ticket Map capture onKey closes on Ctrl+B and routes Ctrl+G/E/Q/` cle
   assert.deepEqual(r.closed, [false]);
   assert.equal(h.state.tmapOpen, false);
 
-  // Ctrl+G while Ticket Map is open closes Ticket Map (yielding focus) and opens Git drawer.
+  // Ctrl+G while Ticket Map is open closes Ticket Map (yielding focus) and shows the Git page.
   h.state.tmapOpen = true;
   r = fireCapture({ key: 'g' });
   assert.equal(r.prevented, true);
   assert.equal(r.stopped, true);
   assert.equal(h.state.tmapOpen, false);
-  assert.deepEqual(r.events, [['tmap:close', true], ['drSetOpen', true, 'git']]);
+  assert.deepEqual(r.events, [['tmap:close', true], 'gitPage:open']);
 
   // Ctrl+G while Ticket Map is open on a non-git session keeps Ticket Map open.
   h.state.tmapOpen = true;
@@ -330,12 +325,12 @@ test('Ctrl+E toggles floating board files sheet and allows closing from #toolbar
   assert.deepEqual(makeHarness({ filesBtnVisible: false }).fire({ key: 'e' }), { prevented: false, events: [] });
 });
 
-test('smooth overlay switching between Overview, Git drawer, Ticket Map, and Floating Files', () => {
-  // Overview -> Ctrl+G exits Overview via WsOverview.after then opens Git drawer.
+test('smooth overlay switching between Overview, the Git page, Ticket Map, and Floating Files', () => {
+  // Overview -> Ctrl+G exits Overview via WsOverview.after then shows the Git page.
   const h1 = makeHarness({ overviewHolding: true });
   assert.deepEqual(h1.fire({ key: 'g' }), {
     prevented: true,
-    events: ['WsOverview:after', ['drSetOpen', true, 'git']]
+    events: ['WsOverview:after', 'gitPage:open']
   });
 
   // Overview -> Ctrl+B exits Overview via WsOverview.after then opens Ticket Map.
@@ -345,18 +340,18 @@ test('smooth overlay switching between Overview, Git drawer, Ticket Map, and Flo
     events: ['WsOverview:after', ['tmap:open']]
   });
 
-  // Floating Files -> Ctrl+G dismisses Files and opens Git drawer.
+  // Floating Files -> Ctrl+G dismisses Files and shows the Git page.
   const h3 = makeHarness({ filesSheetOpen: true });
   assert.deepEqual(h3.fire({ key: 'g' }), {
     prevented: true,
-    events: ['WsCards:dismissFiles', ['drSetOpen', true, 'git']]
+    events: ['WsCards:dismissFiles', 'gitPage:open']
   });
 
-  // Git drawer -> Ctrl+E closes drawer and opens Floating Files.
-  const h4 = makeHarness({ drOpen: true, drMode: 'git' });
+  // Panels drawer -> Ctrl+E closes drawer and opens Floating Files.
+  const h4 = makeHarness({ drOpen: true, drMode: 'panels' });
   assert.deepEqual(h4.fire({ key: 'e' }), {
     prevented: true,
-    events: [['drSetOpen', false, 'git'], 'files:click']
+    events: [['drSetOpen', false, 'panels'], 'files:click']
   });
 });
 

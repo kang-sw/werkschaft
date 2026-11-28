@@ -8,6 +8,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: cc9401c726ae1169
 sage-review-completeness-reviewed: cc9401c726ae1169
+completed: 2026-11-28
 ---
 
 # Standalone Git Page in Always-Open #bgal (Graph, Diff, Worktrees, Review Ledger Jump) & Legacy Git Drawer Retirement
@@ -174,6 +175,18 @@ Two sequential phases: Phase 1 delivers the backend endpoints and the standalone
    - Implement container-query responsive layout inside `#bgal`: Wide (`@container >= 720px`) 2-column 3-region grid (`#glog` 52% left full height, `#gpanel` 54% top-right, `#wtcard` 46% bottom-right) and Narrow (`< 720px`, down to `360px`) 3-tab segmented switch (`그래프 | 변경·Diff (N) | 워크트리 (M)`), reusing `.gwin-back` for commit and working-tree file diffs.
    - Implement the Worktrees panel with debounced `GET /s/<rid>/worktrees?no_size=1` on page open / `워크트리` tab entry (`—` when uncached), the prominent manual Refresh button (`↻ 워크트리 새로 고침 (용량 · 상태 전체 스캔)`) calling `GET /s/<rid>/worktrees` (+ `?wait=1` while `sizing: true`) with live scanning indicator, and immediately actionable `Cleanup 요청`.
 
+### Result (e72c31105) - 2026-11-28
+
+- **Backend (b3754439f):** `wsreview.CheckpointStatusWith` is a read-only status call that never bootstraps; `CheckpointNudgeWith` now derives from it. `GET /s/<rid>/review-ledger` returns the closed `ok`/`warn`/`missing`/`norepo` state with frontier, track, behind counts, thresholds and nudge (`no-store`, `nosniff`). `?no_size=1` and `POST …/worktrees/cleanup` read sizes through a new `sizeCache.peek`, which inserts, evicts and walks nothing and drops entries past the 2-minute TTL.
+- **Frontend (e72c31105):** the Git system page mounts in Track 2A's `#gitdock` slot; the static `gitpage` define moved into `#gitdock`. Wide layout (`@container ≥ 720px`) is the 3-region grid: `#glog` on the left, changes top right, worktrees bottom right. Narrow layout is a 3-tab switch. The top strip shows branch, upstream `↑/↓`, Fetch/Pull/Push and the Review Ledger pill (merges + net lines behind). Clicking the pill jumps to the frontier: Narrow switches to the graph tab, the page walks `git/log?offset=` in a bounded loop, smooth-scrolls, focuses, and lights the spotlight plus a `Review Frontier` row badge. Worktrees open light (`?no_size=1`, `—` when unmeasured); the big Refresh runs the full scan (`?wait=1` while sizing) and shows the scanning marker on every row at once. Cleanup works before and after the scan. Commit rows and changed-file rows open `.gwin-back`. Git CSS is split into `dashboard-git.css` and `dashboard-gitpage.css`, loaded after the ticket-map styles. All 11 locales carry the same 46 `gp.*` keys.
+- **Decisions:**
+  - The Phase 1 "coexistence" checkpoint collapsed: both phases landed together, so legacy `Ctrl+G` was never verified alongside the page.
+  - `#gitdata` is a hidden region carrier; a missing carrier shows the no-repo state, and the no-repo state hides the strip.
+  - In the narrow overlay, `data-away` makes `Ctrl+G` call `setTab("board")` first.
+  - The 900px gallery exists only in the narrow overlay (the column caps at 720px), so the browser test sizes the viewport.
+  - The test runs one daemon per session, so every session opens on a cold size cache.
+- **Verification:** `TestGitPageBrowser` PASS. It covers 4 sessions (dark/light × 900/380), 262 rows each, a frontier beyond page 1, 0px overflow, the busy-row scan and the narrow tab auto-switch. Go route tests for review-ledger (pass/warn/missing/norepo/legacy-threshold) and the zero-walk `no_size` / `no_size+wait` / cleanup tests PASS.
+
 ### Phase 2: Legacy #ghandle & #gdrawer Retirement + Visual & Behavioral Verification
 
 1. **Retire legacy Git drawer & handle surfaces:**
@@ -182,6 +195,18 @@ Two sequential phases: Phase 1 delivers the backend endpoints and the standalone
    - Update existing Go, Node, and browser tests that reference retired `#ghandle` / `#gbody` / `#p-worktrees` selectors (`gitbadge_test.go`, `worktrees_test.go`, `drawer_height_test.go`, `frontend-drawer.test.js`, `search_palette_test.go`, `ticketmap_assets_test.go`, `testdata/global-shortcuts.test.cjs`, `testdata/shell-topbar.browser.cjs`, `testdata/ticketmap-hier.test.cjs`, plus any test pinning the `dashboard-frames.js` `wbDoc === "git"` relay or the `dashboard-ticketmap.js` `Ctrl+G` branch).
 2. **Full side-by-side visual & behavioral acceptance:**
    - Verify via Go, Node, and Playwright tests against the approved mockup `ai-docs/assets/mockups/261128/gallery-git-page/index.html` across Wide (`900px` `#bgal`), Narrow (`380px` `#bgal`), and Scanning/Busy states in both Dark and Light themes.
+
+### Result (5b27f47ac) - 2026-11-28
+
+- **Retired:** `#ghandle` (`r-git`, `ghandle()`, `gitSwapped()` became `gpSwapped()`), the `#gbody` git sheet (`drMode === "git"`), and `#p-worktrees` / `cardTab("worktrees")`. From `drRoom()`, only the git-handle terms (`gw`, `--ghr`, `--ghw`) were removed; `#p-holders`, `#drhandle`, `--shr`, `--drhw` and `--drw` stay. `Ctrl+G` (`globalShortcutAvailable` / `runGlobalShortcut("git")`) opens and focuses the gallery Git page, and a second press only refocuses. The `dashboard-frames.js` `wbDoc` relay and the ticket-map `Ctrl+G` branch go through `runGlobalShortcut`. Legacy tests that referenced the retired selectors were updated.
+- **Review:** `code-review-lite` (claude.medium) over `4cb78aa0a..e72c31105` found 0 Critical, 0 Important and 7 Minor. Minor 1 is fixed in 5b27f47ac: `glTrim` always cancels a pending log read or frontier walk when the page hides. Minor 2 was rejected: `.bgal[data-away]` toggles without a gallery-change notification, so gating on it would leave the page inactive. The other minors are cosmetic or single-request issues and are left as they are.
+- **Visual:** compared `/tmp/gp-shots/gp-{dark,light}-{wide,narrow}` plus the `-busy`, `-frontier` and `-norepo` captures against the mockup captures `mock-*.png` from `ai-docs/assets/mockups/261128/gallery-git-page/index.html`. They match; only the data differs, because the fixture repo differs. Mismatches found along the way were fixed: a doubled scan icon, busy rows that only switched after the first read, narrow pill alignment, and an empty strip in the no-repo state.
+- **Verification:**
+  - Playwright: `TestGitPageBrowser`, `TestGalleryBrowser`, `TestPanelRowsBrowser`, `TestTicketMapDockBrowser` and `TestShellTopbarBrowser` PASS. `TestIDEShellPhase3` fails identically on the HEAD baseline (rail accent).
+  - `TestCSSClassesDoNotCollideAcrossModules` PASS.
+  - `go test ./internal/wsreview/... ./internal/wsi18n/...` ok; `GOOS=windows go vet ./...` clean.
+  - `node --test *.test.js testdata/*.test.cjs`: 949 tests, the same 25 failures as the HEAD baseline.
+  - Full `go test ./internal/wsdashboard/...`: every remaining failure also fails on a git-archive HEAD baseline. The two new failures were stale pins and are fixed in 5b27f47ac.
 
 ## Verification
 

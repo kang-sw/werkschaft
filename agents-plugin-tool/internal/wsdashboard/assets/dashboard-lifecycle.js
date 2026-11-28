@@ -1296,9 +1296,10 @@
     var b = d && d.querySelector(".board-overview");
     return b && b.getClientRects().length ? b : null;
   }
-  function gitHandleEl(d) {
-    var g = d && (d.getElementById ? d.getElementById("ghandle") : d.querySelector && d.querySelector("#ghandle"));
-    return g && !g.disabled ? g : null;
+  // The Git page is available while its gallery host (#bgal's #gitdock)
+  // exists: a session whose root is no repository still shows its empty page.
+  function gitPageEl(d) {
+    return d ? (d.getElementById ? d.getElementById("gitdock") : d.querySelector && d.querySelector("#gitdock")) || null : null;
   }
   // The ticket map is available while it is expanded or its docked page
   // (#bgal's #tmdock) exists.
@@ -1320,7 +1321,7 @@
   }
   function globalShortcutAvailable(d, kind) {
     if (kind === "overview") return !!overviewButton(d);
-    if (kind === "git") return !!gitHandleEl(d);
+    if (kind === "git") return !!gitPageEl(d);
     if (kind === "ticketmap") return ticketMapAvailable(d);
     if (kind === "files") return !!filesButton(d);
     return false;
@@ -1335,18 +1336,19 @@
       b.click();
       return true;
     }
+    // Ctrl+G shows and focuses the Git page; a repeat only refocuses it (no
+    // toggle). The expanded ticket map, the drawer, and the files sheet
+    // close first.
     if (kind === "git") {
-      if (!gitHandleEl(doc) || typeof drSetOpen !== "function") return false;
-      var openGit = !(typeof drOpen !== "undefined" && drOpen && typeof drMode !== "undefined" && drMode === "git");
-      if (openGit) {
-        if (typeof ticketMap !== "undefined" && ticketMap && ticketMap.isOpen && ticketMap.isOpen()) ticketMap.close(true);
-        if (typeof window !== "undefined" && window.WsCards && window.WsCards.dismissFiles) window.WsCards.dismissFiles();
-        if (typeof window !== "undefined" && window.WsOverview && window.WsOverview.holding && window.WsOverview.holding()) {
-          window.WsOverview.after(function () { drSetOpen(true, "git"); });
-          return true;
-        }
+      if (!gitPageEl(doc) || typeof gitPage === "undefined" || !gitPage || typeof gitPage.open !== "function") return false;
+      if (typeof ticketMap !== "undefined" && ticketMap && ticketMap.isOpen && ticketMap.isOpen()) ticketMap.close(true);
+      if (typeof drawer !== "undefined" && drawer && typeof drOpen !== "undefined" && drOpen && typeof drSetOpen === "function") drSetOpen(false);
+      if (typeof window !== "undefined" && window.WsCards && window.WsCards.dismissFiles) window.WsCards.dismissFiles();
+      if (typeof window !== "undefined" && window.WsOverview && window.WsOverview.holding && window.WsOverview.holding()) {
+        window.WsOverview.after(function () { gitPage.open(); });
+        return true;
       }
-      drSetOpen(openGit, "git");
+      gitPage.open();
       return true;
     }
     // Ctrl+B shows and focuses the docked map (a repeat only refocuses it);

@@ -218,7 +218,7 @@
     }
     if (name === "convlive" || name === "entries") outboxSync();
     if (name === "panels") { drawerSync(); restorePanelReader(el, panelReader); }
-    if (name === "git") gitSwapped();
+    if (name === "git") gpSwapped();
     if (treeFocus && treeFocus.isConnected && doc.activeElement !== treeFocus) treeFocus.focus({ preventScroll: true });
     restoreScroll(scroll);
     if (kept) kept.h.apply();

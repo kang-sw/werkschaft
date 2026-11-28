@@ -59,64 +59,8 @@ func CheckpointNudgeWith(ctx context.Context, runner wsgit.Runner, root string) 
 		return "no review ledger yet for this project; run a sweep (lead-review range: <base>..<head>) to establish a baseline"
 	}
 
-	localRunner := localOnlyGitRunner(runner)
-	track, err := ResolveTrackWith(ctx, localRunner, root)
-	if err != nil {
-		return ""
-	}
-
-	mb, err := wsgit.Client{Runner: localRunner}.MergeBase(ctx, root, entry.Head, track)
-	if err != nil {
-		return ""
-	}
-	base := strings.TrimSpace(mb.MergeBase)
-	if base == "" {
-		return ""
-	}
-
-	cfg := readCheckpointConfig(root)
-	if cfg.legacyOnly {
-		count, ok := commitsAheadFromBase(ctx, localRunner, root, base, track)
-		if !ok {
-			return ""
-		}
-		threshold := cfg.legacyCommits
-		if threshold > SizeThresholdCommits {
-			threshold = SizeThresholdCommits
-		}
-		if count < threshold {
-			return ""
-		}
-		return fmt.Sprintf(
-			"review watermark is %d %s behind %s (threshold: %d %s); consider running a sweep (lead-review range: %s..%s).",
-			count, pluralize(count, "commit", "commits"), track,
-			threshold, pluralize(threshold, "commit", "commits"),
-			entry.Head, track,
-		)
-	}
-
-	pathspecs := reviewPathspecs(cfg.excludes)
-	merges, err := eligibleFirstParentMerges(ctx, localRunner, root, base, track, pathspecs)
-	if err != nil {
-		return ""
-	}
-	lines, err := netChangedLines(ctx, localRunner, root, base, track, pathspecs)
-	if err != nil {
-		return ""
-	}
-	if merges < cfg.merges && lines < cfg.lines {
-		return ""
-	}
-
-	return fmt.Sprintf(
-		"review watermark is %d %s, %d net %s behind %s (thresholds: %d %s / %d %s); consider running a sweep (lead-review range: %s..%s).",
-		merges, pluralize(merges, "merge", "merges"),
-		lines, pluralize(lines, "line", "lines"),
-		track,
-		cfg.merges, pluralize(cfg.merges, "merge", "merges"),
-		cfg.lines, pluralize(cfg.lines, "line", "lines"),
-		entry.Head, track,
-	)
+	// The status helper owns the composition; the advisory is its text.
+	return checkpointStatusFound(ctx, localOnlyGitRunner(runner), root, entry).NudgeText
 }
 
 func localOnlyGitRunner(runner wsgit.Runner) wsgit.Runner {

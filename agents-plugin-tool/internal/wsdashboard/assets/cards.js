@@ -1039,7 +1039,7 @@
       var shell = mk("div", "gal-sys-shell");
       var hd = mk("div", "gal-sys-head");
       var row = mk("div", "gal-sys-title-row");
-      var ic = mk("span", "gal-sys-icon" + (id === "git" ? " git" : ""));
+      var ic = mk("span", "gal-sys-icon");
       ic.innerHTML = sysSvg(id);
       var meta = mk("div", "gal-sys-meta");
       meta.appendChild(mk("h3", "gal-sys-h", SYS_META[id].title));
@@ -1098,11 +1098,20 @@
     tmPg.appendChild(tmDock);
     sysPageEls.ticketmap = tmPg;
 
-    var gitGrid = mk("div", "gal-sys-git-grid");
-    gitGrid.appendChild(makeZone("Commit Graph", "Region 1", "Interactive branch and commit history graph migrates here in Track 2B."));
-    gitGrid.appendChild(makeZone("Working Diff", "Region 2", "Staged and unstaged file diffs remain in #ghandle until gallery-git-page."));
-    gitGrid.appendChild(makeZone("Worktrees", "Region 3", "Worktree pool status and branch controls will consolidate here in Track 2B."));
-    sysPageEls.git = makeScaffold("git", "Track 2B", "upcoming", "Legacy #ghandle stays active until Track 2B (gallery-git-page).", gitGrid, "Open Ticket Map →");
+    // The Git page is a full-fill host as well: the session page's Git page
+    // (dashboard-gitpage.js) moves its root (#gitpage) into it when the page
+    // first shows; Ctrl+G focuses it. A container query on it picks the wide
+    // three-region grid or the narrow tabs.
+    var gitPg = mk("div", "gal-page gal-sys-page gal-sys-gitpage");
+    gitPg.setAttribute("data-page", "git");
+    gitPg.setAttribute("data-page-panel", "git");
+    var gitDock = mk("div", "gp-dock");
+    gitDock.id = "gitdock";
+    gitDock.tabIndex = -1;
+    gitDock.setAttribute("role", "region");
+    gitDock.setAttribute("aria-label", SYS_META.git.title);
+    gitPg.appendChild(gitDock);
+    sysPageEls.git = gitPg;
 
     G.SYS.forEach(function (id) { viewEl.appendChild(sysPageEls[id]); });
   }

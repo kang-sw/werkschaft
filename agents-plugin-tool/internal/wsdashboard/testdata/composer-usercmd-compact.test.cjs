@@ -412,8 +412,8 @@ test('CSS contract: Option C tray/band/well tokens per theme, identical overlay 
     assert.ok(!/font-(weight|style)/.test(rule(ed, '.ucmd-hl-' + t)), 'token ' + t + ' keeps glyph advances');
   }
   assert.ok(!/#[0-9a-f]{3,8}\b/i.test(ed), 'editor sheet has no hardcoded colours');
-  const drawer = css('dashboard-drawer.css');
-  assert.equal(drawer.split('--hl-k:').length - 1, 3, '--hl-* exist for light and both dark selectors');
+  const git = css('dashboard-git.css');
+  assert.equal(git.split('--hl-k:').length - 1, 3, '--hl-* exist for light and both dark selectors');
 });
 
 // --- Chromium: real layout, overlay alignment and the LOOK screenshots ------

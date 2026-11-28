@@ -287,15 +287,18 @@ func TestDaemonRunsAndReleasesItsHolderHost(t *testing.T) {
 }
 
 // TestHoldersCardInTheDrawer pins the drawer's holders card: on a session
-// page of a daemon that runs a holder host, after the panels and worktrees
-// card, with its list, count chip, and note line; a
+// page of a daemon that runs a holder host, after the panels (the worktree
+// pool moved to the Git page), with its list, count chip, and note line; a
 // daemon without a holder host has no card.
 func TestHoldersCardInTheDrawer(t *testing.T) {
 	f := startPageFixture(t, func(o *DaemonOptions) { o.Worktrees = &fakeWorktrees{} }, withHolders(newFakeHolders()))
 	_, page := get(t, f.base+"/s/livesession?frame=1")
-	panels, worktrees, card, end := strings.Index(page, `data-region="panels"`), strings.Index(page, `id="p-worktrees"`), strings.Index(page, `id="p-holders"`), strings.Index(page, `<button type="button" class="dr-handle"`)
-	if panels < 0 || worktrees < panels || card < worktrees || end < card {
-		t.Fatalf("drawer order: panels %d, worktrees %d, holders %d, handle %d", panels, worktrees, card, end)
+	panels, card, end := strings.Index(page, `data-region="panels"`), strings.Index(page, `id="p-holders"`), strings.Index(page, `<button type="button" class="dr-handle"`)
+	if panels < 0 || card < panels || end < card {
+		t.Fatalf("drawer order: panels %d, holders %d, handle %d", panels, card, end)
+	}
+	if strings.Contains(page, `id="p-worktrees"`) {
+		t.Error("the drawer still carries the retired worktrees card")
 	}
 	assertSettingsOwner(t, page, false)
 	for _, want := range []string{`id="hdlist" aria-live="polite"`, `id="hdcount" hidden`, `id="hdnote" role="status"`, `Session holders`} {
