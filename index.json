@@ -491,7 +491,17 @@
       "registered_at": "2026-11-28T10:35:30Z"
     },
     "261128-feat-ws-dashboard-git-page-single-panel-ux": {
-      "registered_at": "2026-11-28T10:41:43Z"
+      "registered_at": "2026-11-28T10:41:43Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-28T10:56:09Z",
+        "impl": {
+          "branch": "impl/develop/git-page-ux-v2"
+        }
+      }
     },
     "261128-feat-ws-dashboard-global-holders-popup": {
       "registered_at": "2026-11-28T03:57:30Z",
