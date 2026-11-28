@@ -86,6 +86,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-audit-window.js",
 	"dashboard-audit.js",
 	"dashboard-audit-rows.js",
+	"dashboard-ide-shell.js",
 	"dashboard-lifecycle.js",
 	"dashboard-voice.js",
 }
@@ -122,6 +123,7 @@ var dashboardStyleFiles = []string{
 	"dashboard-rail.css",
 	"dashboard-new-session.css",
 	"dashboard-shell.css",
+	"dashboard-ide-shell.css",
 	"dashboard-account-consent.css",
 	"dashboard-audit.css",
 	"dashboard-audit-rows.css",

@@ -72,6 +72,10 @@
       return;
     }
     if (!railEl || !WsRail) return;
+    if (shell && railWide() && typeof ideRailToggleCollapse === "function") {
+      ideRailToggleCollapse();
+      return;
+    }
     railOpen(!railShown());
   }
   function railOpen(open) {
@@ -83,7 +87,7 @@
     root.classList.toggle("rail-open", !!open);
     if (!open && rp.P && rp.kind === "fold") railPopClose(false);
     if (memoPad) memoPad.open(!!open, railWide());
-    if (railBtn) railBtn.setAttribute("aria-expanded", String(!!open || railWide()));
+    if (railBtn) railBtn.setAttribute("aria-expanded", String(!!open || (railWide() && !(shell && typeof ideRailCollapsed !== "undefined" && ideRailCollapsed))));
   }
   function railSettingsMark() {
     var rail = region("rail");
@@ -578,6 +582,10 @@
     if (railBtn) railBtn.addEventListener("click", function (e) {
       if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
+      if (shell && railWide() && typeof ideRailToggleCollapse === "function") {
+        ideRailToggleCollapse();
+        return;
+      }
       railOpen(!railShown());
     });
     if (rscrim) rscrim.addEventListener("click", function () { railOpen(false); });

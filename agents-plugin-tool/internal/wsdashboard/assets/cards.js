@@ -1483,7 +1483,19 @@
   // (or, once the user widens the board, the unresized default fits Band 4).
   function canFitFourCol(vw, tabs) {
     if (tabs || !(vw >= G.C.WIDE)) return false;
-    var stageW = vw - 32 - 348, gap = 8;
+    var el = typeof document !== "undefined" && document ? document.documentElement : (typeof root !== "undefined" ? root : null);
+    var railCollapsed = !!(el && typeof el.getAttribute === "function" && el.getAttribute("data-rail-collapsed") === "true");
+    var railW = 280;
+    if (!railCollapsed && el) {
+      var rawW = el.style && typeof el.style.getPropertyValue === "function" ? el.style.getPropertyValue("--rail-w") : "";
+      if (!rawW && typeof getComputedStyle === "function") {
+        try { rawW = getComputedStyle(el).getPropertyValue("--rail-w"); } catch (e) { rawW = ""; }
+      }
+      var parsedW = parseFloat(rawW);
+      if (isFinite(parsedW) && parsedW > 0) railW = parsedW;
+    }
+    var railReserve = railCollapsed ? 0 : (railW + 8);
+    var stageW = vw - 32 - railReserve, gap = 8;
     var split = !!(opt && (opt.split || (board && board.closest && board.closest(".dgrid.live, .dgrid.history"))));
     var worktree = !!(board && board.closest && board.closest(".dgrid.worktree"));
     function fitMetrics(bw, cw) {

@@ -529,7 +529,7 @@ test('the header handle keeps one row: small badge marks clear of the columns, a
   assert.match(rule('.usage-key'), /9px\/1\.2/);
   // Where the header runs short (tu) only the compact trigger shows.
   assert.match(rule('.usage-mini'), /display: none/);
-  assert.match(rule('.dwrap > .top.tu .tcen > .usage-toggle'), /width: 34px/);
+  assert.match(rule('.dwrap > .top.tu .tcen > .usage-toggle'), /width: var\(--toph, 36px\)/);
   assert.match(rule('.dwrap > .top.tu .tcen > .usage-toggle > :not(.usage-mini)'), /display: none/);
   assert.match(rule('.dwrap > .top.tu .tcen > .usage-toggle > .usage-mini'), /display: inline-flex/);
   const handleCss = css.slice(0, css.indexOf('.rpop.usage-pop'));

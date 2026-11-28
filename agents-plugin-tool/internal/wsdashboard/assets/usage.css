@@ -19,7 +19,7 @@
 .tcen .usage-pace { font-size: 9.5px; line-height: 1.1; }
 .usage-mini { display: none; color: var(--wb-muted-fg); }
 .usage-mini svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.dwrap > .top.tu .tcen > .usage-toggle { width: 34px; padding: 2px 0 0; justify-content: center; }
+.dwrap > .top.tu .tcen > .usage-toggle { width: var(--toph, 36px); padding: 2px 0 0; justify-content: center; }
 .dwrap > .top.tu .tcen > .usage-toggle > :not(.usage-mini) { display: none; }
 .dwrap > .top.tu .tcen > .usage-toggle > .usage-mini { display: inline-flex; }
 .usage-column { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 1px; white-space: nowrap; font-family: var(--wb-mono, monospace); font-variant-numeric: tabular-nums; }

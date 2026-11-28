@@ -86,7 +86,7 @@ until then. */}}
 <style>{{.Assets.CompanionCSS}}</style>
 <style>{{.Assets.TrackerCSS}}</style>
 <script>{{.Assets.RailScript}}</script></head>
-<body class="dash live shell">{{.Assets.WhiteboardSprite}}{{.Assets.Sprite}}{{.Assets.LucideSprite}}<div class="frames" id="frames"><iframe class="sframe on" src="{{.Src}}" title="{{.Title}}"></iframe></div>
+<body class="dash live shell">{{.Assets.WhiteboardSprite}}{{.Assets.Sprite}}{{.Assets.LucideSprite}}<div class="stage-well-bg" id="stage-well-bg" aria-hidden="true"></div><div class="frames" id="frames"><iframe class="sframe on" src="{{.Src}}" title="{{.Title}}"></iframe></div>
 <div class="dwrap">
 <div class="top{{if .OwnHead}} sh-own{{end}}">{{template "railbtn"}}{{region . "head"}}{{template "sse"}}{{template "tcen"}}{{template "qsslot"}}</div>
 {{template "account-consent"}}
@@ -95,6 +95,14 @@ until then. */}}
   try {
     try { s = window.localStorage; } catch (e) { s = null; }
     var store = { load: function (k) { try { return s ? s.getItem(k) : null; } catch (e) { return null; } }, save: function () {} };
+    var rw = parseInt(store.load("ws.dashboard.railWidth"), 10);
+    if (isFinite(rw)) {
+      rw = Math.max(220, Math.min(360, Math.round(rw)));
+      document.documentElement.style.setProperty("--rail-w", rw + "px");
+    }
+    if (store.load("ws.dashboard.railCollapsed") === "1") {
+      document.documentElement.setAttribute("data-rail-collapsed", "true");
+    }
     if (!R || !r) return;
     R.marks(r, R.state(store), document.documentElement.getAttribute("data-rid"));
     var list = document.getElementById("rlist"), top = parseInt(store.load("ws.dashboard.railscroll"), 10);
@@ -102,6 +110,8 @@ until then. */}}
   } finally { document.getElementById("rail").removeAttribute("data-premark"); }
 })();</script><div class="rscrim" id="rscrim"></div>
 {{template "memopad"}}</div></div>
+<div class="rail-splitter" id="rail-splitter" role="separator" aria-orientation="vertical" aria-label="Resize session rail" aria-valuemin="220" aria-valuemax="360" aria-valuenow="280" tabindex="0"></div>
+<footer class="shell-bottom" id="shell-bottom" aria-hidden="true"></footer>
 {{template "settings" .}}
 {{if .SysOpen}}<dialog id="workflow-settings" aria-label="{{t "js.settings.title"}}"></dialog>{{end}}
 <script>{{i18n}}</script>

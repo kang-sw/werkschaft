@@ -33,12 +33,12 @@ function strip(page) {
 
 function checkStrip(label, g) {
   assert.ok(g.top, label + ': header shows');
-  assert.equal(g.top.h, 34, label + ': header is one 34px strip');
+  assert.equal(g.top.h, 36, label + ': header is one 36px strip');
   const end = g.top.r - g.padR;
   for (const it of g.items) {
     if (!/\b(tph|back|tcen)\b/.test(it.cls)) continue;
     assert.equal(it.box.t, 0, `${label}: ${it.cls} hangs from the top edge`);
-    assert.equal(it.box.h, 34, `${label}: ${it.cls} is 34px tall`);
+    assert.equal(it.box.h, 36, `${label}: ${it.cls} is 36px tall`);
     assert.ok(it.box.r <= end + 0.5, `${label}: ${it.cls} ends at ${it.box.r}, past the strip's room ${end}`);
   }
 }
@@ -83,7 +83,7 @@ async function open(page, rid) {
         assert.equal(g.href, '/s/parentsession');
         assert.equal(g.label, 'Parent');
         assert.equal(g.name, 'Parent Label');
-        assert.equal(g.pill.t, 0); assert.equal(g.pill.h, 34, label + ': pill is 34px tall');
+        assert.equal(g.pill.t, 0); assert.equal(g.pill.h, 36, label + ': pill is 36px tall');
         assert.ok(g.pillFirst, label + ': the pill leads the head');
         assert.ok(g.pill.r <= g.id.l + 0.5, `${label}: pill (${g.pill.r}) is left of the identity (${g.id.l})`);
         assert.ok(!g.nameClipped && !g.pillClipped, label + ': a short parent name is not clipped');

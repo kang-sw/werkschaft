@@ -663,7 +663,7 @@
       frameBox = frameElement?.getBoundingClientRect();
       if (!menu.hidden) controls.measure();
       if (isVrm()) {
-        const wide = vw >= RAIL_MIN_WIDTH && (!wideMq || wideMq.matches);
+        const wide = vw >= RAIL_MIN_WIDTH && (!wideMq || wideMq.matches) && root?.getAttribute?.("data-rail-collapsed") !== "true";
         const railRect = rail?.getBoundingClientRect();
         const slotEl = rail?.querySelector("#rail-companion-slot");
         const railStyle = rail && typeof getComputedStyle === "function" ? getComputedStyle(rail) : null;
@@ -766,7 +766,7 @@
     function invalidated() {
       dirty = true;
       if (isVrm() && !doc.hidden && !cancel.signal.aborted) {
-        const wideNow = window.innerWidth >= RAIL_MIN_WIDTH && (!wideMq || wideMq.matches);
+        const wideNow = window.innerWidth >= RAIL_MIN_WIDTH && (!wideMq || wideMq.matches) && root?.getAttribute?.("data-rail-collapsed") !== "true";
         if (wideNow !== vrmRailVisible) {
           layout();
         } else if (vrmRailVisible) {
@@ -801,7 +801,7 @@
       rail.addEventListener("transitionend", invalidated, options);
       observeRailLayout();
     }
-    railChanges.observe(root, { attributes: true, attributeFilter: ["class"] });
+    railChanges.observe(root, { attributes: true, attributeFilter: ["class", "data-rail-collapsed"] });
     window.addEventListener("resize", invalidated, options);
     wideMq?.addEventListener?.("change", invalidated, options);
 

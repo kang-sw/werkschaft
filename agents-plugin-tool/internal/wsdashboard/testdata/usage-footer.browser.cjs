@@ -63,9 +63,9 @@ function entries(variant) {
         } else {
           assert.equal(await page.locator('.usage-pace').first().textContent(), variant === 'over' ? '+31%' : variant === 'weekly' ? '−7%' : '−13%');
         }
-        // One 34px handle row; each badge mark (with its stale clock) clear of its columns.
+        // One 36px handle row; each badge mark (with its stale clock) clear of its columns.
         const handle = await page.locator('.usage-toggle').boundingBox();
-        assert.equal(handle.height, 34, `${theme}/${width}/${variant}: one 34px handle`);
+        assert.equal(handle.height, 36, `${theme}/${width}/${variant}: one 36px handle`);
         const clear = await page.evaluate(() => [...document.querySelectorAll('.usage-harness')].every(h => {
           const cols = h.querySelector('.usage-columns').getBoundingClientRect().left, c = h.querySelector('.usage-clock');
           return h.querySelector('.usage-mark').getBoundingClientRect().right <= cols && (!c || c.getBoundingClientRect().right <= cols);

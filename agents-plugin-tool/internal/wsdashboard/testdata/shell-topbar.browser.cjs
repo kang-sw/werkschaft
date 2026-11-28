@@ -47,12 +47,12 @@ function geometry(page) {
 function checkStrip(label, g) {
   assert.ok(g.top, label + ': header shows');
   assert.equal(g.top.t, 0, label + ': header hangs from the top edge');
-  assert.equal(g.top.h, 34, label + ': header is one 34px strip');
+  assert.equal(g.top.h, 36, label + ': header is one 36px strip');
   const end = g.top.r - g.padR;
   for (const it of g.items) {
     if (!/\b(tph|back|tcen)\b/.test(it.cls)) continue;
     assert.equal(it.box.t, 0, `${label}: ${it.cls} hangs from the top edge`);
-    assert.equal(it.box.h, 34, `${label}: ${it.cls} is 34px tall`);
+    assert.equal(it.box.h, 36, `${label}: ${it.cls} is 36px tall`);
     assert.ok(it.box.r <= end + 0.5, `${label}: ${it.cls} ends at ${it.box.r}, past the strip's room ${end}`);
     for (const h of g.handles) assert.ok(it.box.r <= h.l + 0.5, `${label}: ${it.cls} (${it.box.r}) collides with a right-end handle at ${h.l}`);
   }
@@ -98,12 +98,13 @@ function checkStrip(label, g) {
       await page.locator('.usage-number').first().waitFor();
       await page.waitForTimeout(300);
 
-      // Wide: the docked rail runs the full height 12px in from the edges;
-      // the strip keeps to the stage column right of it.
+      // Wide: the Variant D docked rail sits flush on the left below the 36px
+      // topbar and ends above the 26px bottom bar; the strip keeps to the stage column right of it.
       let g = await geometry(page);
       checkStrip(`${theme}/1920`, g);
-      assert.deepEqual([g.rail.l, g.rail.t, g.rail.b], [12, 12, g.vh - 12], `${theme}/1920: rail runs the full height`);
-      assert.ok(g.top.l >= g.rail.r + 16 - 0.5, `${theme}/1920: header starts right of the rail (${g.top.l} vs ${g.rail.r})`);
+      assert.deepEqual([g.rail.l, g.rail.t, g.rail.b], [0, 36, g.vh - 26], `${theme}/1920: rail spans flush left between 36px topbar and 26px bottom bar`);
+      assert.equal(g.rail.w, 280, `${theme}/1920: default rail width is 280px`);
+      assert.ok(g.top.l >= g.rail.r + 8 - 0.5, `${theme}/1920: header starts right of the rail (${g.top.l} vs ${g.rail.r})`);
       assert.equal(g.railbtn, null, `${theme}/1920: rail button hides beside the docked rail`);
       assert.ok(!/\btu\b/.test(g.cls), `${theme}/1920: plan usage shows in full`);
       // The badge mark and its stale clock stay clear of the columns.
@@ -140,7 +141,7 @@ function checkStrip(label, g) {
         g = await geometry(page);
         checkStrip('dark/1800/narrow', g);
         assert.equal(g.railbtn, null, 'dark/1800/narrow: rail stays docked, button hidden');
-        assert.equal(g.rail.l, 12, 'dark/1800/narrow: rail stays docked at left edge');
+        assert.equal(g.rail.l, 0, 'dark/1800/narrow: rail stays docked flush at left edge');
         assert.notEqual(g.railZ, '45', 'dark/1800/narrow: rail is not an overlay');
         await page.evaluate(() => document.documentElement.removeAttribute('data-gal'));
 
@@ -150,7 +151,7 @@ function checkStrip(label, g) {
         await page.waitForTimeout(200);
         g = await geometry(page);
         checkStrip('dark/1280', g);
-        assert.deepEqual([g.railbtn.l, g.railbtn.t, g.railbtn.w, g.railbtn.h], [16, 0, 34, 34], 'dark/1280: rail button is a 34px handle at the top-left');
+        assert.deepEqual([g.railbtn.l, g.railbtn.t, g.railbtn.w, g.railbtn.h], [16, 0, 36, 36], 'dark/1280: rail button is a 36px handle at the top-left');
         await shot(page, 'dark-narrow');
         await shot(page, 'dark-narrow-strip', { clip: { x: 0, y: 0, width: 1280, height: 60 } });
         await page.locator('#railbtn').click();
@@ -215,7 +216,7 @@ function checkStrip(label, g) {
           report.push({ width: 760, step, state, items: g.items.map(i => [i.cls, Math.round(i.box.l), Math.round(i.box.r)]), handles: g.handles.map(h => Math.round(h.l)) });
         }
         assert.ok(state.tu && state.tch, 'dark/760: the longest head compacts usage and hides chips ' + JSON.stringify(state));
-        assert.equal(g.usage.w, 34, 'dark/760: compact usage trigger is 34px');
+        assert.equal(g.usage.w, 36, 'dark/760: compact usage trigger is 36px');
         await shot(page, 'dark-760');
         await shot(page, 'dark-760-strip', { clip: { x: 0, y: 0, width: 760, height: 60 } });
         await page.locator('.usage-toggle').click();
