@@ -432,19 +432,6 @@
     "261125-feat-ws-daemon-prompt-injection-mcp-output-budget": {
       "registered_at": "2026-11-25T14:00:10Z"
     },
-    "261125-feat-ws-desktop-native-os-stt": {
-      "registered_at": "2026-11-25T12:38:11Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-28T02:44:05Z",
-        "impl": {
-          "branch": "impl/develop/wager-uncle-juicy"
-        }
-      }
-    },
     "261125-feat-ws-meeting-minutes-voice-mode": {
       "registered_at": "2026-11-25T12:38:19Z"
     },
@@ -552,7 +539,17 @@
       }
     },
     "261128-feat-ws-settings-account-rework-and-voice-section-split": {
-      "registered_at": "2026-11-28T03:40:30Z"
+      "registered_at": "2026-11-28T03:40:30Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-28T04:46:03Z",
+        "impl": {
+          "branch": "impl/develop/dove-duo-thong"
+        }
+      }
     }
   }
 }
