@@ -64,10 +64,13 @@ func gitPageHistory(t *testing.T, root string, n, frontierAt int) string {
 
 // TestGitPageBrowser runs the gallery's Git page end to end in cached
 // Chromium over a real repository: Dark and Light, a wide (900px) and a
-// narrow (380px) gallery, the review pill's jump (which pages the graph to a
-// frontier past its first page and, narrow, switches to the graph tab), the
-// light worktree list and its manual full scan, the commit and file windows
-// (.gwin-back), Ctrl+G's idempotent show, and the no-repository empty state.
+// narrow (380px) gallery, the single full-width graph panel, the dirty
+// tree's UNSTAGED row above HEAD and its commit window (Refresh after the
+// script writes a file into the fixture, then a clean tree once it commits
+// everything), the icon-only strip actions and their busy state, the
+// Worktrees popover (light list, manual full scan, its close paths), the
+// review pill's jump (which pages the graph to a frontier past its first
+// page), Ctrl+G's idempotent show, and the no-repository empty state.
 // WS_GITPAGE_SHOTS (absolute) saves the screenshots compared against the
 // approved mockup.
 func TestGitPageBrowser(t *testing.T) {
@@ -147,7 +150,7 @@ func TestGitPageBrowser(t *testing.T) {
 	}
 	// Sessions in order: dark 900, dark 380, light 900, light 380. The
 	// fast-import history is fixed, so every fixture's frontier is the same.
-	var bases []string
+	var bases, projects []string
 	var frontier string
 	for i := 0; i < 4; i++ {
 		f, oid := gitFixture()
@@ -156,6 +159,7 @@ func TestGitPageBrowser(t *testing.T) {
 		}
 		frontier = oid
 		bases = append(bases, f.base)
+		projects = append(projects, f.project)
 	}
 
 	// A daemon over a root that is no repository.
@@ -166,7 +170,7 @@ func TestGitPageBrowser(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "node", "testdata/gitpage.browser.cjs", strings.Join(bases, ","), plain.base, frontier, shots)
+	cmd := exec.CommandContext(ctx, "node", "testdata/gitpage.browser.cjs", strings.Join(bases, ","), strings.Join(projects, ","), plain.base, frontier, shots)
 	cmd.WaitDelay = 5 * time.Second
 	out, err := cmd.CombinedOutput()
 	t.Log(string(out))

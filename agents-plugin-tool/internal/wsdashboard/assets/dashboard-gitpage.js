@@ -1,25 +1,25 @@
   // --- the Git page: #bgal's Git system page --------------------------------
   // The page (#gitpage, rendered with the session page) moves into the
   // gallery's Git page host (#gitdock, cards.js) and drives the git helpers
-  // in dashboard-git.js: the action strip, the commit graph, the changed
-  // files, and the pooled worktrees. A container query on the host lays the
-  // three regions out side by side (wide) or as three tabs (narrow, below
-  // 720px). Nothing reads while the page is hidden: each showing asks the
-  // daemon to read the git badge again, reads the changed files, the graph
-  // (when it shows), the pool cache-only (no disk walk), and the review
-  // ledger. The git region (#gitdata, the git badge's stream) patches the
-  // branch line and the tab counts by key; the review ledger is read only on
-  // a showing and after an action, never per tick. Leaving the page trims
-  // the graph back to its first page.
-  var GP_NARROW = 720, GP_PAGES = 10;
+  // in dashboard-git.js: the action strip and the commit graph, the page's
+  // one full-width panel at every width, which shows the working tree's
+  // changes as one row above HEAD while the tree is dirty. The pooled
+  // worktrees live in the strip's Worktrees popover
+  // (dashboard-gitpage-wt.js). Nothing reads while the page is hidden: each
+  // showing asks the daemon to read the git badge again, reads the changed
+  // files, the graph, and the review ledger; the pool is read (cache-only,
+  // no disk walk) only when the popover opens. The git region (#gitdata,
+  // the git badge's stream) patches the branch line by key; the review
+  // ledger is read only on a showing and after an action, never per tick.
+  // Leaving the page trims the graph back to its first page.
+  var GP_PAGES = 10;
   var gpE = {
-    strip: $("gpref"), pill: $("gppill"), pilltx: $("gppilltx"), tabs: gpRoot ? gpRoot.querySelector(".gp-tabs") : null,
-    nfiles: $("gpnfiles"), nwt: $("gpnwt"), fcount: $("gpfcount"), sum: $("gpsum"), fmini: $("gpfmini"), fminitx: $("gpfminitx"),
+    strip: $("gpref"), pill: $("gppill"), pilltx: $("gppilltx"), fmini: $("gpfmini"), fminitx: $("gpfminitx"),
     mode: $("gpwtmode"), modetx: $("gpwtmodetx"), scan: $("gpscan"), scansub: $("gpscansub"), scantag: $("gpscantag"),
     empty: $("gpempty"), toast: $("gptoast")
   };
-  var gpHost = null, gpVis = false, gpWide = null, gpRefData = {}, gpLedger = null, gpLedgerSeq = 0;
-  var gpWtTimer = 0, gpScanning = false, gpToastTimer = 0, gpStatusTimer = 0, gpCarrierKey = "";
+  var gpHost = null, gpVis = false, gpRefData = {}, gpLedger = null, gpLedgerSeq = 0;
+  var gpScanning = false, gpToastTimer = 0, gpStatusTimer = 0, gpCarrierKey = "";
   var gpScanSub = gpE.scansub ? gpE.scansub.textContent : "";
   function gpDockHost() {
     if (!gpHost || !gpHost.isConnected) gpHost = doc.getElementById("gitdock");
@@ -30,9 +30,6 @@
     var C = window.WsCards, g = C && C.gallery && C.gallery();
     return !!gpRoot && !!gpDockHost() && !!g && !g.hidden && !!C.activeSys && C.activeSys() === "git";
   }
-  // gpNarrow tells whether the page shows its tabs (the container query's
-  // narrow layout).
-  function gpNarrow() { return !!gpE.tabs && gpE.tabs.offsetWidth > 0; }
   function gpMount() {
     var h = gpDockHost();
     if (!gpRoot || !h) return false;
@@ -41,24 +38,20 @@
     return true;
   }
   // gpSync is the gallery's change listener: the first showing loads the
-  // page; a showing that turns wide loads the graph it now shows; leaving
-  // trims the graph.
+  // page, a later one reads a graph that had no layout yet; leaving trims
+  // the graph and closes the Worktrees popover.
   function gpSync() {
     if (!gpShown()) {
       if (gpVis) { gpVis = false; glTrim(); gpToastHide(); }
+      gpWtShow(false);
       return;
     }
     gpMount();
-    var wide = !gpNarrow();
     if (gpVis) {
-      if (wide !== gpWide) {
-        gpWide = wide;
-        if (!gl.loaded && glog && glog.offsetWidth) glLoad(false);
-      }
+      if (!gl.loaded && glog && glog.offsetWidth) glLoad(false);
       return;
     }
     gpVis = true;
-    gpWide = wide;
     gpActivate();
   }
   function gpNoRepo() { return !!gpRoot && gpRoot.hasAttribute("data-norepo"); }
@@ -66,7 +59,6 @@
     gpSwapped();
     if (gpNoRepo()) return;
     gitOpened();
-    gpWtLight();
     gpLedgerLoad();
   }
 
@@ -81,6 +73,7 @@
     var st = d ? d.getAttribute("data-state") || "" : "norepo";
     gpRoot.toggleAttribute("data-norepo", st === "norepo");
     if (gpE.empty) gpE.empty.hidden = st !== "norepo";
+    if (st === "norepo") gpWtShow(false);
     if (st === "ok") {
       gpRefData.branch = d.getAttribute("data-branch") || "";
       gpRefData.detached = d.hasAttribute("data-detached");
@@ -145,76 +138,7 @@
     if (up.firstChild) box.appendChild(up);
   }
 
-  // --- counts ---------------------------------------------------------------
-  // gpFiles counts a changed-files read: the region's chip, its line delta,
-  // and the narrow Diff tab's badge.
-  function gpFiles(v) {
-    var n = 0, add = 0, del = 0;
-    ["staged", "unstaged", "untracked"].forEach(function (k) {
-      (v[k] || []).forEach(function (f) {
-        n++;
-        if (f.add > 0) add += f.add;
-        if (f.del > 0) del += f.del;
-      });
-    });
-    [gpE.fcount, gpE.nfiles].forEach(function (e) {
-      if (!e) return;
-      e.hidden = !n;
-      e.textContent = String(n);
-    });
-    if (gpE.sum) {
-      gpE.sum.textContent = "";
-      if (add) gpE.sum.appendChild(mk("i", "add", "+" + add.toLocaleString(wsI18n.lang)));
-      if (del) gpE.sum.appendChild(mk("i", "del", "−" + del.toLocaleString(wsI18n.lang)));
-    }
-  }
-  // gpWtCount is the pool's size on the narrow Worktrees tab.
-  function gpWtCount(n) {
-    if (!gpE.nwt) return;
-    gpE.nwt.hidden = false;
-    gpE.nwt.textContent = String(n);
-  }
-
-  // --- tabs (narrow) ----------------------------------------------------------
-  function gpTab(name) {
-    if (!gpRoot) return;
-    gpRoot.setAttribute("data-tab", name);
-    q(".gp-tab", gpRoot).forEach(function (b) {
-      var on = b.getAttribute("data-gp-tab") === name;
-      b.setAttribute("aria-selected", String(on));
-      b.tabIndex = on ? 0 : -1;
-    });
-    if (!gpVis) return;
-    if (name === "graph" && !gl.loaded) glLoad(false);
-    if (name === "worktrees") gpWtLight();
-  }
-  if (gpE.tabs) {
-    gpE.tabs.addEventListener("click", function (e) {
-      var b = e.target.closest && e.target.closest(".gp-tab");
-      if (b) gpTab(b.getAttribute("data-gp-tab"));
-    });
-    gpE.tabs.addEventListener("keydown", function (e) {
-      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-      var tabs = q(".gp-tab", gpE.tabs), at = tabs.indexOf(doc.activeElement);
-      if (at < 0) return;
-      e.preventDefault();
-      var next = tabs[(at + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
-      gpTab(next.getAttribute("data-gp-tab"));
-      next.focus();
-    });
-  }
-
-  // --- worktrees: the cache-only read and the full scan -----------------------
-  // gpWtLight reads the pool cache-only, coalescing a burst; a running full
-  // scan is left to finish.
-  function gpWtLight() {
-    if (!wtlist || gpScanning) return;
-    clearTimeout(gpWtTimer);
-    gpWtTimer = setTimeout(function () {
-      if (gpScanning || !gpVis) return;
-      wtLoad(false, function (pool) { if (pool) gpWtMode(pool); });
-    }, 120);
-  }
+  // --- worktrees: the list's mode and the full scan ---------------------------
   // gpWtMode marks the list cache-only, or measured when every size is.
   function gpWtMode(pool) {
     if (!gpE.mode) return;
@@ -225,7 +149,6 @@
   function gpScan() {
     if (gpScanning || !gpE.scan) return;
     gpScanning = true;
-    clearTimeout(gpWtTimer);
     gpE.scan.disabled = true;
     gpE.scan.setAttribute("data-scan", "busy");
     gpE.scan.setAttribute("aria-busy", "true");
@@ -316,14 +239,12 @@
     }
   }
   function gpReduced() { return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); }
-  // gpJump brings the frontier commit into the graph: the narrow layout
-  // switches to its graph tab, the graph reads further pages until the
-  // commit shows (GP_PAGES at most), then the row scrolls into view and
+  // gpJump brings the frontier commit into the graph: the graph reads
+  // further pages until the commit shows (GP_PAGES at most), then the row scrolls into view and
   // flashes. A frontier past the walk, or a failed read, says so.
   function gpJump() {
     var head = gpLedgerHead(gpLedger);
     if (!head) { gpToast(wsT("js.gp.frontier.none")); return; }
-    if (gpNarrow() && gpRoot.getAttribute("data-tab") !== "graph") gpTab("graph");
     gl.frontier = head;
     function land(i, msg) {
       if (i < 0) { gpToast(msg ? wsT("js.gp.frontier.fail", msg) : wsT("js.gp.frontier.notfound", head.slice(0, 7))); return; }

@@ -328,18 +328,23 @@ func TestByteSize(t *testing.T) {
 	}
 }
 
-// TestWorktreesCardOnTheGitPage pins the Git page's pooled-worktree region:
-// on a session page of a daemon that reads pools, inside the Git page (not
-// the drawer), with the light-list mode, the manual full-scan button, and
-// its cleanup button live with an adapter and disabled with the reason
-// without one; a daemon without a worktree source shows the no-pool line
-// and no list.
+// TestWorktreesCardOnTheGitPage pins the Git page's pooled worktrees: the
+// strip's Worktrees button (with its count badge) and the popover it
+// controls, on a session page of a daemon that reads pools, inside the Git
+// page (not the drawer), with the light-list mode, the manual full-scan
+// button, and its cleanup button live with an adapter and disabled with the
+// reason without one; a daemon without a worktree source keeps the button
+// and its popover shows the no-pool line and no list.
 func TestWorktreesCardOnTheGitPage(t *testing.T) {
 	f, _, _, _ := worktreeFixture(t)
 	_, live := get(t, f.base+"/s/livesession?frame=1")
-	page, card, list := strings.Index(live, `id="gitpage"`), strings.Index(live, `id="wtcard"`), strings.Index(live, `id="wtlist"`)
-	if page < 0 || card < page || list < card {
-		t.Fatalf("git page order: page %d, worktrees %d, list %d", page, card, list)
+	page, btn, pop, list, graph := strings.Index(live, `id="gitpage"`), strings.Index(live, `id="gpwtbtn" aria-haspopup="dialog" aria-controls="gpwtpop" aria-expanded="false"`),
+		strings.Index(live, `<div class="gp-wtpop" id="gpwtpop" role="dialog"`), strings.Index(live, `id="wtlist"`), strings.Index(live, `id="glog"`)
+	if page < 0 || btn < page || pop < btn || list < pop || graph < list {
+		t.Fatalf("git page order: page %d, button %d, popover %d, list %d, graph %d", page, btn, pop, list, graph)
+	}
+	if strings.Contains(live, `id="wtcard"`) {
+		t.Error("the page still carries the retired worktrees card")
 	}
 	if strings.Contains(live, `id="p-worktrees"`) {
 		t.Error("the drawer still carries the retired worktrees card")
@@ -356,7 +361,9 @@ func TestWorktreesCardOnTheGitPage(t *testing.T) {
 	}
 
 	bare := startPageFixture(t)
-	if _, page := get(t, bare.base+"/s/livesession?frame=1"); strings.Contains(page, `id="wtlist"`) || strings.Contains(page, `id="gpscan"`) || !strings.Contains(page, `class="gp-none"`) {
-		t.Errorf("a daemon without a worktree source: a pool list or scan button present, or no no-pool line")
+	_, bp := get(t, bare.base+"/s/livesession?frame=1")
+	pop = strings.Index(bp, `id="gpwtpop"`)
+	if strings.Contains(bp, `id="wtlist"`) || strings.Contains(bp, `id="gpscan"`) || !strings.Contains(bp, `id="gpwtbtn"`) || pop < 0 || strings.Index(bp, `class="gp-none"`) < pop {
+		t.Errorf("a daemon without a worktree source: a pool list or scan button present, or no button, or no no-pool line in the popover")
 	}
 }
