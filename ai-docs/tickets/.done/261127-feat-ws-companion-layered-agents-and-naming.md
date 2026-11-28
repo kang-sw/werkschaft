@@ -10,6 +10,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 1159fe61344c6d9c
 sage-review-completeness-reviewed: 1159fe61344c6d9c
+completed: 2026-11-28
 ---
 
 # Companion Single-Embodiment Dual-Brain Agent Architecture: Capability Markers, Tier-1 Burst Session, Tier-2 Hidden Work Brain, and Shared Dashboard Control Binding
@@ -227,3 +228,10 @@ Landed Phase 2 across two commits on `impl/develop/deed-proud-petal` (`4ad0e631`
   - `node --test internal/wsdashboard/frontend-companion*.test.js` — 92/92 PASS.
   - Playwright Chromium `TestDaemonControlBrowser` (Parts 1–6 including companion-work 1-click banner & messenger pause echo) — PASS (`4.40s`).
 - **Decisions & Review:** `code-review-lite` (`4ad2ac08-01-findings.md`) returned clean with 0 Critical, 0 Important, and 3 Minor items (rune-safe `companionApprovalSummary` clamping, including redacted non-secret `value` in generic lead-tool banner summaries, and concurrent FIFO pause queue tests); all 3 were fixed and verified in `655aed06`. Ticket remains in `ready/` per lead instruction pending final `develop` reconciliation and closure.
+
+
+## Resolution (2026-11-28)
+
+Completed Phases 1 and 2 of the layered companion architecture and naming split:
+- Phase 1 (`d7bc48ad` / `8f2448c43`): split the companion into Tier-1 `companion-body` (conversational persona, isolated from `ws/daemon.*` and direct lead mutations) and Tier-2 `companion-work` (task/workspace executor with `(1750)` allowlist), established companion naming/config/session routing, and wired messenger + runtime tests.
+- Phase 2 (`4ad0e631`, `655aed06`, `af258d4d`, reconciled with `develop` at `df37a65b`): auto-granted open top-level `companion-work` sessions access to shared `ws/daemon.{curl,tabs,dom,ui,screenshot}` tools without per-session opt-in while keeping `companion-body`, worker subagents, and non-opt-in leads blocked; replaced `approval_required` denials for `(1750)` high-impact lead tools and mutating `ws/daemon.*` calls with the shared non-blocking 1-Click approval banner returning `denied` with zero side effects on reject, timeout, dismissal, cancel, or missing active tab; added the in-memory Tier-1 messenger pause status echo across `companion-phone` SSE, `dashboard-companion-messenger.{js,css}`, and all 11 `wsi18n` locale tables. Verified across Go `-race` suites, `GOOS=windows go vet ./...`, asset/wsflow/Node tests, and Playwright `TestDaemonControlBrowser` (Parts 1–6).
