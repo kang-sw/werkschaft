@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -287,6 +288,82 @@ func TestGCProjectsOptionsNeverGoBelowGrace(t *testing.T) {
 	}
 	if gcExists(old) {
 		t.Error("an entry past grace and TTL survived")
+	}
+}
+
+// An unreadable subtree hides what is inside it: the entry must not be treated
+// as expired and removed on the strength of the part that could be read.
+func TestGCProjectsUnreadableChildFailsClosed(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permission bits do not deny this reader")
+	}
+	root := t.TempDir()
+	area := filepath.Join(root, "proj", gcProject, "review-paths")
+	entry := filepath.Join(area, "bundle")
+	gcWrite(t, filepath.Join(entry, "old.md"), 10, day(30))
+	sealed := filepath.Join(entry, "sealed")
+	gcWrite(t, filepath.Join(sealed, "recent.md"), 10, time.Hour)
+	gcAge(t, sealed, day(30))
+	gcAge(t, entry, day(30))
+	plain := gcWrite(t, filepath.Join(area, "plain.md"), 10, day(30))
+	if err := os.Chmod(sealed, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sealed, 0o755) })
+
+	if _, ok := measureEntry(entry, nil); ok {
+		t.Fatal("measureEntry reported a complete measurement of a tree it could not read")
+	}
+	res := GCProjects(root, gcOptions())
+	if !gcExists(entry) {
+		t.Fatal("an entry with an unreadable subtree was removed")
+	}
+	if gcExists(plain) || res.Entries != 1 {
+		t.Fatalf("the readable expired sibling stays or the count is off: present=%v entries=%d", gcExists(plain), res.Entries)
+	}
+	// Once readable again the same tree measures, and its recent file keeps it.
+	if err := os.Chmod(sealed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := measureEntry(entry, nil); !ok {
+		t.Fatal("a readable tree must measure")
+	}
+}
+
+// A stop requested during a walk ends it at once and reports the measurement
+// unusable, so a huge tree cannot delay the daemon's Close.
+func TestMeasureEntryStopsMidWalk(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "tree")
+	for i := 0; i < 40; i++ {
+		gcWrite(t, filepath.Join(dir, "a", string(rune('a'+i%26))+strings.Repeat("z", i)), 1, day(30))
+	}
+	calls := 0
+	stop := func() bool { calls++; return calls > 3 }
+	if _, ok := measureEntry(dir, stop); ok {
+		t.Fatal("a stopped walk reported a complete measurement")
+	}
+	if calls > 5 {
+		t.Fatalf("the walk kept going after the stop: %d checks", calls)
+	}
+	if _, ok := measureEntry(dir, func() bool { return false }); !ok {
+		t.Fatal("an unstopped walk must complete")
+	}
+
+	// Through GCProjects: an old entry is not removed when the stop lands in
+	// the middle of measuring it.
+	root := t.TempDir()
+	old := filepath.Join(root, "proj", gcProject, "tmp", "old")
+	for i := 0; i < 10; i++ {
+		gcWrite(t, filepath.Join(old, strings.Repeat("d", i+1), "f"), 1, day(30))
+	}
+	gcAge(t, old, day(30))
+	checks := 0
+	opts := gcOptions()
+	// Checks 1 (project loop) and 2 (area loop) pass; the walk then stops.
+	opts.Stop = func() bool { checks++; return checks > 2 }
+	res := GCProjects(root, opts)
+	if !gcExists(old) || res.Entries != 0 {
+		t.Fatalf("an entry was removed after the stop: present=%v removed=%d", gcExists(old), res.Entries)
 	}
 }
 

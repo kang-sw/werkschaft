@@ -164,8 +164,16 @@ func (c CacheGCConfig) grace() time.Duration {
 
 // PruneRollbackDir removes legacy swap entries under <dir>/rollback: anything
 // past maxAge or beyond the newest keep, but never an entry younger than the
-// grace. It returns how many it removed. Entries are never read.
+// grace. It returns how many it removed. Entries are never read. A symlink or
+// other irregular entry (an NTFS junction, a device) is not ours to remove and
+// is skipped, as it never counts toward the newest keep.
 func PruneRollbackDir(dir string, cfg CacheGCConfig) int {
+	return pruneRollbackDir(dir, cfg, nil)
+}
+
+// pruneRollbackDir is PruneRollbackDir that ends between entries once stop
+// reports true.
+func pruneRollbackDir(dir string, cfg CacheGCConfig, stop func() bool) int {
 	root := filepath.Join(dir, rollbackDirName)
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -177,8 +185,14 @@ func PruneRollbackDir(dir string, cfg CacheGCConfig) int {
 	}
 	var items []item
 	for _, entry := range entries {
+		if stop != nil && stop() {
+			return 0
+		}
+		if entry.Type()&(fs.ModeSymlink|fs.ModeIrregular) != 0 {
+			continue
+		}
 		info, err := entry.Info()
-		if err != nil {
+		if err != nil || info.Mode()&(fs.ModeSymlink|fs.ModeIrregular) != 0 {
 			continue
 		}
 		items = append(items, item{filepath.Join(root, entry.Name()), info.ModTime()})
@@ -198,11 +212,13 @@ func PruneRollbackDir(dir string, cfg CacheGCConfig) int {
 	}
 	removed := 0
 	for rank, it := range items {
+		if stop != nil && stop() {
+			return removed
+		}
 		age := now.Sub(it.mod)
 		if age < cfg.grace() || (rank < keep && age <= maxAge) {
 			continue
 		}
-		// A symlink is removed as a link, never followed.
 		if os.RemoveAll(it.path) == nil {
 			removed++
 		}
@@ -211,13 +227,25 @@ func PruneRollbackDir(dir string, cfg CacheGCConfig) int {
 }
 
 // stagedBuildName matches the only names the staging code writes
-// (stagedExecutableName): ws-mcp-dashboard-<16 hex>, plus ".exe" on Windows.
-var stagedBuildName = regexp.MustCompile(`^ws-mcp-dashboard-([0-9a-f]{16})(\.exe)?$`)
+// (stagedExecutableName and the launcher's staged_daemon_name):
+// ws-mcp-dashboard-<16 hex> plus the source name's filepath.Ext, lowercased.
+// That extension is ".exe" on Windows, but a released runtime on macOS/Linux is
+// named ws-mcp-<version>-<12 hex> (runtime_binary_name), whose Ext runs from
+// the version's last dot: ws-mcp-0.53.2-abcdef123456 stages as
+// ws-mcp-dashboard-<16 hex>.2-abcdef123456. Anything else (.tmp, .bak,
+// .metadata.json, an unrelated suffix) is not a build.
+var stagedBuildName = regexp.MustCompile(`^ws-mcp-dashboard-([0-9a-f]{16})(\.exe|\.[0-9a-z-]*-[0-9a-f]{12})?$`)
 
 // PruneStagedExecutables removes old staged daemon builds from <dir>/bin with
-// the default bounds. exe is the running daemon's executable.
+// the default bounds. exe is the running daemon's executable; when it is
+// readable its content hash also pins the content-addressed twin of a mutable
+// path (the macOS stable executable).
 func PruneStagedExecutables(dir, exe string) {
-	pruneStagedExecutables(dir, exe, "", DefaultCacheGCConfig(), nil)
+	exeHash := ""
+	if exe != "" {
+		exeHash = ExecutableContentHash(exe)
+	}
+	pruneStagedExecutables(dir, exe, exeHash, DefaultCacheGCConfig(), nil)
 }
 
 // pruneStagedExecutables keeps the pin set and the newest BinKeep distinct
@@ -425,13 +453,13 @@ func (d *Daemon) runCacheGC(cfg CacheGCConfig) {
 	if stopped() {
 		return
 	}
-	removed := PruneRollbackDir(d.dir, cfg)
+	removed := pruneRollbackDir(d.dir, cfg, stopped)
 	if stopped() {
 		return
 	}
 	removed += pruneStagedExecutables(d.dir, d.executable, d.contentHash, cfg, stopped)
 	var registered []Registration
-	var registeredRead bool
+	var registeredRead, registeredUncertain bool
 	res := wsstate.GCProjects(root, wsstate.GCOptions{
 		Now:             cfg.now,
 		Grace:           cfg.grace(),
@@ -442,8 +470,15 @@ func (d *Daemon) runCacheGC(cfg CacheGCConfig) {
 		Stop:            stopped,
 		SessionActive: func(worktreePath string) bool {
 			if !registeredRead {
-				registered, _ = ReadRegistrations(d.dir)
+				var err error
+				registered, err = readRegistrations(d.dir, func(string, error) { registeredUncertain = true })
+				registeredUncertain = registeredUncertain || err != nil
 				registeredRead = true
+			}
+			// A registry that cannot be read in full cannot prove a worktree
+			// unreferenced: keep the directory (fail closed).
+			if registeredUncertain {
+				return true
 			}
 			for _, reg := range registered {
 				if strings.EqualFold(filepath.Clean(reg.Project), filepath.Clean(worktreePath)) {

@@ -286,6 +286,243 @@ func TestPruneStagedExecutablesPublicEntryUsesDefaults(t *testing.T) {
 	}
 }
 
+// A direct caller passes only the executable path: its content hash must still
+// pin the content-addressed twin when the path is a mutable one (macOS stable).
+func TestPruneStagedExecutablesPublicEntryPinsTheExeContentTwin(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, stagedBinDir)
+	stable := gcFile(t, filepath.Join(binDir, macStableExecutable), "stable-binary", gcDays(90))
+	twin := filepath.Join(binDir, "ws-mcp-dashboard-"+ExecutableContentHash(stable)[:16])
+	gcFile(t, twin, "stable-binary", gcDays(60))
+	var others []string
+	for i := 1; i <= 6; i++ {
+		others = append(others, gcFile(t, filepath.Join(binDir, buildName(i)), "other", gcDays(20+i)))
+	}
+	PruneStagedExecutables(dir, stable)
+	if !gcPresent(twin) || !gcPresent(stable) {
+		t.Fatalf("the running content's twin or the stable file was pruned: twin=%v stable=%v", gcPresent(twin), gcPresent(stable))
+	}
+	// The six others are all expired; the newest five keep their places and the
+	// oldest of them goes, while the twin (older still) stays only by its pin.
+	if gcPresent(others[5]) {
+		t.Fatal("an unpinned expired build beyond the newest five survived")
+	}
+}
+
+func versionedBuild(n int, suffix string) string {
+	return fmt.Sprintf("ws-mcp-dashboard-%016x%s", n, suffix)
+}
+
+// stagedExecutableName gives a macOS/Linux released runtime
+// (ws-mcp-<version>-<12 hex>) the extension that filepath.Ext cuts at the
+// version's last dot, so the staged build is ws-mcp-dashboard-<16 hex>.2-<12 hex>.
+func TestStagedBuildNameMatchesStagedNamesOnly(t *testing.T) {
+	for _, name := range []string{
+		"ws-mcp-dashboard-0123456789abcdef",
+		"ws-mcp-dashboard-0123456789abcdef.exe",
+		"ws-mcp-dashboard-0123456789abcdef.2-abcdef123456",
+		"ws-mcp-dashboard-0123456789abcdef.2-dev-abcdef123456",
+		"ws-mcp-dashboard-0123456789abcdef.1-abcdef123456",
+	} {
+		if stagedBuildName.FindStringSubmatch(name) == nil {
+			t.Errorf("%s is a staged build name", name)
+		}
+	}
+	// What the staging code really produces for those runtimes.
+	for _, source := range []string{"ws-mcp-0.53.2-abcdef123456", "ws-mcp-1.0.0-rc.1-abcdef123456", "ws-mcp-unknown-abcdef123456", "ws-mcp-0.53.2-abcdef123456.exe"} {
+		name := stagedExecutableName(source, strings.Repeat("ab", 32))
+		if m := stagedBuildName.FindStringSubmatch(name); m == nil || m[1] != "abababababababab" {
+			t.Errorf("staging %s yields %s, which the GC would not recognise", source, name)
+		}
+	}
+	for _, name := range []string{
+		"ws-mcp-dashboard-0123456789abcdef.tmp",
+		"ws-mcp-dashboard-0123456789abcdef.bak",
+		"ws-mcp-dashboard-0123456789abcdef.metadata.json",
+		"ws-mcp-dashboard-0123456789abcdef.2-abcdef12345",
+		"ws-mcp-dashboard-0123456789abcdef.2-abcdef1234567",
+		"ws-mcp-dashboard-0123456789abcdef.2-ABCDEF123456",
+		"ws-mcp-dashboard-0123456789abcdef.2-abcdef123456.tmp",
+		"ws-mcp-dashboard-0123456789abcdef.2-abcdef123456.metadata.json",
+		".ws-mcp-dashboard-0123456789abcdef.2-abcdef123456.123.tmp",
+		"ws-mcp-dashboard-0123456789abcde.2-abcdef123456",
+		"ws-mcp-dashboard-young.exe",
+	} {
+		if m := stagedBuildName.FindStringSubmatch(name); m != nil {
+			t.Errorf("%s must not be taken for a staged build", name)
+		}
+	}
+}
+
+func TestPruneStagedExecutablesHandlesPosixVersionedRuntimeNames(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, stagedBinDir)
+	const ext = ".2-abcdef123456"
+	build := func(n int, age time.Duration) string {
+		t.Helper()
+		path := gcFile(t, filepath.Join(binDir, versionedBuild(n, ext)), "binary", age)
+		gcFile(t, path+stagedMetadataSuffix, `{"v":1}`, age)
+		return path
+	}
+	b1 := build(1, gcDays(60)) // oldest, unpinned: goes with its sidecar
+	b2 := build(2, gcDays(50)) // the recorded restart target: pinned
+	b3 := build(3, gcDays(45)) // the running exe: pinned
+	b4 := build(4, gcDays(30)) // beyond the newest five: goes with its sidecar
+	// The newest five are b10, b9, b8, b7 and b6.
+	b6 := build(6, gcDays(11))
+	b7 := build(7, gcDays(10))
+	b8 := build(8, gcDays(9))
+	b9 := build(9, gcDays(8))
+	b10 := build(10, 2*time.Hour) // inside the grace
+	// Not builds: staging debris and unknown metadata keep their names.
+	tmp := gcFile(t, filepath.Join(binDir, versionedBuild(11, ext+".tmp")), "x", gcDays(60))
+	bak := gcFile(t, filepath.Join(binDir, versionedBuild(12, ".bak")), "x", gcDays(60))
+	unknown := gcFile(t, filepath.Join(binDir, "other"+stagedMetadataSuffix), "x", gcDays(60))
+	// A sidecar whose versioned build is gone: past the grace it is collected.
+	orphan := gcFile(t, filepath.Join(binDir, versionedBuild(13, ext)+stagedMetadataSuffix), "{}", gcDays(20))
+	freshOrphan := gcFile(t, filepath.Join(binDir, versionedBuild(14, ext)+stagedMetadataSuffix), "{}", time.Hour)
+	record, err := json.Marshal(runningExecutable{1, b2, "0.53.2", "", 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcFile(t, filepath.Join(dir, RunningExecutableFile), string(record), gcDays(1))
+
+	if n := pruneStagedExecutables(dir, b3, "", gcTestConfig(), nil); n != 5 {
+		t.Fatalf("pruned %d files, want 5 (b1 and b4 with their sidecars, and the orphan sidecar)", n)
+	}
+	for path, want := range map[string]bool{
+		b1: false, b1 + stagedMetadataSuffix: false, b4: false, b4 + stagedMetadataSuffix: false,
+		b2: true, b2 + stagedMetadataSuffix: true, b3: true, b3 + stagedMetadataSuffix: true,
+		b6: true, b7: true, b8: true, b9: true, b10: true,
+		tmp: true, bak: true, unknown: true, orphan: false, freshOrphan: true,
+	} {
+		if got := gcPresent(path); got != want {
+			t.Errorf("%s present = %v, want %v", filepath.Base(path), got, want)
+		}
+	}
+	// A second pass has nothing left to do.
+	if n := pruneStagedExecutables(dir, b3, "", gcTestConfig(), nil); n != 0 {
+		t.Fatalf("second pass pruned %d", n)
+	}
+}
+
+// The restart record's binary_sha256 pins a build by content hash: that sum
+// pins a versioned build whatever its extension.
+func TestPruneStagedExecutablesPinsAVersionedBuildByRecordedHash(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, stagedBinDir)
+	pinned := gcFile(t, filepath.Join(binDir, versionedBuild(1, ".2-abcdef123456")), "x", gcDays(90))
+	gone := gcFile(t, filepath.Join(binDir, versionedBuild(2, ".2-abcdef123456")), "x", gcDays(89))
+	for i := 3; i <= 7; i++ {
+		gcFile(t, filepath.Join(binDir, versionedBuild(i, ".2-abcdef123456")), "x", gcDays(10-i))
+	}
+	record, err := json.Marshal(runningExecutable{1, filepath.Join(t.TempDir(), "elsewhere"), "0.53.2", fmt.Sprintf("%016x", 1) + strings.Repeat("0", 48), 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcFile(t, filepath.Join(dir, RunningExecutableFile), string(record), gcDays(1))
+	pruneStagedExecutables(dir, "", "", gcTestConfig(), nil)
+	if !gcPresent(pinned) {
+		t.Fatal("the build named by the record's hash was pruned")
+	}
+	if gcPresent(gone) {
+		t.Fatal("an unpinned expired versioned build survived")
+	}
+}
+
+func TestPruneRollbackDirSkipsSymlinksAndHonoursStop(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, rollbackDirName)
+	outside := t.TempDir()
+	keepFile := gcFile(t, filepath.Join(outside, "precious"), "x", gcDays(90))
+	for i := 0; i < 5; i++ {
+		gcFile(t, filepath.Join(root, fmt.Sprintf("swap-%d", i), "payload"), "x", gcDays(30))
+	}
+	link := filepath.Join(root, "swap-link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	// Everything real is older than the grace and 7 days under this clock.
+	cfg := gcTestConfig()
+	cfg.Now = func() time.Time { return time.Now().Add(gcDays(60)) }
+
+	calls := 0
+	// 6 checks while listing, then the first removal check stops the pass.
+	if n := pruneRollbackDir(dir, cfg, func() bool { calls++; return calls > 6 }); n != 0 {
+		t.Fatalf("a stopped pass removed %d entries", n)
+	}
+	if n := pruneRollbackDir(dir, cfg, func() bool { return true }); n != 0 {
+		t.Fatalf("an immediately stopped pass removed %d entries", n)
+	}
+	for i := 0; i < 5; i++ {
+		if !gcPresent(filepath.Join(root, fmt.Sprintf("swap-%d", i))) {
+			t.Fatal("an entry vanished in a stopped pass")
+		}
+	}
+
+	if n := PruneRollbackDir(dir, cfg); n != 5 {
+		t.Fatalf("pruned %d, want the five real directories", n)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the symlink was removed or replaced: %v", err)
+	}
+	if !gcPresent(keepFile) {
+		t.Fatal("the symlink's target was reached")
+	}
+}
+
+// Dead-worktree removal asks whether a session still names the path. When the
+// session registry cannot be read in full the answer is unknown, which keeps
+// the directory.
+func TestRunCacheGCKeepsDeadWorktreeWhenSessionRegistryIsUncertain(t *testing.T) {
+	setup := func(t *testing.T) (state, dead string, d *Daemon) {
+		t.Helper()
+		root := t.TempDir()
+		state = filepath.Join(root, dirName)
+		d = &Daemon{dir: state, stop: make(chan struct{})}
+		key := "0123abcd@00000001"
+		dead = filepath.Join(root, "proj", key)
+		gcFile(t, filepath.Join(dead, "state.sqlite"), "x", gcDays(40))
+		gcWorktreeJSON(t, dead, key, filepath.Join(t.TempDir(), "deleted-worktree"), gcDays(40))
+		gcTouch(t, dead, gcDays(40))
+		// A readable registration that names some other project.
+		if err := WriteRegistration(state, Registration{ReplyID: "othersession", Project: "/elsewhere", HeartbeatAt: stampFor(gcTestNow)}); err != nil {
+			t.Fatal(err)
+		}
+		return state, dead, d
+	}
+
+	// Baseline: a fully readable registry that does not name it lets it go.
+	_, dead, d := setup(t)
+	d.runCacheGC(gcTestConfig())
+	if gcPresent(dead) {
+		t.Fatal("a provably dead worktree directory survived a certain registry")
+	}
+
+	// A registration.json that does not parse: uncertain, so it stays.
+	state, dead, d := setup(t)
+	gcFile(t, filepath.Join(SessionDir(state, "brokensession"), registrationFileName), "{not json", 0)
+	d.runCacheGC(gcTestConfig())
+	if !gcPresent(dead) {
+		t.Fatal("a dead worktree was removed although a registration could not be read")
+	}
+
+	// A sessions directory that cannot be listed: uncertain as well.
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		return
+	}
+	state, dead, d = setup(t)
+	sessions := filepath.Join(state, sessionsDirName)
+	if err := os.Chmod(sessions, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(sessions, 0o755)
+	d.runCacheGC(gcTestConfig())
+	if !gcPresent(dead) {
+		t.Fatal("a dead worktree was removed although the sessions directory was unreadable")
+	}
+}
+
 func TestCacheGCConfigFromEnv(t *testing.T) {
 	env := func(kv map[string]string) func(string) string {
 		return func(k string) string { return kv[k] }

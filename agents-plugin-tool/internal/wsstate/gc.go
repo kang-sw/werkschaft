@@ -143,7 +143,7 @@ func gcArea(dir string, ttl time.Duration, opts GCOptions, res *GCResult) {
 		if opts.stopped() {
 			return
 		}
-		item, ok := measureEntry(filepath.Join(dir, entry.Name()))
+		item, ok := measureEntry(filepath.Join(dir, entry.Name()), opts.Stop)
 		if !ok {
 			continue
 		}
@@ -190,7 +190,12 @@ func removeItem(item gcItem, res *GCResult) bool {
 // measureEntry returns the size and newest modification time of path: one
 // file's own, or a directory tree's totals. Symlinks are measured as links and
 // never followed.
-func measureEntry(path string) (gcItem, bool) {
+//
+// It fails closed: ok is false, and the entry is neither aged nor removed, when
+// anything under it cannot be read (other than vanishing mid-walk) or when stop
+// reports true during the walk. An unreadable subtree would otherwise hide a
+// recent file and let a live directory look expired.
+func measureEntry(path string, stop func() bool) (gcItem, bool) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return gcItem{}, false
@@ -200,13 +205,26 @@ func measureEntry(path string) (gcItem, bool) {
 		return item, true
 	}
 	item.size = 0
+	complete := true
 	_ = filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+		if stop != nil && stop() {
+			complete = false
+			return fs.SkipAll
+		}
 		if err != nil {
-			return nil
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			complete = false
+			return fs.SkipAll
 		}
 		fi, err := d.Info()
 		if err != nil {
-			return nil
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			complete = false
+			return fs.SkipAll
 		}
 		if fi.ModTime().After(item.mod) {
 			item.mod = fi.ModTime()
@@ -216,7 +234,7 @@ func measureEntry(path string) (gcItem, bool) {
 		}
 		return nil
 	})
-	return item, true
+	return item, complete
 }
 
 // gcDeadWorktree removes dir when its worktree is provably gone and long
@@ -241,7 +259,7 @@ func gcDeadWorktree(dir, key string, opts GCOptions, res *GCResult) bool {
 		return false
 	}
 	// Any file touched inside the directory within the age keeps it.
-	item, ok := measureEntry(dir)
+	item, ok := measureEntry(dir, opts.Stop)
 	if !ok || now.Sub(item.mod) <= opts.DeadWorktreeAge {
 		return false
 	}
