@@ -301,13 +301,13 @@ func TestGitWatcherEndsWithTheDaemon(t *testing.T) {
 	expectNoRead(t, f)
 }
 
-// TestGitHandleRendersEachState pins the git handle's markup: the branch
-// abbreviated (a hammer for an impl branch, a gold trophy for a goal one,
-// both for a branch that is both, each with the stem), the ahead and behind
-// counts, the dirty dot, the detached form, the dimmed forms with their
-// reasons, and no handle for a root that is no repository. Its title spells
-// the whole branch and the ticket title the stem resolved to.
-func TestGitHandleRendersEachState(t *testing.T) {
+// TestGitDataRendersEachState pins the git region's markup: a hidden data
+// carrier (#gitdata) the Git page's branch line reads by key. It carries the
+// branch, its abbreviation (with the goal and impl marks), the upstream
+// standing, the change counts, the detached form, the read failure's reason,
+// the pending form, and the no-repository state the page's empty state
+// follows; nothing renders without a git read. Values are attribute-escaped.
+func TestGitDataRendersEachState(t *testing.T) {
 	repo := func(r wslive.Repo) *GitBadge { return &GitBadge{State: gitOK, Root: "/p", Repo: r, At: 42} }
 	impl := repo(wslive.Repo{Branch: "impl/develop/261108-feat-x", Upstream: "origin/impl/develop/261108-feat-x"})
 	impl.Ticket = "Feature <x>"
@@ -318,38 +318,38 @@ func TestGitHandleRendersEachState(t *testing.T) {
 		not   []string
 	}{
 		{"clean, in sync", repo(wslive.Repo{Branch: "main", Upstream: "origin/main"}),
-			[]string{`<button type="button" class="gh ok" id="ghandle" aria-controls="drsheet" aria-expanded="false" data-at="42" title="main (Ctrl+G)">`, `#i-branch`, `<span class="gh-br">main</span>`},
-			[]string{"gh-ab", "gh-dirty", "gh-impl", "gh-goal"}},
+			[]string{`<span class="gp-data" id="gitdata" hidden data-state="ok" data-at="42" data-branch="main"`, `data-upstream="origin/main" data-ahead="0" data-behind="0" data-staged="0" data-modified="0" data-untracked="0"`},
+			[]string{"data-detached", "data-goal", "data-impl", "data-ticket", "data-err"}},
 		{"dirty", repo(wslive.Repo{Branch: "main", Upstream: "origin/main", Modified: 2, Staged: 1, Untracked: 3}),
-			[]string{`title="main&#10;uncommitted changes (Ctrl+G)"`, `<span class="gh-dirty"></span>`},
+			[]string{`data-staged="1" data-modified="2" data-untracked="3"`},
 			nil},
 		{"ahead and behind", repo(wslive.Repo{Branch: "topic", Upstream: "origin/topic", Ahead: 2, Behind: 1}),
-			[]string{`<span class="gh-ab"><b class="up">↑2</b><b class="dn">↓1</b></span>`},
-			[]string{"gh-dirty"}},
-		{"behind only", repo(wslive.Repo{Branch: "topic", Upstream: "origin/topic", Behind: 4}),
-			[]string{`<span class="gh-ab"><b class="dn">↓4</b></span>`},
-			[]string{`class="up"`}},
-		{"impl branch with its ticket", impl,
-			[]string{`<span class="gh-impl"><svg class="i" aria-hidden="true"><use href="#i-hammer"/></svg></span><span class="gh-br">261108-feat-x</span>`, `title="impl/develop/261108-feat-x&#10;Feature &lt;x&gt; (Ctrl+G)"`},
-			[]string{"gh-goal", "#i-branch"}},
-		{"goal branch", repo(wslive.Repo{Branch: "goal/main/ship-it"}),
-			[]string{`<span class="gh-goal"><svg class="i" aria-hidden="true"><use href="#i-trophy"/></svg></span><span class="gh-br">ship-it</span>`, `title="goal/main/ship-it (Ctrl+G)"`},
-			[]string{"gh-impl", "#i-branch"}},
-		{"goal and impl branch", repo(wslive.Repo{Branch: "goal/main/g/impl/x/fix-it"}),
-			[]string{`<span class="gh-goal">`, `<span class="gh-impl">`, `<span class="gh-br">fix-it</span>`},
-			[]string{"#i-branch"}},
-		{"detached", repo(wslive.Repo{Branch: "abc1234", Detached: true, Modified: 1}),
-			[]string{`title="detached HEAD at abc1234&#10;uncommitted changes (Ctrl+G)"`, `<span class="gh-br">abc1234</span>`, `class="gh-dirty"`},
-			[]string{"gh-ab"}},
-		{"escaped branch", repo(wslive.Repo{Branch: "<b>x"}),
-			[]string{`<span class="gh-br">&lt;b&gt;x</span>`},
-			[]string{"<b>x"}},
-		{"read failure", &GitBadge{State: gitFailed, Root: "/p", Err: "timed out after 10s", At: 42},
-			[]string{`class="gh failed"`, `title="git status could not be read: timed out after 10s (Ctrl+G)"`, `<span class="gh-br">git error</span>`},
-			[]string{"gh-ab"}},
-		{"pending", &GitBadge{State: gitPending, Root: "/p"},
-			[]string{`class="gh pending"`, `title="reading the git status… (Ctrl+G)"`, `data-at="0"`, `<span class="gh-br">…</span>`},
+			[]string{`data-ahead="2" data-behind="1"`},
 			nil},
+		{"impl branch with its ticket", impl,
+			[]string{`data-branch="impl/develop/261108-feat-x" data-short="261108-feat-x" data-impl=""`, `data-ticket="Feature &lt;x&gt;"`},
+			[]string{"data-goal"}},
+		{"goal branch", repo(wslive.Repo{Branch: "goal/main/ship-it"}),
+			[]string{`data-short="ship-it" data-goal=""`},
+			[]string{"data-impl"}},
+		{"goal and impl branch", repo(wslive.Repo{Branch: "goal/main/g/impl/x/fix-it"}),
+			[]string{`data-short="fix-it" data-goal="" data-impl=""`},
+			nil},
+		{"detached", repo(wslive.Repo{Branch: "abc1234", Detached: true, Modified: 1}),
+			[]string{`data-branch="abc1234" data-detached=""`, `data-modified="1"`},
+			nil},
+		{"escaped branch", repo(wslive.Repo{Branch: `<b>"x`}),
+			[]string{`data-branch="&lt;b&gt;&#34;x"`},
+			[]string{"<b>"}},
+		{"read failure", &GitBadge{State: gitFailed, Root: "/p", Err: "timed out after 10s", At: 42},
+			[]string{`data-state="failed" data-at="42" data-err="timed out after 10s"`},
+			[]string{"data-branch", "data-ahead"}},
+		{"pending", &GitBadge{State: gitPending, Root: "/p"},
+			[]string{`data-state="pending" data-at="0"`},
+			[]string{"data-branch", "data-err"}},
+		{"no repository", &GitBadge{State: gitNoRepo, Root: "/p", At: 42},
+			[]string{`data-state="norepo" data-at="42"`},
+			[]string{"data-branch", "data-err"}},
 	}
 	for _, c := range cases {
 		for _, adapter := range []bool{false, true} {
@@ -368,25 +368,31 @@ func TestGitHandleRendersEachState(t *testing.T) {
 					t.Errorf("%s (adapter %v): unexpected %q in %s", c.name, adapter, n, html)
 				}
 			}
+			for _, n := range []string{`id="ghandle"`, `class="gh `} {
+				if strings.Contains(html, n) {
+					t.Errorf("%s (adapter %v): the retired git handle %q in %s", c.name, adapter, n, html)
+				}
+			}
 		}
 	}
-	for _, view := range []SessionView{{ReplyID: "x"}, {ReplyID: "x", Git: &GitBadge{State: gitNoRepo, Root: "/p", At: 42}}} {
-		regions, err := renderSessionRegions(view, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if html := regions[regionGit].HTML; html != "" {
-			t.Errorf("git %+v renders %q, want nothing", view.Git, html)
-		}
+	regions, err := renderSessionRegions(SessionView{ReplyID: "x"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if html := regions[regionGit].HTML; html != "" {
+		t.Errorf("no git read renders %q, want nothing", html)
 	}
 }
 
-// TestGitHandleSitsLeftOfThePanelsHandle pins the handle's place: in the
-// drawer frame after the panels handle (the stylesheet hangs it left of
-// it), with the git sheet beside the panels in the drawer's sheet, and no
-// git badge in the top bar; the sheet holds the commit graph's frame, whose
-// rows the page script draws. A page without a git read has neither.
-func TestGitHandleSitsLeftOfThePanelsHandle(t *testing.T) {
+// TestGitPageMarkup pins the Git page's static markup: one #gitpage root,
+// hidden until the gallery's Git page host (#gitdock) adopts it, outside the
+// top bar and the drawer, carrying the git region, the action strip (icon-
+// only fetch, pull, and push named by aria-label; no commit action), the
+// review pill, the Worktrees button with the popover it controls, and one
+// panel: the commit graph. No tabs, no change list, no region grid. The
+// retired drawer git sheet and handle are gone. A page without a git read
+// still carries the page (its empty state shows) but no data carrier.
+func TestGitPageMarkup(t *testing.T) {
 	view := SessionView{ReplyID: "x", Git: &GitBadge{State: gitPending, Root: "/p"}}
 	regions, err := renderSessionRegions(view, nil)
 	if err != nil {
@@ -396,22 +402,47 @@ func TestGitHandleSitsLeftOfThePanelsHandle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	drbody, gbody, drhandle, git := strings.Index(page, `id="drbody"`), strings.Index(page, `id="gbody"`), strings.Index(page, `id="drhandle"`), strings.Index(page, `id="r-git"`)
-	if drbody < 0 || gbody < drbody || drhandle < gbody || git < drhandle {
-		t.Fatalf("drawer order: panels %d, git sheet %d, panels handle %d, git handle %d", drbody, gbody, drhandle, git)
+	if n := strings.Count(page, `id="gitpage"`); n != 1 {
+		t.Fatalf("pages carry %d #gitpage roots", n)
+	}
+	root, data, strip, acts, pill, btn, pop, glog, empty := strings.Index(page, `<div class="gp-page" id="gitpage" hidden>`), strings.Index(page, `id="gitdata"`),
+		strings.Index(page, `class="gp-strip"`), strings.Index(page, `class="gp-acts"`), strings.Index(page, `id="gppill"`), strings.Index(page, `id="gpwtbtn"`),
+		strings.Index(page, `id="gpwtpop"`), strings.Index(page, `<section class="gp-card glog" id="glog"`), strings.Index(page, `id="gpempty"`)
+	if root < 0 || data < root || strip < data || acts < strip || pill < acts || btn < pill || pop < btn || glog < pop || empty < glog {
+		t.Fatalf("git page order: root %d, data %d, strip %d, actions %d, pill %d, worktrees button %d, popover %d, graph %d, empty %d", root, data, strip, acts, pill, btn, pop, glog, empty)
+	}
+	acts0 := page[acts:strings.Index(page[acts:], `</span>`)+acts]
+	if strings.Contains(page[root:empty], `data-tab=`) {
+		t.Error("the git page carries a tab state")
+	}
+	for _, w := range []string{`data-git="fetch" data-busy=`, `aria-label="Fetch">`, `aria-label="Pull">`, `aria-label="Push">`} {
+		if !strings.Contains(acts0, w) {
+			t.Errorf("the strip actions lack %q", w)
+		}
+	}
+	if strings.Contains(acts0, "<span") {
+		t.Errorf("the strip actions carry a text label: %s", acts0)
+	}
+	for _, w := range []string{`aria-haspopup="dialog" aria-controls="gpwtpop" aria-expanded="false"`, `id="wtcount" hidden`, `<div class="gp-wtpop" id="gpwtpop" role="dialog" aria-label=`} {
+		if !strings.Contains(page, w) {
+			t.Errorf("the Worktrees button or popover lacks %q", w)
+		}
 	}
 	top := page[strings.Index(page, `<div class="top">`):strings.Index(page, `<div class="drawer"`)]
-	for _, n := range []string{"r-git", "gitb", "ghandle"} {
-		if strings.Contains(top, n) {
-			t.Errorf("the top bar carries %q: %s", n, top)
+	drawer := page[strings.Index(page, `<div class="drawer"`):root]
+	for _, n := range []string{"gitdata", "gitpage", "ghandle"} {
+		if strings.Contains(top, n) || strings.Contains(drawer, n) {
+			t.Errorf("the top bar or drawer carries %q", n)
 		}
 	}
-	for _, w := range []string{`data-git="fetch"`, `data-git="pull"`, `data-git="push"`, `id="glog"`, `id="glrows"`, `aria-label="commit graph"`, `data-lost="the dashboard did not answer"`} {
+	for _, w := range []string{`data-git="fetch"`, `data-git="pull"`, `data-git="push"`, `id="glrows"`, `aria-label="commit graph"`, `data-lost="the dashboard did not answer"`,
+		`id="gpempty"`, `id="gptoast"`} {
 		if !strings.Contains(page, w) {
-			t.Errorf("the git sheet lacks %q", w)
+			t.Errorf("the git page lacks %q", w)
 		}
 	}
-	for _, n := range []string{`data-git="commit"`, "gitpop"} {
+	for _, n := range []string{`data-git="commit"`, "gitpop", `id="gbody"`, `id="ghandle"`, `id="p-worktrees"`, `gp-tabs`, `data-gp-tab`, `id="gfiles"`, `id="gpanel"`,
+		`gp-regions`, `id="wtcard"`} {
 		if strings.Contains(page, n) {
 			t.Errorf("the page carries %q", n)
 		}
@@ -425,8 +456,8 @@ func TestGitHandleSitsLeftOfThePanelsHandle(t *testing.T) {
 	if page, err = renderSessionPage(view, regions, false, ""); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(page, `id="gbody"`) || strings.Contains(page, `id="ghandle"`) {
-		t.Error("a page without a git read carries the git sheet or handle")
+	if !strings.Contains(page, `id="gitpage"`) || strings.Contains(page, `id="gitdata"`) {
+		t.Error("a page without a git read lacks the git page or carries a data carrier")
 	}
 }
 
@@ -503,8 +534,8 @@ func TestGitRefreshRouteAndStream(t *testing.T) {
 	route := f.base + "/s/livesession/git"
 
 	_, page := get(t, f.base+"/s/livesession?frame=1")
-	if !strings.Contains(page, `class="gh pending"`) {
-		t.Fatalf("page lacks the pending handle")
+	if !strings.Contains(page, `id="gitdata" hidden data-state="pending"`) {
+		t.Fatalf("page lacks the pending git data")
 	}
 	// No page watches the root yet: nothing is read.
 	if code, _, raw := postJSON(t, route, f.base, ""); code != http.StatusConflict {
@@ -546,12 +577,12 @@ func TestGitRefreshRouteAndStream(t *testing.T) {
 			}
 		}
 	}
-	gitEvent(`>↑1</b>`)
+	gitEvent(`data-ahead="1"`)
 
 	if code, _, raw := postJSON(t, route, f.base, ""); code != http.StatusNoContent {
 		t.Fatalf("refresh = %d %s, want 204", code, raw)
 	}
-	gitEvent(`>↑2</b>`)
+	gitEvent(`data-ahead="2"`)
 
 	resp.Body.Close()
 	waitFor(t, "the root to be dropped", func() bool { return watched(f.d.git) == 0 })
@@ -638,11 +669,11 @@ func TestGitBadgeFollowsTheStreamedSnapshot(t *testing.T) {
 		}
 	}
 	expectRead(t, git, f.project)
-	waitRegion(regionGit, `↑1<`)
+	waitRegion(regionGit, `data-ahead="1"`)
 
 	snapshot("first reply", 17)
 	expectRead(t, git, f.project)
-	waitRegion(regionGit, `↑2<`)
+	waitRegion(regionGit, `data-ahead="2"`)
 
 	snapshot("second reply", 17)
 	waitRegion("convlive", "second reply")

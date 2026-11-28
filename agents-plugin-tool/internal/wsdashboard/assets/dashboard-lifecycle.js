@@ -947,7 +947,20 @@
     if (!h.ent.shownSent) {
       h.ent.shownSent = true;
       shSend(h.ent, "shown", { shown: true });
+      shNudge(h.ent);
     }
+  }
+  // shNudge forces one synchronous layout of a frame that was just made visible
+  // and its document, so a WKWebView that composited the iframe while it was
+  // display:none paints it now rather than at the next unrelated invalidation
+  // (the blank session that only devtools cleared). A read only: no style
+  // write, transform or allocation persists.
+  function shNudge(ent) {
+    try {
+      void ent.el.offsetHeight;
+      var d = ent.el.contentDocument;
+      if (d && d.documentElement) void d.documentElement.offsetHeight;
+    } catch (e) { /* unloading or inaccessible */ }
   }
   function shDrop(ent, leaving) {
     var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("shell", "shDrop") : null;
@@ -1164,6 +1177,7 @@
     headHeld = null;
     shOn = ent;
     shFrames.splice(shFrames.indexOf(ent), 1); shFrames.push(ent);
+    hdNavigated();
     if (ent.cached || !ent.settingsSent) {
       ent.settingsSent = true;
       shSettings(ent);
@@ -1204,6 +1218,7 @@
     } else {
       ent.shownSent = true;
       shSend(ent, "shown", { shown: true });
+      shNudge(ent);
     }
     shCompanionTarget(ent, false, !!was && !!ent.f.rid && was.f.rid !== ent.f.rid);
     shRid(ent.f.rid);
@@ -1282,16 +1297,18 @@
     var b = d && d.querySelector(".board-overview");
     return b && b.getClientRects().length ? b : null;
   }
-  function gitHandleEl(d) {
-    var g = d && (d.getElementById ? d.getElementById("ghandle") : d.querySelector && d.querySelector("#ghandle"));
-    return g && !g.disabled ? g : null;
+  // The Git page is available while its gallery host (#bgal's #gitdock)
+  // exists: a session whose root is no repository still shows its empty page.
+  function gitPageEl(d) {
+    return d ? (d.getElementById ? d.getElementById("gitdock") : d.querySelector && d.querySelector("#gitdock")) || null : null;
   }
+  // The ticket map is available while it is expanded or its docked page
+  // (#bgal's #tmdock) exists.
   function ticketMapAvailable(d) {
     if (!d) return false;
     var back = d.getElementById ? d.getElementById("tmback") : d.querySelector && d.querySelector("#tmback");
     if (back && !back.hidden) return true;
-    var th = d.getElementById ? d.getElementById("thandle") : d.querySelector && d.querySelector("#thandle");
-    return !!(th && !th.hidden && !th.disabled);
+    return !!(d.getElementById ? d.getElementById("tmdock") : d.querySelector && d.querySelector("#tmdock"));
   }
   function filesSheetOpenEl(d) {
     var s = d && (d.getElementById ? d.getElementById("toolbar-files") : d.querySelector && d.querySelector("#toolbar-files"));
@@ -1305,7 +1322,7 @@
   }
   function globalShortcutAvailable(d, kind) {
     if (kind === "overview") return !!overviewButton(d);
-    if (kind === "git") return !!gitHandleEl(d);
+    if (kind === "git") return !!gitPageEl(d);
     if (kind === "ticketmap") return ticketMapAvailable(d);
     if (kind === "files") return !!filesButton(d);
     return false;
@@ -1320,31 +1337,36 @@
       b.click();
       return true;
     }
+    // Ctrl+G shows and focuses the Git page; a repeat only refocuses it (no
+    // toggle). The expanded ticket map, the drawer, and the files sheet
+    // close first.
     if (kind === "git") {
-      if (!gitHandleEl(doc) || typeof drSetOpen !== "function") return false;
-      var openGit = !(typeof drOpen !== "undefined" && drOpen && typeof drMode !== "undefined" && drMode === "git");
-      if (openGit) {
-        if (typeof ticketMap !== "undefined" && ticketMap && ticketMap.isOpen && ticketMap.isOpen()) ticketMap.close(true);
-        if (typeof window !== "undefined" && window.WsCards && window.WsCards.dismissFiles) window.WsCards.dismissFiles();
-        if (typeof window !== "undefined" && window.WsOverview && window.WsOverview.holding && window.WsOverview.holding()) {
-          window.WsOverview.after(function () { drSetOpen(true, "git"); });
-          return true;
-        }
+      if (!gitPageEl(doc) || typeof gitPage === "undefined" || !gitPage || typeof gitPage.open !== "function") return false;
+      if (typeof ticketMap !== "undefined" && ticketMap && ticketMap.isOpen && ticketMap.isOpen()) ticketMap.close(true);
+      if (typeof drawer !== "undefined" && drawer && typeof drOpen !== "undefined" && drOpen && typeof drSetOpen === "function") drSetOpen(false);
+      if (typeof window !== "undefined" && window.WsCards && window.WsCards.dismissFiles) window.WsCards.dismissFiles();
+      if (typeof window !== "undefined" && window.WsOverview && window.WsOverview.holding && window.WsOverview.holding()) {
+        window.WsOverview.after(function () { gitPage.open(); });
+        return true;
       }
-      drSetOpen(openGit, "git");
+      gitPage.open();
       return true;
     }
+    // Ctrl+B shows and focuses the docked map (a repeat only refocuses it);
+    // while the map is expanded it returns it to the dock.
     if (kind === "ticketmap") {
-      if (!ticketMapAvailable(doc) || typeof ticketMap === "undefined" || !ticketMap || typeof ticketMap.toggle !== "function") return false;
-      var openMap = !(ticketMap.isOpen && ticketMap.isOpen());
-      if (openMap) {
-        if (typeof window !== "undefined" && window.WsCards && window.WsCards.dismissFiles) window.WsCards.dismissFiles();
-        if (typeof window !== "undefined" && window.WsOverview && window.WsOverview.holding && window.WsOverview.holding()) {
-          window.WsOverview.after(function () { ticketMap.toggle(); });
-          return true;
-        }
+      if (!ticketMapAvailable(doc) || typeof ticketMap === "undefined" || !ticketMap || typeof ticketMap.open !== "function") return false;
+      if (ticketMap.isOpen && ticketMap.isOpen()) {
+        ticketMap.close(false);
+        return true;
       }
-      ticketMap.toggle();
+      if (typeof drawer !== "undefined" && drawer && typeof drOpen !== "undefined" && drOpen && typeof drSetOpen === "function") drSetOpen(false);
+      if (typeof window !== "undefined" && window.WsCards && window.WsCards.dismissFiles) window.WsCards.dismissFiles();
+      if (typeof window !== "undefined" && window.WsOverview && window.WsOverview.holding && window.WsOverview.holding()) {
+        window.WsOverview.after(function () { ticketMap.open(); });
+        return true;
+      }
+      ticketMap.open();
       return true;
     }
     if (kind === "files") {
@@ -1493,6 +1515,9 @@
           break;
         case "daemon-bridge-res":
           if (typeof handleDaemonBridgeRes === "function") handleDaemonBridgeRes(e.source, m);
+          break;
+        case "term-list":
+          if (on) hdFrameTerms(ent, m);
           break;
       }
     });
@@ -1713,6 +1738,7 @@
       else if (m.wsShell === "rail-open") { if (typeof tkApi !== "undefined" && tkApi && tkApi.closeStore) tkApi.closeStore(); }
       else if (m.wsShell === "sync") { sent = {}; queueHead(); shPost("title", { title: doc.title }); }
       else if (m.wsShell === "daemon-bridge-req") { if (typeof handleDaemonFrameBridgeReq === "function") handleDaemonFrameBridgeReq(m); }
+      else if (m.wsShell === "term-list-req" || m.wsShell === "term-attach") hdFrameTermReq(m);
     });
     queue();
     if (typeof WsJank !== "undefined" && WsJank) {

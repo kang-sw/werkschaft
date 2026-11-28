@@ -86,11 +86,15 @@ type CompanionPersona struct {
 	Name         string `json:"name,omitempty"`
 	Voice        string `json:"voice,omitempty"`
 	QuipLanguage string `json:"quipLanguage,omitempty"`
+	// VoiceByLang is an optional per-language voice overlay, keyed by
+	// language tag, appended to Voice for the resolved reply language.
+	VoiceByLang map[string]string `json:"voice_by_lang,omitempty"`
 }
 
 const (
-	companionPersonaNameMax  = 40
-	companionPersonaVoiceMax = 800
+	companionPersonaNameMax        = 40
+	companionPersonaVoiceMax       = 800
+	companionVoiceByLangMaxEntries = 32
 )
 
 var companionLanguageTag = regexp.MustCompile(`^[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8}){0,4}$`)
@@ -126,12 +130,60 @@ func companionPersonaField(obj companionObject) *CompanionPersona {
 			return nil
 		}
 	}
-	for _, r := range p.Voice {
+	if !companionVoiceText(p.Voice) {
+		return nil
+	}
+	p.VoiceByLang = companionVoiceByLangField(fields)
+	return &p
+}
+
+// companionVoiceText reports whether a voice holds no control characters
+// other than line breaks and tabs.
+func companionVoiceText(s string) bool {
+	for _, r := range s {
 		if unicode.IsControl(r) && r != '\n' && r != '\t' {
-			return nil
+			return false
 		}
 	}
-	return &p
+	return true
+}
+
+// companionVoiceByLangField returns the persona's validated voice_by_lang
+// overlays, or nil. It never fails the persona: a non-object value drops the
+// field, and an entry with a bad language tag, an empty, oversize or
+// non-string value, or control characters drops that entry alone. At most
+// companionVoiceByLangMaxEntries entries are kept, in sorted tag order.
+func companionVoiceByLangField(fields companionObject) map[string]string {
+	raw, ok := fields["voice_by_lang"]
+	if !ok {
+		return nil
+	}
+	entries, err := parseCompanionObject(raw)
+	if err != nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, tag := range sortedCompanionKeys(entries) {
+		if len(out) >= companionVoiceByLangMaxEntries {
+			break
+		}
+		if !companionLanguageTag.MatchString(tag) {
+			continue
+		}
+		var voice string
+		if json.Unmarshal(entries[tag], &voice) != nil {
+			continue
+		}
+		voice = strings.TrimSpace(voice)
+		if voice == "" || utf8.RuneCountInString(voice) > companionPersonaVoiceMax || !companionVoiceText(voice) {
+			continue
+		}
+		out[tag] = voice
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 type companionAutoMatch struct {

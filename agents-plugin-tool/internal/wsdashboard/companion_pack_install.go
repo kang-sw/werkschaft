@@ -482,6 +482,14 @@ func (s *CompanionPackStore) install(opts wsconfig.Options, plan companionInstal
 			listing.Packs = append(listing.Packs, item)
 			continue
 		}
+		// A local pack carrying Studio-authored content is never replaced by
+		// an install; decided from the snapshot, without touching a file.
+		if exists && installedPack.info.Origin != nil && installedPack.info.Origin.Kind == "local" &&
+			installedPack.catalog.authored(installedPack.clips) {
+			item.Error = &companionPackError{ID: entry.ID, Message: "this pack has Studio-authored clips; export them and uninstall it first"}
+			listing.Packs = append(listing.Packs, item)
+			continue
+		}
 		pack, fail := s.preparePlanEntry(plan, entry, paths, dirs, sizes)
 		if fail != nil {
 			item.Error = fail

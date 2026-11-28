@@ -39,6 +39,9 @@ func TestLiveCRUDRefusesBeforeImport(t *testing.T) {
 	if err := s.SetSupportMapping(ctx, "s1", "abc123"); !errors.Is(err, wsmeta.ErrNotImported) {
 		t.Fatalf("SetSupportMapping before import = %v, want ErrNotImported", err)
 	}
+	if err := s.DeleteUsageLatestEntry(ctx, wsmeta.UsageSourcePlan, "claude:work"); !errors.Is(err, wsmeta.ErrNotImported) {
+		t.Fatalf("DeleteUsageLatestEntry before import = %v, want ErrNotImported", err)
+	}
 }
 
 func TestLivePermissionsSupportLabelsAckHiringAndDeleteSession(t *testing.T) {
@@ -195,6 +198,12 @@ func TestLiveRailLayoutUsageMemosAndTrackerHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := s.PutUsageLatestEntry(ctx, wsmeta.UsageSourcePlan, "claude", []byte(`{"harness":"claude","asOf":300,"windows":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutUsageLatestEntry(ctx, wsmeta.UsageSourcePlan, "claude:work", []byte(`{"harness":"claude","asOf":250,"windows":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteUsageLatestEntry(ctx, wsmeta.UsageSourcePlan, "claude:work"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetUsageLatestEntries(ctx, wsmeta.UsageSourceAgy, []wsmeta.UsageEntry{

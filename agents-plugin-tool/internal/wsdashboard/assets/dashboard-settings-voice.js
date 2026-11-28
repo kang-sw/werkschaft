@@ -686,7 +686,7 @@
       title.id = "voice-or-modal-title";
       dlg.append(title, el("p", "vmodal-sub", t("js.settings.voice.or_modal_sub")));
 
-      // Show "Use top OpenRouter key" toggle ONLY when top OpenRouter key is configured.
+      // Show "Reuse Werk OpenRouter key" toggle ONLY when the Werk OpenRouter key is configured.
       if (topConfigured) {
         var swRow = el("div", "vsw-row" + (shared ? " on" : ""));
         var swLabel = el("div", "vsw-label");

@@ -9,7 +9,7 @@
   // tick or per frame.
   var boardRevealRaf = 0;
   function boardRevealHidden() {
-    return !!(doc.hidden || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-animation-paused"))) ||
+    return !!((typeof docHidden === "function" ? docHidden() : doc.hidden) || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-animation-paused"))) ||
       (typeof shHidden !== "undefined" && !!shHidden);
   }
   // boardRevealRemeasure re-reads #bcol's content box and overflow after a
@@ -53,6 +53,6 @@
     // The shell's show/hide and the browser's own visibility both arrive as
     // ws-page-visibility: re-measure and settle on every hidden-to-visible edge.
     doc.addEventListener("ws-page-visibility", boardRevealNow);
-    doc.addEventListener("visibilitychange", function () { if (!doc.hidden) boardRevealSchedule(); });
+    doc.addEventListener("visibilitychange", function () { if (!(typeof docHidden === "function" ? docHidden() : doc.hidden)) boardRevealSchedule(); });
     if (window.addEventListener) window.addEventListener("pageshow", function () { boardRevealSchedule(); });
   }

@@ -375,10 +375,7 @@
       if (typeof setCtab === "function" && grid) { setCtab("term"); return true; }
       return false;
     }
-    if (panel === "git") {
-      if (typeof drSetOpen === "function") { drSetOpen(true, "git"); return true; }
-      return typeof runGlobalShortcut === "function" ? runGlobalShortcut("git") : false;
-    }
+    if (panel === "git") return typeof runGlobalShortcut === "function" ? runGlobalShortcut("git") : false;
     if (panel === "overview") {
       if (window.WsOverview && typeof window.WsOverview.active === "function" && window.WsOverview.active()) return true;
       return typeof runGlobalShortcut === "function" ? runGlobalShortcut("overview") : false;
@@ -852,6 +849,14 @@
         return;
       }
       await postDaemonBridgeBinaryReply(req, pngBytes, "image/png");
+      return;
+    }
+
+    // Interactive guide overlay lives in dashboard-daemon-guide.js.
+    if (op === "guide.highlight" && window.WsDaemonGuide && typeof window.WsDaemonGuide.highlight === "function") {
+      var gres;
+      try { gres = window.WsDaemonGuide.highlight(params) || {}; } catch (_) { gres = { error: "highlight_failed" }; }
+      await postDaemonBridgeReply(req, gres.error ? null : gres.payload, gres.error || null);
       return;
     }
 

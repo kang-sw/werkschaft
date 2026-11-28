@@ -52,7 +52,7 @@ func (a *dashboardAssets) buildFrameFiles() {
 		a.mentionParts,
 		{{file: "rail.js", content: string(d.RailScript)}},
 		{{file: "memo.js", content: string(d.MemoScript)}},
-		{{file: "usage.js", content: string(d.UsageScript)}},
+		a.usageParts,
 		{{file: "shell.js", content: string(d.ShellScript)}},
 		a.cardsParts,
 		{{file: "overview.js", content: string(d.OverviewScript)}},

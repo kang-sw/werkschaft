@@ -168,9 +168,11 @@ func (c *conv) seedSpawnRows() {
 	if c.rec.Lead {
 		kind = ParentLead
 	}
+	// Only row identity and compaction counts are read, so the lean row list
+	// stands in for a whole snapshot.
 	known := map[string]bool{}
-	rows := map[string]wslive.Agent{}
-	for _, a := range c.live.st.Snapshot(c.r.opts.Now().UnixMilli()).Agents {
+	rows := map[string]wslive.AgentRow{}
+	for _, a := range c.live.st.AgentRows() {
 		known[a.ID] = true
 		rows[a.ID] = a
 	}

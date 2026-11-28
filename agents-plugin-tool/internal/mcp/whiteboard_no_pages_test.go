@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
 	"github.com/kang-sw/devenv/internal/wswhiteboard"
 )
@@ -56,17 +57,30 @@ func TestWhiteboardMailboxWritesKeepBoardBytesAndRefreshServedView(t *testing.T)
 	f := &whiteboardFixture{s: server, key: hf.keyB, root: entry.root}
 	f.update(t, `<wb:topic name="t"><wb:log>retained</wb:log></wb:topic>`)
 	_ = f.servedPage(t)
+	reg := wsdashboard.Registration{ReplyID: f.replyID(), Project: entry.root}
 	before := whiteboardTreeForTest(t, f.pageDir())
+	hasBody := func(want string) bool {
+		page := readPageOK(t, f.source, reg)
+		if panelHTML(string(page.Board.Panels), "mailbox") != "" {
+			t.Fatal("retired #p-mailbox rendered in served panels")
+		}
+		for _, body := range page.MailBodies {
+			if strings.Contains(body, want) {
+				return true
+			}
+		}
+		return false
+	}
 	mustSend(t, hf.serverB, 10, hf.keyB, "id:"+wsmailbox.ReplyID(hf.keyA), "fresh-outgoing")
-	if !strings.Contains(f.servedPage(t), "fresh-outgoing") {
-		t.Fatal("mailbox.send left the served panel stale")
+	if !hasBody("fresh-outgoing") {
+		t.Fatal("mailbox.send left served MailBodies stale")
 	}
 	mustSend(t, hf.serverA, 11, hf.keyA, "id:"+f.replyID(), "fresh-incoming")
 	if text := toolText(t, f.call(t, "mailbox.recv", map[string]any{})); !strings.Contains(text, "fresh-incoming") {
 		t.Fatal(text)
 	}
-	if !strings.Contains(f.servedPage(t), "fresh-incoming") {
-		t.Fatal("mailbox.recv left the served panel stale")
+	if !hasBody("fresh-incoming") {
+		t.Fatal("mailbox.recv left served MailBodies stale")
 	}
 	assertWhiteboardTreeForTest(t, f.pageDir(), before)
 }

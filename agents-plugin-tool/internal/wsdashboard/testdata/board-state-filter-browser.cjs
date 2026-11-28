@@ -418,7 +418,7 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
       await eligible('asks');
       // Wide pin column uses real production pin actions and keeps hidden nodes.
       await load('filterordinary'); await tab.setViewportSize({ width: 2800, height: 1000 });
-      await until(async () => await page.evaluate(() => document.documentElement.getAttribute('data-gal') === 'empty'), 'wide 4-column gallery slot ready');
+      await until(async () => await page.evaluate(() => document.documentElement.getAttribute('data-gal') === 'col'), 'wide 4-column gallery slot ready');
       await select('all');
       const pinTopic = page.locator('section.topic[data-topic="implementing0"]');
       const pin = pinTopic.locator('.tpin');
@@ -435,7 +435,7 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
       assert.deepEqual(await page.locator('#bgal section.topic').evaluateAll(nodes => nodes.map(n => n.dataset.topic)), pinOrder, 'All restores multi-pin order');
       await capture(`wide-pins-${theme}`);
       await secondPinTopic.locator('.tpin').click();
-      await until(async () => (await page.locator('#bgal .gal-dot').count()) === 2, 'second pin page removed');
+      await until(async () => (await page.locator('#bgal .gal-dot.page').count()) === 1, 'second pin page removed');
       await pin.click();
       assert.deepEqual(errors, [], 'no production page errors'); assert.deepEqual(unexpected, [], 'requests isolated to owned listeners');
       console.log(`PASS ${theme}: ${JSON.stringify(checks.filter(c => c.theme === theme))}; wide pin identity/order`);

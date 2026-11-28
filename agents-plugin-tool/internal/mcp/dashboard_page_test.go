@@ -110,11 +110,17 @@ func TestDashboardReadPageServesTheBoard(t *testing.T) {
 	if !strings.HasSuffix(servedBoard, imageStamp) {
 		t.Fatal("served board lacks the empty history image stamp")
 	}
-	if panelHTML(string(page.Board.Panels), "tickets") == "" {
-		t.Fatal("served page lacks the idea-only ticket entry point")
+	if panelHTML(string(page.Board.Panels), "tickets") != "" {
+		t.Fatal("served page must omit retired #p-tickets panel")
+	}
+	if panelHTML(string(page.Board.Panels), "mailbox") != "" {
+		t.Fatal("served page must omit retired #p-mailbox panel")
+	}
+	if panelHTML(string(page.Board.Panels), "todo") == "" {
+		t.Fatal("served page lacks #p-todo panel")
 	}
 
-	// File targets and ticket rows are action links under the served rule.
+	// File targets are action links under the served rule; retired #p-tickets stays absent.
 	writeTicket(t, f.root, "ready", "261101-feat-ready-one", "Ready one")
 	writeTicket(t, f.root, "todo", "261102-feat-todo-one", "Todo one")
 	inside := filepath.ToSlash(filepath.Join(f.root, "docs", "inside.md"))
@@ -131,13 +137,13 @@ func TestDashboardReadPageServesTheBoard(t *testing.T) {
 		// the page puts the path back where it fails to load).
 		`<img src="/s/` + reg.ReplyID + `/image?path=shots%2Fa.png" alt="shot"/>`,
 		`<img src="/s/` + reg.ReplyID + `/image?path=` + url.QueryEscape(outside) + `" data-out="" data-abs="` + filepath.FromSlash(outside) + `" alt="away"/>`,
-		`<span class="chip cat feat">feat</span><a href="/s/` + reg.ReplyID + `/file?path=ai-docs%2Ftickets%2Fready%2F261101-feat-ready-one.md" data-wl="file" data-rel="ai-docs/tickets/ready/261101-feat-ready-one.md" data-abs="` + filepath.Join(f.root, "ai-docs", "tickets", "ready", "261101-feat-ready-one.md") + `" title="ai-docs/tickets/ready/261101-feat-ready-one.md">Ready one</a></span>`,
-		`<span class="chip cat feat">feat</span><a href="/s/` + reg.ReplyID + `/file?path=ai-docs%2Ftickets%2Ftodo%2F261102-feat-todo-one.md" data-wl="file" data-rel="ai-docs/tickets/todo/261102-feat-todo-one.md" data-abs="` + filepath.Join(f.root, "ai-docs", "tickets", "todo", "261102-feat-todo-one.md") + `" title="ai-docs/tickets/todo/261102-feat-todo-one.md">Todo one</a></span>`,
-		"1 ready, 1 todo", // the full layout's ticket count
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("served page missing %q", want)
 		}
+	}
+	if panelHTML(string(page.Board.Panels), "tickets") != "" || panelHTML(string(page.Board.Panels), "mailbox") != "" {
+		t.Error("served page rendered retired #p-tickets or #p-mailbox")
 	}
 	if strings.Contains(html, "file:") {
 		t.Error("served page carries a file: URL")
@@ -261,14 +267,12 @@ func TestDashboardReadPageWatchesUnnudgedFiles(t *testing.T) {
 	writeTicket(t, f.root, "ready", "261101-feat-ready-one", "Ready one")
 	writeTicket(t, f.root, "todo", "261102-feat-todo-one", "Todo one")
 	mustWrite(t, f.root, "shots/a.png", "not-really-a-png")
-	f.update(t, "<wb:topic name=\"Rollout\"><wb:body>\n![shot](shots/a.png) ![gone](shots/missing.png)\n</wb:body></wb:topic>")
+	f.update(t, "<wb:topic name=\"Rollout\" tickets=\"261101-feat-ready-one\"><wb:body>\n![shot](shots/a.png) ![gone](shots/missing.png)\n</wb:body></wb:topic>")
 	page := readPageOK(t, src, reg)
 	tickets := filepath.Join(f.root, "ai-docs", "tickets")
 	for _, want := range []string{
 		filepath.Join(tickets, "ready"),
 		filepath.Join(tickets, "todo"),
-		filepath.Join(tickets, "ready", "261101-feat-ready-one.md"),
-		filepath.Join(tickets, "todo", "261102-feat-todo-one.md"),
 		filepath.Join(f.root, "shots", "a.png"),
 		filepath.Join(f.root, "shots", "missing.png"),
 	} {
@@ -683,6 +687,7 @@ func TestDashboardReadPageLangTranslatesBoardAndPanelText(t *testing.T) {
 	src := dashboardPageSource(t, nil, f.s.sessions.boards)
 	reg := wsdashboard.Registration{ReplyID: f.replyID(), Project: f.root}
 	f.call(t, "todo.add", map[string]any{"key": "step", "title": "a step"})
+	f.call(t, "agenda.set", map[string]any{"key": "plan", "value": map[string]any{"note": "agenda note"}})
 	f.update(t, `<wb:topic name="t"><wb:add class="technical"><wb:title>a question</wb:title><wb:why>plain reason</wb:why></wb:add></wb:topic>`)
 	writeTicket(t, f.root, "ready", "261101-feat-ready-one", "Ready one")
 	writeTicket(t, f.root, "todo", "261102-feat-todo-one", "Todo one")
@@ -702,23 +707,26 @@ func TestDashboardReadPageLangTranslatesBoardAndPanelText(t *testing.T) {
 		t.Fatalf("ReadPageLang: found=%v err=%v", ok, err)
 	}
 	enHTML, koHTML := string(en.Board.Board)+string(en.Board.Panels), string(ko.Board.Board)+string(ko.Board.Panels)
-	for _, want := range []string{"Tickets", "1 ready, 1 todo", "Todos"} {
+	for _, want := range []string{"Todos", "Agenda"} {
 		if !strings.Contains(enHTML, want) {
 			t.Errorf("English page lacks %q", want)
 		}
 	}
-	for _, want := range []string{wsi18n.T("ko", "panel.tickets"), wsi18n.T("ko", "panel.tickets.count.full", 1, 1), wsi18n.T("ko", "panel.todo")} {
+	for _, want := range []string{wsi18n.T("ko", "panel.todo"), wsi18n.T("ko", "panel.agenda")} {
 		if !strings.Contains(koHTML, want) {
 			t.Errorf("Korean page lacks %q", want)
 		}
 	}
-	for _, keep := range []string{"a question", "Ready one", "Todo one", "a step"} {
+	for _, keep := range []string{"a question", "a step", "agenda note"} {
 		if !strings.Contains(koHTML, keep) {
 			t.Errorf("Korean page lost the session's own text %q", keep)
 		}
 	}
-	if strings.Contains(koHTML, ">Tickets<") || strings.Contains(koHTML, "1 ready, 1 todo") {
+	if strings.Contains(koHTML, ">Todos<") || strings.Contains(koHTML, ">Agenda<") {
 		t.Error("Korean page still carries English panel text")
+	}
+	if panelHTML(enHTML, "tickets") != "" || panelHTML(koHTML, "tickets") != "" {
+		t.Error("served page rendered retired #p-tickets")
 	}
 }
 
@@ -838,7 +846,8 @@ func TestDashboardBoardMemoKeysEveryBoardInput(t *testing.T) {
 	src := dashboardPageSource(t, nil, f.s.sessions.boards)
 	reg := wsdashboard.Registration{ReplyID: f.replyID(), Project: f.root}
 	writeTicket(t, f.root, "ready", "261101-feat-ready-one", "Ready one")
-	f.update(t, `<wb:topic name="t"><wb:add class="technical"><wb:title>q one</wb:title></wb:add></wb:topic>`)
+	mustWrite(t, f.root, "shots/a.png", "v1")
+	f.update(t, `<wb:topic name="t" tickets="261101-feat-ready-one"><wb:body>![shot](shots/a.png)</wb:body><wb:add class="technical"><wb:title>q one</wb:title></wb:add></wb:topic>`)
 
 	// settle reads until the memo holds a verified render, then expects the
 	// next read to reuse it.
@@ -909,16 +918,16 @@ func TestDashboardBoardMemoKeysEveryBoardInput(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	misses("watched file", func() {
+	misses("watched ticket dir", func() {
 		writeTicket(t, f.root, "ready", "261102-feat-ready-two", "Ready two")
 		bump := filepath.Join(f.root, "ai-docs", "tickets", "ready")
 		at := time.Now().Add(time.Second)
 		os.Chtimes(bump, at, at)
 		waitForDashboardValidation(t) // external watched input, no signal
 	})
-	misses("ticket edited in place", func() {
-		path := filepath.Join(f.root, "ai-docs", "tickets", "ready", "261101-feat-ready-one.md")
-		writeTicket(t, f.root, "ready", "261101-feat-ready-one", "Ready one, retitled")
+	misses("watched image edited in place", func() {
+		path := filepath.Join(f.root, "shots", "a.png")
+		mustWrite(t, f.root, "shots/a.png", "v2-longer")
 		at := time.Now().Add(2 * time.Second)
 		os.Chtimes(path, at, at)
 		waitForDashboardValidation(t) // external watched input, no signal

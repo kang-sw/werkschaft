@@ -57,27 +57,22 @@
    their documents (never display, visibility, opacity or
    content-visibility). A vertical dot rail (.gal-rail) left of the
    viewport lists the pages: each dot shows its pane count, + the trailing
-   empty page (.gal-plus), and in the narrow view ⌂ the Main Board (Page
-   0). The page sets data-gal on the root (dashboard-board.js): "col" from
-   1600px with a docked page (with data-pincol: the gallery is the page
-   body's last grid column, its width handle .bp-edge on its left edge,
-   when the right-side space fits the board pane; the session rail stays
-   docked left); "drag" and "empty" use that same wide slot without a
-   docked page; "narrow" uses a paged gallery over the board's column
-   when the wide slot does not fit or the layout is "tabs" (placed by
-   --gal-left/top/width/height; data-away moves it off the window while
-   that column is hidden). The store page (.tk-spage) takes the grid's cell in
-   every one of these grids. The board keeps its no-gallery width (--pbw:
-   the 1680px page less its paddings, the rail and its gap; the
-   board-first page's 900px column), narrowed to leave the column 480px,
-   and the column fills the window's remaining width to its right. The
-   handle drags the board's width (--boardw with data-boardw, kept by
-   cards.js; the column keeps 280px at least: a width saved on a wider
-   window is clamped to what this window leaves). On the live page
-   --boardw is the board's own column, not its cell: the cell is the
-   conversation's width (--cvw: --convow, else the stylesheet's 5:7 share
-   of the board), the grid's 8px gap and the board's, so each handle
-   moves only the panel on its left and the column takes the difference.
+   empty page (.gal-plus), fixed system pages (workpanel, ticketmap, git),
+   and in the narrow view ⌂ the Main Board (Page 0). The page sets data-gal on
+   the root (dashboard-board.js): "col" from 1600px in non-tabs layout when
+   WsCards.canFitFourCol finds spare stage width for a board-wide column
+   (about 2382px with the session rail open, 2094px collapsed; with
+   data-pincol always set: the gallery is the page body's last grid column,
+   its width handle .bp-edge on its left edge; the session rail stays docked
+   left); "narrow" uses a paged gallery over the board's column below that
+   or when the layout is "tabs" (placed by --gal-left/top/width/height;
+   data-away moves it off the window while that column is hidden). The store
+   page (.tk-spage) takes the grid's cell in every one of these grids. In Band
+   4, the gallery column width is --bgal-eff-w / --bgal-w (default 540px,
+   350-720px, persisted globally in ws.dashboard.bgal.w via RAF-throttled
+   .bp-edge drags) while the stage column (conversation + board) takes the
+   flexible remainder minmax(0, 1fr). The conversation column's width
+   (--convow with data-convow) is dragged independently by .dcv-edge.
    A docked unit fills its pane: a card's body flexes (its stored height
    waits for the board), a topic's head stays put over its body's
    scroller (.gal-pbody, cards.js wrapTopic), so nothing sticks over what
@@ -93,10 +88,9 @@
    edge of the viewport reads the target and its percentage, and the
    target's dot carries .pull-target. */
 :root { --pbw: calc(1680px - 32px - var(--rail-reserve, 288px)); }
-/* --stagew stays --pbw in Band 3; Band 4 sizes .dbody directly with --boardw. */
+/* --stagew stays --pbw in Band 3; Band 4 sizes .bgal with --bgal-w and leaves the stage flexible. */
 .dash { --stagew: var(--pbw); }
 .dash.board { --pbw: 900px; }
-.dash[data-split-grid] { --cvw: var(--convow, calc(var(--boardw) * 5 / 7)); }
 .bgal { display: none; }
 :root[data-gal] .bgal:not([hidden]) { display: flex; gap: 6px; min-width: 0; min-height: 0; }
 .bgal > .bp-edge { display: none; }
@@ -122,6 +116,41 @@
 .gal-dot.main.active { background: #3fa853; color: #0b1910; box-shadow: 0 0 0 3px rgb(63 168 83 / .24); }
 .gal-dot.empty { border-style: dashed; background: transparent; font-size: 13px; font-weight: 500; }
 .gal-dot.empty.active { height: 24px; border-style: solid; border-color: var(--wb-primary); background: color-mix(in srgb, var(--wb-primary) 16%, transparent); color: var(--wb-primary); }
+.gal-sep { flex: none; width: 18px; height: 1px; margin: 2px 0; background: var(--wb-line); border-radius: 999px; }
+.gal-group-sys { flex: none; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 4px 3px; border-radius: 10px; background: color-mix(in srgb, var(--wb-muted) 68%, transparent); }
+.gal-dot.sys { width: 24px; height: 24px; border-radius: 8px; border: 1px solid transparent; background: transparent; color: var(--wb-muted-fg); }
+.gal-dot.sys:hover, .gal-dot.sys:focus-visible { border-color: color-mix(in srgb, var(--wb-primary) 45%, var(--wb-line)); background: var(--wb-card); color: var(--wb-fg); transform: scale(1.06); }
+.gal-dot.sys.active { height: 24px; border-color: var(--wb-primary); background: color-mix(in srgb, var(--wb-primary) 16%, var(--wb-card)); color: var(--wb-primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-primary) 26%, transparent); }
+.gal-sys-page { flex-direction: column; background: var(--wb-card); border-radius: var(--wb-radius); box-shadow: var(--wb-shadow); overflow: hidden; }
+.gal-sys-shell { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: auto; padding: 14px; gap: 12px; background: var(--wb-card); color: var(--wb-fg); }
+.gal-sys-head { display: flex; flex-direction: column; gap: 8px; flex: none; }
+.gal-sys-title-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.gal-sys-icon { flex: none; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; background: color-mix(in srgb, var(--wb-primary) 14%, var(--wb-muted)); color: var(--wb-primary); }
+.gal-sys-meta { flex: 1 1 0; min-width: 0; }
+.gal-sys-h { margin: 0; font-size: 14px; font-weight: 800; line-height: 1.25; color: var(--wb-fg); }
+.gal-sys-sub { margin: 2px 0 0; font-size: 11.5px; color: var(--wb-muted-fg); }
+.gal-sys-badge { flex: none; padding: 2px 8px; border-radius: 999px; font: 700 10.5px/1.4 var(--wb-mono); background: var(--wb-muted); color: var(--wb-muted-fg); }
+.gal-sys-banner { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; background: var(--wb-muted); color: var(--wb-muted-fg); font-size: 11.5px; line-height: 1.4; }
+.gal-sys-bdot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--wb-primary); }
+.gal-sys-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.gal-sys-zone { padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--wb-muted) 64%, var(--wb-bg)); display: flex; flex-direction: column; gap: 4px; }
+.gal-sys-zone-hd { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12.5px; color: var(--wb-fg); }
+.gal-sys-chip { padding: 1px 6px; border-radius: 999px; background: var(--wb-card); color: var(--wb-muted-fg); font: 700 10px/1.5 var(--wb-mono); }
+.gal-sys-zone-desc { margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--wb-muted-fg); }
+/* the Ticket Map page: one full-fill host the ticket map docks into
+   (dashboard-ticketmap.css styles the root); the ring marks the focus
+   that scopes its bare shortcuts. */
+.tm-docked { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; border-radius: inherit; overflow: hidden; outline: none; }
+.tm-docked[data-focus]::after { content: ""; position: absolute; inset: 0; z-index: 8; border-radius: inherit; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 48%, transparent); pointer-events: none; }
+/* the Git page: its strip and its one graph panel are cards of their own
+   (dashboard-gitpage.css), so the page drops the card it would sit on; the
+   Worktrees popover overhangs the strip, so nothing here clips it. */
+.gal-sys-gitpage { background: transparent; box-shadow: none; overflow: visible; }
+.gal-sys-foot { flex: none; display: flex; justify-content: flex-end; padding-top: 4px; }
+.gal-sys-jump { border: 0; border-radius: 8px; padding: 6px 12px; background: var(--wb-primary); color: var(--wb-primary-fg); font: 700 12px/1.2 var(--wb-sans); cursor: pointer; }
+.gal-sys-jump:hover { filter: brightness(1.06); }
+.gal-sys-jump:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 2px; }
+.gal-sys-page.drop { outline: 2px dashed var(--wb-primary); outline-offset: -3px; }
 .gal-dot.drop, .gal-dot.spring, .gal-dot.pull-target { outline: 2px solid #e0a84a; outline-offset: 2px; transform: scale(1.16); box-shadow: 0 0 0 5px rgb(224 168 74 / .24); }
 .bgal[data-dotdrag] .gal-rail { cursor: grabbing; }
 .gal-viewport { flex: 1 1 0; min-width: 0; min-height: 0; position: relative; overflow: hidden; overflow: clip; }
@@ -189,25 +218,23 @@
 .bp-edge::after, .dcv-edge::after { content: ""; position: absolute; top: 10px; bottom: 10px; left: 50%; width: 2px; transform: translateX(-50%); border-radius: 999px; background: transparent; transition: background .14s ease; }
 .bp-edge:hover::after, .bp-edge.drag::after, .bp-edge:focus-visible::after, .dcv-edge:hover::after, .dcv-edge.drag::after, .dcv-edge:focus-visible::after { background: var(--wb-primary); }
 @media (min-width: 1600px) {
-  /* Band 4 (dynamic four-column dock): rail, stage, and gallery column all show */
+  /* Band 4 (always-open four-column dock): rail, flexible stage, and gallery column */
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dwrap:not(.narrow),
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dgrid.board { max-width: none; margin: 0; }
-  :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody { grid-template-columns: var(--rail-w, 280px) minmax(0, min(var(--boardw, min(var(--pbw), 100% - (var(--rail-reserve, 288px) + 488px))), 100% - (var(--rail-reserve, 288px) + 288px))) minmax(280px, 1fr); }
-  :root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody[data-split-grid] { grid-template-columns: var(--rail-w, 280px) minmax(0, min(var(--cvw) + 8px + var(--boardw), 100% - (var(--rail-reserve, 288px) + 288px))) minmax(280px, 1fr); }
+  :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody { grid-template-columns: var(--rail-w, 280px) minmax(0, 1fr) var(--bgal-eff-w, var(--bgal-w, 540px)); }
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody > .rail { grid-column: 1; grid-row: 1; }
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody > .dgrid,
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody > .tk-spage { grid-column: 2; grid-row: 1; }
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .bgal:not([hidden]) { position: relative; z-index: auto; top: auto; bottom: auto; right: auto; width: auto; grid-column: 3; grid-row: 1; }
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dash:not(.live):not(.history) .bgal:not([hidden]) { position: sticky; top: 12px; height: calc(100vh - 24px); height: calc(100dvh - 24px); }
   :root:is([data-pincol], [data-gal="empty"]) .bgal > .bp-edge { display: block; }
-  /* Overview Quick Look (Band 4: WsCards.isFourCol(), !tabs && vw >= 1600 &&
-     canFitFourCol): open column 3 both when pages are docked and when 0 pages
-     are docked; keep docked .gal-viewport mounted offscreen via transform
-     (never display:none) so docked xterm/iframes live. */
+  /* Overview Quick Look (Band 4: WsCards.isFourCol(), !tabs && vw >= 1600 && spare width):
+     open column 3 both when pages are docked and when 0 pages are docked;
+     keep docked .gal-viewport mounted offscreen via transform (never
+     display:none) so docked xterm/iframes live. */
   :root[data-overview-preview] .dwrap:not(.narrow),
   :root[data-overview-preview] .dgrid.board { max-width: none; margin: 0; }
-  :root[data-overview-preview] .dbody { grid-template-columns: var(--rail-w, 280px) minmax(0, min(var(--boardw, min(var(--pbw), 100% - (var(--rail-reserve, 288px) + 488px))), 100% - (var(--rail-reserve, 288px) + 288px))) minmax(280px, 1fr); }
-  :root[data-boardw][data-overview-preview] .dbody[data-split-grid] { grid-template-columns: var(--rail-w, 280px) minmax(0, min(var(--cvw) + 8px + var(--boardw), 100% - (var(--rail-reserve, 288px) + 288px))) minmax(280px, 1fr); }
+  :root[data-overview-preview] .dbody { grid-template-columns: var(--rail-w, 280px) minmax(0, 1fr) var(--bgal-eff-w, var(--bgal-w, 540px)); }
   :root[data-overview-preview] .dbody > .rail { grid-column: 1; grid-row: 1; }
   :root[data-overview-preview] .dbody > .dgrid,
   :root[data-overview-preview] .dbody > .tk-spage { grid-column: 2; grid-row: 1; }

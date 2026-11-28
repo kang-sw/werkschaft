@@ -139,6 +139,7 @@ func TestDashboardBoardTopicCache(t *testing.T) {
 		t.Fatal("sequence-only DB change invalidated unrelated topics")
 	}
 	// Shared watched inputs conservatively invalidate every topic.
+	f.update(t, `<wb:topic name="topic-000" tickets="261101-feat-topic-cache"/>`)
 	settle()
 	before = topicRenderCounts(src)
 	writeTicket(t, f.root, "ready", "261101-feat-topic-cache", "A ticket")

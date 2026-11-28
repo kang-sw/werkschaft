@@ -8,6 +8,10 @@ import (
 	"github.com/kang-sw/devenv/internal/wscred"
 )
 
+// Retained name check: wire identifiers and source label for the /rail/usage
+// Werk OpenAI and unified Codex/OpenAI cards
+// (TestPlanUsageCodexOpenAIExactWorkspaceMatchUnifiesAndDeduplicatesProbe,
+// TestPlanUsageSameEmailDifferentWorkspacesStaySeparate).
 const (
 	werkOpenAIDefaultDebounce = 10 * time.Minute
 	werkOpenAIUsageSource     = "via Werk OpenAI"
@@ -153,6 +157,8 @@ func (s *planUsageStore) refreshWerkOpenAI() {
 	}()
 }
 
+// Retained name check: display label for the unified /rail/usage card
+// (TestPlanUsageCodexOpenAIExactWorkspaceMatchUnifiesAndDeduplicatesProbe).
 func (s *planUsageStore) unifiedCodexOpenAIEntryLocked(now int64, id wscred.OpenAIUsageIdentity) planUsageEntry {
 	x := currentUsage(s.gpt, now)
 	x.Harness = codexOpenAIUnifiedHarness

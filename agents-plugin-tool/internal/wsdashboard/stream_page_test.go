@@ -49,7 +49,7 @@ var boardLatest = null, railAttention = null;
 // receiveRegion reads this window on every board update.
 var boardReturnTimer = 0, boardReturnFresh = false;
 function shDrafts() { return false; }
-` + dashboardFuncs(t, "pageHidden")
+` + dashboardFuncs(t, "docHidden", "pageHidden")
 }
 
 // Include the real stream lifecycle state as well as the requested functions.

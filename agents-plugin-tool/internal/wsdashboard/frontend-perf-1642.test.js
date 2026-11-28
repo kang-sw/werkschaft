@@ -138,22 +138,14 @@ function makeEl(tag, opts = {}) {
   return el;
 }
 
-test('#1 drRoom caches --shr and --thr so unchanged widths skip root custom-property writes', () => {
+test('#1 drRoom caches --shr so unchanged widths skip root custom-property writes', () => {
   const src = readAsset(DASH_ASSETS, 'dashboard-drawer.js');
   const fnSrc = extractFunction(src, 'drRoom');
   const writes = [];
-  let dw = 30, sw = 28, tw = 34, gw = 40;
+  let sw = 28;
   const ctx = {
-    drHas: true,
     drRoomW: -1,
-    drGhOff: -1,
-    drFoldW: -1,
-    drFoldGw: -1,
-    drhandle: { getBoundingClientRect: () => ({ width: dw }) },
-    ghandle: () => true,
-    gitRegion: { getBoundingClientRect: () => ({ width: gw }) },
     shandle: { getBoundingClientRect: () => ({ width: sw }) },
-    thandle: { hidden: false, getBoundingClientRect: () => ({ width: tw }) },
     drheader: { classList: makeClassList() },
     doc: {
       documentElement: {
@@ -164,23 +156,19 @@ test('#1 drRoom caches --shr and --thr so unchanged widths skip root custom-prop
     }
   };
   vm.runInNewContext(fnSrc, ctx);
+  assert.doesNotMatch(fnSrc, /--ghr|ghandle|drhandle/, 'the git and panels handles retired');
 
+  // Only the search handle hangs at the right edge: --shr is 0 and written once.
   ctx.drRoom();
-  assert.deepEqual(
-    writes.filter(([k]) => k === '--shr' || k === '--thr'),
-    [['--shr', '36px'], ['--thr', '70px']]
-  );
+  assert.deepEqual(writes, [['--shr', '0px'], ['--drhw', '28px']]);
 
   writes.length = 0;
   ctx.drRoom();
-  assert.deepEqual(writes, [], 'second call with identical widths must not rewrite --shr/--thr');
+  assert.deepEqual(writes, [], 'second call with identical widths must not rewrite --shr or --drhw');
 
-  dw = 42;
+  sw = 35;
   ctx.drRoom();
-  assert.deepEqual(
-    writes.filter(([k]) => k === '--shr' || k === '--thr'),
-    [['--shr', '48px'], ['--thr', '82px']]
-  );
+  assert.deepEqual(writes, [['--drhw', '35px']], 'a wider handle rewrites only --drhw');
 
   writes.length = 0;
   ctx.drRoom();
@@ -691,6 +679,7 @@ test('#9a shShow sequences WS handoff via wsHideFrame + hidden-ack, cancels stal
     'var shShowGen = 0, shHandoff = null, SH_HIDE_ACK_MS = 80;',
     extractFunction(lcSrc, 'shClearHandoff'),
     extractFunction(lcSrc, 'shFinishHandoff'),
+    extractFunction(lcSrc, 'shNudge'),
     extractFunction(lcSrc, 'shDrop'),
     extractFunction(lcSrc, 'shPrune'),
     extractFunction(lcSrc, 'shShow')
@@ -737,7 +726,7 @@ test('#9a shShow sequences WS handoff via wsHideFrame + hidden-ack, cancels stal
     labelEditing: () => false,
     labelEnd() {},
     shCacheable: () => true,
-    shSettings() {},
+    shSettings() {}, hdNavigated() {},
     shSend(ent, kind, m) {
       sent.push({ rid: ent.f.rid, kind, m });
       if (kind === 'shown' && m.shown === false) hideOrder.push(`postHide:${ent.f.rid}:${m.token}`);

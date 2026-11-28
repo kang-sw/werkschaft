@@ -570,16 +570,12 @@ func docImagePath(root, path string) string {
 	return filepath.Join(root, native)
 }
 
-// servedWhiteboardPanels builds the full page's panels for the served page.
-// The daemon process serves no session itself, so it holds no mailbox
-// identity: the mailbox panel shows the session's reply-id address and its
-// reply-id unread count, never a named inbox the session may own. watch,
-// when not nil, is told each file and directory the panels read that a
-// writer may change without a nudge (whiteboardPanelInput.watch). history,
-// when not nil, reads the mailbox history (whiteboardPanelInput.history),
-// and replies the reply registry (whiteboardPanelInput.replies).
+// servedWhiteboardPanels builds the full page's panels for the served
+// dashboard. #p-tickets and #p-mailbox are retired (tickets live in the
+// always-open #bgal Ticket Map system page), leaving todo and agenda, which
+// the gallery's Workpanel system page shows as its working memory.
 func servedWhiteboardPanels(record sessionRecord, key, replyID, lang string, watch func(path string), history func() ([]mailboxHistoryRecord, error), replies func() (wsmailbox.ReplyStore, bool)) []wswhiteboard.Panel {
-	return whiteboardPanels(whiteboardPanelInput{
+	in := whiteboardPanelInput{
 		rec:        record,
 		root:       record.Root,
 		sessionKey: key,
@@ -588,7 +584,17 @@ func servedWhiteboardPanels(record sessionRecord, key, replyID, lang string, wat
 		watch:      watch,
 		history:    history,
 		replies:    replies,
-	})
+	}
+	var panels []wswhiteboard.Panel
+	for _, provider := range whiteboardProviders {
+		if provider.id == "tickets" || provider.id == "mailbox" {
+			continue
+		}
+		if panel, ok := provider.panel(in); ok {
+			panels = append(panels, panel)
+		}
+	}
+	return panels
 }
 
 // ReadContacts re-reads the contacts of the session reg names, as ReadPage

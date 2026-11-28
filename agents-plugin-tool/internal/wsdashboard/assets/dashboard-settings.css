@@ -144,6 +144,7 @@
 
 /* Precedence chain strip (34px) */
 .prec-strip {
+  flex: none;
   min-height: 34px;
   padding: 4px 16px;
   display: flex;
@@ -241,6 +242,15 @@
   min-height: 0;
   display: grid;
   grid-template-columns: 172px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+/* Right column owns the precedence strip + filter bar so .snav never shifts when they hide. */
+.smain {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .snav {
   border-right: 1px solid var(--wb-muted);
@@ -1142,6 +1152,12 @@
 }
 @media (max-width: 820px) {
   .sbody { display: flex; flex-direction: column; }
+  .smain { flex: 1 1 auto; }
+  /* Pin the header to two fixed rows (title + close, then target pill) so its height
+     cannot depend on whether the pill carries a path; .snav sits directly below it. */
+  .shd-title { flex: 1 1 0; }
+  .shd-top > [data-settings-close] { order: 2; }
+  .scope-target-pill { order: 3; flex: 1 0 100%; max-width: 100%; box-sizing: border-box; }
   .snav { flex: none; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--wb-muted); }
   .snav-group-lbl, .snav-sep { display: none; }
   .snav-btn { width: auto; flex: none; white-space: nowrap; }

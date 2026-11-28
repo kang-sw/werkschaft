@@ -201,6 +201,17 @@ var wsSettingsChoiceLabels = {
 
   var dcSettingsGen = 0;
   var dcSettingsRefs = new Map();
+  // Same-origin ref resolver for the shell's interactive guide overlay
+  // (dashboard-daemon-guide.js); an Element cannot cross postMessage.
+  window.wsDaemonGuideRef = function (gen, ref) {
+    var g = Number(gen) || 0;
+    if (!dcSettingsGen || (g && g !== dcSettingsGen)) return { error: "stale_ref" };
+    var el = dcSettingsRefs.get(String(ref || ""));
+    if (!el) return { error: "ref_not_found" };
+    if (!el.isConnected) return { error: "stale_ref" };
+    if (el.closest && el.closest('[data-ws-dom-exclude="1"]')) return { error: "target_excluded" };
+    return { el: el };
+  };
   var dcSettingsSensitiveRe = /(?:password|passwd|secret|token|api[-_\s]?key|credential|cookie|bearer|private[-_\s]?key|auth[-_\s]?key)/i;
   function dcSettingsRedact(s) {
     return String(s || "")

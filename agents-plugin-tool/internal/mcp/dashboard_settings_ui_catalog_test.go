@@ -190,10 +190,11 @@ func TestDashboardSettingsUICatalogSurface(t *testing.T) {
 	}
 	want := []string{
 		"dashboard.companion_agent_cooldown_seconds", "dashboard.companion_agent_hourly_cap",
-		"dashboard.companion_attachments", "dashboard.companion_director", "dashboard.companion_enabled",
+		"dashboard.companion_attachments", "dashboard.companion_body_tier", "dashboard.companion_director", "dashboard.companion_enabled",
 		"dashboard.companion_eyes", "dashboard.companion_hair", "dashboard.companion_outfit",
 		"dashboard.companion_pack", "dashboard.companion_palette", "dashboard.companion_preset",
 		"dashboard.companion_soul", "dashboard.companion_soul_dir", "dashboard.companion_sources",
+		"dashboard.companion_work_tier",
 	}
 	slices.Sort(panelCompanion)
 	if !slices.Equal(panelCompanion, want) {

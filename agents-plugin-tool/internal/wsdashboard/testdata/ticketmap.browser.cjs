@@ -1,7 +1,8 @@
-// Run by TestTicketMapBrowser: the ticket map overlay and View B on a real
-// framed page over the synthetic board (the ticket's Phase 2 Playwright items
-// 1-14), at 1600x960 and 1280x800 in both themes, plus 900x700 for the narrow
-// checks. With a shots directory it also keeps the overlay's states beside the
+// Run by TestTicketMapBrowser: the expanded ticket map (#tmback) and View B
+// on a real framed page over the synthetic board (the ticket's Phase 2
+// Playwright items 1-14), at 1600x960 and 1280x800 in both themes, plus
+// 900x700 for the narrow checks. The map docks in the gallery's Ticket Map
+// page: Ctrl+B shows that page and its ⤢ (#tmexpand) expands it. With a shots directory it also keeps the overlay's states beside the
 // approved mockup's same states (mock-b-*) for the side-by-side check.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -39,15 +40,49 @@ async function frameOf(page) {
 }
 const raf2 = fr => fr.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
 
-// handles reads #thandle, #shandle and the header room (item 1).
+// handles reads the header room and the retired #thandle (item 1).
 function handles(fr) {
   return fr.evaluate(() => {
-    const b = id => { const e = document.getElementById(id); if (!e || e.hidden) return null; const r = e.getBoundingClientRect(); return r.width ? { l: r.left, r: r.right, t: r.top, w: r.width } : null; };
     const top = document.querySelector('.dwrap > .top'), cs = getComputedStyle(document.documentElement);
     const px = v => parseFloat(v) || 0;
-    return { t: b('thandle'), s: b('shandle'), d: b('drhandle'), room: top ? top.classList.contains('dr-room') : null,
+    return { thandle: !!document.getElementById('thandle'), room: top ? top.classList.contains('dr-room') || top.classList.contains('tk-room') : null,
+      drRoom: top ? top.classList.contains('dr-room') : null, thr: cs.getPropertyValue('--thr'),
       pad: top ? px(getComputedStyle(top).paddingRight) : null, drhw: px(cs.getPropertyValue('--drhw')), tkhw: px(cs.getPropertyValue('--tkhw')) };
   });
+}
+// dockShown tells whether the gallery shows the docked map now: its page is
+// the active one and the root lies in the window (the narrow view's
+// gallery keeps an inactive page mounted off the window).
+const dockShown = fr => fr.evaluate(() => {
+  const C = window.WsCards, r = document.querySelector('#tmdock > .d-tm-root'), b = r && r.getBoundingClientRect();
+  return !!(C && C.activeSys && C.activeSys() === 'ticketmap' && b && b.width > 0 && b.right > 0 && b.left < innerWidth && b.bottom > 0 && b.top < innerHeight);
+});
+// showDock is Ctrl+B from the page: the gallery shows the docked map (the
+// open drawer, which lies over the gallery column, closes).
+async function showDock(page, fr) {
+  if (await dockShown(fr) && !(await fr.evaluate(() => !!document.querySelector('.drawer.open')))) return;
+  await fr.evaluate(() => document.activeElement && document.activeElement.blur && document.activeElement.blur());
+  await page.keyboard.press('Control+b');
+  // Where the gallery cannot show the pane (the narrow view's gallery off
+  // the window), Ctrl+B opens the overlay instead.
+  await fr.waitForFunction(() => {
+    const C = window.WsCards, r = document.querySelector('#tmdock > .d-tm-root'), b = r && r.getBoundingClientRect(), m = document.getElementById('tmback');
+    return (!!m && !m.hidden) || !!(C && C.activeSys && C.activeSys() === 'ticketmap' && b && b.width > 0 && b.right > 0 && b.left < innerWidth);
+  });
+}
+// expandMap shows the docked map and expands it with ⤢ (#tmexpand).
+async function expandMap(page, fr) {
+  await showDock(page, fr);
+  if (await fr.evaluate(() => { const b = document.getElementById('tmback'); return !!b && !b.hidden; })) return;
+  await fr.locator('#tmexpand').click({ timeout: 8000 }).catch(async err => {
+    const why = await fr.evaluate(() => {
+      const g = document.getElementById('bgal'), b = document.getElementById('tmexpand'), r = b && b.getBoundingClientRect(), root = document.documentElement;
+      return { gal: root.getAttribute('data-gal'), away: root.hasAttribute('data-gal-away'), bgal: g && { hidden: g.hidden, pos: g.getAttribute('data-pos'), sys: g.getAttribute('data-sys-active'), away: g.hasAttribute('data-away'), narrow: g.hasAttribute('data-narrow') },
+        active: window.WsCards && window.WsCards.activeSys && window.WsCards.activeSys(), exp: r && [r.left, r.top, r.width, r.height], vw: innerWidth, vh: innerHeight };
+    });
+    throw new Error(`#tmexpand click: ${JSON.stringify(why)}: ${err.message.split('\n')[0]}`);
+  });
+  await fr.waitForFunction(() => { const b = document.getElementById('tmback'); return !!b && !b.hidden; });
 }
 
 // wireCheck measures the hierarchy's connectors (item 7): one wire per
@@ -160,7 +195,7 @@ async function overlaySession(browser, theme, W, H, narrow) {
 
   await page.goto(base + '/s/livesession');
   const fr = await frameOf(page);
-  await fr.locator('#thandle').waitFor({ state: 'visible' });
+  await fr.locator('#tmdock').waitFor({ state: 'attached' });
   await page.waitForTimeout(400);
   assert.equal(await fr.evaluate(() => document.documentElement.getAttribute('data-theme')), theme, `${tag}: page theme`);
   await fr.evaluate(() => {
@@ -170,39 +205,38 @@ async function overlaySession(browser, theme, W, H, narrow) {
     document.addEventListener('keydown', e => { if (document.getElementById('tmback') && !document.getElementById('tmback').hidden) window.__tmleak.push(e.key); });
   });
 
-  // 1. No graph request on page open; #thandle hangs 6px left of #shandle,
-  // and the header keeps room for every handle.
-  assert.equal(graphReqs, 0, `${tag}: page open requests no ticket graph`);
+  // 1. The page requests the graph only when the gallery shows the docked
+  // map; the drawer keeps no ticket map handle, and the header keeps room
+  // for the handles it has.
+  const dock0 = await dockShown(fr);
+  assert.equal(graphReqs, dock0 ? 1 : 0, `${tag}: page open requests the graph only for a shown docked map`);
   let h = await handles(fr);
-  assert.ok(h.t && h.s && h.d, `${tag}: #thandle, #shandle and #drhandle show ${JSON.stringify(h)}`);
-  near(h.t.r, h.s.l - 6, 0.5, `${tag}: #thandle right edge`);
-  near(h.t.t, h.s.t, 0.5, `${tag}: #thandle hangs level with #shandle`);
-  assert.equal(h.room, true, `${tag}: header takes the handle room`);
-  near(h.pad, h.drhw + h.tkhw + 6, 0.5, `${tag}: header right padding is --drhw + --tkhw + 6`);
-  await fr.evaluate(() => { document.getElementById('drhandle').hidden = true; });
-  await page.waitForTimeout(150);
-  h = await handles(fr);
-  assert.ok(!h.d && h.t && h.s, `${tag}: drawer handle hidden`);
-  near(h.t.r, h.s.l - 6, 0.5, `${tag}: #thandle without the drawer handle`);
-  near(h.pad, h.drhw + h.tkhw + 6, 0.5, `${tag}: header padding without the drawer handle`);
-  await fr.evaluate(() => { document.getElementById('drhandle').hidden = false; });
-  await page.waitForTimeout(150);
-  h = await handles(fr);
-  near(h.t.r, h.s.l - 6, 0.5, `${tag}: #thandle with the drawer handle back`);
+  assert.equal(h.thandle, false, `${tag}: no #thandle`);
+  assert.equal(h.thr.trim(), '', `${tag}: no --thr`);
+  // The framed search handle hides behind the shell's search pill, so the
+  // drawer reserves nothing (--drhw 0, no dr-room); the tracker's handles
+  // keep the header's room (tk-room).
+  assert.equal(h.drRoom, false, `${tag}: no drawer handle room in the frame`);
+  assert.equal(h.drhw, 0, `${tag}: --drhw 0 in the frame`);
+  assert.equal(h.room, h.tkhw > 0, `${tag}: header takes the tracker handles' room`);
+  if (h.room) near(h.pad, h.drhw + h.tkhw + 6, 0.5, `${tag}: header right padding is --drhw + --tkhw + 6`);
 
-  // The drawer is open when the map opens: the map closes it (item 11).
-  await fr.locator('#drhandle').click();
-  await fr.waitForFunction(() => !!document.querySelector('.drawer.open'));
+  // Item 11 opened the drawer through #drhandle before the map; the framed
+  // page has no drawer opener since the drawer cards retired (the framed
+  // search handle hides behind the shell's search pill), so the drawer
+  // stays closed under the map.
+  assert.equal(await fr.evaluate(() => !!document.getElementById('drhandle')), false, `${tag}: no #drhandle`);
 
   // 2. One request, a viewport-covering overlay, View B first.
-  await fr.locator('#thandle').click();
+  await expandMap(page, fr);
   await fr.locator('#tmvb .d-tm-card').first().waitFor({ state: 'visible' });
   await raf2(fr);
-  assert.equal(graphReqs, 1, `${tag}: the first open sends one request`);
+  assert.equal(graphReqs, 1, `${tag}: the docked map and its expansion share one request`);
   assert.equal(await fr.evaluate(() => !!document.querySelector('.drawer.open')), false, `${tag}: the map closed the drawer`);
   const cover = await fr.evaluate(() => { const r = document.getElementById('tmback').getBoundingClientRect(); return { l: r.left, t: r.top, w: r.width, h: r.height, vw: innerWidth, vh: innerHeight }; });
   assert.deepEqual([cover.l, cover.t, cover.w, cover.h], [0, 0, cover.vw, cover.vh], `${tag}: the overlay covers the viewport`);
-  assert.equal(await fr.locator('#thandle').getAttribute('aria-expanded'), 'true');
+  assert.equal(await fr.locator('#tmexpand').getAttribute('aria-expanded'), 'true');
+  assert.equal(await fr.evaluate(() => document.querySelector('#tmdock > .d-tm-root')), null, `${tag}: the one root left the dock`);
   assert.equal(await fr.locator('#tmviewb').getAttribute('aria-pressed'), 'true', `${tag}: View B first`);
   assert.equal(await fr.evaluate(() => window.__tmap && window.__tmap.view), 'B');
 
@@ -384,7 +418,7 @@ async function overlaySession(browser, theme, W, H, narrow) {
   await fr.waitForFunction(p => window.WsCards && window.WsCards.list('preview').some(c => c.data.path === p && c.el.isConnected && c.el.getClientRects().length > 0 &&
     c.body.querySelector('.pv-txt, .pv-md')), epic.path);
   assert.equal(await fr.evaluate(p => window.WsCards.list('preview').filter(c => c.data.path === p).length, epic.path), 1, `${tag}: one preview card for the ticket`);
-  await fr.locator('#thandle').click();
+  await expandMap(page, fr);
   await fr.locator('#tmhero').waitFor({ state: 'visible' });
   assert.equal(await heroStem(fr), epicStem, `${tag}: reopen restores the focus`);
   assert.equal(graphReqs, before, `${tag}: reopen sends no request`);
@@ -402,8 +436,9 @@ async function overlaySession(browser, theme, W, H, narrow) {
   assert.equal(await isOpen(fr), true);
   await page.keyboard.press('Escape');
   assert.equal(await isOpen(fr), false, `${tag}: a further Esc closes the overlay`);
-  assert.equal(await fr.locator('#thandle').getAttribute('aria-expanded'), 'false');
-  assert.equal(await fr.evaluate(() => document.activeElement && document.activeElement.id), 'thandle', `${tag}: focus returns to #thandle`);
+  assert.equal(await fr.locator('#tmexpand').getAttribute('aria-expanded'), 'false');
+  assert.equal(await fr.evaluate(() => !!document.querySelector('#tmdock > .d-tm-root')), true, `${tag}: the root docks back`);
+  assert.equal(await fr.evaluate(() => document.activeElement && document.activeElement.id), 'tmexpand', `${tag}: focus returns to ⤢ in the dock`);
   assert.equal(await fr.evaluate(() => !!document.querySelector('.drawer.open')), false, `${tag}: the drawer state is unchanged`);
   assert.deepEqual(await fr.evaluate(() => window.__tmleak), [], `${tag}: no key reached the page`);
   await page.waitForFunction(() => !document.documentElement.hasAttribute('data-fdim'));
@@ -413,7 +448,7 @@ async function overlaySession(browser, theme, W, H, narrow) {
     const nt = `${theme}/900x700`;
     await page.setViewportSize({ width: 900, height: 700 });
     await page.waitForTimeout(200);
-    await fr.locator('#thandle').click();
+    await expandMap(page, fr);
     await fr.locator('#tmvb .d-tm-mx').waitFor();
     await raf2(fr);
     assert.deepEqual(await overflow(fr), { doc: 0, vb: 0 }, `${nt}: no horizontal overflow in the matrix`);
@@ -440,13 +475,14 @@ async function overlaySession(browser, theme, W, H, narrow) {
 
   if (W === 1600) {
     async function prepare() {
+      await showDock(page, fr);
       await fr.evaluate(() => {
         const field = document.getElementById('ctext');
         field.value = 'before after';
         field.focus();
         field.setSelectionRange(7, 7);
       });
-      await fr.locator('#thandle').click();
+      await fr.locator('#tmexpand').click();
       if (await fr.locator('#tmfback').isVisible()) await fr.locator('#tmfback').click();
     }
     async function mentionFrom(selector, stem) {

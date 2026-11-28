@@ -135,26 +135,20 @@ func TestSearchPaletteChromeDeletions(t *testing.T) {
 func TestSearchPaletteHandleGeometry(t *testing.T) {
 	room := dashboardJSBlock(t, "\n  function drRoom() {", "\n  // drFoldShow")
 	runTrackerNode(t, "search handle geometry", `
-var bad = [], props = {}, drHas = true, drRoomW = -1, drGhOff = -1, drFoldW = -1, drFoldGw = -1;
+var bad = [], props = {}, drRoomW = -1, room = null;
 function check(label, got, want) { if (got !== want) bad.push(label + ': ' + got + ' != ' + want); }
-var width = 178, git = 90, search = 35;
-var drhandle = { getBoundingClientRect: function () { return { width: width }; } };
-var gitRegion = { getBoundingClientRect: function () { return { width: git }; } };
+var search = 35;
 var shandle = { getBoundingClientRect: function () { return { width: search }; } };
-var thandle = null;
-function ghandle() { return git ? {} : null; }
-var drheader = { classList: { toggle: function () {} } };
+var drheader = { classList: { toggle: function (k, on) { room = on; } } };
 var doc = { documentElement: { style: { setProperty: function (k, v) { props[k] = v; } } } };
 `+room+`
-[178, 80].forEach(function (w) {
-  width = w; drRoom();
-  check('search immediately left of panels', props['--shr'], (w + 6) + 'px');
-  check('git left of search', props['--ghr'], (w + 6 + search + 6) + 'px');
-  check('header reserves all three handles', props['--drhw'], (w + 6 + search + 6 + git) + 'px');
-});
-drHas = false; git = 0; drRoom();
-check('search alone starts at the right edge', props['--shr'], '0px');
-check('search alone reserves its width', props['--drhw'], '35px');
+drRoom();
+check('search sits at the right edge', props['--shr'], '0px');
+check('the retired git handle writes no offset', props['--ghr'], undefined);
+check('the header reserves the search handle', props['--drhw'], '35px');
+check('the header makes room', room, true);
+search = 40; drRoom();
+check('a wider handle widens the reserve', props['--drhw'], '40px');
 process.stdout.write(bad.join("\n"));
 `)
 }

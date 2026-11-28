@@ -127,6 +127,7 @@ test("stageFill: hydration, toggle persistence, storage sync, and frame/shell he
     STAGE_FILL_KEY: "ws.dashboard.stageFill",
     layoutMode: "auto",
     inputMode: "enter",
+    extraMotion: false,
     framed: true,
     galNarrow: true,
     root,
@@ -180,7 +181,7 @@ test("stageFill: hydration, toggle persistence, storage sync, and frame/shell he
   assert.equal(galleryQueued, 1);
   assert.deepEqual(JSON.parse(JSON.stringify(posted[0])), {
     kind: "settings",
-    body: { layout: "auto", input: "enter", stageFill: false }
+    body: { layout: "auto", input: "enter", stageFill: false, extraMotion: false }
   });
 
   // Shell mirrors head.side = 120 when stageFill is off.
@@ -201,7 +202,7 @@ test("stageFill: hydration, toggle persistence, storage sync, and frame/shell he
   assert.deepEqual(JSON.parse(JSON.stringify(sentToFrames[0])), {
     ent: frameA,
     kind: "settings",
-    body: { layout: "auto", input: "enter", stageFill: true }
+    body: { layout: "auto", input: "enter", stageFill: true, extraMotion: false }
   });
   sandbox.shHead({ head: { html: "", qs: "", pad: 0, top: 44, side: 0 } });
   assert.equal(topProps.get("--sh-stage-side"), "");

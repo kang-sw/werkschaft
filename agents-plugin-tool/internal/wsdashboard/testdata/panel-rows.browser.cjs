@@ -115,8 +115,12 @@ for (const address of [base, updates]) {
       assert.equal(events.length, 1); assert.equal(events[0].event, 'panel-rows');
       assert.deepEqual(events[0].data.rows.map(r => r.key), keys);
     };
-    await frame.locator('#drhandle').click();
-    await frame.waitForFunction(() => document.getElementById('drhandle').getAttribute('aria-expanded') === 'true');
+    // The panels region lives in the gallery's Workpanel page (#wpdock).
+    await frame.locator('#bgal .gal-dot.sys[data-sys="workpanel"]').click();
+    await frame.waitForFunction(() => {
+      const panels = document.getElementById('r-panels'), root = document.getElementById('wproot');
+      return root && !root.hidden && document.getElementById('wpdock')?.contains(panels) && document.getElementById('p-agenda').getBoundingClientRect().height > 0;
+    });
     const step = frame.locator('#p-agenda details[data-key="agenda/plan/step"]');
     assert.equal(await step.evaluate(n => n.open), false, 'nested disclosure initially closed');
     // This real summary click is the required regression: open a closed
@@ -216,17 +220,15 @@ for (const address of [base, updates]) {
     assert(await step.evaluate(n => n.open), 'full fallback retains nested open state');
     assert.equal(await other.evaluate(n => n.open), false, 'full fallback retains nested closed state');
     assert(await frame.evaluate(() => panelRefs.board.isConnected && panelRefs.entries.isConnected && panelFrameLoads === 0 && panelRefs.frames.every((n, i) => n.isConnected && n.contentWindow === panelRefs.windows[i])), 'unaffected page and frames survive full panel fallback');
-    await frame.locator('#drfold').click();
-    await frame.waitForFunction(() => document.getElementById('drhandle').getAttribute('aria-expanded') === 'false');
     oldHash = await hash();
     // Returning from the injected shell also takes a full event; the next
     // stable-shell update must resume changed-card transport.
-    assert.equal((await update('agenda', 'closed drawer agenda'))[0].event, 'region'); await waitHash(oldHash);
-    assert(await frame.locator('#drhandle .tdot').evaluate(n => n.classList.contains('on')), 'closed drawer marks panel update');
-    await frame.locator('#drhandle').click();
-    await frame.waitForFunction(() => document.getElementById('drhandle').getAttribute('aria-expanded') === 'true');
-    assert.equal(await frame.locator('#drhandle .tdot').evaluate(n => n.classList.contains('on')), true, 'pending todo badge remains independent of swap badge');
-    assert(await step.evaluate(n => n.open), 'drawer lifecycle retains nested fold');
+    assert.equal((await update('agenda', 'returned shell agenda'))[0].event, 'region'); await waitHash(oldHash);
+    // The drawer's card body is retired (261128): panels live in the
+    // Workpanel and no drawer card body exists to hold them.
+    assert.equal(await frame.evaluate(() => document.getElementById('drbody')), null, 'the retired drawer card body stays gone');
+    assert.equal(await frame.evaluate(() => !!document.getElementById('r-panels').closest('#drawer')), false, 'panels stay out of the drawer');
+    assert(await step.evaluate(n => n.open), 'workpanel lifecycle retains nested fold');
 
     const count = events.length;
     await frame.evaluate(() => {
@@ -244,11 +246,11 @@ for (const address of [base, updates]) {
     await frame.locator('#p-agenda > summary').click();
     assert(await frame.locator('#p-agenda').evaluate(n => n.open), 'top-level summary is deliberately not a user toggle');
     // Disturb native state explicitly, rather than inventing a user-close
-    // affordance that the drawer intentionally prevents.
+    // affordance that the Workpanel intentionally prevents.
     await frame.locator('#p-agenda').evaluate(n => new Promise(resolve => { n.addEventListener('toggle', resolve, { once: true }); n.open = false; }));
     assert.equal(await frame.locator('#p-agenda').evaluate(n => n.open), false, 'native state disturbed before swap');
     oldHash = await hash(); delta(await update('agenda', 'native panel policy'), ['p-agenda']); await waitHash(oldHash);
-    assert(await frame.locator('#p-agenda').evaluate(n => n.open), 'drawerSync overrides top-level closed state');
+    assert(await frame.locator('#p-agenda').evaluate(n => n.open), 'wpSync overrides top-level closed state');
     assert(await step.evaluate(n => n.open), 'top-level policy does not override nested user-open fold');
     assert.equal(await other.evaluate(n => n.open), false, 'top-level policy does not override nested user-closed fold');
     assert.deepEqual(errors, [], 'no page errors'); assert.deepEqual(unexpected, [], 'no external requests');

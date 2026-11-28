@@ -397,22 +397,34 @@ func TestGitDrawerRoutes(t *testing.T) {
 }
 
 // TestGitPanelCompactActionsAndCleanState pins the git panel's look: the
-// fetch, pull, and push buttons are chip-sized, and a clean tree shows a
-// quiet empty state centred in the change list's room instead of a list
-// line.
+// fetch, pull, and push buttons are square icon-only strip actions at every
+// width (no rule hides their icon), and the working tree has no change list
+// of its own: a dirty tree is one dashed row above HEAD in the graph, and a
+// clean tree draws no row at all.
 func TestGitPanelCompactActionsAndCleanState(t *testing.T) {
 	css, js := mustAsset(t, "dashboard.css"), mustAsset(t, "dashboard.js")
 	for _, want := range []string{
-		".gact { height: 20px; padding: 0 9px; gap: 3px; font-size: 12px; }",
-		".gfiles.clean { align-content: center; justify-items: center; }",
+		".gp-page .gact, .gp-wtbtn { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 4px; width: 24px; height: 24px; padding: 0;",
+		".gp-page .gact .i, .gp-wtbtn .i { width: 14px; height: 14px; }",
+		".glsvg circle.wt { fill: var(--wb-card); stroke-width: 1.6; stroke-dasharray: 2.4 1.8; }",
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("the stylesheet lacks %q", want)
 		}
 	}
-	for _, want := range []string{`gfiles.classList.toggle("clean", !any);`, `var clean = mk("div", "gclean");`, `clean.appendChild(mk("span", "", wsT("js.git.clean")));`} {
+	for _, gone := range []string{".gp-page .gact .i { display: none; }", ".gfiles", ".gclean", ".gp-tab", ".gp-regions"} {
+		if strings.Contains(css, gone) {
+			t.Errorf("the stylesheet still carries %q", gone)
+		}
+	}
+	for _, want := range []string{`row.setAttribute("data-worktree", "1");`, "function glWtRow(c)", "function glWtSync(v)", `if (sig === was) return;`, `if (row.hasAttribute("data-worktree")) glWtOpen();`} {
 		if !strings.Contains(js, want) {
 			t.Errorf("the page script lacks %q", want)
+		}
+	}
+	for _, gone := range []string{"gfiles", "gclean", "js.git.clean", "gpWtLight", "gpNarrow"} {
+		if strings.Contains(js, gone) {
+			t.Errorf("the page script still carries %q", gone)
 		}
 	}
 }

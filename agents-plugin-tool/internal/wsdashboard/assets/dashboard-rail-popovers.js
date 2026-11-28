@@ -389,6 +389,7 @@
     var r = region("rail"), h = region("head"), found = null;
     if (rp.kind === "settings") found = (botBarEl && botBarEl.querySelector(".settings-toggle")) || (railEl && railEl.querySelector(".settings-toggle"));
     else if (rp.kind === "usage") found = (botBarEl && botBarEl.querySelector(".usage-toggle")) || (topEl && topEl.querySelector(".usage-toggle"));
+    else if (rp.kind === "holders") found = botBarEl && botBarEl.querySelector(".hd-trigger");
     else if (rp.kind === "sess") found = h && h.querySelector(".host.hbtn");
     else if (rp.kind === "row" || rp.kind === "confirm") {
       var row = r && WsRail.refind(r, { cls: "rs", attr: "data-rid", val: rp.ws });
@@ -430,6 +431,7 @@
     var a = b.getBoundingClientRect();
     var vw = root.clientWidth || window.innerWidth, vh = root.clientHeight || window.innerHeight;
     if (botBarEl && botBarEl.contains(b)) {
+      if (rp.kind === "holders") { hdPlace(el, a, vw, vh); return; }
       var m = 8, gap = 6;
       var maxH = Math.max(120, Math.floor(a.top - gap - m));
       el.style.maxHeight = maxH + "px";
@@ -696,8 +698,9 @@
     railPopPlace();
     P.focus();
   }
-  // railPopOpen opens kind's popover ("ws", "wt", "lead": a new session, or
-  // "sess": the viewed session's menu) against the button btn; the open
+  // railPopOpen opens kind's popover ("ws", "wt", "lead": a new session,
+  // "sess": the viewed session's menu, or a bottom-bar popover: "settings",
+  // "usage", "holders") against the button btn; the open
   // popover's own button closes it instead.
   function railPopOpen(kind, btn) {
     var bar = btn.closest(".rws"), ws = rpKey(kind, btn);
@@ -708,7 +711,7 @@
       open: function () { root.setAttribute("data-settings-open", ""); setLayout(layoutMode); setInput(inputMode); markTheme(); markLang(); },
       close: function () { root.removeAttribute("data-settings-open"); },
       focus: function () { gmenu.focus(); }
-    } : kind === "fold" ? rpFold || (rpFold = rpFoldMake()) : kind === "usage" ? rpUsage || (rpUsage = usageGutter.makePopover(railPopPlace, function () { railPopClose(true); })) : kind === "wt" ? rpWt || (rpWt = rpWtMake()) : kind === "lead" ? rpLead || (rpLead = rpLeadMake()) : kind === "sess" ? rpSess || (rpSess = rpSessMake()) : rpWs || (rpWs = rpWsMake());
+    } : kind === "holders" ? hdPop() : kind === "fold" ? rpFold || (rpFold = rpFoldMake()) : kind === "usage" ? rpUsage || (rpUsage = usageGutter.makePopover(railPopPlace, function () { railPopClose(true); })) : kind === "wt" ? rpWt || (rpWt = rpWtMake()) : kind === "lead" ? rpLead || (rpLead = rpLeadMake()) : kind === "sess" ? rpSess || (rpSess = rpSessMake()) : rpWs || (rpWs = rpWsMake());
     if (kind === "lead") railPopScrim(true);
     // The fold popup lives in the rail (outside its swapped region), so the
     // rail's row styles and click handling reach its rows.
@@ -1478,7 +1481,7 @@
       var t = e.target;
       if (rdrag || rdragged || !rp.P || !t || !t.closest) return;
       if (window.WsHoldConfirm && (window.WsHoldConfirm.isHolding() || window.WsHoldConfirm.wasJustCancelled())) return;
-      if (rp.P.el.contains(t) || t.closest(".radd, .rnew, .rfh, .hbtn, .usage-toggle, .settings-toggle, .pmdlg, .pmhead")) return;
+      if (rp.P.el.contains(t) || t.closest(".radd, .rnew, .rfh, .hbtn, .usage-toggle, .settings-toggle, .hd-trigger, .pmdlg, .pmhead")) return;
       railPopClose(false);
     }, true);
     // A press inside an iframe never reaches the listener above (the shell's

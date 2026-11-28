@@ -8,6 +8,7 @@ function readAssetSource(pkg, name) {
     'wsdashboard/dashboard.js': ['pages.go', 'dashboardScriptFiles'],
     'wsdashboard/dashboard.css': ['pages.go', 'dashboardStyleFiles'],
     'wsdashboard/tracker.js': ['pages.go', 'trackerScriptFiles'],
+    'wsdashboard/usage.js': ['pages.go', 'usageScriptFiles'],
     'wswhiteboard/page.css': ['render.go', 'pageStyleFiles'],
     'wswhiteboard/stream.js': ['render.go', 'pageStreamFiles'],
   };

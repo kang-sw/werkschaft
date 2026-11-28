@@ -226,6 +226,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	if err := d.refreshCompanion(); err != nil {
 		fmt.Fprintf(logw, "dashboard: load companion settings: %v\n", err)
 	}
+	d.openCompanionMessengerRing()
 	if d.clipboard == nil {
 		d.clipboard = newNativeClipboardWriter()
 	}
@@ -255,6 +256,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		d.planUsage.resolveAgy = opts.AgyCommand
 		d.planUsage.onAgyChange = d.accountChanged
 		d.planUsage.harnesses = opts.Harnesses
+		d.planUsage.seedSlots()
 	}
 	d.cache = newPageCache(d.broker, stats)
 	d.foreign = newForeignSchedule(opts.foreignInterval, opts.MailWake)

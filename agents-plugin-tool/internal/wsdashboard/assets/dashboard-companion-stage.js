@@ -14,6 +14,17 @@
   const railRowSelector = ".rs[data-rid]";
   let mountedRailObserver, mountedStage = null;
 
+  // phoneSnapNewer reports whether companion phone snapshot next may replace
+  // prev: a different daemon epoch (a restarted daemon restarts seq) or a seq
+  // no older than prev's. Snapshots without seq are accepted.
+  function phoneSnapNewer(prev, next) {
+    if (!prev || !next) return !!next;
+    if ((prev.epoch || 0) !== (next.epoch || 0)) return true;
+    const a = Number(prev.seq), b = Number(next.seq);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return true;
+    return b >= a;
+  }
+
   function railSignals() {
     let rows = new Map();
 
@@ -299,6 +310,10 @@
     let home = { x: 60, y: 96 }, arrived = false, custom = null, drag = null, suppressClick = false;
     let vrmPointer = null, lastVrmPointer = null, hitArea = "";
     let companionHover = false;
+    let latestPhoneSnap = null;
+    // Phone gesture received while no rig was mounted; replayed after the
+    // latest phone snapshot once a rig mounts unless a newer snapshot came.
+    let pendingPhoneGesture = "";
     const wideMq = typeof window.matchMedia === "function" ? window.matchMedia("(min-width: 1600px)") : null;
     const physics = { swing: 0, swingVel: 0 };
     const beatOrigin = { x: 0, y: 0 };
@@ -351,6 +366,7 @@
       model = pack;
       sharedPack = shared || null;
       rig = next;
+      replayPhoneToRig();
       runner = C.scenarioRunner(pack.manifest.scenarios);
       timing = C.timing(pack.manifest);
       if (now - switchedAt < 900) runner.fire("route.switch", switchedAt, guards);
@@ -448,8 +464,17 @@
       requestPack();
     }
 
-    let latestPhoneSnap = null;
     const knockTimers = new Set();
+
+    function replayPhoneToRig() {
+      if (!rig) return;
+      if (latestPhoneSnap) rig.setPhoneState?.(latestPhoneSnap);
+      if (pendingPhoneGesture) {
+        const g = pendingPhoneGesture;
+        pendingPhoneGesture = "";
+        if (isVrm()) rig.triggerGesture?.(g);
+      }
+    }
 
     function spawnKnockFx(clientX, clientY, label) {
       if (!knockFxLayer) return;
@@ -492,9 +517,18 @@
 
     function phoneState(snap) {
       if (!C.record(snap)) return;
+      // Monotonic seq guard: a late HTTP /thread or /mark-read answer carrying
+      // an older phone_active snapshot never overwrites a newer putdown/idle.
+      if (!phoneSnapNewer(latestPhoneSnap, snap)) return;
       latestPhoneSnap = snap;
       updateUnreadBadge(snap.unreadClient || 0);
-      rig?.setPhoneState?.(snap);
+      if (rig?.setPhoneState) {
+        rig.setPhoneState(snap);
+      } else if (pendingPhoneGesture) {
+        // A newer authoritative phone snapshot supersedes a phone gesture
+        // buffered while no rig was mounted.
+        pendingPhoneGesture = "";
+      }
       if (isVrm() && vrmRailVisible && (snap.state === "phone_active" || (snap.unreadAgent || 0) > 0 || snap.phoneFaceDown)) {
         markVrmActivity();
         schedule();
@@ -505,8 +539,17 @@
     // rules engine until its TTL ends. Wildcard "*" targets the active shell
     // companion regardless of focused session tab (used by phone/MCP tools).
     function command(payload) {
-      if (!rig || !C.record(payload)) return false;
+      if (!C.record(payload)) return false;
       if (payload.sessionId !== "*" && (!activeRid || payload.sessionId !== activeRid)) return false;
+      if (!rig) {
+        // Buffer phone choreography until a rig mounts so pickup/putdown are
+        // never dropped while the pack loads.
+        if (typeof payload.gesture === "string" && payload.gesture.startsWith("phone_")) {
+          pendingPhoneGesture = payload.gesture;
+          return true;
+        }
+        return false;
+      }
       const directed = C.directedCommand(payload, model, sharedPack, runner);
       if (isVrm() && typeof payload.gesture === "string" && payload.gesture) {
         rig.triggerGesture?.(payload.gesture);
@@ -1566,6 +1609,7 @@
         },
         openSettings: openSettings || null,
         onOpenChange(isOpen) {
+          C.messengerPresence?.set?.(isOpen);
           chatBtn.setAttribute("aria-expanded", isOpen ? "true" : "false");
           chatBtn.setAttribute("aria-pressed", isOpen ? "true" : "false");
           if (isVrm() && vrmRailVisible) {
@@ -1626,6 +1670,7 @@
         for (const tid of knockTimers) clearTimeout(tid);
         knockTimers.clear();
         window.WsCompanionMessenger?.dispose?.();
+        C.messengerPresence?.set?.(false);
         cancel.abort();
         frameInput?.abort();
         cancelAnimationFrame(frame);
@@ -1645,7 +1690,7 @@
   }
 
   const vrmSetRenderMode = C.setVrmRenderMode;
-  Object.assign(C, { mount, railSignals, signalPairs, resizeControl,
+  Object.assign(C, { mount, railSignals, signalPairs, resizeControl, phoneSnapNewer,
     debugStage() { return mountedStage?.debugState?.() || null; },
     setVrmRenderMode(mode) { return mountedStage ? mountedStage.setVrmRenderMode(mode) : (vrmSetRenderMode?.(mode) ?? "docked"); },
     phoneState(snap) { mountedStage?.phoneState?.(snap); },

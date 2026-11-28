@@ -302,6 +302,7 @@ func newCompanionFixtureWithConfig(t *testing.T, cfg wsdashboard.CompanionConfig
 	agents.SetEndpoint(fmt.Sprintf("http://127.0.0.1:%d", ep.Port))
 	daemon.SetCompanionHolderAlive(rt.IsHolderAlive)
 	daemon.SetCompanionWake(rt.OnUserWake)
+	daemon.SetCompanionMessengerClosed(rt.OnMessengerClosed)
 
 	// Mint the dashboard localhost session cookie via the documented machine auth route.
 	cookieReq, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/auth/cookie", ep.Port), nil)
@@ -649,12 +650,18 @@ func TestCompanionRuntimeEndToEndTrivialWorkCapabilitiesAndHiding(t *testing.T) 
 
 	// --- (d) Capability tests over tools/list + tools/call on REAL minted keys ---
 	bodyTools := f.listTools(bodyKey)
-	for _, forbidden := range []string{"config.tune", "git.commit", "git.merge", "tickets.close", "exec.shell", "agent.spawn", "delegation.report", "daemon.curl", "daemon.tabs", "daemon.dom", "daemon.ui", "daemon.screenshot"} {
+	for _, forbidden := range []string{"config.tune", "git.commit", "git.merge", "tickets.close", "exec.shell", "agent.spawn", "delegation.report", "daemon.curl", "daemon.ui", "daemon.screenshot"} {
 		if bodyTools[forbidden] {
 			t.Fatalf("(d) companion-body tools/list exposed forbidden tool %q", forbidden)
 		}
 		if _, _, rpcErr := f.callTool(bodyKey, forbidden, map[string]any{"session_key": bodyKey}); rpcErr == "" {
 			t.Fatalf("(d) companion-body reached forbidden tool %q", forbidden)
+		}
+	}
+	// The interactive guide subset of ws/daemon.* is the body's own.
+	for _, wantGuide := range []string{"daemon.tabs", "daemon.dom", "daemon.highlight", "daemon.monitor"} {
+		if !bodyTools[wantGuide] {
+			t.Fatalf("(d) companion-body tools/list missing guide tool %q", wantGuide)
 		}
 	}
 	workTools := f.listTools(workKey)
@@ -669,7 +676,7 @@ func TestCompanionRuntimeEndToEndTrivialWorkCapabilitiesAndHiding(t *testing.T) 
 	if !workTools["delegation.report"] {
 		t.Fatal("(d) companion-work tools/list missing delegation.report")
 	}
-	for _, wantDaemon := range []string{"daemon.curl", "daemon.tabs", "daemon.dom", "daemon.ui", "daemon.screenshot"} {
+	for _, wantDaemon := range []string{"daemon.curl", "daemon.tabs", "daemon.dom", "daemon.ui", "daemon.screenshot", "daemon.highlight", "daemon.monitor"} {
 		if !workTools[wantDaemon] {
 			t.Fatalf("(d) companion-work tools/list missing auto-granted %q", wantDaemon)
 		}
@@ -1702,8 +1709,8 @@ ko
 				t.Fatalf("Tier-1 launch instructions missing %q:\n%s", want, bodyProcs[0].instructions)
 			}
 		}
-		// Per-wake delivery must carry delimiter-safe <<<SOUL>>> / <<<MOOD>>> / <<<RECALL>>> blocks.
-		if strings.Count(wake1, "<<<") != 6 || strings.Count(wake1, ">>>") != 6 {
+		// Per-wake delivery must carry delimiter-safe <<<SOUL>>> / <<<MOOD>>> / <<<ACTIONS>>> / <<<RECALL>>> blocks.
+		if strings.Count(wake1, "<<<") != 8 || strings.Count(wake1, ">>>") != 8 {
 			t.Fatalf("wake 1 delimiter count broken (<<<=%d >>>=%d):\n%s", strings.Count(wake1, "<<<"), strings.Count(wake1, ">>>"), wake1)
 		}
 		for _, want := range []string{"<<<SOUL>>>", "Dry-witted orbital copilot", "User prefers short bullet summaries", "<<<MOOD>>>", "last_signal: user_message", "<<<RECALL>>>", "Earlier discussion about how is the refactor looking?"} {

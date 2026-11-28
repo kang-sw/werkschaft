@@ -10,12 +10,12 @@ import (
 	"github.com/kang-sw/devenv/internal/wslive"
 )
 
-var _ auditSource = (*agyMapper)(nil)
-
 // Bound the unredacted assembly even when every individual fence fits.
 const agyThoughtCaptureBytes = 1 << 20
 
-func (*agyMapper) newAudit(sessionID string) (string, auditAdapter) {
+// newAudit is the agy dialect's audit adapter, which acpMapper.newAudit
+// returns as the mapper's auditSource.
+func (agyDialect) newAudit(sessionID string) (string, auditAdapter) {
 	return BackendAgy, &agyAudit{session: sessionID, openTools: make(map[string]string)}
 }
 
@@ -45,7 +45,7 @@ func (a *agyAudit) env(kind wsaudit.Kind, at time.Time) wsaudit.Envelope {
 }
 
 func (a *agyAudit) mapLine(line []byte, at time.Time) (bool, []auditEvent, []auditEvent) {
-	var msg agyMessage
+	var msg acpMessage
 	if json.Unmarshal(line, &msg) != nil {
 		return false, a.finishThought(false), nil
 	}
@@ -76,7 +76,7 @@ func (a *agyAudit) mapLine(line []byte, at time.Time) (bool, []auditEvent, []aud
 }
 
 type agyAuditUpdate struct {
-	agyUpdate
+	acpSessionUpdate
 	RawInput json.RawMessage `json:"rawInput"`
 }
 
@@ -169,7 +169,7 @@ func (a *agyAudit) tool(u agyAuditUpdate, at time.Time) []auditEvent {
 	var out []auditEvent
 	if !started {
 		call := a.env(wsaudit.KindToolCall, at)
-		call.Subkind, call.CallID, call.In = name, id, agyAuditBody(u.Args, u.RawInput)
+		call.Subkind, call.CallID, call.In = name, id, acpAuditBody(u.Args, u.RawInput)
 		out = append(out, auditEvent{key: agyAuditToolKey("call", id), ev: call})
 		if native {
 			start := a.nativeLaunch("launch_started", id, at)
@@ -186,7 +186,7 @@ func (a *agyAudit) tool(u agyAuditUpdate, at time.Time) []auditEvent {
 	if done {
 		delete(a.openTools, id)
 		result := a.env(wsaudit.KindToolResult, at)
-		result.Subkind, result.CallID, result.Out = name, id, agyAuditBody(u.RawOutput, u.Content)
+		result.Subkind, result.CallID, result.Out = name, id, acpAuditBody(u.RawOutput, u.Content)
 		setMeta(&result, "status", u.Status)
 		// Reserve slot 0 for a call without an ID on this same record.
 		out = append(out, auditEvent{slot: 1, ev: result})
@@ -215,16 +215,6 @@ func (a *agyAudit) nativeLaunch(subkind, callID string, at time.Time) wsaudit.En
 	ev := a.env(wsaudit.KindSubagent, at)
 	ev.Subkind, ev.AgentID, ev.ParentID = subkind, wslive.NativeAgyPrefix+callID, callID
 	return ev
-}
-
-func agyAuditBody(raw, fallback json.RawMessage) string {
-	if len(raw) == 0 || string(raw) == "null" {
-		raw = fallback
-	}
-	if string(raw) == "null" {
-		return ""
-	}
-	return compactJSON(raw)
 }
 
 func (a *agyAudit) finishThought(ending bool) []auditEvent {

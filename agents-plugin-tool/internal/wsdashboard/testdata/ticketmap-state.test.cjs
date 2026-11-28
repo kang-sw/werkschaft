@@ -218,6 +218,21 @@ test('Esc layering: the first match wins', () => {
   assert.equal(step({ view: 'B', kw: true, sel: 3 }), 'close', 'View C layers do not apply in B');
 });
 
+test('Esc layering in the docked pane: the sheet closes first and the pane never closes', () => {
+  const base = { full: false, pop: false, inQuery: false, query: '', view: 'B', ego: false, kw: false, sel: null, focus: false, sheet: false, docked: true };
+  const step = o => ctx.tmEscStep(Object.assign({}, base, o));
+  assert.equal(step({ full: true, sheet: true }), 'full');
+  assert.equal(step({ pop: true, sheet: true }), 'pop');
+  assert.equal(step({ inQuery: true, query: 'x', sheet: true }), 'query');
+  assert.equal(step({ sheet: true, focus: true }), 'sheet', 'an open sheet closes before View B unfocuses');
+  assert.equal(step({ view: 'C', sheet: true, ego: true, kw: true, sel: 2 }), 'sheet', 'an open sheet closes before View C layers');
+  assert.equal(step({ focus: true }), 'unfocus');
+  assert.equal(step({ view: 'C', sel: 2 }), 'deselect');
+  assert.equal(step({}), 'none', 'the docked pane has nothing to close: Esc passes through');
+  assert.equal(step({ view: 'C' }), 'none');
+  assert.equal(step({ docked: false }), 'close', 'the expanded #tmback still closes');
+});
+
 test('the preview renderer escapes everything first', () => {
   const md = ctx.tmMd;
   assert.equal(md('## Goal <b>\n### Sub\n###### Deep'), '<h4>Goal &lt;b&gt;</h4><h5>Sub</h5><h5>Deep</h5>');

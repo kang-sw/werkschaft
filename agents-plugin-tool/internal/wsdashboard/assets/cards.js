@@ -72,6 +72,8 @@
   // gallery's clipped viewport.
   var doc = document, G = window.WsGallery;
   var BASE = 260, MIN = 72, STEP = 24, PINW_MIN = 280, BOARDW_MIN = 400, CONVW_MIN = 320, SPLITB_MIN = 360;
+  var BGAL_W_KEY = "ws.dashboard.bgal.w", BGAL_SYS_KEY = "ws.dashboard.bgal.sys";
+  var BGAL_W_DEF = 540, BGAL_W_MIN = 350, BGAL_W_MAX = 720;
   // A press drags past SLOP px; a touch drags after holding HOLD ms (the
   // session rail's drag thresholds), and EDGE px from a list's edge scrolls it.
   var SLOP = 5, HOLD = 380, EDGE = 28;
@@ -79,15 +81,16 @@
   // gal is the gallery's model (WsGallery), lay the layout the page shows
   // it in (WsGallery.layout; null before mount). galEl is the gallery's
   // element: a width handle, the dot rail (railEl, its dots in dotsEl) and
-  // the clipped viewport (viewEl) holding one slide per page (pageEls by
-  // page id) and the + page (plusEl); panes (paneEls by reference) and
-  // splits (splitEls by page id and path, their dividers divEls) are kept
-  // so a unit's node keeps its pane. boardw is the board's width beside
-  // the column as the user dragged it, convow the conversation's beside
-  // the board (0: the stylesheet's).
+  // the clipped viewport (viewEl) holding one slide per user page (pageEls by
+  // page id), the + page (plusEl), and fixed system pages (sysPageEls by id);
+  // panes (paneEls by reference) and splits (splitEls by page id and path,
+  // their dividers divEls) are kept so a unit's node keeps its pane. bgalW is
+  // the gallery's global stored width (350-720px, --bgal-w), convow the
+  // conversation's beside the board (0: the stylesheet's).
   var gal = null, lay = null, galEl = null, railEl = null, dotsEl = null, viewEl = null, plusEl = null;
+  var sepEl = null, sysGroupEl = null, sysPageEls = {}, sysActive = null, storedSys = null, galListeners = [];
   var pageEls = {}, paneEls = {}, splitEls = {}, divEls = {}, dotEls = {}, railWheel = new G.RailWheel(), rg = null, railMoved = false, resizeBound = false;
-  var boardw = 0, convow = 0;
+  var bgalW = BGAL_W_DEF, bgalRaf = 0, convow = 0;
   var toolbar = null, overviewOn = false;
   var stateFilter = "all", stateUI = null;
   var toolbarFit = { width: 0, actsWidth: 0, contentSig: "", probing: false, modes: ["", "compact", "dropdown", "tight"] };
@@ -982,14 +985,149 @@
     });
     if (refs.length > 5) b.appendChild(mk("span", "gal-dot-more", "+" + (refs.length - 5)));
   }
-  // paintGallery draws the rail (the narrow view's home dot, a capsule per
-  // page with up to five item icons, the + dot; real buttons kept across repaints)
+  var SYS_META = {
+    workpanel: {
+      title: "Workpanel",
+      sub: "Todo · Agenda · Notes · Manuals",
+      svg: '<rect x="3" y="3" width="7" height="7" rx="1.2"/><rect x="14" y="3" width="7" height="7" rx="1.2"/><rect x="14" y="14" width="7" height="7" rx="1.2"/><rect x="3" y="14" width="7" height="7" rx="1.2"/>'
+    },
+    ticketmap: {
+      title: "Ticket Map",
+      sub: "Hierarchy · Graph · Inspector",
+      svg: '<circle cx="12" cy="5" r="2.2"/><circle cx="5.5" cy="18" r="2.2"/><circle cx="18.5" cy="18" r="2.2"/><path d="M10.9 6.9 6.6 16.1M13.1 6.9l4.3 9.2M7.7 18h8.6"/>'
+    },
+    git: {
+      title: "Git",
+      sub: "Graph · Diff · Worktrees",
+      svg: '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>'
+    }
+  };
+  function sysSvg(id) {
+    var m = SYS_META[id];
+    return '<svg class="gal-dot-icon" viewBox="0 0 24 24" aria-hidden="true">' + (m ? m.svg : "") + '</svg>';
+  }
+  function loadSysActive() {
+    var v = opt && opt.load ? opt.load(BGAL_SYS_KEY) : null;
+    return G.sysIndex(v) >= 0 ? v : null;
+  }
+  function saveSysActive(id) {
+    if (opt && opt.save) opt.save(BGAL_SYS_KEY, G.sysIndex(id) >= 0 ? id : null);
+  }
+  function curPos() {
+    var narrow = !!(lay && lay.narrow);
+    return G.position(gal, narrow, narrow ? sysActive : (sysActive || storedSys || G.DEFAULT_SYS));
+  }
+  function pageElAt(p) {
+    var n = gal.pages.length;
+    if (p < 0) return null;
+    if (p < n) return pageEls[gal.pages[p].id] || null;
+    if (p === n) return plusEl;
+    var sys = G.sysAt(gal, p);
+    return sys ? sysPageEls[sys] || null : null;
+  }
+  function notifyGalChange(reason) {
+    var pos = curPos(), sys = G.sysAt(gal, pos);
+    galListeners.slice().forEach(function (fn) {
+      try { fn({ reason: reason, pos: pos, sys: sys, narrow: !!(lay && lay.narrow), width: bgalW }); } catch (e) {}
+    });
+  }
+  function buildSysPages() {
+    function makeScaffold(id, badgeText, badgeCls, bannerText, bodyEl, jumpLabel) {
+      var pg = mk("div", "gal-page gal-sys-page");
+      pg.setAttribute("data-page", id);
+      pg.setAttribute("data-page-panel", id);
+      var shell = mk("div", "gal-sys-shell");
+      var hd = mk("div", "gal-sys-head");
+      var row = mk("div", "gal-sys-title-row");
+      var ic = mk("span", "gal-sys-icon");
+      ic.innerHTML = sysSvg(id);
+      var meta = mk("div", "gal-sys-meta");
+      meta.appendChild(mk("h3", "gal-sys-h", SYS_META[id].title));
+      meta.appendChild(mk("p", "gal-sys-sub", SYS_META[id].sub));
+      var badge = mk("span", "gal-sys-badge " + badgeCls, badgeText);
+      row.appendChild(ic); row.appendChild(meta); row.appendChild(badge);
+      hd.appendChild(row);
+      if (bannerText) {
+        var ban = mk("div", "gal-sys-banner");
+        ban.appendChild(mk("span", "gal-sys-bdot"));
+        ban.appendChild(mk("span", "", bannerText));
+        hd.appendChild(ban);
+      }
+      shell.appendChild(hd);
+      var body = mk("div", "gal-sys-body");
+      if (bodyEl) body.appendChild(bodyEl);
+      shell.appendChild(body);
+      if (jumpLabel) {
+        var foot = mk("div", "gal-sys-foot");
+        var jbtn = mk("button", "gal-sys-jump", jumpLabel);
+        jbtn.type = "button";
+        jbtn.addEventListener("click", function () { showSys("ticketmap"); });
+        foot.appendChild(jbtn);
+        shell.appendChild(foot);
+      }
+      pg.appendChild(shell);
+      return pg;
+    }
+    function makeZone(title, chip, desc) {
+      var z = mk("section", "gal-sys-zone");
+      var zh = mk("div", "gal-sys-zone-hd");
+      zh.appendChild(mk("strong", "", title));
+      zh.appendChild(mk("span", "gal-sys-chip", chip));
+      z.appendChild(zh);
+      z.appendChild(mk("p", "gal-sys-zone-desc", desc));
+      return z;
+    }
+    // The Workpanel page is one full-fill host: the page's server-rendered
+    // Workpanel (dashboard.tmpl "workpanel", #wproot, holding the panels
+    // region) is adopted into it by dashboard-workpanel.js.
+    var wpPg = mk("div", "gal-page gal-sys-page gal-sys-wppage");
+    wpPg.setAttribute("data-page", "workpanel");
+    wpPg.setAttribute("data-page-panel", "workpanel");
+    var wpDock = mk("div", "wp-dock");
+    wpDock.id = "wpdock";
+    wpPg.appendChild(wpDock);
+    sysPageEls.workpanel = wpPg;
+
+    // The Ticket Map page is one full-fill host: the ticket map
+    // (dashboard-ticketmap.js) docks its root in it when the page shows,
+    // and its bare shortcuts act only while focus is inside it.
+    var tmPg = mk("div", "gal-page gal-sys-page gal-sys-tmpage");
+    tmPg.setAttribute("data-page", "ticketmap");
+    tmPg.setAttribute("data-page-panel", "ticketmap");
+    var tmDock = mk("div", "tm-docked");
+    tmDock.id = "tmdock";
+    tmDock.tabIndex = 0;
+    tmDock.setAttribute("role", "region");
+    tmDock.setAttribute("aria-label", SYS_META.ticketmap.title);
+    tmPg.appendChild(tmDock);
+    sysPageEls.ticketmap = tmPg;
+
+    // The Git page is a full-fill host as well: the session page's Git page
+    // (dashboard-gitpage.js) moves its root (#gitpage) into it when the page
+    // first shows; Ctrl+G focuses it. A container query on it picks the wide
+    // three-region grid or the narrow tabs.
+    var gitPg = mk("div", "gal-page gal-sys-page gal-sys-gitpage");
+    gitPg.setAttribute("data-page", "git");
+    gitPg.setAttribute("data-page-panel", "git");
+    var gitDock = mk("div", "gp-dock");
+    gitDock.id = "gitdock";
+    gitDock.tabIndex = -1;
+    gitDock.setAttribute("role", "region");
+    gitDock.setAttribute("aria-label", SYS_META.git.title);
+    gitPg.appendChild(gitDock);
+    sysPageEls.git = gitPg;
+
+    G.SYS.forEach(function (id) { viewEl.appendChild(sysPageEls[id]); });
+  }
+  // paintGallery draws the rail in exact top-to-bottom order:
+  // [Home (narrow)] -> [User pages] -> [+] -> [.gal-sep] -> [.gal-group-sys: workpanel, ticketmap, git]
   // and shows the current page. dir (+1 down, -1 up) animates the flip.
   function paintGallery(dir) {
     if (!galEl) return;
-    var narrow = !!(lay && lay.narrow), n = gal.pages.length, pos = G.position(gal, narrow), seen = {};
-    var keys = (narrow ? ["main"] : []).concat(gal.pages.map(function (pg) { return pg.id; }), ["+"]);
-    keys.forEach(function (k, i) {
+    var narrow = !!(lay && lay.narrow), n = gal.pages.length, pos = curPos(), seen = {};
+    var topKeys = (narrow ? ["main"] : []).concat(gal.pages.map(function (pg) { return pg.id; }), [G.PLUS]);
+    var topNodes = [];
+    topKeys.forEach(function (k, i) {
       var p = narrow ? i - 1 : i, b = dotEls[k], label;
       if (!b) {
         b = dotEls[k] = mk("button", "gal-dot");
@@ -998,6 +1136,7 @@
       seen[k] = true;
       b.className = "gal-dot" + (k === "main" ? " main" : k === G.PLUS ? " empty" : " page") + (p === pos ? " active" : "");
       b.setAttribute("data-pos", String(p));
+      b.removeAttribute("data-sys");
       if (k === "main") { b.removeAttribute("data-count"); b.textContent = "⌂"; label = wsT("tab.board"); }
       else if (k === G.PLUS) { b.removeAttribute("data-count"); b.textContent = "+"; label = wsT("js.pins.drop"); }
       else {
@@ -1009,21 +1148,61 @@
       else b.title = label;
       b.setAttribute("aria-label", label);
       if (p === pos) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
-      if (dotsEl.children[i] !== b) dotsEl.insertBefore(b, dotsEl.children[i] || null);
+      topNodes.push(b);
+    });
+    if (!sepEl) {
+      sepEl = mk("span", "gal-sep");
+      sepEl.setAttribute("role", "separator");
+      sepEl.setAttribute("aria-orientation", "horizontal");
+    }
+    if (!sysGroupEl) {
+      sysGroupEl = mk("div", "gal-group-sys");
+      sysGroupEl.setAttribute("role", "group");
+      sysGroupEl.setAttribute("aria-label", "System pages");
+    }
+    G.SYS.forEach(function (id, si) {
+      var k = "sys:" + id, p = n + 1 + si, b = dotEls[k];
+      if (!b) {
+        b = dotEls[k] = mk("button", "gal-dot sys");
+        b.type = "button";
+        b.innerHTML = sysSvg(id);
+      }
+      seen[k] = true;
+      // The Workpanel slot's approval wait (dashboard-workpanel.js
+      // drawerWait) survives a repaint.
+      var wait = b.classList.contains("wait");
+      b.className = "gal-dot sys" + (p === pos ? " active" : "") + (wait ? " wait" : "");
+      b.setAttribute("data-pos", String(p));
+      b.setAttribute("data-sys", id);
+      var label = SYS_META[id] ? SYS_META[id].title : id;
+      if (wait) label += "; " + wsT("js.drawer.waiting");
+      if (window.WsGalPreview) b.removeAttribute("title");
+      else b.title = label;
+      b.setAttribute("aria-label", label);
+      if (p === pos) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+      if (sysGroupEl.children[si] !== b) sysGroupEl.insertBefore(b, sysGroupEl.children[si] || null);
     });
     Object.keys(dotEls).forEach(function (k) {
       if (seen[k]) return;
       if (dotEls[k].parentNode) dotEls[k].parentNode.removeChild(dotEls[k]);
       delete dotEls[k];
     });
-    var rail = !!(lay && lay.rail), empty = !!(lay && lay.empty), shown = rail || empty;
+    var wantTop = topNodes.concat([sepEl, sysGroupEl]);
+    wantTop.forEach(function (node, idx) {
+      if (dotsEl.children[idx] !== node) dotsEl.insertBefore(node, dotsEl.children[idx] || null);
+    });
+    while (dotsEl.children.length > wantTop.length) dotsEl.removeChild(dotsEl.lastChild);
+    var rail = !!(lay && lay.rail), shown = rail;
     galEl.hidden = !shown && !doc.documentElement.hasAttribute("data-overview-preview");
     railEl.hidden = !rail;
     galEl.setAttribute("data-pos", String(pos));
     galEl.setAttribute("data-pages", String(n));
+    var curSys = G.sysAt(gal, pos);
+    if (curSys) galEl.setAttribute("data-sys-active", curSys); else galEl.removeAttribute("data-sys-active");
     if (narrow) galEl.setAttribute("data-narrow", ""); else galEl.removeAttribute("data-narrow");
     gal.pages.forEach(function (pg, i) { slide(pageEls[pg.id], i - pos, dir); });
     slide(plusEl, n - pos, dir);
+    G.SYS.forEach(function (id, si) { slide(sysPageEls[id], n + 1 + si - pos, dir); });
     var activeDot = dotEls[dotKey(pos)];
     if (rail && !galEl.hidden && activeDot && dotsEl.scrollHeight > dotsEl.clientHeight) {
       var listBox = dotsEl.getBoundingClientRect(), dotBox = activeDot.getBoundingClientRect();
@@ -1031,7 +1210,7 @@
       else if (dotBox.bottom > listBox.bottom) dotsEl.scrollTop += dotBox.bottom - listBox.bottom;
     }
     away(rail && narrow && pos >= 0);
-    homeWheel(rail && narrow && n > 0);
+    homeWheel(rail && narrow);
     if (window.WsGalPreview && window.WsGalPreview.sync) window.WsGalPreview.sync();
   }
   // away stands the narrow view's Main Board (Page 0) off the view while a
@@ -1081,26 +1260,47 @@
   function galSet(g, moved) {
     var was = cards.map(function (c) { return !!c.pinned; });
     gal = g;
+    if (gal.active !== null) sysActive = null;
     var list = cards.slice();
     sync();
     list.forEach(function (c) { c.paint(); });
     arrange(moved || null);
     persist();
     list.forEach(function (c, i) { if (was[i] !== !!c.pinned && c.k.pinned && cards.indexOf(c) >= 0) c.k.pinned(c); });
+    notifyGalChange("model");
   }
   // show switches the gallery to position pos (WsGallery.position: -1 the
-  // narrow view's Main Board, then the pages, then +), animated by dir.
+  // narrow view's Main Board, then user pages, +, then fixed system pages),
+  // animated by dir.
   function show(pos, dir) {
-    var narrow = !!(lay && lay.narrow), cur = G.position(gal, narrow), g = G.activate(gal, pos, narrow);
-    if (g === gal) return false;
+    var narrow = !!(lay && lay.narrow), n = gal.pages.length;
+    var min = narrow ? -1 : 0, max = n + G.SYS.length;
+    pos = Math.max(min, Math.min(max, pos));
+    var cur = curPos();
+    if (pos === cur) return false;
+    var nextSys = G.sysAt(gal, pos);
+    var g = G.activate(gal, pos, narrow);
     if (window.WsGalPreview && window.WsGalPreview.hide) window.WsGalPreview.hide();
     gal = g;
+    sysActive = nextSys;
+    if (nextSys) {
+      storedSys = nextSys;
+      saveSysActive(nextSys);
+    }
     if (pullEl) { pullOff(); gate.clear(); }
     paintGallery(dir === undefined ? (pos > cur ? 1 : -1) : dir);
     persist();
+    notifyGalChange("show");
     return true;
   }
-  function step(d) { show(G.position(gal, !!(lay && lay.narrow)) + d, d); }
+  function showSys(id) {
+    if (!gal || !galEl) return false;
+    var pos = G.sysPos(gal, id);
+    if (pos < 0) return false;
+    if (pos === curPos()) { notifyGalChange("show"); return true; }
+    return show(pos, 0);
+  }
+  function step(d) { show(curPos() + d, d); }
   // activate shows the page a node stands on (in the narrow view a node on
   // the Main Board shows Page 0) and tells whether it switched; a caller
   // scrolls the node into view after it.
@@ -1112,12 +1312,12 @@
       if (want < 0) return false;
     } else if (narrow && board.contains(node)) want = -1;
     else return false;
-    return want !== G.position(gal, narrow) && show(want, 0);
+    return want !== curPos() && show(want, 0);
   }
   // buildGalleryEl builds the gallery's element in host: the width handle,
-  // the rail and the viewport with its + page; the rail navigates (a dot's
-  // click or Enter, a wheel tick, the empty rail above or below the dots,
-  // a vertical press-drag) and a dragged page dot reorders the pages.
+  // the rail and the viewport with its + and system pages; the rail navigates
+  // (a dot's click or Enter, a wheel tick, the empty rail above or below the
+  // dots, a vertical press-drag) and a dragged page dot reorders user pages.
   function buildGalleryEl(host) {
     galEl = mk("aside", "bgal");
     galEl.id = "bgal";
@@ -1134,6 +1334,7 @@
     plusEl = mk("div", "gal-page gal-plus", wsT("js.pins.drop"));
     plusEl.setAttribute("data-page", G.PLUS);
     viewEl.appendChild(plusEl);
+    buildSysPages();
     galEl.appendChild(railEl);
     galEl.appendChild(viewEl);
     edgeHandle();
@@ -1153,7 +1354,7 @@
     railEl.addEventListener("pointerdown", function (e) {
       if (rg || dg || (e.button !== undefined && e.button !== 0)) return;
       var b = e.target.closest && e.target.closest(".gal-dot"), p = b ? +b.getAttribute("data-pos") : NaN;
-      rg = { id: e.pointerId, x0: e.clientX, y0: e.clientY, from: G.position(gal, !!(lay && lay.narrow)), on: false,
+      rg = { id: e.pointerId, x0: e.clientX, y0: e.clientY, from: curPos(), on: false,
         dot: b && p >= 0 && p < gal.pages.length ? p : null, onDot: !!b, target: null };
     });
     if (window.WsGalPreview && window.WsGalPreview.attach) {
@@ -1165,8 +1366,9 @@
         isDragging: function () { return !!(dg && dg.on); },
         getState: function () {
           var narrow = !!(lay && lay.narrow);
-          return { gal: gal, narrow: narrow, pos: G.position(gal, narrow) };
+          return { gal: gal, narrow: narrow, pos: curPos() };
         },
+        getSysInfo: function (id) { return SYS_META[id] || null; },
         getLeafInfo: function (ref) {
           var icon = pageIcon(ref);
           if (ref.slice(0, 2) === "t:") {
@@ -1254,8 +1456,8 @@
       return;
     }
     var n = gal.pages.length, narrow = !!(lay && lay.narrow);
-    var next = Math.max(narrow ? -1 : 0, Math.min(n, r.from + Math.round((e.clientY - r.y0) / RAIL_PAN)));
-    if (next !== G.position(gal, narrow)) show(next);
+    var next = Math.max(narrow ? -1 : 0, Math.min(n + G.SYS.length, r.from + Math.round((e.clientY - r.y0) / RAIL_PAN)));
+    if (next !== curPos()) show(next);
   }
   function railEnd(e) {
     var r = rg;
@@ -1274,7 +1476,7 @@
   function dotAt(x, y) {
     if (!galEl || galEl.hidden || !railEl || railEl.hidden) return null;
     var hit = null;
-    Array.prototype.some.call(dotsEl.children, function (b) {
+    Array.prototype.some.call(dotsEl.querySelectorAll(".gal-dot"), function (b) {
       if (!inside(rectOf(b), x, y)) return false;
       hit = { pos: +b.getAttribute("data-pos"), el: b };
       return true;
@@ -1291,7 +1493,14 @@
   }
   function clock() { return window.performance && window.performance.now ? window.performance.now() : Date.now(); }
   // dotKey is the key of the rail dot (dotEls) for position p.
-  function dotKey(p) { var n = gal.pages.length; return p < 0 ? "main" : p >= n ? G.PLUS : gal.pages[p].id; }
+  function dotKey(p) {
+    var n = gal.pages.length;
+    if (p < 0) return "main";
+    if (p < n) return gal.pages[p].id;
+    if (p === n) return G.PLUS;
+    var sys = G.sysAt(gal, p);
+    return sys ? "sys:" + sys : G.PLUS;
+  }
 
   // --- spring-loaded rail dots -----------------------------------------------
   // While a drag runs, a rail dot hovered SPRING_MS (WsGallery.Hover) shows
@@ -1301,7 +1510,7 @@
   // the page shown never springs.
   var hover = new G.Hover(), springT = 0;
   function spring(hit) {
-    var el = hit && hit.el.classList.contains("gal-dot") && hit.pos !== G.position(gal, !!(lay && lay.narrow)) ? hit.el : null;
+    var el = hit && hit.el.classList.contains("gal-dot") && !hit.el.classList.contains("sys") && hit.pos !== curPos() ? hit.el : null;
     if (el === hover.target) return;
     unspring();
     if (!el) return;
@@ -1349,7 +1558,7 @@
   // and web cards (a preview card's body is an ordinary scroller; its frames
   // and media are OWN themselves; a topic's .doc-frame forwards its wheel to
   // the gate).
-  var OWN = '.xterm, .tm-host, iframe:not(.doc-frame), canvas, video, embed, object, [data-max], [data-max] *, .bcard:is([data-kind="terminal"], [data-kind="web"]) > .bc-in > .bc-body';
+  var OWN = '.xterm, .tm-host, .d-tm-cvp, iframe:not(.doc-frame), canvas, video, embed, object, [data-max], [data-max] *, .bcard:is([data-kind="terminal"], [data-kind="web"]) > .bc-in > .bc-body';
   var PANE_BODY = ':scope > section.topic > .gal-pbody, :scope > .bcard > .bc-in > .bc-body';
   function reach(s, dy) {
     return dy > 0 ? s.scrollTop + s.clientHeight < s.scrollHeight - G.C.EPS : s.scrollTop > G.C.EPS;
@@ -1386,7 +1595,7 @@
   // charge.
   function gateWheelInput(target, rawDy, rawDx, deltaMode, home, prevent) {
     if (overviewOn || !lay || !target || !target.closest) return;
-    var narrow = !!lay.narrow, pos = G.position(gal, narrow);
+    var narrow = !!lay.narrow, pos = curPos();
     if (home ? pos >= 0 || (galEl && galEl.contains(target)) : pos < 0) return;
     var dy = +rawDy || 0, dx = +rawDx || 0;
     var scale = deltaMode === 1 ? 40 : deltaMode === 2 ? 800 : 1;
@@ -1423,9 +1632,7 @@
       can = canScroll(target, bound, dy, fall);
     }
     var w = gateIn;
-    // The model is replaced, never changed, on every change: its
-    // neighbors are read once per model and view.
-    if (nbOf !== gal || nbNarrow !== narrow) { nb = G.neighbors(gal, pos, narrow); nbOf = gal; nbNarrow = narrow; }
+    nb = G.neighbors(gal, pos, narrow); nbOf = gal; nbNarrow = narrow;
     w.dy = dy;
     w.now = clock();
     w.canUp = dy < 0 && can;
@@ -1436,7 +1643,7 @@
     if (r.kind === "none") return;
     if (r.kind === "pass") { if (r.reset) pullOff(); gateArm(); return; }
     if (prevent) prevent();
-    var el = home ? board : pos >= gal.pages.length ? plusEl : pageEls[gal.pages[pos].id], to = pos + (r.dir || 0);
+    var el = home ? board : pageElAt(pos), to = pos + (r.dir || 0);
     if (r.kind === "reset") pullOff();
     else if (r.kind === "micro") pullShow(el, r.dir, r.shift, 0, "damped", wsT(r.edge ? "js.pins.edge" : "js.pins.wait"), null);
     else if (r.kind === "pull") pullShow(el, r.dir, r.shift, r.pct, r.ready ? "ready" : "", pullName(to) + " (" + Math.round(r.pct * 100) + "%)", to);
@@ -1454,8 +1661,7 @@
   function onFrameWheel(frame, dy, dx, mode) {
     if (!frame || !frame.isConnected) return false;
     if (galEl && galEl.contains(frame)) {
-      var pos = G.position(gal, !!(lay && lay.narrow));
-      var activePage = pos >= 0 ? (pos >= gal.pages.length ? plusEl : pageEls[gal.pages[pos].id]) : null;
+      var activePage = pageElAt(curPos());
       if (!activePage || !activePage.contains(frame)) return false;
       gateWheelInput(frame, dy, dx, mode || 0, false, null);
       return true;
@@ -1468,7 +1674,7 @@
   }
   function pullName(p) {
     var b = dotEls[dotKey(p)];
-    return p >= gal.pages.length ? G.PLUS : b ? (b.title || b.getAttribute("aria-label") || "") : "";
+    return p === gal.pages.length ? G.PLUS : b ? (b.title || b.getAttribute("aria-label") || "") : "";
   }
   function gateArm() {
     clearTimeout(gateT);
@@ -1540,44 +1746,29 @@
     homeEl = col;
     if (col) col.addEventListener("wheel", onHomeWheel, { passive: false });
   }
-  // canFitFourCol activates the 4-column layout (rail + stage + gallery
-  // column) iff !tabs, viewport >= WIDE, and spare right width >= board width
-  // (or, once the user widens the board, the unresized default fits Band 4).
+  // canFitFourCol activates the 4-column layout (rail + stage + always-open
+  // gallery column) iff !tabs, viewport >= WIDE (1600px), and the stage
+  // beside the live left rail leaves spare right width for a column as wide
+  // as the board (the grid at its default width, since the board is no
+  // longer user-resized). Below that the three-column layout stays: the
+  // 34px rail strip on #bcol pages the gallery over the board. Opening room
+  // by collapsing the left rail (readRailReserve) can promote it.
   function canFitFourCol(vw, tabs) {
     if (tabs || !(vw >= G.C.WIDE)) return false;
-    var el = typeof document !== "undefined" && document ? document.documentElement : (typeof root !== "undefined" ? root : null);
-    var railCollapsed = !!(el && typeof el.getAttribute === "function" && el.getAttribute("data-rail-collapsed") === "true");
-    var railW = 280;
-    if (!railCollapsed && el) {
-      var rawW = el.style && typeof el.style.getPropertyValue === "function" ? el.style.getPropertyValue("--rail-w") : "";
-      if (!rawW && typeof getComputedStyle === "function") {
-        try { rawW = getComputedStyle(el).getPropertyValue("--rail-w"); } catch (e) { rawW = ""; }
-      }
-      var parsedW = parseFloat(rawW);
-      if (isFinite(parsedW) && parsedW > 0) railW = parsedW;
-    }
-    var railReserve = railCollapsed ? 0 : (railW + 8);
-    var stageW = vw - 32 - railReserve, gap = 8;
+    var gap = 8, stageW = vw - 32 - readRailReserve();
     var split = !!(opt && (opt.split || (board && board.closest && board.closest(".dgrid.live, .dgrid.history"))));
     var worktree = !!(board && board.closest && board.closest(".dgrid.worktree"));
-    function fitMetrics(bw, cw) {
-      var gridW, boardW;
-      if (worktree) {
-        gridW = bw || 1300;
-        boardW = (gridW - gap) * 7 / 12;
-      } else if (!split) {
-        boardW = bw || 900;
-        gridW = boardW;
-      } else if (bw) {
-        boardW = bw;
-        gridW = (cw || (bw * 5 / 7)) + gap + boardW;
-      } else {
-        gridW = 1300;
-        boardW = cw ? (gridW - gap - Math.max(CONVW_MIN, Math.min(cw, gridW - gap - SPLITB_MIN))) : ((gridW - gap) * 7 / 12);
-      }
-      return stageW - gridW - gap >= boardW;
+    var gridW, boardW;
+    if (worktree) {
+      gridW = 1300;
+      boardW = (gridW - gap) * 7 / 12;
+    } else if (!split) {
+      boardW = gridW = 900;
+    } else {
+      gridW = 1300;
+      boardW = convow ? (gridW - gap - Math.max(CONVW_MIN, Math.min(convow, gridW - gap - SPLITB_MIN))) : ((gridW - gap) * 7 / 12);
     }
-    return fitMetrics(boardw, convow) || (boardw > 0 && fitMetrics(0, 0));
+    return stageW - gridW - gap >= boardW;
   }
   // isFourCol tells whether Band 4 (true 4-column mode) is active for the
   // current viewport and layout mode, matching WsGallery.layout's exact rule.
@@ -1594,6 +1785,7 @@
     if (!opt || !galEl) return;
     var m = opt.mode ? opt.mode() : null, vw = m ? +m.width || 0 : 0, tabs = !!(m && m.tabs);
     var n = gal.pages.length, drag = !!(dg && dg.on);
+    applyBgalWidth(vw);
     var s = G.layout({ width: vw, tabs: tabs, fourCol: canFitFourCol(vw, tabs), pages: n, dragging: drag });
     s.pages = n;
     s.dragging = drag;
@@ -1601,6 +1793,7 @@
     lay = s;
     paintGallery();
     if (opt.layout) opt.layout(s);
+    notifyGalChange("layout");
   }
   // decorate gives every topic on the board a pin button in its title bar,
   // before the note pen, pressed while the topic is docked, and the
@@ -2079,13 +2272,9 @@
     var rec = { cards: cards.map(function (c) {
       return { id: c.id, kind: c.kind, pinned: c.pinned, at: c.at, rank: c.rank, fold: c.folded, h: c.h, data: c.data };
     }), topics: ts };
-    var widths = stored().widths;
-    rec.bb = +widths.bb || 0;
-    if ("bw" in widths) rec.bw = +widths.bw || 0;
-    rec[opt.split ? "bb" : "bw"] = boardw;
     rec.cw = convow;
     rec.gallery = G.record(gal);
-    opt.save(opt.key, cards.length || ts.length || rec.bb || rec.bw || convow || gal.pages.length ? JSON.stringify(rec) : null);
+    opt.save(opt.key, cards.length || ts.length || convow || gal.pages.length ? JSON.stringify(rec) : null);
   }
   function raw() {
     try { return JSON.parse(opt.load(opt.key) || "null"); } catch (e) { return null; }
@@ -2094,12 +2283,9 @@
     var v = raw();
     if (Array.isArray(v)) v = { cards: v };
     if (!v || typeof v !== "object") v = {};
-    if (opt.split && !("bb" in v)) delete v.bw;
     return {
-      widths: v,
       cards: (Array.isArray(v.cards) ? v.cards : []).filter(function (r) { return r && typeof r.kind === "string" && kinds[r.kind]; }),
       topics: (Array.isArray(v.topics) ? v.topics : []).filter(function (r) { return r && typeof r.n === "string" && (+r.p || +r.a || r.f); }),
-      bw: +v[opt.split ? "bb" : "bw"] || 0,
       cw: +v.cw || 0
     };
   }
@@ -2645,14 +2831,15 @@
   // the narrow view's Page 0, where the board shows through.
   function pageAt(x, y) {
     if (!galEl || galEl.hidden || !inside(rectOf(viewEl), x, y)) return null;
-    var pos = G.position(gal, !!(lay && lay.narrow));
+    var pos = curPos();
     if (pos < 0) return null;
-    return { pos: pos, el: pos >= gal.pages.length ? plusEl : pageEls[gal.pages[pos].id] };
+    var el = pageElAt(pos);
+    return el ? { pos: pos, el: el } : null;
   }
   function inRail(x, y) { return !!galEl && !galEl.hidden && !railEl.hidden && inside(rectOf(railEl), x, y); }
   // boardShown tells whether the Main Board takes drops: always in the wide
   // view, on Page 0 in the narrow one.
-  function boardShown() { return !(lay && lay.narrow) || G.position(gal, true) < 0; }
+  function boardShown() { return !(lay && lay.narrow) || curPos() < 0; }
   // paneZone reads a drop on the docked page shown (page el) at (x, y):
   // the pane under the pointer and its zone (WsGallery.zone: the nearest
   // edge splits it; the center swaps the two, offered only to a docked
@@ -2700,12 +2887,15 @@
     var d = dg;
     d.x = x; d.y = y;
     var to = null, scr = null, lightEl = null, hit = dotAt(x, y) || pageAt(x, y);
-    if (hit && hit.el !== plusEl && hit.el.classList.contains("gal-page")) to = paneZone(hit.el, x, y, d);
-    else if (hit) {
+    if (hit && hit.el !== plusEl && hit.el.classList.contains("gal-page")) {
+      if (hit.el.classList.contains("gal-sys-page")) { to = { gal: "dock" }; lightEl = hit.el; }
+      else to = paneZone(hit.el, x, y, d);
+    } else if (hit) {
       var cur = G.pageOf(gal, refOf(d.unit));
-      if (hit.pos < 0) to = d.unit.pinned ? { gal: "home" } : null;
-      else if (hit.pos >= gal.pages.length) to = { gal: "dock" };
-      else to = hit.pos === cur ? null : { gal: "append", pos: hit.pos };
+      if (hit.el && hit.el.classList.contains("sys")) to = null;
+      else if (hit.pos < 0) to = d.unit.pinned ? { gal: "home" } : null;
+      else if (hit.pos === gal.pages.length) to = { gal: "dock" };
+      else if (hit.pos >= 0 && hit.pos < gal.pages.length) to = hit.pos === cur ? null : { gal: "append", pos: hit.pos };
       if (to) lightEl = hit.el;
     } else if (inRail(x, y) || inside(rectOf(toolbar), x, y)) { /* the rail and the toolbar are never drop targets */ }
     else if (boardShown() && inside(rectOf(scroller(board) || board), x, y)) {
@@ -2801,47 +2991,108 @@
   }
 
   // --- the gallery column's width -------------------------------------------------
-  // The gallery's element carries a width handle on its left edge, where
-  // the gallery column meets the board (the stylesheet shows it only in
-  // the wide view's column). Each width handle sizes only the panel on its
-  // left and pushes the panels on its right: the rightmost one (the
-  // gallery column, which fills the window, else the board) takes the
-  // difference, and a drag stops where that one would drop below its
-  // floor. This handle sizes the board (--boardw with data-boardw on the
-  // root, kept in the record; double click goes back to the stylesheet's):
-  // on a page with a split (opt.split) the board's own column, at least
-  // SPLITB_MIN, the stylesheet making the board's cell the conversation,
-  // the gap and the board; elsewhere the board's .dgrid cell, at least
-  // BOARDW_MIN. At most it leaves the column PINW_MIN.
-  function setWidth(w) {
-    var r = doc.documentElement;
-    boardw = w ? Math.max(opt.split ? SPLITB_MIN : BOARDW_MIN, Math.round(w)) : 0;
-    if (boardw) { r.style.setProperty("--boardw", boardw + "px"); r.setAttribute("data-boardw", ""); }
-    else { r.style.removeProperty("--boardw"); r.removeAttribute("data-boardw"); }
+  // The gallery column's stored width (--bgal-w, global ws.dashboard.bgal.w,
+  // 350-720px, default 540px) is dragged by .bp-edge on its left edge using
+  // RAF-throttled custom property writes. The applied width yields below 350px
+  // only when the remaining viewport past rail, conversation floor, board floor
+  // and gaps is smaller than 350px; the board column takes the flexible
+  // remainder.
+  function clampBgalWidth(w) {
+    var n = Math.round(+w);
+    if (!isFinite(n)) return BGAL_W_DEF;
+    return Math.max(BGAL_W_MIN, Math.min(BGAL_W_MAX, n));
   }
-  function boardCell() { return board.closest && board.closest(".dgrid"); }
-  // colShown tells whether the wide view shows the gallery as a column
-  // beside the board (including the idle empty slot, not while a drag alone shows it).
-  function colShown() { return !!(lay && ((lay.column && gal.pages.length) || lay.empty)); }
+  function loadBgalWidth() {
+    var rawW = opt && opt.load ? opt.load(BGAL_W_KEY) : null;
+    if (rawW === null || rawW === "") return BGAL_W_DEF;
+    var n = Number(rawW);
+    return isFinite(n) && n > 0 ? clampBgalWidth(n) : BGAL_W_DEF;
+  }
+  function saveBgalWidth() {
+    if (opt && opt.save) opt.save(BGAL_W_KEY, String(bgalW));
+  }
+  function readRailReserve() {
+    var r = doc.documentElement;
+    if (!r) return 288;
+    if (r.getAttribute && r.getAttribute("data-rail-collapsed") === "true") return 0;
+    var rawW = r.style && r.style.getPropertyValue ? r.style.getPropertyValue("--rail-w") : "";
+    if (!rawW && typeof getComputedStyle === "function") {
+      try { rawW = getComputedStyle(r).getPropertyValue("--rail-w"); } catch (e) { rawW = ""; }
+    }
+    var w = parseFloat(rawW);
+    return (isFinite(w) && w > 0 ? w : 280) + 8;
+  }
+  function effectiveBgalWidth(vw) {
+    var w = bgalW;
+    var width = vw || (opt && opt.mode ? (+opt.mode().width || 0) : 0) || (typeof window !== "undefined" ? (+window.innerWidth || 0) : 0);
+    if (!(width >= G.C.WIDE)) return w;
+    var split = !!(opt && (opt.split || (board && board.closest && board.closest(".dgrid.live, .dgrid.history"))));
+    var worktree = !!(board && board.closest && board.closest(".dgrid.worktree"));
+    var stageFloor = (split || worktree) ? (CONVW_MIN + 8 + SPLITB_MIN) : BOARDW_MIN;
+    var avail = Math.round(width - readRailReserve() - 32 - 8 - stageFloor);
+    if (avail >= BGAL_W_MIN) return Math.min(w, avail);
+    return Math.max(PINW_MIN, Math.min(w, Math.max(0, avail)));
+  }
+  function applyBgalWidth(vw) {
+    var r = doc.documentElement;
+    if (!r || !r.style) return;
+    var eff = effectiveBgalWidth(vw);
+    var v = bgalW + "px", ev = eff + "px";
+    if (!r.style.getPropertyValue || r.style.getPropertyValue("--bgal-w") !== v) r.style.setProperty("--bgal-w", v);
+    if (!r.style.getPropertyValue || r.style.getPropertyValue("--bgal-eff-w") !== ev) r.style.setProperty("--bgal-eff-w", ev);
+  }
+  function queueBgalWidth() {
+    if (typeof requestAnimationFrame !== "function") { applyBgalWidth(); return; }
+    if (bgalRaf) return;
+    bgalRaf = requestAnimationFrame(function () {
+      bgalRaf = 0;
+      applyBgalWidth();
+      notifyGalChange("resize");
+    });
+  }
+  function setBgalWidth(w, immediate) {
+    bgalW = clampBgalWidth(w);
+    if (immediate) {
+      if (bgalRaf && typeof cancelAnimationFrame === "function") { cancelAnimationFrame(bgalRaf); bgalRaf = 0; }
+      applyBgalWidth();
+      saveBgalWidth();
+      notifyGalChange("resize");
+    } else {
+      queueBgalWidth();
+    }
+  }
+  // colShown tells whether the wide view shows the gallery as a column.
+  function colShown() { return !!(lay && lay.column); }
+  // freezeConvo holds the conversation column at its current track width
+  // before a .bp-edge drag so resizing #bgal trades space with #bcol without
+  // shifting #convo; dashboard-layout.css still clamps --convow to keep the
+  // board's 360px floor.
+  function freezeConvo() {
+    var t = colShown() && tracks();
+    if (t && !convow) setConvo(t[0]);
+  }
   function edgeHandle() {
     grab("bp-edge", galEl, function () {
-      freeze();
-      var t = tracks(), cell = boardCell(), w = t ? t[1] : cell ? cell.getBoundingClientRect().width : 0;
-      return w ? { w: w, max: w + galEl.getBoundingClientRect().width - PINW_MIN } : null;
+      freezeConvo();
+      var w = galEl.getBoundingClientRect().width || bgalW;
+      return w ? { w: w } : null;
     }, function (from, dx) {
-      setWidth(Math.min(from.w + dx, Math.max(from.max, opt.split ? SPLITB_MIN : BOARDW_MIN)));
-    }, function () { freeze(); setWidth(0); }).setAttribute("data-edge", "left");
+      setBgalWidth(from.w - dx, false);
+    }, function () {
+      setBgalWidth(BGAL_W_DEF, true);
+    }, function () {
+      if (bgalRaf && typeof cancelAnimationFrame === "function") { cancelAnimationFrame(bgalRaf); bgalRaf = 0; }
+      applyBgalWidth();
+      saveBgalWidth();
+      notifyGalChange("resize");
+    }).setAttribute("data-edge", "left");
   }
   // The split handle stands in the gap between the conversation and the
   // board of the page's grid (opt.split; the stylesheet shows it where the
   // two stand side by side) and sizes the conversation's column (--convow,
   // with data-convow, on the root, kept in the record; double click goes
   // back to the stylesheet's split): at least CONVW_MIN, and at most what
-  // leaves the rightmost panel its floor: the gallery column PINW_MIN while
-  // it shows (the board keeps its width), else the board SPLITB_MIN. The
-  // grid's own resolved tracks give the widths, so the handle needs no
-  // knowledge of the grid's children; the stylesheet clamps a width saved
-  // on a wider window.
+  // leaves the board SPLITB_MIN.
   function setConvo(w) {
     var r = doc.documentElement;
     convow = w ? Math.max(CONVW_MIN, Math.round(w)) : 0;
@@ -2855,30 +3106,19 @@
     var t = (getComputedStyle(opt.split).gridTemplateColumns.match(/[\d.]+(?=px)/g) || []).map(Number);
     return t.length === 2 && t[0] > 0 ? t : null;
   }
-  // freeze holds the conversation and the board at the widths they show
-  // while the gallery column does, before a handle sizes one of them: a
-  // width left to the stylesheet is a share of the cell, which would move
-  // with the other handle.
-  function freeze() {
-    var t = colShown() && tracks();
-    if (!t) return;
-    if (!convow) setConvo(t[0]);
-    if (!boardw) setWidth(t[1]);
-  }
   function splitHandle(grid) {
     grab("dcv-edge", grid, function () {
-      freeze();
       var t = tracks();
-      return t ? { w: t[0], max: t[0] + (colShown() ? galEl.getBoundingClientRect().width - PINW_MIN : t[1] - SPLITB_MIN) } : null;
+      return t ? { w: t[0], max: t[0] + t[1] - SPLITB_MIN } : null;
     }, function (from, dx) {
       setConvo(Math.min(from.w + dx, Math.max(from.max, CONVW_MIN)));
-    }, function () { freeze(); setConvo(0); });
+    }, function () { setConvo(0); });
   }
   // grab makes a width handle (class cls) in host: a press of the main
   // button starts a drag where start() gives its state (null: nothing to
   // drag), each move hands move() that state and the distance from the
   // press, and the release saves; a double click resets and saves.
-  function grab(cls, host, start, move, reset) {
+  function grab(cls, host, start, move, reset, done) {
     var edge = mk("div", cls), from = null, x0 = 0;
     edge.setAttribute("role", "separator");
     edge.setAttribute("aria-orientation", "vertical");
@@ -2895,7 +3135,7 @@
       e.preventDefault();
     });
     edge.addEventListener("pointermove", function (e) { if (from) move(from, e.clientX - x0); });
-    function end() { if (!from) return; from = null; edge.classList.remove("drag"); relayout(); persist(); }
+    function end() { if (!from) return; from = null; edge.classList.remove("drag"); if (done) done(); relayout(); persist(); }
     edge.addEventListener("pointerup", end);
     edge.addEventListener("pointercancel", end);
     edge.addEventListener("dblclick", function () { reset(); relayout(); persist(); });
@@ -3118,7 +3358,10 @@
       buildGalleryEl(o.host || doc.body);
       if (o.split) splitHandle(o.split);
       var s = stored();
-      setWidth(s.bw);
+      bgalW = loadBgalWidth();
+      storedSys = loadSysActive();
+      sysActive = null;
+      applyBgalWidth();
       setConvo(s.cw);
       gal = G.load(raw(), function (c) { return typeof c.kind === "string" && !!kinds[c.kind]; });
       s.topics.forEach(function (r) { topics[r.n] = { name: r.n, pinned: +r.p || 0, at: +r.a || 0, bar: r.b === null ? null : +r.b || 0, folded: !!r.f, rank: r.rank, el: null }; });
@@ -3207,6 +3450,11 @@
     // it into the live one); activate shows the page node stands on and
     // tells whether it switched (WsGallery, activate above).
     gallery: function () { return galEl; },
+    showSys: showSys,
+    sysPageEl: function (id) { return sysPageEls[id] || null; },
+    activeSys: function () { return gal ? G.sysAt(gal, curPos()) : null; },
+    onGalleryChange: function (fn) { if (typeof fn === "function") galListeners.push(fn); },
+    galleryWidth: function () { return bgalW; },
     docked: function () { return pinned().map(function (u) { return u.el; }); },
     isDocked: function (n) { return !!(n && galEl && n.parentNode && n.parentNode.classList && n.parentNode.classList.contains("gal-pane") && galEl.contains(n)); },
     wrap: function (sec) { return topicName(sec) === null ? null : wrapTopic(sec); },

@@ -17,11 +17,13 @@ func (d *Daemon) registerCompanionPackRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(companionPacksRoute+"/{id}/pack.json", d.handleCompanionManifest)
 	mux.HandleFunc(companionPacksRoute+"/{id}/assets/{file}", d.handleCompanionAsset)
 	mux.HandleFunc(companionPacksRoute+"/reload", d.handleCompanionReload)
+	d.registerCompanionClipRoutes(mux)
 	d.registerCompanionInstallRoutes(mux)
 	d.registerCompanionAuthoringRoutes(mux)
 	d.registerCompanionPhoneRoutes(mux)
 	d.registerCompanionMemoryRoutes(mux)
 	d.registerCompanionKnockRoute(mux)
+	d.registerCompanionAgentsRoute(mux)
 	mux.HandleFunc(companionFocusRoute, d.handleCompanionFocus)
 }
 
@@ -81,6 +83,19 @@ func (d *Daemon) handleCompanionAsset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Daemon) serveCompanionPackFile(w http.ResponseWriter, r *http.Request, file, contentType string) {
+	d.serveCompanionPackData(w, r, contentType, file != "", func(pack *companionPack) ([]byte, bool) {
+		if file == "" {
+			return pack.manifest, true
+		}
+		data, found := pack.assets[file]
+		return data, found
+	})
+}
+
+// serveCompanionPackData serves bytes pick selects from one snapshot pack,
+// with the pack revision as ETag and ?rev= immutable caching; sandbox adds
+// the asset CSP.
+func (d *Daemon) serveCompanionPackData(w http.ResponseWriter, r *http.Request, contentType string, sandbox bool, pick func(*companionPack) ([]byte, bool)) {
 	header := w.Header()
 	header.Set("Cache-Control", "private, no-store")
 	if !companionReadMethod(w, r) {
@@ -99,14 +114,10 @@ func (d *Daemon) serveCompanionPackFile(w http.ResponseWriter, r *http.Request, 
 		http.NotFound(w, r)
 		return
 	}
-	data := pack.manifest
-	if file != "" {
-		var found bool
-		data, found = pack.assets[file]
-		if !found {
-			http.NotFound(w, r)
-			return
-		}
+	data, found := pick(pack)
+	if !found {
+		http.NotFound(w, r)
+		return
 	}
 	query, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
@@ -127,7 +138,7 @@ func (d *Daemon) serveCompanionPackFile(w http.ResponseWriter, r *http.Request, 
 	header.Set("ETag", etag)
 	header.Set("Content-Type", contentType)
 	header.Set("X-Content-Type-Options", "nosniff")
-	if file != "" {
+	if sandbox {
 		header.Set("Content-Security-Policy", "default-src 'none'; sandbox")
 	}
 	if etagMatches(strings.Join(r.Header.Values("If-None-Match"), ","), etag) {

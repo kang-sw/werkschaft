@@ -34,7 +34,7 @@ func TestPinnedColumnFillsTheWindowRightOfTheBoard(t *testing.T) {
 		":root { --pbw: calc(1680px - 32px - var(--rail-reserve, 288px)); }",
 		".dash { --stagew: var(--pbw); }",
 		".dash.board { --pbw: 900px; }",
-		`:root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody { grid-template-columns: var(--rail-w, 280px) minmax(0, min(var(--boardw, min(var(--pbw), 100% - (var(--rail-reserve, 288px) + 488px))), 100% - (var(--rail-reserve, 288px) + 288px))) minmax(280px, 1fr); }`,
+		`:root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody { grid-template-columns: var(--rail-w, 280px) minmax(0, 1fr) var(--bgal-eff-w, var(--bgal-w, 540px)); }`,
 		`:root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dwrap:not(.narrow),`,
 	} {
 		if !strings.Contains(css, want) {
@@ -54,7 +54,7 @@ func TestPinnedColumnFillsTheWindowRightOfTheBoard(t *testing.T) {
 // gating .bp-edge on [data-pincol] or [data-gal="empty"].
 func TestGalleryNoReservedColumnWithoutAPage(t *testing.T) {
 	css := mustAsset(t, "dashboard.css")
-	for _, gone := range []string{".bpzone", ".bpins", ".bpcol", "data-drop", "attr(data-label)"} {
+	for _, gone := range []string{".bpzone", ".bpins", ".bpcol", "data-drop"} {
 		if strings.Contains(css, gone) {
 			t.Errorf("dashboard.css still carries the pin stack's %q", gone)
 		}
@@ -80,6 +80,9 @@ func TestGalleryNoReservedColumnWithoutAPage(t *testing.T) {
 	end := strings.Index(css, ".rail .rhd {")
 	if at < 0 || end < at {
 		t.Fatal("dashboard.css lacks the gallery block")
+	}
+	if strings.Contains(css[at:end], "attr(data-label)") {
+		t.Errorf("dashboard.css gallery block still carries attr(data-label)")
 	}
 	// No rule whose subject is the gallery, a page, a split or a pane hides
 	// it by display, visibility, opacity or content-visibility (the empty
@@ -108,10 +111,11 @@ func TestGalleryNoReservedColumnWithoutAPage(t *testing.T) {
 
 // TestGalleryLayoutModes runs the dynamic 4-band layout mapping (cards.js
 // canFitFourCol + dashboard.js galMode + layout hook over WsGallery.layout)
-// under node: Bands 1-3 keep narrow/fused gallery (no overlay rail from
-// 1600px); Band 4 opens the 4th column iff !tabs && vw >= 1600 &&
-// spareRight >= boardW (e.g. >= 2442px on default 5:7 live pages, >= 2188px
-// on 900px board-first pages).
+// under node: the 3-column narrow view (34px rail strip over #bcol) holds
+// until Band 4 opens the 4th column iff !tabs && vw >= 1600 && spare stage
+// width fits a column as wide as the board (>= 2382px on default 5:7 live
+// pages with the left rail open, >= 2094px with it collapsed, >= 2128px on
+// 900px board-first pages).
 func TestGalleryLayoutModes(t *testing.T) {
 	js := mustAsset(t, "dashboard.js")
 	cardsJS := mustAsset(t, "cards.js")
@@ -155,6 +159,7 @@ var window = { get innerWidth() { return width; } };
 function railOpen() { rails++; }
 function placeGallery() { placed++; }
 function queueGallery() { placeGallery(); }
+function readRailReserve() { return attrs["data-rail-collapsed"] === "true" ? 0 : (parseFloat(props["--rail-w"]) || 280) + 8; }
 ` + canFit + mode + `
 var optLayout = { ` + hook + ` };
 function at(px, pages, dragging, tabs) {
@@ -164,57 +169,35 @@ function at(px, pages, dragging, tabs) {
   optLayout.layout(s);
   return [attrs["data-gal"] || null, "data-pincol" in attrs, s.overlay];
 }
-check("Band 1 1599px, no page: no gallery", at(1599, 0, false), [null, false, false]);
+check("Band 1 1599px, no page: always-open narrow view", at(1599, 0, false), ["narrow", false, false]);
 check("Band 1 1599px, a page: the narrow view", at(1599, 1, false), ["narrow", false, false]);
 check("Band 1 1599px, a drag with no page: the narrow rail", at(1599, 0, true), ["narrow", false, false]);
-check("Band 2 1640px, a page: fused narrow, no overlay rail", at(1640, 1, false), ["narrow", false, false]);
-check("Band 3 1920px, a page: fused narrow, no overlay rail", at(1920, 1, false), ["narrow", false, false]);
-check("Band 3 2381px live default (280px rail), a page: still Band 3", at(2381, 1, false), ["narrow", false, false]);
-check("Band 4 2382px live default (280px rail), no page: idle empty slot in Col 3", at(2382, 0, false), ["empty", false, false]);
-check("Band 4 2560px live default, a page: 4-col gallery with rail docked", at(2560, 1, false), ["col", true, false]);
-check("Band 4 2560px, a drag with no page: drag slot in Col 3, no pincol", at(2560, 0, true), ["drag", false, false]);
-// Live --rail-w width transitions (220px, 280px, 360px, and collapsed) shift the Band 4 threshold dynamically.
-root.style.setProperty("--rail-w", "220px");
-check("Band 3 2321px live (220px rail), a page: still Band 3", at(2321, 1, false), ["narrow", false, false]);
-check("Band 4 2322px live (220px rail), no page: opens Col 3", at(2322, 0, false), ["empty", false, false]);
-root.style.setProperty("--rail-w", "360px");
-check("Band 3 2461px live (360px rail), a page: still Band 3", at(2461, 1, false), ["narrow", false, false]);
-check("Band 4 2462px live (360px rail), no page: opens Col 3", at(2462, 0, false), ["empty", false, false]);
-root.setAttribute("data-rail-collapsed", "true");
-check("Band 3 2093px live (collapsed rail), a page: still Band 3", at(2093, 1, false), ["narrow", false, false]);
-check("Band 4 2094px live (collapsed rail), no page: opens Col 3", at(2094, 0, false), ["empty", false, false]);
-root.removeAttribute("data-rail-collapsed");
-root.style.setProperty("--rail-w", "280px");
-opt.split = null;
-check("Band 3 2127px board-first (280px rail), no page: still fused narrow", at(2127, 0, false), [null, false, false]);
-check("Band 4 2128px board-first (280px rail), no page: idle empty slot in Col 3", at(2128, 0, false), ["empty", false, false]);
-board = { closest: function (selector) { return selector === ".dgrid.worktree" ? {} : null; } };
-check("worktree 2128px keeps gallery fused while its 753.67px board would not fit", at(2128, 1, false), ["narrow", false, false]);
-check("worktree 2382px fits the board beside its gallery", at(2382, 1, false), ["col", true, false]);
-board = null;
-opt.split = {};
+check("3-col 1600px, no page: stays the narrow view", at(1600, 0, false), ["narrow", false, false]);
+check("3-col 1640px, a page: stays the narrow view", at(1640, 1, false), ["narrow", false, false]);
+check("3-col 1920px, no page: stays the narrow view (no pincol)", at(1920, 0, false), ["narrow", false, false]);
+check("3-col 2381px live default, rail open: no spare width yet", at(2381, 0, false), ["narrow", false, false]);
+check("Band 4 2382px live default, rail open: 4-col gallery with pincol", at(2382, 0, false), ["col", true, false]);
+check("Band 4 2560px live default, no page: 4-col gallery with pincol", at(2560, 0, false), ["col", true, false]);
+check("Band 4 2560px live default, a page: 4-col gallery with pincol", at(2560, 1, false), ["col", true, false]);
+check("Band 4 2560px, a drag with no page: stays in 4-col gallery", at(2560, 0, true), ["col", true, false]);
+attrs["data-rail-collapsed"] = "true";
+check("rail collapsed 2093px: still no spare width", at(2093, 0, false), ["narrow", false, false]);
+check("rail collapsed 2094px: 4-col gallery with pincol", at(2094, 0, false), ["col", true, false]);
+check("rail collapsed 1920px: stays the narrow view", at(1920, 0, false), ["narrow", false, false]);
+delete attrs["data-rail-collapsed"];
+check("rail expanded again 2094px: back to the narrow view", at(2094, 0, false), ["narrow", false, false]);
+opt = { split: null }; board = null;
+check("non-split 2127px rail open: no spare width", at(2127, 0, false), ["narrow", false, false]);
+check("non-split 2128px rail open: 4-col", at(2128, 0, false), ["col", true, false]);
+opt = { split: {} };
+check("tabs at 2560px, no page: always-open narrow view", at(2560, 0, false, true), ["narrow", false, false]);
 check("tabs at 2560px, a page: the narrow view", at(2560, 1, false, true), ["narrow", false, false]);
-boardw = 1100; convow = 532;
-check("Band 4 2560px widened live, no page: stays in empty Band 4", at(2560, 0, false), ["empty", false, false]);
-check("Band 4 2560px widened live, a page: stays in col Band 4", at(2560, 1, false), ["col", true, false]);
-check("Band 3 1920px widened live, no page: collapses out of Band 4", at(1920, 0, false), [null, false, false]);
-check("Band 3 1920px widened live, a page: falls back to Band 3 narrow", at(1920, 1, false), ["narrow", false, false]);
-opt.split = null; convow = 0; boardw = 1300;
-check("Band 4 2560px widened board-first, no page: stays in empty Band 4", at(2560, 0, false), ["empty", false, false]);
-check("Band 3 1920px widened board-first, a page: falls back to Band 3 narrow", at(1920, 1, false), ["narrow", false, false]);
-board = { closest: function (selector) { return selector === ".dgrid.worktree" ? {} : null; } };
-boardw = 1600;
-check("Band 4 2560px widened worktree, no page: stays in empty Band 4", at(2560, 0, false), ["empty", false, false]);
-check("Band 3 1920px widened worktree, a page: falls back to Band 3 narrow", at(1920, 1, false), ["narrow", false, false]);
-board = null;
-boardw = 0; convow = 0;
-opt.split = {};
-rails = 0; at(1920, 1, false); at(2560, 1, false); at(1920, 1, false);
+rails = 0; at(1400, 0, false); at(2560, 0, false); at(1400, 0, false);
 check("each pincol transition closes the session rail overlay once", rails, 2);
-placed = 0; at(1920, 1, false);
-check("Band 3 places the gallery over the board column", [placed, galNarrow], [1, true]);
-at(2560, 1, false);
-check("Band 4 stops placing the narrow overlay", galNarrow, false);
+placed = 0; at(1400, 0, false);
+check("narrow places the gallery over the board column", [placed, galNarrow], [1, true]);
+at(2560, 0, false);
+check("wide stops placing the narrow overlay", galNarrow, false);
 process.stdout.write(bad.join("\n"));
 `)
 }
@@ -254,47 +237,31 @@ func TestConversationSplitHandle(t *testing.T) {
 	}
 }
 
-// TestLiveCellIsTheConversationAndTheBoard pins the push layout beside the
-// pinned column on the live page: once a board width is set (data-boardw,
-// the board's own column there, cards.js TestColumnGrabsPush), the board's
-// cell is the conversation's width (--cvw: --convow, else the 5:7 share of
-// the board), the grid's 8px gap and the board's, clamped as the cell was,
-// so each handle moves only the panel on its left and the column takes the
-// difference; the grid gives the conversation its width and the board the
-// rest. Other pages keep --boardw as the whole cell.
+// TestLiveCellIsTheConversationAndTheBoard pins the always-open Band 4 width
+// model: --bgal-w / --bgal-eff-w sizes the right gallery column while the
+// stage column (conversation + board) takes the flexible remainder, and legacy
+// --boardw / data-boardw rules are retired.
 func TestLiveCellIsTheConversationAndTheBoard(t *testing.T) {
 	css := mustAsset(t, "dashboard.css")
 	for _, want := range []string{
-		".dash[data-split-grid] { --cvw: var(--convow, calc(var(--boardw) * 5 / 7)); }",
-		`  :root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody[data-split-grid] { grid-template-columns: var(--rail-w, 280px) minmax(0, min(var(--cvw) + 8px + var(--boardw), 100% - (var(--rail-reserve, 288px) + 288px))) minmax(280px, 1fr); }`,
-		`:root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"], [data-overview-preview]) .dgrid:is(.live, .history) { --dgrid-cols: minmax(320px, min(var(--cvw), 100% - 360px - var(--dgrid-gap))) minmax(0, 1fr); }`,
+		`:root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody { grid-template-columns: var(--rail-w, 280px) minmax(0, 1fr) var(--bgal-eff-w, var(--bgal-w, 540px)); }`,
+		`:root[data-overview-preview] .dbody { grid-template-columns: var(--rail-w, 280px) minmax(0, 1fr) var(--bgal-eff-w, var(--bgal-w, 540px)); }`,
 		".dgrid { --dgrid-cols: minmax(320px, 5fr) minmax(0, 7fr); --dgrid-gap: 8px; }",
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("dashboard.css lacks %q", want)
 		}
 	}
-	// Band 3 must ignore data-boardw: --stagew stays --pbw and every
-	// :root[data-boardw] rule in dashboard.css is scoped to Band 4 (gallery
-	// column or wide-only overview Quick Look preview).
 	for _, gone := range []string{
-		":root[data-boardw] .dash.board",
-		":root[data-boardw] .dash[data-split-grid]",
-		":root[data-boardw] .dgrid:is(.live, .history)",
+		":root[data-boardw]",
+		"--boardw",
 	} {
 		if strings.Contains(css, gone) {
-			t.Errorf("dashboard.css leaks Band 4 width into Band 3 via %q", gone)
+			t.Errorf("dashboard.css still carries retired %q", gone)
 		}
 	}
 	if matches := regexp.MustCompile(`--stagew\s*:[^;]+;`).FindAllString(css, -1); len(matches) != 1 || matches[0] != "--stagew: var(--pbw);" {
 		t.Errorf("--stagew definitions = %v, want only [--stagew: var(--pbw);]", matches)
-	}
-	for _, m := range regexp.MustCompile(`:root\[data-boardw\][^{]*`).FindAllString(css, -1) {
-		if !strings.Contains(m, `:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"])`) &&
-			!strings.Contains(m, `:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"], [data-overview-preview])`) &&
-			!strings.Contains(m, `:root[data-boardw][data-overview-preview]`) {
-			t.Errorf("unscoped :root[data-boardw] selector %q", strings.TrimSpace(m))
-		}
 	}
 }
 

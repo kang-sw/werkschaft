@@ -26,6 +26,10 @@ var dashboardPackages = []struct {
 	{"wsflow", wsflowClaudeManifestPath, filepath.Join("..", "..", "..", "agents-plugin-wsflow", "dashboard-config-manifest.json"), true},
 }
 
+// companionTierPattern is the companion tier keys' declared grammar: empty,
+// a bare tier, alias, bundle or <node>:<size>, optionally .<tier>.
+const companionTierPattern = `^([a-z0-9][a-z0-9_:-]{0,63}(\.[a-z0-9][a-z0-9_-]{0,15})?)?$`
+
 // perPackageDefault is a dashboard key whose default differs by package.
 func perPackageDefault(key any) bool {
 	return key == DashboardEnabledKey
@@ -74,8 +78,8 @@ func TestShippedDashboardManifestsLoadBesideEachPackageManifest(t *testing.T) {
 				t.Fatalf("rejected: %v", declared.rejected)
 			}
 			own := loadDeclaredConfig(pkg.own)
-			if len(declared.keys) != len(own.keys)+28 {
-				t.Fatalf("%d keys loaded, want the package's %d plus 28 dashboard keys", len(declared.keys), len(own.keys))
+			if len(declared.keys) != len(own.keys)+30 {
+				t.Fatalf("%d keys loaded, want the package's %d plus 30 dashboard keys", len(declared.keys), len(own.keys))
 			}
 			for _, tc := range []struct {
 				key, kind, pattern string
@@ -96,6 +100,8 @@ func TestShippedDashboardManifestsLoadBesideEachPackageManifest(t *testing.T) {
 				{"dashboard.companion_sources", "string", "", "", nil, "https://example.invalid/packs.git http://bad", nil},
 				{"dashboard.companion_soul", "string", "^([a-z0-9][a-z0-9_-]{0,63})?$", "", nil, "work_soul-1", []string{"Bad Soul", "-bad"}},
 				{"dashboard.companion_soul_dir", "string", "", "", nil, "~/companion-soul", nil},
+				{"dashboard.companion_body_tier", "string", companionTierPattern, "", nil, "claude.small", []string{"Claude.small", "a b", ".small", "claude."}},
+				{"dashboard.companion_work_tier", "string", companionTierPattern, "", nil, "review:large", []string{"-medium", "x.y.z"}},
 			} {
 				key, ok := declared.lookup(tc.key)
 				if !ok || key.Type != tc.kind || key.DefaultValue != tc.def || key.DefaultScope != wsconfig.ScopeGlobal || key.Pattern != tc.pattern || !reflect.DeepEqual(key.Enum, tc.enum) {

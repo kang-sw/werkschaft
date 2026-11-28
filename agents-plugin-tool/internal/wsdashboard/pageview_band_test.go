@@ -189,12 +189,12 @@ func TestBandRegionsSitAroundTheMessageBox(t *testing.T) {
 	if composer < 0 || !(composer < ctx && ctx < text && text < sline) {
 		t.Fatalf("band regions out of place: composer %d ctx %d textarea %d sline %d", composer, ctx, text, sline)
 	}
-	lacks(t, "external session", domOnly(extPage), `id="composer-pills"`, `data-pop="perm"`, `shield`)
+	lacks(t, "external session", domOnly(extPage), `id="composer-pills"`, `data-pop="perm"`, `#l-shield`)
 
 	// Hosted local lead shows exactly Model + Effort triggers (no Permission).
 	leadDOM := domOnly(render(true, false, true, "opus-4.6", "high"))
 	contains(t, "hosted local lead", leadDOM, `id="composer-pills"`, `data-pop="model"`, `data-pop="effort"`, `opus-4.6`, `high`, `#l-cpu`, `#l-gauge`, `#l-chevron-down`)
-	lacks(t, "hosted local lead", leadDOM, `data-pop="perm"`, `#l-lock`, `shield`)
+	lacks(t, "hosted local lead", leadDOM, `data-pop="perm"`, `#l-lock`, `#l-shield`)
 
 	// Non-local hosted lead disables triggers with host-machine tooltip (no lock icon).
 	remoteDOM := domOnly(render(true, false, false, "opus-4.6", "high"))

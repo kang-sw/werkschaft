@@ -97,7 +97,7 @@ q = function (sel) {
   if (sel === ".rpop:not([hidden]), .lmenu, #tkdrawer[open]") return railPops.concat(linkMenus, tkDrawers);
   return [];
 };
-`+mustAsset(t, "shell.js")+dashboardFuncs(t, "syncPageVisibility")+open+connect+show+tick+post+search+frame+`
+`+mustAsset(t, "shell.js")+dashboardFuncs(t, "docHidden", "syncPageVisibility")+open+connect+show+tick+post+search+frame+`
 connect();
 shFrameInit();
 flushAnimationFrames();
@@ -241,6 +241,7 @@ var location = { origin: ORIGIN, pathname: "/s/a", hash: "", search: "?token=t",
 var pushed = [];
 var history = { pushState: function (s, t, u) { pushed.push(u); var x = new URL(u, ORIGIN); location.pathname = x.pathname; location.hash = x.hash; location.search = ""; },
   replaceState: function (s, t, u) { var x = new URL(u, ORIGIN); location.pathname = x.pathname; location.hash = x.hash; } };
+function hdNavigated() {}
 var listeners = {};
 var window = { addEventListener: function (t, fn) { (listeners[t] = listeners[t] || []).push(fn); }, top: null, parent: null };
 window.top = window.parent = window;

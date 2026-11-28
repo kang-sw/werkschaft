@@ -22,6 +22,10 @@ live by the daemon.
 - Every ask goes on the board as an item.
 - One item per decision, never bundled into a panel or a shared ask; patch or
   re-ask it as the work moves.
+- One subject per topic. Route a different subject — including a hotfix or side
+  report that surfaces mid-task — to a matching topic or a new `wb:topic` stem,
+  never onto whichever topic is currently open (prevents unrelated hotfixes from
+  polluting an active topic's log and items); unsure → new stem.
 - A discussion reached a conclusion (decisions settled, a diagnosis finished,
   a ticket written or promoted) → before the topic closes or goes idle, post
   an item proposing the follow-up: what runs next (implementation, a ticket
@@ -103,6 +107,9 @@ it.
 - `name` is the topic's stem (lowercase letters, digits, hyphens, at most 40);
   `label` is the shown title. Give a stem at creation; later groups write the
   stem alone. `label` on an existing topic renames it.
+- Before writing to an existing stem when the user's message names no topic,
+  match by subject against open topics (`{{.McpNamespace}}/whiteboard.query`);
+  if none fits, open a new stem (or reopen a closed one on that subject).
 - `tickets="<stem> <stem>"` links the tickets the topic tracks (replaces the
   list). A topic that defers work to a ticket links it before closing.
 - A group's content reopens a closed topic. `wb:close` withdraws the topic's

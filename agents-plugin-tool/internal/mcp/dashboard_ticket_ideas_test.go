@@ -40,16 +40,11 @@ func TestDashboardTicketIdeasOnlyOnDemand(t *testing.T) {
 	}
 	t.Cleanup(func() { whiteboardTicketsList = original })
 	page := readPageOK(t, src, reg)
-	if len(reads) == 0 {
-		t.Fatal("live page read no ticket panel")
+	if len(reads) != 0 {
+		t.Fatalf("retired #p-tickets should not list tickets during live ReadPage, read %v", reads)
 	}
-	for _, statuses := range reads {
-		if !reflect.DeepEqual(statuses, []string{"ready", "todo"}) {
-			t.Fatalf("live page read %v", statuses)
-		}
-	}
-	if strings.Contains(string(page.Board.Panels), "Idea &lt;one&gt;") || strings.Count(string(page.Board.Panels), `class="kcard"`) != 13 {
-		t.Fatalf("live panel did not list all ready/todo alone: %s", page.Board.Panels)
+	if strings.Contains(string(page.Board.Panels), `id="p-tickets"`) || strings.Contains(string(page.Board.Panels), "Idea &lt;one&gt;") {
+		t.Fatalf("live panel must omit retired #p-tickets and idea tickets: %s", page.Board.Panels)
 	}
 	for _, watch := range page.Watch {
 		if strings.Contains(watch, filepath.Join("tickets", "idea")) {

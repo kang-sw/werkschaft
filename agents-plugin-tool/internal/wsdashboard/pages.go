@@ -27,7 +27,7 @@ import (
 // (wswhiteboard.RenderRegions); the rest render from the view model
 // (pageview.go).
 
-//go:embed assets/dashboard.tmpl assets/dashboard-settings-catalog.json assets/dashboard.css assets/dashboard-*.css assets/dashboard.js assets/dashboard-*.js assets/sprite.svg assets/tracker.css assets/tracker.js assets/tracker-*.js assets/mention.js assets/capsules.js assets/md-parser.js assets/md-editor.js assets/ws-input.js assets/toast.js assets/confirm.js assets/hold-confirm.js assets/rail.js assets/memo.js assets/memo.css assets/usage.js assets/usage.css assets/gallery.js assets/gal-rail-preview.js assets/cards.js assets/preview.js assets/panelcard.js assets/files.js assets/terminal.js assets/shell.js assets/webcard.js assets/webframe.js assets/webinject.js assets/overview.js assets/brand/werkschaft-dark.svg assets/brand/werkschaft-light.svg
+//go:embed assets/dashboard.tmpl assets/dashboard-settings-catalog.json assets/dashboard.css assets/dashboard-*.css assets/dashboard.js assets/dashboard-*.js assets/sprite.svg assets/tracker.css assets/tracker.js assets/tracker-*.js assets/mention.js assets/capsules.js assets/md-parser.js assets/md-editor.js assets/ws-input.js assets/toast.js assets/confirm.js assets/hold-confirm.js assets/rail.js assets/memo.js assets/memo.css assets/usage.js assets/usage-*.js assets/usage.css assets/gallery.js assets/gal-rail-preview.js assets/cards.js assets/preview.js assets/panelcard.js assets/files.js assets/terminal.js assets/shell.js assets/webcard.js assets/webframe.js assets/webinject.js assets/overview.js assets/brand/werkschaft-dark.svg assets/brand/werkschaft-light.svg
 var dashboardFS embed.FS
 
 // These are ordered source fragments, not independently loaded scripts or
@@ -71,16 +71,21 @@ var dashboardScriptFiles = []string{
 	"dashboard-ticketmap-viewb.js",
 	"dashboard-ticketmap-geom.js",
 	"dashboard-ticketmap-graph.js",
+	"dashboard-workpanel.js",
 	"dashboard-frames.js",
 	"dashboard-git.js",
+	"dashboard-gitpage.js",
+	"dashboard-gitpage-wt.js",
 	"dashboard-tracker.js",
 	"dashboard-selection.js",
 	"dashboard-stream.js",
 	"dashboard-daemon-confirm.js",
 	"dashboard-daemon-bridge.js",
+	"dashboard-daemon-guide.js",
 	"dashboard-rail.js",
 	"dashboard-workspace-admission.js",
 	"dashboard-rail-popovers.js",
+	"dashboard-holders.js",
 	"dashboard-leads.js",
 	"dashboard-new-session.js",
 	"dashboard-tier-picker.js",
@@ -111,6 +116,7 @@ var companionScriptFiles = []string{
 	"dashboard-companion-vrm-colead.js",
 	"dashboard-companion-vrm.js",
 	"dashboard-companion-messenger.js",
+	"dashboard-companion-messenger-presence.js",
 	"dashboard-companion-stage.js",
 }
 
@@ -128,13 +134,18 @@ var dashboardStyleFiles = []string{
 	"dashboard-layout.css",
 	"dashboard-drawer.css",
 	"dashboard-ticketmap.css",
+	"dashboard-workpanel.css",
+	"dashboard-git.css",
+	"dashboard-gitpage.css",
 	"dashboard-menus.css",
 	"dashboard-rail.css",
 	"dashboard-new-session.css",
 	"dashboard-shell.css",
 	"dashboard-account-consent.css",
 	"dashboard-daemon-confirm.css",
+	"dashboard-daemon-guide.css",
 	"dashboard-ide-shell.css",
+	"dashboard-holders.css",
 	"dashboard-audit.css",
 	"dashboard-audit-rows.css",
 	"dashboard-exec-hud.css",
@@ -162,6 +173,12 @@ var trackerScriptFiles = []string{
 	"tracker-mount.js",
 }
 
+var usageScriptFiles = []string{
+	"usage.js",
+	"usage-charts.js",
+	"usage-popover.js",
+}
+
 func readDashboardSource(read func(string) ([]byte, error), name string) ([]byte, error) {
 	var files []string
 	switch name {
@@ -171,6 +188,8 @@ func readDashboardSource(read func(string) ([]byte, error), name string) ([]byte
 		files = dashboardStyleFiles
 	case "tracker.js":
 		files = trackerScriptFiles
+	case "usage.js":
+		files = usageScriptFiles
 	case "dashboard-companion.js":
 		files = companionScriptFiles
 	case "dashboard-companion.css":
@@ -341,6 +360,7 @@ type dashboardAssets struct {
 	wbViewerParts []scriptPart
 	trackerParts  []scriptPart
 	mentionParts  []scriptPart
+	usageParts    []scriptPart
 	cardsParts    []scriptPart
 }
 
@@ -547,6 +567,10 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 	if mErr != nil {
 		return nil, mErr
 	}
+	usageParts, usageJoined, uErr := readNamedScriptParts(read, usageScriptFiles, "")
+	if uErr != nil {
+		return nil, uErr
+	}
 	cardsParts, cardsJoined, cErr := readNamedScriptParts(read, []string{"gallery.js", "gal-rail-preview.js", "cards.js"}, "\n;\n")
 	if cErr != nil {
 		return nil, cErr
@@ -564,6 +588,7 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 		wbViewerParts: wbViewerParts,
 		trackerParts:  trackerParts,
 		mentionParts:  mentionParts,
+		usageParts:    usageParts,
 		cardsParts:    cardsParts,
 		data: pageAssetsData{
 			CSS:               template.CSS(get("dashboard.css") + "\n" + get("memo.css") + "\n" + get("usage.css")),
@@ -578,13 +603,13 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 			HoldConfirmScript: template.JS(get("hold-confirm.js")),
 			RailScript:        template.JS(get("rail.js")),
 			MemoScript:        template.JS(get("memo.js")),
-			UsageScript:       template.JS(get("usage.js")),
+			UsageScript:       template.JS(usageJoined),
 			ShellScript:       template.JS(get("shell.js")),
 			CompanionScript:   template.JS(get("dashboard-companion.js")),
 			CompanionCSS:      template.CSS(get("dashboard-companion.css")),
 			CompanionVrmFile:  companionVrmName,
 			SettingsCSS:       template.CSS(get("dashboard-settings.css") + "\n" + optional("dashboard-settings-extras.css") + "\n" + get("dashboard-settings-tiers.css") + "\n" + get("dashboard-settings-preferences.css") + "\n" + get("dashboard-settings-account.css") + "\n" + get("dashboard-settings-voice.css") + "\n" + get("dashboard-settings-companion.css")),
-			SettingsScript:    template.JS(get("hold-confirm.js") + "\n;\n" + optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings-combobox.js") + "\n;\n" + get("dashboard-settings-tiers.js") + "\n;\n" + get("dashboard-settings-preferences.js") + "\n;\n" + get("dashboard-voice-native.js") + "\n;\n" + get("dashboard-settings-account-shared.js") + "\n;\n" + get("dashboard-settings-account-harness.js") + "\n;\n" + get("dashboard-settings-account-runtime.js") + "\n;\n" + get("dashboard-settings-account.js") + "\n;\n" + get("dashboard-settings-voice.js") + "\n;\n" + get("dashboard-settings-companion.js") + "\n;\n" + get("dashboard-settings.js")),
+			SettingsScript:    template.JS(get("hold-confirm.js") + "\n;\n" + optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings-combobox.js") + "\n;\n" + get("dashboard-settings-tiers.js") + "\n;\n" + get("dashboard-settings-preferences.js") + "\n;\n" + get("dashboard-voice-native.js") + "\n;\n" + get("dashboard-settings-account-shared.js") + "\n;\n" + get("dashboard-settings-account-harness.js") + "\n;\n" + get("dashboard-settings-account-runtime.js") + "\n;\n" + get("dashboard-settings-account.js") + "\n;\n" + get("dashboard-settings-voice.js") + "\n;\n" + get("dashboard-settings-companion-agents.js") + "\n;\n" + get("dashboard-settings-companion.js") + "\n;\n" + get("dashboard-settings.js")),
 			SettingsCatalog:   template.JS(get("dashboard-settings-catalog.json")),
 			OverviewScript:    template.JS(get("overview.js")),
 			CardsScript:       template.JS(cardsJoined),

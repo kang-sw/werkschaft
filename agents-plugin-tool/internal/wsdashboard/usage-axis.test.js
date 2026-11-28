@@ -3,16 +3,18 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { execFileSync } = require('node:child_process');
+const { readAssetSource } = require('./testdata/asset-source.cjs');
 const window = {};
-vm.runInNewContext(fs.readFileSync(__dirname + '/assets/usage.js', 'utf8'), { window });
+vm.runInNewContext(readAssetSource('wsdashboard', 'usage.js'), { window });
 const axis = window.WsUsage.weeklyAxis;
 
 test('weekly calendar grid follows local midnights across both DST transitions', () => {
   // A separate process makes the timezone explicit without mutating the runner.
   const script = `
     const assert = require('node:assert/strict');
-    const fs = require('node:fs'), vm = require('node:vm'), window = {};
-    vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), { window });
+    const vm = require('node:vm'), window = {};
+    const { readAssetSource } = require(process.argv[1]);
+    vm.runInNewContext(readAssetSource('wsdashboard', 'usage.js'), { window });
     for (const month of [2, 10]) {
       const reset = new Date(2026, month, month === 2 ? 12 : 5, 17, 30).getTime();
       const start = reset - 7 * 86400000;
@@ -32,7 +34,7 @@ test('weekly calendar grid follows local midnights across both DST transitions',
       }));
     }
   `;
-  execFileSync(process.execPath, ['-e', script, __dirname + '/assets/usage.js'], { env: { ...process.env, TZ: 'America/New_York' } });
+  execFileSync(process.execPath, ['-e', script, __dirname + '/testdata/asset-source.cjs'], { env: { ...process.env, TZ: 'America/New_York' } });
 });
 
 test('midnight-aligned windows label each full day without duplicate edge labels', () => {

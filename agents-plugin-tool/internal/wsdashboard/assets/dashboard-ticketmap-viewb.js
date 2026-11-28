@@ -661,8 +661,11 @@
       function label(g, x, y, text, count) {
         var s = el("span", "d-tm-wl d-tm-wl-" + g, text);
         if (count) s.appendChild(el("b", "", String(count)));
-        s.style.transform = "translate(" + x.toFixed(1) + "px," + y.toFixed(1) + "px)";
         F.lab.appendChild(s);
+        // A label by a wire near the right edge stays inside (the narrow
+        // docked pane).
+        x = Math.max(0, Math.min(x, hr.width - s.offsetWidth - 2));
+        s.style.transform = "translate(" + x.toFixed(1) + "px," + y.toFixed(1) + "px)";
       }
       function visible(scope) {
         return Array.prototype.filter.call(scope.querySelectorAll(".d-tm-xc"), shownEl).map(function (c) { return [c, R(c)]; });
@@ -852,6 +855,17 @@
       var mention = tm.mentionButton(n, "d-tm-mention-inspector");
       if (mention) hd.appendChild(mention);
       body.appendChild(hd);
+      // Full View and Open File sit under the header (the mockup's sheet).
+      var acts = el("div", "d-tm-iacts");
+      var full = tm.button("btn d-tm-btn", wsT("js.tmap.focus.full"), "file-text");
+      full.addEventListener("click", function () { tm.openFull(n.i); });
+      acts.appendChild(full);
+      if (tm.fileTakes(n)) {
+        var file = tm.button("btn d-tm-btn d-tm-ifile", wsT("js.tmap.full.card"), "external-link");
+        file.addEventListener("click", function () { tm.openFile(n); });
+        acts.appendChild(file);
+      }
+      body.appendChild(acts);
       var kv = el("dl", "d-tm-kv");
       function row(key, v) {
         kv.appendChild(el("dt", "", wsT(key)));
@@ -907,9 +921,6 @@
       });
       if (!sims.length) sl.appendChild(el("span", "d-tm-inone", wsT("js.tmap.insp.none")));
       body.appendChild(sl);
-      var full = tm.button("btn d-tm-btn", wsT("js.tmap.focus.full"), "file-text");
-      full.addEventListener("click", function () { tm.openFull(n.i); });
-      body.appendChild(full);
     }
 
     // show follows the shared filters and selection (either may have

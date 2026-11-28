@@ -1906,8 +1906,30 @@ token is refused (403), and with the variable unset the routes do not exist
 (404). The daemon the launcher starts inherits the launcher's environment
 (the daemon-start step runs under it), so the simplest route is the same
 restart as dev assets: `POST /shutdown`, then
-`WS_MCP_DASHBOARD_PPROF=1 ws-mcp dashboard --port 29417`, then
-`go tool pprof -top 'http://127.0.0.1:29417/debug/pprof/profile?seconds=30'`.
+`WS_MCP_DASHBOARD_PPROF=1 ws-mcp dashboard --port 29417`.
+The pprof routes sit behind the default localhost cookie gate
+(`localhost_auth.go`), so a bare `curl` or
+`go tool pprof http://127.0.0.1:29417/...` gets
+`401 {"error":"login_required"}`. Get the cookie from `POST /auth/cookie`.
+Send the bearer token from `<cache root>/dashboard/endpoint.json` and no
+`Origin` header; the route refuses any request that has one. Download the
+profile with that cookie, then read the file:
+
+```sh
+EP=<cache root>/dashboard/endpoint.json
+PORT=$(jq -r .port "$EP"); TOKEN=$(jq -r .token "$EP")
+COOKIE=$(curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:$PORT/auth/cookie" | jq -r .value)
+curl -s -H "Cookie: ws_dashboard_localhost=$COOKIE" -o cpu.pb.gz \
+  "http://127.0.0.1:$PORT/debug/pprof/profile?seconds=30"
+go tool pprof -top cpu.pb.gz
+curl -s -H "Cookie: ws_dashboard_localhost=$COOKIE" \
+  "http://127.0.0.1:$PORT/debug/pprof/streams"
+```
+
+The same cookie works for `heap`, `allocs`, `goroutine` and the other
+profiles. The answer's `maxAge` gives the cookie's lifetime; never log
+the cookie or the token.
 `/debug/pprof/streams` answers the live-update counters since the daemon
 started as JSON: wakes by source, signals, renders, `nudges`,
 `session_reads_changed` and `session_reads_unchanged` (re-reads whose

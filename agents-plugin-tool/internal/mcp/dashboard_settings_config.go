@@ -284,6 +284,7 @@ func dashboardCompanionConfig(catalog *wsconfigservice.Catalog, opts wsconfig.Op
 		Sources:              text(wsdashboard.CompanionSourcesKey),
 		Soul:                 text(wsdashboard.CompanionSoulKey),
 		SoulDir:              text(wsdashboard.CompanionSoulDirKey),
+		Lang:                 strings.TrimSpace(overrides[wsconfig.ItemWorkflowLang]),
 	}, nil
 }
 
@@ -333,6 +334,10 @@ func dashboardAdapterReadLimits(key string) (noRepo, noSession bool) {
 		"agy.prefer_native_subagent", "agy.avoid_agy_subagent":
 		return false, true
 	case DashboardPortKey:
+		return true, true
+	case wsdashboard.CompanionBodyTierKey, wsdashboard.CompanionWorkTierKey:
+		// The companion runtime launches outside any repository or session,
+		// so only the project and global values apply.
 		return true, true
 	}
 	if strings.HasPrefix(key, "claude.") {

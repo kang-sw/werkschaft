@@ -25,6 +25,7 @@
   "agents-plugin/dashboard-config-manifest.json#dashboard.companion_agent_cooldown_seconds": "d64a95e309c116e9",
   "agents-plugin/dashboard-config-manifest.json#dashboard.companion_agent_hourly_cap": "490c4c1434b6b420",
   "agents-plugin/dashboard-config-manifest.json#dashboard.companion_attachments": "1608b53b5015a49e",
+  "agents-plugin/dashboard-config-manifest.json#dashboard.companion_body_tier": "adde38025f59766e",
   "agents-plugin/dashboard-config-manifest.json#dashboard.companion_director": "21676f1374244254",
   "agents-plugin/dashboard-config-manifest.json#dashboard.companion_enabled": "4a286f6abfa738ef",
   "agents-plugin/dashboard-config-manifest.json#dashboard.companion_eyes": "4336fbccda6a6e92",
@@ -37,6 +38,7 @@
   "agents-plugin/dashboard-config-manifest.json#dashboard.companion_soul": "a748037511262fb2",
   "agents-plugin/dashboard-config-manifest.json#dashboard.companion_soul_dir": "575202dc61445838",
   "agents-plugin/dashboard-config-manifest.json#dashboard.companion_sources": "aacd562a50b124f3",
+  "agents-plugin/dashboard-config-manifest.json#dashboard.companion_work_tier": "27d279f8c831d648",
   "agents-plugin/dashboard-config-manifest.json#dashboard.enabled": "c3124db07b520596",
   "agents-plugin/dashboard-config-manifest.json#dashboard.lan_enabled": "cd05a6b51944142e",
   "agents-plugin/dashboard-config-manifest.json#dashboard.mailbox_undelivered_minutes": "df012b3541664716",
@@ -45,5 +47,5 @@
   "agents-plugin/dashboard-config-manifest.json#dashboard.voice_backend_order": "134e71ffef319cfc",
   "agents-plugin/dashboard-config-manifest.json#dashboard.voice_language": "7147d79fb041bd7e",
   "agents-plugin/dashboard-config-manifest.json#dashboard.voice_model": "03ab49926821bb7b",
-  "agents-plugin/dashboard-config-manifest.json#dashboard.voice_openrouter_shared_key": "a9fc30cf3b38a373"
+  "agents-plugin/dashboard-config-manifest.json#dashboard.voice_openrouter_shared_key": "2668b8a31ee1aa0a"
 }

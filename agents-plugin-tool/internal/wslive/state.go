@@ -728,6 +728,63 @@ func (st *State) RunningAgents(prefix string) []string {
 	return out
 }
 
+// AgentRow is one subagent row's identity and lifecycle as Snapshot lists
+// it, without its activity, batches or observed model.
+type AgentRow struct {
+	ID            string
+	ReplyID       string
+	AgentKind     string
+	Status        string
+	Compactions   int
+	CompactOrigin string
+}
+
+// AgentRows lists, in no particular order, the rows Snapshot(now).Agents
+// lists: a native row merged into its daemon (pi) row is left out, as
+// mergeSpawnAgents leaves it out, and no other listed field differs from
+// the snapshot's. It copies no activity, batch or observed model, so a
+// per-event caller does not pay for a whole snapshot.
+func (st *State) AgentRows() []AgentRow {
+	out := make([]AgentRow, 0, len(st.agents))
+	hasPi := false
+	for _, a := range st.agents {
+		out = append(out, AgentRow{ID: a.id, ReplyID: a.replyID, AgentKind: a.kind, Status: a.status, Compactions: a.compactions, CompactOrigin: a.compactOrigin})
+		hasPi = hasPi || a.kind == AgentKindPi
+	}
+	if !hasPi {
+		// spawnAgentTargets merges only into a pi row.
+		return out
+	}
+	rows := make([]Agent, len(out))
+	for i, r := range out {
+		rows[i] = Agent{ID: r.ID, ReplyID: r.ReplyID, AgentKind: r.AgentKind}
+	}
+	// Which rows merge does not depend on order, only on which match exists.
+	merged := spawnAgentTargets(rows, st.spawnAliases)
+	if len(merged) == 0 {
+		return out
+	}
+	kept := out[:0]
+	for i, r := range out {
+		if _, drop := merged[i]; !drop {
+			kept = append(kept, r)
+		}
+	}
+	return kept
+}
+
+// RunningNativeAgents counts the running host-native rows (AgentKind empty)
+// Snapshot(now).Agents lists, as AgentRows reads them.
+func (st *State) RunningNativeAgents() int {
+	n := 0
+	for _, r := range st.AgentRows() {
+		if r.Status == StatusRunning && r.AgentKind == "" {
+			n++
+		}
+	}
+	return n
+}
+
 // activityFor is the lead's activity for an empty id, else the subagent's,
 // created running when new.
 func (st *State) activityFor(id string, at int64) (*activityState, error) {
@@ -1246,6 +1303,13 @@ func (st *State) SeedFinished(prev Snapshot) {
 }
 
 // Snapshot is the state as a snapshot, stamped with now (epoch ms).
+//
+// Its observed models (Lead.Observed, Agent.Observed, ObservedAgents values)
+// are shared with the state, not cloned: State publishes them read-only
+// (summarizeObserved) and replaces them whole, so an earlier snapshot keeps
+// the models it was taken with. A caller must not write into one; the
+// dashboard's evidence overlay already shares the same models
+// (ObservedEvidence). Everything else is the caller's own copy.
 func (st *State) Snapshot(now int64) Snapshot {
 	snap := Snapshot{
 		SchemaVersion: SchemaVersion,
@@ -1254,7 +1318,7 @@ func (st *State) Snapshot(now int64) Snapshot {
 		UpdatedAt:     now,
 		HeartbeatMs:   HeartbeatInterval.Milliseconds(),
 		Lead: Lead{
-			Observed:         st.observed[""].clone(),
+			Observed:         st.observed[""],
 			LastTurnOutput:   cloneObservation(st.lastTurnOutput),
 			OutputRate:       cloneOutputRate(st.outputRate),
 			Activity:         st.lead.view(),
@@ -1289,7 +1353,7 @@ func (st *State) Snapshot(now int64) Snapshot {
 			AgentKind:     a.kind,
 			Harness:       a.harness,
 
-			Observed:          st.observed[a.id].clone(),
+			Observed:          st.observed[a.id],
 			Model:             a.model,
 			Effort:            a.effort,
 			ContextTokens:     a.contextTokens,
@@ -1319,7 +1383,7 @@ func (st *State) Snapshot(now int64) Snapshot {
 		if snap.ObservedAgents == nil {
 			snap.ObservedAgents = map[string]*ObservedModel{}
 		}
-		snap.ObservedAgents[id] = o.clone()
+		snap.ObservedAgents[id] = o
 	}
 	return snap
 }

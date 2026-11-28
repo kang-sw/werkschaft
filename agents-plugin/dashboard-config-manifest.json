@@ -190,6 +190,22 @@
       "description": "Overrides the root directory storing companion Portable Soul folders (for example a Git-synced path). Empty uses ~/.ws/companion-soul. Only the global value applies."
     },
     {
+      "key": "dashboard.companion_body_tier",
+      "type": "string",
+      "pattern": "^([a-z0-9][a-z0-9_:-]{0,63}(\\.[a-z0-9][a-z0-9_-]{0,15})?)?$",
+      "default": "",
+      "default_scope": "global",
+      "description": "Agent tier for the Lightweight (body) companion session: empty or auto picks the small tier on the first available harness, or name <harness>.<tier>, a bare tier, an agent.tier_aliases name, or an agent.tier_routing token. Project and global values apply at the next companion launch; a value that cannot launch falls back to auto with a reason shown in Settings."
+    },
+    {
+      "key": "dashboard.companion_work_tier",
+      "type": "string",
+      "pattern": "^([a-z0-9][a-z0-9_:-]{0,63}(\\.[a-z0-9][a-z0-9_-]{0,15})?)?$",
+      "default": "",
+      "default_scope": "global",
+      "description": "Agent tier for the Work companion session: empty or auto picks the medium tier on the first available harness, or name <harness>.<tier>, a bare tier, an agent.tier_aliases name, or an agent.tier_routing token. Project and global values apply at the next companion launch; a value that cannot launch falls back to auto with a reason shown in Settings."
+    },
+    {
       "key": "dashboard.voice_backend",
       "type": "string",
       "pattern": "^([a-z0-9][a-z0-9_/-]{0,79})?$",
@@ -210,7 +226,7 @@
       "type": "boolean",
       "default": false,
       "default_scope": "global",
-      "description": "When true, OpenRouter voice transcription may reuse the top-level OpenRouter agent API key instead of requiring a dedicated OpenRouter (Voice) key. Default false so configuring the agent key never silently enables paid voice transcription. Only the global value applies."
+      "description": "When true, OpenRouter voice transcription may reuse the Werk OpenRouter API key (configured in Account) instead of requiring a dedicated OpenRouter (Voice) key. Default false so configuring the Werk key never silently enables paid voice transcription. Only the global value applies."
     },
     {
       "key": "dashboard.voice_model",

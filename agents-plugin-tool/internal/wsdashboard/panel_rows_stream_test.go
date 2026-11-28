@@ -34,7 +34,7 @@ func panelRowsPublish(t *testing.T, f *pageFixture, agenda, todo string) {
 		tree = append(tree, wswhiteboard.JSONTree("agenda/", fmt.Sprintf("extra%02d", i), []byte(`{"note":"stable reader content"}`)))
 	}
 	view := wswhiteboard.BuildView(&wswhiteboard.State{Seq: 1, Topics: []wswhiteboard.TopicDoc{{Name: "Plan", Body: "unaffected board frame", Changed: 1}}}, wswhiteboard.ViewInput{Layout: wswhiteboard.LayoutFull, Panels: []wswhiteboard.Panel{
-		{ID: "todo", Title: "Tasks", Rows: tasks},
+		{ID: "todo", Title: "Tasks", Count: fmt.Sprintf("0/%d", len(tasks)), Rows: tasks},
 		{ID: "agenda", Title: "Agendas", Tree: tree},
 		{ID: "tickets", Title: "Tickets", Lanes: []wswhiteboard.PanelLane{{Name: "ready", Rows: []wswhiteboard.PanelRow{{Text: "Stable ticket", Path: "ai-docs/tickets/ready/fixture.md"}}}}},
 		{ID: "mailbox", Title: "Mailbox", Count: "1 unread", Rows: []wswhiteboard.PanelRow{{Label: "peer", Text: "Stable mail"}}},

@@ -194,6 +194,7 @@ func (d *Daemon) Done() <-chan struct{} { return d.done }
 func (d *Daemon) Close() {
 	d.closeOnce.Do(func() {
 		close(d.stop)
+		d.closeGuideMonitors()
 		d.closeMeta()
 		d.accountSignIn.stop()
 		d.slotSignIn.stop()
@@ -301,6 +302,8 @@ func (d *Daemon) Close() {
 			}
 		}
 		d.closeCompanionMemory()
+		d.companionPresence.cancel()
+		d.closeCompanionMessengerRing()
 		removeEndpointIfOwned(d.dir, d.endpoint.Token)
 		fmt.Fprintf(d.log, "dashboard: stopped (pid %d)\n", d.endpoint.PID)
 		if d.endLog != nil {

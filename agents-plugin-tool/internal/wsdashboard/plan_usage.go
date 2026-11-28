@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +31,9 @@ type planUsageWindow struct {
 	AsOf     int64   `json:"asOf"`
 	Disabled bool    `json:"disabled,omitempty"`
 }
+// Retained name check: the "werk" JSON member on planUsageEntry is part of the
+// /rail/usage wire contract
+// (TestPlanUsageCodexOpenAIExactWorkspaceMatchUnifiesAndDeduplicatesProbe).
 type planUsageEntry struct {
 	Harness      string               `json:"harness"`
 	Group        string               `json:"group,omitempty"`
@@ -43,6 +47,19 @@ type planUsageEntry struct {
 	Windows      []planUsageWindow    `json:"windows"`
 	OpenRouter   *openRouterUsageView `json:"openrouter,omitempty"`
 	Werk         *werkUsageView       `json:"werk,omitempty"`
+}
+
+type slotKey struct {
+	harness string
+	slotID  string
+}
+
+// planUsageSlotPreview is the additive /rail/usage?history=1 slotPreviews
+// payload for one inactive slot's cached usage and drawable history samples.
+type planUsageSlotPreview struct {
+	AsOf    int64             `json:"asOf,omitempty"`
+	Windows []planUsageWindow `json:"windows"`
+	Samples []planUsageSample `json:"samples"`
 }
 type planUsageStore struct {
 	mu          sync.Mutex
@@ -103,9 +120,11 @@ type planUsageStore struct {
 	// Write seam for all usage files; nil means writePrivateFile.
 	writeFile func(dir, name string, data []byte) error
 	// detected memoizes detect() by the credential files' stats. Guarded by mu.
-	detected     usageDetectMemo
-	gptSlotID    string
-	claudeSlotID string
+	detected      usageDetectMemo
+	gptSlotID     string
+	claudeSlotID  string
+	slotSnapshots map[slotKey]planUsageEntry
+	lastSlotJSON  map[slotKey][]byte
 	// Werk per-model usage aggregates (RAM cache + debounced wsmeta WAL deltas).
 	// Guarded by mu.
 	werkUsage         map[wsmeta.WerkModelUsageKey]wsmeta.WerkModelUsage
@@ -131,43 +150,174 @@ type planUsageStore struct {
 	werkOpenAIDebounce  time.Duration
 }
 
-// invalidateSlots drops the memoized credential detection and resets cached
-// active-slot probe state when a harness default slot changes (D13).
+func clonePlanUsageEntry(e planUsageEntry) planUsageEntry {
+	if len(e.Windows) > 0 {
+		e.Windows = append([]planUsageWindow(nil), e.Windows...)
+	}
+	return e
+}
+
+func slotStorageKey(k slotKey) string {
+	return k.harness + ":" + k.slotID
+}
+
+func (s *planUsageStore) classifyActiveSlotsLocked(active map[string]string) (claudeHarness, claudeActive, gptHarness, gptActive string) {
+	if len(active) == 0 {
+		return "", "", "", ""
+	}
+	harnesses := make([]string, 0, len(active))
+	for h := range active {
+		harnesses = append(harnesses, h)
+	}
+	sort.Strings(harnesses)
+	for _, h := range harnesses {
+		id := active[h]
+		if s.harnesses.pushesClaudeUsage(h) {
+			claudeHarness, claudeActive = h, id
+		} else if s.harnesses.separateFiveHour(h) {
+			gptHarness, gptActive = h, id
+		}
+	}
+	if claudeActive == "" && s.claude.Harness != "" {
+		if id, ok := active[s.claude.Harness]; ok && s.claude.Harness != gptHarness {
+			claudeHarness, claudeActive = s.claude.Harness, id
+		}
+	}
+	if gptActive == "" && s.gpt.Harness != "" {
+		if id, ok := active[s.gpt.Harness]; ok && s.gpt.Harness != claudeHarness {
+			gptHarness, gptActive = s.gpt.Harness, id
+		}
+	}
+	if gptActive == "" {
+		for _, h := range harnesses {
+			if !s.harnesses.pushesClaudeUsage(h) && h != claudeHarness {
+				gptHarness, gptActive = h, active[h]
+				break
+			}
+		}
+	}
+	return claudeHarness, claudeActive, gptHarness, gptActive
+}
+
+// seedSlots initializes claudeSlotID and gptSlotID from the slot registry after
+// harnesses traits have been wired, so post-restart stashes and history stamps
+// target the real active slot rather than assuming "default".
+func (s *planUsageStore) seedSlots() {
+	if s == nil || s.accountSlots == nil {
+		return
+	}
+	active := s.accountSlots.ActiveSlots()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, claudeActive, _, gptActive := s.classifyActiveSlotsLocked(active)
+	if claudeActive != "" && s.claudeSlotID == "" {
+		s.claudeSlotID = claudeActive
+	}
+	if gptActive != "" && s.gptSlotID == "" {
+		s.gptSlotID = gptActive
+	}
+}
+
+func (s *planUsageStore) stashSlotSnapshotLocked(k slotKey, entry planUsageEntry) {
+	if k.harness == "" || k.slotID == "" {
+		return
+	}
+	if entry.AsOf == 0 && len(entry.Windows) == 0 {
+		return
+	}
+	if s.slotSnapshots == nil {
+		s.slotSnapshots = map[slotKey]planUsageEntry{}
+	}
+	cloned := clonePlanUsageEntry(entry)
+	s.slotSnapshots[k] = cloned
+	if s.meta == nil {
+		return
+	}
+	raw, err := json.Marshal(cloned)
+	if err != nil {
+		return
+	}
+	if s.lastSlotJSON == nil {
+		s.lastSlotJSON = map[slotKey][]byte{}
+	}
+	if bytes.Equal(raw, s.lastSlotJSON[k]) {
+		return
+	}
+	if s.meta.PutUsageLatestEntry(context.Background(), wsmeta.UsageSourcePlan, slotStorageKey(k), raw) == nil {
+		s.lastSlotJSON[k] = raw
+	}
+}
+
+func (s *planUsageStore) activeSlotForHarnessLocked(h string) string {
+	if s.harnesses.pushesClaudeUsage(h) {
+		return s.claudeSlotID
+	}
+	if s.harnesses.separateFiveHour(h) {
+		return s.gptSlotID
+	}
+	if s.claude.Harness == h && s.claudeSlotID != "" {
+		return s.claudeSlotID
+	}
+	if s.gpt.Harness == h && s.gptSlotID != "" {
+		return s.gptSlotID
+	}
+	return ""
+}
+
+// invalidateSlots drops the memoized credential detection, stashes outgoing
+// active-slot snapshots, restores any cached snapshot for the incoming slot,
+// and prunes snapshots of removed slots (D13).
 func (s *planUsageStore) invalidateSlots() {
 	if s == nil {
 		return
 	}
-	var gptActive, claudeActive string
+	var active map[string]string
+	var validSlots map[string]map[string]bool
 	if s.accountSlots != nil {
-		active := s.accountSlots.ActiveSlots()
-		for h, id := range active {
-			if s.harnesses.pushesClaudeUsage(h) {
-				claudeActive = id
-			} else if s.harnesses.separateFiveHour(h) {
-				gptActive = id
+		active = s.accountSlots.ActiveSlots()
+		validSlots = make(map[string]map[string]bool, len(active))
+		for h := range active {
+			views := s.accountSlots.Slots(h)
+			set := make(map[string]bool, len(views))
+			for _, v := range views {
+				set[v.ID] = true
 			}
-		}
-		if gptActive == "" {
-			for h, id := range active {
-				if !s.harnesses.pushesClaudeUsage(h) {
-					gptActive = id
-					break
-				}
-			}
+			validSlots[h] = set
 		}
 	}
+	slotValid := func(harness, slotID string) bool {
+		if harness == "" || slotID == "" {
+			return false
+		}
+		if len(validSlots) == 0 {
+			return true
+		}
+		known, managed := validSlots[harness]
+		return !managed || known[slotID]
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	claudeHarness, claudeActive, gptHarness, gptActive := s.classifyActiveSlotsLocked(active)
 	s.detected = usageDetectMemo{}
 	s.openRouterLastProbe = time.Time{}
 	s.resetWerkOpenAILocked()
+	switched := false
 	if claudeActive != "" {
 		prev := s.claudeSlotID
 		if prev == "" {
 			prev = wscred.DefaultAccountSlotID
 		}
 		if claudeActive != prev {
-			s.claude = planUsageEntry{}
+			if slotValid(s.claude.Harness, prev) {
+				s.stashSlotSnapshotLocked(slotKey{harness: s.claude.Harness, slotID: prev}, s.claude)
+			}
+			if restored, ok := s.slotSnapshots[slotKey{harness: claudeHarness, slotID: claudeActive}]; ok {
+				s.claude = clonePlanUsageEntry(restored)
+			} else {
+				s.claude = planUsageEntry{}
+			}
+			switched = true
 		}
 		s.claudeSlotID = claudeActive
 	}
@@ -177,10 +327,32 @@ func (s *planUsageStore) invalidateSlots() {
 			prev = wscred.DefaultAccountSlotID
 		}
 		if gptActive != prev {
-			s.gpt = planUsageEntry{}
+			if slotValid(s.gpt.Harness, prev) {
+				s.stashSlotSnapshotLocked(slotKey{harness: s.gpt.Harness, slotID: prev}, s.gpt)
+			}
+			if restored, ok := s.slotSnapshots[slotKey{harness: gptHarness, slotID: gptActive}]; ok {
+				s.gpt = clonePlanUsageEntry(restored)
+			} else {
+				s.gpt = planUsageEntry{}
+			}
 			s.lastQuery = time.Time{}
+			switched = true
 		}
 		s.gptSlotID = gptActive
+	}
+	if len(validSlots) > 0 && len(s.slotSnapshots) > 0 {
+		for k := range s.slotSnapshots {
+			if known, managed := validSlots[k.harness]; managed && !known[k.slotID] {
+				delete(s.slotSnapshots, k)
+				delete(s.lastSlotJSON, k)
+				if s.meta != nil {
+					_ = s.meta.DeleteUsageLatestEntry(context.Background(), wsmeta.UsageSourcePlan, slotStorageKey(k))
+				}
+			}
+		}
+	}
+	if switched {
+		s.saveLocked()
 	}
 }
 
@@ -261,6 +433,23 @@ func (s *planUsageStore) loadFromMetaLocked(snap *wsmeta.Snapshot) {
 					var g planUsageEntry
 					if json.Unmarshal(e.Body, &g) == nil {
 						s.gpt = g
+					}
+				default:
+					if provider, slotID, ok := strings.Cut(e.Key, ":"); ok && provider != "" && slotID != "" {
+						var entry planUsageEntry
+						if json.Unmarshal(e.Body, &entry) == nil {
+							if s.slotSnapshots == nil {
+								s.slotSnapshots = map[slotKey]planUsageEntry{}
+							}
+							if s.lastSlotJSON == nil {
+								s.lastSlotJSON = map[slotKey][]byte{}
+							}
+							k := slotKey{harness: provider, slotID: slotID}
+							s.slotSnapshots[k] = entry
+							if raw, err := json.Marshal(entry); err == nil {
+								s.lastSlotJSON[k] = raw
+							}
+						}
 					}
 				}
 			}
@@ -438,7 +627,7 @@ func (s *planUsageStore) pushClaude(snap *wslive.Snapshot) {
 		changed = true
 		// Retained name check: the persisted history harness and source labels
 		// (TestPlanUsageHistoryValidatorsKeepPersistedNames).
-		samples = append(samples, planUsageSample{Harness: "claude", Kind: next.Kind, Source: "Claude push", ResetsAt: next.ResetsAt, AsOf: next.AsOf, Percent: next.Percent})
+		samples = append(samples, planUsageSample{Harness: "claude", Kind: next.Kind, Source: "Claude push", SlotID: s.claudeSlotID, ResetsAt: next.ResetsAt, AsOf: next.AsOf, Percent: next.Percent})
 		if next.AsOf > s.claude.AsOf {
 			s.claude.AsOf = next.AsOf
 		}
@@ -676,6 +865,77 @@ func (s *planUsageStore) quotaResetAt(backend, model string) int64 {
 	return 0
 }
 
+// slotPreviews builds the in-memory ?history=1 slotPreviews map for every
+// non-active stashed slot that still has at least one live window. Zero disk
+// reads or probes occur here.
+func (s *planUsageStore) slotPreviews(now int64) map[string]map[string]planUsageSlotPreview {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.slotSnapshots) == 0 {
+		return nil
+	}
+	var sharedPruned, codex5hPruned []planUsageHistoryRecord
+	prunedLoaded := false
+	loadPruned := func() {
+		if prunedLoaded {
+			return
+		}
+		prunedLoaded = true
+		if s.hist.ok && s.hist.err == nil && len(s.hist.file.Records) > 0 {
+			sharedPruned = prunePlanUsageHistory(s.hist.file.Records, now)
+		}
+		if s.codexHist.ok && s.codexHist.err == nil && len(s.codexHist.file.Records) > 0 {
+			codex5hPruned = prunePlanUsageHistory(s.codexHist.file.Records, now)
+		}
+	}
+	var out map[string]map[string]planUsageSlotPreview
+	for k, entry := range s.slotSnapshots {
+		activeID := s.activeSlotForHarnessLocked(k.harness)
+		if activeID == "" || k.slotID == activeID {
+			continue
+		}
+		cur := currentUsage(entry, now)
+		if len(cur.Windows) == 0 {
+			continue
+		}
+		cur.Harness = k.harness
+		loadPruned()
+		filter := map[string]string{k.harness: k.slotID}
+		samples := []planUsageSample{}
+		if len(sharedPruned) > 0 {
+			samples = append(samples, projectPlanUsageHistoryForSlots(sharedPruned, []planUsageEntry{cur}, filter, true)...)
+		}
+		if s.harnesses.separateFiveHour(k.harness) && len(codex5hPruned) > 0 {
+			var fiveWindows []planUsageWindow
+			for _, w := range cur.Windows {
+				if w.Kind == wslive.LimitFiveHour {
+					fiveWindows = append(fiveWindows, w)
+				}
+			}
+			if len(fiveWindows) > 0 {
+				fiveEntry := cur
+				fiveEntry.Windows = fiveWindows
+				samples = append(samples, projectPlanUsageHistoryForSlots(codex5hPruned, []planUsageEntry{fiveEntry}, filter, true)...)
+			}
+		}
+		if out == nil {
+			out = map[string]map[string]planUsageSlotPreview{}
+		}
+		if out[k.harness] == nil {
+			out[k.harness] = map[string]planUsageSlotPreview{}
+		}
+		out[k.harness][k.slotID] = planUsageSlotPreview{
+			AsOf:    cur.AsOf,
+			Windows: cur.Windows,
+			Samples: samples,
+		}
+	}
+	return out
+}
+
 // GET is viewer-authorized by the daemon's ordinary access wrapper. Pages
 // request while connected; there is no polling goroutine without viewers.
 func (d *Daemon) handlePlanUsage(w http.ResponseWriter, r *http.Request) {
@@ -713,6 +973,9 @@ func (d *Daemon) handlePlanUsage(w http.ResponseWriter, r *http.Request) {
 			body["codexFiveHourHistory"] = codexHist
 		}
 		d.planUsage.addAgyHistory(body, entries, now)
+		if previews := d.planUsage.slotPreviews(now); len(previews) > 0 {
+			body["slotPreviews"] = previews
+		}
 	}
 	_ = json.NewEncoder(w).Encode(body)
 }

@@ -81,8 +81,13 @@ func hostedRenderServer(env []string, root string, render HostedRender, key stri
 	if render.DashboardControl {
 		s.dashboardControlEffective = true
 	} else if render.Records != nil {
-		if rec, ok := render.Records.RecordByReplyID(wsmailbox.ReplyID(key)); ok && rec.Lead && rec.Parent == nil && rec.ClosedAt == "" && !isCompanionBodyRecord(rec) && (rec.DashboardControlAccess || isCompanionWorkRecord(rec)) {
-			s.dashboardControlEffective = true
+		if rec, ok := render.Records.RecordByReplyID(wsmailbox.ReplyID(key)); ok && rec.Lead && rec.Parent == nil && rec.ClosedAt == "" {
+			if isCompanionBodyRecord(rec) {
+				// Tier-1 body: the guide subset only (tabs/dom/highlight/monitor).
+				s.dashboardGuideEffective = true
+			} else if rec.DashboardControlAccess || isCompanionWorkRecord(rec) {
+				s.dashboardControlEffective = true
+			}
 		}
 	}
 	// A render may start the session-start tracker check (a background

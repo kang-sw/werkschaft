@@ -68,7 +68,8 @@ func TestAssetIDFollowsAssetContent(t *testing.T) {
 	}
 	names := append([]string{}, dashboardScriptFiles...)
 	names = append(names, dashboardStyleFiles...)
-	names = append(names, "dashboard.tmpl", "rail.js", "shell.js", "tracker.css", "memo.js", "memo.css")
+	names = append(names, usageScriptFiles...)
+	names = append(names, "dashboard.tmpl", "rail.js", "shell.js", "tracker.css", "memo.js", "memo.css", "usage.css")
 	for _, name := range names {
 		if build(name) == base {
 			t.Errorf("an edit to %s keeps the identity", name)

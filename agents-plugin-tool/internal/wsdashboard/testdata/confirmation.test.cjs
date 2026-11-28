@@ -158,35 +158,6 @@ test('card framework preserves the close veto while the hook is pending', async 
   assert.equal(removed, 1);
 });
 
-test('holder terminal stop revalidates its row and current page', async () => {
-  const posts = [];
-  const h = page({ rid: 'session', hdnote: null, hdLoad() {},
-    post: (route, body, done) => posts.push({ route, done }) });
-  vm.runInContext(block('dashboard-git.js', '  var hdTermClosing', '  function hdFail('), h.context);
-  const row = h.context.hdTermRow({ id: 'holder', state: 'running' });
-  const stop = row.children.at(-1).children.at(-1);
-  stop.click();
-  stop.click();
-  h.escape();
-  await settled();
-  assert.equal(posts.length, 0);
-  stop.click();
-  h.context.rid = 'other';
-  actions(h.dialog())[1].click();
-  await settled();
-  assert.equal(posts.length, 0);
-  h.context.rid = 'session';
-  stop.click();
-  actions(h.dialog())[1].click();
-  await settled();
-  assert.equal(posts.length, 1);
-  assert.equal(posts[0].route, 'terminals/holder/close');
-  const refreshed = h.context.hdTermRow({ id: 'holder', state: 'running' });
-  refreshed.children.at(-1).children.at(-1).click();
-  assert.equal(h.dialog(), undefined);
-  assert.equal(posts.length, 1);
-});
-
 test('label removal uses the confirmed store and label once', async () => {
   const writes = [], label = { id: 'L', name: 'Label' };
   const h = page({ ui: { store: 'A' }, VS: { viewer: { admin: true }, labels: [label] },

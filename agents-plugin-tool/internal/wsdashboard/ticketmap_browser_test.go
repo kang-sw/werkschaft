@@ -71,7 +71,7 @@ func startTicketMapBrowser(t *testing.T) *ticketMapEnv {
 		t.Fatal(err)
 	}
 	epicPath := "ai-docs/tickets/" + layout.Dirs[wsdoctest.TicketMapEpicStem] + "/" + wsdoctest.TicketMapEpicStem + ".md"
-	// #thandle shows only while the page has a tickets panel.
+	// The board keeps a tickets panel beside the gallery's docked map.
 	view := wswhiteboard.BuildView(&wswhiteboard.State{Seq: 1, Topics: []wswhiteboard.TopicDoc{{Name: "Plan", Body: "ticket map board", Changed: 1}}},
 		wswhiteboard.ViewInput{Layout: wswhiteboard.LayoutFull, Panels: []wswhiteboard.Panel{
 			{ID: "tickets", Title: "Tickets", Lanes: []wswhiteboard.PanelLane{{Name: "todo", Rows: []wswhiteboard.PanelRow{{Text: "Orchard platform", Path: epicPath}}}}},
@@ -84,6 +84,10 @@ func startTicketMapBrowser(t *testing.T) *ticketMapEnv {
 		o.Port = 0
 		o.LAN = false
 		o.bindHost = "127.0.0.1"
+		// The slimmed drawer hosts only the holders card (Workpanel B retired
+		// Todo/Agenda/Notes there, the Git page the worktree pool): a holder
+		// host keeps the drawer, its handle, and the header's handle room present.
+		o.Holders = &stateFilterTerminalHost{newFakeHolders()}
 		pf := o.Sessions.(*pageFake)
 		p := pf.page("livesession")
 		p.Board = regions
@@ -130,8 +134,8 @@ func (env *ticketMapEnv) run(t *testing.T, label, script string, args ...string)
 	}
 }
 
-// The ticket map overlay and View B in Chromium (the ticket's Phase 2
-// Playwright items 1-14): the #thandle placement, the first open's one
+// The expanded ticket map and View B in Chromium (the ticket's Phase 2
+// Playwright items 1-14): no #thandle, the docked map and its expansion's one
 // request, the matrix, the 3-tier click-focus with measured connectors, the
 // semantic grid, Full View and the file-card hand-off, Esc layering, the
 // framed shell's dim, and the 900px layout, in both themes.
@@ -140,4 +144,24 @@ func (env *ticketMapEnv) run(t *testing.T, label, script string, args ...string)
 func TestTicketMapBrowser(t *testing.T) {
 	env := startTicketMapBrowser(t)
 	env.run(t, "ticket map", "testdata/ticketmap.browser.cjs", env.f.base, env.graph, wsdoctest.TicketMapEpicStem, env.shots, env.mockup)
+}
+
+// The docked Ticket Map in Chromium (the ticket's always-open Phase 2): the
+// gallery rail order, the two-row toolbar with no horizontal overflow in a
+// 540px and a 380px gallery column, the bottom-sheet inspector closed on
+// load and opened by a View B card or a View C star, the container-scoped
+// 1 / 2 / '/' / Esc keys that never reach #ctext, #composer or #cvox, and
+// the one root shared with the expanded #tmback, in both themes.
+// WS_TICKETMAP_SHOTS (absolute) keeps the docked states beside the approved
+// always-open mockup's presets for the side-by-side capture check.
+func TestTicketMapDockBrowser(t *testing.T) {
+	env := startTicketMapBrowser(t)
+	mockup, err := filepath.Abs(filepath.Join("..", "..", "..", "ai-docs", "assets", "mockups", "261128", "gallery-ticketmap-always-open", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(mockup); err != nil {
+		mockup = ""
+	}
+	env.run(t, "docked ticket map", "testdata/ticketmap-dock.browser.cjs", env.f.base, env.graph, wsdoctest.TicketMapEpicStem, env.shots, mockup)
 }

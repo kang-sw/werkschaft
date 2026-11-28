@@ -115,11 +115,10 @@ function entries(variant) {
         assert.equal(await button.getAttribute('aria-expanded'), 'true');
         assert.ok((await dialog.textContent()).includes(variant === 'weekly' ? 'Codex' : 'Claude')); // harness names, never the source
         if (variant === 'stale') {
-          const staleCards = dialog.locator('.usage-window-card.usage-stale');
-          assert.equal(await staleCards.count(), 2);
-          assert.deepEqual(await staleCards.locator('.usage-number').allTextContents(), ['—', '—']);
-          assert.equal(await staleCards.locator('.usage-pace').count(), 0);
-          assert.equal(await staleCards.locator('.usage-no-report').count(), 2);
+          const staleCells = dialog.locator('.up-nc.is-stale');
+          assert.equal(await staleCells.count(), 2);
+          assert.equal(await dialog.locator('.up-nc-clk').count(), 2);
+          assert.equal(await dialog.locator('.up-sync').getAttribute('data-tone'), 'warn');
         }
         await page.keyboard.press('Escape'); await dialog.waitFor({ state: 'hidden' });
         assert.equal(await button.getAttribute('aria-expanded'), 'false');

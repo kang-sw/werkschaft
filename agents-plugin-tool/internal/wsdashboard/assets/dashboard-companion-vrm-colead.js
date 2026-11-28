@@ -121,6 +121,13 @@
     let phoneAnimElapsed = 0;
     let phoneUnreadAgent = 0;
     let phoneLastSnapState = "laptop_ambient";
+    // Server-confirmed hold: null until the first snapshot, then whether the
+    // latest snapshot said the phone is held. A pickup/typing pose the server
+    // does not confirm within PHONE_UNCONFIRMED_GRACE is put back down, so a
+    // lost putdown command can never strand the phone in hand.
+    let phoneSnapHeld = null;
+    let phoneUnconfirmedElapsed = 0;
+    const PHONE_UNCONFIRMED_GRACE = 4;
     let phoneHoldWeight = 0;
     let phoneTypingWeight = 0;
     let phoneMerongWeight = 0;
@@ -317,6 +324,16 @@
             phoneMode = phoneUnreadAgent > 0 ? "buzz" : "desk";
             phoneAnimElapsed = 0;
           }
+        }
+        if (phoneSnapHeld === false && (phoneMode === "pickup" || phoneMode === "typing")) {
+          phoneUnconfirmedElapsed += dt;
+          if (phoneUnconfirmedElapsed >= PHONE_UNCONFIRMED_GRACE) {
+            phoneMode = phoneFaceDown ? "facedown-merong" : "putdown";
+            phoneAnimElapsed = 0;
+            phoneUnconfirmedElapsed = 0;
+          }
+        } else {
+          phoneUnconfirmedElapsed = 0;
         }
         if (dizzyPhase !== "none") {
           dizzyElapsed += dt;
@@ -828,7 +845,12 @@
       if (g === "phone_buzz") { phoneFaceDown = false; phoneMode = "buzz"; phoneAnimElapsed = 0; return true; }
       if (g === "phone_pickup") { phoneFaceDown = false; phoneMode = "pickup"; phoneAnimElapsed = 0; return true; }
       if (g === "phone_typing") { phoneFaceDown = false; phoneMode = "typing"; phoneAnimElapsed = 0; return true; }
-      if (g === "phone_putdown") { phoneFaceDown = false; phoneMode = "putdown"; phoneAnimElapsed = 0; return true; }
+      if (g === "phone_putdown") {
+        // The server always emits putdown when it clears a hold, so a putdown
+        // that finds the phone already resting is a no-op, not a replay.
+        if (phoneMode === "desk" || phoneMode === "buzz" || phoneMode === "putdown") return true;
+        phoneFaceDown = false; phoneMode = "putdown"; phoneAnimElapsed = 0; return true;
+      }
       if (g === "phone_merong_facedown") { phoneFaceDown = true; phoneMode = "facedown-merong"; phoneAnimElapsed = 0; return true; }
       if (g === "knock_startle") { knockKind = "knock-startle"; knockElapsed = 0; knockDuration = KNOCK_STARTLE_DURATION; return true; }
       if (g === "wakeup_jolt") { knockKind = "wakeup-jolt"; knockElapsed = 0; knockDuration = KNOCK_WAKEUP_DURATION; return true; }
@@ -846,8 +868,10 @@
       phoneUnreadAgent = unread;
       phoneFaceDown = faceDown;
       phoneLastSnapState = nextState;
+      phoneSnapHeld = nextState === "phone_active" || nextPosture === "phone";
+      phoneUnconfirmedElapsed = 0;
 
-      if (nextState === "phone_active" || nextPosture === "phone") {
+      if (phoneSnapHeld) {
         if (phoneMode !== "pickup" && phoneMode !== "typing") {
           phoneMode = "pickup";
           phoneAnimElapsed = 0;

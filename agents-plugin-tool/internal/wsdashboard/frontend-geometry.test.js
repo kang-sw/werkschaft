@@ -14,42 +14,11 @@ function section(source, start, end) {
   return source.slice(a, b);
 }
 
-test('drawer fill coalesces and reads geometry before room and span writes', () => {
-  const source = section(asset('dashboard-drawer.js'), '  var drFilled =', '  function drDot()');
-  const frames = [], events = [];
-  const cards = Array.from({ length: 5 }, () => ({
-    children: [],
-    style: { set gridRow(value) { events.push('span:' + value); } }
-  }));
-  const body = { children: cards, hidden: false };
-  const context = {
-    drbody: body,
-    requestAnimationFrame(fn) { frames.push(fn); return frames.length; },
-    getComputedStyle(el) {
-      events.push('read');
-      return el === body
-        ? { display: 'grid', gridTemplateColumns: '100px 100px 100px' }
-        : { display: 'block', gridRowStart: 'auto', gridRowEnd: 'auto', gridColumnStart: 'auto', gridColumnEnd: 'auto' };
-    },
-    drRoom() { events.push('room-write'); }
-  };
-  vm.createContext(context);
-  vm.runInContext(source, context);
-  context.drFill(true);
-  context.drFill(true);
-  assert.equal(frames.length, 1);
-  frames.shift()();
-  assert.equal(events.filter(e => e === 'room-write').length, 1);
-  assert.equal(events.filter(e => e === 'span:span 2').length, 1);
-  assert.ok(events.lastIndexOf('read') < events.indexOf('room-write'));
-  assert.ok(events.indexOf('room-write') < events.indexOf('span:span 2'));
-
-  events.length = 0;
-  body.hidden = true;
-  context.drFill();
-  assert.deepEqual(events, ['span:']);
-  frames.shift()();
-  assert.equal(events.filter(e => e === 'span:span 2').length, 0);
+test('the search-only drawer runs no card grid fill', () => {
+  // The drawer's cards retired (holders moved to the shell bottom bar), and
+  // with them the rAF-coalesced grid fill and its span writes.
+  const source = asset('dashboard-drawer.js');
+  assert.doesNotMatch(source, /drFill|drFilled|gridRow|gridColumn/);
 });
 
 test('lifecycle post coalesces on rAF and reads layout before lifting the frame', () => {
@@ -64,7 +33,7 @@ test('lifecycle post coalesces on rAF and reads layout before lifting the frame'
     removeAttribute(name) { events.push('write:lifted'); attrs.delete(name); }
   };
   const context = {
-    queued: null, head: null, headDirty: true, root, shHidden: false,
+    queued: null, head: null, headDirty: true, lastHandlesKey: '', root, shHidden: false,
     doc: { querySelector() { return top; } },
     region() { return head; },
     $(id) { return id === 'qsslot' ? qs : null; },

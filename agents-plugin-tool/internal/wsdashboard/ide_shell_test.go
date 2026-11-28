@@ -81,6 +81,10 @@ func TestIdeShellPhase1Assets(t *testing.T) {
 func TestIdeShellPhase2AssetsAndUnframedFallback(t *testing.T) {
 	css := mustAsset(t, "dashboard-ide-shell.css")
 	for _, want := range []string{
+		// Side cells size to content while #talert is hidden so the usage pill can
+		// use the free middle space; a visible #talert restores symmetric 1fr columns.
+		"grid-template-columns: minmax(0, auto) minmax(0, 1fr) minmax(0, auto);",
+		".shell-bottom:has(.talert:not([hidden])) {",
 		"grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);",
 		"z-index: 46;",
 		":root[data-shell][data-fdim] .shell-bottom,",
@@ -181,6 +185,12 @@ check("botFit keeps full usage when right cell has room", [R.botFit(wideBar), wi
 
 var tightBar = makeBar(120, 260, { left: 1000, right: 1260, width: 260 }, { left: 1140, right: 1260, width: 120 });
 check("botFit adds .bu when right cell overflows", [R.botFit(tightBar), tightBar.classList.contains("bu")], [1, true]);
+
+// 1px rounding slack between scrollWidth and clientWidth must not collapse a pill that fits.
+var roundBar = makeBar(400, 401, { left: 1000, right: 1260, width: 260 }, { left: 860, right: 1260, width: 400 });
+check("botFit ignores 1px scroll/client rounding noise", [R.botFit(roundBar), roundBar.classList.contains("bu")], [0, false]);
+var overBar = makeBar(400, 402, { left: 1000, right: 1260, width: 260 }, { left: 860, right: 1260, width: 400 });
+check("botFit still collapses on a real 2px scroll overflow", [R.botFit(overBar), overBar.classList.contains("bu")], [1, true]);
 
 // 2. Extract and run railPopPlace for bottom-bar anchors (upward clamped) vs non-bottom-bar anchors.
 var m = POP_JS.match(/function railPopPlace\(\) \{[\s\S]*?\n  \}/);

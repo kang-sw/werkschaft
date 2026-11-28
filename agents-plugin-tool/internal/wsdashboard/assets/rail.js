@@ -1413,7 +1413,9 @@
     if (!right) return false;
     var rbox = right.getBoundingClientRect();
     if (rbox.width <= 0) return false;
-    if (right.scrollWidth > right.clientWidth + 0.5) return true;
+    // 1px slack: scrollWidth/clientWidth are independently rounded, so a
+    // fractional-width cell that exactly fits can differ by 1 (false collapse).
+    if (right.scrollWidth > right.clientWidth + 1) return true;
     var btn = right.querySelector(".usage-toggle");
     if (!btn) return false;
     var bbox = btn.getBoundingClientRect();

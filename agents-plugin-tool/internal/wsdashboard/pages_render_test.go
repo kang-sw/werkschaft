@@ -147,19 +147,33 @@ func TestSessionPagesCarryScriptHooks(t *testing.T) {
 	}
 	assertSettingsOwner(t, live, false)
 	assertSettingsOwner(t, board, false)
-	// Both pages carry the drawer: the panels region sits in its body, out
-	// of the board column.
+	// Both pages carry the drawer, now only the search sheet (its cards
+	// retired: the holders went to the shell's bottom-bar popup), and the
+	// hidden Workpanel the gallery adopts: the panels region sits once in
+	// its working memory, out of the drawer and the board column, and the
+	// Workpanel chrome stays outside the region.
 	for name, page := range map[string]string{"live": live, "board-first": board} {
 		for _, want := range []string{
-			`<div class="drawer" id="drawer">`, `id="drclip"`, `id="drsheet"`, `id="drhandle"`, `class="dr-wait"`, `class="tdot"`,
-			`<div class="dr-body" id="drbody"><div id="r-panels" class="region r-panels" data-region="panels"`,
+			`<div class="drawer" id="drawer">`, `id="drclip"`, `<div class="dr-sheet" id="drsheet" role="region"`,
+			`<div class="wp-root" id="wproot" hidden>`, `<section class="wp-memory" id="wpmemory" data-active-mem="todo"`,
+			`</div><div id="r-panels" class="region r-panels" data-region="panels"`,
+			`id="wptab-notes"`, `id="wptab-manuals"`, `id="wpnoteslist"`, `id="wpmanualslist"`,
 		} {
 			if !strings.Contains(page, want) {
-				t.Errorf("%s page lacks drawer hook %q", name, want)
+				t.Errorf("%s page lacks drawer or Workpanel hook %q", name, want)
 			}
 		}
-		if i, j := strings.Index(page, `data-region="panels"`), strings.Index(page, `id="bcol"`); i < 0 || j < 0 || i > j {
-			t.Errorf("%s page: the panels region is not in the drawer ahead of the board column", name)
+		if n := strings.Count(page, `data-region="panels"`); n != 1 {
+			t.Errorf("%s page renders the panels region %d times, want once", name, n)
+		}
+		mem, region, ref, bcol := strings.Index(page, `id="wpmemory"`), strings.Index(page, `data-region="panels"`), strings.Index(page, `id="wpref"`), strings.Index(page, `id="bcol"`)
+		if mem < 0 || region < mem || ref < region || bcol < ref {
+			t.Errorf("%s page: the panels region is not inside the Workpanel's working memory ahead of the board column", name)
+		}
+		for _, gone := range []string{`id="drbody"`, `id="drhandle"`, `class="dr-wait"`, `id="p-holders"`} {
+			if strings.Contains(page, gone) {
+				t.Errorf("%s page: the retired drawer card markup %s remains", name, gone)
+			}
 		}
 	}
 	// Both pages run the image viewer once, outside any region, and style it.

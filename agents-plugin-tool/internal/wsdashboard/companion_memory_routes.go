@@ -54,27 +54,6 @@ func (d *Daemon) closeCompanionMemory() {
 	}
 }
 
-func (d *Daemon) activePackStarterPersona() *CompanionPersona {
-	cfg := d.companion.current().config
-	packID := strings.TrimSpace(cfg.Pack)
-	snap := d.companionPacks.snapshot(d.companionOptions())
-	if snap == nil {
-		return nil
-	}
-	if packID == "" || packID == "auto" {
-		packID = companionDefaultID
-	}
-	if pack := snap.byID[packID]; pack != nil && pack.info.Persona != nil {
-		cp := *pack.info.Persona
-		return &cp
-	}
-	if pack := snap.byID[companionDefaultID]; pack != nil && pack.info.Persona != nil {
-		cp := *pack.info.Persona
-		return &cp
-	}
-	return nil
-}
-
 func (d *Daemon) activeProjectNames() []string {
 	var names []string
 	seen := map[string]struct{}{}
@@ -148,6 +127,11 @@ type companionSoulResponse struct {
 	SoulSnapshot
 	PendingCount int `json:"pendingCount"`
 	EpisodeCount int `json:"episodeCount"`
+	// Presets is the embedded official persona preset catalog, default first.
+	Presets []CompanionPersonaPresetView `json:"presets"`
+	// ActivePresetID is the Soul's picked preset when it names a known
+	// preset, else CompanionPersonaPresetDefault.
+	ActivePresetID string `json:"activePresetId"`
 }
 
 func (d *Daemon) handleCompanionSoulGet(w http.ResponseWriter, r *http.Request) {
@@ -163,15 +147,29 @@ func (d *Daemon) handleCompanionSoulGet(w http.ResponseWriter, r *http.Request) 
 			limit = n
 		}
 	}
-	snap, err := mem.Soul().Load(cfg.SoulDir, soulID, d.activePackStarterPersona(), limit)
+	snap, err := mem.Soul().Load(cfg.SoulDir, soulID, limit)
 	if err != nil {
 		companionWriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Read-only: an uncustomized Soul shows the live preset, pack, or default
+	// persona it inherits; nothing is written here.
+	if snap.PersonaInherited {
+		resolved := d.resolveCompanionPersonaFor("", snap.PersonaPreset)
+		snap.Persona = resolved.Markdown
+		snap.PersonaSource = resolved.Source
+	}
 	if souls, err := mem.Soul().ListSouls(cfg.SoulDir, snap.SoulID); err == nil {
 		snap.Souls = souls
 	}
-	resp := companionSoulResponse{SoulSnapshot: snap}
+	resp := companionSoulResponse{
+		SoulSnapshot:   snap,
+		Presets:        CompanionPersonaPresetViews(),
+		ActivePresetID: CompanionPersonaPresetDefault,
+	}
+	if _, ok := companionPersonaPreset(snap.PersonaPreset); ok {
+		resp.ActivePresetID = snap.PersonaPreset
+	}
 	if ep, err := mem.Episodes(); err == nil {
 		if n, err := ep.CountPending(r.Context(), snap.SoulID); err == nil {
 			resp.PendingCount = n
@@ -189,6 +187,8 @@ func (d *Daemon) handleCompanionSoulPost(w http.ResponseWriter, r *http.Request)
 		SoulID  string `json:"soulId"`
 		Target  string `json:"target"`
 		Content string `json:"content"`
+		// PresetID names the official preset for action "preset".
+		PresetID string `json:"presetId"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, companionSoulDocMaxBytes+16<<10)).Decode(&body); err != nil {
 		companionWriteError(w, http.StatusBadRequest, "invalid request body")
@@ -202,7 +202,7 @@ func (d *Daemon) handleCompanionSoulPost(w http.ResponseWriter, r *http.Request)
 	}
 
 	if body.Action == "create" {
-		snap, err := mem.Soul().CreateSoul(cfg.SoulDir, soulID, d.activePackStarterPersona())
+		snap, err := mem.Soul().CreateSoul(cfg.SoulDir, soulID)
 		if err != nil {
 			companionWriteError(w, http.StatusBadRequest, err.Error())
 			return
@@ -214,8 +214,55 @@ func (d *Daemon) handleCompanionSoulPost(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if body.Action == "reset" {
+		// Reset to default: drop both the user's persona.md and the picked
+		// preset, so the Soul inherits the pack or default persona again.
+		if SoulPendingTarget(strings.TrimSpace(body.Target)) != SoulPendingTargetPersona {
+			companionWriteError(w, http.StatusBadRequest, "only persona.md can be reset")
+			return
+		}
+		// persona.md goes first: it is the visible tier, so a failure on the
+		// second step never leaves a half-applied pick hidden behind it.
+		removed, err := mem.Soul().ResetPersona(cfg.SoulDir, soulID)
+		if err != nil {
+			companionWriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := mem.Soul().SetPersonaPreset(cfg.SoulDir, soulID, ""); err != nil {
+			companionWriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "reset", "removed": removed})
+		return
+	}
+	if body.Action == "preset" {
+		// Picking an official preset replaces the user's persona.md (the UI
+		// confirms first); the default preset clears the pick so a pack persona
+		// wins.
+		presetID := strings.TrimSpace(body.PresetID)
+		if _, ok := companionPersonaPreset(presetID); !ok {
+			companionWriteError(w, http.StatusBadRequest, "unknown persona preset")
+			return
+		}
+		removed, err := mem.Soul().ResetPersona(cfg.SoulDir, soulID)
+		if err != nil {
+			companionWriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := mem.Soul().SetPersonaPreset(cfg.SoulDir, soulID, presetID); err != nil {
+			companionWriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "preset", "presetId": presetID, "removed": removed})
+		return
+	}
+	if body.Action != "" && body.Action != "save" {
+		companionWriteError(w, http.StatusBadRequest, "unknown soul action")
+		return
+	}
+
 	target := SoulPendingTarget(strings.TrimSpace(body.Target))
-	res, err := mem.SaveUserDoc(r.Context(), cfg.SoulDir, soulID, d.activePackStarterPersona(), target, body.Content, d.activeProjectNames())
+	res, err := mem.SaveUserDoc(r.Context(), cfg.SoulDir, soulID, target, body.Content, d.activeProjectNames())
 	if err != nil {
 		companionWriteError(w, http.StatusBadRequest, err.Error())
 		return
@@ -237,7 +284,7 @@ func (d *Daemon) handleCompanionSoulExport(w http.ResponseWriter, r *http.Reques
 	if soulID == "" {
 		soulID = cfg.Soul
 	}
-	data, filename, err := mem.Soul().ExportZIP(cfg.SoulDir, soulID, d.activePackStarterPersona())
+	data, filename, err := mem.Soul().ExportZIP(cfg.SoulDir, soulID)
 	if err != nil {
 		companionWriteError(w, http.StatusBadRequest, err.Error())
 		return
@@ -316,7 +363,7 @@ func (d *Daemon) handleCompanionMemoryPendingApprove(w http.ResponseWriter, r *h
 	}
 	mem := d.companionMemoryStore()
 	cfg := d.companion.current().config
-	approved, err := mem.ApprovePending(r.Context(), cfg.SoulDir, d.activePackStarterPersona(), id, body.Content)
+	approved, err := mem.ApprovePending(r.Context(), cfg.SoulDir, id, body.Content)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			companionWriteError(w, http.StatusNotFound, "pending entry not found")

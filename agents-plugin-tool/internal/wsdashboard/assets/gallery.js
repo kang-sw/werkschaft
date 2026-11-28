@@ -105,11 +105,24 @@
   }
 
   // --- the gallery ---------------------------------------------------------
-  // {v: 1, active, pages: [{id, root}], rev}. active is the page shown: a
-  // page id, "+" (the trailing empty page), or null for home (Page 0, the
-  // Main Board, in the narrow view; the first page, or + without one, in the
-  // wide view). rev counts changes; new page ids come from it.
+  // {v: 1, active, pages: [{id, root}], rev}. active is the user page shown: a
+  // page id, "+" (the trailing empty page), or null when Home (narrow) or a
+  // fixed system page (SYS) is shown. System page selection is stored outside
+  // the v1 gallery record so user-pin persistence stays clean. rev counts
+  // changes; new page ids come from it.
   var PLUS = "+";
+  var SYS = ["workpanel", "ticketmap", "git"];
+  var DEFAULT_SYS = "ticketmap";
+  function sysIndex(id) { return typeof id === "string" ? SYS.indexOf(id) : -1; }
+  function sysAt(g, pos) {
+    var n = g && g.pages ? g.pages.length : 0;
+    var i = pos - n - 1;
+    return i >= 0 && i < SYS.length ? SYS[i] : null;
+  }
+  function sysPos(g, id) {
+    var i = sysIndex(id);
+    return i < 0 ? -1 : (g && g.pages ? g.pages.length : 0) + 1 + i;
+  }
   function empty() { return { v: 1, active: null, pages: [], rev: 0 }; }
   function copy(g) {
     return { v: 1, active: g.active, rev: +g.rev || 0, pages: g.pages.map(function (p) { return { id: p.id, root: p.root }; }) };
@@ -232,33 +245,36 @@
   }
 
   // --- where the view stands -----------------------------------------------
-  // A position is -1 for Page 0 (narrow only), 0..N-1 for the docked pages,
-  // and N for +. The narrow view with no docked page is at home even on +:
-  // its rail is hidden at rest, so a + there could only hide the board.
+  // Pager order: -1 for Home (narrow only), 0..N-1 for user-pinned pages,
+  // N for +, and N+1..N+SYS.length for fixed system pages (workpanel,
+  // ticketmap, git). sysActive is the active system page id stored outside
+  // the v1 gallery record; wide mode defaults to DEFAULT_SYS when no user
+  // page is focused, while narrow mode defaults to Home (-1).
   function minPos(narrow) { return narrow ? -1 : 0; }
-  function position(g, narrow) {
+  function maxPos(g) { return g.pages.length + SYS.length; }
+  function position(g, narrow, sysActive) {
     var n = g.pages.length;
-    if (g.active === PLUS) return narrow && !n ? -1 : n;
+    if (g.active === PLUS) return n;
     var i = g.active === null ? -1 : pageIndex(g, g.active);
     if (i >= 0) return i;
-    return narrow ? -1 : n ? 0 : n;
+    var si = sysIndex(sysActive);
+    if (si >= 0) return n + 1 + si;
+    return narrow ? -1 : n + 1 + sysIndex(DEFAULT_SYS);
   }
   function activate(g, pos, narrow) {
     var n = g.pages.length;
-    pos = Math.max(minPos(narrow), Math.min(n, pos));
-    var a = pos === n ? PLUS : pos < 0 ? null : g.pages[pos].id;
+    pos = Math.max(minPos(narrow), Math.min(maxPos(g), pos));
+    var a = pos === n ? PLUS : (pos < 0 || pos > n) ? null : g.pages[pos].id;
     if (a === g.active) return g;
     g = copy(g);
     g.active = a;
     return g;
   }
   // neighbors tells the bounce-snap gate what lies past the page at pos:
-  // true an adjacent page, false an edge (a damped micro-bounce only), null
-  // nothing at all (the gate stays inert when there are no docked pages).
+  // true an adjacent page, false an edge (a damped micro-bounce only).
+  // System pages guarantee the gallery always has multiple pages.
   function neighbors(g, pos, narrow) {
-    var n = g.pages.length;
-    if (!n) return { prev: null, next: null };
-    return { prev: pos > minPos(narrow), next: pos < n };
+    return { prev: pos > minPos(narrow), next: pos < maxPos(g) };
   }
 
   // --- storage -------------------------------------------------------------
@@ -318,18 +334,15 @@
   }
 
   // --- layout --------------------------------------------------------------
-  // layout maps the viewport to the gallery's shape. o: width (px), tabs
-  // (the layout menu says one column at a time), pages (docked pages), and
-  // dragging (a card or topic drag runs). narrow: the Main Board is Page 0
-  // of one paged view (viewport < WIDE, tabs mode, or spare width narrower
-  // than the board pane). column: the 4-column wide view shows the gallery
-  // column beside the board (never an empty one, save while a drag runs).
-  // overlay: legacy field kept false for shape stability. rail: the
-  // gallery's dot rail shows. empty: in 4-column mode with no docked pages
-  // and no drag, the idle dashed slot placeholder shows.
+  // layout maps the viewport to the always-open gallery's shape. At >= WIDE
+  // (1600px), not in tabs mode, and where the caller finds spare width
+  // (o.fourCol, cards.js canFitFourCol), the gallery stands as Band 4 beside
+  // the board (column: true, narrow: false) even with 0 user-pinned pages.
+  // Below that or in tabs mode, the Main Board is Page 0 of the narrow
+  // overlay gallery. The rail is always shown; empty is always false.
   function layout(o) {
-    var four = !o.tabs && o.width >= C.WIDE && !!o.fourCol, any = o.pages > 0, drag = !!o.dragging;
-    return { narrow: !four, column: four && (any || drag), overlay: false, rail: any || drag, empty: four && !any && !drag };
+    var four = !o.tabs && o.width >= C.WIDE && (o.fourCol === undefined ? true : !!o.fourCol);
+    return { narrow: !four, column: four, overlay: false, rail: true, empty: false };
   }
 
   // --- drops ---------------------------------------------------------------
@@ -464,7 +477,8 @@
   };
 
   return {
-    C: C, PLUS: PLUS,
+    C: C, PLUS: PLUS, SYS: SYS, DEFAULT_SYS: DEFAULT_SYS,
+    sysIndex: sysIndex, sysAt: sysAt, sysPos: sysPos,
     refOf: refOf, leaf: leaf, isSplit: isSplit, clampRatio: clampRatio, normalize: normalize,
     leaves: leaves, count: count, removeRef: removeRef, splitAt: splitAt, nodeAt: nodeAt,
     empty: empty, pageIndex: pageIndex, pageOf: pageOf, refs: refs, ordinals: ordinals,

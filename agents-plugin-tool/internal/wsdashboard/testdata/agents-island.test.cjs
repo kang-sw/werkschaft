@@ -511,16 +511,18 @@ assert.equal(idle.querySelector('.hud-obs'), null, 'no observation-ended count w
 assert.equal(hudRoots.children.some(c => c.classList && c.classList.contains('hud-folded')), false);
 
 // Preserve drawerWait and tlPerms exclusions of .ag-source
-const drawerSrc = readAssetSource('wsdashboard', 'dashboard-drawer.js');
+const drawerSrc = readAssetSource('wsdashboard', 'dashboard-workpanel.js');
 const drawerWait = drawerSrc.match(/\n  function drawerWait\(\) \{[\s\S]*?\n  \}\n/);
-assert(drawerWait, 'dashboard-drawer.js holds drawerWait');
+assert(drawerWait, 'dashboard-workpanel.js holds drawerWait');
 function el(inSource) { return { closest(s) { return s === '.ag-source' && inSource ? {} : null; } }; }
 let found = [], selector = '';
-const handle = { classList: { toggle(k, v) { handle[k] = v; } } };
-const dctx = vm.createContext({ drhandle: handle, drfold: null, drTitle() {}, doc: { querySelector(sel) { selector = sel; return found[0] || null; } }, q(sel) { selector = sel; return found; } });
+const slot = { attrs: { 'aria-label': 'Workpanel' }, wait: false,
+  classList: { contains() { return slot.wait; }, toggle(k, v) { slot.wait = v; } },
+  getAttribute(k) { return slot.attrs[k]; }, setAttribute(k, v) { slot.attrs[k] = v; }, hasAttribute(k) { return k in slot.attrs; } };
+const dctx = vm.createContext({ doc: { querySelector() { return slot; } }, wsT: k => k, q(sel) { selector = sel; return found; } });
 vm.runInContext(drawerWait[0], dctx);
-found = [el(true)]; dctx.drawerWait(); assert.equal(handle.wait, false);
-found = [el(true), el(false)]; dctx.drawerWait(); assert.equal(handle.wait, true);
+found = [el(true)]; dctx.drawerWait(); assert.equal(slot.wait, false);
+found = [el(true), el(false)]; dctx.drawerWait(); assert.equal(slot.wait, true);
 for (const src of ['#r-convlive .permwait', '#r-tree .phase.permission', '#r-tree .brow.perm']) assert(selector.includes(src));
 
 const streamSrc = readAssetSource('wsdashboard', 'dashboard-stream.js');

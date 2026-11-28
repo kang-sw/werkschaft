@@ -43,6 +43,13 @@
           "type": "string",
           "pattern": "^[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8}){0,4}$",
           "description": "A language tag such as en or pt-BR."
+        },
+        "voice_by_lang": {
+          "type": "object",
+          "description": "Optional per-language voice overlays keyed by a language tag such as ko or pt-BR. The overlay matching the reply language is added after voice. A malformed entry is dropped alone; the persona and the pack still load.",
+          "maxProperties": 32,
+          "propertyNames": { "pattern": "^[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8}){0,4}$" },
+          "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 800 }
         }
       }
     },

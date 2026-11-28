@@ -354,7 +354,7 @@ Cls.prototype = {
 };
 function El(tag, doc) {
   this.tagName = tag.toUpperCase(); this.nodeType = 1; this.attrs = {}; this.kids = []; this.parentNode = null; this.ownerDocument = doc;
-  this.classList = new Cls(this); this.style = { props: {}, setProperty: function (k, v) { this.props[k] = v; }, removeProperty: function (k) { delete this.props[k]; } };
+  this.classList = new Cls(this); this.style = { props: {}, getPropertyValue: function (k) { return this.props[k] || ""; }, setProperty: function (k, v) { this.props[k] = v; }, removeProperty: function (k) { delete this.props[k]; } };
   this.listeners = {}; this.hidden = false; this.text = "";
 }
 El.prototype = {
@@ -390,14 +390,15 @@ El.prototype = {
   inside: function () { return true; }
 };
 function one(el, s) {
-  var m = /^([a-z0-9]*)((?:\.[a-z0-9-]+|\[[a-z-]+(?:="[^"]*")?\])*)$/i.exec(s);
+  var m = /^([a-z0-9]*)((?:\.[a-z0-9-]+|\[[a-z-]+(?:=(?:"[^"]*"|'[^']*'))?\])*)$/i.exec(s);
   if (!m) throw new Error("selector " + s);
   if (m[1] && el.tagName !== m[1].toUpperCase()) return false;
   var parts = m[2].match(/\.[a-z0-9-]+|\[[^\]]+\]/gi) || [];
   return parts.every(function (p) {
     if (p.charAt(0) === ".") return el.classList.contains(p.slice(1));
-    var a = /^\[([a-z-]+)(?:="([^"]*)")?\]$/i.exec(p);
-    return el.hasAttribute(a[1]) && (a[2] === undefined || el.getAttribute(a[1]) === a[2]);
+    var a = /^\[([a-z-]+)(?:=(?:"([^"]*)"|'([^']*)'))?\]$/i.exec(p);
+    var want = a[2] !== undefined ? a[2] : a[3];
+    return el.hasAttribute(a[1]) && (want === undefined || el.getAttribute(a[1]) === want);
   });
 }
 function match(el, chain) {
@@ -474,7 +475,7 @@ function boot(store, served, o) {
     toolbar: o.toolbar, host: dbody,
     key: "cards", load: function (k) { return store[k] || null; }, save: function (k, v) { if (v === null) delete store[k]; else store[k] = v; },
     mode: function () { return { width: page.width, tabs: page.tabs }; }, split: page.split,
-    layout: function (s) { page.states.push(s); var on = s.column && s.pages > 0; if (on !== col) { col = on; page.layouts.push(on); } },
+    layout: function (s) { page.states.push(s); var on = !!s.column; if (on !== col) { col = on; page.layouts.push(on); } },
     closed: function (from, done) { page.closedCalls.push(from); if (!o.pending) done(o.closed ? o.closed(from) : null); },
     adopted: function (n) { page.adopted.push(n.getAttribute("data-topic")); }
   });
@@ -498,7 +499,7 @@ function pinsOf() { return page.W.docked().map(label); }
 // pagesOf reads them in the stored gallery's order.
 function pagesOf() {
   var els = page.W.gallery().querySelectorAll(".gal-page"), g = JSON.parse(page.store.cards || "{}").gallery || { pages: [] };
-  check("one slide per page, and +", els.length, g.pages.length + 1);
+  check("one slide per page, +, and fixed system pages", els.length, g.pages.length + 1 + page.G.SYS.length);
   return g.pages.map(function (pg) { var p = els.filter(function (e) { return e.getAttribute("data-page") === pg.id; })[0]; return p ? p.querySelectorAll(".gal-pane").map(function (pane) { return pane.children.map(label).join(""); }) : null; });
 }
 function galOf() { return JSON.parse(page.store.cards || "{}").gallery; }
@@ -537,7 +538,7 @@ check("every topic bar has a pin button, then the maximize and back buttons, bef
   [A, B, C].map(function (t) { var b = pinBtn(t); return [!!b, b && b.parentNode.children.slice(b.parentNode.children.indexOf(b)).map(function (x) { return x.className; }), b && b.getAttribute("aria-pressed")]; }),
   [A, B, C].map(function () { return [true, ["ibtn tpin", "ibtn t-fold", "ibtn t-raise", "ibtn d-max", "ibtn d-min", "btn mini tnote-toggle"], "false"]; }));
 check("the toolbar heads the board, which holds no pin list", names(page.board), ["TOOLBAR", "a", "b", "c", "x/c", "more31", "reply"]);
-check("the gallery joins the page body, hidden with nothing docked", [page.W.gallery().parentNode === page.dbody, page.W.gallery().id, page.W.gallery().hidden], [true, "bgal", true]);
+check("the gallery joins the page body, always visible even with nothing docked", [page.W.gallery().parentNode === page.dbody, page.W.gallery().id, page.W.gallery().hidden], [true, "bgal", false]);
 
 // A pinned topic docks among the docked cards, each on a page of its own.
 now = 1100; var ca = page.W.open("k", { name: "Ca" }); ca.pin(true);
@@ -600,12 +601,12 @@ check("pins, pages and their order survive the reload, the gallery a column", [p
 check("the board column holds the rest, the hand-moved topic where it stood",
   names(page.board), ["TOOLBAR", "c", "x/c", "more31", "reply"]);
 check("the docked topic has its pin pressed", pinBtn(page.W.docked()[2]).getAttribute("aria-pressed"), "true");
-// Undocking the last ones drops the column; an open topic goes back by
+// Undocking the last ones keeps the always-open column; an open topic goes back by
 // recency, a closed one to the head of the closed section.
 page.W.list("k")[0].close();
 clickPin(page.W.docked()[0]);
 clickPin(page.W.docked()[0]);
-check("the last undock drops the column and its pages", [page.layouts, names(page.board), pagesOf(), galOf().pages], [[true, false], ["TOOLBAR", "a", "c", "b/c", "x/c", "more31", "reply"], [], []]);
+check("the last undock clears user pages while keeping the always-open column", [page.layouts, names(page.board), pagesOf(), galOf().pages], [[true], ["TOOLBAR", "a", "c", "b/c", "x/c", "more31", "reply"], [], []]);
 
 // A docked topic whose topic is gone is dropped, its page with it.
 store = { cards: saved };
@@ -680,7 +681,7 @@ func TestBoardGallery(t *testing.T) {
 function rec() { return JSON.parse(page.store.cards); }
 function leavesOf(g) { return g.pages.map(function (p) { return page.G.leaves(p.root); }); }
 function dots() { return page.W.gallery().querySelectorAll(".gal-dot"); }
-function dotTexts() { return dots().map(function (b) { return [b.getAttribute("data-pos"), b.getAttribute("data-count") || b.textContent, b.classList.contains("active")]; }); }
+function dotTexts() { return dots().map(function (b) { return [b.getAttribute("data-pos"), b.getAttribute("data-sys") ? "sys:" + b.getAttribute("data-sys") : (b.getAttribute("data-count") || b.textContent), b.classList.contains("active")]; }); }
 function shown() { var a = page.W.gallery().querySelectorAll(".gal-page").filter(function (p) { return p.hasAttribute("data-active"); }); return a.map(function (p) { return p.getAttribute("data-page"); }); }
 function pageIds() { return galOf().pages.map(function (p) { return p.id; }); }
 function clickDot(pos) { var b = dots().filter(function (d) { return d.getAttribute("data-pos") === String(pos); })[0]; page.W.gallery().querySelector(".gal-dots").fire("click", { target: b }); }
@@ -708,12 +709,13 @@ check("a bare cards list migrates in pin order", [leavesOf(galOf()), rec().cards
 store = {};
 var A, B;
 boot(store, function () { A = topic("a", 300); B = topic("b", 200); return [A, B, reply()]; }, { kinds: ["preview"] });
-check("narrow, nothing docked: no rail, no gallery", [page.W.gallery().hidden, dots().length], [true, 2]);
+check("narrow, nothing docked: always-open rail with home, +, separator, and 3 system pages", [page.W.gallery().hidden, dotTexts()], [false, [["-1", "⌂", true], ["0", "+", false], ["1", "sys:workpanel", false], ["2", "sys:ticketmap", false], ["3", "sys:git", false]]]);
+check("rail structure: home, +, .gal-sep, .gal-group-sys", page.W.gallery().querySelector(".gal-dots").children.map(function (n) { return n.className; }), ["gal-dot main active", "gal-dot empty", "gal-sep", "gal-group-sys"]);
 now = 1100; var c = page.W.open("k", { name: "Ca" });
 c.pinBtn.fire("click");
 check("pin docks on a new page, shown", [pagesOf(), galOf().active === pageIds()[0], shown(), page.W.gallery().hidden], [[["Ca"]], true, [pageIds()[0]], false]);
-check("the narrow rail: home, the page's pane count, +", dotTexts(), [["-1", "⌂", false], ["0", "1", true], ["1", "+", false]]);
-check("dots are buttons", dots().map(function (b) { return [b.tagName, b.type]; }), [["BUTTON", "button"], ["BUTTON", "button"], ["BUTTON", "button"]]);
+check("the narrow rail: home, the page's pane count, +, then 3 system pages", dotTexts(), [["-1", "⌂", false], ["0", "1", true], ["1", "+", false], ["2", "sys:workpanel", false], ["3", "sys:ticketmap", false], ["4", "sys:git", false]]);
+check("dots are buttons", dots().map(function (b) { return [b.tagName, b.type]; }), [["BUTTON", "button"], ["BUTTON", "button"], ["BUTTON", "button"], ["BUTTON", "button"], ["BUTTON", "button"], ["BUTTON", "button"]]);
 clickPin(A);
 check("a topic's pin docks it on a page before +, shown", [pagesOf(), shown(), pinBtn(A).getAttribute("aria-pressed")], [[["Ca"], ["a"]], [pageIds()[1]], "true"]);
 check("a docked topic's body stands in its pane's scroller", [A.children.map(function (n) { return n.className; }), paneOf(A).getAttribute("data-ref")], [["tophead", "gal-pbody"], "t:a"]);
@@ -724,14 +726,15 @@ check("narrow: a shown page stands the Main Board off the view, inert", away(), 
 clickDot(-1);
 check("home shows the Main Board: every page off the view", [shown(), page.W.gallery().getAttribute("data-pos")], [[], "-1"]);
 check("and the Main Board back in it", away(), [false, false]);
-check("a page off the view stays mounted, translated, inert", page.W.gallery().querySelectorAll(".gal-page").map(function (p) { return [p.style.props["--gal-off"], p.inert, p.getAttribute("aria-hidden")]; }), [["1", true, "true"], ["2", true, "true"], ["3", true, "true"]]);
+check("a page off the view stays mounted, translated, inert", page.W.gallery().querySelectorAll(".gal-page").map(function (p) { return [p.style.props["--gal-off"], p.inert, p.getAttribute("aria-hidden")]; }), [["1", true, "true"], ["2", true, "true"], ["3", true, "true"], ["4", true, "true"], ["5", true, "true"], ["6", true, "true"]]);
 check("activate shows a docked node's page", [page.W.activate(A.querySelector(".tbar")), shown()], [true, [pageIds()[1]]]);
 check("activate on the shown page switches nothing", page.W.activate(A), false);
 check("narrow: a board node shows Page 0", [page.W.activate(B), shown()], [true, []]);
+check("showSys switches to a fixed system page and persists separately from WsGallery v1", [page.W.showSys("git"), shown(), page.store["ws.dashboard.bgal.sys"], galOf().active], [true, ["git"], "git", null]);
 clickPin(A);
 check("unpin undocks, its emptied page gone, its markup stock again", [pagesOf(), names(page.board), A.children.map(function (n) { return n.className; }), pinBtn(A).getAttribute("aria-pressed")], [[["Ca"]], ["TOOLBAR", "a", "b", "reply"], ["tophead"], "false"]);
 c.pinBtn.fire("click");
-check("the last unpin leaves no page and hides the gallery", [pagesOf(), galOf().pages, page.W.gallery().hidden, names(page.board)], [[], [], true, ["TOOLBAR", "Ca", "a", "b", "reply"]]);
+check("the last unpin leaves no user pages while keeping the always-open gallery visible", [pagesOf(), galOf().pages, page.W.gallery().hidden, names(page.board)], [[], [], false, ["TOOLBAR", "Ca", "a", "b", "reply"]]);
 // A preview's transient state ends when it docks (its kind's pinned hook).
 var pv = null;
 page.W.register("preview", { open: function (x) { x.title({ name: "pv" }); x.el.card = "pv"; }, pinned: function (x) { x.preview = false; } });
@@ -786,7 +789,7 @@ geo = function (n) {
   return dotGeo(n);
 };
 dragTo(page.W.gallery(), c.el.querySelector(".bc-hd"), 990, 400);
-check("a right-edge drop splits the pane in a row, the emptied page gone", [pagesOf(), galOf().pages[0].root.axis, dotTexts().map(function (t) { return t[1]; })], [[["a", "Cd"]], "row", ["⌂", "2", "+"]]);
+check("a right-edge drop splits the pane in a row, the emptied page gone", [pagesOf(), galOf().pages[0].root.axis, dotTexts().map(function (t) { return t[1]; })], [[["a", "Cd"]], "row", ["⌂", "2", "+", "sys:workpanel", "sys:ticketmap", "sys:git"]]);
 check("the split holds its panes and a divider between them", page.W.gallery().querySelectorAll(".gal-split")[0].children.map(function (n) { return n.className; }), ["gal-pane", "gal-div", "gal-pane"]);
 check("the preview is gone after the drop", [page.W.gallery().querySelectorAll(".gal-pane").filter(function (p) { return p.hasAttribute("data-dz"); }).length, page.W.gallery().querySelector(".gal-overlay").hidden], [0, true]);
 dragTo(page.W.gallery(), A.querySelector(".tbar"), 1100, 400);
@@ -910,16 +913,11 @@ process.stdout.write(bad.join("\n"));
 `)
 }
 
-// TestPinnedColumnWidth pins the board-width handle on the pinned column
-// (cards.js buildCol, edgeHandle), the whole script executed under node
-// over the minimal DOM when node is installed: the column fills the window
-// right of the board, so it has one handle, on its left edge where it
-// meets the board, and dragging it resizes the board's .dgrid cell live
-// through --boardw; the width stops at BOARDW_MIN and where the column
-// would drop below PINW_MIN, is saved with the pins (bw) on release, and
-// comes back after a reload; a double click goes back to the stylesheet's
-// width; a press of another button drags nothing; a stored w (the
-// column's own width from before) is dropped.
+// TestPinnedColumnWidth pins the always-open gallery width handle (.bp-edge in
+// cards.js): dragging left widens --bgal-w (RAF-throttled) and dragging right
+// narrows it, clamped to 350px-720px (default 540px), persisted globally in
+// ws.dashboard.bgal.w on release; dblclick resets to 540px; non-primary buttons
+// drag nothing; legacy per-session w/bw/bb fields are ignored.
 func TestPinnedColumnWidth(t *testing.T) {
 	data, err := dashboardFS.ReadFile("assets/cards.js")
 	if err != nil {
@@ -930,52 +928,55 @@ func TestPinnedColumnWidth(t *testing.T) {
 		t.Fatal(err)
 	}
 	runNode(t, "pinned column width", "var CARDS = "+string(src)+";\n"+cardsDOM+`
-var store = {}, colW = 600, cellW = 1000;
+var store = {}, colW = 540, frames = [];
 function served() { return [topic("a", 300), reply()]; }
 function start() {
+  frames = [];
   boot(store, served, { wide: true });
-  page.board.classList.add("dgrid");
-  page.board.getBoundingClientRect = function () { return { top: 0, bottom: 0, left: 0, right: cellW, width: cellW, height: 0 }; };
   page.col.getBoundingClientRect = function () { return { top: 0, bottom: 0, left: 0, right: colW, width: colW, height: 0 }; };
 }
 start();
-function boardw() { return page.doc.documentElement.style.props["--boardw"] || null; }
-function savedW() { return store.cards ? JSON.parse(store.cards).bw : 0; }
+function bgalw() { return page.doc.documentElement.style.props["--bgal-w"] || null; }
+function bgalEff() { return page.doc.documentElement.style.props["--bgal-eff-w"] || null; }
+function savedW() { return store["ws.dashboard.bgal.w"] || null; }
 function ev(x, button) { return { button: button === undefined ? 0 : button, clientX: x, pointerId: 1, preventDefault: function () {} }; }
 function drag(e, by) { e.fire("pointerdown", ev(1000)); e.fire("pointermove", ev(1000 + by)); }
 function release(e) { e.fire("pointerup", ev(1000)); }
 var hs = page.col.querySelectorAll(".bp-edge");
 check("the column has one handle, on its left edge", hs.map(function (e) { return e.getAttribute("data-edge"); }), ["left"]);
+check("default width is 540px", [bgalw(), bgalEff()], ["540px", "540px"]);
 var e = hs[0];
-drag(e, 100);
-check("dragging right widens the board live", [boardw(), e.classList.contains("drag"), savedW()], ["1100px", true, 0]);
+drag(e, -100);
+check("dragging left starts drag without writing storage before release", [e.classList.contains("drag"), savedW()], [true, null]);
 release(e);
-check("the release saves the board's width with the pins", [savedW(), e.classList.contains("drag")], [1100, false]);
-cellW = 1100; colW = 500;
-drag(e, -60);
+check("the release applies and persists the widened gallery width", [bgalw(), savedW(), e.classList.contains("drag")], ["640px", "640", false]);
+colW = 640;
+drag(e, 60);
 release(e);
-check("dragging left narrows it", [boardw(), savedW()], ["1040px", 1040]);
-cellW = 1040; colW = 560;
-drag(e, -5000);
-release(e);
-check("it stops at BOARDW_MIN", [boardw(), savedW()], ["400px", 400]);
-cellW = 400; colW = 1200;
+check("dragging right narrows the gallery", [bgalw(), savedW()], ["580px", "580"]);
+colW = 580;
 drag(e, 5000);
 release(e);
-check("it stops where the column keeps PINW_MIN", [boardw(), savedW()], ["1320px", 1320]);
+check("it clamps at BGAL_W_MIN (350px)", [bgalw(), savedW()], ["350px", "350"]);
+colW = 350;
+drag(e, -5000);
+release(e);
+check("it clamps at BGAL_W_MAX (720px)", [bgalw(), savedW()], ["720px", "720"]);
 e.fire("dblclick", {});
-check("a double click goes back to the stylesheet's width", [boardw(), savedW()], [null, 0]);
+check("a double click resets to 540px", [bgalw(), savedW()], ["540px", "540"]);
 e.fire("pointerdown", ev(1000, 2));
-e.fire("pointermove", ev(1100));
-check("another button drags nothing", boardw(), null);
-cellW = 1000; colW = 600;
-drag(e, -160);
+e.fire("pointermove", ev(900));
+check("another button drags nothing", bgalw(), "540px");
+colW = 540;
+drag(e, -80);
 release(e);
 start();
-check("a reload brings the width back", boardw(), "840px");
-store.cards = JSON.stringify({ cards: [], topics: [], w: 640 });
+check("a reload brings the global gallery width back", bgalw(), "620px");
+page.width = 1600; page.W.relayout();
+check("at 1600px effective width respects viewport floors while preserving stored width", [bgalw(), parseInt(bgalEff(), 10) <= 620], ["620px", true]);
+store = { cards: JSON.stringify({ cards: [], topics: [], w: 640, bw: 900, bb: 800 }) };
 start();
-check("a stored column width is dropped", [boardw(), JSON.parse(store.cards || "{}").w], [null, undefined]);
+check("legacy w/bw/bb fields are ignored and default 540px applies", [bgalw(), page.doc.documentElement.style.props["--boardw"] || null], ["540px", null]);
 process.stdout.write(bad.join("\n"));
 `)
 }
@@ -1043,18 +1044,12 @@ process.stdout.write(bad.join("\n"));
 `)
 }
 
-// TestColumnGrabsPush pins the two width handles together on a page with a
-// split while the pinned column shows (cards.js freeze, edgeHandle,
-// splitHandle), the whole script executed under node over the minimal DOM
-// when node is installed: each handle sizes only the panel on its left and
-// the pinned column takes the difference. The column's handle sets the
-// board's own width (--boardw with data-boardw, saved as bb) and first
-// holds the conversation at the width it shows; the split handle sets the
-// conversation's and first holds the board's; either stops where the
-// column would drop below PINW_MIN, the board at SPLITB_MIN; a double
-// click resets only its own panel, holding the other; without the column
-// the split handle leaves the board's width alone; a bw saved before the
-// split (the whole cell) is dropped.
+// TestColumnGrabsPush pins the two width handles together on a live split page:
+// .bp-edge sizes the always-open gallery column (--bgal-w in ws.dashboard.bgal.w,
+// 350-720px) and holds the conversation track at its current width so #convo
+// does not jump, while .dcv-edge sizes the conversation column (--convow, saved
+// as cw, keeping SPLITB_MIN for the board) without ever writing retired
+// --boardw / data-boardw / bw / bb.
 func TestColumnGrabsPush(t *testing.T) {
 	data, err := dashboardFS.ReadFile("assets/cards.js")
 	if err != nil {
@@ -1065,98 +1060,38 @@ func TestColumnGrabsPush(t *testing.T) {
 		t.Fatal(err)
 	}
 	runNode(t, "column grabs push", "var CARDS = "+string(src)+";\n"+cardsDOM+`
-var store = {}, colW = 500, A;
+var store = {}, colW = 540, A;
 function served() { A = topic("a", 300); return [A, reply()]; }
 function start(pin) {
   boot(store, served, { wide: true, split: true });
-  // Leave room for the split grid and a gallery column even after the
-  // handles grow the board; at 2560px the four-band layout pages instead.
-  page.width = 3200; page.W.relayout();
+  page.width = 2560; page.W.relayout();
   page.col.getBoundingClientRect = function () { return { top: 0, bottom: 0, left: 0, right: colW, width: colW, height: 0 }; };
   if (pin) clickPin(A);
 }
 function prop(k) { return page.doc.documentElement.style.props[k] || null; }
-function widths() { return [prop("--convow"), prop("--boardw"), page.doc.documentElement.hasAttribute("data-boardw")]; }
-function saved() { var r = JSON.parse(store.cards || "{}"); return [r.cw, r.bb, r.bw]; }
+function widths() { return [prop("--convow"), prop("--bgal-w"), page.doc.documentElement.hasAttribute("data-boardw")]; }
+function saved() { var r = JSON.parse(store.cards || "{}"); return [r.cw, store["ws.dashboard.bgal.w"] || null, r.bw, r.bb]; }
 function ev(x, button) { return { button: button === undefined ? 0 : button, clientX: x, pointerId: 1, preventDefault: function () {} }; }
 function drag(e, by) { e.fire("pointerdown", ev(1000)); e.fire("pointermove", ev(1000 + by)); e.fire("pointerup", ev(1000)); }
 start(true);
-check("the column shows", page.layouts[page.layouts.length - 1], true);
+check("the always-open column shows", page.layouts[page.layouts.length - 1], true);
 var be = page.col.querySelector(".bp-edge"), ce = page.split.querySelector(".dcv-edge");
 page.gridCols = "600px 840px";
-drag(be, 100);
-check("the column's handle sizes the board and holds the conversation", [widths(), saved()], [["600px", "940px", true], [600, 940, undefined]]);
-page.gridCols = "600px 940px"; colW = 400;
+drag(be, -100);
+check(".bp-edge widens the gallery and holds --convow without writing data-boardw", [widths(), saved()], [["600px", "640px", false], [600, "640", undefined, undefined]]);
+colW = 640;
 drag(ce, 50);
-check("the split handle sizes the conversation and keeps the board", [widths(), saved()], [["650px", "940px", true], [650, 940, undefined]]);
-page.gridCols = "650px 940px"; colW = 350;
+check(".dcv-edge widens the conversation and preserves --bgal-w", [widths(), saved()], [["650px", "640px", false], [650, "640", undefined, undefined]]);
+page.gridCols = "650px 790px";
 drag(ce, 5000);
-check("the split handle stops where the column keeps PINW_MIN", widths(), ["720px", "940px", true]);
-page.gridCols = "720px 940px"; colW = 280;
-drag(be, 5000);
-check("the column's handle stops there too", widths(), ["720px", "940px", true]);
-drag(be, -5000);
-check("the board stops at SPLITB_MIN", widths(), ["720px", "360px", true]);
+check(".dcv-edge stops where the board keeps SPLITB_MIN", widths(), ["1080px", "640px", false]);
 ce.fire("dblclick", {});
-check("a double click on the split handle resets the conversation alone", [widths(), saved()], [[null, "360px", true], [0, 360, undefined]]);
-store = {};
-start(true);
-page.gridCols = "500px 700px";
-be = page.col.querySelector(".bp-edge"); ce = page.split.querySelector(".dcv-edge");
+check("a double click on .dcv-edge resets conversation alone while keeping --bgal-w", [widths(), saved()], [[null, "640px", false], [0, "640", undefined, undefined]]);
 be.fire("dblclick", {});
-check("a double click on the column's handle resets the board and holds the conversation", widths(), ["500px", null, false]);
-ce.fire("dblclick", {});
-check("a double click on the split handle holds the board", widths(), [null, "700px", true]);
-store = {};
+check("a double click on .bp-edge resets --bgal-w to 540px", [widths(), saved()], [[null, "540px", false], [0, "540", undefined, undefined]]);
+store = { cards: JSON.stringify({ cards: [], topics: [], bw: 1200, bb: 900, cw: 0 }) };
 start(false);
-page.gridCols = "500px 700px";
-page.width = 1920; page.W.relayout();
-drag(page.split.querySelector(".dcv-edge"), 40);
-check("without the column (Band 3) the split handle leaves the board's width alone", widths(), ["540px", null, false]);
-store = { cards: JSON.stringify({ cards: [], topics: [], bb: 600, cw: 0 }) };
-start(false);
-page.gridCols = "532px 744px";
-page.width = 1920; page.W.relayout();
-drag(page.split.querySelector(".dcv-edge"), 60);
-check("Band 3 split drag preserves persisted bb while updating cw", [widths(), saved()], [["592px", "600px", true], [592, 600, undefined]]);
-page.split.querySelector(".dcv-edge").fire("dblclick", {});
-check("Band 3 split dblclick resets cw while preserving persisted bb", [widths(), saved()], [[null, "600px", true], [0, 600, undefined]]);
-store = {};
-start(false);
-page.width = 2560; page.W.relayout();
-page.gridCols = "532px 744px"; colW = 880;
-be = page.col.querySelector(".bp-edge"); ce = page.split.querySelector(".dcv-edge");
-drag(be, 240);
-check("empty dock .bp-edge freezes convo, widens board, keeps empty Band 4",
-  [widths(), saved(), page.states[page.states.length - 1].empty, page.states[page.states.length - 1].column],
-  [["532px", "984px", true], [532, 984, undefined], true, false]);
-page.gridCols = "532px 984px"; colW = 640;
-drag(ce, 60);
-check("empty dock .dcv-edge pushes board into empty dock while keeping boardw fixed",
-  [widths(), saved(), page.states[page.states.length - 1].empty],
-  [["592px", "984px", true], [592, 984, undefined], true]);
-page.gridCols = "592px 984px"; colW = 580;
-drag(ce, 5000);
-check("empty dock .dcv-edge stops where empty dock keeps PINW_MIN",
-  [widths(), page.states[page.states.length - 1].empty],
-  [["892px", "984px", true], true]);
-be.fire("dblclick", {});
-check("empty dock .bp-edge double-click resets boardw, holds convo, stays empty Band 4",
-  [widths(), saved(), page.states[page.states.length - 1].empty],
-  [["892px", null, false], [892, 0, undefined], true]);
-page.gridCols = "892px 400px"; colW = 864;
-drag(be, 100);
-clickPin(A);
-check("pinning after resizing in empty mode preserves convo and board widths",
-  [widths(), page.states[page.states.length - 1].column, page.states[page.states.length - 1].empty],
-  [["892px", "500px", true], true, false]);
-clickPin(A);
-check("unpinning back to empty mode preserves convo and board widths",
-  [widths(), page.states[page.states.length - 1].column, page.states[page.states.length - 1].empty],
-  [["892px", "500px", true], false, true]);
-store = { cards: JSON.stringify({ cards: [], topics: [], bw: 1200, cw: 0 }) };
-start(false);
-check("a bw from before the split is dropped", [widths(), saved()], [[null, null, false], [undefined, undefined, undefined]]);
+check("legacy bw/bb are ignored on load", [widths(), page.states[page.states.length - 1].column, page.states[page.states.length - 1].empty], [[null, "540px", false], true, false]);
 process.stdout.write(bad.join("\n"));
 `)
 }
@@ -1170,42 +1105,27 @@ func TestBoardModeWidthsSurviveOtherModeSaves(t *testing.T) {
 	runNode(t, "board mode widths", "var CARDS = "+string(src)+";\n"+cardsDOM+`
 var store = {}, A;
 function served() { A = topic("a", 300); return [A, reply()]; }
-function width() { return page.doc.documentElement.style.props["--boardw"] || null; }
-function saved() { var r = JSON.parse(store.cards || "{}"); return [r.bw, r.bb]; }
+function width() { return page.doc.documentElement.style.props["--bgal-w"] || null; }
+function saved() { return store["ws.dashboard.bgal.w"] || null; }
 function drag(edge, by) {
   function ev(x) { return { button: 0, clientX: x, pointerId: 1, preventDefault: function () {} }; }
   edge.fire("pointerdown", ev(1000)); edge.fire("pointermove", ev(1000 + by)); edge.fire("pointerup", ev(1000 + by));
 }
 boot(store, served, {wide: true});
-page.board.classList.add("dgrid");
-page.board.getBoundingClientRect = function () { return {width: 1000}; };
-page.col.getBoundingClientRect = function () { return {width: 600}; };
-drag(page.col.querySelector(".bp-edge"), -160);
-check("board-only save marks its width as post-migration", saved(), [840, 0]);
+page.col.getBoundingClientRect = function () { return {width: 540}; };
+drag(page.col.querySelector(".bp-edge"), -80);
+check("board-only drag persists global --bgal-w", [width(), saved()], ["620px", "620"]);
 boot(store, served, {wide: true, split: true});
-check("switching to live keeps the other mode's width without applying it", [width(), saved()], [null, [840, 0]]);
+check("switching to live restores the same global --bgal-w", [width(), saved()], ["620px", "620"]);
 clickPin(A);
-check("a pin in live mode does not erase the board-only width", saved(), [840, 0]);
-page.gridCols = "600px 700px";
-page.col.getBoundingClientRect = function () { return {width: 500}; };
-drag(page.col.querySelector(".bp-edge"), 100);
-check("live width saves independently", saved(), [840, 800]);
+check("pinning in live mode preserves --bgal-w", [width(), saved()], ["620px", "620"]);
+page.col.getBoundingClientRect = function () { return {width: 620}; };
+drag(page.col.querySelector(".bp-edge"), 120);
+check("live drag updates global --bgal-w", [width(), saved()], ["500px", "500"]);
 boot(store, served, {wide: true});
-check("board reload restores its own width and retains live width", [width(), saved()], ["840px", [840, 800]]);
-clickPin(A);
-check("unpin in board mode retains both widths", saved(), [840, 800]);
-boot(store, served, {wide: true, split: true});
-check("live reload restores the live width", width(), "800px");
+check("board reload restores updated global --bgal-w", width(), "500px");
 page.col.querySelector(".bp-edge").fire("dblclick", {});
-page.split.querySelector(".dcv-edge").fire("dblclick", {});
-// Resetting the split freezes the board, so reset it again after the split.
-page.col.querySelector(".bp-edge").fire("dblclick", {});
-check("clearing live widths cannot remove a record holding the other mode's width", saved(), [840, 0]);
-boot(store, served, {wide: true});
-check("board width survives the live reset", width(), "840px");
-store = {cards: JSON.stringify({cards: [], topics: [], bw: 1200})};
-boot(store, served, {split: true});
-check("legacy pre-split width still migrates once", width(), null);
+check("dblclick resets global --bgal-w to 540px", [width(), saved()], ["540px", "540"]);
 process.stdout.write(bad.join("\n"));
 `)
 }
@@ -1228,7 +1148,7 @@ func TestBoardPinnedClosedPagesCount(t *testing.T) {
 	}
 	js := string(data)
 	var src string
-	for _, name := range []string{"openKey", "restoreOpenOne", "restoreOpen", "forgetOpen", "topicKey", "topicSeen", "morphBoard", "frameKeep", "frameKept", "frameChain", "frameGraftable", "frameGrafts", "settleMoves", "frameGraft"} {
+	for _, name := range []string{"openKey", "restoreOpenOne", "restoreOpen", "forgetOpen", "topicKey", "topicSeen", "holdEcho", "morphBoard", "frameKeep", "frameKept", "frameChain", "frameGraftable", "frameGrafts", "settleMoves", "frameGraft"} {
 		f := regexp.MustCompile(`(?s)\n  function ` + name + `\(.*?\n  \}\n`).FindString(js)
 		if f == "" {
 			t.Fatalf("dashboard.js holds no %s", name)

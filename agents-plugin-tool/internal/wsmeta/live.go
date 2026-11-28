@@ -255,6 +255,21 @@ func (s *Store) PutUsageLatestEntry(ctx context.Context, source, entryKey string
 	})
 }
 
+// DeleteUsageLatestEntry removes one keyed latest-usage entry under source
+// without rewriting sibling entries or document extras.
+func (s *Store) DeleteUsageLatestEntry(ctx context.Context, source, entryKey string) error {
+	if source == "" || entryKey == "" {
+		return fmt.Errorf("wsmeta: usage latest entry requires source and key")
+	}
+	return s.write(ctx, relaxed, func(tx *sql.Tx) error {
+		if err := s.requireImported(ctx, tx); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `DELETE FROM usage_latest WHERE source = ? AND entry_key = ?`, source, entryKey)
+		return err
+	})
+}
+
 // SetUsageLatestEntries replaces the ordered entries of one latest-usage
 // source while keeping usage_latest_docs.extra_json and other sources intact
 // (1997).

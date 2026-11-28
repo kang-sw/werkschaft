@@ -59,12 +59,10 @@ const [url, out] = process.argv.slice(2);
     const diagramFrame = await (await diagram.locator('iframe').elementHandle()).contentFrame();
     await diagramFrame.locator('.mermaid svg').waitFor();
     await tab.screenshot({path: path.join(out, 'served-mermaid.png'), fullPage: true});
-    await page.locator('#drhandle').click();
-    await page.waitForFunction(() => {
-      const clip = document.getElementById('drclip');
-      return clip.getBoundingClientRect().height >= parseFloat(clip.style.height) - 1;
-    });
-    await page.locator('#p-todo').waitFor({state: 'visible'});
+    // The todo card lives in the gallery's Workpanel (the drawer's panels
+    // sheet and its #drhandle retired), so it is read where it is attached.
+    assert.equal(await page.locator('#drhandle').count(), 0, 'the drawer panels handle retired');
+    await page.locator('#p-todo').waitFor({state: 'attached'});
     assert((await page.locator('#p-todo').textContent()).includes('Auxiliary sections stay below the full-width board'));
     await tab.screenshot({path: path.join(out, 'served-panels.png'), fullPage: true, animations: 'disabled'});
 

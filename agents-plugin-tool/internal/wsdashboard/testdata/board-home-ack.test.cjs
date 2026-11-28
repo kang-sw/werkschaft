@@ -142,7 +142,7 @@ function returningBoard() {
     function boardInputPatch(previous, ev) { return ev.next; }
     var handlers;
     function openStream(path, h) { handlers = h; return { close: function () {} }; }
-  ` + funcs(['pageHidden', 'swap', 'boardKeep', 'boardPendingNames', 'boardPendingBadge',
+  ` + funcs(['docHidden', 'pageHidden', 'swap', 'boardKeep', 'boardPendingNames', 'boardPendingBadge',
     'boardHeldNow', 'boardApplyPending', 'boardApplied', 'boardFlushViewed', 'boardRecordPending', 'boardReturnShown', 'boardReturnEnd',
     'boardReturnApply', 'stopMainStream', 'syncMainStream', 'connect', 'showRegions']) + `
     boardPendingBadge();

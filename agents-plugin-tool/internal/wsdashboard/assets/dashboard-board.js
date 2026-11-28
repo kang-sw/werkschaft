@@ -8,7 +8,7 @@
   // pageHidden tells whether nobody sees the page (a hidden tab, or a frame
   // the shell hides): region updates are held (hiddenRegions) while it
   // holds, and land when it ends (showRegions).
-  function pageHidden() { return doc.hidden || shHidden; }
+  function pageHidden() { return docHidden() || shHidden; }
   function held(withoutBoard) {
     return q("[data-region]").filter(function (el) { return !withoutBoard || el.getAttribute("data-region") !== "board"; }).map(function (el) {
       var name = el.getAttribute("data-region"), p = hiddenRegions[name];
@@ -100,6 +100,7 @@
       var canonical = typeof html === "string" ? boardInputFull(html) : html;
       boardOffered = !boardLatest || boardLatest.hash !== hash ? { hash: hash, previous: boardLatest ? boardLatest.html : boardRendered, input: canonical } : null;
       boardLatest = { hash: hash, html: canonical };
+      var boardPrev = boardRendered;
       html = boardStageInput(boardLatest.html || html);
     }
     var pin = (name === "entries" || name === "convlive") && pinned();
@@ -151,7 +152,7 @@
           } else ins.forEach(function (n) { restoreOpen(n); fmtTimes(n); sweepOutImgs(n); });
         }
         else if (board) {
-          ins = morphBoard(el, html);
+          ins = morphBoard(el, html, boardPrev);
           if (window.wbHistory && window.wbHistory.sweep) window.wbHistory.sweep();
           ins.forEach(bandBoard);
           ins.forEach(function (n) {
@@ -217,8 +218,8 @@
       if (wbBatch && typeof wbUpdateEndBatch === "function") wbUpdateEndBatch();
     }
     if (name === "convlive" || name === "entries") outboxSync();
-    if (name === "panels") { drawerSync(); restorePanelReader(el, panelReader); }
-    if (name === "git") gitSwapped();
+    if (name === "panels") { wpSync(); restorePanelReader(el, panelReader); }
+    if (name === "git") gpSwapped();
     if (treeFocus && treeFocus.isConnected && doc.activeElement !== treeFocus) treeFocus.focus({ preventScroll: true });
     restoreScroll(scroll);
     if (kept) kept.h.apply();
@@ -232,7 +233,6 @@
     if (pin) (typeof queuePinConvo === "function" ? queuePinConvo() : pinConvo());
     else if (convoRegion && typeof queueSyncConvoBottom === "function") queueSyncConvoBottom();
     if (live && TAB[name]) queueSwapDot(TAB[name]);
-    if (name === "panels") drawerSwapped();
     if (name === "tree" || name === "convlive") drawerWait();
     if (name === "tree") agSwapped();
     if (TL_REGIONS[name]) { delete tlHeld[name]; tlCount(); }
@@ -858,7 +858,7 @@
       host: dbody || doc.body, mode: galMode, split: grid && grid.classList.contains("live") ? grid : null,
       leading: function (c) { return worktree && c.preview && !(PIN_WIDE && PIN_WIDE.matches); },
       layout: function (s) {
-        var col = s.column && s.pages > 0, mode = s.narrow ? (s.rail ? "narrow" : null) : s.column ? (col ? "col" : "drag") : s.empty ? "empty" : null;
+        var col = !!s.column, mode = s.narrow ? "narrow" : (col ? "col" : null);
         if (col !== root.hasAttribute("data-pincol")) {
           if (col) root.setAttribute("data-pincol", ""); else root.removeAttribute("data-pincol");
           railOpen(false);
@@ -1031,8 +1031,10 @@
     if (!incoming) return;
     var seenKey = "t:" + key, h = topicSeen(incoming);
     if (boardSeen[seenKey] === h) return;
+    var held = holdEcho(liveNode, boardRendered && boardRendered.topics ? boardRendered.topics[key] : null, incoming);
     boardSeen[seenKey] = h;
     if (boardRendered && boardRendered.topics) boardRendered.topics[key] = incoming.cloneNode(true);
+    if (held) { if (window.wbForm) window.wbForm(); return; }
     var hadOverviewLive = liveNode.hasAttribute("data-overview-live");
     var hadOverviewHere = liveNode.classList.contains("overview-here");
     var focusSaved = capturePreviewFocus(liveNode);
@@ -1076,10 +1078,22 @@
     restorePreviewFocus(target, focusSaved);
     target.scrollTop = scrollTop;
   }
+  // A hold flip's echo re-renders its topic with only the hold markers changed
+  // (pill.js holdOnly): when the live section shows the previous input, it
+  // takes the new markers in place rather than being replaced, which would
+  // reload its frames and lay the free canvas out around a half-built card.
+  function holdEcho(old, prev, n) {
+    var p = window.wbPill;
+    if (!prev || !p || !p.holdOnly || old.hasAttribute("data-wb-virtual") || boardSeen["t:" + topicKey(old)] !== topicSeen(prev) || !p.holdOnly(prev, n)) return false;
+    p.adoptHolds(old, n);
+    old.setAttribute("data-th", n.getAttribute("data-th"));
+    return true;
+  }
   // morphBoard applies a board region event to el and returns the element
   // nodes it inserted, in order, for the caller to prepare.
-  function morphBoard(el, html) {
+  function morphBoard(el, html, prev) {
     var seen = {}, want = [], ins = [], live = {}, liveClosed = [], pages = [], more = null, grafts = [], changed = [];
+    var prevTopics = prev && typeof prev !== "string" ? prev.topics : null;
     var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("board", "morphBoard") : null;
     try {
     var docked = window.WsCards.docked();
@@ -1115,7 +1129,7 @@
       // forgotten here, and later toggles are kept again.
       var newlyClosed = !!(live[key] && n.classList.contains("closed") && !live[key].classList.contains("closed"));
       if (newlyClosed) { forgetOpen(live[key]); forgetOpen(n); }
-      if (live[key] && boardSeen[key] === h) { want.push(live[key]); delete live[key]; }
+      if (live[key] && (boardSeen[key] === h || holdEcho(live[key], prevTopics && prevTopics[k], n))) { want.push(live[key]); delete live[key]; }
       else if (live[key] && live[key].hasAttribute("data-wb-virtual") && !window.WsCards.isDocked(live[key]) && typeof virtualStashUpdate === "function" && virtualStashUpdate(live[key], n)) {
         want.push(live[key]); delete live[key];
       } else {

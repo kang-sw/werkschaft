@@ -528,6 +528,8 @@
     let rawPose = "stand", rawGesture = null;
     let activeBeatMeta = null;
     let pendingAccent = null, pendingCoLeadBeat = null, pendingHover = null, pendingPhoneState = null, pendingGesture = "";
+    // Arrival order of the buffered gesture and phone state (0 = none).
+    let pendingOrder = 0, pendingGestureOrder = 0, pendingPhoneOrder = 0;
     let pendingInitialRid = "", pendingSessionSwitch = null;
     let ridObserver = null;
     let gaze = { x: 0, y: 0 }, smoothedLook = { yaw: 0, pitch: 0 }, smoothedHead = { yaw: 0, pitch: 0 };
@@ -541,6 +543,11 @@
       bustSpan: 0.27, targetY: 1.38, frameHeight: 0.85,
       headroomRatio: 0.13, cameraZ: 1.85, usedBox3: false
     };
+
+    function bufferGesture(name) {
+      pendingGesture = name;
+      pendingGestureOrder = ++pendingOrder;
+    }
 
     function setOverlay(text) {
       if (!overlay) return;
@@ -749,8 +756,14 @@
         if (pendingAccent !== null) coLead.setLaptopAccent(pendingAccent);
         if (pendingCoLeadBeat !== null) coLead.setCoLeadBeat(pendingCoLeadBeat);
         if (pendingHover !== null) coLead.setHover(pendingHover);
+        // Replay buffered gesture and phone state in arrival order so neither
+        // overwrites the other: a gesture that arrived before the latest phone
+        // snapshot plays first and the snapshot settles the final posture.
+        const gesture = pendingGesture;
+        pendingGesture = "";
+        if (gesture && pendingGestureOrder < pendingPhoneOrder) coLead.triggerGesture(gesture);
         if (pendingPhoneState !== null) coLead.setPhoneState(pendingPhoneState);
-        if (pendingGesture) { coLead.triggerGesture(pendingGesture); pendingGesture = ""; }
+        if (gesture && pendingGestureOrder >= pendingPhoneOrder) coLead.triggerGesture(gesture);
       }
 
       applyViewportResize(true);
@@ -1688,7 +1701,7 @@
         exprCtrl.setState(activeExpression);
         if (rawGesture && rawGesture !== prevGesture && Object.hasOwn(BUILTIN_VRM_GESTURES, rawGesture)) {
           if (coLead) coLead.triggerGesture(rawGesture);
-          else pendingGesture = rawGesture;
+          else bufferGesture(rawGesture);
         }
         viewObj.pose = activePose;
         viewObj.gesture = activeGesture;
@@ -1739,11 +1752,17 @@
       triggerGesture(name) {
         if (!name) return false;
         if (coLead) return coLead.triggerGesture(name);
-        pendingGesture = String(name);
+        bufferGesture(String(name));
         return true;
       },
       setPhoneState(snap) {
         pendingPhoneState = snap || null;
+        pendingPhoneOrder = ++pendingOrder;
+        if (!coLead && /^phone_/.test(pendingGesture)) {
+          // A newer phone snapshot is authoritative over a buffered phone
+          // gesture (a stale pickup must not replay over a putdown).
+          pendingGesture = "";
+        }
         return coLead ? coLead.setPhoneState(snap) : null;
       },
       setViewport(vw, vh, nextDpr) {

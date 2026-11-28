@@ -119,9 +119,15 @@ func TestDashboardFingerprintReadsNoTicket(t *testing.T) {
 	if n := lists.Load(); n != 0 {
 		t.Fatalf("ReadSession listed the tickets %d times, want none", n)
 	}
-	readPageOK(t, src, reg)
-	if lists.Load() == 0 {
-		t.Fatal("the page read must still build the ticket panel")
+	page := readPageOK(t, src, reg)
+	if lists.Load() != 0 {
+		t.Fatalf("retired #p-tickets must not list tickets during ReadPage, got %d", lists.Load())
+	}
+	if panelHTML(string(page.Board.Panels), "tickets") != "" {
+		t.Fatal("retired #p-tickets rendered in served panels")
+	}
+	if _, ok, err := src.ReadTicketIdeas(reg); !ok || err != nil || lists.Load() != 1 {
+		t.Fatalf("ReadTicketIdeas = ok:%v err:%v lists:%d, want 1 demand list", ok, err, lists.Load())
 	}
 }
 

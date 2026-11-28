@@ -127,6 +127,10 @@ type daemonBridge struct {
 	focusSeq uint64
 	tabs     map[string]*daemonBridgeStream
 	pending  map[string]*bridgePending
+	// guide is the ws/daemon.monitor registry, created on first use
+	// (Daemon.guideMonitors); guideClosed marks Daemon.Close.
+	guide       *guideMonitorRegistry
+	guideClosed bool
 }
 
 type daemonRefInfo struct {
@@ -169,10 +173,17 @@ type daemonBridgeStream struct {
 }
 
 func (b *daemonBridge) newStream(initialTabID string, initialVisible, optIn bool) *daemonBridgeStream {
+	var guide *guideMonitorRegistry
+	var s *daemonBridgeStream
+	defer func() {
+		if guide != nil {
+			guide.pushTo(s.enqueue)
+		}
+	}()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.nextID++
-	s := &daemonBridgeStream{
+	s = &daemonBridgeStream{
 		b:            b,
 		streamID:     b.nextID,
 		visible:      initialVisible,
@@ -195,6 +206,7 @@ func (b *daemonBridge) newStream(initialTabID string, initialVisible, optIn bool
 			b.tabs = map[string]*daemonBridgeStream{}
 		}
 		b.tabs[tabID] = s
+		guide = b.guide
 	}
 	return s
 }
@@ -250,12 +262,33 @@ func (s *daemonBridgeStream) handleFrame(frame string) {
 	if json.Unmarshal([]byte(frame), &msg) != nil {
 		return
 	}
+	if msg.Event == guideMonitorEventFrame || msg.Event == guideMonitorStopFrame {
+		s.handleGuideFrame(frame)
+		return
+	}
+	// Guide monitor hooks run after the bridge lock is released (deferred
+	// before the unlock, so they execute after it).
+	var guide *guideMonitorRegistry
+	var routeEvent *guideEvent
+	newlyRegistered := false
+	defer func() {
+		if guide == nil {
+			return
+		}
+		if newlyRegistered {
+			guide.pushTo(s.enqueue)
+		}
+		if routeEvent != nil {
+			guide.ingest(*routeEvent)
+		}
+	}()
 	b := s.b
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if s.closed {
 		return
 	}
+	wasRegistered := s.registered
 	isHeartbeat := msg.Event == "tab-heartbeat"
 	isVisibility := msg.Event == "visibility"
 	if !isHeartbeat && !isVisibility {
@@ -325,6 +358,13 @@ func (s *daemonBridgeStream) handleFrame(frame string) {
 	}
 	if navigated {
 		s.invalidateSnapshotLocked()
+	}
+	if b.guide != nil {
+		guide = b.guide
+		newlyRegistered = !wasRegistered && s.registered
+		if navigated && s.tabID != "" {
+			routeEvent = &guideEvent{Name: guideEventRoute, TabID: s.tabID, Route: sanitizeGuideField(s.activeRoute, daemonRouteMaxLen)}
+		}
 	}
 	if msg.Capabilities != nil {
 		if msg.Capabilities.NativeCapture != nil {
