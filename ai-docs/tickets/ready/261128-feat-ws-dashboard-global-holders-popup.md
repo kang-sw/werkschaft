@@ -6,6 +6,10 @@ blocked-by:
   - 261128-feat-ws-dashboard-gallery-workpanel-b
 related:
   261128-feat-ws-dashboard-always-open-gallery-and-ticketmap: Track 2A always-open #bgal and Ticket Map infrastructure (prerequisite of Track 2B/2C)
+sage-review-design: completed
+sage-review-completeness: completed
+sage-review-design-reviewed: 2fba117ed66dfd43
+sage-review-completeness-reviewed: 2fba117ed66dfd43
 ---
 
 # Global Bottom-Bar Holders Monitor, Process-Tree Resource Trace Popup, and Final #p-holders / #drhandle Retirement
@@ -44,7 +48,7 @@ Migrating Holders into a compact trigger at the far bottom-right of the global s
 
 - **Upward Popover Coordination & Modal Dimming (`railPopOpen`, `data-fdim`):**
   - Anchor the popup (`width: 440px; max-width: calc(100vw - 16px); max-height: min(560px, calc(100vh - 72px))`) **4px above `#botbar`**, right-aligned to the far-right trigger and clamped within the viewport (`8px` inset).
-  - Register with `railPopOpen` / `WsRail.popPlace` (`dashboard-rail-popovers.js:386,420,464,688`) so the Holders popup, `.usage-toggle` popover, and `#gear` / `#gmenu` are mutually exclusive, and `railPopClose` (`:466`) cancels any active Hold-to-Confirm (`WsHoldConfirm.cancelAll()`).
+  - Register with `railPopOpen` / `WsRail.popPlace` (`dashboard-rail-popovers.js` `railPopPlace` at `#L420`, its `WsRail.popPlace` call at `#L444`, `railPopClose` at `#L464`, `railPopOpen` at `#L688`; `popPlace` itself is defined in `rail.js#L890`) so the Holders popup, `.usage-toggle` popover, and `#gear` / `#gmenu` are mutually exclusive, and `railPopClose` (`:466`) cancels any active Hold-to-Confirm (`WsHoldConfirm.cancelAll()`).
   - Extend `data-fdim` click-blocking and dimming (`dashboard-shell.css:33,43`) to the trigger and popup whenever an iframe modal opens.
 
 - **Popup Sections, Summary Counts, and `Listing.Incomplete` Banner:**
@@ -52,7 +56,7 @@ Migrating Holders into a compact trigger at the far bottom-right of the global s
   - Surface `list.incomplete === true` as an explicit warning banner (`role="alert"`) at the top of `#hdlist`.
   - Group **all** holders rather than hiding healthy ones:
     1. **주의 필요 (Attention Required):** unattached holders (`!h.attached`), attached holders with `restart_safe === false`, and `list.failures` rows.
-    2. **실행 중 프로세스 트리 (Running Process Tree):** attached healthy holders (root leads, nested child-agent holders, standalone `exec` holders) plus `durable.*` `werk` sessions marked with an in-process badge and excluded from the OS process count.
+    2. **실행 중 프로세스 트리 (Running Process Tree):** attached healthy holders (root leads, child-agent holders, standalone `exec` holders; rendered flat in Phase 1, nested in Phase 2) plus `durable.*` `werk` sessions marked with an in-process badge and excluded from the OS process count.
     3. **터미널 (Terminals):** daemon-global `host0` terminals (`GET /s/host0/terminals`) and active-session orphan terminals.
 
 - **Hold-to-Confirm Holder Stop & Inline Terminal Confirm (`(1742)=a`):**
@@ -73,10 +77,28 @@ Migrating Holders into a compact trigger at the far bottom-right of the global s
 - **2-Layer Process-Tree Hierarchy & `CGO_ENABLED=0` Cross-Platform Collectors (Phase 2):**
   - **Logical agent layer:** Populate `Label: rec.Label` and additive `ParentReplyID` (from `rec.Parent.ReplyID` when `rec.Parent != nil`, `wsagent/record.go:151`) in `wsagent/runner_process.go:307` (`holderSession` in `wsagent/holder.go:118-126`). In `holders.go` / metrics assembly, also consult live `d.agents` parent relationships by `reply_id` so already-running holders whose descriptor predates `parent_reply_id` still nest under their parent lead holder.
   - **OS descendant layer (`PID -> PPID`):** Walk OS descendant processes under each holder's `PID` (and `Child.PID`) to sum tree RSS & CPU% and render expandable `.tn-row.os` rows on demand.
-  - **Cross-platform OS collectors (`CGO_ENABLED=0` mandatory per `scripts/dev.py:146`, `scripts/build-release-assets.sh:33`, and `performance.md` Rule 6):**
+  - **Cross-platform OS collectors (`CGO_ENABLED=0` mandatory per `scripts/dev.py:146`, `agents-plugin-tool/scripts/build-release-assets.sh:33` (the script is under `agents-plugin-tool/`, not the repo-root `scripts/`); `performance.md` Rule 6 "Spawn a process only when no in-process route exists" governs the subprocess choice: Windows and Linux have an in-process route, so they spawn nothing; Darwin uses a single `ps` per open-popup poll, the owner-approved Rule 6 exception recorded in the `(1744)=a` Decision above):**
     - **Windows (`//go:build windows`, 100% in-process, zero subprocess spawns):** `windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)` + `Process32First`/`Process32Next` (reusing the pattern in `execjob/process_windows.go:121-144` and `wsstate/process_parent_windows.go:12-26`), `windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, ...)` + `windows.GetProcessTimes` (`wsholder/proc_windows.go:12-22`), and `windows.NewLazySystemDLL("psapi.dll").NewProc("GetProcessMemoryInfo")` (`PROCESS_MEMORY_COUNTERS_EX.WorkingSetSize`).
     - **Linux (`//go:build linux`, 100% in-process, zero subprocess spawns):** Read `/proc/<pid>/stat` (`comm`, `ppid`, `utime`, `stime`, `starttime`, `rss * os.Getpagesize()`, following `wsholder/proc_linux.go:21-38`).
     - **macOS / Darwin (`//go:build darwin`, `CGO_ENABLED=0`):** Single `ps -axo pid=,ppid=,rss=,cputime=,comm=` invocation per open-popup poll (matching `execjob/process_unix.go:61`), avoiding deprecated `syscall(2)` and paying no Windows AV spawn cost.
+
+- **macOS `ps` spawn — owner-approved `performance.md` Rule 6 exception (`(1744)=a`, Rule 8):**
+  - Rule: Rule 6, "Spawn a process only when no in-process route exists".
+  - Reason: with `CGO_ENABLED=0` on Darwin, the in-process `kern.proc.all` sysctl (`golang.org/x/sys/unix` `SysctlKinfoProcSlice`) exposes `Xrssize` as `int16`, which saturates on large processes, so it yields no accurate RSS/CPU field. Windows uses native Win32 APIs and Linux reads `/proc`, both with zero spawns.
+  - Scope: exactly one `ps -axo pid=,ppid=,rss=,cputime=,comm=` per ~1.5–2s metrics poll, only while the Holders popup is open, visible, and unpaused; never while it is closed, paused, or hidden.
+  - Measured cost: the Phase 2 `### Result` records the observed `ps` execution time and cost.
+  - *Rejected:* in-process sysctl with degraded RSS/CPU accuracy; macOS tree without RSS/CPU/sparkline.
+
+- **Auto-confirmed technical decisions (sage-review settlement; owner directive `pref.ticket-settlement-autonomy`):**
+  - **`GET /holders/metrics` schema & join key (Phase 2):** Response is `{ "ts": <unix ms>, "interval_ms": <int>, "supported": <bool>, "holders": { "<holder id>": { "pid": <int>, "rss": <bytes>, "cpu": <percent, one decimal>, "spark": { "rss": [<=24 bytes], "cpu": [<=24 percent] }, "procs": [ { "pid", "ppid", "name", "rss", "cpu" } ] } } }`. The join key to a `GET /holders` row is the holder `id` (the same id the stop route uses); `procs` is the flat OS-descendant list under the holder `PID` / `Child.PID` (the client derives nesting by `ppid`). `supported: false` (unsupported platform or collector failure) makes the client keep static holder rows. The ring expires an entry after ~30s without a metrics request. *Rejected:* joining by `pid` (PID reuse) or `reply_id` (absent for exec holders).
+  - **Live reconcile during trace:** Each metrics response also carries the current `procs` set, so the client reconciles by stable key: patch existing `[data-k]` cells in place; **add** a `.tn-row.os` / child row for a new key and **remove** a row whose key vanished; a metrics key with no holder row in the DOM triggers one coalesced `GET /holders` re-read (at most one per 5s) instead of being dropped; a row that currently owns an active Hold-to-Confirm hold or keyboard focus is never removed or re-ordered until the hold ends, only marked exited (`.gone`). *Rejected:* patch-only updates (leaves stale and missing rows until manual Refresh).
+  - **Route dispatch & gate:** `handleHolders` (`holders.go`) treats any non-empty remainder as `<id>/stop`; `/holders/metrics` is matched by an explicit branch before the id parse (or its own mux entry beside `daemon_http.go`'s `/holders` registration). It uses the **stricter `localViewer` gate used by Stop**, because it exposes OS process names and PIDs of arbitrary descendants; non-local (LAN-token) viewers get `404`, as the Stop route does ("as if the route did not exist"), and the client degrades to static rows without RSS/CPU/sparkline. `holders_test.go` covers `/holders/metrics` routing, the viewer gate, `no-store` / `nosniff` headers, and a method check (`GET` only).
+  - **Closed-popup trigger freshness (zero polling preserved):** besides boot seed, open, manual Refresh, and post-Stop, re-fetch `GET /holders` once on `visibilitychange` to visible and on window `focus`, rate-limited to one fetch per 10s, and after shell frame navigation. No `setInterval`; no OS metrics reads. The SSE summary event stays optional.
+  - **Bottom-bar identifiers are provisional:** `#botbar`, `#slot-bot-right`, `.bot-right` are this ticket's working names; the implementer reads the landed `261128-feat-ws-dashboard-ide-shell-overhaul` DOM (3-column bar, right cell holding `.usage-toggle`) and mounts the trigger as the rightmost element of that right cell, adapting ids/classes in code and tests to the landed names. Likewise, `file:line` anchors in this ticket are search hints, not edit targets.
+  - **Phase 1 tree is flat:** `parent_reply_id` and the `d.agents` parent lookup land in Phase 2, so Phase 1 renders attached holders flat (root, child-agent, and `exec` holders in one list) with the in-process badge for `durable.*`. Phase 2 adds nesting; the `d.agents` lookup needs a new optional parent accessor on the `AgentHost` interface (absent host or accessor → flat rendering).
+  - **Legacy cards not yet retired by Track 2A:** before deleting `#drcards` / `#drbody` / `#drhandle`, Phase 1 step 3 greps for remaining `#p-*` cards under `#drcards` (e.g. `#p-tickets`, `#p-mailbox` if `261128-feat-ws-dashboard-always-open-gallery-and-ticketmap` has not landed). Any remaining card keeps its host container and the minimum drawer wiring; only `#p-holders` and the `#drhandle` coupling are removed in that case, and the Result records what stayed and why. If none remain, the full retirement list applies.
+  - **Unframed pages:** the Result lists which routes still render unframed (`Frame: false`) and therefore have no Holders surface, per `(1724)`.
+  - **Phase 2 collector tests:** unit-test the Darwin `ps` output parser, the Linux `/proc/<pid>/stat` parser (including `comm` containing spaces/parentheses), subtree aggregation, and the ring (capacity 24, idle expiry) with fixtures, plus `GOOS=windows go vet`.
 
 - **Final `#p-holders` & `#drhandle` / `#drbody` / `#drcards` Retirement — Preservation Audit:**
   - **Retire:** `#p-holders`, `#drbody`, `#drcards`, `#drhandle` (`dashboard.tmpl:172,190`), `cardTab` / `panelTab` / `drawerTab` / `drEntries`, `drFill`, `drBadge` / `drSwap`, `DR_OPEN` (`ws.dashboard.drawer`), `"panels"` sheet mode in `dashboard-drawer.js`, `#drhandle` / `#drfold` `.wait` coupling in `drawerWait` (already moved to `dashboard-workpanel.js` by Track 2C), and `.hdcard` / `#drbody` / `#drhandle` CSS rules in `dashboard-drawer.css`.
@@ -93,7 +115,7 @@ Migrating Holders into a compact trigger at the far bottom-right of the global s
 - Convention: `ai-docs/manuals/shipped-surface-boundary.md` (declared for `agents-plugin-tool/`)
 - **Visual & theme parity (`dashboard-style.md`):** Material tonal surfaces (`--wb-bg`, `--wb-card`, `--wb-muted`), `color-mix()` semantic washes, `font-variant-numeric: tabular-nums`, Dark & Light theme parity, `0px` horizontal overflow (`scrollWidth <= clientWidth`), and no boxy `1px` row outlines.
 - **Performance & AV budget (`performance.md`):**
-  - `CGO_ENABLED=0` across all platforms (`scripts/dev.py:146`, `build-release-assets.sh:33`).
+  - `CGO_ENABLED=0` across all platforms (a build constraint from `scripts/dev.py:146` and the release script, not a `performance.md` rule) (`scripts/dev.py:146`, `agents-plugin-tool/scripts/build-release-assets.sh:33`).
   - Zero subprocess spawns in Windows and Linux metrics collectors; zero `setInterval` polling and zero OS metrics reads while the popup is closed; zero disk I/O for metrics history; keyed in-place DOM patching so live ticks never reset active Hold-to-Confirm states.
 - **11-locale i18n parity:** Add/update all new and revised `js.hd.*` / `js.holders.*` keys across every table in `agents-plugin-tool/internal/wsi18n/tables/` (`de`, `en`, `es`, `fr`, `it`, `ja`, `ko`, `pt-BR`, `ru`, `zh-Hans`, `zh-Hant`).
 - **Downstream-first shipped text (`shipped-surface-boundary.md`):** No repository-specific strings, paths, or assumptions in shipped Go/JS/CSS/i18n assets.
@@ -103,10 +125,37 @@ Migrating Holders into a compact trigger at the far bottom-right of the global s
 
 - `ai-docs/assets/mockups/261128/global-holders-popup/index.html` (`styles.css`, `app.js`) — approved v2 visual & interactive reference (Dark/Light, Wide/Compact, Warning+Tree / Healthy+Tree / Empty / No Session Frame / Incomplete Scan).
 - `agents-plugin-tool/internal/wsdashboard/holders.go` (`HolderHost`, `DurableSessionHost`, `durableHolderInfo`, `handleHolders`) & `holders_test.go`.
-- `agents-plugin-tool/internal/wsdashboard/assets/hold-confirm.js` (`window.WsHoldConfirm`, `DURATION = 1500`).
+- `agents-plugin-tool/internal/wsdashboard/assets/hold-confirm.js` (`window.WsHoldConfirm`, `DEFAULT_DURATION = 1500` at `hold-confirm.js#L2`).
 - `agents-plugin-tool/internal/wsdashboard/assets/dashboard-rail-popovers.js` (`railPopOpen`, `railPopClose`, `railPopPlace`, `WsRail.popPlace`).
 - `agents-plugin-tool/internal/wsdashboard/assets/shell.js` (`KINDS`, `framed`, frame message routing) & `assets/terminal.js` (`WsTerm.list`, `WsTerm.attach`).
 - `agents-plugin-tool/internal/execjob/process_windows.go` (`CreateToolhelp32Snapshot`), `internal/wsholder/proc_windows.go` (`GetProcessTimes`), and `internal/wsholder/proc_linux.go` (`/proc/<pid>/stat`).
+
+## Prior Decisions
+
+- b31e61ba (2026-11-28, commit): "Legacy retirement is transitional: Phase 1 moves #r-panels into the Workpanel (drops drawer todo/agenda), Phase 2 retires only the Notes card; #drhandle plus a slimmed sheet stay live for #p-worktrees ... and #p-holders" — bearing: supports
+- 261128-feat-ws-dashboard-gallery-workpanel-b (2026-11-28, Decisions): "Legacy Retirement ... Phase 2 retires the Todo, Agenda, and Notes (#p-notes) cards fro[m the drawer]" — bearing: constrains
+- 261128-feat-ws-dashboard-always-open-gallery-and-ticketmap (2026-11-28, Decisions): "Retire #thandle: Remove the top-right Ticket Map handle button (#thandle and thandleSync in dashboard-drawer.js, .d-tm-handle / --thr room reservation in drRoom())" — bearing: constrains
+- 261128-feat-ws-dashboard-control-mcp-api (2026-11-28, Decisions): "(1728)=a & (1742) — Shared top-level shell 1-Click Confirmation Gate" — bearing: constrains
+- 30f2b221 (2026-11-24, commit): "Replaced live hosted rail hover archive button with conditional .drstop ... and replaced modal confirmations in rpSessMake with a reusable 1.5s horizontal hold-to-confirm" — bearing: supports
+- 6d1ba1f0 (2026-11-25, commit): "left hold-confirm.js DEFAULT_DURATION (1500ms) and destructive session/rail/account/bg-exec holds untouched." — bearing: supports
+- 261110-feat-ws-dashboard-session-holder (2026-11-10, Result): "GET /holders and POST /holders/<id>/stop; the drawer's holders card with its strings in all 11 language tables." — bearing: supports
+- 1496fe20 (2026-11-10, commit): "No confirmation step on Stop: the page has no existing confirm pattern for a destructive button" — bearing: supports
+
+## Route Facts
+
+| fact | value | evidence |
+|---|---|---|
+| scope.span | multi-file | wsdashboard/page_routes.go, page_regions.go, pages.go, assets/dashboard.tmpl, dashboard-drawer.js/css, dashboard-git.js, shell.js, terminal.js, new dashboard-holders.js/css, wsi18n/tables (11), wsagent/holder.go, runner_process.go, new wsholder collectors |
+| scope.surface | cross-module | wsdashboard, wsagent (holderSession fields), wsholder collectors, wsi18n tables; new GET /holders/metrics route |
+| scope.new_public_symbol | yes | GET /holders/metrics; holderSession.ParentReplyID; shellPageData.Holders (absent today at page_regions.go#L83-L93) |
+| scope.new_type_contract | yes | holderSession ParentReplyID json parent_reply_id omitempty; metrics response schema; shell.js KINDS postMessage types |
+| scope.test_surface | new-files | existing wsdashboard/holders_test.go, drawer_height_test.go, pages_render_test.go, shell_search_test.go, frontend-drawer.test.js, testdata/holders-anchor.test.cjs; new collector and Playwright coverage needed |
+| complexity.reuse_points | confirmed | hold-confirm.js WsHoldConfirm, railPopOpen/railPopPlace, holders.go handleHolders, wsholder/proc_*.go, execjob/process_windows.go |
+| complexity.side_effect_risk | high | retires drawer shell (#drhandle) while Ctrl+K #sbody/#shandle and drRoom() must survive; drawer JS touches drhandle at many sites in dashboard-drawer.js |
+| risk.correctness | high | cross-platform process-tree collectors and keyed in-place DOM patching under live holds |
+| risk.fit | high | three blocked-by tickets (all ready, not landed) supply #botbar and slot order this ticket mounts into; no #botbar in dashboard.tmpl today |
+| risk.test | high | needs Playwright across theme x width, Windows/Linux/Darwin collector builds |
+| risk.security_or_contract | moderate | new read-only metrics endpoint exposing process info and additive wire field; stop route unchanged |
 
 ## Phases
 
@@ -142,7 +191,7 @@ Verification: `cd agents-plugin-tool && go test -count=1 ./internal/wsdashboard/
    - Implement OS process snapshot & resource collectors behind build tags:
      - `windows`: `CreateToolhelp32Snapshot` + `OpenProcess` + `GetProcessTimes` + `psapi.dll!GetProcessMemoryInfo` (`WorkingSetSize`) — zero subprocess spawns.
      - `linux`: `/proc/<pid>/stat` (`ppid`, `utime`, `stime`, `rss * os.Getpagesize()`) — zero subprocess spawns.
-     - `darwin`: single `ps -axo pid=,ppid=,rss=,cputime=,comm=` per sample — `CGO_ENABLED=0`.
+     - `darwin`: single `ps -axo pid=,ppid=,rss=,cputime=,comm=` per sample — `CGO_ENABLED=0`; owner-approved Rule 6 exception (`(1744)=a`), and the Result records the observed `ps` execution time and cost.
    - Build an in-memory bounded sample ring (~20–24 points per holder/PID, expiring on idle, zero disk I/O) computing per-node and subtree-aggregated RSS (MB/GB), CPU%, and sparkline series, served at `GET /holders/metrics` (`Cache-Control: no-store`, `X-Content-Type-Options: nosniff`).
 3. **Expandable 2-Layer Tree UI, Keyed Metric Updates, and On-Demand Trace Loop (`dashboard-holders.js`, `dashboard-holders.css`):**
    - Render the 4-column tree grid (Process, RSS, CPU, inline `<svg>` sparkline + Stop) with expandable parent-lead -> child-agent -> `.tn-row.os` subprocess rows, aggregate RSS/CPU strip (`#hp-agg`), live trace status pill (`1.5s 트레이스`), and Pause/Resume (`#hp-pause`) toggle matching `ai-docs/assets/mockups/261128/global-holders-popup/index.html`.
