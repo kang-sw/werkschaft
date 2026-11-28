@@ -30,7 +30,7 @@
   // Heights outlive an evicted frame in the shell (dashboard-session-view.js).
   var freePos = new Map(), freeLaidH = new Map(), freeHeightCache = typeof boardHeightCache === "function" ? boardHeightCache() : new Map();
   var freeCardRO = null, freeObserved = new Set(), freeParkedByUs = new WeakSet(), freeDeferredCollapse = new Set();
-  var freeScrollRaf = 0, freeIdleTimer = 0, freeJump = null, freeStagePending = false, freeTopRebasePending = false, freeScrollGen = 0, freeLastScrollTop = 0, freeLastShift = 0, freePendingScrollEnd = false;
+  var freeScrollRaf = 0, freeStageRaf = 0, freeIdleTimer = 0, freeJump = null, freeStagePending = false, freeTopRebasePending = false, freeScrollGen = 0, freeLastScrollTop = 0, freeLastShift = 0, freePendingScrollEnd = false;
   var freePin = null, freePinTimer = 0, freePinRaf = 0;
 
   // --- windowed O(1) topic body virtualization --------------------------------
@@ -1017,8 +1017,8 @@
         if (moreBtn.style && moreBtn.style.top) moreBtn.style.top = "";
       }
     }
-    if (freeStageRaf && typeof cancelAnimationFrame === "function") {
-      cancelAnimationFrame(freeStageRaf);
+    if (typeof freeStageRaf !== "undefined" && freeStageRaf) {
+      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(freeStageRaf);
       freeStageRaf = 0;
     }
     freeActive = false;
@@ -1152,7 +1152,6 @@
       }
     }
   }
-  var freeStageRaf = 0;
   function freeUpdateMoreAndStage(board, list, winEnd, yEnd, hEnd, keepRunway) {
     if (typeof freeStageRaf !== "undefined" && freeStageRaf) {
       if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(freeStageRaf);
