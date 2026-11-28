@@ -2,6 +2,7 @@
 title: "`~/.cache` 대용량 아티팩트(`rollback`·`bin`·`proj`·세션) 자동 GC 도입"
 sage-review-design: required
 sage-review-completeness: required
+completed: 2026-11-29
 ---
 
 # `~/.cache` 대용량 아티팩트(`rollback`·`bin`·`proj`·세션) 자동 GC 도입
@@ -88,3 +89,17 @@ fallback, each covered by injected-clock unit tests and `-race`.
 
 Out of scope: config manifest keys, UI, any sweep of `dashboard/` entries other
 than `rollback/`, `bin/` and `sessions/`, the legacy `PruneRegistrations`.
+
+### Result (847f2c4ff) - 2026-11-29
+
+- Added `wsstate.GCProjects` (`internal/wsstate/gc.go`): touches only `review-paths`, `report-paths`, `prompt-paths`, `tmp` (14d TTL) and `shared/docs` (30d TTL), each with a 2GiB oldest-first LRU cap, a 24h grace, and removal of provably dead `proj/<key>@<id>` dirs (worktree path gone, `LastSeenAt`/tree mtime over 14d, no live session). Unknown folders and unreadable `worktree.json` are never touched; `Ensure` and `GeneratePaths` gain no I/O.
+- Added `internal/wsdashboard/cache_gc.go`: `PruneRollbackDir` (7d / newest 3), `PruneStagedExecutables` with the pin set (running exe, macOS stable twin, `last-running-executable.json` target, builds under 24h, locked files, foreign entries) keeping the newest 5 builds and removing sidecars/orphans, `CacheGCConfig` with `WS_CACHE_GC_*` env overrides, and the daemon maintenance loop (first pass after 45s, then every 6h, guarded to `dashboard/` dirs, stopped by `Close`).
+- Sessions: 1h prune tick in `Daemon.poll`; `pruneRegistrationsWith` uses `ClosedAt`/`HandedOffAt` before dir `ModTime` when `LastSeen` is zero. `retainsPiHistory`, `!record.retired()` and `retired-pi-history/` untouched (T2 invariant, test-covered).
+- Removed the synchronous startup prune in `cmd/ws-mcp/dashboard.go` and the empty `PruneStagedExecutables` stub in `spawn.go`; updated `TestStageExecutableCopiesAndPrunes` and `ai-docs/manuals/ws-mcp.md`.
+- Verified: `go build ./...`, `go vet ./...`, `GOOS=windows go vet ./...`, `go test -race ./internal/wsstate/...`, and `go test -race ./internal/wsdashboard -run 'TestStageExecutable|TestPrune|TestCacheGC|TestRegistry'` all pass. Full non-targeted `internal/wsdashboard`, `internal/wsagent` and `cmd/ws-mcp` suites were slow on this machine and were not confirmed to completion.
+- Known minor gap: a partial `RemoveAll` of a dead worktree dir on Windows could leave a dir without `worktree.json`, which the skip-if-unreadable rule then never collects.
+
+
+## Resolution (2026-11-29)
+
+Implemented background-only GC for the large-growth areas under `~/.cache/ws@*/`: `dashboard/rollback` (7d / newest 3), `dashboard/bin` (newest 5 distinct builds, 7d, pin set, sidecars), `proj/<key>` wsstate areas (14d TTL / 30d shared docs, 2GiB LRU cap, dead-worktree removal), and `dashboard/sessions` (hourly tick, `ClosedAt`/`HandedOffAt` fallback). Tier T0; the T2 Pi-history invariant is untouched.
