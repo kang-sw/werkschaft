@@ -386,6 +386,25 @@ Registry (`wsdashboard/daemon_guide_monitor.go`), keyed by owner reply id
   (or targeted `-run` covering daemon/companion/guide/permission tests plus a
   full package compile), `GOOS=windows go vet ./...`.
 
+### Result (5fce5315d) - 2026-11-28
+
+Phase 1 landed as planned. It adds `ws/daemon.highlight` (argument checks, then a `guide.highlight` bridge op) and `ws/daemon.monitor` (a daemon-side registry). The registry supports start/stop/status/replace with clamps, coalesced deliveries, the 12/min burst cap with a suppressed summary, and TTL and stop-chip final notices. It also covers liveness teardown, `route_changed` derived on the server from heartbeats, the client allowlist, and `Daemon.Close` teardown. The companion-body authority split exposes only the 4 guide aliases (tabs/dom/highlight/monitor), locked to its posture; companion-work and opted-in leads see all 7. The tools are also added to both `runtime.json` files.
+
+One addition beyond the plan: the dashboard's `invalid_request:<reason>` bridge errors (for example `invalid_selector`) map to `invalid_request` with that `Reason`. A bare `invalid_request` from an older client maps to `guide_unavailable/client_unsupported`.
+
+Verification:
+- `go test -race -count=1 -timeout 45m ./cmd/ws-mcp/...` ok.
+- Targeted `-race -run 'Guide|Highlight|Monitor|DaemonTool|Companion' ./internal/mcp/ ./cmd/ws-mcp/`: 38/38 PASS.
+- `go build ./...`, `go vet ./...`, `GOOS=windows go vet ./...` ok.
+- `python3 scripts/generate-package-assets.py --check` rc 0.
+- `ws/tickets.verify` PASS.
+
+Pre-existing failures, not from this branch:
+- `internal/mcp`: `TestSessionKeyResolvesRoot` has a `-race` data race on `s.intake` in `ServeStdio` (`server.go:254` vs `:356`), because `session_auth_test.go` runs two concurrent `ServeStdio` on one server.
+- `internal/wsdashboard`: 11 node-suite tests fail: TestShellPostLayout, TestSessionURLServesTheShellAroundItsFramedPage, TestBoardKeepWiring, TestBoardToolbarPlacementAndCounts, TestBoardGallery, TestConversationPresentationMergePreservesIdentityAndDisclosures, TestFilesExplorerInstances, TestGalleryNoReservedColumnWithoutAPage, TestSearchDrawerSplitOwnership, TestFreshSessionLoadClient, TestShellSwitchesFramesThroughItsGlue. Their inputs (assets/testdata/templates/`pages.go`) are identical to merge-base `b01986791`.
+
+This session took over a wedged worker. The implementation was complete but uncommitted, and it was reviewed before being committed.
+
 ### Phase 2: Shell overlay, structural hooks, stop chip, E2E
 
 Builds on the Phase 1 bridge op, push event, and frames.
