@@ -97,6 +97,18 @@ async function until(check, message) {
         for (const topic of await card.locator('.wbupdate-topic').all()) {
           assert(await topic.locator('.wbupdate-items').count() <= 1, 'one chip group per topic');
           assert.equal(await topic.locator('.wbupdate-row .wbupdate-item-id, .wbupdate-class, .wbupdate-options').count(), 0, 'no redundant item rows');
+          if (await topic.locator('.wbupdate-items').count() === 1) {
+            const order = await topic.evaluate(t => {
+              const items = t.querySelector('.wbupdate-items');
+              const ib = items.getBoundingClientRect();
+              const others = [...t.querySelectorAll('.wbupdate-rows > .wbupdate-row, .wbupdate-rows > .wbupdate-panel-wrap')];
+              return others.map(o => ({
+                dom: !!(o.compareDocumentPosition(items) & Node.DOCUMENT_POSITION_FOLLOWING),
+                visual: o.getBoundingClientRect().bottom <= ib.top + 0.5,
+              }));
+            });
+            assert(order.every(o => o.dom && o.visual), 'question chips render below panels and logs (DOM and visual order)');
+          }
           for (const chip of await topic.locator('.wbupdate-items > a.wbupdate-item-id').all()) {
             const target = await chip.getAttribute('data-wb-jump');
             assert(/^item-[1-9]\d{0,5}$/.test(target), 'chips keep validated item targets');

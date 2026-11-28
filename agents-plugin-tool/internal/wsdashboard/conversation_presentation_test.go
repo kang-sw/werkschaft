@@ -357,6 +357,10 @@ func TestConversationPresentationWhiteboardFoldAndTargets(t *testing.T) {
 			t.Errorf("missing %q: %s", want, html)
 		}
 	}
+	// Question/item chips sit at the bottom of the topic, after panel and log rows.
+	if items, panel, logRow := strings.Index(html, `class="wbupdate-items"`), strings.Index(html, `data-wb-jump="p2"`), strings.Index(html, `class="wbupdate-l"`); items < 0 || panel < 0 || logRow < 0 || items < panel || items < logRow {
+		t.Errorf("items must follow panel and log rows (items=%d panel=%d log=%d): %s", items, panel, logRow, html)
+	}
 	for _, bad := range []string{"SECRET PANEL PAYLOAD", "second line", "<html>", "<img", "<iframe", "<script>", "srcdoc=", "Answer on board", "Open on board", `data-wb-jump="e7"`, "question?", "b: &lt;script&gt;literal&lt;/script&gt;", "wbeffect-details", "wbeffect-values"} {
 		if strings.Contains(html, bad) {
 			t.Errorf("panel payload or interpreted markup %q: %s", bad, html)
