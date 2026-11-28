@@ -8,7 +8,7 @@ import "testing"
 // data-th replaces it; a section without data-th compares its HTML as
 // before. The record is the incoming hash, never the live DOM.
 func TestBoardKeepsATopicByItsHash(t *testing.T) {
-	src := dashboardFuncs(t, "openKey", "restoreOpenOne", "restoreOpen", "forgetOpen", "topicKey", "topicSeen", "morphBoard", "frameKeep", "frameKept", "frameChain", "frameGraftable", "frameGrafts", "settleMoves", "frameGraft")
+	src := dashboardFuncs(t, "openKey", "restoreOpenOne", "restoreOpen", "forgetOpen", "topicKey", "topicSeen", "holdEcho", "morphBoard", "frameKeep", "frameKept", "frameChain", "frameGraftable", "frameGrafts", "settleMoves", "frameGraft")
 	runNode(t, "board topic hash", `
 var bad = [];
 function check(what, got, want) { if (JSON.stringify(got) !== JSON.stringify(want)) bad.push(what + ": got " + JSON.stringify(got) + ", want " + JSON.stringify(want)); }

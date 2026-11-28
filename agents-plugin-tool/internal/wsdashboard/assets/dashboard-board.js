@@ -100,6 +100,7 @@
       var canonical = typeof html === "string" ? boardInputFull(html) : html;
       boardOffered = !boardLatest || boardLatest.hash !== hash ? { hash: hash, previous: boardLatest ? boardLatest.html : boardRendered, input: canonical } : null;
       boardLatest = { hash: hash, html: canonical };
+      var boardPrev = boardRendered;
       html = boardStageInput(boardLatest.html || html);
     }
     var pin = (name === "entries" || name === "convlive") && pinned();
@@ -151,7 +152,7 @@
           } else ins.forEach(function (n) { restoreOpen(n); fmtTimes(n); sweepOutImgs(n); });
         }
         else if (board) {
-          ins = morphBoard(el, html);
+          ins = morphBoard(el, html, boardPrev);
           if (window.wbHistory && window.wbHistory.sweep) window.wbHistory.sweep();
           ins.forEach(bandBoard);
           ins.forEach(function (n) {
@@ -1031,8 +1032,10 @@
     if (!incoming) return;
     var seenKey = "t:" + key, h = topicSeen(incoming);
     if (boardSeen[seenKey] === h) return;
+    var held = holdEcho(liveNode, boardRendered && boardRendered.topics ? boardRendered.topics[key] : null, incoming);
     boardSeen[seenKey] = h;
     if (boardRendered && boardRendered.topics) boardRendered.topics[key] = incoming.cloneNode(true);
+    if (held) { if (window.wbForm) window.wbForm(); return; }
     var hadOverviewLive = liveNode.hasAttribute("data-overview-live");
     var hadOverviewHere = liveNode.classList.contains("overview-here");
     var focusSaved = capturePreviewFocus(liveNode);
@@ -1076,10 +1079,22 @@
     restorePreviewFocus(target, focusSaved);
     target.scrollTop = scrollTop;
   }
+  // A hold flip's echo re-renders its topic with only the hold markers changed
+  // (pill.js holdOnly): when the live section shows the previous input, it
+  // takes the new markers in place rather than being replaced, which would
+  // reload its frames and lay the free canvas out around a half-built card.
+  function holdEcho(old, prev, n) {
+    var p = window.wbPill;
+    if (!prev || !p || !p.holdOnly || old.hasAttribute("data-wb-virtual") || boardSeen["t:" + topicKey(old)] !== topicSeen(prev) || !p.holdOnly(prev, n)) return false;
+    p.adoptHolds(old, n);
+    old.setAttribute("data-th", n.getAttribute("data-th"));
+    return true;
+  }
   // morphBoard applies a board region event to el and returns the element
   // nodes it inserted, in order, for the caller to prepare.
-  function morphBoard(el, html) {
+  function morphBoard(el, html, prev) {
     var seen = {}, want = [], ins = [], live = {}, liveClosed = [], pages = [], more = null, grafts = [], changed = [];
+    var prevTopics = prev && typeof prev !== "string" ? prev.topics : null;
     var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("board", "morphBoard") : null;
     try {
     var docked = window.WsCards.docked();
@@ -1115,7 +1130,7 @@
       // forgotten here, and later toggles are kept again.
       var newlyClosed = !!(live[key] && n.classList.contains("closed") && !live[key].classList.contains("closed"));
       if (newlyClosed) { forgetOpen(live[key]); forgetOpen(n); }
-      if (live[key] && boardSeen[key] === h) { want.push(live[key]); delete live[key]; }
+      if (live[key] && (boardSeen[key] === h || holdEcho(live[key], prevTopics && prevTopics[k], n))) { want.push(live[key]); delete live[key]; }
       else if (live[key] && live[key].hasAttribute("data-wb-virtual") && !window.WsCards.isDocked(live[key]) && typeof virtualStashUpdate === "function" && virtualStashUpdate(live[key], n)) {
         want.push(live[key]); delete live[key];
       } else {

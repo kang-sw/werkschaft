@@ -736,6 +736,71 @@ test('5a. stream-view.js wbHistory.keep skips compensation for above-anchor buff
   assert.equal(bgal.scrollTop, 390, '#bgal keeps normal scroll compensation');
 });
 
+test('5a2. stream-view.js wbHistory.keep on the free canvas reads its reference unit only inside the anchor card', () => {
+  const root = makeEl('root');
+  const html = makeEl('html');
+  const bcol = makeEl('div', { attrs: { id: 'bcol', 'data-board-free': '' }, overflowY: 'auto', scrollTop: 50000, clientHeight: 800, scrollHeight: 100000 });
+  const board = makeEl('div', { attrs: { id: 'r-board' } });
+  const cardAnchor = makeTopic('anchor', { height: 1200 });
+  const cardBelow = makeTopic('below', { height: 1200 });
+  const frameAnchor = makeEl('div', { cls: ['doc-frame'], attrs: { 'data-doc-key': 'entry:e1' } });
+  const frameBelow = makeEl('div', { cls: ['doc-frame'], attrs: { 'data-doc-key': 'entry:e2' } });
+  cardAnchor.appendChild(frameAnchor);
+  cardBelow.appendChild(frameBelow);
+  board.appendChild(cardAnchor);
+  board.appendChild(cardBelow);
+  bcol.appendChild(board);
+  html.appendChild(bcol);
+  root.appendChild(html);
+  // The below card's unit sits nearer the reading line than the anchor's, as
+  // when the anchor's head is near the top and its frame starts lower: the
+  // unscoped rule picks it.
+  let anchorTop = 300, belowTop = 100;
+  frameAnchor.getBoundingClientRect = () => ({ top: anchorTop, bottom: anchorTop + 100, height: 100, left: 0, right: 600, width: 600 });
+  frameBelow.getBoundingClientRect = () => ({ top: belowTop, bottom: belowTop + 100, height: 100, left: 0, right: 600, width: 600 });
+  bcol.getBoundingClientRect = () => ({ top: 0, bottom: 800, height: 800, left: 0, right: 800, width: 800 });
+  bcol.clientWidth = 800;
+  const ctx = {
+    window: null,
+    innerWidth: 1000,
+    document: { documentElement: html, body: html, scrollingElement: html, getElementById: () => null, querySelectorAll: () => [], addEventListener: () => {} },
+    getComputedStyle: n => ({ overflowY: n.overflowY || 'visible', display: 'block', visibility: 'visible' }),
+    requestAnimationFrame: fn => { fn(); return 1; },
+    cancelAnimationFrame: () => {},
+    addEventListener: () => {},
+    Date, Math, Set, Map, WeakMap, Array, Object,
+    WsBoardAnchor: {
+      windowInfo: () => ({ active: true, anchorIdx: 0, list: [cardAnchor, cardBelow], indexOf: n => (n === cardAnchor ? 0 : n === cardBelow ? 1 : -1) }),
+      owner: n => (cardAnchor.contains(n) ? cardAnchor : cardBelow.contains(n) ? cardBelow : null),
+    },
+  };
+  ctx.window = ctx;
+  ctx.innerHeight = 800;
+  vm.createContext(ctx);
+  vm.runInContext(streamViewSrc, ctx);
+  const kit = ctx.viewKit(ctx);
+
+  // A relayout moves the below card 600px up while the anchor card stays: no scroll.
+  let h = kit.keep(cardAnchor.firstElementChild, { scroller: bcol });
+  belowTop -= 600;
+  h.apply();
+  assert.equal(bcol.scrollTop, 50000, 'another card moving never scrolls the free canvas');
+
+  // Content above the reading line inside the anchor card still keeps its place.
+  belowTop = 100;
+  h = kit.keep(cardAnchor.firstElementChild, { scroller: bcol });
+  anchorTop += 150;
+  h.apply();
+  assert.equal(bcol.scrollTop, 50150, 'the anchor card unit keeps its compensation');
+
+  // No anchor unit in view: no reference, so a moving neighbour is ignored.
+  anchorTop = -500;
+  h = kit.keep(cardAnchor.firstElementChild, { scroller: bcol });
+  belowTop -= 600;
+  h.apply();
+  assert.equal(bcol.scrollTop, 50150, 'without an anchor unit in view nothing is compensated');
+});
+
 test('5b. rail.js free-canvas reads rects ONLY for mounted window cards, computes offBefore/offAfter capsules & +N counts, and skips dropGhost on #r-board height resize', () => {
   const root = makeEl('root');
   const html = makeEl('html');
