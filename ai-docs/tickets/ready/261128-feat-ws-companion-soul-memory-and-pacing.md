@@ -191,6 +191,27 @@ Layer structured personality, mood continuity, Soul injection and in-character b
 3. **Verification:**
    - Go unit tests verifying Characteristic Sheet parsing, mood transitions + idle decay without disk touches, per-wake Soul envelope delimiter safety and rune budgeting on Tier-1, ambient `companionPrompt` Soul-vs-pack persona source/fallback (the `<<<RECALL>>>` envelope is tested with a stubbed recall provider; the real `recall_memory` tool lands in Phase 3), and Tier-1 in-character briefing preserving verbatim technical artifacts (hashes, file links, verdicts) through the prerequisite's `delegate_work` → `ws/delegation.report` path.
 
+### Result (ff7aa41e) - 2026-11-28
+
+- **Characteristic Sheet & Dynamic Mood State Machine (`agents-plugin-tool/internal/wsdashboard/companion_mood.go`, `companion_soul_prompt.go`, `companion_soul.go`, `daemon.go`, `companion_phone.go`, `companion_director.go`):**
+  - Added `ParseCharacteristicSheet` + `FormatCharacteristicSheet` parsing structured `persona.md` fields (`archetype`, `speech_quirks`, `gap_moe_triggers`, `comfort_behaviors`, `focus_behaviors`, plus `name`/`voice`/`language`) with graceful fallback to freeform `Voice` prose for unstructured `persona.md` files.
+  - Added strictly in-memory `CompanionMoodTracker` (`energy`, `focus`, `rapport`, `stress`, `empathy` bounded `[0, 1]`, reset to baseline on restart per D11) updated by director session signals (`turn_end`, `tool_error`, `commit`, `ask`, `idle`), user messages, knocks, and delegation lifecycle events, with exponential idle decay using an injectable clock and zero disk writes per tick (`performance.md`).
+  - Added `CompanionSoulStore.PeekExisting` for RAM hot-cache reads without auto-creating or seeding Soul files on disk.
+- **Soul Injection Channel & Ambient Persona Precedence (`companion_soul_prompt.go`, `companion_director.go`, `cmd/ws-mcp/companion_runtime.go`):**
+  - Replaced `261127`'s pack-persona launch seam in Tier-1 (`ensureBodySession`) with `Daemon.CompanionActiveSoulLaunch()` + `BuildCompanionBodyLaunchPrompt`, reading the stable `persona.md` Characteristic Sheet when a Soul exists and falling back to the active pack's starter `CompanionPersona` otherwise (D9).
+  - Delivered a fresh delimiter-quoted, rune-budgeted `<<<SOUL>>>` / `<<<MOOD>>>` / `<<<RECALL>>>` envelope (`BuildCompanionWakeEnvelope` / `BuildCompanionWakeEnvelopeText`) on each Tier-1 `Runner.Deliver` wake (both user wakes and delegation reports), neutralizing embedded `<<<`/`>>>` tokens across all data fields and wiring a pluggable `CompanionRecallProvider` interface (defaulting to recent RAM-cached Soul shard entries, ready for Phase 3's FTS5 recaller).
+  - Updated ambient `companionPrompt` (`companion_director.go`) via `resolveAmbientCompanionPersona` to read the Soul's `persona.md` only (never `profile.md` or memory shards) when a Soul exists, falling back to pack `CompanionPersona` otherwise (D9).
+- **In-Character Briefing of Delegated Results (`companion_soul_prompt.go`, `cmd/ws-mcp/companion_runtime.go`):**
+  - Consumed `261127#phase1`'s `delegate_work` / `ws/delegation.report` verbatim-forwarding path unchanged (D6) and strengthened both Tier-1's launch prompt and `formatDelegationReportEnvelope` to instruct in-character/mood user briefing while preserving verbatim technical artifacts (commit hashes, file links/paths, diffs, test outputs, review verdicts), leaving the user's primary coding lead completely untouched (D2, D4).
+- **Dogfood Fix (`cmd/ws-mcp/companion_runtime.go`):**
+  - Replaced hardcoded harness-name preference literals in `pickLaunchSpec` with `wsagent.BuiltinHarnessNames()`, eliminating all `TestCommonCodeHasNoHarnessNameBranch` hits in `cmd/ws-mcp/companion_runtime.go` and pinning the order in `TestCompanionPickLaunchSpecFollowsBuiltinHarnessOrder`.
+- **Review & Verification (`5849fd64f..ff7aa41e`):** `code-review-lite` reported 0 Critical / 0 Important and 3 Minor findings; resolved the byte-slice timestamp bug (`ts[:10]` -> rune-safe slicing) and pinned `pickLaunchSpec` preference ordering in `ff7aa41e` (the third Minor confirmed D9's `PeekExisting` launch-prompt caching design). Verified:
+  - `go test -race -timeout 120s ./internal/wsdashboard -run 'Test(Companion|Mood|Soul|Memory|Settings|Characteristic|Ambient|ParseCharacteristic|BuildCompanion|FormatAmbient)'`: pass (13.992s)
+  - `go test -race -timeout 120s ./cmd/ws-mcp -run 'TestCompanion'`: pass (8.703s)
+  - `go test -race ./internal/mcp -run 'Test(Dashboard|Settings|Manifest|Companion|Delegation)'`: pass (84.624s)
+  - `GOOS=windows go vet ./...`: pass
+  - `go test -v ./internal/wsagent -run TestCommonCodeHasNoHarnessNameBranch`: zero hits in `cmd/ws-mcp/companion_runtime.go`
+
 ### Phase 3: Unified Tier-1 Hybrid MCP Animation-Delay Pacing (`ws/companion.act`) & Active Memory Recall/Save Loop
 
 Implement interruptible multi-beat pacing and active memory tools on the unified Tier-1 MCP-burst Companion:
