@@ -504,7 +504,14 @@
       "registered_at": "2026-11-28T13:05:13Z"
     },
     "261128-refactor-ws-auditstore-handle-eviction-and-lazy-index": {
-      "registered_at": "2026-11-28T11:39:31Z"
+      "registered_at": "2026-11-28T11:39:31Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-28T13:18:09Z"
+      }
     },
     "261128-refactor-ws-daemon-wake-driven-stat-invalidation": {
       "registered_at": "2026-11-28T11:39:20Z",
