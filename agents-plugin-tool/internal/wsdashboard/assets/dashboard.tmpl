@@ -681,12 +681,13 @@ once in a few seconds per tab; a refused mint shows the note. */}}
 {{define "r-config-gear"}}<button type="button" class="r-config-gear" data-scope-entry="{{.Scope}}" data-settings-target="{{.Target}}"{{with .Worktree}} data-settings-worktree="{{.}}"{{end}} title="{{if eq .Scope "project"}}{{t "js.settings.rail.project"}}{{else if eq .Scope "repo"}}{{t "js.settings.rail.repo"}}{{else}}{{t "js.settings.rail.session"}}{{end}}" aria-label="{{if eq .Scope "project"}}{{t "js.settings.rail.project"}}{{else if eq .Scope "repo"}}{{t "js.settings.rail.repo"}}{{else}}{{t "js.settings.rail.session"}}{{end}}">{{icon "gear"}}</button>{{end}}
 
 {{define "config-settings"}}<!DOCTYPE html>
-<html data-mode="settings" data-frame="1" data-lang="{{lang}}"{{with .Theme}} data-theme="{{.}}"{{end}}>
+<html data-mode="settings" data-frame="1" data-lang="{{lang}}"{{with .Theme}} data-theme="{{.}}"{{end}}{{with .XtermFile}} data-term="{{.}}"{{end}}>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">{{firstPaint}}
 <title>{{t "js.settings.title"}} · Werkschaft</title>
 <link rel="stylesheet" href="/s/{{.Assets.FrameWhiteboardFile}}">
 <link rel="stylesheet" href="/s/{{.Assets.FrameCSSFile}}">
 <link rel="stylesheet" href="/s/{{.Assets.SettingsCSSFile}}">
+{{if .XtermFile}}<link rel="stylesheet" href="/s/{{.Assets.FrameXtermFile}}">{{end}}
 <script defer src="/s/{{index .Assets.SettingsI18nFiles lang}}"></script>
 <script defer src="/s/{{.Assets.SettingsScriptFile}}"></script></head>
 <body class="dash live">{{.Assets.Sprite}}{{.Assets.LucideSprite}}<div class="dwrap">

@@ -340,6 +340,9 @@ function makeAccountEnv(opts = {}) {
     fetch: fetchImpl,
     URL,
     Date,
+    Uint8Array,
+    atob: globalThis.atob,
+    location: { protocol: "http:", host: "127.0.0.1:4123" },
     setTimeout: win.setTimeout,
     clearTimeout: win.clearTimeout,
     navigator: { clipboard: { writeText: async () => {} } }
@@ -348,6 +351,7 @@ function makeAccountEnv(opts = {}) {
   vm.runInContext(readAsset("dashboard-settings-account-shared.js"), ctx);
   vm.runInContext(readAsset("dashboard-settings-account-harness.js"), ctx);
   vm.runInContext(readAsset("dashboard-settings-account-runtime.js"), ctx);
+  vm.runInContext(readAsset("dashboard-settings-account-pirpc.js"), ctx);
   vm.runInContext(readAsset("dashboard-settings-account.js"), ctx);
   vm.runInContext(readAsset("dashboard-settings-voice.js"), ctx);
 
@@ -374,6 +378,7 @@ test("split account and voice modules stay well under 1,000 lines and pages.go l
     "dashboard-settings-account-shared.js",
     "dashboard-settings-account-harness.js",
     "dashboard-settings-account-runtime.js",
+    "dashboard-settings-account-pirpc.js",
     "dashboard-settings-account.js",
     "dashboard-settings-voice.js"
   ];
@@ -385,11 +390,12 @@ test("split account and voice modules stay well under 1,000 lines and pages.go l
   const sharedIdx = pagesGo.indexOf("dashboard-settings-account-shared.js");
   const harnessIdx = pagesGo.indexOf("dashboard-settings-account-harness.js");
   const runtimeIdx = pagesGo.indexOf("dashboard-settings-account-runtime.js");
+  const pirpcIdx = pagesGo.indexOf("dashboard-settings-account-pirpc.js");
   const voiceIdx = pagesGo.indexOf("dashboard-settings-voice.js");
   const accountIdx = pagesGo.indexOf("dashboard-settings-account.js");
   const settingsIdx = pagesGo.indexOf("dashboard-settings.js");
-  assert.ok(sharedIdx > 0 && harnessIdx > sharedIdx && runtimeIdx > harnessIdx && accountIdx > runtimeIdx && settingsIdx > accountIdx,
-    "pages.go must load account shared -> harness -> runtime -> coordinator before dashboard-settings.js");
+  assert.ok(sharedIdx > 0 && harnessIdx > sharedIdx && runtimeIdx > harnessIdx && pirpcIdx > runtimeIdx && accountIdx > pirpcIdx && settingsIdx > accountIdx,
+    "pages.go must load account shared -> harness -> runtime -> pirpc -> coordinator before dashboard-settings.js");
   assert.ok(voiceIdx > 0 && voiceIdx < settingsIdx, "pages.go must load dashboard-settings-voice.js before dashboard-settings.js");
 });
 
@@ -462,9 +468,10 @@ test("Account panel renders 2 purpose groups, inline slot rename validation + AP
   env.doc.body.append(controller.panel);
   await controller.refreshStatus();
 
-  // 1. Two purpose groups in order
+  // 1. Three purpose groups in order (pirpc hidden when status.pi_runtime is absent)
   const groups = controller.panel.querySelectorAll("[data-account-group]");
-  assert.deepEqual(groups.map(g => g.dataset.accountGroup), ["harness", "runtime"]);
+  assert.deepEqual(groups.map(g => g.dataset.accountGroup), ["harness", "runtime", "pirpc"]);
+  assert.equal(groups[2].hidden, true, "pirpc group must stay hidden when status.pi_runtime is absent");
 
   // 2. OpenAI consent sub-setting lives inside OpenAI's .acc-kids stem and is visible & disabled when signed out
   const oaBlock = controller.panel.querySelector('[data-account-row="openai"]');
@@ -651,4 +658,264 @@ test("dashboard-settings-account.css uses borderless tonal surfaces, 2px indenta
   assert.match(css, /\.acc-kids\b/);
   assert.match(css, /--acc-stem/);
   assert.match(css, /@media \(max-width:\s*760px\)/);
+  assert.match(css, /\.acc-pi-prog-bar\b/);
+  assert.match(css, /transform:\s*scaleX\(var\(--p,\s*0\)\)/);
+  assert.match(css, /\.acc-pty-backdrop\b/);
+});
+
+test("Managed Pi (pi-rpc) group filters pi-rpc out of Group 1, handles runtime install/progress/uninstall, slot CRUD, choices invalidation, and ephemeral PTY login modal lifecycle", async () => {
+  let statusPayload = {
+    loopback_peer: true,
+    openrouter: { configured: false },
+    openai: null,
+    openai_ready: false,
+    sign_in: { state: "idle" },
+    consent_prompt: 0,
+    local_keys: [],
+    pi_runtime: { installed: false, version: "1.5.2", installing: false, error: "" },
+    pi_login: { state: "idle" },
+    slots: {
+      claude: [{ id: "default", label: "Default", active: true }],
+      "pi-rpc": [
+        { id: "default", label: "Default", active: true, config_dir: "/home/u/.pi/agent" },
+        { id: "work-pi", label: "Work Pi", active: false, managed: true, config_dir: "/tmp/slots/pi-rpc/work-pi" }
+      ]
+    },
+    harness_auth: [],
+    voice_keys: {}
+  };
+
+  let completeCalls = 0;
+  let cancelCalls = 0;
+  let invalidated = 0;
+  const env = makeAccountEnv({
+    fakeTimers: true,
+    onFetch: async (url, _opts, body) => {
+      if (url === "/api/account/status") {
+        return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(statusPayload)) };
+      }
+      if (url === "/api/account/pi/runtime/install") {
+        statusPayload.pi_runtime = {
+          installed: false, version: "1.5.2", installing: true,
+          progress: { phase: "download", downloaded: 10485760, total: 41943040 }, error: ""
+        };
+        return { ok: true, status: 202, json: async () => JSON.parse(JSON.stringify(statusPayload.pi_runtime)) };
+      }
+      if (url === "/api/account/pi/runtime/uninstall") {
+        statusPayload.pi_runtime = { installed: false, version: "1.5.2", installing: false, error: "" };
+        return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(statusPayload.pi_runtime)) };
+      }
+      if (url === "/api/account/slots/switch") {
+        statusPayload.slots[body.harness].forEach(s => { s.active = s.id === body.slot_id; });
+        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+      }
+      if (url === "/api/account/slots/rename") {
+        const s = statusPayload.slots[body.harness].find(x => x.id === body.slot_id);
+        s.label = body.label;
+        return { ok: true, status: 200, json: async () => Object.assign({}, s) };
+      }
+      if (url === "/api/account/slots/remove") {
+        statusPayload.slots[body.harness] = statusPayload.slots[body.harness].filter(x => x.id !== body.slot_id);
+        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+      }
+      if (url === "/api/account/pi/login/start") {
+        statusPayload.pi_login = {
+          state: "running", attempt: "att-1", slot_id: body.existing ? body.slot_id : "new-pi-1",
+          label: body.label || "New Pi", existing: !!body.existing, provider: body.provider || "",
+          ws_path: "/api/account/pi/login/ws?attempt=att-1"
+        };
+        return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(statusPayload.pi_login)) };
+      }
+      if (url === "/api/account/pi/login/complete") {
+        completeCalls++;
+        if (completeCalls === 1) {
+          return { ok: false, status: 422, json: async () => ({ error: "auth_not_ready" }) };
+        }
+        statusPayload.pi_login = { state: "succeeded", attempt: "att-1", slot_id: "new-pi-1", auth_ready: true };
+        statusPayload.slots["pi-rpc"].push({ id: "new-pi-1", label: "New Pi", active: false, managed: true, config_dir: "/tmp/slots/pi-rpc/new-pi-1" });
+        return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(statusPayload.pi_login)) };
+      }
+      if (url === "/api/account/pi/login/cancel") {
+        cancelCalls++;
+        statusPayload.pi_login = { state: "cancelled", attempt: body.attempt || "att-1" };
+        return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(statusPayload.pi_login)) };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    }
+  });
+
+  env.doc.documentElement.setAttribute("data-term", "xterm-abc123.js");
+  env.win.WsSettingsCombobox = { invalidateChoices() { invalidated++; } };
+
+  // Mock xterm.js, FitAddon, ResizeObserver, WebSocket.
+  const termInstances = [];
+  env.win.Terminal = class FakeTerminal {
+    constructor(opts) {
+      this.options = opts;
+      this.rows = 24;
+      this.cols = 80;
+      this.written = [];
+      this.disposed = false;
+      this._onData = null;
+      termInstances.push(this);
+    }
+    loadAddon(a) { this.addon = a; }
+    open(host) { this.host = host; }
+    focus() { this.focused = true; }
+    onData(fn) { this._onData = fn; }
+    write(chunk) { this.written.push(Buffer.from(chunk).toString("utf8")); }
+    writeln(line) { this.written.push(line); }
+    dispose() { this.disposed = true; }
+  };
+  env.win.FitAddon = {
+    FitAddon: class FakeFitAddon {
+      fit() { this.fitted = (this.fitted || 0) + 1; }
+    }
+  };
+  const roInstances = [];
+  env.win.ResizeObserver = class FakeRO {
+    constructor(cb) { this.cb = cb; this.disconnected = false; roInstances.push(this); }
+    observe() {}
+    disconnect() { this.disconnected = true; }
+  };
+  const wsInstances = [];
+  env.win.WebSocket = class FakeWS {
+    constructor(url) {
+      this.url = url;
+      this.readyState = 1;
+      this.sent = [];
+      this.closed = false;
+      wsInstances.push(this);
+    }
+    send(msg) { this.sent.push(JSON.parse(msg)); }
+    close() { this.closed = true; this.readyState = 3; }
+  };
+
+  const controller = env.win.WsSettingsAccount.create({
+    el: env.el,
+    button: env.button,
+    append: env.append,
+    svgIcon: env.svgIcon,
+    request: async () => ({ entries: [{ key: "agent.werk_endpoints", value: "{}" }] }),
+    showTiers: () => {},
+    onChange: () => {},
+    endpointSpec: { label: "js.settings.key.agent.werk_endpoints.label", description: "js.settings.key.agent.werk_endpoints.description" }
+  });
+  env.doc.body.append(controller.panel);
+  await controller.refreshStatus();
+
+  // 1. Group 1 (harness) must filter out pi-rpc even though status.slots["pi-rpc"] exists.
+  const harnessGrp = controller.panel.querySelector('[data-account-group="harness"]');
+  assert.equal(harnessGrp.querySelector('[data-account-row="slots-pi-rpc"]'), null, "pi-rpc must not appear in Group 1");
+  assert.ok(harnessGrp.querySelector('[data-account-row="slots-claude"]'), "claude remains in Group 1");
+
+  // 2. Group 3 (pirpc) is visible when status.pi_runtime is present.
+  const pirpcGrp = controller.panel.querySelector('[data-account-group="pirpc"]');
+  assert.equal(pirpcGrp.hidden, false);
+
+  // 3. Install runtime -> progress track renders with --p ratio (0.25) and MB counter; settling invalidates choices.
+  const installBtn = pirpcGrp.querySelector("[data-pi-runtime-install]");
+  installBtn.click();
+  await new Promise(r => setImmediate(r));
+  const progBar = pirpcGrp.querySelector(".acc-pi-prog-bar");
+  assert.ok(progBar, "expected progress bar while installing");
+  assert.equal(progBar.style._props["--p"], "0.2500");
+  assert.match(pirpcGrp.querySelector(".acc-pi-prog-bytes").textContent, /10\.0 \/ 40\.0 MB/);
+
+  statusPayload.pi_runtime = { installed: true, version: "1.5.2", installing: false, error: "" };
+  await controller.refreshStatus();
+  assert.equal(invalidated, 1, "install settlement must invalidate choices");
+  assert.equal(pirpcGrp.querySelector(".acc-pi-prog-bar"), null, "progress bar disappears after install settles");
+
+  // 4. Switch slot invalidates choices; inline rename preserves draft across SSE refresh and saves.
+  const swBtn = pirpcGrp.querySelector('[data-slot-switch="work-pi"]');
+  swBtn.click();
+  await new Promise(r => setImmediate(r));
+  assert.equal(invalidated, 2, "slot switch must invalidate choices");
+
+  const rnBtn = pirpcGrp.querySelector('[data-slot-rename="work-pi"]');
+  rnBtn.click();
+  const rnInput = pirpcGrp.querySelector(".acc-rename-inp");
+  rnInput.value = "Work Pi Updated";
+  await controller.refreshStatus();
+  assert.equal(pirpcGrp.querySelector(".acc-rename-inp").value, "Work Pi Updated", "SSE refresh must preserve open rename draft");
+  pirpcGrp.querySelector(".acc-rename-form").dispatchEvent({ type: "submit" });
+  await new Promise(r => setImmediate(r));
+  assert.equal(statusPayload.slots["pi-rpc"].find(s => s.id === "work-pi").label, "Work Pi Updated");
+
+  // 5. Open Add Account drawer -> launch PTY login modal -> WS hello/out/ping/in/size -> 422 stays open -> 200 closes & invalidates.
+  pirpcGrp.querySelector("[data-pi-add-account]").click();
+  const drawer = pirpcGrp.querySelector("[data-pi-add-drawer]");
+  assert.ok(drawer, "expected add-account pre-launch drawer");
+  drawer.querySelector("[data-pi-login-label]").value = "New Pi";
+  drawer.querySelector("[data-pi-login-provider]").value = "openai";
+  drawer.dispatchEvent({ type: "submit" });
+  await new Promise(r => setImmediate(r));
+  await new Promise(r => setImmediate(r));
+
+  const modalEl = env.doc.body.querySelector("[data-pi-pty-modal]");
+  assert.ok(modalEl, "expected ephemeral PTY login modal in document.body");
+  assert.equal(wsInstances.length, 1);
+  assert.match(wsInstances[0].url, /\/api\/account\/pi\/login\/ws\?attempt=att-1$/);
+
+  wsInstances[0].onopen();
+  wsInstances[0].onmessage({ data: JSON.stringify({ t: "hello", state: "running", rows: 24, cols: 80 }) });
+  wsInstances[0].onmessage({ data: JSON.stringify({ t: "out", data: Buffer.from("READY\r\n").toString("base64") }) });
+  wsInstances[0].onmessage({ data: JSON.stringify({ t: "ping" }) });
+  termInstances[0]._onData("/login\r");
+
+  assert.ok(termInstances[0].written.includes("READY\r\n"));
+  assert.ok(wsInstances[0].sent.some(f => f.t === "size" && f.rows === 24 && f.cols === 80));
+  assert.ok(wsInstances[0].sent.some(f => f.t === "pong"));
+  assert.ok(wsInstances[0].sent.some(f => f.t === "in" && f.data === "/login\r"));
+
+  // First Verify & Save returns 422 auth_not_ready -> error shown, modal stays open.
+  modalEl.querySelector("[data-pi-modal-complete]").click();
+  await new Promise(r => setImmediate(r));
+  assert.ok(env.doc.body.querySelector("[data-pi-pty-modal]"), "422 must keep modal open");
+  assert.equal(modalEl.querySelector(".acc-pty-err").hidden, false);
+
+  // Second Verify & Save succeeds -> invalidates choices, closes modal, disposes terminal + RO + WS.
+  modalEl.querySelector("[data-pi-modal-complete]").click();
+  await new Promise(r => setImmediate(r));
+  await new Promise(r => setImmediate(r));
+  assert.equal(env.doc.body.querySelector("[data-pi-pty-modal]"), null, "succeeded login closes modal");
+  assert.equal(invalidated, 3, "succeeded login must invalidate choices");
+  assert.equal(termInstances[0].disposed, true);
+  assert.equal(wsInstances[0].closed, true);
+  assert.equal(roInstances[0].disconnected, true);
+
+  // 6. Existing-slot Terminal Login -> Cancel sends POST pi/login/cancel and cleans up.
+  pirpcGrp.querySelector('[data-pi-slot-login="default"]').click();
+  await new Promise(r => setImmediate(r));
+  await new Promise(r => setImmediate(r));
+  const modal2 = env.doc.body.querySelector("[data-pi-pty-modal]");
+  assert.ok(modal2);
+  modal2.querySelector("[data-pi-modal-cancel]").click();
+  await new Promise(r => setImmediate(r));
+  assert.equal(cancelCalls, 1);
+  assert.equal(env.doc.body.querySelector("[data-pi-pty-modal]"), null);
+
+  // 7. Hold-confirm Remove slot and Uninstall runtime both invalidate choices.
+  function triggerHold(btn) {
+    btn.dispatchEvent({ type: "keydown", key: " " });
+    const holdTimer = env.timers.filter(t => !t.cleared && t.ms === 1500).at(-1);
+    assert.ok(holdTimer, "expected 1500ms hold-confirm timer");
+    holdTimer.fn();
+    assert.equal(btn.getAttribute("data-hold-state"), "ready");
+    env.win.dispatchEvent({ type: "keyup", key: " " });
+  }
+  triggerHold(pirpcGrp.querySelector('[data-slot-remove="new-pi-1"]'));
+  await new Promise(r => setImmediate(r));
+  await new Promise(r => setImmediate(r));
+  assert.equal(invalidated, 4, "slot remove must invalidate choices");
+  assert.equal(statusPayload.slots["pi-rpc"].some(s => s.id === "new-pi-1"), false);
+
+  triggerHold(pirpcGrp.querySelector("[data-pi-runtime-uninstall]"));
+  await new Promise(r => setImmediate(r));
+  await new Promise(r => setImmediate(r));
+  assert.equal(invalidated, 5, "runtime uninstall must invalidate choices");
+  assert.equal(statusPayload.pi_runtime.installed, false);
+
+  controller.destroy();
 });

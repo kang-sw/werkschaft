@@ -697,3 +697,98 @@ test('Phase 3 inactive-slot hover preview renders cached age, dims active baseli
   assert.equal(nodes(pop.el, '.up-pser').filter(n => n.className.includes('is-preview-on')).length, 0, 'redraw after slot change clears preview');
   pop.close();
 });
+
+test('pi-rpc renders compact multi-slot switcher and session rows without No curve notices or dimming quota charts', async () => {
+  const now = Date.UTC(2026, 10, 28, 12, 0);
+  const reset5h = now + 2 * 3600000, reset7d = now + 3 * 86400000;
+  const env = environment(now, 'en');
+  const switchCalls = [];
+  const accountStatus = {
+    loopback_peer: true,
+    pi_runtime: { installed: true, version: '1.5.2', installing: false },
+    slots: {
+      claude: [
+        { id: 'default', harness: 'claude', label: 'Default', implicit: true, active: true }
+      ],
+      'pi-rpc': [
+        { id: 'default', harness: 'pi-rpc', label: 'Default', implicit: true, active: true },
+        { id: 'work-pi', harness: 'pi-rpc', label: 'Work Pi', config_dir: '/tmp/pi-work', managed: true, active: false }
+      ]
+    },
+    conversations: [
+      { id: 'conv-pi-1', label: 'Pi Feature', backend: 'pi-rpc', account_slot_id: 'default' }
+    ]
+  };
+  env.set({
+    entries: [
+      { harness: 'claude', source: 'Claude push', asOf: now, windows: [
+        { kind: 'five_hour', percent: 35, asOf: now, resetsAt: reset5h },
+        { kind: 'seven_day', percent: 45, asOf: now, resetsAt: reset7d }
+      ] }
+    ],
+    history: {
+      schema_version: 1, status: 'ok', samples: [
+        { harness: 'claude', kind: 'five_hour', source: 'Claude push', resetsAt: reset5h, asOf: now - 3600000, percent: 15 },
+        { harness: 'claude', kind: 'five_hour', source: 'Claude push', resetsAt: reset5h, asOf: now, percent: 35 }
+      ]
+    }
+  });
+  const baseFetch = env.window.fetch;
+  env.window.fetch = (url, options = {}) => {
+    if (url === '/api/account/status') {
+      env.calls.push({ url, options });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(accountStatus) });
+    }
+    if (url === '/api/account/slots/switch') {
+      const body = JSON.parse(options.body || '{}');
+      switchCalls.push(body);
+      accountStatus.slots['pi-rpc'].forEach(s => { s.active = s.id === body.slot_id; });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ queued_count: 0 }) });
+    }
+    return baseFetch(url, options);
+  };
+
+  const mounted = env.window.WsUsage.mount(env.doc, env.top, { accountSwitcher: true }); await flush();
+  const pop = mounted.makePopover(() => {}, () => {}); pop.open(); await flush();
+
+  // Zero "No curve" notices for Pi.
+  const notes = nodes(pop.el, '.up-cp-note').map(n => n.textContent);
+  assert.ok(notes.every(txt => !txt.includes('Pi')), 'must not emit No curve note for pi-rpc: ' + JSON.stringify(notes));
+
+  // Pi row exists without data-k and carries Pi badge + multi-slot pills.
+  const piRow = nodes(pop.el, '.up-hr-noquota').find(r => r.attributes['data-slot-harness'] === 'pi-rpc');
+  assert.ok(piRow, 'expected compact pi-rpc switcher row in Group 1');
+  assert.equal(piRow.attributes['data-k'], undefined, 'pi-rpc row must omit data-k so hover/click never locks focus');
+  const piBadge = piRow.querySelector('.up-hb');
+  assert.equal(piBadge.attributes['data-k'], 'pi-rpc');
+  assert.equal(piBadge.textContent, 'Pi');
+
+  const workPiPill = nodes(piRow, '.up-sp').find(b => b.attributes['data-slot-id'] === 'work-pi');
+  assert.ok(workPiPill, 'expected Work Pi slot pill');
+
+  // Hovering/focusing inactive Pi pill or hovering/clicking Pi row must not dim Claude charts/rows.
+  const claudeRow = nodes(pop.el, '.up-hr').find(r => r.attributes['data-k'] === 'claude');
+  workPiPill.emit('mouseenter');
+  workPiPill.emit('focus');
+  pop.el.emit('mouseover', { target: piRow });
+  pop.el.emit('click', { target: piRow });
+  assert.ok(!claudeRow.className.includes('is-dim'), 'Pi hover/focus must not dim Claude row');
+  assert.ok(nodes(pop.el, '.up-ser').every(n => !n.className.includes('is-dim') && !n.className.includes('is-preview-base')),
+    'Pi hover/focus must not dim Claude chart series');
+
+  // Clicking Work Pi switches the pi-rpc slot via POST /api/account/slots/switch.
+  workPiPill.emit('click', { stopPropagation() {} }); await flush();
+  assert.equal(switchCalls.length, 1);
+  assert.deepEqual(switchCalls[0], { harness: 'pi-rpc', slot_id: 'work-pi' });
+
+  // Active session row for pi-rpc resolves the Pi badge via defForHarness.
+  const sessToggle = pop.el.querySelector('.up-sess-hd');
+  assert.ok(sessToggle, 'expected active sessions toggle for multi-slot pi-rpc session');
+  sessToggle.emit('click', { stopPropagation() {} });
+  const piSessRow = nodes(pop.el, '.up-srow').find(r => r.attributes['data-conv-id'] === 'conv-pi-1');
+  assert.ok(piSessRow, 'expected pi-rpc session row');
+  const sessBadge = piSessRow.querySelector('.up-hb');
+  assert.equal(sessBadge.attributes['data-k'], 'pi-rpc');
+  assert.equal(sessBadge.textContent, 'Pi');
+  pop.close();
+});

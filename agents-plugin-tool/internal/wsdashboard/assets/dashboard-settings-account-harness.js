@@ -10,14 +10,7 @@
 
   function orderedHarnesses(slotsMap) {
     if (!slotsMap || typeof slotsMap !== "object") return [];
-    return Object.keys(slotsMap).sort((a, b) => {
-      const ia = HARNESS_ORDER.indexOf(a);
-      const ib = HARNESS_ORDER.indexOf(b);
-      if (ia >= 0 && ib >= 0) return ia - ib;
-      if (ia >= 0) return -1;
-      if (ib >= 0) return 1;
-      return a.localeCompare(b);
-    });
+    return HARNESS_ORDER.filter(name => Object.hasOwn(slotsMap, name));
   }
 
   function create(ctx) {

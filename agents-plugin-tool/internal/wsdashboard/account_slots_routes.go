@@ -104,6 +104,7 @@ func (d *Daemon) handleAccountSlotsAdd(w http.ResponseWriter, r *http.Request) {
 		accountSlotError(w, err)
 		return
 	}
+	d.notifyPiRuntimeChanged()
 	d.accountChanged()
 	writeJSON(w, http.StatusOK, slot)
 }
@@ -127,6 +128,10 @@ func (d *Daemon) handleAccountSlotsRemove(w http.ResponseWriter, r *http.Request
 		accountError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
+	if d.piLoginBusyForSlot(harness, slotID) {
+		accountError(w, http.StatusConflict, "login_in_progress")
+		return
+	}
 	slot, exists := d.accountSlots.ResolveSlot(harness, slotID)
 	if err := d.accountSlots.RemoveSlot(harness, slotID); err != nil {
 		accountSlotError(w, err)
@@ -138,6 +143,7 @@ func (d *Daemon) handleAccountSlotsRemove(w http.ResponseWriter, r *http.Request
 			_ = os.RemoveAll(slot.ConfigDir)
 		}
 	}
+	d.notifyPiRuntimeChanged()
 	d.accountChanged()
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -215,6 +221,7 @@ func (d *Daemon) handleAccountSlotsSwitch(w http.ResponseWriter, r *http.Request
 			accountSlotHostError(w, err)
 			return
 		}
+		d.notifyPiRuntimeChanged()
 		d.accountChanged()
 		writeJSON(w, http.StatusOK, res)
 		return
@@ -240,6 +247,7 @@ func (d *Daemon) handleAccountSlotsSwitch(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
+	d.notifyPiRuntimeChanged()
 	d.accountChanged()
 	writeJSON(w, http.StatusOK, AccountSlotSwitchResult{
 		AccountSlotID: slotID,

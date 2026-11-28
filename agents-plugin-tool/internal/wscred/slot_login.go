@@ -178,6 +178,26 @@ func SlotAuthReady(harness, configDir string) bool {
 			return false
 		}
 		return doc.OAuth != nil && (strings.TrimSpace(doc.OAuth.AccessToken) != "" || strings.TrimSpace(doc.OAuth.RefreshToken) != "")
+	case "pi-rpc":
+		raw, err := os.ReadFile(filepath.Join(configDir, "auth.json"))
+		if err != nil {
+			return false
+		}
+		var doc map[string]map[string]any
+		if json.Unmarshal(raw, &doc) != nil {
+			return false
+		}
+		for provider, entry := range doc {
+			if strings.TrimSpace(provider) == "" || len(entry) == 0 {
+				continue
+			}
+			for _, val := range entry {
+				if s, ok := val.(string); ok && strings.TrimSpace(s) != "" {
+					return true
+				}
+			}
+		}
+		return false
 	default:
 		return false
 	}

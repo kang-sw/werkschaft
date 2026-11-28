@@ -1,11 +1,13 @@
 package wsdashboard
 
 import (
+	"context"
 	"errors"
 	"github.com/gofrs/flock"
 	"github.com/kang-sw/devenv/internal/wsconvidx"
 	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsmeta"
+	"github.com/kang-sw/devenv/internal/wspiruntime"
 	"io"
 	"net"
 	"net/http"
@@ -178,6 +180,12 @@ type DaemonOptions struct {
 	// SlotAuthPreflight optionally validates a newly logged-in harness slot
 	// directory before registering it (D14). Nil falls back to wscred.SlotAuthReady.
 	SlotAuthPreflight func(harness, configDir string) error
+	// PiRuntime is the shared managed Pi runtime manager. Nil leaves managed
+	// Pi runtime and PTY login routes unavailable.
+	PiRuntime *wspiruntime.Manager
+	// OnPiRuntimeChanged runs after managed Pi runtime install/uninstall or
+	// Pi account slot mutations so cached model choices invalidate immediately.
+	OnPiRuntimeChanged func()
 	// AgentRecordValidator validates legacy agent.json captures during the
 	// one-time SQLite metadata cutover (wsmeta.StoreAgentRecord). Production
 	// supplies wsagent.ValidateLegacyRecord; leaving it nil rejects a state
@@ -250,6 +258,14 @@ type DaemonOptions struct {
 	harnessAuthCmd func(harness string) (string, []string, error)
 	// harnessAuthTimeout overrides the single-account harness auth timeout in tests.
 	harnessAuthTimeout time.Duration
+	// piLoginTimeout overrides the max ephemeral Pi PTY login timeout in tests.
+	piLoginTimeout time.Duration
+	// piLoginIdleTimeout overrides the idle I/O timeout for Pi PTY login in tests.
+	piLoginIdleTimeout time.Duration
+	// piLoginDisconnectGrace overrides the WebSocket disconnect grace period in tests.
+	piLoginDisconnectGrace time.Duration
+	// piLoginCommand replaces the managed Pi binary/args for PTY login in tests.
+	piLoginCommand func(provider string) (string, []string, error)
 	// CacheGC overrides the cache GC bounds; nil reads the WS_CACHE_GC*
 	// environment once at start (CacheGCConfigFromEnv).
 	CacheGC *CacheGCConfig
@@ -391,10 +407,19 @@ type Daemon struct {
 	slotAuthPreflight  func(harness, configDir string) error
 	slotLoginCmd       func(harness string, mode wscred.SlotLoginMode) (string, []string, error)
 	slotSignInTimeout  time.Duration
-	harnessAuth        harnessAuthManager
-	harnessAuthCmd     func(harness string) (string, []string, error)
-	harnessAuthTimeout time.Duration
-	accountRev         atomic.Int64
+	harnessAuth            harnessAuthManager
+	harnessAuthCmd         func(harness string) (string, []string, error)
+	harnessAuthTimeout     time.Duration
+	piRuntime              *wspiruntime.Manager
+	onPiRuntimeChanged     func()
+	piRuntimeState         piRuntimeController
+	piRuntimeInstall       func(context.Context, wspiruntime.ProgressFunc) error
+	piLogin                piLoginController
+	piLoginTimeout         time.Duration
+	piLoginIdleTimeout     time.Duration
+	piLoginDisconnectGrace time.Duration
+	piLoginCommand         func(provider string) (string, []string, error)
+	accountRev             atomic.Int64
 	// voice test hooks (nil in production).
 	voiceBaseURLs   map[wscred.ProviderID]string
 	voiceHTTPClient *http.Client

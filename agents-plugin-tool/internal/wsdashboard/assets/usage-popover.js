@@ -138,7 +138,8 @@
           setPreview(null, null);
           switchHarnessSlot(harness, slot.id, lbl);
         });
-        if (!slot.active) {
+        var hDef = defForHarness(harness, "");
+        if (!slot.active && !(hDef && hDef.noQuota)) {
           b.addEventListener("mouseenter", function () { setPreview(harness, slot.id); });
           b.addEventListener("mouseleave", function () { setPreview(null, null); });
           b.addEventListener("focus", function () { setPreview(harness, slot.id); });
@@ -413,6 +414,45 @@
         }
         if (kids.children.length) hg.appendChild(kids);
         rows.appendChild(hg);
+      }
+      // Managed Pi (pi-rpc) compact switcher row without data-k so hover/click never
+      // locks or dims Claude/Codex/Agy quota charts or rows.
+      var piSlots = switcherOn ? slotsOf("pi-rpc") : [];
+      if (switcherOn && piSlots.length > 0 && ((accountData && accountData.pi_runtime && accountData.pi_runtime.installed) || piSlots.length > 1)) {
+        var piDef = defForHarness("pi-rpc", "");
+        var piRow = el("div", "up-hr up-hr-noquota");
+        piRow.setAttribute("data-slot-harness", "pi-rpc");
+        var piId = el("div", "up-hr-id");
+        if (piDef) piId.appendChild(hbadge(piDef, false));
+        piId.appendChild(el("span", "up-hr-name", "Pi"));
+        if (piSlots.length >= 2) {
+          var piPills = buildSlotPills("pi-rpc");
+          if (piPills) piId.appendChild(piPills);
+        } else {
+          var activePi = piSlots.filter(function (s) { return s.active; })[0] || piSlots[0];
+          var piLbl = activePi.id === "default" ? t("defaultSlot") : (activePi.label || activePi.id);
+          piId.appendChild(el("span", "up-pill sm", piLbl));
+        }
+        piRow.appendChild(piId);
+        var piSt = el("div", "up-hr-status");
+        piSt.appendChild(el("span", "", t("piNoQuotaNote")));
+        if (piSlots.length < 2) {
+          var piManage = el("a", "usage-manage-link", t("manageAccounts"));
+          piManage.href = "/settings?section=account&provider=pi-rpc";
+          if (openSettings) {
+            piManage.addEventListener("click", function (ev) {
+              if (ev && (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button)) return;
+              if (ev && ev.preventDefault) ev.preventDefault();
+              if (ev && ev.stopPropagation) ev.stopPropagation();
+              openSettings("/settings?section=account&provider=pi-rpc", piManage);
+            });
+          }
+          piSt.appendChild(piManage);
+        }
+        piRow.appendChild(piSt);
+        rows.appendChild(piRow);
+        var bPi = buildRowBanner("pi-rpc");
+        if (bPi) rows.appendChild(bPi);
       }
       var sess = el("div", "up-sess");
       rows.appendChild(sess);

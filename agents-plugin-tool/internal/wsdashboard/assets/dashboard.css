@@ -218,8 +218,8 @@ html[data-can-control] .tph.child-close:disabled { opacity: .5; cursor: default;
 .hb::before { content: "??"; }
 .hb[data-h="claude"] { background: #d97757; color: #fff; }
 .hb[data-h="claude"]::before { content: "Cl"; }
-.hb[data-h="pi"] { background: #0b0b0c; color: #e6e6e6; box-shadow: inset 0 0 0 1px #5a5a5a; }
-.hb[data-h="pi"]::before { content: "Pi"; }
+.hb[data-h="pi"], .hb[data-h="pi-rpc"] { background: #0b0b0c; color: #e6e6e6; box-shadow: inset 0 0 0 1px #5a5a5a; }
+.hb[data-h="pi"]::before, .hb[data-h="pi-rpc"]::before { content: "Pi"; }
 .hb[data-h="codex"] { background: #f2f2f2; color: #1e1f22; }
 .hb[data-h="codex"]::before { content: "Co"; }
 .hb[data-h="agy"] { background: #3b7be8; color: #fff; }

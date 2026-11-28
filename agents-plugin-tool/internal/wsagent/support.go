@@ -412,6 +412,29 @@ func choiceExecutableError(lister ChoiceLister) string {
 	return ""
 }
 
+// InvalidateChoices drops cached choice listings for harness, or for every
+// harness when harness is empty, so subsequent /support/choices requests
+// re-probe immediately.
+func (s *Support) InvalidateChoices(harness string) {
+	if s == nil {
+		return
+	}
+	s.choicesMu.Lock()
+	if harness == "" {
+		clear(s.cache)
+	} else {
+		delete(s.cache, harness)
+	}
+	s.choicesMu.Unlock()
+	s.pickerMu.Lock()
+	if harness == "" {
+		clear(s.pickerCache)
+	} else {
+		delete(s.pickerCache, harness)
+	}
+	s.pickerMu.Unlock()
+}
+
 // listChoices fills each available harness's models and efforts, from the
 // cache when fresh. A listing failure is that harness's error alone, and is
 // cached briefly too. A listing runs apart from ctx's cancellation, bounded
