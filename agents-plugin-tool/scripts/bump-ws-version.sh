@@ -16,7 +16,18 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 tool_dir=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
 repo_root=$(CDPATH= cd -- "$tool_dir/.." && pwd -P)
 
-VERSION=$version REPO_ROOT=$repo_root python3 - <<'PY'
+if [ -n "${PYTHON:-}" ]; then
+  python_bin=$PYTHON
+elif python3 -c "import sys" >/dev/null 2>&1; then
+  python_bin=python3
+elif python -c "import sys" >/dev/null 2>&1; then
+  python_bin=python
+else
+  printf 'python3 or python is required\n' >&2
+  exit 1
+fi
+
+VERSION=$version REPO_ROOT=$repo_root "$python_bin" - <<'PY'
 import json
 import os
 import re
