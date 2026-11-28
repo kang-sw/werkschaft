@@ -22,6 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
+
+	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
 const (
@@ -1016,7 +1018,7 @@ func writeAtomicPrivateFile(target string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpPath, target); err != nil {
+	if err := wsstate.AtomicReplaceFile(tmpPath, target); err != nil {
 		return err
 	}
 	cleanup = false

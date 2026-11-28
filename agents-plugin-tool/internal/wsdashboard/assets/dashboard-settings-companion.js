@@ -1565,6 +1565,9 @@
 
   function loadSoulState(soulKey, rerender, force) {
     if (!force && state.memoryKey === soulKey && (state.soulData || state.soulLoading || state.soulError)) return;
+    if (state.memoryKey !== soulKey) {
+      state.pendingItems = null;
+    }
     state.memoryKey = soulKey;
     state.soulLoading = true;
     state.soulError = "";
@@ -1580,6 +1583,9 @@
           state.profileDraft = res.data.profile || "";
           state.profileDirty = false;
         }
+        if (state.memoryTab === "approvals" && state.pendingItems === null) {
+          loadPendingItems(rerender, true);
+        }
       } else {
         state.soulError = extractErrorMessage(res, "load_failed");
       }
@@ -1594,7 +1600,9 @@
   function loadPendingItems(rerender, force) {
     if (!force && (state.pendingItems !== null || state.pendingLoading)) return;
     state.pendingLoading = true;
-    fetchJson("/api/companion/memory/pending").then(function (res) {
+    var activeSoulId = (state.soulData && state.soulData.soulId) ? String(state.soulData.soulId) : "";
+    var url = "/api/companion/memory/pending" + (activeSoulId ? "?soul=" + encodeURIComponent(activeSoulId) : "");
+    fetchJson(url).then(function (res) {
       state.pendingLoading = false;
       if (res.ok && res.data && Array.isArray(res.data.items)) {
         state.pendingItems = res.data.items;
@@ -2051,6 +2059,8 @@
             } else {
               state.memoryFeedback = { kind: "err", text: extractErrorMessage(res, ctx.tr("js.settings.error.config_error")) };
             }
+          } catch (e) {
+            state.memoryFeedback = { kind: "err", text: ctx.tr("js.settings.error.config_error") };
           } finally {
             state.episodesBusy = false;
             ctx.rerender();
@@ -2094,6 +2104,8 @@
           } else {
             state.memoryFeedback = { kind: "err", text: extractErrorMessage(res, ctx.tr("js.settings.error.config_error")) };
           }
+        } catch (e) {
+          state.memoryFeedback = { kind: "err", text: ctx.tr("js.settings.error.config_error") };
         } finally {
           state.episodesBusy = false;
           ctx.rerender();

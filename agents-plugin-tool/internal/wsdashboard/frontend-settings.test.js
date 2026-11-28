@@ -1750,8 +1750,11 @@ test("companion settings Memory / Soul drawer supports persona/profile edits, sc
         else soulState.profile = body.content;
         return { ok: true, status: 200, json: async () => ({ status: "saved" }) };
       }
-      if (url === "/api/companion/memory/pending") {
-        return { ok: true, status: 200, json: async () => ({ items: pendingItems }) };
+      if (url === "/api/companion/memory/pending" || url.startsWith("/api/companion/memory/pending?")) {
+        const parsed = new URL(url, origin);
+        const soulFilter = parsed.searchParams.get("soul") || "";
+        const filtered = soulFilter ? pendingItems.filter(p => p.soulId === soulFilter) : pendingItems;
+        return { ok: true, status: 200, json: async () => ({ items: filtered }) };
       }
       if (url.endsWith("/approve")) {
         const id = Number(url.split("/")[5]);
