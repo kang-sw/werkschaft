@@ -404,7 +404,9 @@
     var showStageReset = ctx.filter === "all" && (!ctx.searchTerm ||
       [ctx.tr("js.settings.companion.stage_reset.label"), ctx.tr("js.settings.companion.stage_reset.description"), "reset", "size", "home"]
         .join(" ").toLocaleLowerCase().includes(ctx.searchTerm));
-    if (!visibleKeys.length && !showStageReset) return null;
+    // Companion Agents card (dashboard-settings-companion-agents.js).
+    var agentsCard = window.WsSettingsCompanionAgents ? window.WsSettingsCompanionAgents.render(ctx) : null;
+    if (!visibleKeys.length && !showStageReset && !agentsCard) return null;
 
     var rawEnabled = effectiveValue(ctx, "dashboard.companion_enabled");
     var enabledVal = rawEnabled === true || rawEnabled === "true";
@@ -461,6 +463,7 @@
     }
 
     group.append(rowsWrap);
+    if (agentsCard) group.append(agentsCard);
     return group;
   }
 
@@ -2320,6 +2323,7 @@
       state.soulImporting = false;
       state.soulImportOverwrite = false;
       state.syncFeedback = null;
+      if (window.WsSettingsCompanionAgents) window.WsSettingsCompanionAgents.resetState();
     }
   };
 })();

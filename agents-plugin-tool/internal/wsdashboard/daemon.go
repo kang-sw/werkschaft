@@ -342,6 +342,9 @@ type Daemon struct {
 	// companionWake, when bound by cmd/ws-mcp, wakes the Tier-1 companion burst
 	// session on incoming user messages or release with unread inbox.
 	companionWake atomic.Pointer[func(reason string)]
+	// companionAgents, when bound by cmd/ws-mcp, computes the companion tier
+	// readback (companion_agents_route.go).
+	companionAgents atomic.Pointer[func() any]
 	// director is the companion agent director (companion_director.go).
 	director      companionDirector
 	agents        AgentHost
