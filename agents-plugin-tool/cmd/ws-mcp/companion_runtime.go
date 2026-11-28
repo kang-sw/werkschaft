@@ -86,9 +86,10 @@ type companionRuntime struct {
 	bodyLaunches int
 	workLaunches int
 
-	stopOnce sync.Once
-	stopCh   chan struct{}
-	wg       sync.WaitGroup
+	stopOnce      sync.Once
+	stopCh        chan struct{}
+	closedRuntime bool
+	wg            sync.WaitGroup
 }
 
 func newCompanionRuntime(dir, root string, agents *wsagent.Runner, daemon func() *wsdashboard.Daemon, logw io.Writer) *companionRuntime {
@@ -126,15 +127,29 @@ func (r *companionRuntime) now() time.Time {
 	return time.Now()
 }
 
+// spawn launches fn tracked by r.wg unless Close has already begun, ensuring
+// background runtime tasks drain cleanly before Close returns.
+func (r *companionRuntime) spawn(fn func()) {
+	r.mu.Lock()
+	if r.closedRuntime {
+		r.mu.Unlock()
+		return
+	}
+	r.wg.Add(1)
+	r.mu.Unlock()
+	go func() {
+		defer r.wg.Done()
+		fn()
+	}()
+}
+
 // Start begins the lightweight in-memory deadline monitor goroutine.
 func (r *companionRuntime) Start() {
 	interval := r.tickInterval
 	if interval <= 0 {
 		interval = companionDeadlineTickInterval
 	}
-	r.wg.Add(1)
-	go func() {
-		defer r.wg.Done()
+	r.spawn(func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -145,12 +160,16 @@ func (r *companionRuntime) Start() {
 				r.checkDeadlines(r.now())
 			}
 		}
-	}()
+	})
 }
 
-// Close stops the deadline monitor goroutine and waits for it to exit.
+// Close stops the deadline monitor goroutine and waits for all background
+// runtime tasks to exit.
 func (r *companionRuntime) Close() {
 	r.stopOnce.Do(func() {
+		r.mu.Lock()
+		r.closedRuntime = true
+		r.mu.Unlock()
 		close(r.stopCh)
 	})
 	r.wg.Wait()
@@ -286,7 +305,7 @@ func (r *companionRuntime) handleBodyWakeError(d *wsdashboard.Daemon, bodyKey, e
 	}
 	if !unavailable && phone.UnreadAgentCount() > 0 && d.CompanionDirectorEnabled() {
 		// Bounded retry via release-unread until CompanionWakeMaxRetries is hit.
-		go r.OnUserWake("release-unread")
+		r.spawn(func() { r.OnUserWake("release-unread") })
 	}
 }
 
@@ -312,7 +331,7 @@ func (r *companionRuntime) OnCompanionActivity(role, replyID, wsKey string) {
 // OnCompanionTurnEnd handles turn settlement for companion-body and
 // companion-work. Must not block on the runner loop.
 func (r *companionRuntime) OnCompanionTurnEnd(role, replyID, wsKey, status, errText string) {
-	go r.handleCompanionTurnEnd(role, replyID, wsKey, status, errText)
+	r.spawn(func() { r.handleCompanionTurnEnd(role, replyID, wsKey, status, errText) })
 }
 
 func (r *companionRuntime) handleCompanionTurnEnd(role, replyID, wsKey, status, errText string) {
@@ -364,7 +383,7 @@ func (r *companionRuntime) handleCompanionTurnEnd(role, replyID, wsKey, status, 
 		// messages remain and no queued turn is pending.
 		released := d.CompanionForceRelease(wsKey)
 		if !released && !stillPending && phone.UnreadAgentCount() > 0 && !phone.Snapshot().Unavailable {
-			go r.OnUserWake("release-unread")
+			r.spawn(func() { r.OnUserWake("release-unread") })
 		}
 	case mcp.CompanionRoleWork:
 		// A Tier-2 turn end without ws/delegation.report leaves the delegation
@@ -377,7 +396,7 @@ func (r *companionRuntime) handleCompanionTurnEnd(role, replyID, wsKey, status, 
 // OnCompanionClose handles conversation close or unexpected crash for
 // companion-body and companion-work. Must not block on the runner loop.
 func (r *companionRuntime) OnCompanionClose(role, replyID, wsKey, reason string) {
-	go r.handleCompanionClose(role, replyID, wsKey, reason)
+	r.spawn(func() { r.handleCompanionClose(role, replyID, wsKey, reason) })
 }
 
 func (r *companionRuntime) handleCompanionClose(role, replyID, wsKey, reason string) {
@@ -410,7 +429,7 @@ func (r *companionRuntime) handleCompanionClose(role, replyID, wsKey, reason str
 			}
 			released := d.CompanionForceRelease(wsKey)
 			if !released && d.CompanionPhone().UnreadAgentCount() > 0 && !d.CompanionPhone().Snapshot().Unavailable {
-				go r.OnUserWake("release-unread")
+				r.spawn(func() { r.OnUserWake("release-unread") })
 			}
 		}
 	case mcp.CompanionRoleWork:
@@ -480,7 +499,7 @@ func (r *companionRuntime) CompanionDelegateWork(callerKey, brief string) (mcp.C
 	}
 	r.syncDelegationInFlight(d)
 	if toDispatch != nil {
-		go r.dispatchToWorkBrain(toDispatch)
+		r.spawn(func() { r.dispatchToWorkBrain(toDispatch) })
 	}
 	return mcp.CompanionDelegationAccepted{
 		DelegationID: id,
@@ -536,13 +555,13 @@ func (r *companionRuntime) CompanionDelegationReport(callerKey, delegationID, st
 
 	// Copy artifacts slice so caller mutations cannot race async delivery.
 	artCopy := append([]string(nil), artifacts...)
-	go r.deliverReportToBody(delegationID, status, result, artCopy)
+	r.spawn(func() { r.deliverReportToBody(delegationID, status, result, artCopy) })
 
 	if next != nil {
-		go r.dispatchToWorkBrain(next)
+		r.spawn(func() { r.dispatchToWorkBrain(next) })
 	} else if workWSKey != "" && r.agents != nil {
 		// Queue Tier-2 idle compaction at the next hosted idle boundary ((1748)).
-		go r.compactWorkBrainIdle(workWSKey)
+		r.spawn(func() { r.compactWorkBrainIdle(workWSKey) })
 	}
 
 	return mcp.CompanionDelegationReportAck{
@@ -608,9 +627,9 @@ func (r *companionRuntime) failActiveDelegation(delegationID, reason string) {
 		d.ObserveCompanionMood(wsdashboard.CompanionMoodEventDelegationFailed)
 	}
 	r.syncDelegationInFlight(d)
-	go r.deliverReportToBody(delegationID, "failed", reason, nil)
+	r.spawn(func() { r.deliverReportToBody(delegationID, "failed", reason, nil) })
 	if next != nil {
-		go r.dispatchToWorkBrain(next)
+		r.spawn(func() { r.dispatchToWorkBrain(next) })
 	}
 }
 
@@ -680,7 +699,7 @@ func (r *companionRuntime) checkDeadlines(now time.Time) {
 		return
 	}
 	if leaseExpired && hasUnread {
-		go r.OnUserWake("release-unread")
+		r.spawn(func() { r.OnUserWake("release-unread") })
 	}
 }
 

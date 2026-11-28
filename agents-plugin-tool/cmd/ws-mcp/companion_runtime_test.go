@@ -407,11 +407,19 @@ func (f *companionFixture) callMCP(hostedKey, method string, params any) rpcWire
 	if len(lines) < 2 {
 		f.t.Fatalf("ServeStdio(%s) produced %d lines: %q", method, len(lines), out.String())
 	}
-	var resp rpcWireResponse
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &resp); err != nil {
-		f.t.Fatalf("unmarshal RPC response: %v\nraw=%s", err, lines[len(lines)-1])
+	// ServeStdio handles JSON-RPC requests concurrently, so id=2 may finish
+	// before id=1 (initialize). Match response by id=2 explicitly.
+	for _, line := range lines {
+		var resp rpcWireResponse
+		if err := json.Unmarshal([]byte(line), &resp); err != nil {
+			f.t.Fatalf("unmarshal RPC response: %v\nraw=%s", err, line)
+		}
+		if strings.TrimSpace(string(resp.ID)) == "2" {
+			return resp
+		}
 	}
-	return resp
+	f.t.Fatalf("ServeStdio(%s) missing response id=2 in output:\n%s", method, out.String())
+	return rpcWireResponse{}
 }
 
 func (f *companionFixture) callTool(hostedKey, name string, args map[string]any) (text string, isErr bool, rpcErr string) {
