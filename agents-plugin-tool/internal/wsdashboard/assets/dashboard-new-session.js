@@ -249,6 +249,9 @@
     isoSw.appendChild(mk("i"));
     var isoLbl = isoSw.appendChild(mk("span", null, wsT("js.lead.iso") + " · " + wsT("js.lead.iso.default")));
 
+    var pNativeNote = foot.appendChild(mk("p", "ns-adv-note spdesc"));
+    pNativeNote.hidden = true;
+
     var footOpts = foot.appendChild(mk("div", "ns-foot-opts"));
     var wbSw = footOpts.appendChild(rpBtn("ns-sw", ""));
     wbSw.setAttribute("role", "switch");
@@ -268,8 +271,6 @@
     convSw.appendChild(mk("i"));
     convSw.appendChild(mk("span", null, wsT("js.lead.conv_history")));
 
-    var pNativeNote = foot.appendChild(mk("p", "ns-adv-note spdesc"));
-    pNativeNote.hidden = true;
     var pfine = foot.appendChild(mk("p", "ns-fine pmfine", wsT("js.perm.fine.intent")));
     pfine.hidden = true;
     var perr = foot.appendChild(mk("p", "pmerr")), perrHd = perr.appendChild(mk("b"));
@@ -422,12 +423,16 @@
           edited();
         });
         var claudeInline = P.harness === "claude";
-        var inlineNote = (claudeInline && LEAD_MODE_NOTE[modeNow] ? wsT(LEAD_MODE_NOTE[modeNow]) : modeNow) + (gone ? " " + wsT("js.perm.native.own") : "");
+        var desc = (claudeInline && LEAD_MODE_NOTE[modeNow]) ? wsT(LEAD_MODE_NOTE[modeNow]) : "";
+        var own = gone ? wsT("js.perm.native.own") : "";
+        var inlineNote = desc && own ? desc + " " + own : (desc || own);
         pNativeNote.textContent = inlineNote;
         pNativeNote.hidden = !inlineNote;
-        if (pNativeNote.classList) pNativeNote.classList.toggle("warn", !!LEAD_DANGER_MODE[modeNow]);
+        if (pNativeNote.classList) pNativeNote.classList.toggle("warn", !!inlineNote && !!LEAD_DANGER_MODE[modeNow]);
       } else {
+        pNativeNote.textContent = "";
         pNativeNote.hidden = true;
+        if (pNativeNote.classList) pNativeNote.classList.toggle("warn", false);
       }
       var showAdv = supported && !gone && modes.length > 0;
       adv.hidden = !showAdv;
@@ -440,10 +445,10 @@
           edited();
         });
         var claude = P.harness === "claude";
-        var noteText = owned ? wsT("js.perm.adv.owned.note", wsT(PERM_LABEL[level])) : (claude && LEAD_MODE_NOTE[modeNow] ? wsT(LEAD_MODE_NOTE[modeNow]) : modeNow);
+        var noteText = owned ? wsT("js.perm.adv.owned.note", wsT(PERM_LABEL[level])) : (claude && LEAD_MODE_NOTE[modeNow] ? wsT(LEAD_MODE_NOTE[modeNow]) : "");
         advNote.textContent = noteText;
         advNote.hidden = !noteText;
-        if (advNote.classList) advNote.classList.toggle("warn", !owned && !!LEAD_DANGER_MODE[modeNow]);
+        if (advNote.classList) advNote.classList.toggle("warn", !owned && !!noteText && !!LEAD_DANGER_MODE[modeNow]);
       }
       pfine.hidden = !supported || !!gone;
       perr.hidden = !P.refused;
