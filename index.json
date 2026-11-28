@@ -475,7 +475,17 @@
       "registered_at": "2026-11-27T01:26:05Z"
     },
     "261128-feat-ws-companion-control-rig-studio-and-action-catalog": {
-      "registered_at": "2026-11-28T10:07:48Z"
+      "registered_at": "2026-11-28T10:07:48Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-28T10:42:44Z",
+        "impl": {
+          "branch": "impl/develop/companion-control-rig-studio"
+        }
+      }
     },
     "261128-feat-ws-companion-visual-polish-and-metafiction-overlay": {
       "registered_at": "2026-11-28T06:52:51Z"
