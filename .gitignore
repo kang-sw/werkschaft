@@ -32,5 +32,24 @@ ai-docs/assets/mockups/**/*.jpeg
 ai-docs/assets/mockups/**/*.webp
 ai-docs/assets/mockups/**/*.gif
 ai-docs/assets/mockups/**/*.avif
+# Pure raster captures and mockup renders (keep text mockups, scripts, JSON manifests, and .plans/ trackable)
+ai-docs/assets/captures/**/*.png
+ai-docs/assets/captures/**/*.jpg
+ai-docs/assets/captures/**/*.jpeg
+ai-docs/assets/captures/**/*.webp
+ai-docs/assets/captures/**/*.gif
+ai-docs/assets/captures/**/*.avif
+ai-docs/ref/brand/mockup/**/*.png
+ai-docs/ref/brand/mockup/**/*.jpg
+ai-docs/ref/brand/mockup/**/*.jpeg
+ai-docs/ref/brand/mockup/**/*.webp
+ai-docs/ref/brand/mockup/**/*.gif
+ai-docs/ref/brand/mockup/**/*.avif
+/shared/**/*.png
+/shared/**/*.jpg
+/shared/**/*.jpeg
+/shared/**/*.webp
+/shared/**/*.gif
+/shared/**/*.avif
 agents-plugin/.claude-plugin/types/
 agents-plugin-wsflow/.claude-plugin/types/
