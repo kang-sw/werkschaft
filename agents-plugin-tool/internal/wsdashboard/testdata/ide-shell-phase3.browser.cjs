@@ -134,7 +134,7 @@ function makeUsagePayload() {
           const cur = document.querySelector('#rlist .rs.cur');
           const leftItems = [...topLeft.querySelectorAll(':scope > :not(.r-head), :scope > .r-head > *')]
             .map(el => ({ cls: el.className, box: box(el) })).filter(x => x.box);
-          const handles = [...fdoc.querySelectorAll('#drhandle, #tkhandles .tk-handle')]
+          const handles = [...fdoc.querySelectorAll('#tkhandles .tk-handle')]
             .map(el => ({ id: el.id || '', cls: el.className, box: box(el) })).filter(x => x.box);
           const shandleBox = box(fdoc.getElementById('shandle'));
           const branch = topLeft.querySelector('.worktree-branch');
@@ -157,7 +157,8 @@ function makeUsagePayload() {
             botRect: box(bot),
             botLeftKids: [...document.getElementById('slot-bot-left').children].map(c => c.className),
             botRightUsage: !!document.querySelector('#slot-bot-right .usage-toggle'),
-            curAfterW: cur ? getComputedStyle(cur, '::after').width : '',
+            // The accent bar is ::before (::after is the drag-nest indicator's).
+            curAfterW: cur ? getComputedStyle(cur, '::before').width : '',
             curBg: cur ? getComputedStyle(cur).backgroundColor : '',
             railbtn: box(document.getElementById('railbtn')),
             branchText: branch ? branch.textContent.trim() : '',
@@ -214,7 +215,7 @@ function makeUsagePayload() {
 
         // Top-Right global tracker handles + legacy session handles present & zero overlap.
         assert.ok(m.tkHandleCount >= 2, `${theme}/${vp.width}: #tkhandles holds store handle + #tkadd (${m.tkHandleCount})`);
-        assert.ok(m.handles.length >= 3, `${theme}/${vp.width}: right handles visible (${m.handles.length})`);
+        assert.ok(m.handles.length >= 2, `${theme}/${vp.width}: right handles visible (${m.handles.length})`);
         for (const it of m.leftItems) {
           assert.ok(it.box.r <= m.searchBox.l + 0.5,
             `${theme}/${vp.width}: top-left ${it.cls} (${it.box.r}) overlaps search (${m.searchBox.l})`);
@@ -248,33 +249,15 @@ function makeUsagePayload() {
       await activeFrame.locator('#tkqin').press('Escape');
       await activeFrame.locator('#tkqpop').waitFor({ state: 'hidden' });
 
-      // Click through shell Top-Right directly at #drhandle screen coordinates!
-      const drBox = await page.evaluate(() => {
+      // The framed page's panels handle retired with the drawer cards (the
+      // holders moved to the shell's bottom-bar popup): no #drhandle, and the
+      // framed search handle stays hidden behind the shell's search pill.
+      const retired = await page.evaluate(() => {
         const fdoc = document.querySelector('.sframe.on').contentDocument;
-        const r = fdoc.getElementById('drhandle').getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        return { drhandle: !!fdoc.getElementById('drhandle'), drbody: !!fdoc.getElementById('drbody'), holders: !!fdoc.getElementById('p-holders'),
+          drawerOpen: !!fdoc.querySelector('.drawer.open') };
       });
-      await page.mouse.click(drBox.x, drBox.y);
-      await activeFrame.locator('#drawer.open #drclip').waitFor({ state: 'visible' });
-      await page.waitForTimeout(200);
-      const drawerAlign = await page.evaluate(() => {
-        const fdoc = document.querySelector('.sframe.on').contentDocument;
-        const clip = fdoc.getElementById('drclip').getBoundingClientRect();
-        const drtop = parseFloat(getComputedStyle(fdoc.getElementById('drawer')).getPropertyValue('--drtop')) || 0;
-        const fold = fdoc.getElementById('drfold').getBoundingClientRect();
-        return { clipTop: Math.round(clip.top), drtop: Math.round(drtop), foldTop: Math.round(fold.top), foldBottom: Math.round(fold.bottom) };
-      });
-      assert.ok(drawerAlign.clipTop >= 35 && drawerAlign.clipTop <= 38, `${theme}: drawer aligns below 36px topbar (${JSON.stringify(drawerAlign)})`);
-      assert.ok(drawerAlign.foldTop >= 0 && drawerAlign.foldBottom <= 36.5, `${theme}: drawer fold handle aligns inside 36px topbar`);
-      if (theme === 'dark') await shot(page, 'phase3-dark-1440-drawer');
-      // Click #drfold through shell Top-Right to close drawer.
-      const foldBox = await page.evaluate(() => {
-        const fdoc = document.querySelector('.sframe.on').contentDocument;
-        const r = fdoc.getElementById('drfold').getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-      });
-      await page.mouse.click(foldBox.x, foldBox.y);
-      await activeFrame.locator('#drclip').waitFor({ state: 'hidden' });
+      assert.deepEqual(retired, { drhandle: false, drbody: false, holders: false, drawerOpen: false }, `${theme}: the framed drawer carries no cards or panels handle`);
 
       // Click through shell Top-Right directly at tracker store .tk-handle!
       const tkBox = await page.evaluate(() => {

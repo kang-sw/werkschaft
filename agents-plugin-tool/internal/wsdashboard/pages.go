@@ -75,6 +75,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-frames.js",
 	"dashboard-git.js",
 	"dashboard-gitpage.js",
+	"dashboard-gitpage-wt.js",
 	"dashboard-tracker.js",
 	"dashboard-selection.js",
 	"dashboard-stream.js",
@@ -84,6 +85,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-rail.js",
 	"dashboard-workspace-admission.js",
 	"dashboard-rail-popovers.js",
+	"dashboard-holders.js",
 	"dashboard-leads.js",
 	"dashboard-new-session.js",
 	"dashboard-tier-picker.js",
@@ -110,6 +112,7 @@ var companionScriptFiles = []string{
 	"dashboard-companion-vrm-colead.js",
 	"dashboard-companion-vrm.js",
 	"dashboard-companion-messenger.js",
+	"dashboard-companion-messenger-presence.js",
 	"dashboard-companion-stage.js",
 }
 
@@ -138,6 +141,7 @@ var dashboardStyleFiles = []string{
 	"dashboard-daemon-confirm.css",
 	"dashboard-daemon-guide.css",
 	"dashboard-ide-shell.css",
+	"dashboard-holders.css",
 	"dashboard-audit.css",
 	"dashboard-audit-rows.css",
 	"dashboard-exec-hud.css",

@@ -383,6 +383,92 @@ test('out-of-order hold response does not overwrite newer settled server state',
   assert.equal(h.items[1].classList.contains('wb-held'), true, 'stale response must not overwrite newer hold');
 });
 
+// A minimal element tree for the hold-echo comparison: attributes in order,
+// child nodes with text, and the few queries holdOnly/adoptHolds use.
+function tree(tag, attrs, ...kids) {
+  const el = {
+    nodeType: 1, tagName: tag.toUpperCase(), parentNode: null, childNodes: [], attrs: Object.assign({}, attrs),
+    get attributes() { return Object.keys(el.attrs).map(name => ({ name, value: el.attrs[name] })); },
+    get id() { return el.attrs.id || ''; },
+    get title() { return el.attrs.title || ''; },
+    set title(v) { el.attrs.title = String(v); },
+    getAttribute: k => (k in el.attrs ? el.attrs[k] : null),
+    setAttribute: (k, v) => { el.attrs[k] = String(v); },
+    hasAttribute: k => k in el.attrs,
+    classList: {
+      contains: c => (el.attrs.class || '').split(/\s+/).includes(c),
+      toggle: (c, on) => {
+        const list = (el.attrs.class || '').split(/\s+/).filter(x => x && x !== c);
+        if (on) list.push(c);
+        el.attrs.class = list.join(' ');
+      }
+    },
+    matches: sel => sel === 'section.topic' && el.tagName === 'SECTION' && el.classList.contains('topic'),
+    all() { return el.childNodes.filter(n => n.nodeType === 1).flatMap(n => [n, ...n.all()]); },
+    querySelectorAll(sel) {
+      if (sel === '[id^="item-"]') return el.all().filter(n => n.id.startsWith('item-'));
+      if (sel === '.wb-hold-toggle[data-wb-hold]') return el.all().filter(n => n.classList.contains('wb-hold-toggle') && n.hasAttribute('data-wb-hold'));
+      throw new Error('unexpected selector ' + sel);
+    },
+    querySelector(sel) {
+      if (sel === '.wb-hold-toggle') return el.all().find(n => n.classList.contains('wb-hold-toggle')) || null;
+      throw new Error('unexpected selector ' + sel);
+    },
+    closest(sel) {
+      if (sel !== '[id^="item-"]') throw new Error('unexpected selector ' + sel);
+      for (let p = el; p; p = p.parentNode) if (p.id.startsWith('item-')) return p;
+      return null;
+    }
+  };
+  kids.forEach(k => {
+    const n = typeof k === 'string' ? { nodeType: 3, nodeValue: k, parentNode: null } : k;
+    n.parentNode = el;
+    el.childNodes.push(n);
+  });
+  return el;
+}
+
+// A topic as page.tmpl renders it, with the given held item numbers.
+function renderedTopic(held, opts = {}) {
+  const item = n => tree('div', { class: 'card policy' + (held.includes(n) ? ' wb-held' : ''), id: 'item-' + n, 'data-id': String(n) },
+    tree('span', { class: 'title' }, opts.title && n === 1 ? opts.title : 'Ask ' + n),
+    tree('button', { type: 'button', class: 'btn mini wb-hold-toggle', 'data-wb-hold': '', 'aria-pressed': String(held.includes(n)), title: held.includes(n) ? 'Release' : 'Hold', 'aria-label': held.includes(n) ? 'Release' : 'Hold' }));
+  const chip = (kind, count) => tree('span', Object.assign({ class: 'chip', 'data-tbar-ask': kind }, count ? {} : { hidden: '' }),
+    tree('span', { class: 'chip-lbl' }, kind), tree('span', { class: 'n' }, String(count)));
+  return tree('section', { class: 'topic', id: 'topic-a', 'data-topic': 'a', 'data-th': 'th-' + held.join('-') },
+    tree('div', { class: 'tophead' }, tree('div', { class: 'tbar' }, chip('open', 2 - held.length), chip('held', held.length),
+      tree('span', { class: 'n' }, opts.count || '7'))),
+    tree('div', { class: 'tdoc' }, opts.body || 'Body'),
+    item(1), item(2));
+}
+
+test('holdOnly tells a hold-only topic echo from any other change, and adoptHolds takes the item markers in place', () => {
+  const h = makePillHarness([{ id: 1, dataId: '1', top: -100 }]);
+  const { holdOnly, adoptHolds } = h.win.wbPill;
+  const prev = renderedTopic([]);
+  assert.equal(holdOnly(prev, renderedTopic([2])), true, 'held class, toggle state and labels, ask chips and data-th only');
+  assert.equal(holdOnly(renderedTopic([2]), renderedTopic([])), true, 'releasing is hold-only too');
+  assert.equal(holdOnly(prev, renderedTopic([2], { body: 'Body edited' })), false, 'a body change');
+  assert.equal(holdOnly(prev, renderedTopic([], { title: 'Ask 1 edited' })), false, 'an item title change');
+  assert.equal(holdOnly(prev, renderedTopic([], { count: '8' })), false, 'a count outside the ask chips');
+  const extra = renderedTopic([2]);
+  extra.childNodes[2].attrs.class += ' sent-sent';
+  assert.equal(holdOnly(prev, extra), false, 'another class token beside wb-held');
+  assert.equal(holdOnly(null, prev), false);
+
+  // The live section carries what the page added (a mounted frame), so it
+  // is never compared; only its item markers follow the echo.
+  const live = renderedTopic([1]);
+  live.childNodes.push(tree('iframe', { class: 'doc-frame' }));
+  adoptHolds(live, renderedTopic([2]));
+  const [one, two] = live.querySelectorAll('[id^="item-"]');
+  assert.equal(one.classList.contains('wb-held'), false);
+  assert.equal(one.querySelector('.wb-hold-toggle').getAttribute('aria-pressed'), 'false');
+  assert.equal(two.classList.contains('wb-held'), true);
+  assert.equal(two.querySelector('.wb-hold-toggle').getAttribute('aria-pressed'), 'true');
+  assert.equal(two.querySelector('.wb-hold-toggle').getAttribute('aria-label'), 'js.pill.unhold');
+});
+
 test('pill.js contains zero browser-local hold machinery or localStorage access', () => {
   for (const forbidden of [
     'localStorage',

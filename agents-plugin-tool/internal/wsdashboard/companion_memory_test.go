@@ -21,24 +21,23 @@ func TestCompanionSoulRAMCacheAndSingleLineShards(t *testing.T) {
 	nowTime := time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC)
 	store := NewCompanionSoulStore(stateDir, homeDir, func() time.Time { return nowTime })
 
-	// 1. Empty soul ID resolves to "default" and seeds persona.md from pack starter.
-	starter := &CompanionPersona{
-		Name:         "Mina",
-		Voice:        "Warm, concise, and encouraging.",
-		QuipLanguage: "ko",
-	}
-	snap1, err := store.Load("", "", starter, 30)
+	// 1. Empty soul ID resolves to "default"; a cold load is read-only and
+	// never seeds persona.md (the persona is inherited live instead).
+	snap1, err := store.Load("", "", 30)
 	if err != nil {
 		t.Fatalf("cold load: %v", err)
 	}
 	if snap1.SoulID != "default" {
 		t.Fatalf("soulID = %q, want default", snap1.SoulID)
 	}
-	if !snap1.SeededFromPack {
-		t.Fatal("expected SeededFromPack=true on initial seed")
+	if snap1.Persona != "" || !snap1.PersonaInherited || snap1.PersonaSource != "" {
+		t.Fatalf("cold load persona = %q inherited=%v source=%q, want empty inherited", snap1.Persona, snap1.PersonaInherited, snap1.PersonaSource)
 	}
-	if !strings.Contains(snap1.Persona, "# Mina") || !strings.Contains(snap1.Persona, "Warm, concise") {
-		t.Fatalf("unexpected seeded persona: %q", snap1.Persona)
+	if _, err := os.Stat(filepath.Join(homeDir, ".ws", "companion-soul")); !os.IsNotExist(err) {
+		t.Fatalf("cold load wrote the soul root: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, companionMachineIDFile)); !os.IsNotExist(err) {
+		t.Fatalf("cold load wrote the machine id: %v", err)
 	}
 	if got := store.DiskReadCount(); got != 1 {
 		t.Fatalf("disk reads after cold load = %d, want 1", got)
@@ -46,7 +45,7 @@ func TestCompanionSoulRAMCacheAndSingleLineShards(t *testing.T) {
 
 	// 2. Warm reads hit RAM hot cache with ZERO disk reads.
 	for i := 0; i < 5; i++ {
-		snap, err := store.Load("", "", starter, 30)
+		snap, err := store.Load("", "", 30)
 		if err != nil {
 			t.Fatalf("warm load %d: %v", i, err)
 		}
@@ -75,12 +74,12 @@ func TestCompanionSoulRAMCacheAndSingleLineShards(t *testing.T) {
 	}
 
 	// 4. AppendShardEntry appends ONE JSONL line per delta without rescanning.
-	e1, err := store.AppendShardEntry("", "", starter, "rapport", "Prefers dark mode late at night.", []string{"ui", "night"})
+	e1, err := store.AppendShardEntry("", "", "rapport", "Prefers dark mode late at night.", []string{"ui", "night"})
 	if err != nil {
 		t.Fatalf("append 1: %v", err)
 	}
 	nowTime = nowTime.Add(5 * time.Minute)
-	e2, err := store.AppendShardEntry("", "", starter, "preference", "Likes concise commit summaries.", []string{"style"})
+	e2, err := store.AppendShardEntry("", "", "preference", "Likes concise commit summaries.", []string{"style"})
 	if err != nil {
 		t.Fatalf("append 2: %v", err)
 	}
@@ -104,7 +103,7 @@ func TestCompanionSoulRAMCacheAndSingleLineShards(t *testing.T) {
 		}
 	}
 
-	warmAfterAppend, err := store.Load("", "", starter, 30)
+	warmAfterAppend, err := store.Load("", "", 30)
 	if err != nil {
 		t.Fatalf("warm load after append: %v", err)
 	}
@@ -135,22 +134,18 @@ func TestCompanionSoulRAMCacheAndSingleLineShards(t *testing.T) {
 		t.Fatalf("write other machine shard: %v", err)
 	}
 
-	// Reload in a fresh store (simulating restart or git pull on another machine)
-	// with a DIFFERENT pack starter persona to verify starter-only precedence!
-	otherPackStarter := &CompanionPersona{
-		Name:  "Overwriter",
-		Voice: "Should NEVER overwrite an existing Soul.",
+	// Reload in a fresh store (simulating restart or git pull on another
+	// machine): shard appends never created persona.md.
+	if _, err := os.Stat(filepath.Join(homeDir, ".ws", "companion-soul", "default", "persona.md")); !os.IsNotExist(err) {
+		t.Fatalf("persona.md was auto-seeded: %v", err)
 	}
 	store2 := NewCompanionSoulStore(stateDir, homeDir, func() time.Time { return nowTime })
-	reloaded, err := store2.Load("", "", otherPackStarter, 30)
+	reloaded, err := store2.Load("", "", 30)
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if reloaded.SeededFromPack {
-		t.Fatal("existing Soul must NOT be marked SeededFromPack on reload")
-	}
-	if reloaded.Persona != snap1.Persona || strings.Contains(reloaded.Persona, "Overwriter") {
-		t.Fatalf("visual pack starter overwrote existing persona.md: %q", reloaded.Persona)
+	if reloaded.Persona != "" || !reloaded.PersonaInherited {
+		t.Fatalf("reloaded persona = %q inherited=%v, want inherited", reloaded.Persona, reloaded.PersonaInherited)
 	}
 	if reloaded.ShardCount != 2 {
 		t.Fatalf("ShardCount = %d, want 2", reloaded.ShardCount)
@@ -333,7 +328,7 @@ func TestCompanionMemoryGuardrailFlowsAndRestartPersistence(t *testing.T) {
 
 	// 5. Settings drawer edit of profile.md containing suspicious content (even a token)
 	// is HELD in approval queue rather than rejected outright, and does not touch disk.
-	docHold, err := mem.SaveUserDoc(ctx, "", "default", nil, SoulPendingTargetProfile,
+	docHold, err := mem.SaveUserDoc(ctx, "", "default", SoulPendingTargetProfile,
 		"Contact me at bob@example.org or use /Users/bob/work", activeProjects)
 	if err != nil {
 		t.Fatalf("SaveUserDoc hold: %v", err)
@@ -341,7 +336,7 @@ func TestCompanionMemoryGuardrailFlowsAndRestartPersistence(t *testing.T) {
 	if docHold.Status != "held_pending" || docHold.Pending == nil {
 		t.Fatalf("SaveUserDoc hold = %+v", docHold)
 	}
-	snapBeforeApprove, err := mem.Soul().Load("", "default", nil, 30)
+	snapBeforeApprove, err := mem.Soul().Load("", "default", 30)
 	if err != nil {
 		t.Fatalf("load before approve: %v", err)
 	}
@@ -374,10 +369,10 @@ func TestCompanionMemoryGuardrailFlowsAndRestartPersistence(t *testing.T) {
 
 	// Approve the held profile.md with redacted/edited content.
 	editedProfile := "Prefers async written updates."
-	if _, err := mem2.ApprovePending(ctx, "", nil, docHold.Pending.ID, &editedProfile); err != nil {
+	if _, err := mem2.ApprovePending(ctx, "", docHold.Pending.ID, &editedProfile); err != nil {
 		t.Fatalf("ApprovePending profile: %v", err)
 	}
-	snapAfterApprove, err := mem2.Soul().Load("", "default", nil, 30)
+	snapAfterApprove, err := mem2.Soul().Load("", "default", 30)
 	if err != nil {
 		t.Fatalf("load after approve: %v", err)
 	}
@@ -386,10 +381,10 @@ func TestCompanionMemoryGuardrailFlowsAndRestartPersistence(t *testing.T) {
 	}
 	// Approve the held shard item with edited text.
 	editedShard := "Likes end-of-day wrap-up summaries."
-	if _, err := mem2.ApprovePending(ctx, "", nil, holdRes.Pending.ID, &editedShard); err != nil {
+	if _, err := mem2.ApprovePending(ctx, "", holdRes.Pending.ID, &editedShard); err != nil {
 		t.Fatalf("ApprovePending shard: %v", err)
 	}
-	snapAfterShard, err := mem2.Soul().Load("", "default", nil, 30)
+	snapAfterShard, err := mem2.Soul().Load("", "default", 30)
 	if err != nil {
 		t.Fatalf("load after shard approve: %v", err)
 	}
@@ -518,13 +513,13 @@ func TestCompanionSoulExportImportHardening(t *testing.T) {
 	nowTime := time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC)
 	store := NewCompanionSoulStore(stateDir, homeDir, func() time.Time { return nowTime })
 
-	if err := store.WriteUserDoc("", "work", nil, SoulPendingTargetPersona, "# Work Companion\n\nFocused.\n"); err != nil {
+	if err := store.WriteUserDoc("", "work", SoulPendingTargetPersona, "# Work Companion\n\nFocused.\n"); err != nil {
 		t.Fatalf("write persona: %v", err)
 	}
-	if err := store.WriteUserDoc("", "work", nil, SoulPendingTargetProfile, "Prefers structured diffs.\n"); err != nil {
+	if err := store.WriteUserDoc("", "work", SoulPendingTargetProfile, "Prefers structured diffs.\n"); err != nil {
 		t.Fatalf("write profile: %v", err)
 	}
-	if _, err := store.AppendShardEntry("", "work", nil, "rapport", "Celebrates clean green builds.", []string{"builds"}); err != nil {
+	if _, err := store.AppendShardEntry("", "work", "rapport", "Celebrates clean green builds.", []string{"builds"}); err != nil {
 		t.Fatalf("append shard: %v", err)
 	}
 	// Plant an unrelated sqlite file inside the soul directory to verify export strictly excludes it.
@@ -533,7 +528,7 @@ func TestCompanionSoulExportImportHardening(t *testing.T) {
 		t.Fatalf("plant sqlite: %v", err)
 	}
 
-	zipData, filename, err := store.ExportZIP("", "work", nil)
+	zipData, filename, err := store.ExportZIP("", "work")
 	if err != nil {
 		t.Fatalf("ExportZIP: %v", err)
 	}
@@ -669,17 +664,109 @@ func TestCompanionMemoryHTTPRoutesAndGuards(t *testing.T) {
 		t.Fatalf("LAN GET episodes = %d, want 404", w.Code)
 	}
 
-	// 2. Local viewer GET /api/companion/soul auto-initializes default Soul.
-	w := companionTestRequest(d, cookie, http.MethodGet, companionSoulRoute, "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("GET soul = %d: %s", w.Code, w.Body.String())
+	// 2. Local viewer GET /api/companion/soul shows the inherited official
+	// persona read-only: it writes nothing to disk.
+	getSoul := func() companionSoulResponse {
+		t.Helper()
+		w := companionTestRequest(d, cookie, http.MethodGet, companionSoulRoute, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET soul = %d: %s", w.Code, w.Body.String())
+		}
+		var resp companionSoulResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode soul response: %v", err)
+		}
+		return resp
 	}
-	var soulResp companionSoulResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &soulResp); err != nil {
-		t.Fatalf("decode soul response: %v", err)
-	}
-	if soulResp.SoulID != "default" || soulResp.Persona == "" {
+	soulResp := getSoul()
+	if soulResp.SoulID != "default" || !strings.HasPrefix(soulResp.Persona, "# Companion\n") ||
+		soulResp.PersonaSource != CompanionPersonaSourceOfficial || !soulResp.PersonaInherited ||
+		soulResp.ActivePresetID != CompanionPersonaPresetDefault || len(soulResp.Presets) < 2 ||
+		soulResp.Presets[0].ID != CompanionPersonaPresetDefault || soulResp.Presets[0].TitleByLang["ko"] == "" {
 		t.Fatalf("unexpected initial soul: %+v", soulResp)
+	}
+	pickedPreset := soulResp.Presets[1]
+	soulRoot := filepath.Join(d.home, ".ws", "companion-soul")
+	personaPath := filepath.Join(soulRoot, "default", "persona.md")
+	if _, err := os.Stat(soulRoot); !os.IsNotExist(err) {
+		t.Fatalf("GET soul wrote the soul root: %v", err)
+	}
+
+	// 2b. Saving persona.md makes it the user's; reset removes it and the
+	// Soul inherits the official persona again. Only persona.md resets.
+	w := postJSON(companionSoulRoute, `{"target":"persona.md","content":"# Mine\n\n## Voice\nDry and brief.\n"}`, companionTestOrigin)
+	if w.Code != http.StatusOK {
+		t.Fatalf("persona save = %d: %s", w.Code, w.Body.String())
+	}
+	if got := getSoul(); got.PersonaSource != CompanionPersonaSourceUser || got.PersonaInherited || !strings.HasPrefix(got.Persona, "# Mine") {
+		t.Fatalf("customized soul = %+v", got)
+	}
+	if w = postJSON(companionSoulRoute, `{"action":"reset","target":"profile.md"}`, companionTestOrigin); w.Code != http.StatusBadRequest {
+		t.Fatalf("profile reset = %d, want 400", w.Code)
+	}
+	if w = postJSON(companionSoulRoute, `{"action":"reset","target":"persona.md"}`, "http://evil.test"); w.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin reset = %d, want 403", w.Code)
+	}
+	if w = postJSON(companionSoulRoute, `{"action":"bogus","target":"persona.md","content":"x"}`, companionTestOrigin); w.Code != http.StatusBadRequest {
+		t.Fatalf("unknown action = %d, want 400", w.Code)
+	}
+	w = postJSON(companionSoulRoute, `{"action":"reset","target":"persona.md"}`, companionTestOrigin)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"removed":true`) {
+		t.Fatalf("persona reset = %d: %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(personaPath); !os.IsNotExist(err) {
+		t.Fatalf("reset kept persona.md: %v", err)
+	}
+	if got := getSoul(); got.PersonaSource != CompanionPersonaSourceOfficial || !got.PersonaInherited {
+		t.Fatalf("reset soul = %+v", got)
+	}
+	if w = postJSON(companionSoulRoute, `{"action":"reset","target":"persona.md"}`, companionTestOrigin); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"removed":false`) {
+		t.Fatalf("repeat reset = %d: %s", w.Code, w.Body.String())
+	}
+
+	// 2c. Picking an official preset replaces a custom persona.md and wins
+	// over the default; "reset" clears both; unknown presets are refused.
+	presetPath := filepath.Join(soulRoot, "default", companionSoulPresetFile)
+	if w = postJSON(companionSoulRoute, `{"target":"persona.md","content":"# Mine\n"}`, companionTestOrigin); w.Code != http.StatusOK {
+		t.Fatalf("persona save = %d: %s", w.Code, w.Body.String())
+	}
+	if w = postJSON(companionSoulRoute, `{"action":"preset","presetId":"no-such-preset"}`, companionTestOrigin); w.Code != http.StatusBadRequest {
+		t.Fatalf("unknown preset = %d, want 400", w.Code)
+	}
+	if w = postJSON(companionSoulRoute, `{"action":"preset","presetId":"`+pickedPreset.ID+`"}`, "http://evil.test"); w.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin preset = %d, want 403", w.Code)
+	}
+	w = postJSON(companionSoulRoute, `{"action":"preset","presetId":"`+pickedPreset.ID+`"}`, companionTestOrigin)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"removed":true`) {
+		t.Fatalf("preset pick = %d: %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(personaPath); !os.IsNotExist(err) {
+		t.Fatalf("preset pick kept persona.md: %v", err)
+	}
+	if got := getSoul(); got.PersonaSource != CompanionPersonaSourcePreset || !got.PersonaInherited || got.ActivePresetID != pickedPreset.ID ||
+		!strings.HasPrefix(got.Persona, "# "+pickedPreset.Name+"\n") {
+		t.Fatalf("preset soul = %+v", got)
+	}
+	if w = postJSON(companionSoulRoute, `{"action":"preset","presetId":"`+CompanionPersonaPresetDefault+`"}`, companionTestOrigin); w.Code != http.StatusOK {
+		t.Fatalf("default pick = %d: %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(presetPath); !os.IsNotExist(err) {
+		t.Fatalf("default pick kept the preset file: %v", err)
+	}
+	if got := getSoul(); got.PersonaSource != CompanionPersonaSourceOfficial || got.ActivePresetID != CompanionPersonaPresetDefault {
+		t.Fatalf("default-pick soul = %+v", got)
+	}
+	if w = postJSON(companionSoulRoute, `{"action":"preset","presetId":"`+pickedPreset.ID+`"}`, companionTestOrigin); w.Code != http.StatusOK {
+		t.Fatalf("re-pick = %d: %s", w.Code, w.Body.String())
+	}
+	if w = postJSON(companionSoulRoute, `{"action":"reset","target":"persona.md"}`, companionTestOrigin); w.Code != http.StatusOK {
+		t.Fatalf("reset after pick = %d: %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(presetPath); !os.IsNotExist(err) {
+		t.Fatalf("reset kept the preset file: %v", err)
+	}
+	if got := getSoul(); got.PersonaSource != CompanionPersonaSourceOfficial || got.ActivePresetID != CompanionPersonaPresetDefault {
+		t.Fatalf("reset-after-pick soul = %+v", got)
 	}
 
 	// 3. Clean POST saves profile.md (200); suspicious POST holds in approval queue (202).

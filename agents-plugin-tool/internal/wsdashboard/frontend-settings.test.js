@@ -1686,6 +1686,14 @@ test("companion settings Memory / Soul drawer supports persona/profile edits, sc
     machineId: "m-local1234",
     souls: ["default"],
     persona: "# Mina\n\nWarm and concise.\n",
+    personaSource: "user",
+    personaInherited: false,
+    presets: [
+      { id: "official-default", name: "Companion", title: "Default", titleByLang: { en: "Default", ko: "기본" }, summary: "Warm colleague.", summaryByLang: { en: "Warm colleague." } },
+      { id: "cheeky-imp", name: "Imp", title: "Cheeky Imp", titleByLang: { en: "Cheeky Imp" }, summary: "Playful.", summaryByLang: { en: "Playful." } },
+      { id: "crisp-partner", name: "Companion", title: "Crisp Partner", titleByLang: { en: "Crisp Partner", ko: "깔끔한 파트너" }, summary: "Dry, direct, and ultra-concise.", summaryByLang: { en: "Dry, direct, and ultra-concise." } }
+    ],
+    activePresetId: "official-default",
     profile: "Prefers brief status notes.\n",
     recentEntries: [
       { id: "se-1", ts: "2026-11-28T12:00:00Z", machine_id: "m-local1234", kind: "rapport", content: "Likes dark themes." }
@@ -1742,6 +1750,20 @@ test("companion settings Memory / Soul drawer supports persona/profile edits, sc
       }
       if (url === "/api/companion/soul" && opts.method === "POST") {
         const body = JSON.parse(opts.body);
+        if (body.action === "reset") {
+          soulState.persona = "# Companion\n\n## Voice\nOfficial default.\n";
+          soulState.personaSource = "official";
+          soulState.personaInherited = true;
+          soulState.activePresetId = "official-default";
+          return { ok: true, status: 200, json: async () => ({ status: "reset", removed: true }) };
+        }
+        if (body.action === "preset") {
+          soulState.persona = body.presetId === "crisp-partner" ? "# Companion\n\n## Voice\nDry.\n" : "# Imp\n\n## Voice\nPlayful.\n";
+          soulState.personaSource = body.presetId === "official-default" ? "official" : "preset";
+          soulState.personaInherited = true;
+          soulState.activePresetId = body.presetId;
+          return { ok: true, status: 200, json: async () => ({ status: "preset", presetId: body.presetId, removed: false }) };
+        }
         if (body.content.includes("@")) {
           pendingItems.push({ id: 8, soulId: "default", target: body.target, content: body.content, findings: [{ category: "email", rule: "email_address", sample: "a@b.test" }], createdAt: "2026-11-28T12:10:00Z" });
           return { ok: true, status: 202, json: async () => ({ status: "held_pending", pending: pendingItems[pendingItems.length - 1] }) };
@@ -1804,6 +1826,57 @@ test("companion settings Memory / Soul drawer supports persona/profile edits, sc
   assert.ok(personaEditor && personaEditor.value.includes("# Mina"));
   assert.ok(profileEditor && profileEditor.value.includes("Prefers brief status notes."));
   assert.ok(content.querySelector("[data-companion-soul-shards]"), "recent Soul shards list renders");
+
+  // 1b. A customized persona shows its source and a Reset button; reset
+  // removes persona.md and the editor falls back to the inherited default.
+  assert.equal(content.querySelector("[data-companion-persona-source]")?.dataset.companionPersonaSource, "user");
+  assert.equal(content.querySelector('[data-companion-soul-save="persona.md"]').disabled, false);
+  // While customized, the preset picks render but none is marked active.
+  assert.ok(content.querySelector("[data-companion-persona-presets]"), "preset picker renders");
+  assert.equal(content.querySelector('[data-companion-persona-preset="official-default"]').className.includes("active"), false);
+  assert.equal(content.querySelectorAll("[data-companion-persona-preset]").length, 3, "every preset renders a pick");
+  content.querySelector("[data-companion-persona-reset]").click();
+  await flush();
+  await flush();
+  await flush();
+  const resetCall = calls.find(c => c.url === "/api/companion/soul" && c.method === "POST");
+  assert.deepEqual(JSON.parse(resetCall.body), { action: "reset", soulId: "default", target: "persona.md" });
+  assert.equal(content.querySelector("[data-companion-persona-source]")?.dataset.companionPersonaSource, "official");
+  assert.equal(content.querySelector("[data-companion-persona-reset]"), null, "inherited persona has nothing to reset");
+  const inheritedEditor = content.querySelector('[data-companion-soul-editor="persona.md"]');
+  assert.ok(inheritedEditor.value.includes("Official default."));
+  const inheritedSave = content.querySelector('[data-companion-soul-save="persona.md"]');
+  assert.equal(inheritedSave.disabled, true, "an untouched inherited persona is not saved");
+  inheritedEditor.value = inheritedEditor.value + "Tweaked.\n";
+  inheritedEditor.dispatchEvent(new FakeEvent("input"));
+  assert.equal(inheritedSave.disabled, false, "editing an inherited persona enables Save");
+
+  // 1c. The default preset is active while inherited; picking another
+  // preset posts it, marks it active, and offers Reset to default.
+  assert.ok(content.querySelector('[data-companion-persona-preset="official-default"]').className.includes("active"));
+  const impBtn = content.querySelector('[data-companion-persona-preset="cheeky-imp"]');
+  assert.ok(impBtn.textContent.includes("Cheeky Imp") && impBtn.textContent.includes("Playful."));
+  impBtn.click();
+  await flush();
+  await flush();
+  await flush();
+  const presetCall = calls.find(c => c.url === "/api/companion/soul" && c.method === "POST" && JSON.parse(c.body).action === "preset");
+  assert.deepEqual(JSON.parse(presetCall.body), { action: "preset", soulId: "default", presetId: "cheeky-imp" });
+  assert.equal(content.querySelector("[data-companion-persona-source]")?.dataset.companionPersonaSource, "preset");
+  assert.ok(content.querySelector('[data-companion-persona-preset="cheeky-imp"]').className.includes("active"));
+  assert.ok(content.querySelector("[data-companion-persona-reset]"), "a picked preset can be reset to default");
+  assert.ok(content.querySelector('[data-companion-soul-editor="persona.md"]').value.includes("# Imp"));
+  // crisp-partner is a working pick too: it posts and becomes the active one.
+  const crispBtn = content.querySelector('[data-companion-persona-preset="crisp-partner"]');
+  assert.ok(crispBtn.textContent.includes("Crisp Partner") && crispBtn.textContent.includes("Dry, direct, and ultra-concise."));
+  crispBtn.click();
+  await flush();
+  await flush();
+  await flush();
+  const crispCall = calls.filter(c => c.url === "/api/companion/soul" && c.method === "POST" && JSON.parse(c.body).action === "preset").pop();
+  assert.deepEqual(JSON.parse(crispCall.body), { action: "preset", soulId: "default", presetId: "crisp-partner" });
+  assert.ok(content.querySelector('[data-companion-persona-preset="crisp-partner"]').className.includes("active"));
+  assert.equal(content.querySelector('[data-companion-persona-preset="cheeky-imp"]').className.includes("active"), false);
 
   // 2. Saving profile.md with suspicious email triggers scrubber hold_pending notice.
   profileEditor.value = "Mail a@b.test";

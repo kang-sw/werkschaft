@@ -184,6 +184,20 @@ func (e companionSchemaEval) validObject(node map[string]any, value any) bool {
 			if list, isList := value.([]any); isList {
 				ok = float64(len(list)) <= arg.(float64)
 			}
+		case "minProperties":
+			if object, isObject := value.(map[string]any); isObject {
+				ok = float64(len(object)) >= arg.(float64)
+			}
+		case "maxProperties":
+			if object, isObject := value.(map[string]any); isObject {
+				ok = float64(len(object)) <= arg.(float64)
+			}
+		case "propertyNames":
+			if object, isObject := value.(map[string]any); isObject {
+				for name := range object {
+					ok = ok && e.valid(arg, name)
+				}
+			}
 		case "prefixItems":
 			if list, isList := value.([]any); isList {
 				for i, sub := range arg.([]any) {
@@ -582,9 +596,32 @@ func TestCompanionAuthoringPackSchemaMatchesValidator(t *testing.T) {
 		{"eye set", `{"eyesets":{"round":{"sclera":"r.png","irisFill":"i.webp"}}}`},
 		{"bad eye-set raster", `{"eyesets":{"round":{"sclera":"r.exe"}}}`},
 		{"null eye set", `{"eyesets":{"round":null}}`},
+		{"persona voice_by_lang", `{"persona":{"name":"Kit","voice":"Dry.","voice_by_lang":{"ko":"해요체로 짧게.","pt-BR":"Leve e direto."}}}`},
 	} {
 		doc := companionOverlay(minimal, companionParse(t, tc.patch))
 		agree(tc.name, doc)
+	}
+	// The schema flags voice_by_lang entries the validator drops alone (the
+	// pack still loads, so these are lint, not rejections).
+	var many strings.Builder
+	for i := 0; i <= companionVoiceByLangMaxEntries; i++ {
+		fmt.Fprintf(&many, `%s"x%c%c":"v"`, map[bool]string{true: "", false: ","}[i == 0], 'a'+i/26, 'a'+i%26)
+	}
+	for name, patch := range map[string]string{
+		"bad voice_by_lang tag":        `{"persona":{"voice_by_lang":{"not a tag":"v"}}}`,
+		"blank voice_by_lang overlay":  `{"persona":{"voice_by_lang":{"ko":""}}}`,
+		"long voice_by_lang overlay":   `{"persona":{"voice_by_lang":{"ko":"` + strings.Repeat("a", companionPersonaVoiceMax+1) + `"}}}`,
+		"too many voice_by_lang tags":  `{"persona":{"voice_by_lang":{` + many.String() + `}}}`,
+		"non-string voice_by_lang tag": `{"persona":{"voice_by_lang":{"ko":5}}}`,
+	} {
+		doc := companionOverlay(minimal, companionParse(t, patch))
+		if schema.valid(schema.root, doc) {
+			t.Errorf("%s: the schema accepts it", name)
+		}
+		id, _ := doc["id"].(string)
+		if _, _, err := validateCompanionManifest(companionEncode(t, doc), id); err != nil {
+			t.Errorf("%s: the validator rejects the pack instead of dropping the entry: %v", name, err)
+		}
 	}
 	// The paper-doll fixture, every section at once, matches the schema.
 	if !schema.valid(schema.root, companionDecode(t, []byte(companionKitFixture))) {
@@ -759,6 +796,7 @@ func TestCompanionAuthoringSchemaConstantsMatchValidators(t *testing.T) {
 		{"raster", packDefs["raster"].(map[string]any)["pattern"].(string), companionRaster.String()},
 		{"match tag", packDefs["matchTags"].(map[string]any)["items"].(map[string]any)["allOf"].([]any)[0].(map[string]any)["pattern"].(string), companionMatchTag.String()},
 		{"language tag", pack["properties"].(map[string]any)["persona"].(map[string]any)["properties"].(map[string]any)["quipLanguage"].(map[string]any)["pattern"].(string), companionLanguageTag.String()},
+		{"voice_by_lang key", pack["properties"].(map[string]any)["persona"].(map[string]any)["properties"].(map[string]any)["voice_by_lang"].(map[string]any)["propertyNames"].(map[string]any)["pattern"].(string), companionLanguageTag.String()},
 		{"entry id", marketDefs["entry"].(map[string]any)["properties"].(map[string]any)["id"].(map[string]any)["pattern"].(string), companionPackID.String()},
 		{"sha256", marketDefs["entry"].(map[string]any)["properties"].(map[string]any)["sha256"].(map[string]any)["pattern"].(string), companionSHA256.String()},
 	} {
@@ -770,14 +808,17 @@ func TestCompanionAuthoringSchemaConstantsMatchValidators(t *testing.T) {
 	persona := packProps["persona"].(map[string]any)["properties"].(map[string]any)
 	canvasItems := packProps["canvas"].(map[string]any)["items"].(map[string]any)
 	entryProps := marketDefs["entry"].(map[string]any)["properties"].(map[string]any)
+	voiceByLang := persona["voice_by_lang"].(map[string]any)
 	for name, pair := range map[string][2]any{
-		"persona name":     {persona["name"].(map[string]any)["maxLength"], float64(companionPersonaNameMax)},
-		"persona voice":    {persona["voice"].(map[string]any)["maxLength"], float64(companionPersonaVoiceMax)},
-		"url length":       {marketDefs["httpsUrl"].(map[string]any)["maxLength"], float64(companionURLMax)},
-		"path length":      {entryProps["path"].(map[string]any)["maxLength"], float64(companionArchivePathMax)},
-		"packs per market": {market["properties"].(map[string]any)["packs"].(map[string]any)["maxItems"], float64(companionMaxPacks)},
-		"canvas minimum":   {canvasItems["minimum"], float64(64)},
-		"canvas maximum":   {canvasItems["maximum"], float64(2048)},
+		"persona name":          {persona["name"].(map[string]any)["maxLength"], float64(companionPersonaNameMax)},
+		"persona voice":         {persona["voice"].(map[string]any)["maxLength"], float64(companionPersonaVoiceMax)},
+		"voice_by_lang entries": {voiceByLang["maxProperties"], float64(companionVoiceByLangMaxEntries)},
+		"voice_by_lang overlay": {voiceByLang["additionalProperties"].(map[string]any)["maxLength"], float64(companionPersonaVoiceMax)},
+		"url length":            {marketDefs["httpsUrl"].(map[string]any)["maxLength"], float64(companionURLMax)},
+		"path length":           {entryProps["path"].(map[string]any)["maxLength"], float64(companionArchivePathMax)},
+		"packs per market":      {market["properties"].(map[string]any)["packs"].(map[string]any)["maxItems"], float64(companionMaxPacks)},
+		"canvas minimum":        {canvasItems["minimum"], float64(64)},
+		"canvas maximum":        {canvasItems["maximum"], float64(2048)},
 	} {
 		if pair[0] != pair[1] {
 			t.Errorf("%s: schema %v, validator %v", name, pair[0], pair[1])
@@ -854,6 +895,8 @@ func TestCompanionAuthoringGuideCaps(t *testing.T) {
 		"Archive path length":              fmt.Sprintf("%d characters", companionArchivePathMax),
 		"Persona name":                     fmt.Sprintf("%d characters", companionPersonaNameMax),
 		"Persona voice":                    fmt.Sprintf("%d characters", companionPersonaVoiceMax),
+		"Persona `voice_by_lang` entries":  fmt.Sprint(companionVoiceByLangMaxEntries),
+		"Persona `voice_by_lang` overlay":  fmt.Sprintf("%d characters", companionPersonaVoiceMax),
 		"Source zip download":              companionGuideSize(int(companionSourceCap)),
 		"External pack zip download":       companionGuideSize(int(companionPackZipCap)),
 		"Download time":                    fmt.Sprintf("%d s", int(companionFetchTimeout.Seconds())),

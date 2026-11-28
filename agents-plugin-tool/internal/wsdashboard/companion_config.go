@@ -56,7 +56,7 @@ func IsCompanionConfigKey(key string) bool {
 // SendCompanionConfigChange) after committing a change: the companion keys
 // and the runner's global keys. The wire route keeps its companion name.
 func IsDaemonGlobalConfigKey(key string) bool {
-	return IsCompanionConfigKey(key) || isAgentGlobalConfigKey(key)
+	return IsCompanionConfigKey(key) || isAgentGlobalConfigKey(key) || key == wsconfig.ItemWorkflowLang
 }
 
 func isAgentGlobalConfigKey(key string) bool {
@@ -102,6 +102,9 @@ type CompanionConfig struct {
 	// SoulDir optionally overrides the root directory storing Portable Souls
 	// (empty defaults to ~/.ws/companion-soul).
 	SoulDir string `json:"soulDir"`
+	// Lang is the global workflow.lang value, held here so persona
+	// resolution reads memory instead of the config file on every wake.
+	Lang string `json:"lang,omitempty"`
 }
 
 // MarshalJSON adds sourceEntries: each entry of Sources as the source routes

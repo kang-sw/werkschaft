@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -231,6 +232,11 @@ func observedBefore(a, b ObservedRecord) bool {
 	return observationKey(a) < observationKey(b)
 }
 
+// summarizeObserved builds every agent's model afresh. The models it returns
+// are published read-only: State replaces them whole on the next summary and
+// never writes into one, so Snapshot shares them instead of cloning. Each
+// History is clipped to its length so a reader's append reallocates rather
+// than writing into a backing array another snapshot shares.
 func summarizeObserved(records map[string]ObservedRecord) map[string]*ObservedModel {
 	grouped := map[string][]ObservedRecord{}
 	for _, r := range records {
@@ -246,6 +252,7 @@ func summarizeObserved(records map[string]ObservedRecord) map[string]*ObservedMo
 			}
 			model.Current = r.ModelObservation
 		}
+		model.History = slices.Clip(model.History)
 		out[id] = model
 	}
 	return out

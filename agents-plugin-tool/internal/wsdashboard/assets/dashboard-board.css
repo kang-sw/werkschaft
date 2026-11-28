@@ -488,12 +488,6 @@ details.entry-panel[open][data-max] > .doc-body > .mockup-wrap { flex: 1 1 0; he
 .wc-badge[hidden] { display: none; }
 .ibtn.wc-att:has(.wc-badge:not([hidden])) { opacity: 1; color: var(--wb-fail); }
 .tnew + .tnew { margin-left: 2px; }
-/* the holder card's terminals whose session is gone */
-.hdterms { display: grid; gap: 2px; }
-.hdsub { font-size: 11.5px; font-weight: 800; color: var(--wb-muted-fg); padding: 0 2px; }
-.hdrow > .hdbtns { grid-area: stop; display: inline-flex; gap: 4px; }
-.hdcwd { font-family: var(--wb-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-
 /* Designated-Y free-canvas virtual scrolling (dashboard-board-anchor.js).
    #bcol is the single native scroll container (scrollbar hidden; #bdial is
    the index-based navigation rail). Active window cards lay out at

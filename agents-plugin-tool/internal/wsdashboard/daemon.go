@@ -339,9 +339,22 @@ type Daemon struct {
 	// companionRecall optionally overrides the per-wake <<<RECALL>>> snippet provider.
 	companionRecallMu sync.RWMutex
 	companionRecall   CompanionRecallProvider
+	// companionBodyPersona* track the persona the live companion-body was
+	// launched with, so a later change rides the next wake as an override.
+	companionBodyPersonaMu       sync.Mutex
+	companionBodyPersonaFP       string
+	companionBodyPersonaDiverged bool
 	// companionWake, when bound by cmd/ws-mcp, wakes the Tier-1 companion burst
 	// session on incoming user messages or release with unread inbox.
 	companionWake atomic.Pointer[func(reason string)]
+	// companionMessengerClosed, when bound by cmd/ws-mcp, gets one debounced
+	// call when the last Messenger closes while the companion holds the phone
+	// (companion_phone_presence.go); companionPresence owns the debounce.
+	companionMessengerClosed atomic.Pointer[func(holder string)]
+	companionPresence        companionPresenceDebounce
+	// messengerRing persists Messenger history (companion_messenger_ring.go).
+	messengerRingMu sync.Mutex
+	messengerRing   *companionMessengerRing
 	// companionAgents, when bound by cmd/ws-mcp, computes the companion tier
 	// readback (companion_agents_route.go).
 	companionAgents atomic.Pointer[func() any]
@@ -516,6 +529,9 @@ type Daemon struct {
 	holders          HolderHost
 	fullStopMu       sync.Mutex
 	fullStopAccepted bool
+	// holderTrace is GET /holders/metrics's in-memory sample ring
+	// (holders_metrics.go).
+	holderTrace holderTrace
 	// terminals are the shells on holder PTYs the session pages show, nil
 	// unless the holder manager can host them (terminals.go); shell picks a
 	// new one's shell.

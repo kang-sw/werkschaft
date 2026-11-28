@@ -708,6 +708,8 @@
         if (usage && usageGutter) { e.preventDefault(); railPopOpen("usage", usage); return; }
         var settings = t.closest && t.closest(".settings-toggle");
         if (settings && gmenu) { e.preventDefault(); railPopOpen("settings", settings); return; }
+        var holders = t.closest && t.closest(".hd-trigger");
+        if (holders) { e.preventDefault(); railPopOpen("holders", holders); return; }
         var gear = t.closest && t.closest("[data-scope-entry]");
         if (gear && root.hasAttribute("data-can-control")) {
           e.preventDefault();

@@ -112,6 +112,50 @@
   }
   st._applyServerHeld = applyServerHeld;
   st._revertHold = revertHold;
+  // A hold flip re-renders its topic, and page.tmpl changes only the hold
+  // markers there: the item's wb-held class, its toggle's pressed state and
+  // labels, the topic bar's ask chips (hidden, count) and the section's
+  // data-th. holdOnly(prev, next) says two rendered topics differ in nothing
+  // else, so the board swap keeps the live section (its frames stay mounted
+  // and the free canvas keeps its layout) and adoptHolds takes the item
+  // markers; the re-run of this script then redraws the chips.
+  function holdAttrSkip(el, name) {
+    if (name === "data-th") return el.matches("section.topic");
+    if (name === "hidden") return el.hasAttribute("data-tbar-ask");
+    return el.hasAttribute("data-wb-hold") && (name === "aria-pressed" || name === "title" || name === "aria-label");
+  }
+  function holdClass(el) {
+    return (el.getAttribute("class") || "").split(/\s+/).filter(function (c) { return c && c !== "wb-held"; }).join(" ");
+  }
+  function holdSame(a, b) {
+    if (a.nodeType !== b.nodeType) return false;
+    if (a.nodeType !== 1) {
+      if (a.nodeValue === b.nodeValue) return true;
+      var p = a.parentNode;
+      return a.nodeType === 3 && !!p && p.classList.contains("n") && !!p.parentNode && p.parentNode.hasAttribute("data-tbar-ask");
+    }
+    if (a.tagName !== b.tagName) return false;
+    var names = {}, i;
+    for (i = 0; i < a.attributes.length; i++) names[a.attributes[i].name] = true;
+    for (i = 0; i < b.attributes.length; i++) names[b.attributes[i].name] = true;
+    for (var name in names) {
+      if (holdAttrSkip(a, name)) continue;
+      if (name === "class" ? holdClass(a) !== holdClass(b) : a.getAttribute(name) !== b.getAttribute(name)) return false;
+    }
+    var ac = a.childNodes, bc = b.childNodes;
+    if (ac.length !== bc.length) return false;
+    for (i = 0; i < ac.length; i++) if (!holdSame(ac[i], bc[i])) return false;
+    return true;
+  }
+  st.holdOnly = function (prev, next) { return !!(prev && next && prev.nodeType === 1 && holdSame(prev, next)); };
+  st.adoptHolds = function (live, next) {
+    var at = {};
+    Array.prototype.forEach.call(live.querySelectorAll('[id^="item-"]'), function (el) { at[el.id] = el; });
+    Array.prototype.forEach.call(next.querySelectorAll(".wb-hold-toggle[data-wb-hold]"), function (b) {
+      var src = b.closest('[id^="item-"]'), el = src && at[src.id];
+      if (el) syncHoldDOM(el, domHeld(src));
+    });
+  };
   function postHold(rawId, next, prevHeld, acceptGone) {
     var nid = normItemId(rawId);
     if (!nid) return;

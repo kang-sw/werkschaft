@@ -453,7 +453,7 @@ func (d *Daemon) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 	if isAgentGlobalConfigKey(mutation.Key) {
 		d.reloadAgentGlobalConfig()
 	}
-	if IsCompanionConfigKey(mutation.Key) {
+	if IsCompanionConfigKey(mutation.Key) || mutation.Key == wsconfig.ItemWorkflowLang {
 		if err := d.refreshCompanion(); err != nil {
 			fmt.Fprintf(d.log, "dashboard: refresh companion settings: %v\n", err)
 		}

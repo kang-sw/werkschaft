@@ -36,10 +36,10 @@ func (c *conv) handle(ev Event) {
 		c.lineEnd(ev.Seq)
 	case ev.ReplayDone:
 		c.replayDone(ev.ReplayLost)
-	case ev.agyReplay != nil:
+	case ev.acpReplay != nil:
 		if c.replaying {
-			c.modelWaitPending = ev.agyReplay.pendingTools
-			if ev.agyReplay.promptOpen {
+			c.modelWaitPending = ev.acpReplay.pendingTools
+			if ev.acpReplay.promptOpen {
 				// The prompt can still be waiting for its first content.
 				c.beginTurn(true)
 			}

@@ -13,7 +13,7 @@ import "testing"
 // moveBefore nothing is kept. The cases execute under node
 // when it is installed.
 func TestBoardKeepsUnchangedEntryFrames(t *testing.T) {
-	src := dashboardFuncs(t, "openKey", "restoreOpenOne", "restoreOpen", "forgetOpen", "topicKey", "topicSeen", "morphBoard", "frameKeep", "frameKept", "frameChain", "frameGraftable", "frameGrafts", "settleMoves", "frameGraft", "frameNext", "mountFrame")
+	src := dashboardFuncs(t, "openKey", "restoreOpenOne", "restoreOpen", "forgetOpen", "topicKey", "topicSeen", "holdEcho", "morphBoard", "frameKeep", "frameKept", "frameChain", "frameGraftable", "frameGrafts", "settleMoves", "frameGraft", "frameNext", "mountFrame")
 	runNode(t, "keyed frame reuse", frameDOM+`
 function isFrame(n, kind) { return n.classList.contains("doc-frame") && (!kind || n.tagName === kind); }
 function entry(n) { return /^entry:/.test(n.getAttribute("data-doc-key") || ""); }

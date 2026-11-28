@@ -23,6 +23,18 @@ const (
 
 	companionDeadlineTickInterval = 10 * time.Second
 	companionClosedDelegationCap  = 200
+
+	// companionBodyRotateTurns is how many settled companion-body turns run
+	// on one harness session before the runtime rotates it (same harness,
+	// ring checkpoint) at an idle boundary with the phone on the desk.
+	companionBodyRotateTurns = 40
+	// companionMessengerCloseFallback bounds how long the companion may keep
+	// the phone after the Messenger closed and its close-notification turn
+	// was delivered; then the lease is force-released.
+	companionMessengerCloseFallback = 90 * time.Second
+	// companionHandoffDigestMessages caps the Messenger messages a handoff
+	// checkpoint carries.
+	companionHandoffDigestMessages = 6
 )
 
 type companionLaunchSpec struct {
@@ -59,6 +71,8 @@ type companionRuntime struct {
 	configOpts wsconfig.Options
 	// Test seam: overrides deadline tick interval when > 0.
 	tickInterval time.Duration
+	// Test seam: overrides companionMessengerCloseFallback when > 0.
+	messengerCloseFallback time.Duration
 
 	// Serialization mutexes ordered strictly before phone.mu and r.mu:
 	//   bodyLaunchMu / workLaunchMu / inFlightMu -> phone.mu -> r.mu -> wsagent locks
@@ -74,6 +88,14 @@ type companionRuntime struct {
 	bodyWakeUnreadID string
 	bodyWaking       bool
 	closedBodyKeys   map[string]struct{}
+	// bodyTurns counts settled turns on the current body harness session
+	// toward companionBodyRotateTurns.
+	bodyTurns int
+	// bodyHandoffs counts cross-harness/tier handoffs (observability/tests).
+	bodyHandoffs int
+	// bodyPrevID is the body that last closed or crashed; the next launch
+	// carries its checkpoint so the conversation continues.
+	bodyPrevID string
 
 	workReplyID string
 	workWSKey   string
@@ -151,6 +173,15 @@ func (r *companionRuntime) Start() {
 	if interval <= 0 {
 		interval = companionDeadlineTickInterval
 	}
+	// Reattach the companion-body a previous daemon left open (and close any
+	// duplicates) before the first wake, so a restart never adds a session.
+	r.spawn(func() {
+		if d := r.liveDaemon(); d != nil && r.agents != nil {
+			r.bodyLaunchMu.Lock()
+			r.reattachBodyLocked()
+			r.bodyLaunchMu.Unlock()
+		}
+	})
 	r.spawn(func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -194,11 +225,11 @@ func (r *companionRuntime) IsHolderAlive(holder string) bool {
 		return false
 	}
 	if holder == bodyKey && bodyID != "" {
-		return r.agents != nil && r.agents.IsConversationLive(bodyID)
+		return r.agents != nil && r.agents.IsConversationOpen(bodyID)
 	}
 	if r.agents != nil {
 		replyID := wsmailbox.ReplyID(holder)
-		if r.agents.IsConversationLive(replyID) {
+		if r.agents.IsConversationOpen(replyID) {
 			return true
 		}
 		if _, known := r.agents.CompanionRecord(replyID); known {
@@ -276,6 +307,9 @@ func (r *companionRuntime) OnUserWake(reason string) {
 		return
 	}
 	msg := envelope + "\n\n" + formatBodyUserWakePrompt(unread, reason)
+	if d.CompanionMessengerOpen() {
+		msg += "\n" + companionMessengerOpenNote
+	}
 	r.mu.Lock()
 	if r.bodyReplyID == bodyID {
 		r.bodyPendingTurns++
@@ -382,10 +416,21 @@ func (r *companionRuntime) handleCompanionTurnEnd(role, replyID, wsKey, status, 
 		// lease cleanly via phone_putdown before TurnEnd settled, a user message
 		// may have arrived while the turn was running (suppressed to avoid
 		// preempting the turn); trigger an unread re-wake here if unread
-		// messages remain and no queued turn is pending.
-		released := d.CompanionForceRelease(wsKey)
+		// messages remain and no queued turn is pending. While the Messenger
+		// is open, CompanionReleaseOnTurnEnd keeps a held phone in hand after
+		// a successful settle; a failed or zero-progress turn always releases.
+		var released bool
+		if failed {
+			released = d.CompanionForceRelease(wsKey)
+		} else {
+			released = d.CompanionReleaseOnTurnEnd(wsKey)
+		}
 		if !released && !stillPending && phone.UnreadAgentCount() > 0 && !phone.Snapshot().Unavailable {
 			r.spawn(func() { r.OnUserWake("release-unread") })
+			return
+		}
+		if !stillPending {
+			r.maybeRotateBody(d, replyID, wsKey)
 		}
 	case mcp.CompanionRoleWork:
 		// A Tier-2 turn end without ws/delegation.report leaves the delegation
@@ -413,6 +458,7 @@ func (r *companionRuntime) handleCompanionClose(role, replyID, wsKey, reason str
 		}
 		if replyID != "" && replyID == r.bodyReplyID {
 			matchedCurrent = true
+			r.bodyPrevID = replyID
 			r.bodyReplyID = ""
 			r.bodyWSKey = ""
 			r.bodyPendingTurns = 0
@@ -695,7 +741,9 @@ func (r *companionRuntime) checkDeadlines(now time.Time) {
 	r.mu.Unlock()
 
 	hasChildren := workID != "" && r.agents != nil && r.agents.HasLiveChildren(workID)
-	_, leaseExpired, delegationExpired, hasUnread := d.CompanionPhone().ExpireIfPastDeadline(now, hasChildren)
+	// The daemon wrapper also ages out stale Messenger presence and puts the
+	// stage's phone down when an expired lease held it.
+	leaseExpired, delegationExpired, hasUnread := d.CompanionExpireIfPastDeadline(now, hasChildren)
 	if delegationExpired && activeID != "" {
 		r.failActiveDelegation(activeID, "in-flight delegation deadline expired")
 		return
@@ -711,23 +759,114 @@ func (r *companionRuntime) ensureBodySession(d *wsdashboard.Daemon) (replyID, ws
 
 	r.mu.Lock()
 	existingID, existingKey := r.bodyReplyID, r.bodyWSKey
+	idle := r.bodyPendingTurns == 0
 	r.mu.Unlock()
-	if existingID != "" && existingKey != "" && r.agents.IsConversationLive(existingID) {
-		return existingID, existingKey, nil
+	if existingID == "" {
+		// A previous daemon's body (or one this runtime lost track of) is
+		// reattached before anything new is launched.
+		existingID, existingKey = r.reattachBodyLocked()
 	}
 
 	spec, ok := r.pickLaunchSpec(mcp.CompanionRoleBody)
+	if existingID != "" && existingKey != "" && r.agents.IsConversationOpen(existingID) {
+		rec, known := r.agents.CompanionRecord(existingID)
+		if !ok || !known || !idle || companionSpecMatches(rec, spec) {
+			return existingID, existingKey, nil
+		}
+		// The configured body tier/harness changed: hand the conversation
+		// over to a session on the new spec, at an idle boundary only.
+		fmt.Fprintf(r.logw, "companion runtime: companion-body spec changed (%s/%s -> %s/%s); handing off\n", rec.Backend, rec.Model, spec.Backend, spec.Model)
+	}
 	if !ok {
 		return "", "", fmt.Errorf("no available harness backend for companion-body")
 	}
+	if existingID == "" {
+		r.mu.Lock()
+		existingID = r.bodyPrevID
+		r.mu.Unlock()
+	}
+	return r.launchBodyLocked(d, spec, existingID, existingKey)
+}
+
+// companionSpecMatches reports whether rec runs on spec. An empty spec field
+// (harness default) matches anything.
+func companionSpecMatches(rec wsagent.Record, spec companionLaunchSpec) bool {
+	eq := func(have, want string) bool { return want == "" || have == want }
+	return eq(rec.Backend, spec.Backend) && eq(rec.Model, spec.Model) && eq(rec.Effort, spec.Effort) && eq(rec.Provider, spec.Provider)
+}
+
+// reattachBodyLocked adopts the newest open companion-body record that is
+// not known closed as the body session, and closes every other open
+// companion-body record (stale duplicates from restarts or crashes). It
+// returns the adopted ids, or empty strings when there is none. The caller
+// holds bodyLaunchMu.
+func (r *companionRuntime) reattachBodyLocked() (string, string) {
+	if r.agents == nil {
+		return "", ""
+	}
+	recs := r.agents.CompanionSessions(mcp.CompanionRoleBody)
+	r.mu.Lock()
+	currentID, currentKey := r.bodyReplyID, r.bodyWSKey
+	chosenID, chosenKey := currentID, currentKey
+	var stale []wsagent.Record
+	for _, rec := range recs {
+		if rec.ReplyID == currentID {
+			continue
+		}
+		_, closedKey := r.closedBodyKeys[rec.WSKey]
+		if chosenID == "" && rec.WSKey != "" && !closedKey {
+			chosenID, chosenKey = rec.ReplyID, rec.WSKey
+			continue
+		}
+		stale = append(stale, rec)
+	}
+	for _, rec := range stale {
+		if rec.WSKey != "" {
+			r.closedBodyKeys[rec.WSKey] = struct{}{}
+		}
+	}
+	adopted := currentID == "" && chosenID != ""
+	if adopted {
+		r.bodyReplyID, r.bodyWSKey = chosenID, chosenKey
+		r.bodyPendingTurns, r.bodyWakeUnreadID, r.bodyTurns = 0, "", 0
+	}
+	r.mu.Unlock()
+	if adopted {
+		fmt.Fprintf(r.logw, "companion runtime: reattached companion-body %s\n", chosenID)
+	}
+	for _, rec := range stale {
+		if _, err := r.agents.CloseConversation(rec.ReplyID); err != nil {
+			fmt.Fprintf(r.logw, "companion runtime: close stale companion-body %s: %v\n", rec.ReplyID, err)
+		}
+	}
+	return chosenID, chosenKey
+}
+
+// launchBodyLocked starts a companion-body session on spec. When prevID
+// names an earlier body (a tier/harness change, or one whose harness died),
+// the new session's launch prompt carries a checkpoint of prevID's dialog
+// plus the Messenger digest, the body ids swap atomically, a phone lease
+// held by prevKey moves to the new key, and prevID is closed. The caller
+// holds bodyLaunchMu.
+func (r *companionRuntime) launchBodyLocked(d *wsdashboard.Daemon, spec companionLaunchSpec, prevID, prevKey string) (string, string, error) {
 	var sheet wsdashboard.CharacteristicSheet
 	var lang string
+	var digest string
 	if d != nil {
 		sheet, lang, _ = d.CompanionActiveSoulLaunch()
+		digest = d.CompanionMessengerDigest(companionHandoffDigestMessages)
+	}
+	prompt := wsdashboard.BuildCompanionBodyLaunchPrompt(sheet, lang)
+	if prevID != "" {
+		if checkpoint, err := r.agents.CompanionHandoffCheckpoint(prevID, digest); err == nil {
+			prompt += "\n\n" + companionHandoffPreamble + "\n\n" + checkpoint
+		} else {
+			fmt.Fprintf(r.logw, "companion runtime: handoff checkpoint from %s: %v\n", prevID, err)
+		}
 	}
 	st, err := r.agents.CreateLead(spec.Backend, r.launchRoot(d), wsagent.LeadOptions{
 		CompanionRole:         mcp.CompanionRoleBody,
-		CompanionSystemPrompt: wsdashboard.BuildCompanionBodyLaunchPrompt(sheet, lang),
+		CompanionSystemPrompt: prompt,
 		Model:                 spec.Model,
 		Provider:              spec.Provider,
 		Effort:                spec.Effort,
@@ -742,9 +881,125 @@ func (r *companionRuntime) ensureBodySession(d *wsdashboard.Daemon) (replyID, ws
 	r.mu.Lock()
 	r.bodyReplyID = st.ID
 	r.bodyWSKey = rec.WSKey
+	r.bodyPendingTurns, r.bodyWakeUnreadID, r.bodyTurns = 0, "", 0
+	r.bodyPrevID = ""
 	r.bodyLaunches++
+	if prevKey != "" {
+		r.closedBodyKeys[prevKey] = struct{}{}
+	}
+	if prevID != "" {
+		r.bodyHandoffs++
+	}
 	r.mu.Unlock()
+	if prevKey != "" && d != nil {
+		d.CompanionPhone().MigrateLease(prevKey, rec.WSKey)
+	}
+	if prevID != "" && r.agents.IsConversationOpen(prevID) {
+		if _, err := r.agents.CloseConversation(prevID); err != nil {
+			fmt.Fprintf(r.logw, "companion runtime: close handed-off companion-body %s: %v\n", prevID, err)
+		}
+	}
 	return st.ID, rec.WSKey, nil
+}
+
+// maybeRotateBody counts a settled body turn and, every
+// companionBodyRotateTurns turns, rotates the body's harness session (same
+// harness, ring checkpoint) while the phone is on the desk.
+func (r *companionRuntime) maybeRotateBody(d *wsdashboard.Daemon, replyID, wsKey string) {
+	r.mu.Lock()
+	if replyID != r.bodyReplyID {
+		r.mu.Unlock()
+		return
+	}
+	r.bodyTurns++
+	due := r.bodyTurns >= companionBodyRotateTurns && r.bodyPendingTurns == 0
+	r.mu.Unlock()
+	if !due || d.CompanionPosture(wsKey) == wsdashboard.CompanionPosturePhone {
+		return
+	}
+	res := r.agents.RotateCompanion(wsKey)
+	if res.Status == "queued" {
+		r.mu.Lock()
+		if replyID == r.bodyReplyID {
+			r.bodyTurns = 0
+		}
+		r.mu.Unlock()
+		return
+	}
+	fmt.Fprintf(r.logw, "companion runtime: rotate companion-body (%s): %s\n", res.Status, res.Reason)
+}
+
+// OnMessengerClosed is the daemon's debounced notice that the last Messenger
+// closed while holder had the phone in hand. Must not block the caller.
+func (r *companionRuntime) OnMessengerClosed(holder string) {
+	r.spawn(func() { r.handleMessengerClosed(holder) })
+}
+
+// handleMessengerClosed gives companion-body exactly one turn to wrap up
+// and put the phone down, with a fallback that force-releases the lease if
+// the turn never does. A body already mid-turn needs no extra turn: its turn
+// end releases now that the Messenger is closed.
+func (r *companionRuntime) handleMessengerClosed(holder string) {
+	d := r.liveDaemon()
+	if d == nil || r.agents == nil {
+		return
+	}
+	r.mu.Lock()
+	bodyID, bodyKey := r.bodyReplyID, r.bodyWSKey
+	busy := r.bodyPendingTurns > 0 || r.bodyWaking
+	r.mu.Unlock()
+	if bodyID == "" || holder != bodyKey || busy {
+		return
+	}
+	if !d.CompanionDirectorEnabled() {
+		d.CompanionForceRelease(bodyKey)
+		return
+	}
+	r.mu.Lock()
+	if r.bodyReplyID == bodyID {
+		r.bodyPendingTurns++
+	}
+	r.mu.Unlock()
+	if _, err := r.agents.Deliver(bodyID, wsagent.Delivery{Text: formatBodyMessengerClosedPrompt()}); err != nil {
+		r.mu.Lock()
+		if r.bodyReplyID == bodyID && r.bodyPendingTurns > 0 {
+			r.bodyPendingTurns--
+		}
+		r.mu.Unlock()
+		fmt.Fprintf(r.logw, "companion runtime: deliver messenger-closed notice: %v\n", err)
+		d.CompanionForceRelease(bodyKey)
+		return
+	}
+	fallback := r.messengerCloseFallback
+	if fallback <= 0 {
+		fallback = companionMessengerCloseFallback
+	}
+	r.spawn(func() {
+		t := time.NewTimer(fallback)
+		defer t.Stop()
+		select {
+		case <-r.stopCh:
+			return
+		case <-t.C:
+		}
+		snap := d.CompanionPhone().Snapshot()
+		if !d.CompanionMessengerOpen() && snap.Posture == wsdashboard.CompanionPosturePhone && snap.LeaseOwner == bodyKey {
+			fmt.Fprintf(r.logw, "companion runtime: phone still held %s after messenger closed; releasing\n", fallback)
+			d.CompanionForceRelease(bodyKey)
+		}
+	})
+}
+
+// companionHandoffPreamble introduces the checkpoint a replacement
+// companion-body session inherits from the session it replaces.
+const companionHandoffPreamble = "[companion handoff]\nYou are continuing as the same companion after a session handoff (a model/harness change or a restart). The checkpoint below carries the previous session's conversation; treat it as your own memory and continue naturally without announcing the handoff."
+
+// companionMessengerOpenNote rides a user wake while the Messenger is open.
+const companionMessengerOpenNote = "[messenger open] The user has the messenger open: after replying, keep holding the smartphone and end your turn without ws/companion.phone_putdown (unless switching to work)."
+
+func formatBodyMessengerClosedPrompt() string {
+	return "[messenger closed]\nThe user closed the messenger while you are holding the smartphone. " +
+		"Wrap up: call ws/companion.phone_putdown (next=\"ambient\", or next=\"work\" if a delegation is running) now. Do not send another messenger reply unless something is genuinely unfinished."
 }
 
 func (r *companionRuntime) ensureWorkSession(d *wsdashboard.Daemon) (string, error) {
