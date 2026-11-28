@@ -139,7 +139,7 @@ Added `openrouter_voice` (`VoiceOnly: true`, `KeyPrefix: "sk-or-"`) to `internal
 
 **Done when:** the native backend, resolver, span mechanics and hold-to-talk run through `WsVoiceInput` with no provider-specific branch in the composer, and the Node and Go asset tests pass.
 
-### Result (pending) - 2026-11-28
+### Result (93a55157) - 2026-11-28
 
 Added sibling modules `dashboard-voice-native.js` (top-frame `werkschaftSpeech` adapter + same-origin `postMessage` relay, single-owner lock, `MutationObserver` iframe-detach cancel, `hidden` broadcast) and `dashboard-voice-ptt.js` (`[data-voice-span]` inline lifecycle, `#cvox-cap` fallback, composer lock/button helpers, and Spacebar 0.5 s PTT with owner single-space trim rule, repeat suppression, IME/modifier/menu/unconfigured guards, and lock-blur guard); shrunk `dashboard-voice.js` from 1,019 to 1,013 lines while adding `resolveOrder`, eligibility vs usability separation, and the `postProcess` hook; excluded `[data-voice-span]` in `capsules.js` `read()` and `md-editor.js` `readEditorDom()` with reconcile skipped while live and run once after commit; bundled scripts in `pages.go` and added `js.voice.listening`/`refining`/`err.unavailable` across all 11 `wsi18n` tables. Tracked approved mockup under `ai-docs/assets/mockups/261128/voice-provider-ui/`. Verified with `frontend-voice.test.js`, `frontend-voice-phase3.test.js` (15/15), `capsules.test.cjs`, `composer-md-render.test.cjs`, `composer-md-ime-undo.test.cjs`, `ws-input.test.cjs`, Go `wsi18n` & `wsdashboard` asset/voice tests, and zero `:has(`.
 
@@ -153,6 +153,10 @@ Added sibling modules `dashboard-voice-native.js` (top-frame `werkschaftSpeech` 
 4. **Verification:** Node tests (`frontend-settings.test.js` and a new voice-settings test) for section rendering, toggle visibility/disabling, order persistence from drag and keyboard, dimmed native in a browser, `focus("voice")`; result capture compared side by side against the approved mockup; zero `:has()`.
 
 **Done when:** the section, modal, and priority bar work against the Phase 2 keys and match the approved mockup.
+
+### Result (pending) - 2026-11-28
+
+Implemented the Voice Providers settings section (`dashboard-settings-voice.js` + `dashboard-settings-voice.css`) matching the approved `ai-docs/assets/mockups/261128/voice-provider-ui/` mockup: Powerline horizontal priority bar with drag-and-drop, keyboard `ArrowLeft`/`ArrowRight`, and boundary move buttons persisting `dashboard.voice_backend_order`; provider rows (`native` dimmed "Desktop only" in browser and surfacing `permission_denied`/`privacy_disabled`/`offline_pack_missing`/`language_unavailable` hints on desktop, `openrouter`, `openai_api`, `groq`, and `local/*`); OpenRouter (Voice) modal showing the "Use top OpenRouter key" switch only when the top key is configured, disabling the dedicated input when ON, and always materializing `dashboard.voice_openrouter_shared_key` on save; saving any provider key appends it to `dashboard.voice_backend_order`. Moved legacy grouped voice-key rows out of `dashboard-settings-account.js` (1,446 -> 1,306 lines), added `account.focus("voice")`, wired `SettingsCSS`/`SettingsScript` (including `dashboard-voice-native.js`) in `pages.go`, and added 63 `js.settings.voice.*` keys across all 11 `wsi18n` locale tables. Verified with `frontend-settings-voice.test.js` (8/8), `frontend-settings.test.js` (26/26), Go `wsi18n` & `wsdashboard` tests, and zero `:has(`. Capture method: `needs-capture` (`WS_PLAYWRIGHT_MODULE` is not set in this worker environment).
 
 ### Phase 5: Composer voice UI: bottom-left mic button, click routing, span styling (gated by the approved mockup; depends on Phase 3 and Phase 4)
 

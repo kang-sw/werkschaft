@@ -26,31 +26,14 @@
     const providers = el("div", "sgroup");
     const slotsHead = section("js.settings.account.slots_heading");
     const slotsGroup = el("div", "sgroup");
-    const voiceProviders = el("div", "sgroup");
+    const voiceHost = el("div", "account-voice-host");
     const endpoints = el("div", "sgroup");
     const providerNotice = el("p", "info-note");
     const nav = {status: null, projection: null, isLoaded: false, error: false};
     let statusLoad, endpointLoad, signIn, pollTimer, slotSignIn, slotPollTimer, harnessAuthSignIn, harnessAuthPollTimer;
     let openRouterBusy = false, openAIBusy = false, endpointBusy = false, slotBusy = false, harnessAuthBusy = false;
-    let orForm, epForm, slotAddForm, openRouterRow, openAIRow, consentRow, endpointRow;
+    let orForm, epForm, slotAddForm, openRouterRow, openAIRow, consentRow, endpointRow, voiceSection;
     let openRouterError = "", openAIError = "", endpointError = "", slotError = "", harnessAuthError = "";
-    const voiceSpecs = [
-      {
-        id: "openai_api",
-        label: "OpenAI Platform",
-        description: "js.settings.account.openai_api_description",
-        placeholder: "sk-…",
-        prefix: "sk-"
-      },
-      {
-        id: "groq",
-        label: "Groq",
-        description: "js.settings.account.groq_description",
-        placeholder: "gsk_…",
-        prefix: "gsk_"
-      }
-    ];
-    const voiceState = new Map();
 
     providerNotice.hidden = true;
     providerNotice.setAttribute("role", "status");
@@ -59,7 +42,7 @@
     panel.append(el("p", "info-note", t("js.settings.account.machine_note")), providerNotice,
       section("js.settings.account.providers"), providers,
       slotsHead, slotsGroup,
-      section("js.settings.account.voice_providers"), voiceProviders,
+      voiceHost,
       section("js.settings.account.endpoints"), endpoints);
 
     function errorText(code, fallback = "js.settings.account.request_failed") {
@@ -111,10 +94,6 @@
 
     function localKey(name) {
       return nav.status?.local_keys?.find(key => key.provider === "local/" + name);
-    }
-
-    function voiceKey(id) {
-      return nav.status?.voice_keys?.find(key => key.provider === id);
     }
 
     function attention() {
@@ -169,7 +148,8 @@
             JSON.stringify(before?.slots) !== JSON.stringify(result.slots) ||
             JSON.stringify(before?.harness_auth) !== JSON.stringify(result.harness_auth)) updateSlots();
         if (JSON.stringify(before?.local_keys) !== JSON.stringify(result.local_keys)) updateEndpointMasks();
-        if (JSON.stringify(before?.voice_keys) !== JSON.stringify(result.voice_keys)) updateVoiceKeys();
+        if (voiceSection && (JSON.stringify(before?.voice_keys) !== JSON.stringify(result.voice_keys) ||
+            JSON.stringify(before?.openrouter) !== JSON.stringify(result.openrouter))) voiceSection.render();
       }).catch(() => { nav.error = true; }).finally(() => {
         statusLoad = null;
         providerNotice.replaceChildren();
@@ -183,6 +163,7 @@
     function loadEndpoints() {
       if (endpointLoad) return endpointLoad;
       endpointLoad = request("/api/config/snapshot?scope=global").then(config => {
+        if (voiceSection) voiceSection.applyConfigSnapshot(config);
         const entry = config.entries.find(item => item.key === endpointKey);
         if (!entry) throw new Error();
         const value = typeof entry.value === "string" ? JSON.parse(entry.value.trim() || "{}") : entry.value;
@@ -194,6 +175,7 @@
         nav.isLoaded = true;
         endpointLoad = null;
         updateEndpoints();
+        if (voiceSection) voiceSection.render();
         onChange();
       });
       return endpointLoad;
@@ -1273,136 +1255,6 @@
       }
     }
 
-    function makeVoiceRow(spec) {
-      const row = accountRow(spec.id);
-      const line = append(el("div", "klabel-line"), el("span", "klabel", spec.label),
-        el("span", "tag", t("js.settings.account.voice_api_key")), el("code", "skey", spec.id));
-      const info = append(el("div", "kmeta"), line, el("p", "kdesc", t(spec.description)));
-      row.append(info, el("div", "account-rail"));
-      voiceState.set(spec.id, {spec, row, busy: false, error: "", form: null});
-      return row;
-    }
-
-    function closeVoiceEditor(entry) {
-      if (!entry?.form) return;
-      entry.form.input.value = "";
-      entry.form.form.remove();
-      entry.form = null;
-    }
-
-    function updateVoiceKey(entry) {
-      const current = voiceKey(entry.spec.id);
-      const info = entry.row.querySelector(".kmeta");
-      const rail = entry.row.querySelector(".account-rail");
-      info.querySelector(".account-message")?.remove();
-      rail.replaceChildren();
-      rail.setAttribute("aria-busy", String(entry.busy));
-      entry.row.classList.toggle("account-configured", !!current?.configured);
-      if (current?.configured) {
-        rail.append(entry.busy ? busyPill("js.settings.saving", current.masked) : pill(t("js.settings.account.key_set"), "ok", current.masked, true));
-        if (!entry.form) {
-          rail.append(
-            btn(t("js.settings.account.replace_key"), () => showVoiceEditor(entry)),
-            hold("i-trash", t("js.settings.account.remove_voice_key", entry.spec.label), () => changeVoiceKey(entry, "remove"))
-          );
-        }
-      } else if (nav.status) {
-        rail.append(pill(t("js.settings.account.unset"), "unset"));
-        if (!entry.form) rail.append(btn(t("js.settings.account.add_key"), () => showVoiceEditor(entry)));
-      }
-      if (entry.busy) rail.querySelectorAll("button").forEach(control => { control.disabled = true; });
-      if (entry.error && !entry.form) info.append(message(entry.error, "fail"));
-    }
-
-    function updateVoiceKeys() {
-      for (const entry of voiceState.values()) updateVoiceKey(entry);
-    }
-
-    function showVoiceEditor(entry) {
-      if (entry.form || entry.busy) return;
-      entry.error = "";
-      const input = password("account-voice-" + entry.spec.id, entry.spec.placeholder);
-      input.required = true;
-      const hint = message("");
-      const form = el("form", "account-drawer account-voice-form");
-      form.autocomplete = "off";
-      const save = btn(t("js.settings.save"), null, true);
-      save.type = "submit";
-      const cancel = btn(t("js.settings.account.cancel"), () => {
-        closeVoiceEditor(entry);
-        updateVoiceKey(entry);
-        entry.row.querySelector(".account-rail button:last-of-type")?.focus();
-      });
-      const error = message("", "fail");
-      error.hidden = true;
-      const configured = !!voiceKey(entry.spec.id)?.configured;
-      form.append(append(el("div", "account-form"),
-        field(t(configured ? "js.settings.account.replace_voice_key" : "js.settings.account.voice_key_label", entry.spec.label), input, hint),
-        append(el("div", "account-actions"), save, cancel)), error);
-      const editor = {form, input, save, cancel, hint, error};
-      function syncHint() {
-        error.hidden = true;
-        const unusual = input.value.length > 0 && entry.spec.prefix && !input.value.startsWith(entry.spec.prefix);
-        hint.textContent = unusual ? t("js.settings.account.voice_prefix_warning", entry.spec.prefix) : t("js.settings.account.voice_key_help");
-        hint.classList.toggle("warn", !!unusual);
-        input.removeAttribute("aria-invalid");
-      }
-      input.addEventListener("input", syncHint);
-      form.addEventListener("submit", event => {
-        event.preventDefault();
-        if (input.value && !entry.busy) changeVoiceKey(entry, "set", editor);
-      });
-      syncHint();
-      entry.form = editor;
-      entry.row.append(form);
-      updateVoiceKey(entry);
-      input.focus();
-    }
-
-    async function changeVoiceKey(entry, op, editor) {
-      if (entry.busy) return;
-      entry.busy = true;
-      entry.error = "";
-      if (editor) {
-        editor.input.disabled = editor.save.disabled = editor.cancel.disabled = true;
-        editor.save.textContent = t("js.settings.saving");
-        editor.error.hidden = true;
-      }
-      updateVoiceKey(entry);
-      try {
-        const body = {op, provider: entry.spec.id};
-        if (editor) body.key = editor.input.value;
-        const req = accountRequest("key", body);
-        delete body.key;
-        const result = await req;
-        if (editor && entry.form === editor) closeVoiceEditor(entry);
-        if (nav.status) {
-          const list = Array.isArray(nav.status.voice_keys) ? nav.status.voice_keys.slice() : [];
-          const idx = list.findIndex(item => item.provider === entry.spec.id);
-          if (idx >= 0) list[idx] = result.status;
-          else list.push(result.status);
-          nav.status.voice_keys = list;
-        }
-        onChange();
-      } catch (error) {
-        entry.error = errorText(error.code);
-        if (editor && entry.form === editor) {
-          editor.error.hidden = false;
-          editor.error.textContent = entry.error;
-          if (error.code === "invalid_key") editor.input.setAttribute("aria-invalid", "true");
-        }
-      } finally {
-        entry.busy = false;
-        if (editor && entry.form === editor) {
-          editor.input.disabled = editor.save.disabled = editor.cancel.disabled = false;
-          editor.save.textContent = t("js.settings.save");
-          editor.input.focus();
-        }
-        updateVoiceKey(entry);
-        if (editor && !entry.form && entry.row.isConnected && !entry.error) entry.row.focus({preventScroll: true});
-      }
-    }
-
     openRouterRow = accountRow("openrouter");
     openRouterRow.append(meta("OpenRouter", t("js.settings.account.openrouter_description"),
       {key: "openrouter", tag: t("js.settings.account.api_key"), provider: "openrouter", modelLink: "js.settings.account.openrouter_models"}), el("div", "account-rail"));
@@ -1410,10 +1262,21 @@
     consentRow = makeConsentRow();
     endpointRow = makeEndpointRow();
     providers.append(openRouterRow, openAIRow, consentRow);
-    for (const spec of voiceSpecs) voiceProviders.append(makeVoiceRow(spec));
+    if (window.WsSettingsVoice && typeof window.WsSettingsVoice.create === "function") {
+      voiceSection = window.WsSettingsVoice.create({
+        el, button, append, svgIcon, request, accountRequest, hold, pill, busyPill, message, password, field, errorText,
+        getStatus: () => nav.status,
+        getEndpoints: () => nav.projection,
+        onChange,
+        onOpenLocal: () => {
+          endpointRow.focus({preventScroll: true});
+          endpointRow.scrollIntoView({block: "nearest"});
+        }
+      });
+      voiceHost.append(voiceSection.element);
+    }
     endpoints.append(endpointRow);
     updateOpenAI();
-    updateVoiceKeys();
     updateEndpoints();
 
     return {
@@ -1422,20 +1285,17 @@
       closeEditors() {
         closeOpenRouterEditor();
         updateOpenRouter();
-        for (const entry of voiceState.values()) {
-          closeVoiceEditor(entry);
-          updateVoiceKey(entry);
-        }
+        if (voiceSection) voiceSection.closeEditors();
         closeEndpointEditor();
         closeSlotAddEditor();
         updateSlots();
       },
       focus(provider) {
+        if (voiceSection && voiceSection.focus(provider)) return;
         const isEndpoint = provider.startsWith("local/");
         const name = isEndpoint ? provider.slice(6) : provider;
-        const voiceRow = voiceState.get(provider)?.row;
         const node = isEndpoint ? Array.from(endpointRow.querySelectorAll("[data-endpoint-name]")).find(row => row.dataset.endpointName === name) || endpointRow :
-          voiceRow || (provider === "openai" ? openAIRow : provider === "openrouter" ? openRouterRow : endpointRow);
+          (provider === "openai" ? openAIRow : provider === "openrouter" ? openRouterRow : endpointRow);
         node.focus({preventScroll: true});
         node.scrollIntoView({block: "nearest"});
       }
