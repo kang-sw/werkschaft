@@ -19,7 +19,7 @@
 .rscrim { display: none; }
 @media (min-width: 1600px) {
   .dwrap:not(.narrow) { max-width: none; }
-  .dbody { --rail-stage-gap: 8px; display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 0 var(--rail-stage-gap); align-items: start; }
+  .dbody { --rail-stage-gap: 8px; display: grid; grid-template-columns: var(--rail-w, 280px) minmax(0, 1fr); gap: 0 var(--rail-stage-gap); align-items: start; }
   .dlanding { --dl-r: var(--dl-x); margin-left: calc(0px - var(--rail-stage-gap)); }
   .dash.live .dbody, .dash.history .dbody { flex: 1 1 0; min-height: 0; grid-template-rows: minmax(0, 1fr); align-items: stretch; }
   .dash.live .dbody > .dgrid.live, .dash.history .dbody > .dgrid.history { min-height: 0; }
@@ -27,19 +27,19 @@
   .dbody > .tk-spage { grid-column: 2; grid-row: 1; }
   .dash:not(.live):not(.history) .rail { position: sticky; top: 12px; max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px); }
   .dwrap > .top > .back { display: none; }
-  .dwrap > .top { margin-left: calc(340px + 8px); }
+  .dwrap > .top { margin-left: var(--rail-reserve, 288px); }
   .dbody > .rail { margin: calc(-1 * var(--toph)) 0 0 -4px; }
   :root:not([data-mode="index"]):not([data-pincol]):not([data-gal="empty"]):not([data-gal="drag"]):not([data-overview-preview]) .dbody > .dgrid { width: 100%; max-width: var(--stagew); margin-inline: auto; }
-  :root:not([data-shell]):not([data-pincol]):not([data-gal="empty"]):not([data-gal="drag"]):not([data-overview-preview]) .dash:not(.index):not(.tk-paged) > .dwrap { --stage-side: max(0px, (100% - 348px - var(--stagew)) / 2); }
-  :root:not([data-shell]):not([data-pincol]):not([data-gal="empty"]):not([data-gal="drag"]):not([data-overview-preview]) .dash:not(.index):not(.tk-paged) > .dwrap > .top { margin-left: calc(348px + var(--stage-side)); margin-right: var(--stage-side); }
+  :root:not([data-shell]):not([data-pincol]):not([data-gal="empty"]):not([data-gal="drag"]):not([data-overview-preview]) .dash:not(.index):not(.tk-paged) > .dwrap { --stage-side: max(0px, (100% - var(--rail-reserve, 288px) - var(--stagew)) / 2); }
+  :root:not([data-shell]):not([data-pincol]):not([data-gal="empty"]):not([data-gal="drag"]):not([data-overview-preview]) .dash:not(.index):not(.tk-paged) > .dwrap > .top { margin-left: calc(var(--rail-reserve, 288px) + var(--stage-side)); margin-right: var(--stage-side); }
   :root:not([data-shell]):not([data-pincol]):not([data-gal="empty"]):not([data-gal="drag"]):not([data-overview-preview]) .dash:not(.index):not(.tk-paged) > .dwrap > .top:is(.dr-room, .tk-room) { padding-right: max(0px, calc(var(--drhw, 0px) + var(--tkhw, 0px) + 6px - var(--stage-side, 0px))); }
-  :root[data-shell] .dwrap > .top { margin-left: calc(348px + var(--sh-stage-side, 0px)); margin-right: var(--sh-stage-side, 0px); }
+  :root[data-shell] .dwrap > .top { margin-left: calc(var(--rail-reserve, 288px) + var(--sh-stage-side, 0px)); margin-right: var(--sh-stage-side, 0px); }
   :root[data-stage-fill]:not([data-mode="index"]):not([data-pincol]):not([data-gal="empty"]):not([data-gal="drag"]):not([data-overview-preview]) .dbody > .dgrid { max-width: none; }
   :root[data-stage-fill]:not([data-shell]):not([data-pincol]):not([data-gal="empty"]):not([data-gal="drag"]):not([data-overview-preview]) .dash:not(.index):not(.tk-paged) > .dwrap { --stage-side: 0px; }
   :root:not([data-pincol]):not([data-gal="empty"]):not([data-gal="drag"]):not([data-overview-preview]) .board-acts .board-stage-fill { display: inline-flex; }
 }
 @media (max-width: 1599.98px) {
-  .rail { position: fixed; z-index: 45; top: 12px; bottom: 12px; left: 12px; width: 340px; max-width: calc(100vw - 24px); box-shadow: var(--wb-shadow-hi); transform: translateX(calc(-100% - 20px)); visibility: hidden; transition: transform .22s cubic-bezier(.2, .7, .3, 1), visibility 0s linear .22s; }
+  .rail { position: fixed; z-index: 45; top: 12px; bottom: 12px; left: 12px; width: var(--rail-w, 280px); max-width: calc(100vw - 24px); box-shadow: var(--wb-shadow-hi); transform: translateX(calc(-100% - 20px)); visibility: hidden; transition: transform .22s cubic-bezier(.2, .7, .3, 1), visibility 0s linear .22s; }
   .rail-open .rail { transform: none; visibility: visible; transition: transform .22s cubic-bezier(.2, .7, .3, 1); }
   .rscrim { display: block; position: fixed; inset: 0; z-index: 44; background: var(--scrim); opacity: 0; pointer-events: none; transition: opacity .22s; }
   .rail-open .rscrim { opacity: 1; pointer-events: auto; }
@@ -92,7 +92,7 @@
    transform) while data-gal-pull is set, a pill (.gal-pullpill) at that
    edge of the viewport reads the target and its percentage, and the
    target's dot carries .pull-target. */
-:root { --pbw: calc(1680px - 32px - 348px); }
+:root { --pbw: calc(1680px - 32px - var(--rail-reserve, 288px)); }
 /* --stagew stays --pbw in Band 3; Band 4 sizes .dbody directly with --boardw. */
 .dash { --stagew: var(--pbw); }
 .dash.board { --pbw: 900px; }
@@ -192,8 +192,8 @@
   /* Band 4 (dynamic four-column dock): rail, stage, and gallery column all show */
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dwrap:not(.narrow),
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dgrid.board { max-width: none; margin: 0; }
-  :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody { grid-template-columns: 340px minmax(0, min(var(--boardw, min(var(--pbw), 100% - 836px)), 100% - 636px)) minmax(280px, 1fr); }
-  :root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody[data-split-grid] { grid-template-columns: 340px minmax(0, min(var(--cvw) + 8px + var(--boardw), 100% - 636px)) minmax(280px, 1fr); }
+  :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody { grid-template-columns: var(--rail-w, 280px) minmax(0, min(var(--boardw, min(var(--pbw), 100% - (var(--rail-reserve, 288px) + 488px))), 100% - (var(--rail-reserve, 288px) + 288px))) minmax(280px, 1fr); }
+  :root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody[data-split-grid] { grid-template-columns: var(--rail-w, 280px) minmax(0, min(var(--cvw) + 8px + var(--boardw), 100% - (var(--rail-reserve, 288px) + 288px))) minmax(280px, 1fr); }
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody > .rail { grid-column: 1; grid-row: 1; }
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody > .dgrid,
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody > .tk-spage { grid-column: 2; grid-row: 1; }
@@ -206,8 +206,8 @@
      (never display:none) so docked xterm/iframes live. */
   :root[data-overview-preview] .dwrap:not(.narrow),
   :root[data-overview-preview] .dgrid.board { max-width: none; margin: 0; }
-  :root[data-overview-preview] .dbody { grid-template-columns: 340px minmax(0, min(var(--boardw, min(var(--pbw), 100% - 836px)), 100% - 636px)) minmax(280px, 1fr); }
-  :root[data-boardw][data-overview-preview] .dbody[data-split-grid] { grid-template-columns: 340px minmax(0, min(var(--cvw) + 8px + var(--boardw), 100% - 636px)) minmax(280px, 1fr); }
+  :root[data-overview-preview] .dbody { grid-template-columns: var(--rail-w, 280px) minmax(0, min(var(--boardw, min(var(--pbw), 100% - (var(--rail-reserve, 288px) + 488px))), 100% - (var(--rail-reserve, 288px) + 288px))) minmax(280px, 1fr); }
+  :root[data-boardw][data-overview-preview] .dbody[data-split-grid] { grid-template-columns: var(--rail-w, 280px) minmax(0, min(var(--cvw) + 8px + var(--boardw), 100% - (var(--rail-reserve, 288px) + 288px))) minmax(280px, 1fr); }
   :root[data-overview-preview] .dbody > .rail { grid-column: 1; grid-row: 1; }
   :root[data-overview-preview] .dbody > .dgrid,
   :root[data-overview-preview] .dbody > .tk-spage { grid-column: 2; grid-row: 1; }
@@ -331,15 +331,23 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rail .rended { display: none; }
 .rail .rs { position: relative; display: flex; align-items: flex-start; gap: 0; padding-left: 14px; border-radius: 6px; }
 .rail .rs:hover { background: color-mix(in srgb, var(--wb-primary) 6%, var(--wb-card)); }
-/* Owner exception: crisp neon primary outline on the selected rail row so it stays
-   unmistakably distinct from resting/hover rows and the amber .attn wash. */
+/* Active session row (decision 1709=a): calm tonal fill with a left primary
+   accent bar. Uses ::before (excluding .attn so unread pulse is never
+   clobbered, though rail.js already clears .attn on the active row) to leave
+   ::after free for .rdkid drag-nest indicator and .conv-reveal-pulse. */
 .rail .rs.cur {
-  background: color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card));
-  box-shadow:
-    inset 0 0 0 1.5px var(--wb-primary),
-    inset 0 0 8px light-dark(color-mix(in srgb, var(--wb-primary) 12%, transparent), color-mix(in srgb, var(--wb-primary) 24%, transparent)),
-    0 0 6px light-dark(color-mix(in srgb, var(--wb-primary) 26%, transparent), color-mix(in srgb, var(--wb-primary) 52%, transparent)),
-    0 0 2px light-dark(transparent, color-mix(in srgb, var(--wb-primary) 80%, transparent));
+  background: color-mix(in srgb, var(--wb-primary) 13%, transparent);
+}
+.rail .rs.cur:not(.attn)::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 5px;
+  bottom: 5px;
+  width: 2.5px;
+  border-radius: 999px;
+  background: var(--wb-primary);
+  pointer-events: none;
 }
 .rail .rs.ended { opacity: .75; }
 /* an archived row is ended to the layout (no drag, no parent) but drawn
@@ -943,6 +951,28 @@ button.bgbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-o
 .pmstate .pmsrc { font-size: 11px; color: var(--wb-muted-fg); }
 .pmstate .pmnote { grid-column: 1 / -1; margin: 0; font-size: 11.5px; color: var(--wb-muted-fg); }
 .rpop .pmchg { display: grid; gap: 5px; }
+/* per-session dashboard control MCP opt-in (dashboard-leads.js rpSessMake) */
+.rpop .dcsec { display: grid; gap: 6px; padding-top: 2px; }
+.rpop .dcsec[hidden] { display: none; }
+.rpop .dchd { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rpop .dc-sw { display: inline-flex; align-items: center; gap: 7px; border: 0; background: transparent; padding: 2px 0; color: var(--wb-muted-fg); font: 600 11.5px/1.2 var(--wb-sans); cursor: pointer; white-space: nowrap; }
+.rpop .dc-sw:hover:not(:disabled) { color: var(--wb-fg); }
+.rpop .dc-sw:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: 2px; border-radius: 6px; }
+.rpop .dc-sw:disabled { opacity: .45; cursor: not-allowed; }
+.rpop .dc-sw i { width: 28px; height: 16px; border-radius: 999px; background: var(--wb-line); position: relative; transition: background-color .12s; flex: none; }
+.rpop .dc-sw i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--wb-card); box-shadow: 0 1px 2px rgb(0 0 0 / .22); transition: left .12s, background-color .12s; }
+.rpop .dc-sw[aria-checked="true"] { color: var(--wb-fg); }
+.rpop .dc-sw[aria-checked="true"] i { background: color-mix(in srgb, var(--wb-primary) 55%, var(--wb-muted)); }
+.rpop .dc-sw[aria-checked="true"] i::after { left: 14px; background: var(--wb-primary); }
+.rpop .dcdesc { margin: 0; font-size: 11.5px; color: var(--wb-muted-fg); line-height: 1.4; }
+.rpop .dcpend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 7px 9px; border-radius: 8px; background: color-mix(in srgb, var(--wb-warn) 12%, var(--wb-card)); font-size: 11.5px; color: var(--wb-fg); }
+.rpop .dcpend[hidden] { display: none; }
+.rpop .dcbadge { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 700; background: color-mix(in srgb, var(--wb-warn) 22%, var(--wb-card)); color: var(--wb-warn-ink); white-space: nowrap; }
+.rpop .dcpend-text { flex: 1 1 160px; min-width: 0; color: var(--wb-muted-fg); line-height: 1.35; }
+.rpop .dc-stop-btn { margin-inline-start: auto; border: 0; border-radius: 7px; padding: 4px 10px; background: color-mix(in srgb, var(--wb-fail) 16%, var(--wb-card)); color: var(--wb-fail); font: 700 11.5px var(--wb-sans); cursor: pointer; white-space: nowrap; }
+.rpop .dc-stop-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--wb-fail) 24%, var(--wb-card)); }
+.rpop .dc-stop-btn:focus-visible { outline: 1.5px solid var(--wb-fail); outline-offset: 1px; }
+.rpop .dc-stop-btn:disabled { opacity: .45; cursor: not-allowed; }
 /* unsupported and refused */
 .rpop .pmoff { margin: 0; padding: 6px 9px; border-radius: 8px; background: var(--wb-muted); font-size: 11.5px; color: var(--wb-muted-fg); }
 .rpop .pmerr { margin: 0; padding: 7px 10px; border-radius: 8px; background: color-mix(in srgb, var(--wb-fail) 12%, var(--wb-card)); color: var(--wb-fail); font-size: 11.5px; display: grid; gap: 2px; }
@@ -1390,13 +1420,13 @@ button.bgbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-o
 .settings-page-link:hover { background: var(--wb-muted); }
 :root:not([data-can-control]) .rail .rfoot > .r-config-global { display: none; }
 
-/* The settings sheet keeps the standard 340px docked rail from 1600px and uses the 340px overlay drawer below. */
+/* The settings sheet keeps the docked rail width variable from 1600px and uses the overlay drawer below. */
 @media (min-width: 1600px) {
-  :root[data-settings-shell] .dwrap > .top { margin-inline-start: 348px; }
+  :root[data-settings-shell] .dwrap > .top { margin-inline-start: var(--rail-reserve, 288px); }
   :root[data-settings-shell] .dwrap > .top > .back { display: none; }
   :root[data-settings-shell] .dbody {
     display: grid;
-    grid-template-columns: 340px minmax(0, 1fr);
+    grid-template-columns: var(--rail-w, 280px) minmax(0, 1fr);
     gap: 0 8px;
     flex: 1 1 0;
     min-height: 0;

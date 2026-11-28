@@ -147,16 +147,24 @@ func assertSettingsOwner(t *testing.T, body string, owns bool) {
 		return strings.Contains(" "+attr(n, "class")+" ", " "+class+" ")
 	}
 	gear, toggles, menus := 0, 0, 0
+	isShell := false
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "html" && attr(n, "data-shell") != "" {
+			isShell = true
+		}
 		if hasClass(n, "settings-toggle") {
 			toggles++
 		}
 		switch attr(n, "id") {
 		case "gear":
 			gear++
-			if !hasClass(n, "settings-toggle") || n.Parent == nil || !hasClass(n.Parent, "rfoot") || n.Parent.FirstChild != n {
-				t.Error("settings trigger must be first in the rail footer")
+			if isShell {
+				if !hasClass(n, "settings-toggle") || n.Parent == nil || attr(n.Parent, "id") != "slot-bot-left" {
+					t.Error("shell settings trigger must live in #slot-bot-left inside #shell-bottom")
+				}
+			} else if !hasClass(n, "settings-toggle") || n.Parent == nil || !hasClass(n.Parent, "rfoot") || n.Parent.FirstChild != n {
+				t.Error("unframed settings trigger must be first in the rail footer")
 			}
 		case "gmenu":
 			menus++

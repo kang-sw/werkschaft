@@ -188,6 +188,7 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 		if d := h.live.Load(); d != nil {
 			opts.Live = d
 			opts.Companion = d
+			opts.DaemonControl = d
 			opts.Conv = d
 		}
 		if h.companion != nil {
@@ -223,6 +224,7 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 		opts.UserCommandsDiscovery = h.userCommandsFor(hello.Conversation)
 		opts.Conversation = hello.Conversation
 		opts.ExecCutover = hello.ExecCutover
+		opts.DashboardControlAccess = hello.DashboardControlAccess
 		opts.ConvHistoryAccess = hello.ConvHistoryAccess
 		opts.FileWrites = hello.FileWrites
 		opts.RecordExecLaunch = hello.RecordExecLaunch

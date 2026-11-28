@@ -1574,10 +1574,12 @@ func TestRailUnregisteredWorkspaceSessionsKeepNotificationRows(t *testing.T) {
 	panelPrefix := `<div class="rail-session-panel">`
 	slotIdx := strings.Index(html, slotTag)
 	unregIdx := strings.Index(html, `<details class="rws-unreg"`)
-	rfootIdx := strings.Index(html, `<div class="rfoot">`)
-	if !strings.HasPrefix(html, panelPrefix) || slotIdx < 0 || unregIdx < 0 || rfootIdx < 0 ||
-		unregIdx >= rfootIdx || rfootIdx >= slotIdx || !strings.HasSuffix(html, `</div>`+slotTag) {
-		t.Fatalf("expected #rail-companion-slot as final sibling after .rail-session-panel (containing details.rws-unreg and .rfoot) (unreg=%d rfoot=%d slot=%d):\n%s", unregIdx, rfootIdx, slotIdx, html)
+	if strings.Contains(html, `<div class="rfoot">`) {
+		t.Fatalf("r-rail must not include retired .rfoot in shell rail region:\n%s", html)
+	}
+	if !strings.HasPrefix(html, panelPrefix) || slotIdx < 0 || unregIdx < 0 ||
+		unregIdx >= slotIdx || !strings.HasSuffix(html, `</div>`+slotTag) {
+		t.Fatalf("expected #rail-companion-slot as final sibling after .rail-session-panel (containing details.rws-unreg) (unreg=%d slot=%d):\n%s", unregIdx, slotIdx, html)
 	}
 	_, box, ok := strings.Cut(html, `<div class="unreg-notif" hidden>`)
 	if !ok {

@@ -79,8 +79,9 @@ const route = p => '/w/' + p.replace(/\\/g, '/').replace(/^\//, '').split('/').m
     // Search has index-page scope, not host0/session file or answer hooks.
     assert.equal(await page.locator('.board-download').count(), 0, 'worktree page has no board zip to download');
     assert.equal(await page.locator('#tkqs').count(), 0, 'worktree session page omits duplicate #tkqs button');
-    assert.equal(await tab.locator('#tkqs').count(), 0, 'shell header mirrors no #tkqs button on worktree page');
-    await page.locator('#shandle').click();
+    assert.equal(await tab.locator('#qsslot #tkqs').count(), 1, 'shell top-center owns #tkqs pill on worktree page');
+    assert.equal(await page.locator('#shandle').isHidden(), true, 'framed #shandle stays hidden under Variant D shell');
+    await tab.locator('#qsslot #tkqs').click();
     await page.locator('#tkqpop').waitFor({ state: 'visible' });
     await page.locator('#tkqin').press('Escape');
     await page.locator('#tkqpop').waitFor({ state: 'hidden' });
@@ -88,10 +89,12 @@ const route = p => '/w/' + p.replace(/\\/g, '/').replace(/^\//, '').split('/').m
     await tab.screenshot({ path: '/tmp/exec5/wv-impl/worktree-page.png' });
     await tab.setViewportSize({ width: 2400, height: 1000 });
     await explorer.locator('.bc-pin').click();
-    // Pinning opens the gallery page at this width; return to the Main Board
-    // before clicking the terminal, whose board card is then inert offscreen.
-    await page.locator('#bgal .gal-dot.main').click();
-    await page.waitForFunction(() => !document.documentElement.hasAttribute('data-gal-away'));
+    // At narrower widths pinning opens the gallery page over the board; under
+    // Variant D's 280px default rail, 2400px fits Band 4 beside the live board.
+    if (await page.evaluate(() => document.documentElement.hasAttribute('data-gal-away'))) {
+      await page.locator('#bgal .gal-dot.main').click();
+      await page.waitForFunction(() => !document.documentElement.hasAttribute('data-gal-away'));
+    }
     await page.locator('.bcard[data-kind="terminal"] .bc-pin').click();
     await tab.screenshot({ path: '/tmp/exec5/wv-impl/pinned-page.png' });
     // Drag uses the existing threshold and must not become a navigation.

@@ -1063,6 +1063,7 @@
       body.permission_level = String(f.level);
       if (body.permission_level === "full" && f.ack === true) body.permission_full_ack = true;
     } else if (f.mode) body.permission_mode = String(f.mode);
+    if (f.dashboardControl === true) body.dashboard_control_access = true;
     if (typeof f.convHistoryAccess === "boolean") body.conv_history_access = f.convHistoryAccess;
     return body;
   }
@@ -1348,6 +1349,16 @@
   // handles). The head region's wrapper lays out as its items (display:
   // contents), so they are measured in its place.
   function topOver(top, win) {
+    var left = top.querySelector(":scope > .top-left");
+    if (left) {
+      if (left.scrollWidth > left.clientWidth + 0.5) return true;
+      var lbox = left.getBoundingClientRect(), lend = lbox.right, lover = false;
+      Array.prototype.forEach.call(left.querySelectorAll(":scope > :not(.r-head), :scope > .r-head > *"), function (el) {
+        var r = el.getBoundingClientRect();
+        if (r.width > 0 && r.right > lend + 0.5) lover = true;
+      });
+      return lover;
+    }
     var box = top.getBoundingClientRect(), end = box.right - (parseFloat(win.getComputedStyle(top).paddingRight) || 0), over = false;
     Array.prototype.forEach.call(top.querySelectorAll(":scope > :not(.r-head), :scope > .r-head > *"), function (el) {
       var r = el.getBoundingClientRect();
@@ -1385,12 +1396,56 @@
     var fit = function () { topFit(top, win); };
     var inSlot = function (rec) { var n = rec.target; n = n && n.nodeType !== 1 ? n.parentNode : n; return !!(n && n.closest && n.closest(".qsslot")); };
     if (win.ResizeObserver) {
-      var ro = new win.ResizeObserver(fit), slot = top.querySelector(".qsslot");
+      var ro = new win.ResizeObserver(fit), slot = top.querySelector(".qsslot"), left = top.querySelector(":scope > .top-left");
       ro.observe(top);
+      if (left) ro.observe(left);
       if (slot) ro.observe(slot); // its search handle is a strip item
     }
     if (win.MutationObserver) new win.MutationObserver(function (recs) { if (!recs.every(inSlot)) fit(); }).observe(top, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["hidden"] });
     if (win.document.fonts && win.document.fonts.ready) win.document.fonts.ready.then(fit);
+    fit();
+  }
+  // botOver / botFit / botWatch compact the relocated bottom-right usage handle
+  // (.shell-bottom.bu) when it overflows #slot-bot-right, and restore the full
+  // pill as soon as the right cell widens again.
+  function botOver(bar) {
+    var right = bar && bar.querySelector("#slot-bot-right, .bot-right");
+    if (!right) return false;
+    var rbox = right.getBoundingClientRect();
+    if (rbox.width <= 0) return false;
+    if (right.scrollWidth > right.clientWidth + 0.5) return true;
+    var btn = right.querySelector(".usage-toggle");
+    if (!btn) return false;
+    var bbox = btn.getBoundingClientRect();
+    return bbox.width > 0 && (bbox.left < rbox.left - 0.5 || bbox.right > rbox.right + 0.5);
+  }
+  function botFit(bar, win) {
+    win = win || window;
+    if (!bar || !bar.classList) return 0;
+    var cl = bar.classList;
+    cl.remove("bu");
+    if (botOver(bar)) {
+      cl.add("bu");
+      return 1;
+    }
+    return 0;
+  }
+  function botWatch(bar, win) {
+    win = win || window;
+    if (!bar) return;
+    var fit = function () { botFit(bar, win); };
+    if (win.ResizeObserver) {
+      var ro = new win.ResizeObserver(fit);
+      ro.observe(bar);
+      var right = bar.querySelector("#slot-bot-right, .bot-right");
+      if (right) ro.observe(right);
+      var center = bar.querySelector("#slot-bot-center, .bot-center");
+      if (center) ro.observe(center);
+    }
+    if (win.MutationObserver) {
+      new win.MutationObserver(fit).observe(bar, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["hidden"] });
+    }
+    if (win.document && win.document.fonts && win.document.fonts.ready) win.document.fonts.ready.then(fit);
     fit();
   }
   window.WsRail = {
@@ -1452,6 +1507,8 @@
     popPlace: popPlace,
     topFit: topFit,
     topWatch: topWatch,
+    botFit: botFit,
+    botWatch: botWatch,
     matchBranches: matchBranches,
     worktreeBody: worktreeBody,
     deleteReady: deleteReady,

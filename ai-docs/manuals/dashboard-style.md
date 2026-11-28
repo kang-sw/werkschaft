@@ -30,6 +30,16 @@ mockups (`ai-docs/assets/mockups/`). All token values below are sourced from
   focus rings, and primary actions. Keep semantic colors (`--wb-ok`,
   `--wb-warn`, `--wb-fail`, `--wb-hot`) muted and purposeful so status signals
   stand out without visual noise.
+- **Scoped outer-chrome & stage-well hairline exception (`(1709)=a`).** The
+  Variant D outer IDE shell (`dashboard-ide-shell.css`) renders a continuous
+  chrome frame (`--d-shell-bg`: `#111216` dark / `#e7e7e2` light) unifying the
+  `36px` topbar, drag-resizable (`220px–360px`, default `280px`) left session
+  rail, and `26px` global bottom bar with no hard grid dividers between chrome
+  bands. A subtle `1px` whisper rim (`--stage-rim`: `color-mix(in srgb,
+  var(--wb-fg) 8%, transparent)`) is explicitly permitted **only** on the
+  outer Variant D inset `12px`-rounded stage well (`--d-stage-bg`: `#16181d`
+  dark / `#f4f4f1` light) and outer shell chrome boundaries. All inner cards,
+  topics, rows, and panels remain strictly borderless Material tonal surfaces.
 
 ### Anti-Patterns to Avoid
 
@@ -61,6 +71,8 @@ HUD tokens extend them in `wsdashboard/assets/dashboard.css`.
 | `--wb-card` | `#ffffff` | `#1e2024` | Elevated cards, rail, composer, popovers, dialogs |
 | `--wb-muted` | `#e9e8e3` | `#2b2d32` | Hover surfaces, header strips, chips, recessed tracks |
 | `--wb-topic` / `--wb-on-topic` | `#e3e4e8` / `#1b1d21` | `#2a2d33` / `#e4e5e8` | Filled topic and workspace title bars |
+| `--d-shell-bg` | `#e7e7e2` | `#111216` | Variant D continuous outer shell chrome (36px topbar, left rail, 26px bottom bar) |
+| `--d-stage-bg` | `#f4f4f1` | `#16181d` | Variant D inset 12px-rounded stage well backdrop (`--stage-rim`: `8%` `--wb-fg` hairline) |
 | Recessed input well (dark convention) | — | `#16181c` | Deep recessed well inside `#1e2024` cards (intermediate hover/chip step: `#25272c`) |
 
 ### Ink, Hairline & Neutral Wash
@@ -131,8 +143,10 @@ HUD tokens extend them in `wsdashboard/assets/dashboard.css`.
   `--wb-muted` (menus such as `.rpop .rmi`, `.gmenu button`) or `--wb-wash`
   (dense tables such as `.glr`).
 - Active/selected rows use a soft primary tint
-  (`color-mix(in srgb, var(--wb-primary) 12–14%, var(--wb-card))`) rather than a
-  heavy outline.
+  (`color-mix(in srgb, var(--wb-primary) 12–14%, var(--wb-card))`, or `13%`
+  over `transparent` with a `2.5px` left `--wb-primary` accent bar for active
+  session rows `.rail .rs.cur` per `(1709)=a`) rather than a heavy outline or
+  neon glow.
 
 ### Compact Controls & Pills (`.sbadge`, `.xchip`, `.rp`, icon buttons)
 

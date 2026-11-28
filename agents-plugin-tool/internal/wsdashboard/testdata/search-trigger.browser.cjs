@@ -35,15 +35,15 @@ const [base] = process.argv.slice(2);
     await frame.locator('#tkqin').press('Escape');
     await frame.locator('#tkqpop').waitFor({ state: 'hidden' });
 
-    // 2. Live session page (shell-framed): #tkqs is absent in both shell and frame; #shandle + shortcuts work.
+    // 2. Live session page (shell-framed): shell #qsslot #tkqs owns the centered
+    //    search trigger pill, framed #shandle is hidden, and shortcuts open/close #tkqpop.
     await page.goto(base + '/s/livesession');
     frame = await activeFrame();
-    await frame.locator('#shandle').waitFor({ state: 'visible' });
-    assert.equal(await frame.locator('#tkqs').count(), 0, 'live session frame omits #tkqs');
-    assert.equal(await page.locator('#tkqs').count(), 0, 'shell header omits #tkqs on live session');
-    assert.equal(await page.locator('#qsslot').innerHTML(), '', 'shell #qsslot stays empty on live session');
+    await page.locator('#qsslot #tkqs').waitFor({ state: 'visible' });
+    assert.equal(await frame.locator('#tkqs').count(), 0, 'live session frame omits duplicate #tkqs');
+    assert.equal(await frame.locator('#shandle').isVisible(), false, 'framed live session hides duplicate right-end #shandle');
 
-    await frame.locator('#shandle').click();
+    await page.locator('#qsslot #tkqs').click();
     await frame.locator('#tkqpop').waitFor({ state: 'visible' });
     await frame.locator('#tkqin').press('Escape');
     await frame.locator('#tkqpop').waitFor({ state: 'hidden' });
@@ -66,19 +66,19 @@ const [base] = process.argv.slice(2);
     await frame.locator('#tkqin').press('Escape');
     await frame.locator('#tkqpop').waitFor({ state: 'hidden' });
 
-    // 3. Non-live session page (boardsession): #tkqs is absent in both shell and frame; #shandle works.
+    // 3. Non-live session page (boardsession): shell #qsslot #tkqs owns centered search; framed #shandle stays hidden.
     await page.goto(base + '/s/boardsession');
     frame = await activeFrame();
-    await frame.locator('#shandle').waitFor({ state: 'visible' });
-    assert.equal(await frame.locator('#tkqs').count(), 0, 'board session frame omits #tkqs');
-    assert.equal(await page.locator('#tkqs').count(), 0, 'shell header omits #tkqs on board session');
-    await frame.locator('#shandle').click();
+    await page.locator('#qsslot #tkqs').waitFor({ state: 'visible' });
+    assert.equal(await frame.locator('#tkqs').count(), 0, 'board session frame omits duplicate #tkqs');
+    assert.equal(await frame.locator('#shandle').isVisible(), false, 'framed board session hides duplicate right-end #shandle');
+    await page.locator('#qsslot #tkqs').click();
     await frame.locator('#tkqpop').waitFor({ state: 'visible' });
     await frame.locator('#tkqin').press('Escape');
     await frame.locator('#tkqpop').waitFor({ state: 'hidden' });
 
     assert.deepEqual(errors, [], 'no page errors: ' + JSON.stringify(errors));
-    console.log('PASS: index keeps #tkqs; session pages omit #tkqs in shell and frame while #shandle and shortcuts open/close search.');
+    console.log('PASS: shell #qsslot #tkqs owns centered search on index and session pages while framed #shandle stays hidden and shortcuts open/close search.');
     await context.close();
   } finally {
     await browser.close();

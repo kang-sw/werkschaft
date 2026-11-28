@@ -105,6 +105,11 @@ type State struct {
 	PermissionLevel       PermissionLevel `json:"permission_level,omitempty"`
 	PermissionSource      string          `json:"permission_source,omitempty"`
 	PermissionEnforcement string          `json:"permission_enforcement,omitempty"`
+	// DashboardControlAccess is the persisted opt-in for ws/daemon.* tools,
+	// and DashboardControlAccessEffective is the live process's attach-time
+	// snapshot (equals DashboardControlAccess when no process is running).
+	DashboardControlAccess          bool `json:"dashboard_control_access,omitempty"`
+	DashboardControlAccessEffective bool `json:"dashboard_control_access_effective,omitempty"`
 	PluginIsolation       string          `json:"plugin_isolation,omitempty"`
 	PluginWarning         string          `json:"plugin_warning,omitempty"`
 	// Approvals are the tool permission prompts waiting for an answer,
@@ -224,6 +229,8 @@ func closedState(rec Record) State {
 			st.Lifecycle = wsdashboard.SessionPendingDeletion
 		}
 		st.PluginIsolation = leadPluginIsolation(rec.PluginIsolation)
+		st.DashboardControlAccess = rec.DashboardControlAccess
+		st.DashboardControlAccessEffective = rec.DashboardControlAccess
 	}
 	st.PluginWarning = rec.PluginWarning
 	if rec.Parent != nil {

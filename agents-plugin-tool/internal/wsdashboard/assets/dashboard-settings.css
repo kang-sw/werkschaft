@@ -1159,12 +1159,12 @@
 }
 
 /* ==========================================================================
-   Docked Session Rail Contract (>=1600px: 340px Docked; <1600px: 340px Overlay Drawer)
+   Docked Session Rail Contract (>=1600px: --rail-w Docked; <1600px: Overlay Drawer)
    ========================================================================== */
 @media (min-width: 1600px) {
   :root[data-mode="settings"] .dbody {
     display: grid;
-    grid-template-columns: 340px minmax(0, 1fr);
+    grid-template-columns: var(--rail-w, 280px) minmax(0, 1fr);
     gap: 0 16px;
     flex: 1 1 0;
     min-height: 0;

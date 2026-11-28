@@ -9,6 +9,7 @@
 /* The memo pad slides from behind the rail, after its entrance. The same
    rail-open state lifts a permanent column above the scrim on wide screens. */
 .memo-pad { --memo-w: 480px; position: fixed; z-index: 44; left: var(--memo-left, 352px); top: var(--memo-top, 12px); bottom: 12px; width: var(--memo-w); max-width: calc(100vw - 24px); display: flex; flex-direction: column; gap: 12px; padding: 14px 18px 0; box-sizing: border-box; border-radius: 0 12px 12px 0; color: var(--wb-fg); background: var(--wb-card); box-shadow: var(--wb-shadow-hi); visibility: hidden; opacity: 0; transform: translateX(-100%); pointer-events: none; transition: transform .22s ease, opacity .16s, visibility 0s linear .22s; }
+:root[data-shell] .memo-pad { bottom: calc(var(--botbar-h, 26px) + 12px); }
 .rail-open .memo-pad { visibility: visible; opacity: 1; transform: none; pointer-events: auto; transition: transform .24s ease .18s, opacity .18s .18s; }
 .rail-open .rail { z-index: 45; }
 .rail-open .rscrim { display: block; position: fixed; inset: 0; z-index: 43; background: var(--scrim); opacity: 1; pointer-events: auto; }

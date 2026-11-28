@@ -5,6 +5,7 @@ compile_error!("Werkschaft supports macOS and Windows");
 
 #[cfg(any(windows, test))]
 mod accelerator;
+mod capture;
 mod chrome;
 mod close;
 mod daemon;
@@ -101,6 +102,7 @@ fn build_webview(
                     updates::inject(&window, payload.url());
                     notice.show_refusal(&window);
                     notify::inject(&window, payload.url());
+                    capture::inject(&window, payload.url());
                     speech::inject(&window, payload.url());
                     #[cfg(windows)]
                     strip::inject_theme_bridge(
@@ -439,6 +441,7 @@ fn main() {
             }
             install_menu(app.handle())?;
             notify::manage(app.handle(), setup_state.clone());
+            capture::manage(app.handle(), setup_state.clone());
             speech::manage(app.handle(), setup_state.clone());
             let tray_state = setup_state.clone();
             tray::install(app.handle(), move |app| restore_main(app, &tray_state))?;

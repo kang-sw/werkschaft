@@ -64,6 +64,8 @@
   //     theme   {theme}               another page picked the theme
   //     settings {layout, input, stageFill?} shell's current choices, independent
   //                                   of whether browser persistence works
+  //     rail-layout {width, collapsed} shell's live docked rail width and
+  //                                   collapse state for stage/gallery math
   //     companion-gate {active}       enable or release companion observations
   // Frontend-only bound, not a persisted setting or manifest key. Zero keeps
   // the fresh-load path for diagnostics; one destination may be loading.
@@ -82,6 +84,7 @@
     hash: { hash: "string" },
     theme: { theme: "string" },
     settings: { layout: "string", input: "string" },
+    "rail-layout": { width: "number", collapsed: "boolean" },
     "companion-gate": { active: "boolean" },
     "companion-packs-changed": {},
     "companion-stage-action": { action: "string" },
@@ -102,7 +105,9 @@
     "rail-open": {},
     sync: {},
     "jank-stall": { stall: "record" },
-    "jank-minor": { durMs: "number", topInvoker: "string" }
+    "jank-minor": { durMs: "number", topInvoker: "string" },
+    "daemon-bridge-req": { id: "string", op: "string", params: "record" },
+    "daemon-bridge-res": { id: "string", ok: "boolean", payload: "?record", error: "?string" }
   };
 
   // message returns m when it is a shell message of a known kind whose

@@ -79,6 +79,14 @@ type ServerOptions struct {
 	// CompanionDelegation bridges ws/companion.delegate_work and
 	// ws/delegation.report to the daemon's in-memory delegation runtime.
 	CompanionDelegation CompanionDelegationHost
+	// DaemonControl is the dashboard daemon's local loopback curl and multi-tab
+	// confirmation bridge host. When nil and Live implements DaemonControlHost,
+	// NewServerWithOptions binds Live automatically.
+	DaemonControl DaemonControlHost
+	// DashboardControlAccess snapshots whether this hosted lead opted into
+	// ws/daemon.* at MCP token attach (ProxyHello.DashboardControlAccess).
+	// Honored only when Conversation is set.
+	DashboardControlAccess bool
 	// Conv is the dashboard daemon's conversation history search/read/reveal
 	// host. When nil and Live implements ConvHost, NewServerWithOptions binds
 	// Live automatically.
@@ -264,6 +272,12 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 		}
 	}
 	s.companionDelegation = opts.CompanionDelegation
+	s.daemonControl = opts.DaemonControl
+	if s.daemonControl == nil && opts.Live != nil {
+		if host, ok := opts.Live.(DaemonControlHost); ok {
+			s.daemonControl = host
+		}
+	}
 	s.conv = opts.Conv
 	if s.conv == nil && opts.Live != nil {
 		if host, ok := opts.Live.(ConvHost); ok {
@@ -276,6 +290,7 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 	s.userCommands, s.userCommandsDiscovery = opts.UserCommands, opts.UserCommandsDiscovery
 	if s.conversation != "" {
 		s.execCutover = opts.ExecCutover
+		s.dashboardControlEffective = opts.DashboardControlAccess
 		s.convHistoryListed = opts.ConvHistoryAccess
 		s.recordExecLaunch = opts.RecordExecLaunch
 		if opts.FileWrites != nil {

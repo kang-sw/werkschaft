@@ -18,7 +18,7 @@
 :root[data-shell] .frames { inset-block-start: var(--account-banner-space, 0px); }
 :root[data-shell]:not([data-fdim]) .account-banner { pointer-events: auto; }
 @media (min-width: 1600px) {
-  .account-banner { margin-inline-start: calc(348px + var(--sh-stage-side, 0px)); }
+  .account-banner { margin-inline-start: calc(var(--rail-reserve, 288px) + var(--sh-stage-side, 0px)); }
   :root[data-account-banner] .dwrap .dbody > .rail {
     margin-block-start: calc(-1 * (var(--toph) + var(--account-banner-space, 0px)));
   }

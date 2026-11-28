@@ -130,10 +130,10 @@ const pendingPayload = {
       assert.deepEqual(errors, [], `${theme}: init errors`);
 
       await page.locator('.usage-group-label').first().waitFor();
-      // Header handle checks: single 34px row, 4 harness groups (Claude, Codex, Gemini, Claude/GPT),
+      // Header handle checks: single 36px row, 4 harness groups (Claude, Codex, Gemini, Claude/GPT),
       // disabled 5h bucket omitted in footer (2 + 1 + 2 + 1 = 6 columns), compact group labels without age.
       const handle = await page.locator('.usage-toggle').boundingBox();
-      assert.equal(handle.height, 34, `${theme}: single 34px handle row`);
+      assert.equal(handle.height, 36, `${theme}: single 36px handle row`);
       assert.equal(await page.locator('.usage-harness').count(), 4);
       assert.equal(await page.locator('.usage-column').count(), 6);
       assert.equal(await page.locator('.usage-group').count(), 0);
@@ -235,7 +235,7 @@ const pendingPayload = {
       assert.equal(await page.locator('.usage-group-age').count(), 0);
       assert.equal(await page.locator('.usage-harness').nth(2).getAttribute('title'), 'Gemini Models');
       const singleHandle = await page.locator('.usage-toggle').boundingBox();
-      assert.equal(singleHandle.height, 34, `${theme}: single-agy 34px handle row`);
+      assert.equal(singleHandle.height, 36, `${theme}: single-agy 36px handle row`);
       await page.locator('.usage-toggle').screenshot({ path: path.join(output, `single-agy-${theme}.png`) });
 
       assert.deepEqual(requests, [], `${theme}: no network requests`);
