@@ -185,6 +185,18 @@ func TestDaemonControlBrowser(t *testing.T) {
 			}
 			f.d.SetScreenshotPlaywrightModule(body.Module)
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		case "/ctrl/confirm":
+			var req DaemonConfirmRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+			defer cancel()
+			res := f.d.RequestDaemonConfirmation(ctx, req)
+			_ = json.NewEncoder(w).Encode(res)
+		case "/ctrl/phone-snapshot":
+			_ = json.NewEncoder(w).Encode(f.d.CompanionPhone().Snapshot())
 		default:
 			http.NotFound(w, r)
 		}

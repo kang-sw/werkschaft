@@ -133,6 +133,13 @@
   function statusForSnapshot(snap) {
     const st = snap?.state || "laptop_ambient";
     const unreadAgent = Number(snap?.unreadAgent) || 0;
+    if (snap?.pendingApproval && snap.pendingApproval.requestId) {
+      return {
+        dot: "approval",
+        subtitle: t("js.companion.messenger.status.approval_paused", "Paused — waiting for 1-click approval"),
+        typing: ""
+      };
+    }
     if (st === "phone_active") {
       return {
         dot: "phone",
@@ -207,6 +214,7 @@
       state: "laptop_ambient",
       posture: "laptop",
       phoneFaceDown: false,
+      pendingApproval: null,
       messages: [],
       unreadClient: 0,
       unreadAgent: 0,
@@ -519,7 +527,8 @@
         const wasNearBottom = (threadEl.scrollHeight - threadEl.scrollTop - threadEl.clientHeight) < 48;
         threadEl.replaceChildren();
         const msgs = Array.isArray(snapshot.messages) ? snapshot.messages : [];
-        if (msgs.length === 0) {
+        const pendingApproval = snapshot.pendingApproval && snapshot.pendingApproval.requestId ? snapshot.pendingApproval : null;
+        if (msgs.length === 0 && !pendingApproval) {
           const empty = doc.createElement("div");
           empty.className = "ws-cm-empty";
           empty.textContent = t("js.companion.messenger.empty", "Send a quick note — it buzzes your companion's desk smartphone.");
@@ -577,7 +586,40 @@
             threadEl.append(row);
           }
         }
-        if (wasNearBottom || msgs.length <= 2) {
+        if (pendingApproval) {
+          const echo = doc.createElement("div");
+          echo.className = "ws-cm-pause-echo";
+          echo.setAttribute("role", "status");
+          echo.setAttribute("data-request-id", pendingApproval.requestId);
+
+          const head = doc.createElement("div");
+          head.className = "ws-cm-pause-head";
+          head.append(makeSvg(doc, ICONS.shield));
+          const title = doc.createElement("span");
+          title.className = "ws-cm-pause-title";
+          title.textContent = t("js.companion.messenger.approval_paused_title", "Waiting for 1-click approval");
+          head.append(title);
+          if (pendingApproval.tool) {
+            const tool = doc.createElement("span");
+            tool.className = "ws-cm-pause-tool";
+            tool.textContent = pendingApproval.tool;
+            head.append(tool);
+          }
+          echo.append(head);
+
+          if (pendingApproval.summary) {
+            const sum = doc.createElement("p");
+            sum.className = "ws-cm-pause-summary";
+            sum.textContent = pendingApproval.summary;
+            echo.append(sum);
+          }
+          const hint = doc.createElement("p");
+          hint.className = "ws-cm-pause-hint";
+          hint.textContent = t("js.companion.messenger.approval_paused_hint", "Approve or deny in the top confirmation banner to continue.");
+          echo.append(hint);
+          threadEl.append(echo);
+        }
+        if (wasNearBottom || msgs.length <= 2 || Boolean(pendingApproval)) {
           threadEl.scrollTop = threadEl.scrollHeight;
         }
       }
@@ -669,9 +711,13 @@
 
     function applySnapshot(next) {
       if (!next || typeof next !== "object") return;
+      const pendingApproval = next.pendingApproval && typeof next.pendingApproval === "object" && next.pendingApproval.requestId
+        ? next.pendingApproval
+        : null;
       snapshot = {
         ...snapshot,
         ...next,
+        pendingApproval,
         messages: Array.isArray(next.messages) ? next.messages : snapshot.messages,
         tier1Summary: Array.isArray(next.tier1Summary) ? next.tier1Summary : snapshot.tier1Summary,
         rotationMeta: next.rotationMeta && typeof next.rotationMeta === "object" ? next.rotationMeta : snapshot.rotationMeta

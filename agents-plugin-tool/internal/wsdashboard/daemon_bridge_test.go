@@ -436,3 +436,119 @@ func TestDaemonBridgeRequestRoundTrip(t *testing.T) {
 		t.Fatalf("bridge roundtrip = (%s, %q, %v), want nodes=3 on tab-rt", string(got.payload), got.tabID, got.err)
 	}
 }
+
+func TestDaemonBridgeCompanionPauseEchoAndDeniedMapping(t *testing.T) {
+	f := startPageFixture(t)
+	tab := openWS(t, f.base, "/rail/events?bridge=1&tab_id=tab-pause&display=1", f.base, true)
+	waitForDaemonTabs(t, f.d, func(tabs []DaemonTabInfo) bool { return len(tabs) == 1 })
+
+	// 1. CompanionPause=true on DaemonCurl sets PendingApproval while awaiting
+	// confirmation, broadcasts companion-phone SSE, maps timeout to code="denied"
+	// (reason="timeout"), and clears PendingApproval automatically on expiry.
+	f.d.daemonConfirmTimeout = 120 * time.Millisecond
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := f.d.DaemonCurl(context.Background(), DaemonCurlRequest{
+			Method:         "POST",
+			Path:           "/health",
+			CompanionPause: true,
+		})
+		errCh <- err
+	}()
+
+	ev := waitForWSEvent(t, tab.events, DaemonConfirmRequestEvent)
+	var pushed confirmPushPayload
+	if err := json.Unmarshal([]byte(ev.data), &pushed); err != nil {
+		t.Fatal(err)
+	}
+	pa := f.d.CompanionPhone().Snapshot().PendingApproval
+	if pa == nil || pa.RequestID != pushed.RequestID || pa.Tool != "daemon.curl" || pa.Summary != "POST /health" {
+		t.Fatalf("expected PendingApproval while companion-work curl paused, got %+v", pa)
+	}
+
+	err := <-errCh
+	dce, ok := IsDaemonControlError(err)
+	if !ok || dce.Code != "denied" || dce.Reason != "timeout" {
+		t.Fatalf("companion-work curl timeout err = (%v, dce=%+v), want code=denied reason=timeout", err, dce)
+	}
+	if paAfter := f.d.CompanionPhone().Snapshot().PendingApproval; paAfter != nil {
+		t.Fatalf("PendingApproval did not clear after timeout: %+v", paAfter)
+	}
+
+	// 2. Regular lead (CompanionPause=false) still preserves code="timeout" and
+	// does NOT set PendingApproval.
+	errChLead := make(chan error, 1)
+	go func() {
+		_, err := f.d.DaemonCurl(context.Background(), DaemonCurlRequest{
+			Method:         "POST",
+			Path:           "/health",
+			CompanionPause: false,
+		})
+		errChLead <- err
+	}()
+	_ = waitForWSEvent(t, tab.events, DaemonConfirmRequestEvent)
+	if paLead := f.d.CompanionPhone().Snapshot().PendingApproval; paLead != nil {
+		t.Fatalf("regular lead confirm must not set companion PendingApproval: %+v", paLead)
+	}
+	errLead := <-errChLead
+	dceLead, ok := IsDaemonControlError(errLead)
+	if !ok || dceLead.Code != "timeout" {
+		t.Fatalf("regular lead curl timeout err = (%v, dce=%+v), want code=timeout", errLead, dceLead)
+	}
+
+	// 3. CompanionPause=true on RequestDaemonConfirmation clears PendingApproval on
+	// both approve and tab disconnect (tab_gone).
+	f.d.daemonConfirmTimeout = 5 * time.Second
+	resCh := make(chan DaemonConfirmResult, 1)
+	go func() {
+		resCh <- f.d.RequestDaemonConfirmation(context.Background(), DaemonConfirmRequest{
+			Tool:           "config.tune",
+			Summary:        "config.tune (key=workflow.lang, scope=global)",
+			CompanionPause: true,
+		})
+	}()
+	ev2 := waitForWSEvent(t, tab.events, DaemonConfirmRequestEvent)
+	var pushed2 confirmPushPayload
+	_ = json.Unmarshal([]byte(ev2.data), &pushed2)
+	if pa2 := f.d.CompanionPhone().Snapshot().PendingApproval; pa2 == nil || pa2.RequestID != pushed2.RequestID || pa2.Tool != "config.tune" {
+		t.Fatalf("PendingApproval during config.tune = %+v, want request %s", pa2, pushed2.RequestID)
+	}
+	_ = tab.conn.Close()
+	res2 := <-resCh
+	if res2.Approved || res2.Code != "tab_gone" {
+		t.Fatalf("tab disconnect result = %+v, want tab_gone", res2)
+	}
+	if paGone := f.d.CompanionPhone().Snapshot().PendingApproval; paGone != nil {
+		t.Fatalf("PendingApproval did not clear on tab disconnect: %+v", paGone)
+	}
+}
+
+func TestCompanionPhoneConcurrentApprovalPauses(t *testing.T) {
+	var store CompanionPhoneStore
+
+	// Queue two concurrent approval pauses; snapshot exposes the head (FIFO).
+	store.BeginApprovalPause("req-1", "config.tune", "config.tune (key=workflow.lang, value=ko)")
+	store.BeginApprovalPause("req-2", "daemon.curl", "POST /api/example")
+	if pa := store.Snapshot().PendingApproval; pa == nil || pa.RequestID != "req-1" {
+		t.Fatalf("head PendingApproval = %+v, want req-1", pa)
+	}
+
+	// Clearing req-1 promotes req-2 without dropping it.
+	store.EndApprovalPause("req-1")
+	if pa := store.Snapshot().PendingApproval; pa == nil || pa.RequestID != "req-2" || pa.Tool != "daemon.curl" {
+		t.Fatalf("promoted PendingApproval = %+v, want req-2", pa)
+	}
+
+	// Queue req-3 behind req-2, clear req-3 out of order -> req-2 stays head.
+	store.BeginApprovalPause("req-3", "note.write", "note.write (layer=machine)")
+	store.EndApprovalPause("req-3")
+	if pa := store.Snapshot().PendingApproval; pa == nil || pa.RequestID != "req-2" {
+		t.Fatalf("after out-of-order clear PendingApproval = %+v, want req-2", pa)
+	}
+
+	// Clearing the final pending approval restores nil cleanly.
+	store.EndApprovalPause("req-2")
+	if pa := store.Snapshot().PendingApproval; pa != nil {
+		t.Fatalf("after final clear PendingApproval = %+v, want nil", pa)
+	}
+}

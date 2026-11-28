@@ -79,14 +79,15 @@ type DaemonTabInfo struct {
 // DaemonConfirmRequest describes a mutating operation awaiting 1-click user
 // approval in the top-level dashboard shell.
 type DaemonConfirmRequest struct {
-	TabID       string `json:"tab_id,omitempty"`
-	Tool        string `json:"tool"`
-	Method      string `json:"method,omitempty"`
-	Path        string `json:"path,omitempty"`
-	Action      string `json:"action,omitempty"`
-	TargetLabel string `json:"target_label,omitempty"`
-	FillValue   string `json:"fill_value,omitempty"`
-	Summary     string `json:"summary"`
+	TabID          string `json:"tab_id,omitempty"`
+	Tool           string `json:"tool"`
+	Method         string `json:"method,omitempty"`
+	Path           string `json:"path,omitempty"`
+	Action         string `json:"action,omitempty"`
+	TargetLabel    string `json:"target_label,omitempty"`
+	FillValue      string `json:"fill_value,omitempty"`
+	Summary        string `json:"summary"`
+	CompanionPause bool   `json:"companion_pause,omitempty"`
 }
 
 // DaemonConfirmResult is the settled outcome of RequestDaemonConfirmation.
@@ -491,6 +492,11 @@ func (d *Daemon) RequestDaemonConfirmation(ctx context.Context, req DaemonConfir
 	}
 	tabID := tab.tabID
 	b.mu.Unlock()
+
+	if req.CompanionPause {
+		d.companionPhone.BeginApprovalPause(requestID, req.Tool, req.Summary)
+		defer d.companionPhone.EndApprovalPause(requestID)
+	}
 
 	clearPending := func() {
 		b.mu.Lock()

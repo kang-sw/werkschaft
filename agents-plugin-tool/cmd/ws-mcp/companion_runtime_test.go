@@ -23,6 +23,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
+	"golang.org/x/net/websocket"
 )
 
 type testLogWriter struct{ t *testing.T }
@@ -384,6 +385,8 @@ func (f *companionFixture) callMCP(hostedKey, method string, params any) rpcWire
 		Conversation:        convID,
 		Companion:           f.daemon,
 		CompanionDelegation: f.rt,
+		DaemonControl:       f.daemon,
+		RecordReader:        f.agents,
 		Agents:              f.agents,
 	})
 	defer srv.Close()
@@ -557,14 +560,14 @@ func TestCompanionRuntimeEndToEndTrivialWorkCapabilitiesAndHiding(t *testing.T) 
 		mu.Unlock()
 
 		if turn == 1 {
-			// (c) High-impact tool returns approval_required; allowlisted tool runs.
+			// (c) High-impact tool fails closed with denied (no active dashboard tab); allowlisted tool runs.
 			gateTxt, gateErr, _ := f.callTool(p.wsKey, "config.tune", map[string]any{
 				"session_key": p.wsKey,
 				"key":         "workflow.lang",
 				"scope":       "global",
 				"value":       "ko",
 			})
-			if gateErr && strings.Contains(gateTxt, `"approval_required"`) {
+			if gateErr && strings.Contains(gateTxt, `"error":"denied"`) && strings.Contains(gateTxt, `"no_active_tab"`) {
 				approvalReqSeen.Store(true)
 			}
 			_, listErr, listRPC := f.callTool(p.wsKey, "config.list", map[string]any{"session_key": p.wsKey})
@@ -612,7 +615,7 @@ func TestCompanionRuntimeEndToEndTrivialWorkCapabilitiesAndHiding(t *testing.T) 
 		t.Fatal("(b) delegate_work under phone posture did not return posture_locked")
 	}
 	if !approvalReqSeen.Load() {
-		t.Fatal("(c) Tier-2 high-impact config.tune did not return approval_required")
+		t.Fatal("(c) Tier-2 high-impact config.tune did not fail closed with denied/no_active_tab")
 	}
 	if !allowlistedRan.Load() {
 		t.Fatal("(c) Tier-2 allowlisted config.list failed")
@@ -646,7 +649,7 @@ func TestCompanionRuntimeEndToEndTrivialWorkCapabilitiesAndHiding(t *testing.T) 
 
 	// --- (d) Capability tests over tools/list + tools/call on REAL minted keys ---
 	bodyTools := f.listTools(bodyKey)
-	for _, forbidden := range []string{"config.tune", "git.commit", "git.merge", "tickets.close", "exec.shell", "agent.spawn", "delegation.report"} {
+	for _, forbidden := range []string{"config.tune", "git.commit", "git.merge", "tickets.close", "exec.shell", "agent.spawn", "delegation.report", "daemon.curl", "daemon.tabs", "daemon.dom", "daemon.ui", "daemon.screenshot"} {
 		if bodyTools[forbidden] {
 			t.Fatalf("(d) companion-body tools/list exposed forbidden tool %q", forbidden)
 		}
@@ -665,6 +668,11 @@ func TestCompanionRuntimeEndToEndTrivialWorkCapabilitiesAndHiding(t *testing.T) 
 	}
 	if !workTools["delegation.report"] {
 		t.Fatal("(d) companion-work tools/list missing delegation.report")
+	}
+	for _, wantDaemon := range []string{"daemon.curl", "daemon.tabs", "daemon.dom", "daemon.ui", "daemon.screenshot"} {
+		if !workTools[wantDaemon] {
+			t.Fatalf("(d) companion-work tools/list missing auto-granted %q", wantDaemon)
+		}
 	}
 
 	// --- (c) Neither companion session appears in rail, roster, or direct POST send ---
@@ -1312,6 +1320,298 @@ func TestCompanionRuntimeReviewRegressions(t *testing.T) {
 		if rec.Root != wsDir {
 			t.Fatalf("companion-work Root=%q, want registered workspace %q (not state dir %q)", rec.Root, wsDir, dir)
 		}
+	})
+}
+
+func TestCompanionWorkApprovalBannerAndPauseEchoEndToEnd(t *testing.T) {
+	f := newCompanionFixture(t, "agent")
+	workID, err := f.rt.ensureWorkSession(f.daemon)
+	if err != nil {
+		t.Fatalf("ensureWorkSession: %v", err)
+	}
+	rec, ok := f.agents.CompanionRecord(workID)
+	if !ok || rec.WSKey == "" {
+		t.Fatalf("missing companion-work record for %s", workID)
+	}
+	workKey := rec.WSKey
+
+	// Connect a real local browser bridge tab to /rail/events.
+	ep := f.daemon.Endpoint()
+	baseHTTP := fmt.Sprintf("http://127.0.0.1:%d", ep.Port)
+	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/rail/events?bridge=1&tab_id=tab-cw&display=1", ep.Port)
+	cfg, err := websocket.NewConfig(wsURL, baseHTTP)
+	if err != nil {
+		t.Fatalf("websocket.NewConfig: %v", err)
+	}
+	cfg.Header.Set("Cookie", f.authCookie.Name+"="+f.authCookie.Value)
+	conn, err := websocket.DialConfig(cfg)
+	if err != nil {
+		t.Fatalf("websocket.DialConfig: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	type wsMsg struct {
+		Event string          `json:"event"`
+		Data  json.RawMessage `json:"data"`
+	}
+	events := make(chan wsMsg, 64)
+	go func() {
+		defer close(events)
+		for {
+			var raw string
+			if err := websocket.Message.Receive(conn, &raw); err != nil {
+				return
+			}
+			var m wsMsg
+			if json.Unmarshal([]byte(raw), &m) == nil && m.Event != "" {
+				events <- m
+			}
+		}
+	}()
+
+	waitCompanionUntil(t, 5*time.Second, "tab-cw registered", func() bool {
+		for _, tab := range f.daemon.DaemonTabs() {
+			if tab.TabID == "tab-cw" {
+				return true
+			}
+		}
+		return false
+	})
+
+	waitEvent := func(want string) json.RawMessage {
+		t.Helper()
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		for {
+			select {
+			case ev, ok := <-events:
+				if !ok {
+					t.Fatalf("WS closed while waiting for %q", want)
+				}
+				if ev.Event == want {
+					return ev.Data
+				}
+			case <-timer.C:
+				t.Fatalf("timed out waiting for WS event %q", want)
+			}
+		}
+	}
+
+	postReply := func(payload map[string]any) int {
+		t.Helper()
+		raw, _ := json.Marshal(payload)
+		req, err := http.NewRequest(http.MethodPost, baseHTTP+wsdashboard.DaemonBridgeReplyPath, bytes.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", baseHTTP)
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		req.AddCookie(f.authCookie)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	type confirmPush struct {
+		RequestID string `json:"request_id"`
+		Nonce     string `json:"nonce"`
+		TabID     string `json:"tab_id"`
+		Tool      string `json:"tool"`
+		Summary   string `json:"summary"`
+	}
+
+	// 1. Read-only daemon.curl (GET), daemon.tabs, and allowlisted config.list
+	// execute immediately with zero confirmation banner and zero pause echo.
+	txt, isErr, rpcErr := f.callTool(workKey, "daemon.curl", map[string]any{
+		"session_key": workKey,
+		"method":      "GET",
+		"path":        "/health",
+	})
+	if isErr || rpcErr != "" || !strings.Contains(txt, `"status":200`) {
+		t.Fatalf("companion-work GET /health failed: txt=%q isErr=%v rpcErr=%q", txt, isErr, rpcErr)
+	}
+	txt, isErr, rpcErr = f.callTool(workKey, "daemon.tabs", map[string]any{"session_key": workKey})
+	if isErr || rpcErr != "" || !strings.Contains(txt, "tab-cw") {
+		t.Fatalf("companion-work daemon.tabs failed: txt=%q isErr=%v rpcErr=%q", txt, isErr, rpcErr)
+	}
+	if f.daemon.CompanionPhone().Snapshot().PendingApproval != nil {
+		t.Fatal("read-only calls must not set PendingApproval")
+	}
+
+	// 2. High-impact lead tool (config.tune) pauses behind 1-click banner +
+	// messenger pause echo; foreign/stale request IDs are rejected; Deny returns
+	// denied with zero side effect and clears PendingApproval.
+	type toolOut struct {
+		text   string
+		isErr  bool
+		rpcErr string
+	}
+	denyCh := make(chan toolOut, 1)
+	go func() {
+		txt, isErr, rpcErr := f.callTool(workKey, "config.tune", map[string]any{
+			"session_key": workKey,
+			"key":         "workflow.lang",
+			"scope":       "global",
+			"value":       "ko",
+		})
+		denyCh <- toolOut{txt, isErr, rpcErr}
+	}()
+
+	var pushed confirmPush
+	if err := json.Unmarshal(waitEvent(wsdashboard.DaemonConfirmRequestEvent), &pushed); err != nil {
+		t.Fatalf("unmarshal confirm push: %v", err)
+	}
+	if pushed.Tool != "config.tune" || pushed.TabID != "tab-cw" || pushed.RequestID == "" {
+		t.Fatalf("unexpected confirm push for config.tune: %+v", pushed)
+	}
+	waitCompanionUntil(t, 3*time.Second, "PendingApproval populated for config.tune", func() bool {
+		pa := f.daemon.CompanionPhone().Snapshot().PendingApproval
+		return pa != nil && pa.RequestID == pushed.RequestID && pa.Tool == "config.tune"
+	})
+
+	// Foreign request_id and wrong nonce are rejected without settling the pause.
+	if code := postReply(map[string]any{
+		"request_id": "foreign-request-id",
+		"nonce":      pushed.Nonce,
+		"tab_id":     "tab-cw",
+		"decision":   "approve",
+	}); code != http.StatusConflict {
+		t.Fatalf("foreign request_id status = %d, want 409", code)
+	}
+	if code := postReply(map[string]any{
+		"request_id": pushed.RequestID,
+		"nonce":      "wrong-nonce",
+		"tab_id":     "tab-cw",
+		"decision":   "approve",
+	}); code != http.StatusForbidden {
+		t.Fatalf("wrong nonce status = %d, want 403", code)
+	}
+	if pa := f.daemon.CompanionPhone().Snapshot().PendingApproval; pa == nil || pa.RequestID != pushed.RequestID {
+		t.Fatalf("rejected foreign/bad-nonce reply cleared PendingApproval prematurely: %+v", pa)
+	}
+
+	// Real Deny settles with denied and zero side effects.
+	if code := postReply(map[string]any{
+		"request_id": pushed.RequestID,
+		"nonce":      pushed.Nonce,
+		"tab_id":     "tab-cw",
+		"decision":   "deny",
+	}); code != http.StatusOK {
+		t.Fatalf("deny status = %d, want 200", code)
+	}
+	denyRes := <-denyCh
+	if !denyRes.isErr || denyRes.rpcErr != "" || !strings.Contains(denyRes.text, `"error":"denied"`) {
+		t.Fatalf("denied config.tune = %+v, want error=denied", denyRes)
+	}
+	waitCompanionUntil(t, 3*time.Second, "PendingApproval cleared after deny", func() bool {
+		return f.daemon.CompanionPhone().Snapshot().PendingApproval == nil
+	})
+	cfgTxt, cfgErr, _ := f.callTool(workKey, "config.get", map[string]any{"session_key": workKey, "key": "workflow.lang"})
+	if cfgErr || strings.Contains(cfgTxt, "ko") {
+		t.Fatalf("denied config.tune mutated config: %q", cfgTxt)
+	}
+
+	// 3. Approving config.tune executes and persists workflow.lang=ko, then clears PendingApproval.
+	approveCh := make(chan toolOut, 1)
+	go func() {
+		txt, isErr, rpcErr := f.callTool(workKey, "config.tune", map[string]any{
+			"session_key": workKey,
+			"key":         "workflow.lang",
+			"scope":       "global",
+			"value":       "ko",
+		})
+		approveCh <- toolOut{txt, isErr, rpcErr}
+	}()
+	var pushed2 confirmPush
+	if err := json.Unmarshal(waitEvent(wsdashboard.DaemonConfirmRequestEvent), &pushed2); err != nil {
+		t.Fatalf("unmarshal confirm push 2: %v", err)
+	}
+	if code := postReply(map[string]any{
+		"request_id": pushed2.RequestID,
+		"nonce":      pushed2.Nonce,
+		"tab_id":     "tab-cw",
+		"decision":   "approve",
+	}); code != http.StatusOK {
+		t.Fatalf("approve status = %d, want 200", code)
+	}
+	approveRes := <-approveCh
+	if approveRes.isErr || approveRes.rpcErr != "" {
+		t.Fatalf("approved config.tune failed: %+v", approveRes)
+	}
+	waitCompanionUntil(t, 3*time.Second, "PendingApproval cleared after approve", func() bool {
+		return f.daemon.CompanionPhone().Snapshot().PendingApproval == nil
+	})
+	cfgTxt, cfgErr, _ = f.callTool(workKey, "config.get", map[string]any{"session_key": workKey, "key": "workflow.lang"})
+	if cfgErr || !strings.Contains(cfgTxt, "ko") {
+		t.Fatalf("approved config.tune did not persist workflow.lang=ko: %q", cfgTxt)
+	}
+
+	// 4. Mutating ws/daemon.curl (POST) by companion-work pauses with pause echo,
+	// returns denied on dismiss, and executes cleanly on approve.
+	curlDismissCh := make(chan toolOut, 1)
+	go func() {
+		txt, isErr, rpcErr := f.callTool(workKey, "daemon.curl", map[string]any{
+			"session_key": workKey,
+			"method":      "POST",
+			"path":        "/health",
+		})
+		curlDismissCh <- toolOut{txt, isErr, rpcErr}
+	}()
+	var pushedCurl confirmPush
+	if err := json.Unmarshal(waitEvent(wsdashboard.DaemonConfirmRequestEvent), &pushedCurl); err != nil {
+		t.Fatalf("unmarshal curl confirm push: %v", err)
+	}
+	waitCompanionUntil(t, 3*time.Second, "PendingApproval populated for daemon.curl", func() bool {
+		pa := f.daemon.CompanionPhone().Snapshot().PendingApproval
+		return pa != nil && pa.RequestID == pushedCurl.RequestID && pa.Tool == "daemon.curl"
+	})
+	if code := postReply(map[string]any{
+		"request_id": pushedCurl.RequestID,
+		"nonce":      pushedCurl.Nonce,
+		"tab_id":     "tab-cw",
+		"decision":   "dismiss",
+	}); code != http.StatusOK {
+		t.Fatalf("dismiss status = %d, want 200", code)
+	}
+	curlDismissRes := <-curlDismissCh
+	if !curlDismissRes.isErr || !strings.Contains(curlDismissRes.text, `"error":"denied"`) {
+		t.Fatalf("dismissed companion-work daemon.curl = %+v, want denied", curlDismissRes)
+	}
+	waitCompanionUntil(t, 3*time.Second, "PendingApproval cleared after curl dismiss", func() bool {
+		return f.daemon.CompanionPhone().Snapshot().PendingApproval == nil
+	})
+
+	curlApproveCh := make(chan toolOut, 1)
+	go func() {
+		txt, isErr, rpcErr := f.callTool(workKey, "daemon.curl", map[string]any{
+			"session_key": workKey,
+			"method":      "POST",
+			"path":        "/health",
+		})
+		curlApproveCh <- toolOut{txt, isErr, rpcErr}
+	}()
+	var pushedCurl2 confirmPush
+	if err := json.Unmarshal(waitEvent(wsdashboard.DaemonConfirmRequestEvent), &pushedCurl2); err != nil {
+		t.Fatalf("unmarshal curl confirm push 2: %v", err)
+	}
+	if code := postReply(map[string]any{
+		"request_id": pushedCurl2.RequestID,
+		"nonce":      pushedCurl2.Nonce,
+		"tab_id":     "tab-cw",
+		"decision":   "approve",
+	}); code != http.StatusOK {
+		t.Fatalf("approve curl status = %d, want 200", code)
+	}
+	curlApproveRes := <-curlApproveCh
+	if curlApproveRes.isErr || curlApproveRes.rpcErr != "" || !strings.Contains(curlApproveRes.text, `"status":405`) {
+		t.Fatalf("approved companion-work POST /health = %+v, want HTTP 405 from daemon mux", curlApproveRes)
+	}
+	waitCompanionUntil(t, 3*time.Second, "PendingApproval cleared after curl approve", func() bool {
+		return f.daemon.CompanionPhone().Snapshot().PendingApproval == nil
 	})
 }
 

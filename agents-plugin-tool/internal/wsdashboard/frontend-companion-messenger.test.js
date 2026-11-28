@@ -574,6 +574,39 @@ test("Step 4 Phase 1: messenger popup anchoring, Variant D rail widths, viewport
   });
   assert.equal(dot.dataset.state, "laptop", "clearing unavailable with no unread messages must restore laptop dot state");
 
+  // Phase 2: pendingApproval renders pause status echo + approval status dot,
+  // and clears cleanly when omitted from a subsequent snapshot (Go omitempty).
+  M.applySnapshot({
+    seq: 7, state: "laptop_work", posture: "laptop", unavailable: false,
+    pendingApproval: {
+      requestId: "req-42",
+      tool: "config.tune",
+      summary: "config.tune (key=workflow.lang, scope=global)",
+      createdAt: Date.now()
+    },
+    messages: [{ id: "m1", sender: "companion", text: "On it!", createdAt: Date.now() }],
+    unreadClient: 0, unreadAgent: 0, tier1Summary: []
+  });
+  assert.equal(dot.dataset.state, "approval", "pendingApproval must set dot data-state=approval");
+  assert.ok(subtitle.textContent.toLowerCase().includes("approval"), `expected approval subtitle, got ${subtitle.textContent}`);
+  const pauseEcho = popup.all().find(el => el.className === "ws-cm-pause-echo");
+  assert.ok(pauseEcho, "pendingApproval must render .ws-cm-pause-echo status card in thread");
+  assert.equal(pauseEcho.getAttribute("role"), "status");
+  assert.equal(pauseEcho.getAttribute("data-request-id"), "req-42");
+  const pauseTool = pauseEcho.all().find(el => el.className === "ws-cm-pause-tool");
+  const pauseSummary = pauseEcho.all().find(el => el.className === "ws-cm-pause-summary");
+  assert.equal(pauseTool?.textContent, "config.tune");
+  assert.equal(pauseSummary?.textContent, "config.tune (key=workflow.lang, scope=global)");
+
+  // Subsequent snapshot omitting pendingApproval (Go omitempty) must remove the echo and restore laptop_work dot state.
+  M.applySnapshot({
+    seq: 8, state: "laptop_work", posture: "laptop", unavailable: false,
+    messages: [{ id: "m1", sender: "companion", text: "On it!", createdAt: Date.now() }],
+    unreadClient: 0, unreadAgent: 0, tier1Summary: []
+  });
+  assert.equal(popup.all().find(el => el.className === "ws-cm-pause-echo"), undefined, "omitted pendingApproval must remove .ws-cm-pause-echo");
+  assert.equal(dot.dataset.state, "work", "clearing pendingApproval during laptop_work must restore work dot state");
+
   M.dispose();
 });
 

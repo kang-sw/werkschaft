@@ -91,20 +91,21 @@ type DaemonDOMSnapshot struct {
 // DaemonUIRequest is the structured input to ws/daemon.ui (strictly 6
 // allowlisted semantic actions; zero arbitrary JS eval).
 type DaemonUIRequest struct {
-	TabID      string `json:"tab_id,omitempty"`
-	Action     string `json:"action"`
-	Path       string `json:"path,omitempty"`
-	ReplyID    string `json:"reply_id,omitempty"`
-	EntryID    string `json:"entry_id,omitempty"`
-	Scope      string `json:"scope,omitempty"`
-	Section    string `json:"section,omitempty"`
-	Target     string `json:"target,omitempty"`
-	Worktree   string `json:"worktree,omitempty"`
-	Session    string `json:"session,omitempty"`
-	Panel      string `json:"panel,omitempty"`
-	Ref        string `json:"ref,omitempty"`
-	Generation uint64 `json:"generation,omitempty"`
-	Value      string `json:"value,omitempty"`
+	TabID          string `json:"tab_id,omitempty"`
+	Action         string `json:"action"`
+	Path           string `json:"path,omitempty"`
+	ReplyID        string `json:"reply_id,omitempty"`
+	EntryID        string `json:"entry_id,omitempty"`
+	Scope          string `json:"scope,omitempty"`
+	Section        string `json:"section,omitempty"`
+	Target         string `json:"target,omitempty"`
+	Worktree       string `json:"worktree,omitempty"`
+	Session        string `json:"session,omitempty"`
+	Panel          string `json:"panel,omitempty"`
+	Ref            string `json:"ref,omitempty"`
+	Generation     uint64 `json:"generation,omitempty"`
+	Value          string `json:"value,omitempty"`
+	CompanionPause bool   `json:"companion_pause,omitempty"`
 }
 
 // DaemonUIResponse is the structured result of a ws/daemon.ui action.
@@ -645,15 +646,16 @@ func (d *Daemon) DaemonUI(ctx context.Context, req DaemonUIRequest) (DaemonUIRes
 			label = ref
 		}
 		confirm := d.RequestDaemonConfirmation(ctx, DaemonConfirmRequest{
-			TabID:       targetTabID,
-			Tool:        "daemon.ui",
-			Action:      "click_ref",
-			TargetLabel: label,
-			Summary:     fmt.Sprintf("click_ref %s (%s)", ref, label),
+			TabID:          targetTabID,
+			Tool:           "daemon.ui",
+			Action:         "click_ref",
+			TargetLabel:    label,
+			Summary:        fmt.Sprintf("click_ref %s (%s)", ref, label),
+			CompanionPause: req.CompanionPause,
 		})
 		if !confirm.Approved {
 			code := confirm.Code
-			if code == "" {
+			if req.CompanionPause || code == "" {
 				code = "denied"
 			}
 			return DaemonUIResponse{}, &DaemonControlError{
@@ -707,16 +709,17 @@ func (d *Daemon) DaemonUI(ctx context.Context, req DaemonUIRequest) (DaemonUIRes
 			fillSummary = clampString(d.redactDaemonSecrets(req.Value), 120)
 		}
 		confirm := d.RequestDaemonConfirmation(ctx, DaemonConfirmRequest{
-			TabID:       targetTabID,
-			Tool:        "daemon.ui",
-			Action:      "fill_ref",
-			TargetLabel: label,
-			FillValue:   fillSummary,
-			Summary:     fmt.Sprintf("fill_ref %s (%s) = %s", ref, label, fillSummary),
+			TabID:          targetTabID,
+			Tool:           "daemon.ui",
+			Action:         "fill_ref",
+			TargetLabel:    label,
+			FillValue:      fillSummary,
+			Summary:        fmt.Sprintf("fill_ref %s (%s) = %s", ref, label, fillSummary),
+			CompanionPause: req.CompanionPause,
 		})
 		if !confirm.Approved {
 			code := confirm.Code
-			if code == "" {
+			if req.CompanionPause || code == "" {
 				code = "denied"
 			}
 			return DaemonUIResponse{}, &DaemonControlError{

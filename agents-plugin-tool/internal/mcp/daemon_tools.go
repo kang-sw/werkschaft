@@ -28,6 +28,7 @@ type DaemonControlHost interface {
 	DaemonDOM(ctx context.Context, req wsdashboard.DaemonDOMRequest) (wsdashboard.DaemonDOMSnapshot, error)
 	DaemonUI(ctx context.Context, req wsdashboard.DaemonUIRequest) (wsdashboard.DaemonUIResponse, error)
 	DaemonScreenshot(ctx context.Context, req wsdashboard.DaemonScreenshotRequest) (wsdashboard.DaemonScreenshotResponse, error)
+	RequestDaemonConfirmation(ctx context.Context, req wsdashboard.DaemonConfirmRequest) wsdashboard.DaemonConfirmResult
 }
 
 func isDaemonControlTool(name string) bool {
@@ -40,6 +41,10 @@ func isCompanionBodyRecord(rec wsagent.Record) bool {
 	}
 	p := strings.ToLower(strings.TrimSpace(rec.Profile))
 	return p == "companion-body" || strings.HasPrefix(p, "companion-body-")
+}
+
+func isCompanionWorkRecord(rec wsagent.Record) bool {
+	return strings.EqualFold(strings.TrimSpace(rec.CompanionRole), CompanionRoleWork)
 }
 
 func daemonControlTools() []map[string]any {
@@ -146,9 +151,10 @@ func (s *Server) daemonControlListed() bool {
 // daemonControlCallRefusal returns a non-empty refusal message when this
 // connection is not authorized to invoke a ws/daemon.* tool. Enforces:
 //   - trusted hosted conversation binding (never launcher/out-of-daemon/worker)
-//   - persisted && effective opt-in (grant after attach stays denied until restart;
-//     live revocation denies immediately without stopping the running process)
 //   - open top-level lead record, never a worker child or Tier-1 companion-body
+//   - automatic access for Tier-2 companion-work sessions (261127 Phase 2)
+//   - persisted && effective opt-in for regular leads (grant after attach stays
+//     denied until restart; live revocation denies immediately)
 func (s *Server) daemonControlCallRefusal(name string) string {
 	if s.connectionDescriptor().leadRender {
 		if s.dashboardControlEffective {
@@ -158,9 +164,6 @@ func (s *Server) daemonControlCallRefusal(name string) string {
 	}
 	if s.conversation == "" {
 		return fmt.Sprintf("%s: dashboard control requires an opted-in dashboard-hosted top-level lead session", name)
-	}
-	if !s.dashboardControlEffective {
-		return fmt.Sprintf("%s: dashboard control was not enabled when this session started (enable it in session settings and restart the session)", name)
 	}
 	if s.recordReader == nil {
 		return fmt.Sprintf("%s: dashboard control record authority is unavailable", name)
@@ -172,6 +175,12 @@ func (s *Server) daemonControlCallRefusal(name string) string {
 	if !rec.Lead || rec.Parent != nil || rec.ClosedAt != "" || isCompanionBodyRecord(rec) {
 		return fmt.Sprintf("%s: dashboard control is restricted to open top-level lead sessions (workers and companion-body are blocked)", name)
 	}
+	if isCompanionWorkRecord(rec) {
+		return ""
+	}
+	if !s.dashboardControlEffective {
+		return fmt.Sprintf("%s: dashboard control was not enabled when this session started (enable it in session settings and restart the session)", name)
+	}
 	if !rec.DashboardControlAccess {
 		return fmt.Sprintf("%s: dashboard control access has been revoked for this session", name)
 	}
@@ -182,7 +191,7 @@ func daemonControlLeadOnlyDenial(name string) string {
 	return fmt.Sprintf("%s is restricted to opted-in top-level hosted lead sessions; worker subagents and spawned forks are blocked", name)
 }
 
-func (s *Server) handleDaemonTool(ctx context.Context, id json.RawMessage, name string, args map[string]any) response {
+func (s *Server) handleDaemonTool(ctx context.Context, id json.RawMessage, name string, args map[string]any, companionWork bool) response {
 	if s.conversation == "" {
 		return toolErrorTextResponse(id, fmt.Sprintf("%s: dashboard control requires an opted-in dashboard-hosted top-level lead session", name))
 	}
@@ -194,13 +203,13 @@ func (s *Server) handleDaemonTool(ctx context.Context, id json.RawMessage, name 
 	}
 	switch name {
 	case daemonCurlTool:
-		return s.handleDaemonCurl(ctx, id, args)
+		return s.handleDaemonCurl(ctx, id, args, companionWork)
 	case daemonTabsTool:
 		return s.handleDaemonTabs(id)
 	case daemonDOMTool:
 		return s.handleDaemonDOM(ctx, id, args)
 	case daemonUITool:
-		return s.handleDaemonUI(ctx, id, args)
+		return s.handleDaemonUI(ctx, id, args, companionWork)
 	case daemonScreenshotTool:
 		return s.handleDaemonScreenshot(ctx, id, args)
 	default:
@@ -264,12 +273,15 @@ func (s *Server) handleDaemonDOM(ctx context.Context, id json.RawMessage, args m
 	return toolJSONResponse(id, snap, nil)
 }
 
-func (s *Server) handleDaemonUI(ctx context.Context, id json.RawMessage, args map[string]any) response {
+func (s *Server) handleDaemonUI(ctx context.Context, id json.RawMessage, args map[string]any, companionWork bool) response {
 	action, err := stringArg(daemonUITool, "action", args)
 	if err != nil {
 		return toolTextResponse(id, "", err)
 	}
-	req := wsdashboard.DaemonUIRequest{Action: action}
+	req := wsdashboard.DaemonUIRequest{
+		Action:         action,
+		CompanionPause: companionWork,
+	}
 	for _, field := range []struct {
 		key string
 		dst *string
@@ -349,7 +361,7 @@ func positiveIntArg(raw any) (int, bool) {
 	return 0, false
 }
 
-func (s *Server) handleDaemonCurl(ctx context.Context, id json.RawMessage, args map[string]any) response {
+func (s *Server) handleDaemonCurl(ctx context.Context, id json.RawMessage, args map[string]any, companionWork bool) response {
 	method, err := stringArg(daemonCurlTool, "method", args)
 	if err != nil {
 		return toolTextResponse(id, "", err)
@@ -384,12 +396,13 @@ func (s *Server) handleDaemonCurl(ctx context.Context, id json.RawMessage, args 
 	}
 
 	resp, err := s.daemonControl.DaemonCurl(ctx, wsdashboard.DaemonCurlRequest{
-		Method:  method,
-		Path:    pathStr,
-		Query:   query,
-		Body:    body,
-		Headers: headers,
-		TabID:   tabID,
+		Method:         method,
+		Path:           pathStr,
+		Query:          query,
+		Body:           body,
+		Headers:        headers,
+		TabID:          tabID,
+		CompanionPause: companionWork,
 	})
 	if err != nil {
 		if dce, ok := wsdashboard.IsDaemonControlError(err); ok {

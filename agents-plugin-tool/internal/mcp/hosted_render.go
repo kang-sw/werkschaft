@@ -81,7 +81,7 @@ func hostedRenderServer(env []string, root string, render HostedRender, key stri
 	if render.DashboardControl {
 		s.dashboardControlEffective = true
 	} else if render.Records != nil {
-		if rec, ok := render.Records.RecordByReplyID(wsmailbox.ReplyID(key)); ok && rec.Lead && rec.Parent == nil && rec.ClosedAt == "" && !isCompanionBodyRecord(rec) && rec.DashboardControlAccess {
+		if rec, ok := render.Records.RecordByReplyID(wsmailbox.ReplyID(key)); ok && rec.Lead && rec.Parent == nil && rec.ClosedAt == "" && !isCompanionBodyRecord(rec) && (rec.DashboardControlAccess || isCompanionWorkRecord(rec)) {
 			s.dashboardControlEffective = true
 		}
 	}
