@@ -36,5 +36,15 @@ ai-docs/assets/mockups/**/*.jpeg
 ai-docs/assets/mockups/**/*.webp
 ai-docs/assets/mockups/**/*.gif
 ai-docs/assets/mockups/**/*.avif
+# Untracked local captures, helper scripts/scratch under mockups, shared, brand mockup renders, plans
+ai-docs/assets/captures/
+ai-docs/assets/mockups/**/*.py
+ai-docs/assets/mockups/**/*.cjs
+ai-docs/assets/mockups/**/*.mjs
+ai-docs/assets/mockups/**/pack*/
+ai-docs/assets/mockups/**/raw/
+/shared/
+ai-docs/ref/brand/mockup/mk936/
+ai-docs/.plans/
 agents-plugin/.claude-plugin/types/
 agents-plugin-wsflow/.claude-plugin/types/
