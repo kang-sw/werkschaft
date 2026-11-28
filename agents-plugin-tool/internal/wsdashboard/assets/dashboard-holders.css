@@ -99,6 +99,29 @@
   transition: background .12s, color .12s;
 }
 .hd-pop .hd-ibtn:hover { background: var(--wb-muted); color: var(--wb-fg); }
+.hd-pop .hd-ibtn[hidden] { display: none; }
+.hd-pop .hd-ibtn[aria-pressed="true"] { color: var(--wb-primary); background: color-mix(in srgb, var(--wb-primary) 12%, transparent); }
+/* the live trace pill: green while the trace runs; its dot pulses by
+   opacity in steps (compositor only), and the closed popup hides it */
+.hd-pop .hd-trace {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--wb-muted-fg);
+  background: color-mix(in srgb, var(--wb-fg) 7%, transparent);
+}
+.hd-pop .hd-trace[hidden] { display: none; }
+.hd-pop .hd-tdot { width: 6px; height: 6px; border-radius: 50%; background: var(--wb-muted-fg); opacity: .5; }
+.hd-pop .hd-trace[data-on="true"] { color: var(--wb-ok); background: color-mix(in srgb, var(--wb-ok) 13%, transparent); }
+.hd-pop .hd-trace[data-on="true"] .hd-tdot { background: var(--wb-ok); opacity: 1; animation: hd-tpulse 1.5s steps(4) infinite; }
+@keyframes hd-tpulse { 50% { opacity: .35; } }
 .hd-pop .hd-ibtn:focus-visible,
 .hd-pop .hd-btn:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 1px; }
 .hd-pop .hd-ibtn.hd-spin .i { animation: hd-spin .8s linear infinite; }
@@ -126,6 +149,9 @@
 }
 .hd-pop .hd-chip.hd-warn { background: color-mix(in srgb, var(--wb-warn) 20%, transparent); color: var(--wb-warn-ink); }
 .hd-pop .hd-chip.hd-fail { background: color-mix(in srgb, var(--wb-fail) 16%, transparent); color: var(--wb-fail); }
+.hd-pop .hd-agg { display: flex; gap: 10px; font-size: 11px; color: var(--wb-muted-fg); white-space: nowrap; }
+.hd-pop .hd-agg[hidden] { display: none; }
+.hd-pop .hd-agg b { color: var(--wb-fg); font-weight: 800; }
 .hd-pop .hd-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -196,6 +222,9 @@
   background: transparent;
 }
 .hd-pop button.hd-chev:hover { background: var(--wb-muted); color: var(--wb-fg); }
+.hd-pop button.hd-chev:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 0; }
+/* a holder without children keeps its chevron's cell, inert and unseen */
+.hd-pop button.hd-chev:disabled { visibility: hidden; cursor: default; }
 .hd-pop .hd-chev .i { width: 11px; height: 11px; transform: rotate(-90deg); transition: transform .14s ease; }
 .hd-pop .hd-chev[aria-expanded="true"] .i { transform: none; }
 .hd-pop .hd-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
@@ -242,7 +271,13 @@
 .hd-pop .hd-trend { display: flex; align-items: center; min-width: 0; }
 .hd-pop .hd-spark { width: 48px; height: 16px; color: var(--wb-primary); overflow: visible; }
 .hd-pop .hd-spark polyline { fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+/* CPU is the bold line; RSS the faint one behind it */
+.hd-pop .hd-spark .hd-sp-rss { stroke: var(--wb-muted-fg); stroke-width: 1; opacity: .55; }
 .hd-pop .hd-lost .hd-spark { color: var(--wb-warn); }
+/* a holder the last trace answer lacks: its process has exited */
+.hd-pop .hd-row.hd-gone .hd-main,
+.hd-pop .hd-row.hd-gone .hd-num { opacity: .5; }
+.hd-pop .hd-row.hd-gone .hd-dot { background: var(--wb-muted-fg); box-shadow: none; }
 .hd-pop .hd-act { display: flex; justify-content: flex-end; min-width: 0; }
 .hd-pop .hd-act .hd-btn { padding: 0 7px; }
 .hd-pop .hd-row.hd-os { padding-top: 3px; padding-bottom: 3px; opacity: .88; }
@@ -364,6 +399,7 @@
   .hd-pop .hd-btn,
   .hd-pop .hd-row,
   .hd-pop .hd-chev .i { transition: none; }
-  .hd-pop .hd-ibtn.hd-spin .i { animation: none; }
+  .hd-pop .hd-ibtn.hd-spin .i,
+  .hd-pop .hd-trace[data-on="true"] .hd-tdot { animation: none; }
   .hd-pop .hd-btn.d-hold-btn.d-hold-active::before { animation: none; transform: scaleX(1); opacity: .3; }
 }

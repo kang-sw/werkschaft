@@ -23,16 +23,40 @@
   // active frame's page (term-attach), so it is off without a frame that
   // offers terminals.
   //
+  // The running holders form a tree: a worker's holder nests under the
+  // holder of the session that spawned it (its descriptor's parent_reply_id,
+  // or the listing's parents map for an older descriptor), and, while the
+  // trace runs, each holder lists its OS descendant processes below it.
+  //
+  // The trace (/holders/metrics) is the only repeated read, and it runs only
+  // while the popup is open, not paused (#hd-pause), and the tab is shown:
+  // one read, then the next a setTimeout later (the answer's interval_ms),
+  // so closing, pausing, or hiding the tab leaves no timer. Each answer
+  // patches the metric cells, the sparklines, and the totals (#hd-agg) by
+  // key in place, so a hold, the focus, and the expanded rows survive it;
+  // only the OS process rows, which hold no control, are rebuilt when their
+  // set changes. A holder the answer lacks is marked gone, and an answer
+  // naming a holder the popup lacks re-reads /holders (at most once per
+  // HD_REREAD). A daemon without the route, a viewer it refuses (404), or a
+  // machine it cannot read (supported false) leaves the static rows.
+  //
   // The frame side (hdFrameTermReq) and the shell's message hooks
   // (hdFrameTerms, hdNavigated) are defined on every page; each does nothing
   // where its half is absent, so an unframed page needs no bottom bar.
   var hdTrig = shell && botBarEl ? botBarEl.querySelector(".hd-trigger") : null;
   var HD_CAUSE = { no_answer: "js.hd.cause.noanswer", protocol: "js.hd.cause.protocol", token: "js.hd.cause.token" };
-  var HD_FRESH = 10000, HD_DURABLE = "durable.";
+  var HD_FRESH = 10000, HD_DURABLE = "durable.", HD_REREAD = 5000, HD_TRACE_MIN = 1500, HD_TRACE_MAX = 2000;
   var hd = {
     P: null, list: null, err: "", seq: 0, at: 0, busy: false,
     host: [], orphans: [], tseq: 0, oseq: 0, frame: false,
-    confirm: "", closing: {}, dirty: false, hold: null
+    confirm: "", closing: {}, dirty: false, hold: null,
+    // the trace: its last answer, whether the daemon serves it (null until
+    // an answer says), the pending timer, and the read in flight
+    mx: null, mxOK: null, mseq: 0, timer: 0, mxBusy: false, paused: false, ms: HD_TRACE_MIN,
+    rr: 0, miss: "",
+    // exp: a holder's expanded state the user chose; cells: each rendered
+    // holder row's patchable parts, by holder id
+    exp: {}, cells: {}
   };
 
   function hdIsDurable(h) { return typeof h.id === "string" && h.id.indexOf(HD_DURABLE) === 0; }
@@ -188,6 +212,21 @@
     head.appendChild(mk("b", "hd-title", wsT("js.holders.title")));
     P.sum = head.appendChild(mk("span", "hd-sum"));
     head.appendChild(mk("span", "hd-sp"));
+    P.trace = head.appendChild(mk("span", "hd-trace"));
+    P.trace.id = "hd-trace";
+    P.trace.hidden = true;
+    P.trace.setAttribute("data-on", "false");
+    P.trace.appendChild(mk("i", "hd-tdot")).setAttribute("aria-hidden", "true");
+    P.traceLbl = P.trace.appendChild(mk("span"));
+    P.pause = head.appendChild(hdBtn("hd-ibtn", "", "pause", wsT("js.holders.trace.pause")));
+    P.pause.id = "hd-pause";
+    P.pause.hidden = true;
+    P.pause.setAttribute("aria-pressed", "false");
+    P.pause.addEventListener("click", function () {
+      hd.paused = !hd.paused;
+      hdNote(wsT(hd.paused ? "js.holders.trace.paused" : "js.holders.trace.resumed"));
+      hdTraceSync();
+    });
     P.refresh = head.appendChild(hdBtn("hd-ibtn", "", "refresh", wsT("js.holders.refresh")));
     P.refresh.id = "hd-refresh";
     P.refresh.addEventListener("click", function () { hdNote(""); hdFetch(); });
@@ -199,6 +238,11 @@
     strip.hidden = true;
     P.chips = strip.appendChild(mk("div", "hd-chips"));
     P.chips.id = "hd-chips";
+    P.agg = strip.appendChild(mk("div", "hd-agg"));
+    P.agg.id = "hd-agg";
+    P.agg.hidden = true;
+    P.aggRss = hdAggPart(P.agg, "js.holders.agg.rss", "agg:rss");
+    P.aggCpu = hdAggPart(P.agg, "js.holders.agg.cpu", "agg:cpu");
     P.list = el.appendChild(mk("div", "hd-body"));
     P.list.id = "hdlist";
     P.note = el.appendChild(mk("div", "hd-note"));
@@ -218,8 +262,10 @@
         }
       });
     }
-    P.open = function () { hd.confirm = ""; hdNote(""); hdRender(); hdFetch(); };
-    P.close = function () { hd.confirm = ""; hd.hold = null; hd.dirty = false; };
+    // Each opening asks the daemon for the trace again (it may have been
+    // replaced since); closing leaves no timer and drops a read in flight.
+    P.open = function () { hd.confirm = ""; hd.mxOK = null; hd.miss = ""; hdNote(""); hdRender(); hdFetch(); hdTraceSync(); };
+    P.close = function () { hd.confirm = ""; hd.hold = null; hd.dirty = false; hdTraceStop(); };
     // Escape first dismisses an open terminal confirmation.
     P.back = function () {
       if (!hd.confirm) return false;
@@ -236,7 +282,10 @@
     var b = e.target.closest && e.target.closest("button[data-act]");
     if (!b || b.disabled || !hd.P.list.contains(b)) return;
     var act = b.getAttribute("data-act"), id = b.getAttribute("data-id") || "", t = hdTermByID(id);
-    if (act === "term-attach") { if (t && hdFrameOK()) shSend(shOn, "term-attach", { term: t }); }
+    if (act === "toggle") {
+      var c = hd.cells[id];
+      if (c) { hd.exp[id] = !hdOpenOf(id, c); hdKidsSync(id, c); railPopPlace(); }
+    } else if (act === "term-attach") { if (t && hdFrameOK()) shSend(shOn, "term-attach", { term: t }); }
     else if (act === "term-stop") {
       if (!t) return;
       if (t.state === "exited") hdTermStop(t);
@@ -302,6 +351,7 @@
     var c = hdCounts(hd.list), fa = doc.activeElement, fk = null;
     if (fa && list.contains(fa) && fa.getAttribute("data-act")) fk = [fa.getAttribute("data-act"), fa.getAttribute("data-id") || ""];
     hdChrome(c);
+    hd.cells = {};
     var frag = doc.createDocumentFragment();
     if (!hd.list) {
       frag.appendChild(mk("div", "hd-empty hd-quiet", hd.err ? wsT("js.hd.fail", hd.err) : wsT("js.hd.loading")));
@@ -315,18 +365,18 @@
       }
       var attention = holders.filter(function (h) { return !h.attached || h.restart_safe === false; });
       var running = holders.filter(function (h) { return h.attached && h.restart_safe !== false; });
-      var head = false;
+      var head = false, ta = hdTree(attention), tr = hdTree(running);
       if (attention.length || failures.length) {
         frag.appendChild(hdSec(wsT("js.holders.sec.attention"), attention.length + failures.length));
         frag.appendChild(hdHead());
         head = true;
-        attention.forEach(function (h) { frag.appendChild(hdNode(h, canStop)); });
+        ta.roots.forEach(function (h) { frag.appendChild(hdNode(h, canStop, 0, ta.kids)); });
         failures.forEach(function (f) { frag.appendChild(hdFailRow(f)); });
       }
       frag.appendChild(hdSec(wsT("js.holders.sec.running"), running.filter(function (h) { return !hdIsDurable(h); }).length));
       if (running.length) {
         if (!head) frag.appendChild(hdHead());
-        running.forEach(function (h) { frag.appendChild(hdNode(h, canStop)); });
+        tr.roots.forEach(function (h) { frag.appendChild(hdNode(h, canStop, 0, tr.kids)); });
       } else {
         frag.appendChild(mk("div", "hd-empty hd-quiet", wsT("js.holders.none")));
       }
@@ -343,6 +393,7 @@
     if (!hd.host.length && !hd.orphans.length) frag.appendChild(mk("div", "hd-empty hd-quiet", wsT("js.holders.noterms")));
     list.textContent = "";
     list.appendChild(frag);
+    hdMxPaint();
     if (fk) hdFocus(fk[0], fk[1]);
     railPopPlace();
   }
@@ -383,22 +434,48 @@
     a.title = wsT(key, wtStamp(ms));
     return a;
   }
-  // hdNode is one holder's row (its node, which a later level nests under).
-  function hdNode(h, canStop) {
-    var node = mk("div", "hd-node"), durable = hdIsDurable(h), lost = !h.attached;
+  // hdParentOf is the reply id of the session that spawned h's, if known.
+  function hdParentOf(h) {
+    var s = h.session || {}, p = typeof s.parent_reply_id === "string" ? s.parent_reply_id : "";
+    if (!p && hd.list && hd.list.parents && typeof hd.list.parents[h.id] === "string") p = hd.list.parents[h.id];
+    return p;
+  }
+  // hdTree nests the holders of one section: a holder whose parent's holder
+  // is in the same section goes under it; any other (and a cycle) is a root.
+  function hdTree(hs) {
+    var byReply = {}, up = {}, kids = {}, roots = [];
+    hs.forEach(function (h) {
+      var r = h.session && h.session.reply_id;
+      if (typeof r === "string" && r && !byReply[r]) byReply[r] = h;
+    });
+    hs.forEach(function (h) { var p = byReply[hdParentOf(h)]; if (p && p !== h) up[h.id] = p; });
+    hs.forEach(function (h) {
+      var p = up[h.id], n = 0;
+      for (var a = p; a && a !== h && n < 32; a = up[a.id]) n++;
+      if (p && !(a === h || n >= 32)) (kids[p.id] = kids[p.id] || []).push(h);
+      else roots.push(h);
+    });
+    return { roots: roots, kids: kids };
+  }
+  // hdNode is one holder's node: its row, then its children (the holders it
+  // spawned, then its OS processes), shown while it is expanded.
+  function hdNode(h, canStop, lv, kids) {
+    var node = mk("div", "hd-node"), durable = hdIsDurable(h), lost = !h.attached, sub = kids[h.id] || [];
     node.setAttribute("data-node", h.id);
     var row = node.appendChild(mk("div", "hd-row" + (lost ? " hd-lost" : "")));
     row.setAttribute("data-id", h.id);
-    row.style.setProperty("--lv", "0");
+    row.style.setProperty("--lv", String(lv));
     row.title = durable ? wsT("js.holders.inproc.title") : h.id;
-    row.appendChild(mk("span", "hd-chev"));
+    var chev = row.appendChild(durable ? mk("span", "hd-chev") : hdBtn("hd-chev", "", "chev", wsT("js.holders.toggle")));
+    if (!durable) { chev.setAttribute("data-act", "toggle"); chev.setAttribute("data-id", h.id); }
     var main = row.appendChild(mk("div", "hd-main")), l1 = main.appendChild(mk("div", "hd-l1"));
     l1.appendChild(mk("span", "hd-dot"));
     l1.appendChild(mk("b", "hd-name", durable ? h.id.slice(HD_DURABLE.length) : hdLabel(h)));
-    var kind = h.session && HD_KIND[h.session.kind];
-    if (durable) l1.appendChild(mk("span", "hd-badge hd-dur", wsT("js.holders.inproc")));
-    else if (kind) l1.appendChild(mk("span", "hd-badge", wsT(kind)));
-    var meta = main.appendChild(mk("div", "hd-meta"));
+    // The kind badge heads the meta line (as the mockup), leaving the name
+    // the row's full width beside the metric columns.
+    var kind = h.session && HD_KIND[h.session.kind], meta = main.appendChild(mk("div", "hd-meta"));
+    if (durable) meta.appendChild(mk("span", "hd-badge hd-dur", wsT("js.holders.inproc")));
+    else if (kind) meta.appendChild(mk("span", "hd-badge", wsT(kind)));
     if (h.pid) meta.appendChild(mk("span", "hd-pid", wsT("js.hd.pid", h.pid)));
     if (h.session && typeof h.session.backend === "string" && h.session.backend) meta.appendChild(mk("span", null, h.session.backend));
     if (h.started_at) meta.appendChild(hdAge(h.started_at, "js.hd.started"));
@@ -408,11 +485,17 @@
       var rs = meta.appendChild(mk("span", "hd-unsafe", wsT("js.hd.unsafe")));
       rs.title = wsT("js.hd.unsafe.title");
     }
-    var rss = row.appendChild(mk("span", "hd-num hd-mx"));
+    var rss = row.appendChild(mk("span", "hd-num hd-mx", "—"));
     rss.setAttribute("data-k", h.id + ":rss");
-    var cpu = row.appendChild(mk("span", "hd-num hd-cpu hd-mx"));
+    var cpu = row.appendChild(mk("span", "hd-num hd-cpu hd-mx", "—"));
     cpu.setAttribute("data-k", h.id + ":cpu");
-    row.appendChild(mk("span", "hd-trend hd-mx"));
+    var trend = row.appendChild(mk("span", "hd-trend hd-mx")), spark = null, spR = null, spC = null;
+    if (!durable) {
+      trend.title = wsT("js.holders.trend.title");
+      spark = trend.appendChild(svgEl("svg", { "class": "hd-spark", viewBox: "0 0 48 16", preserveAspectRatio: "none", "aria-hidden": "true", "data-k": h.id + ":spark" }));
+      spR = spark.appendChild(svgEl("polyline", { "class": "hd-sp-rss", points: "" }));
+      spC = spark.appendChild(svgEl("polyline", { "class": "hd-sp-cpu", points: "" }));
+    }
     var act = row.appendChild(mk("span", "hd-act"));
     if (lost && !durable && canStop) {
       var b = act.appendChild(hdBtn("hd-btn hd-danger hd-hold d-hold-btn", wsT("js.hd.stop"), "stop", wsT("js.hd.stop.title") + " — " + wsT("js.holders.hold.hint")));
@@ -420,7 +503,192 @@
       b.setAttribute("data-act", "holder-stop");
       b.setAttribute("data-id", h.id);
     }
+    if (durable) return node;
+    var box = node.appendChild(mk("div", "hd-kids"));
+    box.style.setProperty("--kl", String(lv));
+    sub.forEach(function (k) { box.appendChild(hdNode(k, canStop, lv + 1, kids)); });
+    var c = hd.cells[h.id] = {
+      pid: h.pid > 0 ? h.pid : 0, lv: lv, row: row, chev: chev, rss: rss, cpu: cpu, spR: spR, spC: spC,
+      box: box, procs: box.appendChild(mk("div", "hd-procs")), n: sub.length, np: 0, sig: "", pc: {}
+    };
+    hdKidsSync(h.id, c);
     return node;
+  }
+  // hdOpenOf reports whether a holder's children show: the user's choice,
+  // else open while it has spawned holders under it.
+  function hdOpenOf(id, c) { return c.n + c.np > 0 && (id in hd.exp ? !!hd.exp[id] : c.n > 0); }
+  // hdKidsSync writes a holder's chevron and children box from its state;
+  // a holder without children keeps an inert, invisible chevron.
+  function hdKidsSync(id, c) {
+    var has = c.n + c.np > 0, open = hdOpenOf(id, c);
+    if (c.chev.disabled !== !has) c.chev.disabled = !has;
+    if (has) c.chev.setAttribute("aria-expanded", open ? "true" : "false");
+    else c.chev.removeAttribute("aria-expanded");
+    if (c.box.hidden !== !open) c.box.hidden = !open;
+  }
+
+  // --- the trace
+  function hdAggPart(box, key, k) {
+    var s = box.appendChild(mk("span", null, wsT(key) + " "));
+    var b = s.appendChild(mk("b", null, "—"));
+    b.setAttribute("data-k", k);
+    return b;
+  }
+  function hdSet(el, text) { if (el && el.textContent !== text) el.textContent = text; }
+  function hdRss(b) {
+    var mb = (+b || 0) / 1048576;
+    return mb >= 1024 ? (mb / 1024).toFixed(2) + " GB" : (mb >= 10 ? String(Math.round(mb)) : mb.toFixed(1)) + " MB";
+  }
+  function hdCpu(v) { return (+v || 0).toFixed(1) + "%"; }
+  // hdSparkPts plots a series across the 48x16 sparkline, scaled to its peak.
+  function hdSparkPts(s) {
+    if (!Array.isArray(s) || s.length < 2) return "";
+    var max = 0, pts = [];
+    s.forEach(function (v) { if (+v > max) max = +v; });
+    max = max * 1.15 || 1;
+    for (var i = 0; i < s.length; i++) pts.push((i * 48 / (s.length - 1)).toFixed(1) + "," + (14.5 - (+s[i] || 0) / max * 13).toFixed(1));
+    return pts.join(" ");
+  }
+  function hdTraceLive() { return hdIsOpen() && !hd.paused && !doc.hidden && hd.mxOK !== false; }
+  // hdTraceSync starts the trace when it should run and nothing is pending,
+  // or stops it.
+  function hdTraceSync() {
+    if (!hdTraceLive()) hdTraceStop();
+    else if (!hd.timer && !hd.mxBusy) hdTraceAsk();
+    hdTraceChrome();
+  }
+  function hdTraceStop() {
+    if (hd.timer) { clearTimeout(hd.timer); hd.timer = 0; }
+    if (hd.mxBusy) { hd.mxBusy = false; hd.mseq++; }
+  }
+  function hdTraceAsk() {
+    hd.timer = 0;
+    if (!window.fetch) return;
+    var seq = ++hd.mseq;
+    hd.mxBusy = true;
+    fetch("/holders/metrics", { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+      // An older daemon, or a viewer it does not serve: no trace.
+      if (r.status === 404 || r.status === 405) return { supported: false };
+      return r.ok ? r.json() : null;
+    }).then(function (v) { hdTraceTook(seq, v); }, function () { hdTraceTook(seq, null); });
+  }
+  // hdTraceTook applies an answer (null: a failed read, retried on the next
+  // turn) and schedules the next read while the trace should run.
+  function hdTraceTook(seq, v) {
+    if (seq !== hd.mseq) return;
+    hd.mxBusy = false;
+    if (v && v.supported === false) { hd.mxOK = false; hd.mx = null; }
+    else if (v && v.holders && typeof v.holders === "object") {
+      hd.mxOK = true;
+      hd.mx = v;
+      hd.ms = Math.min(HD_TRACE_MAX, Math.max(HD_TRACE_MIN, +v.interval_ms || HD_TRACE_MIN));
+    }
+    if (hdIsOpen()) hdMxPaint(true);
+    hdTraceChrome();
+    if (hdTraceLive()) hd.timer = setTimeout(hdTraceAsk, hd.ms);
+  }
+  function hdTraceChrome() {
+    var P = hd.P;
+    if (!P) return;
+    var off = hd.mxOK === false, live = hdTraceLive();
+    P.trace.hidden = off;
+    P.pause.hidden = off;
+    P.trace.setAttribute("data-on", live ? "true" : "false");
+    hdSet(P.traceLbl, hd.paused ? wsT("js.holders.trace.off") : wsT("js.holders.trace.on", String(hd.ms / 1000)));
+    var pressed = hd.paused ? "true" : "false";
+    if (P.pause.getAttribute("aria-pressed") !== pressed) {
+      var tip = wsT(hd.paused ? "js.holders.trace.resume" : "js.holders.trace.pause");
+      P.pause.setAttribute("aria-pressed", pressed);
+      P.pause.title = tip;
+      P.pause.setAttribute("aria-label", tip);
+      P.pause.textContent = "";
+      P.pause.appendChild(gIcon(hd.paused ? "play" : "pause"));
+    }
+    P.note.setAttribute("data-idle", wsT(live ? "js.holders.idle.trace" : "js.holders.idle"));
+  }
+  // hdMxPaint writes the last answer into the rendered rows by key. From a
+  // trace answer (tick), a holder the answer lacks or names anew re-reads
+  // the listing, once per new difference and at most once per HD_REREAD.
+  function hdMxPaint(tick) {
+    var P = hd.P, mx = hd.mx, on = !!(mx && hd.mxOK !== false);
+    P.el.classList.toggle("hd-mx-on", on);
+    if (P.agg.hidden !== !on) P.agg.hidden = !on;
+    if (!on) return;
+    var H = mx.holders, rss = 0, cpu = 0, miss = [], own = {};
+    Object.keys(hd.cells).forEach(function (id) { if (hd.cells[id].pid) own[hd.cells[id].pid] = true; });
+    Object.keys(H).forEach(function (id) {
+      rss += +H[id].rss || 0;
+      cpu += +H[id].cpu || 0;
+      if (!hd.cells[id]) miss.push(id);
+    });
+    Object.keys(hd.cells).forEach(function (id) {
+      var c = hd.cells[id], m = H[id] || null;
+      c.row.classList.toggle("hd-gone", !m && !!c.pid);
+      if (!m && c.pid) miss.push(id);
+      hdSet(c.rss, m ? hdRss(m.rss) : "—");
+      hdSet(c.cpu, m ? hdCpu(m.cpu) : "—");
+      var sp = m && m.spark || {};
+      c.spR.setAttribute("points", hdSparkPts(sp.rss));
+      c.spC.setAttribute("points", hdSparkPts(sp.cpu));
+      hdProcSync(id, c, m ? (m.procs || []).filter(function (p) { return p && p.pid > 0 && !own[p.pid]; }) : []);
+    });
+    hdSet(P.aggRss, hdRss(rss));
+    hdSet(P.aggCpu, hdCpu(cpu));
+    var sig = miss.sort().join(" ");
+    if (!tick || !sig || sig === hd.miss || Date.now() - hd.rr < HD_REREAD) return;
+    hd.miss = sig;
+    hd.rr = Date.now();
+    hdFetch();
+  }
+  // hdProcSync patches a holder's OS process rows, or rebuilds them when
+  // their set changed (they hold no control, so nothing is lost).
+  function hdProcSync(id, c, ps) {
+    var sig = ps.map(function (p) { return p.pid; }).join(",");
+    if (sig === c.sig) {
+      ps.forEach(function (p) { var e = c.pc[p.pid]; if (e) { hdSet(e.rss, hdRss(p.rss)); hdSet(e.cpu, hdCpu(p.cpu)); } });
+      return;
+    }
+    c.sig = sig;
+    c.pc = {};
+    c.procs.textContent = "";
+    hdProcOrder(ps).forEach(function (e) { c.procs.appendChild(hdProcRow(id, e[0], c.lv + 1 + Math.min(e[1], 2), c)); });
+    c.np = ps.length;
+    hdKidsSync(id, c);
+  }
+  // hdProcOrder lists processes depth first by parent pid, each with its
+  // depth below the holder; siblings by pid.
+  function hdProcOrder(ps) {
+    var by = {}, has = {}, out = [];
+    ps.forEach(function (p) { has[p.pid] = true; });
+    ps.forEach(function (p) { var k = has[p.ppid] && p.ppid !== p.pid ? p.ppid : 0; (by[k] = by[k] || []).push(p); });
+    (function walk(k, d) {
+      (by[k] || []).sort(function (a, b) { return a.pid - b.pid; }).forEach(function (p) {
+        if (out.length >= ps.length) return;
+        out.push([p, d]);
+        walk(p.pid, d + 1);
+      });
+    })(0, 0);
+    return out;
+  }
+  function hdProcRow(id, p, lv, c) {
+    var row = mk("div", "hd-row hd-os");
+    row.setAttribute("data-id", id + "/" + p.pid);
+    row.style.setProperty("--lv", String(lv));
+    row.title = wsT("js.holders.os.title", p.pid, p.ppid);
+    row.appendChild(mk("span", "hd-chev"));
+    var main = row.appendChild(mk("div", "hd-main")), l1 = main.appendChild(mk("div", "hd-l1"));
+    l1.appendChild(mk("span", "hd-dot"));
+    l1.appendChild(mk("b", "hd-name", typeof p.name === "string" && p.name ? p.name : String(p.pid)));
+    main.appendChild(mk("div", "hd-meta")).appendChild(mk("span", "hd-pid", wsT("js.holders.os.pid", p.pid, p.ppid)));
+    var e = c.pc[p.pid] = {
+      rss: row.appendChild(mk("span", "hd-num hd-mx", hdRss(p.rss))),
+      cpu: row.appendChild(mk("span", "hd-num hd-cpu hd-mx", hdCpu(p.cpu)))
+    };
+    e.rss.setAttribute("data-k", id + "/" + p.pid + ":rss");
+    e.cpu.setAttribute("data-k", id + "/" + p.pid + ":cpu");
+    row.appendChild(mk("span", "hd-trend hd-mx"));
+    row.appendChild(mk("span", "hd-act"));
+    return row;
   }
   function hdFailRow(f) {
     var row = mk("div", "hd-trow hd-fail");
@@ -483,6 +751,7 @@
   if (hdTrig) {
     hdTrigSync();
     hdFetch();
-    doc.addEventListener("visibilitychange", function () { if (!doc.hidden) hdFresh(); });
+    // Hiding the tab stops the trace; showing it again resumes an open one.
+    doc.addEventListener("visibilitychange", function () { if (!doc.hidden) hdFresh(); if (hdIsOpen()) hdTraceSync(); });
     window.addEventListener("focus", hdFresh);
   }
