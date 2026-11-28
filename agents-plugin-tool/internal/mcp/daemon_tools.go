@@ -48,6 +48,10 @@ func isCompanionWorkRecord(rec wsagent.Record) bool {
 }
 
 func daemonControlTools() []map[string]any {
+	return append(daemonCoreTools(), daemonGuideTools()...)
+}
+
+func daemonCoreTools() []map[string]any {
 	return []map[string]any{
 		{
 			"name":        daemonCurlTool,
@@ -137,27 +141,17 @@ func daemonControlTools() []map[string]any {
 	}
 }
 
-// daemonControlListed reports whether ws/daemon.* tools are advertised on this
-// connection's tools/list, call discovery, and agy DirectTools. Requires both
-// attach-time effective access and live persisted opt-in on an open top-level
-// hosted lead (never workers or Tier-1 companion-body).
-func (s *Server) daemonControlListed() bool {
-	if s.connectionDescriptor().leadRender {
-		return s.dashboardControlEffective
-	}
-	return s.daemonControlCallRefusal(daemonCurlTool) == ""
-}
-
 // daemonControlCallRefusal returns a non-empty refusal message when this
 // connection is not authorized to invoke a ws/daemon.* tool. Enforces:
 //   - trusted hosted conversation binding (never launcher/out-of-daemon/worker)
-//   - open top-level lead record, never a worker child or Tier-1 companion-body
+//   - open top-level lead record, never a worker child
+//   - Tier-1 companion-body: exactly the guide tools (isDaemonGuideTool)
 //   - automatic access for Tier-2 companion-work sessions (261127 Phase 2)
 //   - persisted && effective opt-in for regular leads (grant after attach stays
 //     denied until restart; live revocation denies immediately)
 func (s *Server) daemonControlCallRefusal(name string) string {
 	if s.connectionDescriptor().leadRender {
-		if s.dashboardControlEffective {
+		if s.dashboardControlEffective || (s.dashboardGuideEffective && isDaemonGuideTool(name)) {
 			return ""
 		}
 		return fmt.Sprintf("%s: dashboard control is not enabled for this session", name)
@@ -172,8 +166,14 @@ func (s *Server) daemonControlCallRefusal(name string) string {
 	if !ok {
 		return fmt.Sprintf("%s: hosted lead session record not found", name)
 	}
-	if !rec.Lead || rec.Parent != nil || rec.ClosedAt != "" || isCompanionBodyRecord(rec) {
+	if !rec.Lead || rec.Parent != nil || rec.ClosedAt != "" {
 		return fmt.Sprintf("%s: dashboard control is restricted to open top-level lead sessions (workers and companion-body are blocked)", name)
+	}
+	if isCompanionBodyRecord(rec) {
+		if isDaemonGuideTool(name) {
+			return ""
+		}
+		return fmt.Sprintf("%s: companion-body may use only the guide tools (%s); hand other dashboard control to companion.delegate_work (workers and companion-body are blocked from it)", name, daemonGuideToolList)
 	}
 	if isCompanionWorkRecord(rec) {
 		return ""
@@ -212,6 +212,10 @@ func (s *Server) handleDaemonTool(ctx context.Context, id json.RawMessage, name 
 		return s.handleDaemonUI(ctx, id, args, companionWork)
 	case daemonScreenshotTool:
 		return s.handleDaemonScreenshot(ctx, id, args)
+	case daemonHighlightTool:
+		return s.handleDaemonHighlight(ctx, id, args)
+	case daemonMonitorTool:
+		return s.handleDaemonMonitor(ctx, id, args)
 	default:
 		return errorResponse(id, -32602, fmt.Sprintf("unknown tool: %s", name))
 	}
