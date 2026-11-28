@@ -591,6 +591,9 @@ func clampReadMaxBytes(maxBytes int) int {
 	if maxBytes <= 0 {
 		return DefaultReadMaxBytes
 	}
+	if maxBytes < utf8.UTFMax {
+		return utf8.UTFMax
+	}
 	if maxBytes > MaxReadMaxBytes {
 		return MaxReadMaxBytes
 	}
@@ -620,8 +623,12 @@ func buildFTSQuery(raw string) string {
 	var tokens []string
 	i := 0
 	for i < len(raw) {
-		for i < len(raw) && unicode.IsSpace(rune(raw[i])) {
-			i++
+		for i < len(raw) {
+			r, size := utf8.DecodeRuneInString(raw[i:])
+			if !unicode.IsSpace(r) {
+				break
+			}
+			i += size
 		}
 		if i >= len(raw) {
 			break
@@ -643,8 +650,12 @@ func buildFTSQuery(raw string) string {
 			continue
 		}
 		start := i
-		for i < len(raw) && !unicode.IsSpace(rune(raw[i])) {
-			i++
+		for i < len(raw) {
+			r, size := utf8.DecodeRuneInString(raw[i:])
+			if unicode.IsSpace(r) {
+				break
+			}
+			i += size
 		}
 		tok := raw[start:i]
 		if tok == "AND" || tok == "OR" || tok == "NOT" {
@@ -724,17 +735,27 @@ func makeSnippet(text string, terms []string, maxRunes int) string {
 	if len(runes) <= maxRunes {
 		return flat
 	}
-	lower := strings.ToLower(flat)
-	bestByte := -1
+	lowerRunes := make([]rune, len(runes))
+	for i, r := range runes {
+		lowerRunes[i] = unicode.ToLower(r)
+	}
+	bestRune := -1
 	for _, term := range terms {
-		if idx := strings.Index(lower, term); idx >= 0 && (bestByte < 0 || idx < bestByte) {
-			bestByte = idx
+		needle := []rune(term)
+		if len(needle) == 0 || len(needle) > len(lowerRunes) {
+			continue
+		}
+		for i := range needle {
+			needle[i] = unicode.ToLower(needle[i])
+		}
+		if idx := indexRunes(lowerRunes, needle); idx >= 0 && (bestRune < 0 || idx < bestRune) {
+			bestRune = idx
 		}
 	}
-	if bestByte < 0 {
+	if bestRune < 0 {
 		return string(runes[:maxRunes]) + "..."
 	}
-	matchRune := utf8.RuneCountInString(flat[:bestByte])
+	matchRune := bestRune
 	start := matchRune - maxRunes/3
 	if start < 0 {
 		start = 0
@@ -769,4 +790,27 @@ func makePreview(text string, maxRunes int) string {
 
 func flattenWhitespace(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+func indexRunes(haystack, needle []rune) int {
+	if len(needle) == 0 || len(needle) > len(haystack) {
+		return -1
+	}
+	limit := len(haystack) - len(needle)
+	for i := 0; i <= limit; i++ {
+		if haystack[i] != needle[0] {
+			continue
+		}
+		match := true
+		for j := 1; j < len(needle); j++ {
+			if haystack[i+j] != needle[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
 }

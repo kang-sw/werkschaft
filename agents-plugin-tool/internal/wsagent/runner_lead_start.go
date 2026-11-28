@@ -228,7 +228,12 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	var convHistoryEffective bool
 	if attach {
 		spec.ExecCutover = c.rejoinExecCutover(rec)
-		convHistoryEffective = rec.Lead && rec.MCPToken != "" && rec.MCPHolder == rec.HolderID && rec.MCPConvHistoryAccess
+		if durable {
+			// Durable leads always mint a fresh in-daemon MCP session (never persist MCPToken).
+			convHistoryEffective = rec.Lead && rec.ConvHistoryAccess
+		} else {
+			convHistoryEffective = rec.Lead && rec.MCPToken != "" && rec.MCPHolder == rec.HolderID && rec.MCPConvHistoryAccess
+		}
 	} else {
 		c.decideExecCutover(rec, def, &spec, mcpEnv)
 		convHistoryEffective = rec.Lead && rec.ConvHistoryAccess

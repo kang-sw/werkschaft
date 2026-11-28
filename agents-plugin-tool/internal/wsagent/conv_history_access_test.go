@@ -169,3 +169,88 @@ func TestConvHistoryAccessPermissionRoutesAndLiveToggleNoStop(t *testing.T) {
 		t.Fatalf("ReviveLead did not reopen closed lead: %+v", stReopened)
 	}
 }
+
+func TestConvHistoryAccessTokenHelloSnapshotRejoinAndChildRefusal(t *testing.T) {
+	h := cutoverHarness(t)
+	st := h.lead(BackendClaude, LeadOptions{PermissionMode: "default", ConvHistoryAccess: true})
+	_, rec := leadLaunch(t, h, st.ID)
+	if rec.MCPToken == "" {
+		t.Fatal("expected lead to carry an HTTP ws-mcp token")
+	}
+	if !rec.MCPConvHistoryAccess {
+		t.Fatalf("record MCPConvHistoryAccess = false, want true")
+	}
+
+	// 1. ResolveMCPToken yields ProxyHello.ConvHistoryAccess == true (start-time snapshot).
+	hello, _, ok := h.runner.ResolveMCPToken(rec.MCPToken)
+	if !ok || !hello.ConvHistoryAccess {
+		t.Fatalf("ResolveMCPToken initial hello = %+v (ok=%v), want ConvHistoryAccess=true", hello, ok)
+	}
+
+	// 2. Live toggle off: persisted flag flips immediately, but the running process's
+	// MCP token keeps start-time snapshot ConvHistoryAccess=true (drives tools/list)
+	// while Runner.ConvHistoryAccess(id) returns false immediately (call-time revoke).
+	rOff := h.route(localBrowser, http.MethodPost, "/agents/"+st.ID+"/settings", map[string]any{
+		"conv_history_access": false,
+	})
+	if rOff.status != http.StatusOK {
+		t.Fatalf("live toggle off status = %d body=%s", rOff.status, rOff.body)
+	}
+	if h.runner.ConvHistoryAccess(st.ID) {
+		t.Fatalf("Runner.ConvHistoryAccess(%s) = true after live toggle off, want false", st.ID)
+	}
+	helloAfterOff, _, ok := h.runner.ResolveMCPToken(rec.MCPToken)
+	if !ok || !helloAfterOff.ConvHistoryAccess {
+		t.Fatalf("running token hello after live toggle off = %+v (ok=%v), want start-time snapshot true", helloAfterOff, ok)
+	}
+
+	// 3. Daemon restart rejoins the running holder and restores MCPConvHistoryAccess
+	// into the rejoined token's ProxyHello.ConvHistoryAccess and ConvHistoryAccessEffective.
+	h.runner.Close()
+	h.holders.restart()
+	h.runner = NewRunner(h.opts)
+	h.runner.SetEndpoint("http://127.0.0.1:1")
+	h.runner.Start(func(string, string) {})
+	h.runner.BindExecJobs(h.execJobs)
+	t.Cleanup(h.runner.Close)
+	h.quiesce(st.ID)
+
+	rejoinedHello, _, ok := h.runner.ResolveMCPToken(rec.MCPToken)
+	if !ok || !rejoinedHello.ConvHistoryAccess {
+		t.Fatalf("rejoined token hello = %+v (ok=%v), want ConvHistoryAccess=true", rejoinedHello, ok)
+	}
+	rejoinedState := h.state(st.ID)
+	if rejoinedState.ConvHistoryAccess || !rejoinedState.ConvHistoryAccessEffective {
+		t.Fatalf("rejoined state flags: persisted=%v effective=%v, want false/true",
+			rejoinedState.ConvHistoryAccess, rejoinedState.ConvHistoryAccessEffective)
+	}
+
+	// 4. Child/worker sessions are refused HTTP 403 on both /settings and /settings/permission
+	// when attempting to set conv_history_access.
+	ch, _ := agentLeadHarness(t)
+	parentLead := ch.lead(BackendClaude, LeadOptions{PermissionMode: "auto"})
+	spawned, err := ch.runner.AgentSpawn(ch.caller(parentLead), AgentSpawnRequest{
+		Prompt:    "child task",
+		Tier:      "claude.small",
+		Authority: "read-only",
+	})
+	if err != nil {
+		t.Fatalf("AgentSpawn child worker: %v", err)
+	}
+	childID := agentID(spawned.Address)
+	if ch.runner.ConvHistoryAccess(childID) {
+		t.Fatalf("child worker ConvHistoryAccess = true, want false")
+	}
+	for _, tc := range []struct {
+		path string
+		body map[string]any
+	}{
+		{"/agents/" + childID + "/settings", map[string]any{"conv_history_access": true}},
+		{"/agents/" + childID + "/settings/permission", map[string]any{"permission_level": "read-only", "conv_history_access": true}},
+	} {
+		resp := ch.route(localBrowser, http.MethodPost, tc.path, tc.body)
+		if resp.status != http.StatusForbidden {
+			t.Fatalf("POST %s on child worker: status=%d body=%s, want 403", tc.path, resp.status, resp.body)
+		}
+	}
+}

@@ -216,7 +216,6 @@ func (d *Daemon) closeConvIndex() {
 	if err := d.convIdx.Close(); err != nil && d.log != nil {
 		fmt.Fprintf(d.log, "dashboard: conversation index close: %v\n", err)
 	}
-	d.convIdx = nil
 }
 
 func (d *Daemon) replyIDFromRingDir(ringDir string) (string, bool) {
@@ -513,12 +512,14 @@ func (d *Daemon) ensureConvSessionIndexed(ctx context.Context, sessionID string)
 		if d.isActiveNonHosted(sessionID) {
 			d.convBackfillMu.Lock()
 			already := d.convNonHostedReconciled[sessionID]
-			if !already {
-				d.convNonHostedReconciled[sessionID] = true
-			}
 			d.convBackfillMu.Unlock()
 			if !already {
-				return d.reconcileConvSession(ctx, sessionID, ws)
+				if err := d.reconcileConvSession(ctx, sessionID, ws); err != nil {
+					return err
+				}
+				d.convBackfillMu.Lock()
+				d.convNonHostedReconciled[sessionID] = true
+				d.convBackfillMu.Unlock()
 			}
 		}
 	}
@@ -888,12 +889,13 @@ func (d *Daemon) ConvSearch(ctx context.Context, req ConvSearchRequest) (ConvSea
 				// receiver-process writes against the high-water mark once.
 				d.convBackfillMu.Lock()
 				already := d.convNonHostedReconciled[c.id]
-				if !already {
-					d.convNonHostedReconciled[c.id] = true
-				}
 				d.convBackfillMu.Unlock()
 				if !already {
-					_ = d.reconcileConvSession(ctx, c.id, c.workspace)
+					if err := d.reconcileConvSession(ctx, c.id, c.workspace); err == nil {
+						d.convBackfillMu.Lock()
+						d.convNonHostedReconciled[c.id] = true
+						d.convBackfillMu.Unlock()
+					}
 				}
 			}
 		}

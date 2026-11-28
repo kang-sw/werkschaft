@@ -153,6 +153,7 @@ func TestDaemonConvHostIncrementalBackfillRevealAndPrune(t *testing.T) {
 		Project:      wsA,
 		Harness:      "claude",
 		RegisteredAt: time.Now().Add(-3 * time.Minute).UTC().Format(time.RFC3339),
+		HeartbeatAt:  time.Now().UTC().Format(time.RFC3339),
 	})
 
 	agentHost := &fakeConvAgentHost{
@@ -270,13 +271,13 @@ func TestDaemonConvHostIncrementalBackfillRevealAndPrune(t *testing.T) {
 		t.Fatalf("ConvRead child = %+v (err=%v)", childRead, err)
 	}
 
-	// 5. Unpinned active non-hosted session receiver write reconciled on first conv.* touch.
+	// 5a. Unindexed session triggers indexing: "partial" and async backfill.
 	if err := wslive.AppendRing(wslive.RingDir(SessionDir(dir, nonHostedID)), []wslive.RingEntry{
 		{Kind: "user", Text: "external receiver process write"},
 	}); err != nil {
 		t.Fatalf("AppendRing non-hosted: %v", err)
 	}
-	// Clear from index to simulate receiver write from a separate process (no in-process observer).
+	// Clear from index to simulate a brand-new unindexed session.
 	if err := d.convIdx.DeleteSession(ctx, nonHostedID); err != nil {
 		t.Fatalf("DeleteSession non-hosted: %v", err)
 	}
@@ -299,7 +300,48 @@ func TestDaemonConvHostIncrementalBackfillRevealAndPrune(t *testing.T) {
 	}
 	extSearch, err := d.ConvSearch(ctx, ConvSearchRequest{CallerWorkspace: wsA, Query: "external receiver"})
 	if err != nil || len(extSearch.Hits) != 1 || extSearch.Hits[0].SessionID != nonHostedID {
-		t.Fatalf("non-hosted reconciled search = %+v (err=%v)", extSearch, err)
+		t.Fatalf("non-hosted backfilled search = %+v (err=%v)", extSearch, err)
+	}
+
+	// 5b. Decision 1645: ALREADY-indexed active non-hosted session reconciles
+	// receiver-process disk writes on first conv.* touch (not every call), and
+	// subsequently on ReadSession (reconcileNonHostedOnRead).
+	// Reset the first-touch guard for nonHostedID so we exercise a clean first touch
+	// on an already-indexed session.
+	d.convBackfillMu.Lock()
+	delete(d.convNonHostedReconciled, nonHostedID)
+	d.convBackfillMu.Unlock()
+	nonHostedRing := wslive.RingDir(SessionDir(dir, nonHostedID))
+	firstTouchName := time.Now().Add(2 * time.Minute).UTC().Format("20060102T150405.000000000Z") + "-11223344.json"
+	if err := os.WriteFile(filepath.Join(nonHostedRing, firstTouchName), []byte(`{"kind":"user","text":"first_touch_decision_1645_token"}`), 0o600); err != nil {
+		t.Fatalf("write first-touch external ring file: %v", err)
+	}
+	firstTouchRes, err := d.ConvSearch(ctx, ConvSearchRequest{CallerWorkspace: wsA, Query: "first_touch_decision_1645_token"})
+	if err != nil || len(firstTouchRes.Hits) != 1 || firstTouchRes.Hits[0].SessionID != nonHostedID {
+		t.Fatalf("first-touch reconcile on indexed non-hosted session failed: %+v (err=%v)", firstTouchRes, err)
+	}
+	// Write a second external file after first touch -> second ConvSearch must NOT re-scan disk on every call.
+	secondWriteName := time.Now().Add(3 * time.Minute).UTC().Format("20060102T150405.000000000Z") + "-22334455.json"
+	if err := os.WriteFile(filepath.Join(nonHostedRing, secondWriteName), []byte(`{"kind":"user","text":"second_external_until_readsession"}`), 0o600); err != nil {
+		t.Fatalf("write second external ring file: %v", err)
+	}
+	secondTouchRes, err := d.ConvSearch(ctx, ConvSearchRequest{CallerWorkspace: wsA, Query: "second_external_until_readsession"})
+	if err != nil || len(secondTouchRes.Hits) != 0 {
+		t.Fatalf("second ConvSearch unexpectedly re-reconciled disk on every call: %+v (err=%v)", secondTouchRes, err)
+	}
+	// Now simulate ReadSession calling reconcileNonHostedOnRead -> second write becomes visible.
+	d.reconcileNonHostedOnRead(nonHostedID)
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		r, err := d.ConvSearch(ctx, ConvSearchRequest{CallerWorkspace: wsA, Query: "second_external_until_readsession"})
+		if err == nil && len(r.Hits) == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	afterReadRes, err := d.ConvSearch(ctx, ConvSearchRequest{CallerWorkspace: wsA, Query: "second_external_until_readsession"})
+	if err != nil || len(afterReadRes.Hits) != 1 || afterReadRes.Hits[0].SessionID != nonHostedID {
+		t.Fatalf("reconcileNonHostedOnRead did not index second write: %+v (err=%v)", afterReadRes, err)
 	}
 
 	// 6. conv.reveal:

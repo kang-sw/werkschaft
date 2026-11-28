@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // ConvReveal is a dashboard UI highlight/jump event pushed over the live rail
@@ -89,7 +90,11 @@ func (d *Daemon) PublishConvReveal(ev ConvReveal) bool {
 	}
 	ev.EntryID = strings.TrimSpace(ev.EntryID)
 	if len(ev.EntryID) > convRevealEntryLimit {
-		ev.EntryID = ev.EntryID[:convRevealEntryLimit]
+		cut := convRevealEntryLimit
+		for cut > 0 && !utf8.RuneStart(ev.EntryID[cut]) {
+			cut--
+		}
+		ev.EntryID = ev.EntryID[:cut]
 	}
 	ev.Reason = strings.TrimSpace(ev.Reason)
 	if runes := []rune(ev.Reason); len(runes) > convRevealReasonRunes {
