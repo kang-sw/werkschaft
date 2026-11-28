@@ -525,6 +525,7 @@
   "js.companion.messenger.status.laptop": "Al lavoro sul portatile · scrivi per avvisare lo smartphone",
   "js.companion.messenger.status.phone": "Controlla lo smartphone con una mano",
   "js.companion.messenger.status.sleepy": "Sta sonnecchiando… bussa al vetro per svegliare",
+  "js.companion.messenger.status.unavailable": "Companion temporaneamente non disponibile — invia un messaggio per riprovare",
   "js.companion.messenger.status.work": "Gestisce la richiesta sul portatile",
   "js.companion.messenger.tier1_empty": "Nessun riepilogo Tier-1 ancora.",
   "js.companion.messenger.tier1_reset": "Reimposta",

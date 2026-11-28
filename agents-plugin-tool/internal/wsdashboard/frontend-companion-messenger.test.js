@@ -552,6 +552,28 @@ test("Step 4 Phase 1: messenger popup anchoring, Variant D rail widths, viewport
   for (const fn of docListeners.keydown || []) fn({ key: "Escape", preventDefault() {} });
   assert.equal(M.isOpen(), false, "Escape must close unpinned messenger");
 
+  // Unavailable state renders dedicated status dot + subtitle and recovers on clean snapshot.
+  M.open();
+  await new Promise(r => setImmediate(r));
+  M.applySnapshot({
+    seq: 4, state: "laptop_ambient", posture: "laptop", unavailable: true,
+    messages: [], unreadClient: 0, unreadAgent: 1, tier1Summary: []
+  });
+  const dot = popup.all().find(el => el.className === "ws-cm-status-dot");
+  const subtitle = popup.all().find(el => el.className === "ws-cm-subtitle");
+  assert.equal(dot.dataset.state, "unavailable", "unavailable snapshot must set dot data-state=unavailable");
+  assert.ok(subtitle.textContent.toLowerCase().includes("unavailable"), `expected unavailable subtitle, got ${subtitle.textContent}`);
+  M.applySnapshot({
+    seq: 5, state: "laptop_ambient", posture: "laptop", unavailable: false,
+    messages: [], unreadClient: 0, unreadAgent: 1, tier1Summary: []
+  });
+  assert.equal(dot.dataset.state, "buzz", "clearing unavailable with unread agent message must show buzz");
+  M.applySnapshot({
+    seq: 6, state: "laptop_ambient", posture: "laptop", unavailable: false,
+    messages: [], unreadClient: 0, unreadAgent: 0, tier1Summary: []
+  });
+  assert.equal(dot.dataset.state, "laptop", "clearing unavailable with no unread messages must restore laptop dot state");
+
   M.dispose();
 });
 

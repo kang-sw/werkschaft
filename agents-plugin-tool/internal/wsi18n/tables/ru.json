@@ -525,6 +525,7 @@
   "js.companion.messenger.status.laptop": "Работает за ноутбуком · сообщение позовёт смартфон",
   "js.companion.messenger.status.phone": "Проверяет смартфон одной рукой",
   "js.companion.messenger.status.sleepy": "Дремлет… постучите по стеклу, чтобы разбудить",
+  "js.companion.messenger.status.unavailable": "Компаньон временно недоступен — отправьте сообщение, чтобы повторить",
   "js.companion.messenger.status.work": "Выполняет запрос на ноутбуке",
   "js.companion.messenger.tier1_empty": "Записей сводки Tier-1 пока нет.",
   "js.companion.messenger.tier1_reset": "Сбросить",

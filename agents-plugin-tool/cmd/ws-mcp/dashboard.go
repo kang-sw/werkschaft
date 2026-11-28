@@ -112,6 +112,24 @@ func dashboardCommand(args []string) {
 			(*fn)(replyID, requestID, label)
 		}
 	}
+	var companionRT atomic.Pointer[companionRuntime]
+	companionHooks := companionRunnerHooks{
+		onTurnEnd: func(role, replyID, wsKey, status, errText string) {
+			if rt := companionRT.Load(); rt != nil {
+				rt.OnCompanionTurnEnd(role, replyID, wsKey, status, errText)
+			}
+		},
+		onActivity: func(role, replyID, wsKey string) {
+			if rt := companionRT.Load(); rt != nil {
+				rt.OnCompanionActivity(role, replyID, wsKey)
+			}
+		},
+		onClose: func(role, replyID, wsKey, reason string) {
+			if rt := companionRT.Load(); rt != nil {
+				rt.OnCompanionClose(role, replyID, wsKey, reason)
+			}
+		},
+	}
 	var werkUsage atomic.Pointer[func(wsdashboard.WerkUsageDelta)]
 	callWerkUsage := func(delta wsdashboard.WerkUsageDelta) {
 		if fn := werkUsage.Load(); fn != nil && *fn != nil {
@@ -149,7 +167,7 @@ func dashboardCommand(args []string) {
 	} else {
 		accountSlots = wscred.NewAccountSlotRegistry(slotsPath)
 	}
-	agents := newAgentRunnerWithHired(dir, logw, trackerChanged.call, agyActivity.call, callQuotaResetAt, callOnHired, callWerkUsage, holders, boards, labels.label, credentials, accountSlots)
+	agents := newAgentRunnerWithHooks(dir, logw, trackerChanged.call, agyActivity.call, callQuotaResetAt, callOnHired, callWerkUsage, companionHooks, holders, boards, labels.label, credentials, accountSlots)
 	// The hosted exec jobs bind after the runner starts (openHostedExec):
 	// until then no held report is released and no session sleeps.
 	agents.ExpectExecJobs()
@@ -174,6 +192,9 @@ func dashboardCommand(args []string) {
 	nudges := mcp.NewWhiteboardNudges(dir, agents, logw, boards)
 	userCmdsReady := make(chan struct{})
 	host := &proxyHost{userCmdsReady: userCmdsReady, credentials: credentials, notes: sessions.Notes, dir: dir, port: *port, lan: *lan, buildTime: *buildTime, contentHash: contentHash, logw: logw, configPath: filepath.Clean(configPath), agents: agents, ephemeralPool: ephemeralPool, boards: boards, mailLabels: labels.label}
+	companion := newCompanionRuntime(dir, "", agents, host.live.Load, logw)
+	companionRT.Store(companion)
+	host.companion = companion
 	boards.SetChanged(func(root, key string) {
 		if d := host.live.Load(); d != nil {
 			d.Index().Reread(wsmailbox.ReplyID(key))
@@ -284,6 +305,7 @@ func dashboardCommand(args []string) {
 			// Terminate cached ephemeral processes and prune temp dirs before
 			// releasing the singleton lock.
 			run(closePool)
+			run(companion.Close)
 			wg.Wait()
 		},
 	})
@@ -328,6 +350,9 @@ func dashboardCommand(args []string) {
 	werkUsage.Store(&werkUsageFn)
 	host.live.Store(daemon)
 	labels.daemon.Store(daemon)
+	daemon.SetCompanionHolderAlive(companion.IsHolderAlive)
+	daemon.SetCompanionWake(companion.OnUserWake)
+	companion.Start()
 	execJobsChanged := func() {
 		if d := host.live.Load(); d != nil {
 			d.ExecJobsChanged()
@@ -432,6 +457,7 @@ func dashboardCommand(args []string) {
 	}
 	cron.close(logw)
 	stopAllTrackers()
+	companion.Close()
 	closePool()
 	closeTracker()
 }
@@ -617,7 +643,17 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 	return newAgentRunnerWithHired(dir, logw, trackerChanged, agyActivity, quotaResetAt, nil, nil, holders, boards, labels, credentials, nil)
 }
 
+type companionRunnerHooks struct {
+	onTurnEnd  func(role, replyID, wsKey, status, errText string)
+	onActivity func(role, replyID, wsKey string)
+	onClose    func(role, replyID, wsKey, reason string)
+}
+
 func newAgentRunnerWithHired(dir string, logw io.Writer, trackerChanged, agyActivity func(), quotaResetAt func(backend, model string) int64, onHired func(replyID, requestID, label string), onWerkUsage func(wsdashboard.WerkUsageDelta), holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials *wscred.Store, accountSlots *wscred.AccountSlotRegistry) *wsagent.Runner {
+	return newAgentRunnerWithHooks(dir, logw, trackerChanged, agyActivity, quotaResetAt, onHired, onWerkUsage, companionRunnerHooks{}, holders, boards, labels, credentials, accountSlots)
+}
+
+func newAgentRunnerWithHooks(dir string, logw io.Writer, trackerChanged, agyActivity func(), quotaResetAt func(backend, model string) int64, onHired func(replyID, requestID, label string), onWerkUsage func(wsdashboard.WerkUsageDelta), companion companionRunnerHooks, holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials *wscred.Store, accountSlots *wscred.AccountSlotRegistry) *wsagent.Runner {
 	modelWaitSeconds := wsagent.DefaultAgyModelWaitTimeoutSeconds
 	modelWaitRetries := wsagent.DefaultAgyModelWaitRetries
 	if name, _, err := wsagent.ResolveHostedPackage(); err == nil && name == "wsflow" {
@@ -676,9 +712,12 @@ func newAgentRunnerWithHired(dir string, logw io.Writer, trackerChanged, agyActi
 		Log:            logw,
 		TrackerChanged: trackerChanged,
 		AgyActivity:    agyActivity,
-		QuotaResetAt:   quotaResetAt,
-		OnHired:        onHired,
-		Report:         mcp.AgentTurnReporter(logw),
+		QuotaResetAt:        quotaResetAt,
+		OnHired:             onHired,
+		OnCompanionTurnEnd:  companion.onTurnEnd,
+		OnCompanionActivity: companion.onActivity,
+		OnCompanionClose:    companion.onClose,
+		Report:              mcp.AgentTurnReporter(logw),
 		// agent.spawn routes role tiers through the packaged playbook
 		// roles' agent.tier_routing graph.
 		TierRoles: mcp.PackagedTierRoles,

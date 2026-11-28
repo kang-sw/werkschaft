@@ -574,7 +574,7 @@ func (d *Daemon) directorRun(call companionCall) (string, bool) {
 			lang = overrides[wsconfig.ItemWorkflowLang]
 		}
 	}
-	digest := companionDigest(call, d.companionRing(call.sessionID))
+	digest := companionDigest(call, d.companionRing(call.sessionID), d.companionPhone.LatestSummary())
 	c.mu.Lock()
 	c.recordLocked(c.clock())
 	c.digests++
@@ -828,15 +828,21 @@ func companionDigestLine(rec wslive.RingRecord) string {
 	return companionCut(line, companionDigestEntryRunes)
 }
 
-// companionDigest is the focused session's state line and its newest ring
-// entries, oldest first, within companionDigestRunes in total.
-func companionDigest(call companionCall, ring []wslive.RingRecord) string {
+// companionDigest is the focused session's state line, optional latest
+// messenger exchange backfeed ((1730)=a), and newest ring entries, oldest first,
+// within companionDigestRunes in total.
+func companionDigest(call companionCall, ring []wslive.RingRecord, messengerSummary ...string) string {
 	turn := "idle"
 	if call.turnActive {
 		turn = "active"
 	}
 	head := fmt.Sprintf("turn: %s; phase: %s; failed tool calls this turn: %d; open questions for the user: %d",
 		turn, companionOr(call.phase, "idle"), call.failed, call.asks)
+	if len(messengerSummary) > 0 {
+		if line := companionCut(messengerSummary[0], companionDigestEntryRunes); line != "" {
+			head += "\nrecent_messenger: " + line
+		}
+	}
 	budget := companionDigestRunes - utf8.RuneCountInString(head)
 	if len(ring) > companionDigestEntries {
 		ring = ring[len(ring)-companionDigestEntries:]

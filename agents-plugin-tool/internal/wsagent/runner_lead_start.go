@@ -42,7 +42,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	}
 	if attach {
 		// Root lead keys remain parentless under the existing key-store contract.
-		err := c.r.opts.LeadKeys.EnsureLead(rec.Root, rec.WSKey)
+		err := c.ensureLeadKey(rec)
 		c.setStatus(func() { c.rejoinKeyPending = err != nil })
 		if err != nil {
 			diagnostic := "rejoin ws session key (advisory): " + err.Error()
@@ -62,7 +62,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		if err := c.retireHolder(); err != nil {
 			return err
 		}
-		if err := c.r.opts.LeadKeys.EnsureLead(rec.Root, rec.WSKey); err != nil {
+		if err := c.ensureLeadKey(rec); err != nil {
 			return fmt.Errorf("ws session key: %w", err)
 		}
 		c.setStatus(func() { c.rejoinKeyPending = false })
@@ -71,7 +71,11 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 			// carries the key and the manual in its prompt. Pi leads get
 			// them from their extension, or from its bridge fallback
 			// (writePiLeadBridge, LeadSpec.Manual).
-			if instructions, err = composeLeadInstructions(c.dir, rec, c.leadManual(rec), c.r.subagentSteer(rec), c.r.opts.Backends[rec.Backend].PlaybookCommands); err != nil {
+			if rec.CompanionRole != "" {
+				if instructions, err = composeCompanionInstructions(c.dir, rec); err != nil {
+					return err
+				}
+			} else if instructions, err = composeLeadInstructions(c.dir, rec, c.leadManual(rec), c.r.subagentSteer(rec), c.r.opts.Backends[rec.Backend].PlaybookCommands); err != nil {
 				return err
 			}
 		}
@@ -151,7 +155,12 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 				EnvHostedSessionKey: rec.WSKey,
 				EnvHostedSessionRow: wsdashboard.RegistrationPath(c.r.opts.Dir, rec.ReplyID),
 			},
-			Manual:     func() string { return c.leadManual(rec) },
+			Manual: func() string {
+				if rec.CompanionRole != "" {
+					return rec.CompanionSystemPrompt
+				}
+				return c.leadManual(rec)
+			},
 			FrameTrace: c.agyFrameTrace,
 			Spawned: func(holderID string, pid int) {
 				spawned = true
@@ -297,7 +306,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	}
 	// A pending restore already carries state. Queue startup state for the
 	// first model turn after a launch, including when the harness resumes.
-	if c.r.opts.LeadSessionState != nil &&
+	if rec.CompanionRole == "" && c.r.opts.LeadSessionState != nil &&
 		!strings.HasPrefix(c.compactNote, restartRestoreMarker) &&
 		!strings.HasPrefix(c.compactNote, compactionRestoreMarker) &&
 		!strings.HasPrefix(c.compactNote, leadStartStateMarker) {
@@ -344,4 +353,13 @@ func (c *conv) retireHolder() error {
 	})
 	c.writeRegistration()
 	return nil
+}
+
+func (c *conv) ensureLeadKey(rec Record) error {
+	if rec.CompanionRole != "" {
+		if cks, ok := c.r.opts.LeadKeys.(CompanionLeadKeyStore); ok {
+			return cks.EnsureCompanionLead(rec.Root, rec.WSKey, rec.CompanionRole)
+		}
+	}
+	return c.r.opts.LeadKeys.EnsureLead(rec.Root, rec.WSKey)
 }

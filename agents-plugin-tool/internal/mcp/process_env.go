@@ -76,6 +76,9 @@ type ServerOptions struct {
 	// phone messenger host. When nil and Live implements CompanionHost,
 	// NewServerWithOptions binds Live automatically.
 	Companion CompanionHost
+	// CompanionDelegation bridges ws/companion.delegate_work and
+	// ws/delegation.report to the daemon's in-memory delegation runtime.
+	CompanionDelegation CompanionDelegationHost
 	// EphemeralPool is the dashboard daemon's shared lightweight ephemeral
 	// harness pool used by opt-in dynamic tier routing on agent.spawn. Nil
 	// leaves dynamic tier routing inert (static fallback).
@@ -252,6 +255,7 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 			s.companion = host
 		}
 	}
+	s.companionDelegation = opts.CompanionDelegation
 	s.ephemeralPool = opts.EphemeralPool
 	s.exec, s.conversation = opts.Exec, opts.Conversation
 	s.cron = opts.Cron
@@ -415,6 +419,13 @@ func (s *Server) resolveHostedSession() string {
 		return ""
 	}
 	key := strings.TrimSpace(s.getenv(envHostedSessionKey))
+	// A daemon-authenticated HTTP MCP connection (durable or external) already
+	// bound s.conversation from its per-session token; when its key's reply-id
+	// matches that authenticated conversation, honor it directly even when the
+	// durable process has no separate OS harness PID (OwnerPID == 0).
+	if s.conversation != "" && key != "" && wsmailbox.ReplyID(key) == s.conversation {
+		return key
+	}
 	row := strings.TrimSpace(s.getenv(envHostedSessionRow))
 	harness := s.harnessPID()
 	if key == "" || row == "" || harness <= 0 {

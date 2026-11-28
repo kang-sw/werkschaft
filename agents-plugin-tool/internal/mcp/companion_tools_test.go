@@ -7,13 +7,25 @@ import (
 	"testing"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wsmailbox"
 )
 
 type testCompanionHost struct {
-	store   wsdashboard.CompanionPhoneStore
-	speaks  []string
-	faces   []string
-	motions []string
+	store       wsdashboard.CompanionPhoneStore
+	speaks      []string
+	faces       []string
+	motions     []string
+	delegations []struct {
+		caller string
+		brief  string
+	}
+	reports []struct {
+		caller    string
+		id        string
+		status    string
+		result    string
+		artifacts []string
+	}
 }
 
 func (h *testCompanionHost) CompanionPosture(owner string) string {
@@ -64,7 +76,26 @@ func (h *testCompanionHost) CompanionReleaseOnTurnEnd(owner string) bool {
 	return changed
 }
 
-func invokeCompanionTestTool(t *testing.T, s *Server, name string, args map[string]any) (string, bool) {
+func (h *testCompanionHost) CompanionDelegateWork(callerKey, brief string) (CompanionDelegationAccepted, error) {
+	h.delegations = append(h.delegations, struct {
+		caller string
+		brief  string
+	}{caller: callerKey, brief: brief})
+	return CompanionDelegationAccepted{DelegationID: "del-1", Status: "accepted"}, nil
+}
+
+func (h *testCompanionHost) CompanionDelegationReport(callerKey, delegationID, status, result string, artifacts []string) (CompanionDelegationReportAck, error) {
+	h.reports = append(h.reports, struct {
+		caller    string
+		id        string
+		status    string
+		result    string
+		artifacts []string
+	}{caller: callerKey, id: delegationID, status: status, result: result, artifacts: artifacts})
+	return CompanionDelegationReportAck{DelegationID: delegationID, Status: status}, nil
+}
+
+func invokeCompanionTestToolRaw(t *testing.T, s *Server, name string, args map[string]any) response {
 	t.Helper()
 	raw, err := json.Marshal(map[string]any{
 		"name":      name,
@@ -73,11 +104,16 @@ func invokeCompanionTestTool(t *testing.T, s *Server, name string, args map[stri
 	if err != nil {
 		t.Fatalf("marshal params: %v", err)
 	}
-	resp := s.callTool(context.Background(), request{
+	return s.callTool(context.Background(), request{
 		ID:     json.RawMessage(`1`),
 		Method: "tools/call",
 		Params: raw,
 	})
+}
+
+func invokeCompanionTestTool(t *testing.T, s *Server, name string, args map[string]any) (string, bool) {
+	t.Helper()
+	resp := invokeCompanionTestToolRaw(t, s, name, args)
 	if resp.Error != nil {
 		t.Fatalf("unexpected RPC error calling %s: %+v", name, resp.Error)
 	}
@@ -103,158 +139,361 @@ func discoveryToolNames(tools []map[string]any) map[string]bool {
 	return out
 }
 
+func mintCompanionTestKey(t *testing.T, s *Server, root, role string) string {
+	t.Helper()
+	key, err := s.sessions.mintWithCompanionRole(root, roleLead, "", "", role)
+	if err != nil {
+		t.Fatalf("mintWithCompanionRole(%q): %v", role, err)
+	}
+	return key
+}
+
 func TestCompanionPostureLockDirectAndDiscovery(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", t.TempDir())
+	root := t.TempDir()
 	host := &testCompanionHost{}
 	if _, _, err := host.store.EnqueueUserMessage("hey check your phone"); err != nil {
 		t.Fatalf("EnqueueUserMessage: %v", err)
 	}
 
-	s := NewServer(t.TempDir(), "test")
+	s := NewServer(root, "test")
 	s.descriptor = connectionDescriptor{callFallback: true}
 	s.companion = host
-	s.conversation = "sess-phone-1"
+	bodyKey := mintCompanionTestKey(t, s, root, CompanionRoleBody)
+	bodyEntry, ok := s.lookupSession(bodyKey)
+	if !ok || bodyEntry.companionRole != CompanionRoleBody {
+		t.Fatalf("lookup companion-body key failed: ok=%v entry=%+v", ok, bodyEntry)
+	}
 
-	leadEntry := sessionEntry{scope: roleLead}
-
-	// Laptop posture: phone_read and phone_send must be refused via callTool,
-	// via the call envelope, and hidden from callDiscoveryTools.
-	laptopDisc := discoveryToolNames(s.callDiscoveryTools("", leadEntry, true))
+	// Laptop posture: phone_read and phone_send must be refused with posture_locked
+	// via callTool, via the call envelope, and hidden from callDiscoveryTools.
+	laptopDisc := discoveryToolNames(s.callDiscoveryTools(bodyKey, bodyEntry, true))
 	if laptopDisc[companionPhoneReadTool] || laptopDisc[companionPhoneSendTool] {
 		t.Fatalf("callDiscoveryTools exposed phone_read/phone_send on laptop posture")
 	}
-	if !laptopDisc[companionPhonePickupTool] || !laptopDisc["runtime.read"] {
-		t.Fatalf("callDiscoveryTools missing expected laptop tools: pickup=%v runtime.read=%v", laptopDisc[companionPhonePickupTool], laptopDisc["runtime.read"])
+	if !laptopDisc[companionPhonePickupTool] || !laptopDisc[companionDelegateWorkTool] || !laptopDisc["runtime.read"] {
+		t.Fatalf("callDiscoveryTools missing expected laptop tools: pickup=%v delegate=%v runtime.read=%v",
+			laptopDisc[companionPhonePickupTool], laptopDisc[companionDelegateWorkTool], laptopDisc["runtime.read"])
 	}
+	// Tier-1 base allowlist must never expose lead-level mutating tools at any posture ((1740)).
+	for _, forbidden := range []string{"config.tune", "git.commit", "git.merge", "tickets.close", "exec.shell", "agent.spawn", delegationReportTool} {
+		if laptopDisc[forbidden] {
+			t.Fatalf("companion-body exposed forbidden mutating/work tool %q on laptop posture", forbidden)
+		}
+		resp := invokeCompanionTestToolRaw(t, s, forbidden, map[string]any{"session_key": bodyKey})
+		if resp.Error == nil {
+			t.Fatalf("companion-body reached forbidden tool %q without RPC profile error: %+v", forbidden, resp)
+		}
+	}
+
 	for _, tool := range []string{companionPhoneReadTool, companionPhoneSendTool} {
-		args := map[string]any{}
+		args := map[string]any{"session_key": bodyKey}
 		if tool == companionPhoneSendTool {
 			args["text"] = "cannot send yet"
 		}
 		txt, isErr := invokeCompanionTestTool(t, s, tool, args)
-		if !isErr || !strings.Contains(txt, companionRefusalPhoneOnDesk) {
-			t.Fatalf("callTool(%s) on laptop = (%q, isErr=%v), want refusal %q", tool, txt, isErr, companionRefusalPhoneOnDesk)
+		if !isErr || !strings.Contains(txt, `"posture_locked"`) || !strings.Contains(txt, companionPhonePickupTool) {
+			t.Fatalf("callTool(%s) on laptop = (%q, isErr=%v), want posture_locked naming %s", tool, txt, isErr, companionPhonePickupTool)
 		}
 		txt, isErr = invokeCompanionTestTool(t, s, "call", map[string]any{"tool": tool, "arguments": args})
-		if !isErr || !strings.Contains(txt, companionRefusalPhoneOnDesk) {
-			t.Fatalf("call(%s) on laptop = (%q, isErr=%v), want refusal %q", tool, txt, isErr, companionRefusalPhoneOnDesk)
+		if !isErr || !strings.Contains(txt, `"posture_locked"`) || !strings.Contains(txt, companionPhonePickupTool) {
+			t.Fatalf("call(%s) on laptop = (%q, isErr=%v), want posture_locked naming %s", tool, txt, isErr, companionPhonePickupTool)
 		}
 	}
 
 	// Cosmetic companion tools work in laptop posture.
-	if txt, isErr := invokeCompanionTestTool(t, s, companionSpeakTool, map[string]any{"text": "working!"}); isErr || !strings.Contains(txt, "ok") {
+	if txt, isErr := invokeCompanionTestTool(t, s, companionSpeakTool, map[string]any{"session_key": bodyKey, "text": "working!"}); isErr || !strings.Contains(txt, "ok") {
 		t.Fatalf("companion.speak on laptop = (%q, isErr=%v)", txt, isErr)
 	}
-	if txt, isErr := invokeCompanionTestTool(t, s, companionFaceTool, map[string]any{"expression": "happy"}); isErr || !strings.Contains(txt, "ok") {
+	if txt, isErr := invokeCompanionTestTool(t, s, companionFaceTool, map[string]any{"session_key": bodyKey, "expression": "happy"}); isErr || !strings.Contains(txt, "ok") {
 		t.Fatalf("companion.face on laptop = (%q, isErr=%v)", txt, isErr)
 	}
-	if txt, isErr := invokeCompanionTestTool(t, s, companionMotionTool, map[string]any{"gesture": "wave"}); isErr || !strings.Contains(txt, "ok") {
+	if txt, isErr := invokeCompanionTestTool(t, s, companionMotionTool, map[string]any{"session_key": bodyKey, "gesture": "wave"}); isErr || !strings.Contains(txt, "ok") {
 		t.Fatalf("companion.motion on laptop = (%q, isErr=%v)", txt, isErr)
 	}
 
 	// Pick up phone -> posture locks to phone and drains unread message.
-	txt, isErr := invokeCompanionTestTool(t, s, companionPhonePickupTool, map[string]any{})
+	txt, isErr := invokeCompanionTestTool(t, s, companionPhonePickupTool, map[string]any{"session_key": bodyKey})
 	if isErr || !strings.Contains(txt, "hey check your phone") || !strings.Contains(txt, "posture: phone") {
 		t.Fatalf("phone_pickup = (%q, isErr=%v)", txt, isErr)
 	}
 
-	// In phone posture: laptop tools are hidden from callDiscoveryTools and
-	// hard-refused in both callTool and the call envelope!
-	phoneDisc := discoveryToolNames(s.callDiscoveryTools("", leadEntry, true))
-	if phoneDisc["runtime.read"] || phoneDisc["git.status"] || phoneDisc["tickets.query"] {
-		t.Fatalf("callDiscoveryTools exposed laptop tools while holding phone")
+	// In phone posture: delegate_work and laptop tools are hidden from
+	// callDiscoveryTools and hard-refused with posture_locked in both callTool
+	// and the call envelope!
+	phoneDisc := discoveryToolNames(s.callDiscoveryTools(bodyKey, bodyEntry, true))
+	if phoneDisc["runtime.read"] || phoneDisc["git.status"] || phoneDisc["tickets.query"] || phoneDisc[companionDelegateWorkTool] {
+		t.Fatalf("callDiscoveryTools exposed work tools while holding phone: %+v", phoneDisc)
 	}
-	if !phoneDisc[companionPhoneReadTool] || !phoneDisc[companionPhoneSendTool] || !phoneDisc[companionPhonePutdownTool] {
-		t.Fatalf("callDiscoveryTools missing phone tools while holding phone")
+	if !phoneDisc[companionPhoneReadTool] || !phoneDisc[companionPhoneSendTool] || !phoneDisc[companionPhonePutdownTool] || !phoneDisc["mailbox.recv"] {
+		t.Fatalf("callDiscoveryTools missing phone/mailbox tools while holding phone")
 	}
-	for _, blocked := range []string{"runtime.read", "git.status", "tickets.query"} {
-		txt, isErr = invokeCompanionTestTool(t, s, blocked, map[string]any{})
-		if !isErr || !strings.Contains(txt, companionRefusalHandsBusy) {
-			t.Fatalf("callTool(%s) on phone = (%q, isErr=%v), want refusal %q", blocked, txt, isErr, companionRefusalHandsBusy)
+	for _, blocked := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{companionDelegateWorkTool, map[string]any{"session_key": bodyKey, "brief": "do work"}},
+		{"runtime.read", map[string]any{"session_key": bodyKey}},
+		{"git.status", map[string]any{"session_key": bodyKey}},
+		{"tickets.query", map[string]any{"session_key": bodyKey}},
+	} {
+		// runtime.read does not declare session_key; bind hosted key for it.
+		if blocked.tool == "runtime.read" {
+			s.hostedKey = bodyKey
+			blocked.args = map[string]any{}
+		} else {
+			s.hostedKey = ""
 		}
-		txt, isErr = invokeCompanionTestTool(t, s, "call", map[string]any{"tool": blocked, "arguments": map[string]any{}})
-		if !isErr || !strings.Contains(txt, companionRefusalHandsBusy) {
-			t.Fatalf("call(%s) on phone = (%q, isErr=%v), want refusal %q", blocked, txt, isErr, companionRefusalHandsBusy)
+		txt, isErr = invokeCompanionTestTool(t, s, blocked.tool, blocked.args)
+		if !isErr || !strings.Contains(txt, `"posture_locked"`) || !strings.Contains(txt, companionPhonePutdownTool) {
+			t.Fatalf("callTool(%s) on phone = (%q, isErr=%v), want posture_locked naming %s", blocked.tool, txt, isErr, companionPhonePutdownTool)
+		}
+		txt, isErr = invokeCompanionTestTool(t, s, "call", map[string]any{"tool": blocked.tool, "arguments": blocked.args})
+		if !isErr || !strings.Contains(txt, `"posture_locked"`) || !strings.Contains(txt, companionPhonePutdownTool) {
+			t.Fatalf("call(%s) on phone = (%q, isErr=%v), want posture_locked naming %s", blocked.tool, txt, isErr, companionPhonePutdownTool)
 		}
 	}
+	s.hostedKey = ""
 
 	// Companion phone tools succeed while holding the phone.
-	txt, isErr = invokeCompanionTestTool(t, s, companionPhoneSendTool, map[string]any{"text": "merong!", "tone": "merong"})
+	txt, isErr = invokeCompanionTestTool(t, s, companionPhoneSendTool, map[string]any{"session_key": bodyKey, "text": "merong!", "tone": "merong"})
 	if isErr || !strings.Contains(txt, "sent ") {
 		t.Fatalf("phone_send = (%q, isErr=%v)", txt, isErr)
 	}
-	txt, isErr = invokeCompanionTestTool(t, s, companionPhoneReadTool, map[string]any{})
+	txt, isErr = invokeCompanionTestTool(t, s, companionPhoneReadTool, map[string]any{"session_key": bodyKey})
 	if isErr || !strings.Contains(txt, "posture: phone") {
 		t.Fatalf("phone_read = (%q, isErr=%v)", txt, isErr)
 	}
 
 	// Putdown facedown_merong restores laptop posture.
 	txt, isErr = invokeCompanionTestTool(t, s, companionPhonePutdownTool, map[string]any{
-		"style": wsdashboard.CompanionPutdownFacedownMerong,
-		"next":  wsdashboard.CompanionPutdownNextAmbient,
+		"session_key": bodyKey,
+		"style":       wsdashboard.CompanionPutdownFacedownMerong,
+		"next":        wsdashboard.CompanionPutdownNextAmbient,
 	})
 	if isErr || !strings.Contains(txt, "posture: laptop") {
 		t.Fatalf("phone_putdown = (%q, isErr=%v)", txt, isErr)
 	}
-	if host.store.Snapshot().PhoneFaceDown != true {
+	if !host.store.Snapshot().PhoneFaceDown {
 		t.Fatalf("expected PhoneFaceDown=true after facedown_merong putdown")
 	}
 
-	// Laptop tool works again after putdown.
-	txt, isErr = invokeCompanionTestTool(t, s, "runtime.read", map[string]any{})
-	if isErr {
-		t.Fatalf("runtime.read after putdown failed: %q", txt)
+	// delegate_work succeeds in laptop posture with a multi-kilobyte lossless brief.
+	largeBrief := strings.Repeat("preserve-every-byte-0123456789\n", 400)
+	txt, isErr = invokeCompanionTestTool(t, s, companionDelegateWorkTool, map[string]any{
+		"session_key": bodyKey,
+		"brief":       largeBrief,
+	})
+	if isErr || !strings.Contains(txt, "delegation_id: del-1") || !strings.Contains(txt, "status: accepted") {
+		t.Fatalf("delegate_work on laptop = (%q, isErr=%v)", txt, isErr)
+	}
+	if len(host.delegations) != 1 || host.delegations[0].brief != largeBrief {
+		t.Fatalf("delegate_work brief truncated or altered: len=%d want=%d", len(host.delegations[0].brief), len(largeBrief))
 	}
 }
 
-func TestCompanionPhoneBuzzPiggyback(t *testing.T) {
+func TestCompanionMarkerScopingRegression(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", t.TempDir())
+	root := t.TempDir()
 	host := &testCompanionHost{}
-	s := NewServer(t.TempDir(), "test")
-	s.companion = host
-	s.conversation = "sess-buzz-1"
-
-	// Zero unread -> no piggyback line.
-	txt, isErr := invokeCompanionTestTool(t, s, "runtime.read", map[string]any{})
-	if isErr || strings.Contains(txt, "[phone buzz:") {
-		t.Fatalf("unexpected buzz with 0 unread: %q", txt)
-	}
-
-	// Two unread user messages -> non-JSON, non-error response carries [phone buzz: 2 unread].
 	if _, _, err := host.store.EnqueueUserMessage("ping 1"); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := host.store.EnqueueUserMessage("ping 2"); err != nil {
 		t.Fatal(err)
 	}
-	txt, isErr = invokeCompanionTestTool(t, s, "runtime.read", map[string]any{})
-	if isErr || !strings.Contains(txt, "[phone buzz: 2 unread]") {
-		t.Fatalf("expected [phone buzz: 2 unread] piggyback, got: %q", txt)
+
+	s := NewServer(root, "test")
+	s.descriptor = connectionDescriptor{callFallback: true}
+	s.companion = host
+
+	leadKey := mintCompanionTestKey(t, s, root, "")
+	leadEntry, _ := s.lookupSession(leadKey)
+	bodyKey := mintCompanionTestKey(t, s, root, CompanionRoleBody)
+	bodyEntry, _ := s.lookupSession(bodyKey)
+	workKey := mintCompanionTestKey(t, s, root, CompanionRoleWork)
+	workEntry, _ := s.lookupSession(workKey)
+
+	// (m1) Unmarked lead: never receives [phone buzz: N unread], never posture-locked
+	// even while companion-body holds the phone, and cannot list or reach phone_* or delegate_work.
+	if _, _, err := host.store.PhonePickup(bodyKey); err != nil {
+		t.Fatalf("body PhonePickup: %v", err)
+	}
+	if _, _, err := host.store.EnqueueUserMessage("ping 3 while held"); err != nil {
+		t.Fatal(err)
 	}
 
-	// JSON format must stay valid JSON (no piggyback appended).
+	s.hostedKey = leadKey
+	txt, isErr := invokeCompanionTestTool(t, s, "runtime.read", map[string]any{})
+	if isErr || strings.Contains(txt, "[phone buzz:") || strings.Contains(txt, "posture_locked") {
+		t.Fatalf("(m1) unmarked lead runtime.read leaked buzz or posture lock: (%q, isErr=%v)", txt, isErr)
+	}
+	leadDisc := discoveryToolNames(s.callDiscoveryTools(leadKey, leadEntry, true))
+	for _, hidden := range []string{companionPhonePickupTool, companionPhoneReadTool, companionPhoneSendTool, companionPhonePutdownTool, companionDelegateWorkTool, delegationReportTool} {
+		if leadDisc[hidden] {
+			t.Fatalf("(m1) unmarked lead discovery exposed %q", hidden)
+		}
+		resp := invokeCompanionTestToolRaw(t, s, hidden, map[string]any{"session_key": leadKey})
+		if resp.Error == nil {
+			t.Fatalf("(m1) unmarked lead reached %q: %+v", hidden, resp)
+		}
+	}
+	// Keyless caller must also not inherit phone ownership via any "lead" fallback.
+	s.hostedKey = ""
+	for _, hidden := range []string{companionPhonePickupTool, companionPhoneReadTool, companionPhoneSendTool, companionPhonePutdownTool, companionDelegateWorkTool} {
+		resp := invokeCompanionTestToolRaw(t, s, hidden, map[string]any{})
+		if resp.Error == nil {
+			t.Fatalf("(m1) keyless caller reached %q: %+v", hidden, resp)
+		}
+	}
+
+	// (m3) Unmarked lead keeps companion.{speak,face,motion} as landed.
+	if !leadDisc[companionSpeakTool] || !leadDisc[companionFaceTool] || !leadDisc[companionMotionTool] {
+		t.Fatalf("(m3) unmarked lead missing speak/face/motion in discovery")
+	}
+	if txt, isErr := invokeCompanionTestTool(t, s, companionSpeakTool, map[string]any{"session_key": leadKey, "text": "hello lead"}); isErr || !strings.Contains(txt, "ok") {
+		t.Fatalf("(m3) unmarked lead companion.speak failed: (%q, isErr=%v)", txt, isErr)
+	}
+
+	// (m2) companion-body gets [phone buzz: N unread] on non-JSON replies and NOT on JSON replies.
+	if _, _, err := host.store.PhonePutdown(bodyKey, wsdashboard.CompanionPutdownNormal, wsdashboard.CompanionPutdownNextAmbient); err != nil {
+		t.Fatal(err)
+	}
+	s.hostedKey = bodyKey
+	txt, isErr = invokeCompanionTestTool(t, s, "runtime.read", map[string]any{})
+	if isErr || !strings.Contains(txt, "[phone buzz: 1 unread]") {
+		t.Fatalf("(m2) companion-body expected [phone buzz: 1 unread], got: %q (isErr=%v)", txt, isErr)
+	}
 	jsonTxt, isErr := invokeCompanionTestTool(t, s, "runtime.read", map[string]any{"format": "json"})
 	if isErr || strings.Contains(jsonTxt, "[phone buzz:") {
-		t.Fatalf("JSON output must not carry phone buzz piggyback: %q", jsonTxt)
+		t.Fatalf("(m2) companion-body JSON reply must not carry phone buzz: %q", jsonTxt)
 	}
 	var parsed map[string]any
 	if err := json.Unmarshal([]byte(jsonTxt), &parsed); err != nil {
-		t.Fatalf("JSON output corrupted: %v", err)
+		t.Fatalf("(m2) JSON output corrupted: %v", err)
 	}
-
 	// Error response must not carry phone buzz piggyback.
-	errTxt, isErr := invokeCompanionTestTool(t, s, companionPhoneSendTool, map[string]any{"text": "too early"})
+	errTxt, isErr := invokeCompanionTestTool(t, s, companionPhoneSendTool, map[string]any{"session_key": bodyKey, "text": "too early"})
 	if !isErr || strings.Contains(errTxt, "[phone buzz:") {
-		t.Fatalf("error output must not carry phone buzz piggyback: %q", errTxt)
+		t.Fatalf("(m2) error reply must not carry phone buzz: %q", errTxt)
 	}
 
-	// Picking up drains unread -> subsequent runtime.read after putdown has no buzz.
-	if _, isErr := invokeCompanionTestTool(t, s, companionPhonePickupTool, map[string]any{}); isErr {
-		t.Fatalf("pickup failed")
-	}
-	if _, isErr := invokeCompanionTestTool(t, s, companionPhonePutdownTool, map[string]any{}); isErr {
-		t.Fatalf("putdown failed")
-	}
+	// Tier-2 companion-work never gets the badge, never gets any companion.* tool,
+	// and never gets session.request_hire; it DOES get delegation.report.
+	s.hostedKey = workKey
 	txt, isErr = invokeCompanionTestTool(t, s, "runtime.read", map[string]any{})
 	if isErr || strings.Contains(txt, "[phone buzz:") {
-		t.Fatalf("buzz persisted after drain: %q", txt)
+		t.Fatalf("companion-work must not receive phone buzz: %q", txt)
+	}
+	workDisc := discoveryToolNames(s.callDiscoveryTools(workKey, workEntry, true))
+	for _, hidden := range []string{companionSpeakTool, companionFaceTool, companionMotionTool, companionPhonePickupTool, companionPhoneReadTool, companionPhoneSendTool, companionPhonePutdownTool, companionDelegateWorkTool, "session.request_hire"} {
+		if workDisc[hidden] {
+			t.Fatalf("companion-work discovery exposed %q", hidden)
+		}
+		resp := invokeCompanionTestToolRaw(t, s, hidden, map[string]any{"session_key": workKey})
+		if resp.Error == nil {
+			t.Fatalf("companion-work reached %q: %+v", hidden, resp)
+		}
+	}
+	if !workDisc[delegationReportTool] {
+		t.Fatalf("companion-work discovery missing %s", delegationReportTool)
+	}
+	// Verify bodyEntry still does not expose delegation.report.
+	bodyDisc := discoveryToolNames(s.callDiscoveryTools(bodyKey, bodyEntry, true))
+	if bodyDisc[delegationReportTool] {
+		t.Fatalf("companion-body exposed %s", delegationReportTool)
+	}
+}
+
+func TestCompanionWorkApprovalGateAndDelegationReport(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", t.TempDir())
+	root := t.TempDir()
+	host := &testCompanionHost{}
+	s := NewServer(root, "test")
+	s.companion = host
+	workKey := mintCompanionTestKey(t, s, root, CompanionRoleWork)
+
+	// High-impact lead tool (config.tune) returns structured approval_required and does not execute.
+	txt, isErr := invokeCompanionTestTool(t, s, "config.tune", map[string]any{
+		"session_key": workKey,
+		"key":         "workflow.lang",
+		"scope":       "global",
+		"value":       "ko",
+	})
+	if !isErr || !strings.Contains(txt, `"approval_required"`) || !strings.Contains(txt, `"config.tune"`) {
+		t.Fatalf("companion-work config.tune = (%q, isErr=%v), want approval_required", txt, isErr)
+	}
+
+	// Non-session note mutation fails closed with approval_required.
+	txt, isErr = invokeCompanionTestTool(t, s, "note.write", map[string]any{
+		"session_key": workKey,
+		"layer":       "machine",
+		"key":         "k",
+		"value":       "v",
+	})
+	if !isErr || !strings.Contains(txt, `"approval_required"`) {
+		t.Fatalf("companion-work machine note.write = (%q, isErr=%v), want approval_required", txt, isErr)
+	}
+
+	// Allowlisted read/state tools execute without approval.
+	txt, isErr = invokeCompanionTestTool(t, s, "config.list", map[string]any{"session_key": workKey})
+	if isErr {
+		t.Fatalf("companion-work allowlisted config.list failed: %q", txt)
+	}
+
+	// ws/delegation.report transports lossless multi-kilobyte result and artifacts.
+	bigResult := strings.Repeat("detailed-technical-findings-line\n", 300)
+	artifacts := []string{"/tmp/report.md", "https://example.local/diff"}
+	txt, isErr = invokeCompanionTestTool(t, s, delegationReportTool, map[string]any{
+		"session_key":   workKey,
+		"delegation_id": "del-42",
+		"status":        "done",
+		"result":        bigResult,
+		"artifacts":     artifacts,
+	})
+	if isErr || !strings.Contains(txt, "delegation_id: del-42") || !strings.Contains(txt, "status: done") {
+		t.Fatalf("delegation.report = (%q, isErr=%v)", txt, isErr)
+	}
+	if len(host.reports) != 1 || host.reports[0].result != bigResult || len(host.reports[0].artifacts) != 2 {
+		t.Fatalf("delegation.report captured = %+v", host.reports)
+	}
+}
+
+func TestCompanionHiddenFromMailboxCorrespondents(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", t.TempDir())
+	t.Setenv("WS_CONFIG_HOME", t.TempDir())
+	root := t.TempDir()
+	s := NewServer(root, "test")
+
+	leadKey := mintCompanionTestKey(t, s, root, "")
+	workKey := mintCompanionTestKey(t, s, root, CompanionRoleWork)
+	bodyKey := mintCompanionTestKey(t, s, root, CompanionRoleBody)
+
+	// Both companion sessions send mail to the lead; lead drains it.
+	leadAddr := wsmailbox.ReplyIDPrefix + wsmailbox.ReplyID(leadKey)
+	for _, k := range []string{workKey, bodyKey} {
+		if txt, isErr := invokeCompanionTestTool(t, s, "mailbox.send", map[string]any{
+			"session_key": k,
+			"to":          leadAddr,
+			"content":     "internal",
+		}); isErr {
+			t.Fatalf("companion send failed: %s", txt)
+		}
+	}
+	if txt, isErr := invokeCompanionTestTool(t, s, "mailbox.recv", map[string]any{"session_key": leadKey}); isErr || !strings.Contains(txt, "internal") {
+		t.Fatalf("lead recv = (%q, isErr=%v)", txt, isErr)
+	}
+
+	// Lead calls mailbox.lookup_peers -> neither companion session may appear in correspondents.
+	txt, isErr := invokeCompanionTestTool(t, s, "mailbox.lookup_peers", map[string]any{
+		"session_key": leadKey,
+		"scope":       "machine",
+		"format":      "json",
+	})
+	if isErr {
+		t.Fatalf("lookup_peers failed: %s", txt)
+	}
+	if strings.Contains(txt, wsmailbox.ReplyID(workKey)) || strings.Contains(txt, wsmailbox.ReplyID(bodyKey)) {
+		t.Fatalf("companion reply-ids leaked into mailbox correspondents: %s", txt)
 	}
 }
