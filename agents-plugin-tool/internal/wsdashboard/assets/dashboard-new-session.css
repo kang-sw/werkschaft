@@ -231,6 +231,27 @@
   box-shadow: 0 6px 22px color-mix(in srgb, var(--wb-fail) 28%, transparent);
 }
 .rpop.ns-modal .ns-cta.danger:focus-visible { outline-color: var(--wb-fail); }
+/* optional session label: a quiet recessed well under the hero CTA, clearly
+   lighter than the CTA it follows */
+.rpop.ns-modal .ns-label-in {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: 36px;
+  margin: 4px 0 0;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ns-s2);
+  color: var(--wb-fg);
+  font: 13px var(--wb-sans);
+  outline: none;
+  transition: box-shadow .1s, background-color .1s;
+}
+.rpop.ns-modal .ns-label-in::placeholder { color: var(--wb-muted-fg); opacity: .85; }
+.rpop.ns-modal .ns-label-in:hover:not(:disabled):not(:focus) { background: color-mix(in srgb, var(--wb-fg) 4%, var(--ns-s2)); }
+.rpop.ns-modal .ns-label-in:focus { background: var(--ns-s2); box-shadow: 0 0 0 1.5px var(--wb-primary); }
+.rpop.ns-modal .ns-label-in:disabled { opacity: .5; cursor: default; }
 .rpop.ns-modal .ns-ctahint {
   margin: 0 4px;
   font-size: 11.5px;
@@ -724,4 +745,5 @@
   .rpop.ns-modal .ns-cta { padding: 14px 16px; flex-wrap: wrap; gap: 6px 10px; }
   .rpop.ns-modal .ns-cta-lbl { font-size: 17px; }
   .rpop.ns-modal .ns-cta-sum { font-size: 12px; }
+  .rpop.ns-modal .ns-label-in { height: 38px; font-size: 14px; }
 }

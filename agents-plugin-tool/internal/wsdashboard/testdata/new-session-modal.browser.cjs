@@ -61,7 +61,8 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
   try {
     for (const theme of ['dark', 'light']) {
       for (const width of [1280, 480]) {
-        const posts = [];
+        const posts = [], seq = [], labels = [];
+        let leadCreated = false;
         const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: theme, locale: 'ko-KR', serviceWorkers: 'block' });
         await context.addCookies([{ name: 'ws_dashboard_lang', value: 'ko', url: base }]);
         await context.route('**/*', async route => {
@@ -71,7 +72,18 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
           if (url.pathname === '/support/choices') return route.fulfill({ json: CHOICES, headers: { 'Cache-Control': 'no-store' } });
           if (url.pathname.startsWith('/agents/leads')) {
             posts.push({ path: url.pathname, body: req.postDataJSON() });
+            seq.push('lead');
+            if (leadCreated) return route.fulfill({ status: 201, json: { id: 'newsess' } });
             return route.fulfill({ status: 500, body: 'fixture: no runner' });
+          }
+          if (url.pathname === '/s/newsess/label') {
+            seq.push('label');
+            labels.push(req.postDataJSON());
+            return route.fulfill({ json: { label: req.postDataJSON().label } });
+          }
+          if (url.pathname === '/s/newsess') {
+            seq.push('nav');
+            return route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>new session</title>' });
           }
           return route.continue();
         });
@@ -106,7 +118,18 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
           const effLblR = r('.ns-eff .ns-lbl');
           const modBoxR = r('.ns-mod .ns-cb-in');
           const effBoxR = r('.ns-eff .ns-knob');
+          const wrap = el.querySelector('.ns-cta-w'), kids = [...wrap.children];
+          const ctaR = r('.ns-cta-w > .ns-cta'), labR = r('.ns-cta-w > .ns-label-in'), wrapR = wrap.getBoundingClientRect();
+          const labCs = getComputedStyle(el.querySelector('.ns-label-in'));
+          const label = {
+            order: kids.map(k => k.className.split(' ')[0]),
+            ctaBottom: ctaR.bottom, top: labR.top, bottom: labR.bottom, left: labR.left, right: labR.right, height: labR.height,
+            wrapLeft: wrapR.left, wrapRight: wrapR.right, ctaHeight: ctaR.height, maxLength: el.querySelector('.ns-label-in').maxLength,
+            bg: labCs.backgroundColor, ink: labCs.color, border: labCs.borderTopWidth,
+            hintTop: wrap.querySelector('.ns-ctahint').hidden ? null : r('.ns-ctahint').top, harTop: r('.ns-har').top
+          };
           return {
+            label,
             viewportW: vpW,
             modal: { x: modalR.left, y: modalR.top, w: modalR.width, h: modalR.height, scrollW: el.scrollWidth, clientW: el.clientWidth },
             hd: { top: hdR.top, bottom: hdR.bottom, right: hdR.right },
@@ -122,16 +145,29 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
         assert(metrics.modal.y >= 0 && metrics.modal.y + metrics.modal.h <= 901, `${theme}/${width}: modal fits vertically: ${JSON.stringify(metrics.modal)}`);
         assert(metrics.modal.scrollW <= metrics.modal.clientW + 1, `${theme}/${width}: zero horizontal overflow: ${JSON.stringify(metrics.modal)}`);
 
+        // Session label: the second child of the CTA wrapper, directly under
+        // Start, full width, compact and subordinate, clear of what follows.
+        const L = metrics.label;
+        assert.deepEqual(L.order.slice(0, 2), ['ns-cta', 'ns-label-in'], `${theme}/${width}: label is the sibling directly after Start: ${JSON.stringify(L.order)}`);
+        assert(L.top >= L.ctaBottom && L.top - L.ctaBottom <= 12, `${theme}/${width}: label sits right under Start: ${JSON.stringify(L)}`);
+        assert(Math.abs(L.left - L.wrapLeft) <= 1 && Math.abs(L.right - L.wrapRight) <= 1, `${theme}/${width}: label is full width of the CTA wrapper: ${JSON.stringify(L)}`);
+        assert(L.height >= 36 && L.height <= 38.01 && L.height < L.ctaHeight, `${theme}/${width}: label is compact and subordinate to Start: ${L.height} vs ${L.ctaHeight}`);
+        assert.equal(L.maxLength, 64, 'label maxlength matches the route');
+        assert.equal(L.border, '0px', `${theme}/${width}: label is borderless`);
+        assert(L.bottom <= L.harTop, `${theme}/${width}: label does not overlap the harness bar`);
+        console.log(`LABEL ${theme}/${width}: h=${L.height.toFixed(1)} gap=${(L.top - L.ctaBottom).toFixed(1)} bg=${L.bg} ink=${L.ink}`);
+
         if (width === 1280) {
           const boxTopDiff = Math.abs(metrics.modBox.top - metrics.effBox.top);
           const boxHeightDiff = Math.abs(metrics.modBox.height - metrics.effBox.height);
           const lblTopDiff = Math.abs(metrics.modLbl.top - metrics.effLbl.top);
           const lblHeightDiff = Math.abs(metrics.modLbl.height - metrics.effLbl.height);
           console.log(`RECTS ${theme}/${width}: modBox={top:${metrics.modBox.top.toFixed(2)},h:${metrics.modBox.height.toFixed(2)},w:${metrics.modBox.width.toFixed(2)}} effBox={top:${metrics.effBox.top.toFixed(2)},h:${metrics.effBox.height.toFixed(2)},w:${metrics.effBox.width.toFixed(2)}} topDiff=${boxTopDiff.toFixed(2)}px heightDiff=${boxHeightDiff.toFixed(2)}px lblTopDiff=${lblTopDiff.toFixed(2)}px lblHeightDiff=${lblHeightDiff.toFixed(2)}px`);
-          assert(boxTopDiff <= 1, `${theme}/${width}: Model/Effort box topDiff=${boxTopDiff}px > 1px`);
-          assert(boxHeightDiff <= 1, `${theme}/${width}: Model/Effort box heightDiff=${boxHeightDiff}px > 1px`);
-          assert(lblTopDiff <= 1, `${theme}/${width}: Model/Effort label topDiff=${lblTopDiff}px > 1px`);
-          assert(lblHeightDiff <= 1, `${theme}/${width}: Model/Effort label heightDiff=${lblHeightDiff}px > 1px`);
+          assert(boxTopDiff < 0.005, `${theme}/${width}: Model/Effort box topDiff=${boxTopDiff}px != 0`);
+          assert(boxHeightDiff < 0.005, `${theme}/${width}: Model/Effort box heightDiff=${boxHeightDiff}px != 0`);
+          assert(lblTopDiff < 0.005, `${theme}/${width}: Model/Effort label topDiff=${lblTopDiff}px != 0`);
+          assert(lblHeightDiff < 0.005, `${theme}/${width}: Model/Effort label heightDiff=${lblHeightDiff}px != 0`);
+          assert(Math.abs(metrics.modLbl.height - 22) < 0.5 && Math.abs(metrics.modBox.height - 44) < 0.5, `${theme}/${width}: 22px label + 44px control: ${JSON.stringify([metrics.modLbl, metrics.modBox])}`);
           assert(metrics.modBox.right < metrics.effBox.left, `${theme}/${width}: Model and Effort do not overlap horizontally`);
         } else {
           assert(metrics.tier.top >= metrics.hd.bottom - 1, `${theme}/${width}: narrow tier pill drops cleanly below header: ${JSON.stringify(metrics)}`);
@@ -232,6 +268,32 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
           await page.screenshot({ path: out(`ns-danger-${theme}-${width}.png`) });
           await page.keyboard.press('Escape');
           assert.equal(await page.locator('.rpop.ns-modal').isVisible(), false, 'Escape hides modal completely');
+        }
+
+        // Session label flow: a reopened modal starts with an empty label; a
+        // typed label is written to the new session, trimmed, before the page
+        // opens it; Enter in the field starts the session.
+        {
+          let m = await openModal();
+          const lin = m.locator('.ns-label-in');
+          await lin.fill('left over');
+          await page.keyboard.press('Escape');
+          m = await openModal();
+          assert.equal(await lin.inputValue(), '', `${theme}/${width}: reopening clears the label`);
+          assert.equal(await lin.getAttribute('placeholder'), '세션 라벨 (선택)');
+          if (width === 1280 && theme === 'dark') {
+            await page.screenshot({ path: out(`ns-label-empty-${theme}-${width}.png`) });
+            await lin.fill('  스모크 라벨  ');
+            await page.screenshot({ path: out(`ns-label-filled-${theme}-${width}.png`) });
+          } else await lin.fill('  스모크 라벨  ');
+          leadCreated = true;
+          seq.length = 0; labels.length = 0;
+          await lin.focus();
+          await Promise.all([page.waitForURL('**/s/newsess'), page.keyboard.press('Enter')]);
+          for (let i = 0; i < 40 && !seq.includes('nav'); i++) await page.waitForTimeout(50);
+          assert.deepEqual(seq, ['lead', 'label', 'nav'], `${theme}/${width}: create, then label, then navigation`);
+          assert.deepEqual(labels, [{ label: '스모크 라벨' }], `${theme}/${width}: trimmed label payload`);
+          assert.equal(posts.at(-1).path, '/agents/leads');
         }
 
         assert.deepEqual(errors, [], `${theme}/${width} page errors`);

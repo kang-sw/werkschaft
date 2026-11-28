@@ -4,7 +4,12 @@ const { readAssetSource } = require('./asset-source.cjs');
 const vm = require('node:vm');
 const source = readAssetSource('wsdashboard', 'dashboard.js');
 const tierPickerSrc = readAssetSource('wsdashboard', 'dashboard-tier-picker.js');
-const maker = source.match(/  var LEAD_MODES = [\s\S]*?\n  function rpLeadMake\(\) \{[\s\S]*?\n  \}\n/);
+// The lead choices and permission helpers live in dashboard-leads.js ahead of
+// the session menu; the spawn modal maker is its own dashboard-new-session.js.
+const leadsHead = source.match(/  var LEAD_MODES = [\s\S]*?\n(?=  \/\/ The session menu of the viewed hosted session)/);
+const modalSource = readAssetSource('wsdashboard', 'dashboard-new-session.js');
+const modalMaker = modalSource.match(/  var LEAD_DANGER_MODE = [\s\S]*?\n  function rpLeadMake\(\) \{[\s\S]*?\n  \}\n/);
+const maker = leadsHead && modalMaker && [leadsHead[0] + modalMaker[0]];
 assert(maker, 'production lead choices, rows and popover maker exist');
 const rail = readAssetSource('wsdashboard', 'rail.js');
 const legacy = [

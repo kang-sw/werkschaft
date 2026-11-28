@@ -79,6 +79,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-workspace-admission.js",
 	"dashboard-rail-popovers.js",
 	"dashboard-leads.js",
+	"dashboard-new-session.js",
 	"dashboard-tier-picker.js",
 	"dashboard-session-view.js",
 	"dashboard-companion-relay.js",

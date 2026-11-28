@@ -837,6 +837,8 @@
   "js.lead.iso.default.hint": "Das mitgelieferte ws/wsflow ersetzt die installierten Kopien; Ihre anderen Plugins bleiben.",
   "js.lead.iso.isolated": "Isoliert",
   "js.lead.iso.isolated.hint": "Nur das mitgelieferte ws/wsflow wird geladen; Berechtigungen, Hooks, Speicher und MCP-Einstellungen bleiben.",
+  "js.lead.label.aria": "Sitzungsbezeichnung",
+  "js.lead.label.placeholder": "Sitzungsbezeichnung (optional)",
   "js.lead.menu": "Sitzung, die das Dashboard ausführt",
   "js.lead.menu.note": "Eine Änderung gilt ab dem nächsten Turn.",
   "js.lead.mode": "Berechtigungsmodus",

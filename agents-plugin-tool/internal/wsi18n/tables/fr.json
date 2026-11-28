@@ -837,6 +837,8 @@
   "js.lead.iso.default.hint": "Le ws/wsflow fourni remplace les copies installées ; vos autres plugins restent.",
   "js.lead.iso.isolated": "Isolé",
   "js.lead.iso.isolated.hint": "Seul le ws/wsflow fourni est chargé ; vos permissions, hooks, mémoire et réglages MCP restent.",
+  "js.lead.label.aria": "Libellé de la session",
+  "js.lead.label.placeholder": "Libellé de la session (facultatif)",
   "js.lead.menu": "Session exécutée par le tableau de bord",
   "js.lead.menu.note": "Un changement s'applique à partir du prochain tour.",
   "js.lead.mode": "Mode de permission",

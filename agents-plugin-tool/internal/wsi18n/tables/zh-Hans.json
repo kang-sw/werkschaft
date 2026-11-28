@@ -837,6 +837,8 @@
   "js.lead.iso.default.hint": "内置的 ws/wsflow 替换已安装的副本；其他插件保留。",
   "js.lead.iso.isolated": "隔离",
   "js.lead.iso.isolated.hint": "仅加载内置的 ws/wsflow；权限、钩子、记忆和 MCP 设置保留。",
+  "js.lead.label.aria": "会话标签",
+  "js.lead.label.placeholder": "会话标签（可选）",
   "js.lead.menu": "由仪表盘运行的会话",
   "js.lead.menu.note": "更改从下一轮开始生效。",
   "js.lead.mode": "权限模式",

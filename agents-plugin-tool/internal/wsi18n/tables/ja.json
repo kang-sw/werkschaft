@@ -837,6 +837,8 @@
   "js.lead.iso.default.hint": "同梱の ws/wsflow がインストール済みのコピーを置き換え、他のプラグインはそのまま残ります。",
   "js.lead.iso.isolated": "分離",
   "js.lead.iso.isolated.hint": "同梱の ws/wsflow のみ読み込まれ、権限・フック・メモリ・MCP 設定は維持されます。",
+  "js.lead.label.aria": "セッションラベル",
+  "js.lead.label.placeholder": "セッションラベル（任意）",
   "js.lead.menu": "ダッシュボードが実行するセッション",
   "js.lead.menu.note": "変更は次のターンから適用されます。",
   "js.lead.mode": "権限モード",
