@@ -323,3 +323,24 @@ ko
 		}
 	}
 }
+
+func TestBuildCompanionWakeEnvelopeNonASCIITimestampUTF8Safe(t *testing.T) {
+	env := BuildCompanionWakeEnvelopeText(CompanionWakeEnvelopeData{
+		SoulID: "luna",
+		Sheet:  CharacteristicSheet{Name: "Luna", Voice: "calm"},
+		Mood:   CompanionMoodBaseline(),
+		Recalled: []CompanionRecallSnippet{
+			{
+				Source:    "soul:note",
+				Timestamp: "2026년11월28일오후1시55분",
+				Content:   "Multibyte timestamp stays valid UTF-8",
+			},
+		},
+	})
+	if !utf8.ValidString(env) {
+		t.Fatalf("envelope contains invalid UTF-8:\n%q", env)
+	}
+	if !strings.Contains(env, "[soul:note 2026년11월28]") {
+		t.Fatalf("expected 10-rune timestamp prefix in envelope:\n%s", env)
+	}
+}

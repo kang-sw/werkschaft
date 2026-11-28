@@ -625,8 +625,8 @@ func formatRecallEnvelopeBody(snippets []CompanionRecallSnippet, budget int) str
 		}
 		meta := strings.TrimSpace(companionQuote(s.Source))
 		if ts := strings.TrimSpace(companionQuote(s.Timestamp)); ts != "" {
-			if len(ts) > 10 {
-				ts = ts[:10]
+			if utf8.RuneCountInString(ts) > 10 {
+				ts = string([]rune(ts)[:10])
 			}
 			if meta != "" {
 				meta += " " + ts

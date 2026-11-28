@@ -1607,3 +1607,43 @@ ko
 		}
 	})
 }
+
+func TestCompanionPickLaunchSpecFollowsBuiltinHarnessOrder(t *testing.T) {
+	names := wsagent.BuiltinHarnessNames()
+	if len(names) < 2 {
+		t.Fatalf("expected at least 2 built-in harnesses, got %v", names)
+	}
+	second, last := names[1], names[len(names)-1]
+	backend := &companionTestBackend{}
+	runner := wsagent.NewRunner(wsagent.Options{
+		Dir: t.TempDir(),
+		Backends: map[string]wsagent.BackendRegistration{
+			"aaa-custom": {
+				Backend:       backend,
+				LeadProfile:   "lead-custom",
+				WorkerCapable: true,
+				WorkerProfile: wsagent.AgentWorkerProfile("aaa-custom"),
+			},
+			last: {
+				Backend:       backend,
+				LeadProfile:   wsagent.LeadProfileFor(last),
+				WorkerCapable: true,
+				WorkerProfile: wsagent.AgentWorkerProfile(last),
+			},
+			second: {
+				Backend:       backend,
+				LeadProfile:   wsagent.LeadProfileFor(second),
+				WorkerCapable: true,
+				WorkerProfile: wsagent.AgentWorkerProfile(second),
+			},
+		},
+	})
+	rt := newCompanionRuntime(t.TempDir(), t.TempDir(), runner, nil, nil)
+	spec, ok := rt.pickLaunchSpec(mcp.CompanionRoleBody)
+	if !ok {
+		t.Fatal("pickLaunchSpec returned ok=false")
+	}
+	if spec.Backend != second {
+		t.Fatalf("pickLaunchSpec picked %q, want %q (earliest available in BuiltinHarnessNames %v)", spec.Backend, second, names)
+	}
+}
