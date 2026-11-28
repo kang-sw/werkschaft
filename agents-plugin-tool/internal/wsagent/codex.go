@@ -126,7 +126,13 @@ func codexEnv(spec StartSpec) []string {
 // Start initializes and opens a new process before returning. A holder
 // reattach sends nothing: replay rebuilds the mapper, and the runner alone
 // decides when to deliver input or reconcile a gap.
-func (b CodexBackend) Start(_ context.Context, spec StartSpec) (Process, error) {
+func (b CodexBackend) Start(ctx context.Context, spec StartSpec) (Process, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if spec.Ephemeral {
 		spec.PermissionLevel = PermissionReadOnly
 		spec.Lead = nil
@@ -210,7 +216,7 @@ func (b CodexBackend) Start(_ context.Context, spec StartSpec) (Process, error) 
 	if spec.Lead != nil && spec.Lead.Spawned != nil {
 		spec.Lead.Spawned(holder, pid)
 	}
-	if err := p.open(spec); err != nil {
+	if err := p.open(ctx, spec); err != nil {
 		_ = p.Close()
 		return nil, fmt.Errorf("codex backend: %w", err)
 	}
@@ -307,12 +313,15 @@ func (p *codexProcess) threadParams(spec StartSpec) (map[string]any, error) {
 	return params, nil
 }
 
-func (p *codexProcess) open(spec StartSpec) error {
+func (p *codexProcess) open(ctx context.Context, spec StartSpec) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	version := codexWorkerClientVersion
 	if spec.Lead != nil {
 		version = spec.Lead.DaemonVersion
 	}
-	_, err := p.call("init", "initialize", map[string]any{
+	_, err := p.callContext(ctx, "init", "initialize", map[string]any{
 		"clientInfo":   map[string]any{"name": "ws", "version": version},
 		"capabilities": map[string]any{"experimentalApi": true},
 	})
@@ -334,7 +343,7 @@ func (p *codexProcess) open(spec StartSpec) error {
 		params["excludeTurns"] = true
 		method = "thread/resume"
 	}
-	if _, err := p.call("open", method, params); err != nil {
+	if _, err := p.callContext(ctx, "open", method, params); err != nil {
 		return fmt.Errorf("%s: %w", method, err)
 	}
 	if spec.Ephemeral {
@@ -342,7 +351,10 @@ func (p *codexProcess) open(spec StartSpec) error {
 	}
 	// A listing failure is not an admission failure: the harness default
 	// still works. Expose no guessed model names or effort levels.
-	if _, err := p.call("models", "model/list", map[string]any{}); err != nil {
+	if _, err := p.callContext(ctx, "models", "model/list", map[string]any{}); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		p.deliver(Event{Notice: "codex model/list: " + err.Error()})
 	}
 	return nil

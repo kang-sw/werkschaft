@@ -891,6 +891,7 @@ func (c *conv) compactIdle() bool {
 					c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed, Text: err.Error()})
 				} else {
 					c.compactResume, c.compactResumeInternal, c.compactOrigin = false, false, ""
+					c.publishCompaction(false)
 				}
 				c.setStatus(func() { c.lastErr = "compaction: " + err.Error() })
 				c.releaseHeld()
@@ -1259,7 +1260,9 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 	}
 	cut.Meta = cutMeta
 
+	started := false
 	err = c.sendStandalonePrompt(false, func() error {
+		started = true
 		c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart})
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart, Trigger: trigger})
 
@@ -1346,6 +1349,11 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 		return nil
 	})
 	if err != nil {
+		if started && c.compacting {
+			c.compactCommand = false
+			c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
+			c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed, Text: err.Error()})
+		}
 		return false, err
 	}
 	return true, nil
