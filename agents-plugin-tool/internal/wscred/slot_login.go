@@ -30,12 +30,26 @@ var (
 	ErrSlotCallbackInvalidHost = errors.New("callback host must be loopback")
 	// ErrSlotCallbackPortMismatch reports a pasted callback URL whose port does not match the active listener.
 	ErrSlotCallbackPortMismatch = errors.New("callback port mismatch")
+	// ErrSlotAuthCodeInvalid reports an empty, oversized, or control-character auth code paste.
+	ErrSlotAuthCodeInvalid = errors.New("invalid auth code")
 )
 
 // SlotLoginHarnesses returns the harnesses currently enabled for account-slot
 // provisioning and topbar switching.
 func SlotLoginHarnesses() []string {
-	return []string{"codex"}
+	return []string{"codex", "claude"}
+}
+
+// SlotLoginModes returns the interactive sign-in modes supported by harness.
+func SlotLoginModes(harness string) []SlotLoginMode {
+	switch harness {
+	case "codex":
+		return []SlotLoginMode{SlotLoginModeBrowser, SlotLoginModeDeviceAuth}
+	case "claude":
+		return []SlotLoginMode{SlotLoginModeBrowser}
+	default:
+		return nil
+	}
 }
 
 // CreateManagedSlotDirUnder allocates <baseDir>/slots/<harness>/<slotID> with
@@ -109,6 +123,13 @@ func SlotLoginCommandSpec(harness string, mode SlotLoginMode) (defaultCmd string
 		default:
 			return "", nil, "", ErrSlotLoginUnsupported
 		}
+	case "claude":
+		switch mode {
+		case SlotLoginModeBrowser:
+			return "claude", []string{"auth", "login"}, "CLAUDE_CONFIG_DIR", nil
+		default:
+			return "", nil, "", ErrSlotLoginUnsupported
+		}
 	default:
 		return "", nil, "", ErrSlotLoginUnsupported
 	}
@@ -177,6 +198,10 @@ func ParseSlotLoginLine(line string) (authURL, verifyURL, userCode string, callb
 	if clean == "" {
 		return "", "", "", 0
 	}
+	cleanLower := strings.ToLower(clean)
+	authHintLine := strings.Contains(cleanLower, "authentication required") ||
+		strings.Contains(cleanLower, "visit the url") ||
+		strings.Contains(cleanLower, "open the url")
 	for _, raw := range httpURLRe.FindAllString(clean, -1) {
 		raw = strings.TrimRight(raw, ".,;:!?)")
 		u, err := url.Parse(raw)
@@ -193,9 +218,17 @@ func ParseSlotLoginLine(line string) (authURL, verifyURL, userCode string, callb
 			}
 		case "https":
 			pathLower := strings.ToLower(u.Path)
+			hostLower := strings.ToLower(u.Hostname())
 			if strings.Contains(pathLower, "/device") {
 				verifyURL = raw
-			} else if strings.Contains(pathLower, "authorize") || strings.Contains(strings.ToLower(u.Host), "auth.") {
+			} else if authHintLine ||
+				strings.Contains(pathLower, "authorize") ||
+				strings.Contains(pathLower, "/oauth") ||
+				strings.Contains(hostLower, "auth.") ||
+				hostLower == "claude.ai" ||
+				hostLower == "console.anthropic.com" ||
+				hostLower == "accounts.google.com" ||
+				u.Query().Get("client_id") != "" {
 				authURL = raw
 				if redir := u.Query().Get("redirect_uri"); redir != "" {
 					if ru, err := url.Parse(redir); err == nil {
@@ -266,4 +299,20 @@ func ValidateLoopbackCallbackReplay(rawURL string, expectedPort int) (string, er
 		RawQuery: u.RawQuery,
 	}
 	return canon.String(), nil
+}
+
+// ValidateAuthCodeInput validates a raw single-line authorization code pasted
+// from a remote browser for stdin delivery to an interactive CLI login (D18).
+// Callers must never log or echo the returned code.
+func ValidateAuthCodeInput(raw string) (string, error) {
+	code := strings.TrimSpace(raw)
+	if code == "" || len(code) > 4096 {
+		return "", ErrSlotAuthCodeInvalid
+	}
+	for i := 0; i < len(code); i++ {
+		if code[i] < 0x20 || code[i] == 0x7f {
+			return "", ErrSlotAuthCodeInvalid
+		}
+	}
+	return code, nil
 }

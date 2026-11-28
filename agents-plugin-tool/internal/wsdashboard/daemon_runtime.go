@@ -186,6 +186,7 @@ func (d *Daemon) Close() {
 		d.closeMeta()
 		d.accountSignIn.stop()
 		d.slotSignIn.stop()
+		d.harnessAuth.stop()
 		// The composer's runs and background loop end with the stop (a
 		// running launch converts on it); none writes after Close returns.
 		d.composerWait()

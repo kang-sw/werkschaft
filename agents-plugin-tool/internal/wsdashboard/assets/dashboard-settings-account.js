@@ -30,10 +30,10 @@
     const endpoints = el("div", "sgroup");
     const providerNotice = el("p", "info-note");
     const nav = {status: null, projection: null, isLoaded: false, error: false};
-    let statusLoad, endpointLoad, signIn, pollTimer, slotSignIn, slotPollTimer;
-    let openRouterBusy = false, openAIBusy = false, endpointBusy = false, slotBusy = false;
+    let statusLoad, endpointLoad, signIn, pollTimer, slotSignIn, slotPollTimer, harnessAuthSignIn, harnessAuthPollTimer;
+    let openRouterBusy = false, openAIBusy = false, endpointBusy = false, slotBusy = false, harnessAuthBusy = false;
     let orForm, epForm, slotAddForm, openRouterRow, openAIRow, consentRow, endpointRow;
-    let openRouterError = "", openAIError = "", endpointError = "", slotError = "";
+    let openRouterError = "", openAIError = "", endpointError = "", slotError = "", harnessAuthError = "";
     const voiceSpecs = [
       {
         id: "openai_api",
@@ -78,7 +78,11 @@
         callback_host_not_loopback: "js.settings.account.slot_callback_rejected",
         invalid_callback_url: "js.settings.account.slot_callback_rejected",
         callback_port_mismatch: "js.settings.account.slot_callback_port_mismatch",
+        callback_not_ready: "js.settings.account.slot_callback_rejected",
         callback_replay_failed: "js.settings.account.slot_login_failed",
+        invalid_auth_code: "js.settings.account.invalid_auth_code",
+        stdin_not_ready: "js.settings.account.slot_login_failed",
+        stdin_write_failed: "js.settings.account.slot_login_failed",
         slot_exists: "js.settings.account.slot_exists",
         config_dir_is_default: "js.settings.account.slot_dir_default",
         config_dir_not_found: "js.settings.account.slot_dir_missing",
@@ -146,18 +150,23 @@
         const before = nav.status;
         const previousAttempt = signIn;
         const previousSlotAttempt = slotSignIn;
+        const previousHarnessAuth = harnessAuthSignIn;
         nav.status = result;
         nav.error = false;
         if (!openAIBusy && JSON.stringify(signIn) !== JSON.stringify(result.sign_in)) signIn = result.sign_in;
         if (pending(signIn)) schedulePoll();
         if (!slotBusy && result.slot_sign_in && JSON.stringify(slotSignIn) !== JSON.stringify(result.slot_sign_in)) slotSignIn = result.slot_sign_in;
         if (pending(slotSignIn)) scheduleSlotPoll();
+        const activeHarnessAuth = Array.isArray(result.harness_auth) ? result.harness_auth.find(item => pending(item.sign_in))?.sign_in || result.harness_auth.find(item => item.sign_in && item.sign_in.state && item.sign_in.state !== "idle")?.sign_in : null;
+        if (!harnessAuthBusy && activeHarnessAuth && JSON.stringify(harnessAuthSignIn) !== JSON.stringify(activeHarnessAuth)) harnessAuthSignIn = activeHarnessAuth;
+        if (pending(harnessAuthSignIn)) scheduleHarnessAuthPoll();
         if (JSON.stringify(before?.openrouter) !== JSON.stringify(result.openrouter)) updateOpenRouter();
         if (before?.openai_ready !== result.openai_ready || before?.loopback_peer !== result.loopback_peer ||
             previousAttempt !== signIn || JSON.stringify(before?.openai) !== JSON.stringify(result.openai) ||
             JSON.stringify(before?.openai_accounts) !== JSON.stringify(result.openai_accounts)) updateOpenAI();
-        if (previousSlotAttempt !== slotSignIn || before?.loopback_peer !== result.loopback_peer ||
-            JSON.stringify(before?.slots) !== JSON.stringify(result.slots)) updateSlots();
+        if (previousSlotAttempt !== slotSignIn || previousHarnessAuth !== harnessAuthSignIn || before?.loopback_peer !== result.loopback_peer ||
+            JSON.stringify(before?.slots) !== JSON.stringify(result.slots) ||
+            JSON.stringify(before?.harness_auth) !== JSON.stringify(result.harness_auth)) updateSlots();
         if (JSON.stringify(before?.local_keys) !== JSON.stringify(result.local_keys)) updateEndpointMasks();
         if (JSON.stringify(before?.voice_keys) !== JSON.stringify(result.voice_keys)) updateVoiceKeys();
       }).catch(() => { nav.error = true; }).finally(() => {
@@ -681,24 +690,83 @@
       labelInp.focus();
     }
 
+    function scheduleHarnessAuthPoll() {
+      if (harnessAuthPollTimer || !pending(harnessAuthSignIn)) return;
+      harnessAuthPollTimer = window.setTimeout(pollHarnessAuth, 900);
+    }
+
+    async function pollHarnessAuth() {
+      harnessAuthPollTimer = null;
+      if (!pending(harnessAuthSignIn)) return;
+      try {
+        const before = harnessAuthSignIn;
+        const result = await accountRequest("harness-auth/status");
+        if (before !== harnessAuthSignIn) return;
+        const nextSignIn = result?.sign_in || null;
+        if (Array.isArray(result?.providers) && nav.status) nav.status.harness_auth = result.providers;
+        if (JSON.stringify(nextSignIn) === JSON.stringify(before) && !harnessAuthError) return;
+        harnessAuthSignIn = nextSignIn;
+        harnessAuthError = "";
+        updateSlots();
+        if (nextSignIn?.state === "succeeded") await refreshStatus();
+      } catch (_) {
+        if (!harnessAuthError) {
+          harnessAuthError = t("js.settings.account.progress_failed");
+          updateSlots();
+        }
+      } finally {
+        scheduleHarnessAuthPoll();
+      }
+    }
+
+    async function changeHarnessAuth(path, body) {
+      if (harnessAuthBusy) return;
+      harnessAuthBusy = true;
+      harnessAuthError = "";
+      updateSlots();
+      try {
+        const result = await accountRequest(path, body);
+        if (path === "harness-auth/reverify") {
+          await refreshStatus();
+        } else if (result) {
+          harnessAuthSignIn = result;
+          scheduleHarnessAuthPoll();
+        }
+      } catch (error) {
+        harnessAuthError = errorText(error.code);
+      } finally {
+        harnessAuthBusy = false;
+        updateSlots();
+      }
+    }
+
     function updateSlots() {
       const slotsMap = nav.status?.slots;
+      const modesMap = nav.status?.slot_login_modes || {};
       const harnesses = slotsMap && typeof slotsMap === "object" ? Object.keys(slotsMap).sort() : [];
-      slotsHead.hidden = !harnesses.length;
-      slotsGroup.hidden = !harnesses.length;
-      if (!harnesses.length) {
+      const singleAuths = Array.isArray(nav.status?.harness_auth)
+        ? nav.status.harness_auth.filter(item => item && (item.available || item.probed || item.auth_required || pending(item.sign_in)))
+        : [];
+      const anyVisible = harnesses.length > 0 || singleAuths.length > 0;
+      slotsHead.hidden = !anyVisible;
+      slotsGroup.hidden = !anyVisible;
+      if (!anyVisible) {
         slotsGroup.replaceChildren();
         return;
       }
       const existingPaste = slotsGroup.querySelector("[data-slot-paste]");
       const preservedAttempt = existingPaste?.dataset.attempt || "";
       const preservedPaste = existingPaste && preservedAttempt === (slotSignIn?.attempt || "") ? existingPaste.value : "";
+      const existingAuthPaste = slotsGroup.querySelector("[data-harness-auth-paste]");
+      const preservedAuthAttempt = existingAuthPaste?.dataset.attempt || "";
+      const preservedAuthPaste = existingAuthPaste && preservedAuthAttempt === (harnessAuthSignIn?.attempt || "") ? existingAuthPaste.value : "";
       slotsGroup.replaceChildren();
       for (const harness of harnesses) {
         const list = Array.isArray(slotsMap[harness]) ? slotsMap[harness] : [];
+        const modes = Array.isArray(modesMap[harness]) && modesMap[harness].length ? modesMap[harness] : ["browser"];
         const row = accountRow("slots-" + harness);
         const title = harness === "codex" ? "Codex" : harness === "claude" ? "Claude" : harness;
-        const desc = t("js.settings.account.codex_slots_description");
+        const desc = t(harness === "claude" ? "js.settings.account.claude_slots_description" : "js.settings.account.codex_slots_description");
         const line = append(el("div", "klabel-line"),
           el("span", "klabel", title),
           el("span", "tag", t("js.settings.account.slot_count", list.length)));
@@ -712,13 +780,19 @@
           cancel.disabled = slotSignIn.state === "cancelling" || !slotSignIn.attempt;
           rail.append(cancel);
         } else {
-          const browserBtn = btn(t("js.settings.account.slot_sign_in_browser"), () => changeSlot("slots/sign-in/start", {harness, mode: "browser"}), true);
-          browserBtn.disabled = slotBusy || anySignActive || !nav.status?.loopback_peer;
-          const deviceBtn = btn(t("js.settings.account.slot_sign_in_device"), () => changeSlot("slots/sign-in/start", {harness, mode: "device_auth"}));
-          deviceBtn.disabled = slotBusy || anySignActive || !nav.status?.loopback_peer;
+          if (modes.includes("browser")) {
+            const browserBtn = btn(t("js.settings.account.slot_sign_in_browser"), () => changeSlot("slots/sign-in/start", {harness, mode: "browser"}), true);
+            browserBtn.disabled = slotBusy || anySignActive || !nav.status?.loopback_peer;
+            rail.append(browserBtn);
+          }
+          if (modes.includes("device_auth")) {
+            const deviceBtn = btn(t("js.settings.account.slot_sign_in_device"), () => changeSlot("slots/sign-in/start", {harness, mode: "device_auth"}));
+            deviceBtn.disabled = slotBusy || anySignActive || !nav.status?.loopback_peer;
+            rail.append(deviceBtn);
+          }
           const existingBtn = btn(t("js.settings.account.slot_add_existing"), () => showSlotAddEditor(harness));
           existingBtn.disabled = slotBusy || anySignActive;
-          rail.append(browserBtn, deviceBtn, existingBtn);
+          rail.append(existingBtn);
         }
         row.append(info, rail);
 
@@ -788,7 +862,7 @@
               drawer.append(append(el("div", "account-field"), el("label", "", t("js.settings.account.signin_url_label")),
                 append(el("div", "account-copy-row"), aInp, copyA, append(openA, svgIcon("l-external-link")))));
             }
-            if (slotSignIn.callback_ready || slotSignIn.authorize_url) {
+            if (slotSignIn.callback_ready || slotSignIn.stdin_ready || slotSignIn.authorize_url) {
               const cbForm = el("form", "account-form");
               cbForm.autocomplete = "off";
               const cbInp = el("input", "inp mono");
@@ -796,11 +870,12 @@
               cbInp.dataset.slotPaste = "1";
               cbInp.dataset.attempt = slotSignIn.attempt || "";
               cbInp.spellcheck = false;
+              cbInp.autocomplete = "off";
               cbInp.value = preservedPaste;
               const submit = btn(t("js.settings.account.signin_submit"), null, true);
               submit.type = "submit";
               submit.disabled = slotBusy;
-              cbForm.append(field(t("js.settings.account.slot_callback_label"), cbInp, message(t("js.settings.account.slot_callback_help"))),
+              cbForm.append(field(t("js.settings.account.slot_callback_paste_label"), cbInp, message(t("js.settings.account.slot_callback_paste_help"))),
                 append(el("div", "account-actions"), submit));
               cbForm.addEventListener("submit", event => {
                 event.preventDefault();
@@ -829,6 +904,106 @@
           slotTone = "fail";
         }
         if (slotNotice) info.append(message(slotNotice, slotTone));
+        slotsGroup.append(row);
+      }
+
+      for (const item of singleAuths) {
+        const harness = item.harness;
+        const activeAttempt = pending(harnessAuthSignIn) && harnessAuthSignIn.harness === harness ? harnessAuthSignIn : (pending(item.sign_in) ? item.sign_in : null);
+        const lastAttempt = harnessAuthSignIn?.harness === harness ? harnessAuthSignIn : item.sign_in;
+        const row = accountRow("harness-auth-" + harness);
+        row.classList.toggle("account-configured", !!item.probed && !item.auth_required && !item.status && !activeAttempt);
+        const line = append(el("div", "klabel-line"),
+          el("span", "klabel", item.label || harness),
+          el("span", "tag", t("js.settings.account.single_slot_tag")));
+        const info = append(el("div", "kmeta"), line, el("p", "kdesc", t("js.settings.account.agy_auth_description")));
+        const rail = el("div", "account-rail");
+        if (activeAttempt) {
+          rail.append(busyPill(activeAttempt.state === "cancelling" ? "js.settings.account.cancelling" : "js.settings.account.signing_in"));
+          const cancel = btn(t("js.settings.account.cancel"), () => changeHarnessAuth("harness-auth/cancel", {harness, attempt: activeAttempt.attempt}));
+          cancel.disabled = harnessAuthBusy || activeAttempt.state === "cancelling" || !activeAttempt.attempt;
+          rail.append(cancel);
+        } else {
+          let pillLabel = "js.settings.account.status_unknown", pillTone = "unset";
+          if (item.probing) {
+            rail.append(busyPill("js.settings.account.checking"));
+          } else {
+            if (item.auth_required) {
+              pillLabel = "js.settings.account.reauth_required";
+              pillTone = "fail";
+            } else if (item.probed && !item.status) {
+              pillLabel = "js.settings.account.signed_in";
+              pillTone = "ok";
+            }
+            rail.append(pill(t(pillLabel), pillTone, "", pillTone === "ok"));
+          }
+          if (item.auth_required || !item.probed || item.status) {
+            const signBtn = btn(t(item.auth_required ? "js.settings.account.sign_in_again" : "js.settings.account.sign_in"),
+              () => changeHarnessAuth("harness-auth/start", {harness}), !!item.auth_required);
+            signBtn.disabled = harnessAuthBusy || pending(harnessAuthSignIn) || !nav.status?.loopback_peer;
+            rail.append(append(signBtn, svgIcon("l-external-link")));
+          }
+          const reverifyBtn = btn(t("js.settings.account.reverify"), () => changeHarnessAuth("harness-auth/reverify", {harness}));
+          reverifyBtn.disabled = harnessAuthBusy || item.probing || !nav.status?.loopback_peer;
+          rail.append(reverifyBtn);
+        }
+        row.append(info, rail);
+
+        if (activeAttempt && activeAttempt.state !== "cancelling") {
+          const drawer = el("div", "account-drawer account-signin-drawer");
+          if (activeAttempt.browser_error) drawer.append(message(t("js.settings.account.signin_browser_fallback"), "warn"));
+          drawer.append(message(t("js.settings.account.harness_auth_started")));
+          if (activeAttempt.authorize_url) {
+            const aInp = el("input", "inp mono");
+            aInp.readOnly = true;
+            aInp.value = activeAttempt.authorize_url;
+            const copyA = btn(t("js.settings.account.copy_link"), () => copyText(activeAttempt.authorize_url, copyA));
+            const openA = el("a", "btn", t("js.settings.account.open_link"));
+            openA.href = activeAttempt.authorize_url;
+            openA.target = "_blank";
+            openA.rel = "noopener noreferrer";
+            drawer.append(append(el("div", "account-field"), el("label", "", t("js.settings.account.signin_url_label")),
+              append(el("div", "account-copy-row"), aInp, copyA, append(openA, svgIcon("l-external-link")))));
+          }
+          if (activeAttempt.stdin_ready || activeAttempt.callback_ready || activeAttempt.authorize_url) {
+            const pForm = el("form", "account-form");
+            pForm.autocomplete = "off";
+            const pInp = el("input", "inp mono");
+            pInp.id = "account-harness-auth-paste-" + harness;
+            pInp.dataset.harnessAuthPaste = "1";
+            pInp.dataset.attempt = activeAttempt.attempt || "";
+            pInp.spellcheck = false;
+            pInp.autocomplete = "off";
+            pInp.value = preservedAuthPaste;
+            const submit = btn(t("js.settings.account.signin_submit"), null, true);
+            submit.type = "submit";
+            submit.disabled = harnessAuthBusy;
+            pForm.append(field(t("js.settings.account.harness_auth_paste_label"), pInp, message(t("js.settings.account.harness_auth_paste_help"))),
+              append(el("div", "account-actions"), submit));
+            pForm.addEventListener("submit", event => {
+              event.preventDefault();
+              const val = pInp.value.trim();
+              if (!val || harnessAuthBusy) return;
+              pInp.value = "";
+              changeHarnessAuth("harness-auth/complete", {harness, attempt: activeAttempt.attempt, input: val});
+            });
+            drawer.append(pForm);
+          }
+          row.append(drawer);
+        }
+
+        let authNotice = "", authTone = "";
+        if (lastAttempt?.state === "failed" && !activeAttempt) {
+          authNotice = errorText(lastAttempt.reason, "js.settings.account.slot_login_failed");
+          authTone = "fail";
+        } else if (lastAttempt?.state === "cancelled" && !activeAttempt) {
+          authNotice = t("js.settings.account.sign_in_cancelled");
+        }
+        if (harnessAuthError) {
+          authNotice = harnessAuthError;
+          authTone = "fail";
+        }
+        if (authNotice) info.append(message(authNotice, authTone));
         slotsGroup.append(row);
       }
     }

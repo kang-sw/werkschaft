@@ -125,7 +125,8 @@ func claudeEnv(env []string) []string {
 
 // claudeLeadEnv is a lead conversation's environment: env without the
 // parent harness session's CLAUDE* and ws variables, plus the hosted-session
-// variables.
+// variables. When spec.AccountConfigDir is set, it binds CLAUDE_CONFIG_DIR to
+// that isolated slot directory (and claudeLeadEnabledPlugins reads the same).
 func claudeLeadEnv(spec StartSpec) []string {
 	// The session-state lines are what tell a turn nobody sent from an idle
 	// harness (session_state_changed in mapLine).
@@ -133,7 +134,21 @@ func claudeLeadEnv(spec StartSpec) []string {
 	for name, value := range spec.Lead.Env {
 		set[name] = value
 	}
+	if dir := strings.TrimSpace(spec.AccountConfigDir); dir != "" {
+		set["CLAUDE_CONFIG_DIR"] = filepath.Clean(dir)
+	}
 	return harnessEnv(wsharnessenv.Drop(spec.Env), []string{"CLAUDE"}, claudeKeptEnv, set)
+}
+
+// claudeApplyAccountConfigDir binds CLAUDE_CONFIG_DIR when an explicit
+// isolated slot config directory is selected, leaving the default home
+// untouched when empty.
+func claudeApplyAccountConfigDir(env []string, accountConfigDir string) []string {
+	dir := strings.TrimSpace(accountConfigDir)
+	if dir == "" {
+		return env
+	}
+	return harnessEnv(env, nil, nil, map[string]string{"CLAUDE_CONFIG_DIR": filepath.Clean(dir)})
 }
 
 // claudeWorkerEnv is an agent.spawn worker's environment: claudeEnv plus the
@@ -615,6 +630,7 @@ func (b ClaudeBackend) Start(ctx context.Context, spec StartSpec) (Process, erro
 		if set := claudeAutoCompactEnv(spec.compactAdvisory, spec.compactHard); set != nil {
 			cmd.Env = harnessEnv(cmd.Env, nil, nil, set)
 		}
+		cmd.Env = claudeApplyAccountConfigDir(cmd.Env, spec.AccountConfigDir)
 	}
 	if spec.Lead != nil {
 		cmd.Env = claudeLeadEnv(spec)

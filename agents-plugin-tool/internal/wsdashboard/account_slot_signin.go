@@ -24,9 +24,11 @@ const defaultSlotSignInTimeout = 5 * time.Minute
 // HTTP requests (D14 + D18).
 type accountSlotSignIn struct {
 	mu           sync.Mutex
+	stdinMu      sync.Mutex
 	state        accountSlotSignInStatus
 	cancel       context.CancelFunc
 	cmd          *exec.Cmd
+	stdin        io.WriteCloser
 	callbackPort int
 	closed       bool
 }
@@ -43,6 +45,7 @@ type accountSlotSignInStatus struct {
 	VerifyURL     string `json:"verify_url,omitempty"`
 	UserCode      string `json:"user_code,omitempty"`
 	CallbackReady bool   `json:"callback_ready,omitempty"`
+	StdinReady    bool   `json:"stdin_ready,omitempty"`
 	BrowserError  bool   `json:"browser_error,omitempty"`
 }
 
@@ -60,7 +63,14 @@ func (s *accountSlotSignIn) stop() {
 	s.closed = true
 	cancel := s.cancel
 	cmd := s.cmd
+	stdin := s.stdin
+	s.stdin = nil
 	s.mu.Unlock()
+	if stdin != nil {
+		s.stdinMu.Lock()
+		_ = stdin.Close()
+		s.stdinMu.Unlock()
+	}
 	if cancel != nil {
 		cancel()
 	}
@@ -262,17 +272,25 @@ func (d *Daemon) runSlotSignIn(
 	configureSlotLoginCmd(cmd)
 	cmd.Dir = slotDir
 	cmd.Env = replaceEnvVar(os.Environ(), envKey, slotDir)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		d.finishSlotSignIn(attempt, "failed", "login_failed")
+		return
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		_ = stdin.Close()
 		d.finishSlotSignIn(attempt, "failed", "login_failed")
 		return
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		_ = stdin.Close()
 		d.finishSlotSignIn(attempt, "failed", "login_failed")
 		return
 	}
 	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
 		d.finishSlotSignIn(attempt, "failed", "cli_unavailable")
 		return
 	}
@@ -280,9 +298,13 @@ func (d *Daemon) runSlotSignIn(
 	s.mu.Lock()
 	if s.state.Attempt == attempt {
 		s.cmd = cmd
+		s.stdin = stdin
+		s.state.StdinReady = true
 		if s.state.State == "starting" {
 			s.state.State = "waiting"
 		}
+	} else {
+		_ = stdin.Close()
 	}
 	s.mu.Unlock()
 
@@ -403,12 +425,20 @@ func (d *Daemon) finishSlotSignIn(attempt, state, reason string) {
 	s.state.VerifyURL = ""
 	s.state.UserCode = ""
 	s.state.CallbackReady = false
+	s.state.StdinReady = false
 	s.state.BrowserError = false
 	s.callbackPort = 0
 	s.cmd = nil
+	stdin := s.stdin
+	s.stdin = nil
 	if s.cancel != nil {
 		s.cancel()
 		s.cancel = nil
+	}
+	if stdin != nil {
+		s.stdinMu.Lock()
+		_ = stdin.Close()
+		s.stdinMu.Unlock()
 	}
 }
 
@@ -481,39 +511,69 @@ func (d *Daemon) handleAccountSlotSignInComplete(w http.ResponseWriter, r *http.
 	}
 	port := s.callbackPort
 	mode := s.state.Mode
+	stdin := s.stdin
 	s.mu.Unlock()
 
-	if mode != string(wscred.SlotLoginModeBrowser) || port <= 0 {
+	if mode != string(wscred.SlotLoginModeBrowser) {
 		accountError(w, http.StatusConflict, "callback_not_ready")
 		return
 	}
-	targetURL, err := wscred.ValidateLoopbackCallbackReplay(body.Input, port)
-	if err != nil {
-		switch {
-		case errors.Is(err, wscred.ErrSlotCallbackInvalidHost):
-			accountError(w, http.StatusUnprocessableEntity, "callback_host_not_loopback")
-		case errors.Is(err, wscred.ErrSlotCallbackPortMismatch):
-			accountError(w, http.StatusUnprocessableEntity, "callback_port_mismatch")
-		default:
-			accountError(w, http.StatusUnprocessableEntity, "invalid_callback_url")
+	trimmed := strings.TrimSpace(body.Input)
+	lower := strings.ToLower(trimmed)
+	looksURL := strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") || strings.Contains(lower, "://")
+	if looksURL {
+		targetURL, err := wscred.ValidateLoopbackCallbackReplay(trimmed, port)
+		if err != nil {
+			switch {
+			case errors.Is(err, wscred.ErrSlotCallbackInvalidHost):
+				accountError(w, http.StatusUnprocessableEntity, "callback_host_not_loopback")
+			case errors.Is(err, wscred.ErrSlotCallbackPortMismatch):
+				if port <= 0 {
+					accountError(w, http.StatusConflict, "callback_not_ready")
+				} else {
+					accountError(w, http.StatusUnprocessableEntity, "callback_port_mismatch")
+				}
+			default:
+				accountError(w, http.StatusUnprocessableEntity, "invalid_callback_url")
+			}
+			return
 		}
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, targetURL, nil)
+		if err != nil {
+			accountError(w, http.StatusUnprocessableEntity, "invalid_callback_url")
+			return
+		}
+		resp, err := slotCallbackReplayClient.Do(req)
+		if err != nil {
+			accountError(w, http.StatusBadGateway, "callback_replay_failed")
+			return
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		_ = resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			accountError(w, http.StatusUnprocessableEntity, "callback_rejected")
+			return
+		}
+		writeJSON(w, http.StatusAccepted, s.status())
 		return
 	}
 
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, targetURL, nil)
+	// Non-URL input is delivered as a raw pasted authorization code over the
+	// login subprocess's open stdin pipe without logging or echoing it (D18).
+	code, err := wscred.ValidateAuthCodeInput(trimmed)
 	if err != nil {
-		accountError(w, http.StatusUnprocessableEntity, "invalid_callback_url")
+		accountError(w, http.StatusUnprocessableEntity, "invalid_auth_code")
 		return
 	}
-	resp, err := slotCallbackReplayClient.Do(req)
-	if err != nil {
-		accountError(w, http.StatusBadGateway, "callback_replay_failed")
+	if stdin == nil {
+		accountError(w, http.StatusConflict, "stdin_not_ready")
 		return
 	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-	_ = resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		accountError(w, http.StatusUnprocessableEntity, "callback_rejected")
+	s.stdinMu.Lock()
+	_, writeErr := io.WriteString(stdin, code+"\n")
+	s.stdinMu.Unlock()
+	if writeErr != nil {
+		accountError(w, http.StatusConflict, "stdin_write_failed")
 		return
 	}
 	writeJSON(w, http.StatusAccepted, s.status())

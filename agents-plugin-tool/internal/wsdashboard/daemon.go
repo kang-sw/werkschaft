@@ -240,6 +240,10 @@ type DaemonOptions struct {
 	slotLoginCmd func(harness string, mode wscred.SlotLoginMode) (string, []string, error)
 	// slotSignInTimeout overrides the slot login timeout in tests.
 	slotSignInTimeout time.Duration
+	// harnessAuthCmd replaces the single-account harness auth CLI binary/args in tests.
+	harnessAuthCmd func(harness string) (string, []string, error)
+	// harnessAuthTimeout overrides the single-account harness auth timeout in tests.
+	harnessAuthTimeout time.Duration
 }
 
 // MailWaker receives the daemon's mailbox wake signals (DaemonOptions.MailWake).
@@ -308,11 +312,14 @@ type Daemon struct {
 	credentials       credentialStore
 	accountSlots      *wscred.AccountSlotRegistry
 	accountSignIn     accountSignIn
-	slotSignIn        accountSlotSignIn
-	slotAuthPreflight func(harness, configDir string) error
-	slotLoginCmd      func(harness string, mode wscred.SlotLoginMode) (string, []string, error)
-	slotSignInTimeout time.Duration
-	accountRev        atomic.Int64
+	slotSignIn         accountSlotSignIn
+	slotAuthPreflight  func(harness, configDir string) error
+	slotLoginCmd       func(harness string, mode wscred.SlotLoginMode) (string, []string, error)
+	slotSignInTimeout  time.Duration
+	harnessAuth        harnessAuthManager
+	harnessAuthCmd     func(harness string) (string, []string, error)
+	harnessAuthTimeout time.Duration
+	accountRev         atomic.Int64
 	// voice test hooks (nil in production).
 	voiceBaseURLs   map[wscred.ProviderID]string
 	voiceHTTPClient *http.Client

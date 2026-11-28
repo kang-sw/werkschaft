@@ -159,7 +159,8 @@
       switchConfirm: "js.usage.switch_confirm", switchedImmediate: "js.usage.switched_immediate",
       switchedDefault: "js.usage.switched_default", switchedDefaultOnly: "js.usage.switched_default_only",
       switchedQueued: "js.usage.switched_queued", switchedNow: "js.usage.switched_now",
-      switchFailed: "js.usage.switch_failed", cancel: "js.usage.cancel", werkOpenai: "js.usage.werk_openai"
+      switchFailed: "js.usage.switch_failed", cancel: "js.usage.cancel", werkOpenai: "js.usage.werk_openai",
+      singleAccount: "js.usage.single_account"
     };
     function t(key) { return window.wsT.apply(null, [keys[key]].concat(Array.prototype.slice.call(arguments, 1))); }
     function locale() { return window.wsI18n.lang; }
@@ -729,6 +730,23 @@
           chips.appendChild(chip);
         });
         row.appendChild(chips);
+        box.appendChild(row);
+      });
+
+      var singleAuths = Array.isArray(accountData.harness_auth) ? accountData.harness_auth.filter(function (item) {
+        return item && item.single_slot && (item.available || item.probed || item.auth_required);
+      }) : [];
+      singleAuths.forEach(function (item) {
+        var row = el("div", "usage-slot-row usage-slot-readonly");
+        row.setAttribute("data-slot-harness", item.harness);
+        row.setAttribute("data-readonly-slot", "1");
+        var hLabel = el("span", "usage-slot-harness");
+        hLabel.appendChild(icon({ harness: item.harness }, true));
+        hLabel.appendChild(el("span", "", item.label || entryName({ harness: item.harness })));
+        row.appendChild(hLabel);
+        var badgeText = item.auth_required ? t("signInRequired") : t("singleAccount");
+        var badge = el("span", "usage-slot-readonly-badge" + (item.auth_required ? " warn" : ""), badgeText);
+        row.appendChild(badge);
         box.appendChild(row);
       });
 

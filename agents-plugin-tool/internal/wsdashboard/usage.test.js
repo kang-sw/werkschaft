@@ -1030,3 +1030,90 @@ test('accountSwitcher mode renders 1-click switchers, guided Stop+Restart/queue,
   assert.match(css, /var\(--wb-/);
   pop.close();
 });
+
+test('Phase 3 topbar switcher supports claude slots and renders agy as single-slot read-only', async () => {
+  const at = Date.UTC(2026, 10, 28, 10, 0), reset = at + 3 * 3600000;
+  const env = environment(at, 'en');
+  let accountStatus = {
+    loopback_peer: true,
+    slots: {
+      claude: [
+        { id: 'default', harness: 'claude', label: 'Default', implicit: true, active: true },
+        { id: 'work', harness: 'claude', label: 'Claude Work', config_dir: '/tmp/claude-work', active: false }
+      ]
+    },
+    harness_auth: [
+      { harness: 'agy', label: 'Antigravity', single_slot: true, available: true, probed: true, auth_required: false }
+    ],
+    conversations: [
+      { id: 'claude-conv-1', harness: 'claude', title: 'Claude Lead', account_slot_id: 'default' }
+    ]
+  };
+  const posts = [];
+  env.set({ entries: [
+    { harness: 'claude', plan: 'max', asOf: at, windows: [{ kind: 'five_hour', percent: 25, asOf: at, resetsAt: reset }] },
+    { harness: 'agy', group: 'gemini', label: 'Gemini Models', asOf: at, windows: [{ kind: 'five_hour', percent: 15, asOf: at, resetsAt: reset }] }
+  ] });
+  const baseFetch = env.window.fetch;
+  env.window.fetch = (url, options = {}) => {
+    if (url === '/api/account/status') {
+      env.calls.push({ url, options });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(accountStatus) });
+    }
+    if (url === '/api/account/slots/switch') {
+      const body = JSON.parse(options.body || '{}');
+      posts.push({ url, body });
+      accountStatus = {
+        ...accountStatus,
+        slots: {
+          claude: accountStatus.slots.claude.map(s => ({ ...s, active: s.id === body.slot_id }))
+        },
+        conversations: [
+          { id: 'claude-conv-1', harness: 'claude', title: 'Claude Lead', account_slot_id: 'default', pending_account_slot_id: body.slot_id }
+        ]
+      };
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ mode: 'harness_default', queued_count: 1 }) });
+    }
+    return baseFetch(url, options);
+  };
+
+  const mounted = env.window.WsUsage.mount(env.doc, env.top, { accountSwitcher: true });
+  await flush();
+  const pop = mounted.makePopover(() => {}, () => {});
+  pop.open();
+  await flush();
+
+  // Claude renders switchable slot chips.
+  const claudeRow = nodes(pop.el, '.usage-slot-row').find(r => r.attributes['data-slot-harness'] === 'claude');
+  assert.ok(claudeRow);
+  const claudeChips = nodes(claudeRow, '.usage-slot-chip');
+  assert.equal(claudeChips.length, 2);
+  assert.equal(claudeChips[0].attributes['aria-pressed'], 'true');
+  claudeChips[1].events.click();
+  await flush();
+  assert.deepEqual(posts[0], { url: '/api/account/slots/switch', body: { harness: 'claude', slot_id: 'work' } });
+  assert.ok(nodes(pop.el, '.queued').length > 0);
+
+  // Agy renders as read-only single-slot with zero switch buttons (D15).
+  const agyRow = nodes(pop.el, '.usage-slot-row').find(r => r.attributes['data-slot-harness'] === 'agy');
+  assert.ok(agyRow);
+  assert.equal(agyRow.attributes['data-readonly-slot'], '1');
+  assert.equal(nodes(agyRow, '.usage-slot-chip').length, 0);
+  assert.equal(agyRow.querySelector('.usage-slot-readonly-badge').textContent, 'Single account');
+  assert.equal(nodes(pop.el, 'input').length, 0);
+
+  // When agy auth_required is true, the read-only badge reflects sign-in required with warn styling.
+  accountStatus = {
+    ...accountStatus,
+    harness_auth: [
+      { harness: 'agy', label: 'Antigravity', single_slot: true, available: true, probed: true, auth_required: true }
+    ]
+  };
+  env.doc.events['ws-account-changed']();
+  await flush();
+  const agyRow2 = nodes(pop.el, '.usage-slot-row').find(r => r.attributes['data-slot-harness'] === 'agy');
+  const warnBadge = agyRow2.querySelector('.usage-slot-readonly-badge');
+  assert.equal(warnBadge.textContent, 'sign-in required');
+  assert.ok(warnBadge.className.includes('warn'));
+  pop.close();
+});

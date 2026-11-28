@@ -161,8 +161,10 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		credentials:       credentials,
 		accountSlots:      opts.AccountSlots,
 		slotAuthPreflight: opts.SlotAuthPreflight,
-		slotLoginCmd:      opts.slotLoginCmd,
-		slotSignInTimeout: opts.slotSignInTimeout,
+		slotLoginCmd:       opts.slotLoginCmd,
+		slotSignInTimeout:  opts.slotSignInTimeout,
+		harnessAuthCmd:     opts.harnessAuthCmd,
+		harnessAuthTimeout: opts.harnessAuthTimeout,
 		config:            opts.Config,
 		harnesses:       opts.Harnesses,
 		cardBound:       opts.CardBound,
@@ -248,6 +250,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		d.planUsage.explicitHome = opts.Home
 		d.planUsage.accountSlots = d.accountSlots
 		d.planUsage.resolveAgy = opts.AgyCommand
+		d.planUsage.onAgyChange = d.accountChanged
 		d.planUsage.harnesses = opts.Harnesses
 	}
 	d.cache = newPageCache(d.broker, stats)

@@ -86,6 +86,8 @@ type planUsageStore struct {
 	agyDebounce    time.Duration
 	agyTimeout     time.Duration
 	agyEnv         []string
+	agyProbeMu     sync.Mutex
+	onAgyChange    func()
 	now            func() time.Time
 	// Request dependencies are private test seams, not configuration knobs.
 	// Production always uses the fixed HTTPS origin below.

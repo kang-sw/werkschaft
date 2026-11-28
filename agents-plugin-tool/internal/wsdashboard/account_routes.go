@@ -39,7 +39,9 @@ type accountStatus struct {
 	LocalKeys      []wscred.ProviderStatus             `json:"local_keys"`
 	VoiceKeys      []wscred.ProviderStatus             `json:"voice_keys"`
 	Slots          map[string][]wscred.AccountSlotView `json:"slots,omitempty"`
+	SlotLoginModes map[string][]wscred.SlotLoginMode   `json:"slot_login_modes,omitempty"`
 	SlotSignIn     *accountSlotSignInStatus            `json:"slot_sign_in,omitempty"`
+	HarnessAuth    []harnessAuthSnapshot               `json:"harness_auth,omitempty"`
 	Conversations  []AccountSlotConversation           `json:"conversations,omitempty"`
 }
 
@@ -87,7 +89,7 @@ func (d *Daemon) handleAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	action := r.URL.Path[len(accountPrefix):]
 	method := http.MethodPost
-	if action == "status" || action == "sign-in/status" || action == "slots/sign-in/status" {
+	if action == "status" || action == "sign-in/status" || action == "slots/sign-in/status" || action == "harness-auth/status" {
 		method = http.MethodGet
 	}
 	if r.Method != method {
@@ -114,10 +116,13 @@ func (d *Daemon) handleAccount(w http.ResponseWriter, r *http.Request) {
 	case "slots/sign-in/start", "slots/sign-in/status", "slots/sign-in/complete", "slots/sign-in/cancel":
 		d.handleAccountSlotSignIn(w, r, action)
 		return
+	case "harness-auth/status", "harness-auth/start", "harness-auth/complete", "harness-auth/cancel", "harness-auth/reverify":
+		d.handleAccountHarnessAuth(w, r, action)
+		return
 	}
 	store, ok := d.credentials.(browserCredentialStore)
 	if !ok {
-		if action == "status" && d.accountSlots != nil {
+		if action == "status" && (d.accountSlots != nil || d.planUsage != nil) {
 			d.handleAccountStatus(w, r, nil)
 			return
 		}
@@ -182,12 +187,20 @@ func (d *Daemon) handleAccountStatus(w http.ResponseWriter, r *http.Request, sto
 	}
 	if d.accountSlots != nil {
 		slots := map[string][]wscred.AccountSlotView{}
+		modes := map[string][]wscred.SlotLoginMode{}
 		for _, harness := range wscred.SlotLoginHarnesses() {
 			slots[harness] = d.accountSlots.Slots(harness)
+			if m := wscred.SlotLoginModes(harness); len(m) > 0 {
+				modes[harness] = m
+			}
 		}
 		status.Slots = slots
+		status.SlotLoginModes = modes
 		slotSignIn := d.slotSignIn.status()
 		status.SlotSignIn = &slotSignIn
+	}
+	if snaps := d.harnessAuthSnapshots(); len(snaps) > 0 {
+		status.HarnessAuth = snaps
 	}
 	if host, ok := d.agents.(AgentAccountSlotHost); ok {
 		status.Conversations = host.AccountSlotConversations("")
