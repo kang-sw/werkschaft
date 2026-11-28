@@ -10,6 +10,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-completeness-reviewed: d1b0119e859e4898
 sage-review-design-reviewed: d1b0119e859e4898
+completed: 2026-11-28
 ---
 
 # Companion 3-Layer Long-Term Memory (Portable Soul / Local Episodes / VRM), Characteristic Sheet & Hybrid MCP Animation-Delay Pacing
@@ -248,3 +249,13 @@ Implement interruptible multi-beat pacing and active memory tools on the unified
   - `python3 agents-plugin-tool/scripts/generate-package-assets.py --check`: pass
   - `python3 -m unittest discover -s agents-plugin-wsflow/tests`: OK (22 tests, 2 skipped)
   - `node --test agents-plugin-tool/internal/wsdashboard/frontend-companion-messenger.test.js`: 5/5 pass
+
+
+## Resolution (2026-11-28)
+
+Implemented all three phases of the WS Companion Soul Memory, Characteristic Sheet, Dynamic Mood, and Hybrid Pacing feature on `impl/develop/mauve-flop-crate` and reconciled cleanly with latest `develop` (`00bd2ee55`):
+
+- **Phase 1 (`724fe286`):** 3-layer orthogonal memory store (Portable Soul RAM hot cache + append-only monthly per-machine JSONL shards, deterministic 2-layer secret/PII scrubber + SQLite `soul_pending` approval queue, machine-local `companion-episodes.sqlite` WAL/FTS5 store), guarded `/api/companion/soul/*` & `/api/companion/memory/*` routes, T0 `dashboard.companion_soul`/`dashboard.companion_soul_dir` config keys, and the Settings Memory / Soul drawer across all 11 locales.
+- **Phase 2 (`ff7aa41e`):** Structured `persona.md` Characteristic Sheet parser, strictly in-memory `CompanionMoodTracker` with idle decay, Tier-1 Soul launch prompt + delimiter-safe per-wake `<<<SOUL>>>`/`<<<MOOD>>>`/`<<<RECALL>>>` envelopes, ambient `companionPrompt` Soul precedence, and in-character briefing of `ws/delegation.report` results preserving verbatim technical artifacts.
+- **Phase 3 (`89d3fe1c`):** Interruptible `ws/companion.act` MCP pacing tool (`3000` ms default, `1500..6000` ms clamp, `timer`/`user_message`/`glass_knock`/`cancelled` wake branches, inbox consumption + content-free nudge dedup, drain/shutdown safety), guarded `POST /api/companion/knock` wired from cosmetic VRM glass knock without touching messenger, `companion-body`-only active memory MCP tools (`ws/companion.remember_soul`, `ws/companion.remember_episode`, `ws/companion.recall_memory`) with zero `ws/note.*` access and real FTS5 + Soul recall wiring, `CompanionBurstMaxCalls = 12` per-turn cap with wake/turn-end reset, and `ws`/`wsflow` `runtime.json` parity.
+- **Reconciliation & Verification (`e27e2e24`, `faa2d206`, `c6ab0ea5`):** Reconciled with `develop` (`237bdd0c6` and `00bd2ee55`), verified all Go `-race` suites (`internal/wsdashboard`, `cmd/ws-mcp` `-count=3`, `internal/mcp`, `internal/wsi18n`, `internal/wspackage`), `GOOS=windows go vet ./...`, `generate-package-assets.py --check`, `wsflow` unittest suite, and frontend messenger tests.
