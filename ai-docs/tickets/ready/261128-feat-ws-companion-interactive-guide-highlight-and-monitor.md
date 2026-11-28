@@ -390,7 +390,12 @@ Registry (`wsdashboard/daemon_guide_monitor.go`), keyed by owner reply id
 
 Phase 1 landed as planned. It adds `ws/daemon.highlight` (argument checks, then a `guide.highlight` bridge op) and `ws/daemon.monitor` (a daemon-side registry). The registry supports start/stop/status/replace with clamps, coalesced deliveries, the 12/min burst cap with a suppressed summary, and TTL and stop-chip final notices. It also covers liveness teardown, `route_changed` derived on the server from heartbeats, the client allowlist, and `Daemon.Close` teardown. The companion-body authority split exposes only the 4 guide aliases (tabs/dom/highlight/monitor), locked to its posture; companion-work and opted-in leads see all 7. The tools are also added to both `runtime.json` files.
 
-One addition beyond the plan: the dashboard's `invalid_request:<reason>` bridge errors (for example `invalid_selector`) map to `invalid_request` with that `Reason`. A bare `invalid_request` from an older client maps to `guide_unavailable/client_unsupported`.
+One addition beyond the plan: the dashboard's `invalid_request:<reason>` bridge errors (for example `invalid_selector`) map to `invalid_request` with that `Reason`. A bare `invalid_request` from an older client maps to `guide_unavailable/client_unsupported`. The original worker made further deviations:
+- Liveness is checked at delivery, sweep and final notice, not at ingest, so ingest stays I/O-free.
+- The new tools default to compact text.
+- A monitor sees events from every dashboard tab, not one bound tab.
+- Final notices bypass the 12/min cap.
+- Routes are passed through `redactDaemonSecrets` at delivery (covered by `TestGuideMonitorDeliveryRedactsSecrets`).
 
 Verification:
 - `go test -race -count=1 -timeout 45m ./cmd/ws-mcp/...` ok.
@@ -459,3 +464,50 @@ Builds on the Phase 1 bridge op, push event, and frames.
   stops the monitor, and delivers `stopped_by_user`; `ws:guide-highlight-change`
   fires; an excluded target is refused. Verify idle frame-freedom (no rAF while
   static).
+
+### Result (901bc5816) - 2026-11-28
+
+Phase 2 landed in 901bc5816, with review fixes in 47386310b. The overlay is in the new modules `assets/dashboard-daemon-guide.js` (658 lines) and `dashboard-daemon-guide.css` (119 lines), loaded right after the daemon bridge and confirm assets.
+
+What it does:
+- Ref/selector/text resolution across the shell, the session frame and the settings frame.
+- Spotlight and pulse styles, with a text-only comment card in a `data-ws-dom-exclude` fixed layer.
+- Cross-iframe projection, clipped to the frame viewport.
+- Tracking through scroll/resize listeners, a ResizeObserver and a throttled MutationObserver, with one rAF site and nothing scheduled while idle. It pauses while the page is hidden.
+- `×` and ESC dismissal, `highlight_clicked` on a target or card click, the 8-slot cap, replace by id, and the `ws:guide-highlight-change` gaze event.
+- Structural monitor hooks (`tab_switched`, `section_changed`, `modal_opened/closed`, `highlight_clicked`) with a 300 ms debounce, gated on the `daemon-guide-monitor` push.
+- The stop chip (`js.dc.guide.monitor_stop`) plus `js.dc.guide.dismiss`, in all 11 locales.
+
+Wiring: `dashboard-daemon-bridge.js` delegates `guide.highlight`; `dashboard-stream.js` relays `daemon-guide-monitor` and resets it on drop.
+
+Deviations from the plan:
+- Frame and settings refs resolve through a same-origin `window.wsDaemonGuideRef(gen, ref)` call, not a `dcCallFrame` op, because an Element cannot cross postMessage.
+- While `#workflow-settings` is open, the overlay layer moves into that modal, because `showModal` makes the rest of the document inert.
+- Mutation-driven re-measure uses a 120 ms timer rather than rAF and writes styles only on change. A detached selector/text target re-resolves at most once per second, with one trailing retry.
+- `tab_switched` carries the new tab value in `section`.
+- Text targets never match user-editable content (contenteditable, textarea, select, non-button inputs), so found/not-found answers cannot probe drafts.
+
+Review: code-review-lite (claude.medium, read-only) found 0 Critical, 0 Important and 5 Minor. Four are fixed in 47386310b:
+- stop-chip send result;
+- editable text probes;
+- hidden-tab pause and re-resolve backoff;
+- re-check before delivering a batch built before a stop.
+
+The fifth (an optional vm unit test of the chip) is covered end to end by Playwright instead.
+
+Verification. Branch merged with develop 9bfb17422 (d3ca4fe45); develop e2ac20320 only adds whiteboard docs and merge-trees cleanly.
+- `node --test testdata/daemon-guide.test.cjs`: 10/10.
+- `WS_PLAYWRIGHT_MODULE=… go test -run TestDaemonGuideBrowser ./internal/wsdashboard/`: PASS in real Chromium. It covers shell and frame spotlights with projected rects following scroll and resize, `×`/ESC, refusals and the cap, editable-text probes, idle rAF freedom, coalesced monitor deliveries, and chip → `stopped_by_user`.
+- `go test ./internal/wsi18n/...` ok.
+- `GOOS=windows go vet ./...` ok.
+- `generate-package-assets.py --check` rc 0.
+- `go test -race ./cmd/ws-mcp/...` ok.
+- `TestDashboardAssetSourceAssembly`'s hard-coded bundle list now includes the guide modules.
+
+Remaining `-race` failures, none from this branch (none of their inputs are touched here):
+- `internal/wsdashboard`, 9 from the Phase 1 list: TestShellPostLayout, TestSessionURLServesTheShellAroundItsFramedPage, TestBoardKeepWiring, TestBoardToolbarPlacementAndCounts, TestConversationPresentationMergePreservesIdentityAndDisclosures, TestFilesExplorerInstances, TestSearchDrawerSplitOwnership, TestFreshSessionLoadClient, TestShellSwitchesFramesThroughItsGlue. The develop merge fixed TestBoardGallery and TestGalleryNoReservedColumnWithoutAPage.
+- `internal/wsdashboard`, 3 introduced by develop's 578066dfe (`docHidden` is undefined in source snippets taken from `assets/dashboard.js`): TestTickTimesKeepsItsSetsUntilThePageChanges, TestTabLabelCount, TestUserMessageClockAndMinuteRefresh.
+- `internal/mcp`:
+  - The `s.intake` ServeStdio race hits TestSessionKeyResolvesRoot, TestMailboxRecvConcurrentCallsNeverDoubleDeliver and TestServeStdioDoesNotBlockToolsListBehindLongCall.
+  - TestDashboardSettingsCatalog expects 28 dashboard keys; develop's 049b88cce made it 30.
+  - TestServeStdioConfigShow fails on macOS: the response path is `/var/folders/…` but the test expects the canonical `/private/var/…`.
