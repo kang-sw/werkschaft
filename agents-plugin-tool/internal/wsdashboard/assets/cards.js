@@ -1730,16 +1730,35 @@
     if (col) col.addEventListener("wheel", onHomeWheel, { passive: false });
   }
   // canFitFourCol activates the 4-column layout (rail + stage + always-open
-  // gallery column) iff !tabs and viewport >= WIDE (1600px).
+  // gallery column) iff !tabs, viewport >= WIDE (1600px), and the stage
+  // beside the live left rail leaves spare right width for a column as wide
+  // as the board (the grid at its default width, since the board is no
+  // longer user-resized). Below that the three-column layout stays: the
+  // 34px rail strip on #bcol pages the gallery over the board. Opening room
+  // by collapsing the left rail (readRailReserve) can promote it.
   function canFitFourCol(vw, tabs) {
-    return !tabs && vw >= G.C.WIDE;
+    if (tabs || !(vw >= G.C.WIDE)) return false;
+    var gap = 8, stageW = vw - 32 - readRailReserve();
+    var split = !!(opt && (opt.split || (board && board.closest && board.closest(".dgrid.live, .dgrid.history"))));
+    var worktree = !!(board && board.closest && board.closest(".dgrid.worktree"));
+    var gridW, boardW;
+    if (worktree) {
+      gridW = 1300;
+      boardW = (gridW - gap) * 7 / 12;
+    } else if (!split) {
+      boardW = gridW = 900;
+    } else {
+      gridW = 1300;
+      boardW = convow ? (gridW - gap - Math.max(CONVW_MIN, Math.min(convow, gridW - gap - SPLITB_MIN))) : ((gridW - gap) * 7 / 12);
+    }
+    return stageW - gridW - gap >= boardW;
   }
   // isFourCol tells whether Band 4 (true 4-column mode) is active for the
   // current viewport and layout mode, matching WsGallery.layout's exact rule.
   function isFourCol() {
     if (!opt || !board) return false;
     var m = opt.mode ? opt.mode() : null, vw = m ? +m.width || 0 : 0, tabs = !!(m && m.tabs);
-    return canFitFourCol(vw, tabs);
+    return !tabs && vw >= G.C.WIDE && canFitFourCol(vw, tabs);
   }
   // relayout asks the page what it shows (opt.mode: its width and whether
   // the layout menu shows one column at a time), maps that to the

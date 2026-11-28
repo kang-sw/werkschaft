@@ -111,10 +111,11 @@ func TestGalleryNoReservedColumnWithoutAPage(t *testing.T) {
 
 // TestGalleryLayoutModes runs the dynamic 4-band layout mapping (cards.js
 // canFitFourCol + dashboard.js galMode + layout hook over WsGallery.layout)
-// under node: Bands 1-3 keep narrow/fused gallery (no overlay rail from
-// 1600px); Band 4 opens the 4th column iff !tabs && vw >= 1600 &&
-// spareRight >= boardW (e.g. >= 2442px on default 5:7 live pages, >= 2188px
-// on 900px board-first pages).
+// under node: the 3-column narrow view (34px rail strip over #bcol) holds
+// until Band 4 opens the 4th column iff !tabs && vw >= 1600 && spare stage
+// width fits a column as wide as the board (>= 2382px on default 5:7 live
+// pages with the left rail open, >= 2094px with it collapsed, >= 2128px on
+// 900px board-first pages).
 func TestGalleryLayoutModes(t *testing.T) {
 	js := mustAsset(t, "dashboard.js")
 	cardsJS := mustAsset(t, "cards.js")
@@ -158,6 +159,7 @@ var window = { get innerWidth() { return width; } };
 function railOpen() { rails++; }
 function placeGallery() { placed++; }
 function queueGallery() { placeGallery(); }
+function readRailReserve() { return attrs["data-rail-collapsed"] === "true" ? 0 : (parseFloat(props["--rail-w"]) || 280) + 8; }
 ` + canFit + mode + `
 var optLayout = { ` + hook + ` };
 function at(px, pages, dragging, tabs) {
@@ -170,19 +172,31 @@ function at(px, pages, dragging, tabs) {
 check("Band 1 1599px, no page: always-open narrow view", at(1599, 0, false), ["narrow", false, false]);
 check("Band 1 1599px, a page: the narrow view", at(1599, 1, false), ["narrow", false, false]);
 check("Band 1 1599px, a drag with no page: the narrow rail", at(1599, 0, true), ["narrow", false, false]);
-check("Band 4 1600px, no page: always-open 4-col gallery with pincol", at(1600, 0, false), ["col", true, false]);
-check("Band 4 1640px, a page: 4-col gallery with pincol", at(1640, 1, false), ["col", true, false]);
-check("Band 4 1920px, no page: always-open 4-col gallery with pincol", at(1920, 0, false), ["col", true, false]);
+check("3-col 1600px, no page: stays the narrow view", at(1600, 0, false), ["narrow", false, false]);
+check("3-col 1640px, a page: stays the narrow view", at(1640, 1, false), ["narrow", false, false]);
+check("3-col 1920px, no page: stays the narrow view (no pincol)", at(1920, 0, false), ["narrow", false, false]);
+check("3-col 2381px live default, rail open: no spare width yet", at(2381, 0, false), ["narrow", false, false]);
+check("Band 4 2382px live default, rail open: 4-col gallery with pincol", at(2382, 0, false), ["col", true, false]);
 check("Band 4 2560px live default, no page: 4-col gallery with pincol", at(2560, 0, false), ["col", true, false]);
 check("Band 4 2560px live default, a page: 4-col gallery with pincol", at(2560, 1, false), ["col", true, false]);
 check("Band 4 2560px, a drag with no page: stays in 4-col gallery", at(2560, 0, true), ["col", true, false]);
+attrs["data-rail-collapsed"] = "true";
+check("rail collapsed 2093px: still no spare width", at(2093, 0, false), ["narrow", false, false]);
+check("rail collapsed 2094px: 4-col gallery with pincol", at(2094, 0, false), ["col", true, false]);
+check("rail collapsed 1920px: stays the narrow view", at(1920, 0, false), ["narrow", false, false]);
+delete attrs["data-rail-collapsed"];
+check("rail expanded again 2094px: back to the narrow view", at(2094, 0, false), ["narrow", false, false]);
+opt = { split: null }; board = null;
+check("non-split 2127px rail open: no spare width", at(2127, 0, false), ["narrow", false, false]);
+check("non-split 2128px rail open: 4-col", at(2128, 0, false), ["col", true, false]);
+opt = { split: {} };
 check("tabs at 2560px, no page: always-open narrow view", at(2560, 0, false, true), ["narrow", false, false]);
 check("tabs at 2560px, a page: the narrow view", at(2560, 1, false, true), ["narrow", false, false]);
-rails = 0; at(1400, 0, false); at(1920, 0, false); at(1400, 0, false);
+rails = 0; at(1400, 0, false); at(2560, 0, false); at(1400, 0, false);
 check("each pincol transition closes the session rail overlay once", rails, 2);
 placed = 0; at(1400, 0, false);
 check("narrow places the gallery over the board column", [placed, galNarrow], [1, true]);
-at(1920, 0, false);
+at(2560, 0, false);
 check("wide stops placing the narrow overlay", galNarrow, false);
 process.stdout.write(bad.join("\n"));
 `)

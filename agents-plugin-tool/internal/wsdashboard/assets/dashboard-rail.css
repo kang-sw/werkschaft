@@ -59,10 +59,12 @@
    viewport lists the pages: each dot shows its pane count, + the trailing
    empty page (.gal-plus), fixed system pages (workpanel, ticketmap, git),
    and in the narrow view ⌂ the Main Board (Page 0). The page sets data-gal on
-   the root (dashboard-board.js): "col" from 1600px in non-tabs layout (with
+   the root (dashboard-board.js): "col" from 1600px in non-tabs layout when
+   WsCards.canFitFourCol finds spare stage width for a board-wide column
+   (about 2382px with the session rail open, 2094px collapsed; with
    data-pincol always set: the gallery is the page body's last grid column,
    its width handle .bp-edge on its left edge; the session rail stays docked
-   left); "narrow" uses a paged gallery over the board's column below 1600px
+   left); "narrow" uses a paged gallery over the board's column below that
    or when the layout is "tabs" (placed by --gal-left/top/width/height;
    data-away moves it off the window while that column is hidden). The store
    page (.tk-spage) takes the grid's cell in every one of these grids. In Band
@@ -228,7 +230,7 @@
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .bgal:not([hidden]) { position: relative; z-index: auto; top: auto; bottom: auto; right: auto; width: auto; grid-column: 3; grid-row: 1; }
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dash:not(.live):not(.history) .bgal:not([hidden]) { position: sticky; top: 12px; height: calc(100vh - 24px); height: calc(100dvh - 24px); }
   :root:is([data-pincol], [data-gal="empty"]) .bgal > .bp-edge { display: block; }
-  /* Overview Quick Look (Band 4: WsCards.isFourCol(), !tabs && vw >= 1600):
+  /* Overview Quick Look (Band 4: WsCards.isFourCol(), !tabs && vw >= 1600 && spare width):
      open column 3 both when pages are docked and when 0 pages are docked;
      keep docked .gal-viewport mounted offscreen via transform (never
      display:none) so docked xterm/iframes live. */

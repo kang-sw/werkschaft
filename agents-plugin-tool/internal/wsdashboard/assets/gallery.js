@@ -335,9 +335,10 @@
 
   // --- layout --------------------------------------------------------------
   // layout maps the viewport to the always-open gallery's shape. At >= WIDE
-  // (1600px) and not in tabs mode, the gallery stands as Band 4 beside the
-  // board (column: true, narrow: false) even with 0 user-pinned pages.
-  // Below WIDE or in tabs mode, the Main Board is Page 0 of the narrow
+  // (1600px), not in tabs mode, and where the caller finds spare width
+  // (o.fourCol, cards.js canFitFourCol), the gallery stands as Band 4 beside
+  // the board (column: true, narrow: false) even with 0 user-pinned pages.
+  // Below that or in tabs mode, the Main Board is Page 0 of the narrow
   // overlay gallery. The rail is always shown; empty is always false.
   function layout(o) {
     var four = !o.tabs && o.width >= C.WIDE && (o.fourCol === undefined ? true : !!o.fourCol);

@@ -1,6 +1,6 @@
 // Run by TestTicketMapDockBrowser: the Ticket Map docked in the gallery's
 // ticketmap system page (#tmdock) on a real framed page over the synthetic
-// board, at 1920x1080 with the gallery column at 540px and at 380px, in both
+// board, at 2560x1440 with the gallery column at 540px and at 380px, in both
 // themes: the rail order, the two-row toolbar with no horizontal overflow,
 // the bottom-sheet inspector (closed on load, opened by a View B card or a
 // View C star, grip collapse, Esc), the container-scoped 1 / 2 / / / Esc
@@ -68,7 +68,9 @@ async function noOverflow(fr, label) {
 }
 
 async function dockSession(browser, theme, galW) {
-  const W = 1920, H = 1080, tag = `${theme}/${W}x${H}/gal${galW}`;
+  // 2560px is a 4-column width (the Ticket Map docks by default there);
+  // 1920px with the rail open keeps the 3-column narrow layout.
+  const W = 2560, H = 1440, tag = `${theme}/${W}x${H}/gal${galW}`;
   const context = await browser.newContext({ viewport: { width: W, height: H }, colorScheme: theme });
   await context.addCookies([{ name: 'ws_dashboard_theme', value: theme, url: base }]);
   await context.addInitScript(w => {
