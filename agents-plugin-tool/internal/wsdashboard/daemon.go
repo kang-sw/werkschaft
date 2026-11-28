@@ -515,6 +515,12 @@ type Daemon struct {
 	metaClosed bool
 	metaWG     sync.WaitGroup
 
+	// daemonBridge holds local-viewer shell tab heartbeats, per-tab push
+	// channels, and pending 1-click confirmations / bridge replies (daemon_bridge.go).
+	daemonBridge         daemonBridge
+	daemonConfirmTimeout time.Duration
+	daemonCurlTimeout    time.Duration
+
 	closeOnce sync.Once
 	stop      chan struct{}
 	done      chan struct{}
