@@ -123,6 +123,56 @@ With `261127-feat-ws-companion-layered-agents-and-naming`, `261128-feat-ws-compa
    - Node unit tests covering finger curl preset bone coverage & missing-bone fallback, palm orthonormal basis handedness on VRM 0.x vs 1.0 mock skeletons, and Dark/Light lighting preset selection.
    - Playwright browser tests (`TestCompanionVrm*`) verifying bust/laptop framing bounds at `220px`, `280px`, and `360px` widths in both Dark and Light themes and held-phone palm alignment on synthetic + local real VRM 0.x/1.0 samples.
 
+### Result (0162d8fa3) - 2026-11-28
+
+- **Commits on `impl/develop/companion-visual-polish-1769`:**
+  - `15b2fa900` — Phase 2 implementation:
+    - aspect-adaptive bust framing solver (height/width-limited) plus a pixel-true `readPixels` alpha top-row headroom calibration pass;
+    - 30-bone finger curl presets (`relaxed`/`typing`/`phone-grip`/`point`) with VRM 0.x conjugation and a missing-bone no-op;
+    - orthonormal world palm frame (wrist + index/middle/pinky proximals) for the held phone, with numerically solved FK;
+    - laptop/phone procedural geometry and canvas texture polish;
+    - new `dashboard-companion-vrm-studio.js` with Dark/Light key/fill/rim + hemisphere presets that follow `data-theme`/`prefers-color-scheme` live, a prop-only PMREM environment (MToon untouched), and a contact shadow;
+    - Go embed/asset assembly, unit and Playwright coverage.
+  - `0162d8fa3` — `code-review-lite` (`claude.medium`) follow-up, verdict clean (0 Critical / 0 Important / 9 Minor):
+    - #1 width fit now adds the full front-plane offset (+ front-plane unit assert);
+    - #2 PMREM render target disposed;
+    - #3 bounded headroom probe retry + fake-`gl` `measureAlphaTopRow` unit test;
+    - #4 allocation-free VRM 0.x conjugate in the per-frame loop;
+    - #5 finger-target comment corrected;
+    - #6 dead `staticShadow` branch removed;
+    - #7 dark preset comment corrected;
+    - #9 non-vacuous theme wait;
+    - #8 (no fallback lights without `C.vrmStudio`) accepted, because the bundle order guarantees `vrm-studio` loads first.
+
+    It also adds an opt-in 2x per-pose real-VRM PNG mode (`WS_COMPANION_PHASE2_QA_PNGS`, gitignored output only) and a frame-based layout stability wait in the Phase 2 browser script.
+- **Line counts & deviations:**
+  - Final sizes:
+    - `vrm.js` 1939L (<2000);
+    - `vrm-studio.js` 676L (new);
+    - `vrm-props.js` 871L, `vrm-pose.js` 670L, `vrm-colead.js` 985L;
+    - `vrm-fx.js` 486L and `dashboard-companion.css` 372L (both unchanged);
+    - new tests `frontend-companion-studio.test.js` 570L, `companion_vrm_studio_browser_test.go` 164L, `testdata/companion-vrm-phase2-studio.browser.cjs` 370L.
+  - Studio lighting/PMREM/framing helpers live in `dashboard-companion-vrm-studio.js` rather than `vrm.js`, to keep `vrm.js` <2000L.
+  - The pixel-true headroom calibration was added because VRM 0.x alpha-cut hair/ear cards make bone/bbox headroom inaccurate.
+  - Laptop-lid chest cap relaxed to `chestY + 0.06 * bustSpan` (the >= 20%-below-chin guard dominates).
+  - Typing hands may sit below the lid, where they are occluded rather than clipped by a visible slot edge.
+  - Measured on real VRM 0.x/1.0 at `220/280/360px` × Dark/Light:
+    - screenshot-mask headroom 11.2–13.7%;
+    - laptop top 16.3–16.7%;
+    - chin 51–54%;
+    - zero side-edge clipping;
+    - held-phone palm facing 0.86–0.89;
+    - no blown or crushed exposure in either theme.
+  - Deferred to Phase 3: near-plane corner clipping (carried from Phase 1), typing hands occluded below the lid, finger pose polish after the owner's visual checkpoint.
+- **Verification:**
+  - `python3 agents-plugin-tool/scripts/generate-package-assets.py --check`: PASS.
+  - `node --test agents-plugin-tool/internal/wsdashboard/frontend-companion*.test.js`: 102/102 PASS.
+  - `go test -race -count=1 -run 'TestCompanion|TestAssets|TestDevAssets|TestDashboardAssetSourceAssembly' ./internal/wsdashboard`: PASS (99.4s).
+  - `GOOS=windows go vet ./...`: PASS.
+  - Real-VRM 0.x (`6493143135142452442.vrm`) & VRM 1.0 (`AvatarSample_M2.vrm`) Playwright suite (`go test -count=1 -v ./internal/wsdashboard -run '^TestCompanionVrm'`): 6/7 PASS.
+    - Passing: `TestCompanionVrmAssetBundleAndRoute`, `TestCompanionVrmRailDockBrowser`, `TestCompanionVrmCoLeadBrowser`, `TestCompanionVrmSwapDizzyBrowser`, `TestCompanionVrmStep4Phase1Browser`, and `TestCompanionVrmPhase2StudioBrowser` (final standalone rerun PASS 118.9s, after the stability wait fixed one VRM 1.0 Light 220px flake under load).
+    - Failing: `TestCompanionVrmBrowser` on its `activeFps` 24–36 gate (15.3–23.4 measured). The host load average was 13–21 from parallel sessions, and the Phase 1 baseline commit measured 15.66 under the same conditions, so this is environmental, not a Phase 2 regression.
+
 ### Phase 3: Animation Curves/Springs/Saccades/Blink Polish, Soul Mood Ambient Bridge, Live `bleed`/`roam` Metafiction Choreography & Real-VRM 0.x/1.0 Visual QA
 
 1. **Organic animation math:** Replace raw `Math.sin(t * freq)` calls in `dashboard-companion-vrm-pose.js` and `dashboard-companion-vrm-colead.js` with monotonic phase accumulators (zero phase jump on cadence changes), critically damped spring followers for head/torso/laptop/phone transitions, subtle horizontal/vertical eye micro-saccades, and natural single/double-blink intervals.
