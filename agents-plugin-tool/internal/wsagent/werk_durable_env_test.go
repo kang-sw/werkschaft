@@ -12,22 +12,41 @@ import (
 // only WS_* keys left every one of them failing with "git not found".
 
 const (
-	durableEnvPath  = "/test/durable-bin:/usr/bin"
-	durableEnvHome  = "/test/durable-home"
-	durableEnvToken = "daemon-inherited-session-token"
-	durableEnvURL   = "http://127.0.0.1:1/inherited"
+	durableEnvPath   = "/test/durable-bin:/usr/bin"
+	durableEnvHome   = "/test/durable-home"
+	durableEnvCache  = "/test/durable-cache"
+	durableEnvConfig = "/test/durable-config"
+	durableEnvToken  = "daemon-inherited-session-token"
+	durableEnvURL    = "http://127.0.0.1:1/inherited"
 )
 
+var dirtyParentEnv = []string{
+	"WS_MCP_NO_DASHBOARD=parent-no-dashboard",
+	"WS_HOSTED_SESSION_KEY=parent-hosted-key",
+	"WS_MAILBOX_AUTO=parent@auto",
+	"WS_MCP_DEBUG_LOG=/parent/debug.log",
+	"WS_RSRC_DEV_CHECKOUT=/parent/dev",
+	"CLAUDECODE=1",
+	"CLAUDE_CODE_SSE_PORT=123",
+	"CODEX_THREAD_ID=abc",
+	"PI_SESSION=1",
+	"ORCA_FOO=1",
+	"WS_PI_CHANNEL_CREDENTIAL=sec",
+}
+
 // stubDaemonEnviron replaces the daemon environment the durable start sites read.
-// The inherited MCP credentials model a daemon started from inside a session.
+// The inherited MCP credentials and session vars model a daemon started from
+// inside a parent harness session.
 func stubDaemonEnviron(t *testing.T) {
 	t.Helper()
 	prev := environ
 	environ = func() []string {
-		return []string{
+		base := []string{
 			"PATH=" + durableEnvPath, "HOME=" + durableEnvHome, "USERPROFILE=" + durableEnvHome,
+			"WS_CACHE_HOME=" + durableEnvCache, "WS_CONFIG_HOME=" + durableEnvConfig,
 			EnvMCPSessionURL + "=" + durableEnvURL, EnvMCPSessionToken + "=" + durableEnvToken,
 		}
+		return append(base, dirtyParentEnv...)
 	}
 	t.Cleanup(func() { environ = prev })
 }
@@ -40,10 +59,58 @@ func checkDurableHelloEnv(t *testing.T, env map[string]string, token string) {
 	if env["HOME"] != durableEnvHome {
 		t.Errorf("hello HOME = %q, want %q", env["HOME"], durableEnvHome)
 	}
+	if env["WS_CACHE_HOME"] != durableEnvCache {
+		t.Errorf("hello WS_CACHE_HOME = %q, want %q", env["WS_CACHE_HOME"], durableEnvCache)
+	}
+	if env["WS_CONFIG_HOME"] != durableEnvConfig {
+		t.Errorf("hello WS_CONFIG_HOME = %q, want %q", env["WS_CONFIG_HOME"], durableEnvConfig)
+	}
 	for name, value := range env {
-		if name == EnvMCPSessionURL || name == EnvMCPSessionToken ||
+		if strings.EqualFold(name, EnvMCPSessionURL) || strings.EqualFold(name, EnvMCPSessionToken) ||
 			strings.Contains(value, durableEnvToken) || (token != "" && strings.Contains(value, token)) {
 			t.Errorf("hello env leaks MCP credential %s=%q", name, value)
+		}
+	}
+	for _, name := range []string{
+		"WS_MCP_DEBUG_LOG", "WS_RSRC_DEV_CHECKOUT",
+		"CLAUDECODE", "CLAUDE_CODE_SSE_PORT", "CODEX_THREAD_ID", "PI_SESSION", "ORCA_FOO", "WS_PI_CHANNEL_CREDENTIAL",
+	} {
+		if value, ok := env[name]; ok {
+			t.Errorf("hello env leaked parent-harness/session var %s=%q", name, value)
+		}
+	}
+	if got := env["WS_MAILBOX_AUTO"]; got == "parent@auto" {
+		t.Errorf("hello env leaked parent WS_MAILBOX_AUTO=%q", got)
+	}
+	if got := env["WS_HOSTED_SESSION_KEY"]; got == "parent-hosted-key" {
+		t.Errorf("hello env leaked parent WS_HOSTED_SESSION_KEY=%q", got)
+	}
+	if got := env[EnvNoDashboard]; got == "parent-no-dashboard" {
+		t.Errorf("hello env leaked parent %s=%q", EnvNoDashboard, got)
+	}
+}
+
+func TestDurableEnvStripsInheritedSessionAndHarnessVars(t *testing.T) {
+	base := append([]string{
+		"PATH=" + durableEnvPath, "HOME=" + durableEnvHome, "USERPROFILE=" + durableEnvHome,
+		"WS_CACHE_HOME=" + durableEnvCache, "WS_CONFIG_HOME=" + durableEnvConfig,
+	}, dirtyParentEnv...)
+	got := workerEnvMap(durableEnv(base))
+	for name, want := range map[string]string{
+		"PATH":           durableEnvPath,
+		"HOME":           durableEnvHome,
+		"USERPROFILE":    durableEnvHome,
+		"WS_CACHE_HOME":  durableEnvCache,
+		"WS_CONFIG_HOME": durableEnvConfig,
+	} {
+		if got[name] != want {
+			t.Errorf("durableEnv %s = %q, want %q", name, got[name], want)
+		}
+	}
+	for _, kv := range dirtyParentEnv {
+		name, _, _ := strings.Cut(kv, "=")
+		if val, ok := got[name]; ok {
+			t.Errorf("durableEnv leaked %s=%q", name, val)
 		}
 	}
 }
@@ -51,11 +118,42 @@ func checkDurableHelloEnv(t *testing.T, env map[string]string, token string) {
 func TestMCPHelloStripsSessionCredentialsFromHarnessEnv(t *testing.T) {
 	hello := mcpHello([]string{
 		"PATH=" + durableEnvPath, "HOME=" + durableEnvHome,
+		"WS_CACHE_HOME=" + durableEnvCache, "WS_CONFIG_HOME=" + durableEnvConfig,
 		EnvMCPSessionURL + "=" + durableEnvURL, EnvMCPSessionToken + "=" + durableEnvToken,
 	}, map[string]string{"WS_MCP_HARNESS": "werk"}, "/cwd", 0, "v")
 	checkDurableHelloEnv(t, hello.Env, "")
 	if hello.Harness != "werk" {
 		t.Errorf("hello harness = %q", hello.Harness)
+	}
+}
+
+func TestMCPHelloForOSWindowsCaseFoldsCredentialsAndOverrides(t *testing.T) {
+	hello := mcpHelloForOS("windows", []string{
+		"Path=C:\\bin",
+		"Ws_McP_SeSsIoN_ToKeN=" + durableEnvToken,
+		"ws_mcp_session_url=" + durableEnvURL,
+		"ws_mcp_harness=old",
+		"ws_mcp_project_root=C:\\old-root",
+	}, map[string]string{
+		"WS_MCP_HARNESS":      "werk",
+		"WS_MCP_PROJECT_ROOT": "C:\\new-root",
+	}, "C:\\cwd", 42, "v")
+	for name, value := range hello.Env {
+		if strings.EqualFold(name, EnvMCPSessionURL) || strings.EqualFold(name, EnvMCPSessionToken) {
+			t.Fatalf("Windows mcpHello leaked credential %s=%q", name, value)
+		}
+		if name == "ws_mcp_harness" || name == "ws_mcp_project_root" {
+			t.Fatalf("Windows mcpHello left mixed-case duplicate %s=%q alongside override", name, value)
+		}
+	}
+	if hello.Env["WS_MCP_HARNESS"] != "werk" || hello.Harness != "werk" {
+		t.Fatalf("hello harness = %q (env=%q), want werk", hello.Harness, hello.Env["WS_MCP_HARNESS"])
+	}
+	if hello.Env["WS_MCP_PROJECT_ROOT"] != "C:\\new-root" || hello.ProjectRoot != "C:\\new-root" {
+		t.Fatalf("hello project root = %q (env=%q), want C:\\new-root", hello.ProjectRoot, hello.Env["WS_MCP_PROJECT_ROOT"])
+	}
+	if hello.Env["Path"] != "C:\\bin" {
+		t.Fatalf("hello Path = %q, want C:\\bin", hello.Env["Path"])
 	}
 }
 
@@ -82,6 +180,9 @@ func TestDurableWorkerHelloCarriesDaemonEnvironment(t *testing.T) {
 		t.Fatalf("durable worker hello did not resolve (ok=%v pid=%d)", ok, hello.OwnerPID)
 	}
 	checkDurableHelloEnv(t, hello.Env, spec.MCPSession.Token)
+	if _, ok := hello.Env["WS_HOSTED_SESSION_KEY"]; ok {
+		t.Errorf("durable worker hello inherited WS_HOSTED_SESSION_KEY: %q", hello.Env["WS_HOSTED_SESSION_KEY"])
+	}
 	if hello.Env[EnvAllowedTools] == "" || hello.Env[EnvAgentSessionKey] == "" {
 		t.Errorf("the ws-mcp entry's own environment was lost: %v", hello.Env)
 	}
@@ -114,6 +215,9 @@ func TestDurableLeadHelloCarriesDaemonEnvironment(t *testing.T) {
 		t.Fatalf("durable lead hello did not resolve (ok=%v pid=%d)", ok, hello.OwnerPID)
 	}
 	checkDurableHelloEnv(t, hello.Env, spec.MCPSession.Token)
+	if _, ok := hello.Env[EnvNoDashboard]; ok {
+		t.Errorf("durable lead hello inherited %s: %q", EnvNoDashboard, hello.Env[EnvNoDashboard])
+	}
 	if hello.Env["FIXTURE_PACKAGE"] != "active" {
 		t.Errorf("the ws-mcp entry's own environment was lost: %v", hello.Env)
 	}

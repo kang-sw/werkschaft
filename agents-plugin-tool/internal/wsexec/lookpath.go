@@ -43,10 +43,12 @@ func LookPath(name string, environ []string) (string, error) {
 			}
 		}
 	}
+	hasDir := false
 	for _, dir := range filepath.SplitList(path) {
 		if dir == "" {
 			continue
 		}
+		hasDir = true
 		for _, ext := range exts {
 			candidate := filepath.Join(dir, name+ext)
 			info, err := os.Stat(candidate)
@@ -59,7 +61,7 @@ func LookPath(name string, environ []string) (string, error) {
 			return candidate, nil
 		}
 	}
-	if strings.TrimSpace(path) == "" {
+	if !hasDir || strings.TrimSpace(path) == "" {
 		return "", &exec.Error{Name: name, Err: errPathUnset}
 	}
 	return "", &exec.Error{Name: name, Err: exec.ErrNotFound}
@@ -80,6 +82,10 @@ func (pathUnsetError) Unwrap() error { return exec.ErrNotFound }
 // searchPath shares the resolver's last-entry and platform case rules with
 // the Git cache key. Other environment variables do not select explicit Git.
 func searchPath(environ []string) (path, pathext string) {
+	return searchPathForOS(runtime.GOOS, environ)
+}
+
+func searchPathForOS(goos string, environ []string) (path, pathext string) {
 	if environ == nil {
 		return os.Getenv("PATH"), os.Getenv("PATHEXT")
 	}
@@ -88,7 +94,7 @@ func searchPath(environ []string) (path, pathext string) {
 		if !ok {
 			continue
 		}
-		if runtime.GOOS == "windows" {
+		if goos == "windows" {
 			key = strings.ToUpper(key)
 		}
 		switch key {

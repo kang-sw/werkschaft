@@ -342,8 +342,9 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 		// The daemon hosts the loop, so the daemon's own environment is the
 		// session's (PATH, HOME, ...). A nil env would give mcpHello only the
 		// WS_* entries, and the caller-env resolver refuses to fall back to
-		// the daemon's PATH. mcpHello strips the session URL and token.
-		spec.MCPSession.Started(environ(), 0)
+		// the daemon's PATH. durableEnv strips inherited session/harness vars,
+		// and mcpHello strips the session URL and token.
+		spec.MCPSession.Started(durableEnv(environ()), 0)
 	}
 	if !attach {
 		c.steerSeq, c.steerAnswers = 0, 0

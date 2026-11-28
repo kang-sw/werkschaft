@@ -15,6 +15,7 @@ import (
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsfs"
+	"github.com/kang-sw/devenv/internal/wsharnessenv"
 )
 
 // A hosted worker's connection (a Codex or Claude cutover worker attaches
@@ -316,6 +317,27 @@ func TestReadOnlyWorkerMergeDiffWritesNoObjects(t *testing.T) {
 	}
 }
 
+func werkTestEnv(t *testing.T, withPATH bool) []string {
+	t.Helper()
+	home := t.TempDir()
+	var env []string
+	for _, kv := range wsharnessenv.Drop(os.Environ()) {
+		key, _, _ := strings.Cut(kv, "=")
+		if strings.EqualFold(key, "HOME") || strings.EqualFold(key, "USERPROFILE") ||
+			strings.EqualFold(key, "WS_MCP_HARNESS") || strings.EqualFold(key, wsagent.EnvPermissionLevel) ||
+			(!withPATH && strings.EqualFold(key, "PATH")) {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env,
+		"WS_MCP_HARNESS="+wsagent.BackendWerk,
+		wsagent.EnvPermissionLevel+"="+string(wsagent.PermissionReadOnly),
+		"HOME="+home,
+		"USERPROFILE="+home,
+	)
+}
+
 // werkHelloEnvWorker binds a read-only werk worker whose Env is shaped like
 // the hello a ProcessDurable session publishes (wsagent mcpHello): the WS_*
 // entries plus the daemon's PATH and HOME (the fixed behavior; Started(nil, 0)
@@ -323,11 +345,7 @@ func TestReadOnlyWorkerMergeDiffWritesNoObjects(t *testing.T) {
 func werkHelloEnvWorker(t *testing.T) *workerFixture {
 	t.Helper()
 	fx := newHostedExecFixture(t, 10*time.Second)
-	env := []string{
-		"WS_MCP_HARNESS=" + wsagent.BackendWerk,
-		wsagent.EnvPermissionLevel + "=" + string(wsagent.PermissionReadOnly),
-		"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(),
-	}
+	env := werkTestEnv(t, true)
 	worker := NewServerWithOptions(ServerOptions{Root: fx.root, Version: "test", Env: env, Harness: wsagent.BackendWerk, Conversation: "worker", ExecCutover: wsagent.BackendWerk, Exec: func() *execjob.Hosted { return fx.hosted }})
 	key, _ := parseLoginResponse(t, callLogin(t, worker, 900003, fx.root, nil))
 	worker.callerBinding = boundCallers{backends: map[string]string{"worker": wsagent.BackendWerk}}
@@ -360,15 +378,15 @@ func TestWerkReadOnlyWorkerResolvesGitFromHelloEnv(t *testing.T) {
 		}
 	})
 	t.Run("hello env without PATH", func(t *testing.T) {
-		// The hello env the bug produced: WS_* entries only. Even the login's
+		// The hello env the bug produced: no PATH entry. Even the login's
 		// own worktree probe needs git, so the failure shows up there, and it
 		// must name the environment rather than "executable file not found".
 		fx := newHostedExecFixture(t, 10*time.Second)
 		worker := NewServerWithOptions(ServerOptions{Root: fx.root, Version: "test", Harness: wsagent.BackendWerk, Conversation: "worker", ExecCutover: wsagent.BackendWerk,
-			Env:  []string{"WS_MCP_HARNESS=" + wsagent.BackendWerk, wsagent.EnvPermissionLevel + "=" + string(wsagent.PermissionReadOnly)},
+			Env:  werkTestEnv(t, false),
 			Exec: func() *execjob.Hosted { return fx.hosted }})
 		resp := callLogin(t, worker, 900004, fx.root, nil)
-		if !strings.Contains(resp, "PATH is unset or empty") || strings.Contains(resp, "not found in $PATH") {
+		if !strings.Contains(resp, "PATH is unset or empty") || strings.Contains(resp, "executable file not found") {
 			t.Fatalf("login without PATH = %s, want a message naming the unset PATH", resp)
 		}
 	})
