@@ -3,6 +3,7 @@ package wsdashboard
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -107,8 +108,10 @@ type fourStateSession struct {
 }
 
 // seedFourStateRail registers the mockup's rows: two repositories, active,
-// asleep, archived, and ended (pending-deletion) sessions.
-func seedFourStateRail(t *testing.T, dir, devenv, game string) []fourStateSession {
+// asleep, archived, and ended (pending-deletion) sessions, and a third
+// repository (bulk) with bulkArchived archived rows under one live row, the
+// long history the archived popup must bound.
+func seedFourStateRail(t *testing.T, dir, devenv, game, bulk string, bulkArchived int) []fourStateSession {
 	t.Helper()
 	day := 24 * time.Hour
 	left := func(d time.Duration) time.Duration { return RegistryRetention - d - 30*time.Minute }
@@ -136,6 +139,14 @@ func seedFourStateRail(t *testing.T, dir, devenv, game string) []fourStateSessio
 		{id: "shaderlab", project: game, label: "셰이더 실험", harness: "pi", reply: "normal map 경로가 바뀐 이유를 확인해 줘", user: true},
 		{id: "rendererone", project: game, label: "렌더러 v1", harness: "claude", hosted: true, endedAgo: left(5 * day)},
 		{id: "perfmeasure", project: game, label: "perf 측정", harness: "pi", endedAgo: left(3 * day)},
+		{id: "bulklive", project: bulk, label: "벌크 활성", harness: "claude", hosted: true, asleep: true},
+	}
+	for i := 1; i <= bulkArchived; i++ {
+		harness := "claude"
+		if i%3 == 0 {
+			harness = "pi"
+		}
+		rows = append(rows, fourStateSession{id: fmt.Sprintf("bulkarch%02d", i), project: bulk, label: fmt.Sprintf("보관 기록 %02d", i), harness: harness, hosted: true, asleep: true, hidden: true})
 	}
 	for i, s := range rows {
 		at := now.Add(-time.Duration(len(rows)-i) * time.Minute)
@@ -178,7 +189,8 @@ func seedFourStateRail(t *testing.T, dir, devenv, game string) []fourStateSessio
 }
 
 // TestRailFourStateBrowser drives the real rail in Chromium against a
-// disposable daemon on an ephemeral port: the fold row's tri-state radio,
+// disposable daemon on an ephemeral port: the fold row's archived/deleted
+// popup (tabs, search, bounded scroll, Escape and outside-click close),
 // archive moving a row into the archived fold and staying there across a
 // reload, unarchive returning it asleep, a 409 or 500 archive leaving the
 // row put with its message, and the row menu's archive entry. With
@@ -200,14 +212,14 @@ func TestRailFourStateBrowser(t *testing.T) {
 	t.Setenv("WS_CONFIG_HOME", t.TempDir())
 	SetDevAssets(nil)
 	dir, root := t.TempDir(), t.TempDir()
-	devenv, game := filepath.Join(root, "devenv"), filepath.Join(root, "gunpowder-odyssey")
-	for _, p := range []string{devenv, game} {
+	devenv, game, bulk := filepath.Join(root, "devenv"), filepath.Join(root, "gunpowder-odyssey"), filepath.Join(root, "long-history")
+	for _, p := range []string{devenv, game, bulk} {
 		// Rail repository recognition needs no Git process.
 		if err := os.MkdirAll(filepath.Join(p, ".git"), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	seedFourStateRail(t, dir, devenv, game)
+	seedFourStateRail(t, dir, devenv, game, bulk, 36)
 	agents := &fourStateAgents{dir: dir, busyID: "assettidy", failID: "renderer"}
 	d := startIndexedDaemon(t, dir, newPageFake(), time.Hour, func(o *DaemonOptions) {
 		o.Port = 0
