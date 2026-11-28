@@ -873,7 +873,7 @@ type agyMapper struct {
 	requested          map[string]bool
 	ranUnrequested     map[string]bool
 	warnedSubagent     map[string]bool
-	modelFailure   string
+	modelFailure       string
 	// content is set while mapping one session/update that carried model
 	// content (text, thought, its holder pulse, or a plan).
 	content    bool
