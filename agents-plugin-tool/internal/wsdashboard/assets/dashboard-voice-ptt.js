@@ -609,7 +609,7 @@
   }
 
   function openVoiceSettings(win, opener) {
-    var target = "/settings?section=account&provider=voice";
+    var target = "/settings?section=voice";
     var w = win || (typeof window !== "undefined" ? window : null);
     if (!w) return false;
     if (typeof w.wsOpenSettings === "function") {
