@@ -251,7 +251,6 @@
       }
     }
   }
-  // A creation intent belongs only to this tab and expires after ten seconds.
   // railFocus is what holds the focus in the rail before a swap replaces
   // every row: a row's link or one of its buttons, by the row's reply-id;
   // railRefocus puts it back on the new row after the swap, unless the

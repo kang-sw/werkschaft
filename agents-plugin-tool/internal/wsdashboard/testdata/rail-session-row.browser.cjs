@@ -97,8 +97,11 @@ async function create(page, label = '') {
   await page.waitForURL(base + '/s/' + id);
   return id;
 }
-async function settleNoAutoRename(page) {
-  await page.locator('#r-head .sname').waitFor();
+async function settleNoAutoRename(page, id) {
+  await page.waitForFunction(
+    rid => document.documentElement.getAttribute('data-rid') === rid && !!document.querySelector('#r-head .sname'),
+    id
+  );
   await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
   assert.equal(await page.locator('#r-rail .drinp, #r-head .sinp').count(), 0, 'new session does not enter rename mode');
   assert.equal(await page.evaluate(() => sessionStorage.getItem('ws.dashboard.renameNew')), null, 'no creation rename intent stored');
@@ -199,7 +202,7 @@ async function settleNoAutoRename(page) {
       // creation, and manual rename (.drren) remains intact.
       await page.setViewportSize({ width: 1680, height: 900 });
       let id = await create(page);
-      await settleNoAutoRename(page);
+      await settleNoAutoRename(page, id);
       await page.locator(row(id)).waitFor();
       assert.equal((await order(page)).at(-1), id, 'new row appended at group end');
       assert.equal(await page.locator(row(id) + ' .rid').textContent(), id, 'blank label keeps reply-id');
@@ -212,7 +215,7 @@ async function settleNoAutoRename(page) {
       await peer.close();
       // Creating with a provided label also skips auto-rename and renders the label.
       id = await create(page, '모달 라벨');
-      await settleNoAutoRename(page);
+      await settleNoAutoRename(page, id);
       await page.locator(row(id)).waitFor();
       assert.equal(await page.locator(row(id) + ' .rid').textContent(), '모달 라벨', 'provided label renders in rail');
       assert.equal(await page.locator('#r-head .snm').textContent(), '모달 라벨', 'provided label renders in header');
@@ -237,11 +240,11 @@ async function settleNoAutoRename(page) {
       for (const width of [1280, 760]) {
         await page.setViewportSize({ width, height: 900 });
         id = await create(page);
-        await settleNoAutoRename(page);
+        await settleNoAutoRename(page, id);
         assert.equal(await page.locator(row(id)).isVisible(), false, 'collapsed rail stays closed');
         assert.equal(await page.locator('#r-head .snm').textContent(), id, 'blank label keeps reply-id in header');
         id = await create(page, '접힌 라벨');
-        await settleNoAutoRename(page);
+        await settleNoAutoRename(page, id);
         assert.equal(await page.locator(row(id)).isVisible(), false, 'collapsed rail stays closed');
         assert.equal(await page.locator('#r-head .snm').textContent(), '접힌 라벨', 'provided label shows in header');
         await page.locator('#r-head .sren').click();
