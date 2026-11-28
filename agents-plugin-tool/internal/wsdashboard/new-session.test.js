@@ -54,7 +54,8 @@ function makeEnv(opts = {}) {
   };
   vm.createContext(c);
   const source = fs.readFileSync(__dirname + '/assets/dashboard-leads.js', 'utf8');
-  vm.runInContext(fs.readFileSync(__dirname + '/assets/dashboard-tier-picker.js', 'utf8') + source.slice(0, source.indexOf('  // The session menu of the viewed hosted session')), c);
+  const modal = fs.readFileSync(__dirname + '/assets/dashboard-new-session.js', 'utf8');
+  vm.runInContext(fs.readFileSync(__dirname + '/assets/dashboard-tier-picker.js', 'utf8') + source.slice(0, source.indexOf('  // The session menu of the viewed hosted session')) + modal, c);
   const p = c.rpLeadMake(), btn = new Element('button');
   const all = (el, pred) => [ ...(pred(el) ? [el] : []), ...el.children.flatMap(x => all(x, pred)) ];
   const find = (el, pred) => all(el, pred)[0];
@@ -172,6 +173,115 @@ test('new session saves only successful starts and restores available per-harnes
   c.localStorage.getItem = () => { throw Error('blocked'); };
   c.localStorage.setItem = () => { throw Error('blocked'); };
   p.open('root', 'name', btn); click(start); reply(201, { id: '3' });
+});
+
+// labelEnv is a modal whose label route answers through labelReply and whose
+// navigation, label writes and storage writes are recorded in order.
+function labelEnv() {
+  const log = [], labelCalls = [], storage = [];
+  let reply, pending;
+  const hs = [{ harness: 'claude', lead: true, available: true, models: [{ id: 'opus' }], efforts: ['high'], permission_modes: ['auto'] }];
+  const env = makeEnv({
+    wsT: s => s,
+    localStorage: { getItem: () => null, setItem(k, v) { storage.push(v); } },
+    tkFetch(path, opt, cb) { pending = cb; },
+    railPost(path, body, cb) { log.push(['post', path]); reply = cb; }
+  });
+  const { c, p, btn } = env;
+  c.go = href => log.push(['go', href]);
+  c.setTimeout = setTimeout; c.clearTimeout = clearTimeout;
+  c.fetch = (url, opt) => new Promise(resolve => {
+    labelCalls.push({ url, opt, resolve });
+    log.push(['label', url, JSON.parse(opt.body).label]);
+  });
+  p.open('root', 'name', btn);
+  pending(200, { harnesses: hs });
+  const input = env.find(p.el, e => e.attrs['data-session-label']);
+  return { ...env, log, labelCalls, storage, input, reply: (...a) => reply(...a), open: () => { p.open('root', 'name', btn); pending(200, { harnesses: hs }); } };
+}
+
+test('the session label field sits directly after Start inside the CTA wrapper and is not a combobox or knob', () => {
+  const env = labelEnv();
+  const wrap = env.start.parentNode;
+  assert.equal(wrap.cls, 'ns-cta-w');
+  assert.equal(wrap.children[0], env.start);
+  assert.equal(wrap.children[1], env.input);
+  assert.equal(env.input.tag, 'input');
+  assert.equal(env.input.cls, 'ns-label-in');
+  assert.equal(env.input.type, 'text');
+  assert.equal(env.input.maxLength, 64);
+  assert.equal(env.input.placeholder, 'js.lead.label.placeholder');
+  assert.equal(env.input.attrs['aria-label'], 'js.lead.label.aria');
+  assert.equal(wrap.children[2].cls, 'ns-ctahint');
+});
+
+test('a typed label is posted to the new session before it opens, trimmed and never remembered', async () => {
+  const env = labelEnv();
+  env.input.value = '  my 라벨 \n';
+  env.start.events.click();
+  assert.equal(env.input.disabled, true, 'the field is locked with the start');
+  env.reply(201, { id: 'abc/1' });
+  assert.deepEqual(env.log, [['post', '/agents/leads'], ['label', '/s/abc%2F1/label', 'my 라벨']]);
+  assert.equal(env.start.disabled, true, 'start stays busy while the label is written');
+  const call = env.labelCalls[0];
+  assert.equal(call.opt.method, 'POST');
+  assert.equal(call.opt.headers['Content-Type'], 'application/json');
+  assert.equal(call.opt.body, JSON.stringify({ label: 'my 라벨' }));
+  call.resolve({ status: 200, ok: true });
+  await new Promise(r => setImmediate(r));
+  assert.deepEqual(env.log[2], ['go', '/s/abc%2F1']);
+  assert.equal(env.log.length, 3);
+  assert.equal(env.storage.length, 1);
+  assert.ok(!env.storage[0].includes('라벨'), 'the label is not stored with the picks');
+  env.open();
+  assert.equal(env.input.value, '', 'reopening starts with an empty label');
+  assert.equal(env.input.disabled, false);
+});
+
+test('an empty or whitespace label sends no label request', () => {
+  for (const text of ['', '   ', '\t']) {
+    const env = labelEnv();
+    env.input.value = text;
+    env.start.events.click();
+    env.reply(201, { id: 'x1' });
+    assert.deepEqual(env.log, [['post', '/agents/leads'], ['go', '/s/x1']]);
+    assert.equal(env.labelCalls.length, 0);
+  }
+});
+
+test('a failed label write, 404 retries, and network errors still open the new session', async () => {
+  let env = labelEnv();
+  env.input.value = 'name';
+  env.start.events.click();
+  env.reply(201, { id: 'x2' });
+  env.labelCalls[0].resolve({ status: 500, ok: false });
+  await new Promise(r => setImmediate(r));
+  assert.deepEqual(env.log.at(-1), ['go', '/s/x2']);
+
+  env = labelEnv();
+  env.input.value = 'name';
+  env.start.events.click();
+  env.reply(201, { id: 'x3' });
+  env.c.fetch = () => Promise.reject(new Error('offline'));
+  env.labelCalls[0].resolve({ status: 404, ok: false });
+  await new Promise(r => setTimeout(r, 450));
+  assert.deepEqual(env.log.at(-1), ['go', '/s/x3'], 'a retry that fails still navigates');
+  assert.equal(env.log.filter(e => e[0] === 'go').length, 1);
+});
+
+test('Enter in the label field starts like the button, and is ignored while busy or composing', () => {
+  const env = labelEnv();
+  let prevented = 0;
+  const key = (e = {}) => env.input.events.keydown({ key: 'Enter', preventDefault() { prevented++; }, ...e });
+  key({ isComposing: true });
+  key({ keyCode: 229 });
+  key({ key: 'a' });
+  assert.deepEqual(env.log, []);
+  key();
+  assert.deepEqual(env.log, [['post', '/agents/leads']]);
+  assert.equal(prevented, 1);
+  key();
+  assert.equal(env.log.length, 1, 'a second Enter while busy sends nothing');
 });
 
 test('new session popover rereads the harness choices on every open and keeps the form', () => {

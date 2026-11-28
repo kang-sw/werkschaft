@@ -837,6 +837,8 @@
   "js.lead.iso.default.hint": "內建的 ws/wsflow 取代已安裝的副本；其他外掛保留。",
   "js.lead.iso.isolated": "隔離",
   "js.lead.iso.isolated.hint": "僅載入內建的 ws/wsflow；權限、掛鉤、記憶與 MCP 設定保留。",
+  "js.lead.label.aria": "工作階段標籤",
+  "js.lead.label.placeholder": "工作階段標籤（選填）",
   "js.lead.menu": "由儀表板執行的工作階段",
   "js.lead.menu.note": "變更從下一輪開始生效。",
   "js.lead.mode": "權限模式",

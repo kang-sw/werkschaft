@@ -837,6 +837,8 @@
   "js.lead.iso.default.hint": "The bundled ws/wsflow replace the installed copies; your other plugins stay.",
   "js.lead.iso.isolated": "Isolated",
   "js.lead.iso.isolated.hint": "Only the bundled ws/wsflow load; your permissions, hooks, memory and MCP settings stay.",
+  "js.lead.label.aria": "Session label",
+  "js.lead.label.placeholder": "Session label (optional)",
   "js.lead.menu": "Session the dashboard runs",
   "js.lead.menu.note": "A change applies from the next turn.",
   "js.lead.mode": "Permission mode",

@@ -837,6 +837,8 @@
   "js.lead.iso.default.hint": "번들된 ws/wsflow가 설치된 사본을 대체하며, 다른 플러그인은 그대로 유지됩니다.",
   "js.lead.iso.isolated": "격리",
   "js.lead.iso.isolated.hint": "번들된 ws/wsflow만 로드되며, 권한·훅·메모리·MCP 설정은 유지됩니다.",
+  "js.lead.label.aria": "세션 라벨",
+  "js.lead.label.placeholder": "세션 라벨 (선택)",
   "js.lead.menu": "대시보드가 실행하는 세션",
   "js.lead.menu.note": "변경은 다음 턴부터 적용됩니다.",
   "js.lead.mode": "권한 모드",

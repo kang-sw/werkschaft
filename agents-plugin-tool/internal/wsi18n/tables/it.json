@@ -837,6 +837,8 @@
   "js.lead.iso.default.hint": "Il ws/wsflow incluso sostituisce le copie installate; gli altri plugin restano.",
   "js.lead.iso.isolated": "Isolato",
   "js.lead.iso.isolated.hint": "Viene caricato solo il ws/wsflow incluso; permessi, hook, memoria e impostazioni MCP restano.",
+  "js.lead.label.aria": "Etichetta della sessione",
+  "js.lead.label.placeholder": "Etichetta della sessione (facoltativa)",
   "js.lead.menu": "Sessione eseguita dalla dashboard",
   "js.lead.menu.note": "Una modifica si applica dal turno successivo.",
   "js.lead.mode": "Modalità permessi",

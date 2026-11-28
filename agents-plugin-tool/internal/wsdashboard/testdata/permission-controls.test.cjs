@@ -14,8 +14,12 @@ const vm = require('node:vm');
 const { readAssetSource } = require('./asset-source.cjs');
 
 const source = readAssetSource('wsdashboard', 'dashboard.js');
-const region = source.match(/  var LEAD_MODES = [\s\S]*?\n  function rpLeadMake\(\) \{[\s\S]*?\n  \}\n/);
-assert(region, 'production lead choices, permission helpers and creation popover exist');
+// The choices and permission helpers live in dashboard-leads.js ahead of the
+// session menu; the creation popover maker is dashboard-new-session.js.
+const leadsHead = source.match(/  var LEAD_MODES = [\s\S]*?\n(?=  \/\/ The session menu of the viewed hosted session)/);
+const modalMaker = readAssetSource('wsdashboard', 'dashboard-new-session.js').match(/  var LEAD_DANGER_MODE = [\s\S]*?\n  function rpLeadMake\(\) \{[\s\S]*?\n  \}\n/);
+const region = leadsHead && modalMaker && [leadsHead[0] + modalMaker[0]];
+assert(region,'production lead choices, permission helpers and creation popover exist');
 const sessMaker = source.match(/\n  var leadActions = new Set\(\);\n  function rpSessMake\(inRow\) \{[\s\S]*?\n  \}\n/);
 assert(sessMaker, 'production session menu maker exists');
 const gone = source.match(/\n  function leadGone\(st\) \{.*\}\n/);
