@@ -1302,15 +1302,16 @@ html[data-mode="live"][data-sysopen] .exec-view-out[hidden] { display: none; }
 .ucmd-req-tool-pill { margin-left: auto; font-family: var(--wb-mono); font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--wb-fg) 8%, transparent); color: var(--wb-primary); }
 
 /* conv-reveal #entry=<key> flash highlight and not-found notice */
-.conv-entry-flash { position: relative; border-radius: 8px; box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-primary) 72%, transparent); background: color-mix(in srgb, var(--wb-primary) 13%, transparent); animation: conv-entry-flash 1.8s ease-out; }
+.conv-entry-flash { position: relative; border-radius: 8px; }
+.conv-entry-flash::after { content: ""; position: absolute; inset: -2px; border-radius: inherit; pointer-events: none; background: color-mix(in srgb, var(--wb-primary) 18%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-primary) 75%, transparent); animation: conv-entry-flash 1.8s ease-out forwards; opacity: 0; }
 @keyframes conv-entry-flash {
-  0% { box-shadow: 0 0 0 3px var(--wb-primary); background: color-mix(in srgb, var(--wb-primary) 24%, transparent); }
-  70% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-primary) 62%, transparent); background: color-mix(in srgb, var(--wb-primary) 14%, transparent); }
-  100% { box-shadow: 0 0 0 0 transparent; background: transparent; }
+  0% { opacity: 1; }
+  70% { opacity: .68; }
+  100% { opacity: 0; }
 }
 .conv-entry-notice-wrap { position: sticky; top: 8px; height: 0; z-index: 6; display: flex; justify-content: center; pointer-events: none; }
 .conv-entry-notice { pointer-events: auto; align-self: flex-start; padding: 5px 12px; border-radius: 999px; background: var(--wb-card); color: var(--wb-muted-fg); font: 600 12px/1.3 var(--wb-sans); box-shadow: var(--wb-shadow-hi), inset 0 0 0 1px var(--wb-line); white-space: nowrap; }
 .conv-entry-notice[hidden] { display: none; }
 @media (prefers-reduced-motion: reduce) {
-  .conv-entry-flash { animation: none; }
+  .conv-entry-flash::after { animation: none; opacity: .7; }
 }

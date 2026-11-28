@@ -787,11 +787,24 @@
       if (P.busy || !st || !st.lead || st.is_child) return;
       act("settings", { conv_history_access: !st.conv_history_access });
     });
-    convStopNow.addEventListener("click", function () {
-      var st = state();
-      if (P.busy || !st || !st.process || !st.can_control || leadGone(st)) return;
-      act("stop", {});
-    });
+    var convStopHold = window.WsHoldConfirm
+      ? window.WsHoldConfirm.attach(convStopNow, {
+          mode: "bar",
+          shouldHold: function () { return !canClickStop(state()); },
+          canStart: function () { return canActOn(convStopNow, function (st) { return !!st.process; }); },
+          onCancel: function () { if (typeof railRelease === "function") railRelease(); },
+          onConfirm: function (el, held) {
+            if (!canActOn(convStopNow, function (st) { return !!st.process; })) return;
+            if (held) railPopClose(false);
+            act("stop", held ? {} : { safe_only: true });
+            if (typeof railRelease === "function") railRelease();
+          }
+        })
+      : (convStopNow.addEventListener("click", function () {
+          if (!canActOn(convStopNow, function (st) { return !!st.process; })) return;
+          var safe = canClickStop(state());
+          act("stop", safe ? { safe_only: true } : {});
+        }), { sync: function () {}, cancel: function () {} });
     restart.b.addEventListener("click", function () {
       var n = bgTasks();
       confirmAction("restart", restart.b, n > 0 ? wsTn("js.lead.restart.confirm", n) : "", n);
@@ -813,6 +826,7 @@
       rows.set(String(st.backend || ""), { model: String(st.model || ""), provider: String(st.provider || ""), effort: String(st.effort || ""), mode: String(st.permission_mode || ""), active: st.process ? String(st.active_mode || "") : "" });
       permDraw(st);
       rows.disable(P.busy);
+      var safeStop = canClickStop(st);
       var isLead = !!st.lead && !st.is_child;
       convSec.hidden = !isLead;
       if (isLead) {
@@ -823,11 +837,19 @@
         var needRestart = !!st.process && convCur !== convEff;
         convRestart.hidden = !needRestart;
         convStopNow.disabled = P.busy || !st.process;
+        var convStopSig = (needRestart ? "1" : "0") + ":" + (safeStop ? "1" : "0");
+        if (convStopNow.getAttribute("data-stop-sig") !== convStopSig) {
+          convStopNow.setAttribute("data-stop-sig", convStopSig);
+          convStopNow.setAttribute("data-safe", safeStop ? "1" : "0");
+          convStopNow.title = safeStop ? wsT("js.lead.conv_history.stop_now") : holdHintNote(wsT("js.lead.conv_history.stop_now"));
+          convStopHold.sync();
+        }
+        if (convStopNow.disabled || convRestart.hidden) convStopHold.cancel();
       } else {
         convRestart.hidden = true;
+        convStopHold.cancel();
       }
       stop.b.disabled = P.busy || !st.process;
-      var safeStop = canClickStop(st);
       var stopSig = (st.process ? "1" : "0") + ":" + (safeStop ? "1" : "0");
       if (stop.b.getAttribute("data-stop-sig") !== stopSig) {
         stop.b.setAttribute("data-stop-sig", stopSig);

@@ -953,7 +953,7 @@ button.bgbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-o
 .rpop .spconv-restart { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 8px; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--wb-warn) 16%, var(--wb-card)); color: color-mix(in srgb, var(--wb-warn-ink) 88%, var(--wb-fg)); font-size: 11.5px; }
 .rpop .spconv-restart[hidden] { display: none; }
 .rpop .spconv-rtxt { font-weight: 600; flex: 1 1 auto; min-width: 0; }
-.rpop .spconv-stop { flex: none; border: 0; border-radius: 999px; padding: 3px 9px; background: var(--wb-card); color: var(--wb-fail); font: 700 11px/1.3 var(--wb-sans); cursor: pointer; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-fail) 42%, transparent); }
+.rpop .spconv-stop { position: relative; overflow: hidden; flex: none; border: 0; border-radius: 999px; padding: 3px 9px; background: var(--wb-card); color: var(--wb-fail); font: 700 11px/1.3 var(--wb-sans); cursor: pointer; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-fail) 42%, transparent); }
 .rpop .spconv-stop:hover:not(:disabled) { background: color-mix(in srgb, var(--wb-fail) 14%, var(--wb-card)); }
 .rpop .spconv-stop:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: 1px; }
 .rpop .spconv-stop:disabled { opacity: .45; cursor: not-allowed; }
@@ -962,7 +962,7 @@ button.bgbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-o
 .rail .rs.conv-reveal-pulse::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: color-mix(in srgb, var(--wb-primary) 22%, transparent); pointer-events: none; animation: conv-reveal-pulse 1.3s ease-in-out 3; opacity: 0; }
 @keyframes conv-reveal-pulse { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
 .rail .conv-reveal-jump { position: relative; z-index: 2; flex: none; display: inline-flex; align-items: center; padding: 1px 7px; margin-left: 4px; border-radius: 999px; background: var(--wb-primary); color: var(--wb-primary-fg); font: 700 10.5px/16px var(--wb-sans); text-decoration: none; white-space: nowrap; }
-.rail .conv-reveal-jump:hover { filter: brightness(1.08); }
+.rail .conv-reveal-jump:hover { opacity: .9; }
 .rail .conv-reveal-jump:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 1px; }
 @media (prefers-reduced-motion: reduce) {
   .rail, .rail-open .rail, .rscrim { transition: none; }

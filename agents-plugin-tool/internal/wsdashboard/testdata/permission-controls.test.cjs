@@ -558,17 +558,42 @@ const rowsOf = m => m.state.children.map(n => n.textContent);
   assert.equal(w.posts.length, 1);
   assert.equal(w.posts[0].route, '/agents/s1/settings');
   assert.deepEqual(w.posts[0].body, { conv_history_access: true });
-  w.posts[0].done(200, { ...base, process: true, conv_history_access: true, conv_history_access_effective: false }, '');
+  w.posts[0].done(200, { ...base, process: true, safe_stop: true, conv_history_access: true, conv_history_access_effective: false }, '');
   assert.equal(convSw.getAttribute('aria-checked'), 'true');
   assert.equal(shown(banner), true, 'running mismatch reveals restart-needed banner');
   assert.equal(stopNow.disabled, false);
-  // Stop now button posts /agents/s1/stop.
+  assert.equal(stopNow.getAttribute('data-safe'), '1');
+  // Stop now button on safe_stop:true posts { safe_only: true } to /agents/s1/stop.
   stopNow.click();
   assert.equal(w.posts.length, 2);
   assert.equal(w.posts[1].route, '/agents/s1/stop');
-  assert.deepEqual(w.posts[1].body, {});
+  assert.deepEqual(w.posts[1].body, { safe_only: true });
   w.posts[1].done(200, { ...base, process: false, conv_history_access: true, conv_history_access_effective: true }, '');
   assert.equal(shown(banner), false, 'stopped session hides restart-needed banner');
+
+  // With WsHoldConfirm attached, safe_stop:false requires hold-to-confirm (no plain click stop)
+  // and posts {} (force stop) when held confirmation completes.
+  const wh = world();
+  const attached = [];
+  wh.ctx.window.WsHoldConfirm = {
+    attach(el, opts) {
+      attached.push({ el, opts });
+      return { sync() {}, cancel() {} };
+    }
+  };
+  const mh = menu(wh, { ...base, process: true, safe_stop: false, background_tasks: 2, conv_history_access: true, conv_history_access_effective: false });
+  const stopNowHeld = mh.p.el.find(n => n.getAttribute('data-conv-stop-now') === '1');
+  const rec = attached.find(x => x.el === stopNowHeld);
+  assert.ok(rec, 'convStopNow attaches WsHoldConfirm');
+  assert.equal(rec.opts.mode, 'bar');
+  assert.equal(rec.opts.shouldHold(), true, 'unsafe stop requires 1.5s hold');
+  assert.equal(stopNowHeld.getAttribute('data-safe'), '0');
+  stopNowHeld.click();
+  assert.equal(wh.posts.length, 0, 'single click does not stop when safe_stop is false');
+  rec.opts.onConfirm(stopNowHeld, true);
+  assert.equal(wh.posts.length, 1);
+  assert.equal(wh.posts[0].route, '/agents/s1/stop');
+  assert.deepEqual(wh.posts[0].body, {}, 'held confirmation posts force stop');
 
   // Stopped process with mismatched effective flag still hides banner.
   const w2 = world();

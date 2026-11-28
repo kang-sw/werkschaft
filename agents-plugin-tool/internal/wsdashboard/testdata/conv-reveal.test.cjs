@@ -312,3 +312,42 @@ test('entryJumpTo stops at 5 pages, shows not-found notice, and preserves visual
   assert.equal(env.convo.scrollHeight - env.convo.scrollTop, beforeFromBottom, 'visual scroll position unchanged');
   assert.equal(env.ctx.stick, true, 'stick untouched when not found');
 });
+
+test('entryJumpTo flushes wbFoldSync synchronously for paginated replies and matches partial-window clones by entry key', async () => {
+  let foldCalls = 0;
+  const env = makeConvEnv({
+    e50: { html: ['e40', 'e41'], before: 'e40', end: false }
+  });
+  // Simulate wbOnlyOn() active: turn drawer declares ["e_missing", "e41"] where
+  // only e41 exists in the partial DOM window; wbFoldSync folds e41 on demand.
+  const turn = new El('details', 'd-turn');
+  turn.setAttribute('data-conv-turn', '1');
+  turn.setAttribute('data-replies', 'e_missing e41');
+  const drawer = turn.appendChild(new El('div', 'd-turn-drawer'));
+  drawer.setAttribute('data-conv-turn-drawer', '1');
+  env.box.appendChild(turn);
+
+  let cloned = null;
+  env.ctx.wbOnlyOn = () => true;
+  env.ctx.wbFoldSync = () => {
+    foldCalls++;
+    const orig = env.box.querySelector('[data-entry="e41"]');
+    if (orig && orig.getAttribute('data-wb-folded') !== '1') {
+      orig.setAttribute('data-wb-folded', '1');
+      cloned = new El('div', 'msg fromlead', 'e41');
+      cloned.setAttribute('data-wb-clone', '1');
+      cloned.setAttribute('data-wb-clone-entry', 'e41');
+      drawer.appendChild(cloned);
+    }
+  };
+
+  const ok = await env.ctx.api.entryJumpFromHash('#entry=e41');
+  assert.equal(ok, true);
+  assert.equal(foldCalls, 1, 'wbFoldSync flushed synchronously before revealing target');
+  assert.equal(turn.open, true, 'turn drawer opened for newly paginated folded reply');
+  assert.ok(cloned, 'clone created for e41');
+  assert.equal(cloned.classList.contains('conv-entry-flash'), true, 'exact data-wb-clone-entry clone highlighted');
+  assert.equal(cloned.scrolled.length, 1, 'clone scrolled into view');
+  const orig = env.box.querySelector('[data-entry="e41"]');
+  assert.equal(orig.classList.contains('conv-entry-flash'), false, 'hidden original not flashed');
+});

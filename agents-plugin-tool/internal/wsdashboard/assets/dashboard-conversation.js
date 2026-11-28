@@ -574,7 +574,11 @@
         if (idx >= 0) {
           turns[i].open = true;
           var clones = turns[i].querySelectorAll("[data-wb-clone]");
-          target = clones[idx] || clones[0] || turns[i];
+          var exact = null;
+          for (var c = 0; c < clones.length; c++) {
+            if (clones[c].getAttribute && clones[c].getAttribute("data-wb-clone-entry") === key) { exact = clones[c]; break; }
+          }
+          target = exact || clones[idx] || clones[0] || turns[i];
           break;
         }
       }
@@ -609,6 +613,9 @@
     var pages = 0;
     function finishFound(box, el) {
       if (epoch !== entryJumpEpoch) return false;
+      // Flush any pending async whiteboard-only fold before revealing/flashing
+      // so newly paginated replies are already cloned into their turn drawer.
+      if (typeof wbOnlyOn === "function" && wbOnlyOn() && typeof wbFoldSync === "function") wbFoldSync();
       var target = entryJumpRevealTarget(box, el, key);
       stick = false;
       if (typeof queueSyncConvoBottom === "function") queueSyncConvoBottom();

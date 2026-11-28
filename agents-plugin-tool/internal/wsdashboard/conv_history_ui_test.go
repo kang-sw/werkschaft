@@ -29,6 +29,7 @@ type convUIAgentCall struct {
 type convUIFakeAgents struct {
 	mu            sync.Mutex
 	running       bool
+	safeStop      bool
 	convAccess    bool
 	convEffective bool
 	calls         []convUIAgentCall
@@ -54,6 +55,7 @@ func (a *convUIFakeAgents) stateJSON() map[string]any {
 		"can_control":                   true,
 		"status":                        "idle",
 		"process":                       a.running,
+		"safe_stop":                     a.safeStop,
 		"conv_history_access":           a.convAccess,
 		"conv_history_access_effective": a.convEffective,
 	}
@@ -77,7 +79,9 @@ func (a *convUIFakeAgents) Handler() http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(a.stateJSON())
 		case r.Method == http.MethodPost && r.URL.Path == "/agents/leadsess/stop":
-			a.calls = append(a.calls, convUIAgentCall{Method: r.Method, Path: r.URL.Path})
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			a.calls = append(a.calls, convUIAgentCall{Method: r.Method, Path: r.URL.Path, Body: body})
 			a.running = false
 			a.convEffective = a.convAccess
 			w.Header().Set("Content-Type", "application/json")
@@ -92,6 +96,7 @@ func (a *convUIFakeAgents) reset() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.running = true
+	a.safeStop = true
 	a.convAccess = false
 	a.convEffective = false
 	a.calls = nil
@@ -138,7 +143,7 @@ func TestConvHistoryUIBrowser(t *testing.T) {
 	t.Setenv("WS_CONFIG_HOME", t.TempDir())
 	SetDevAssets(nil)
 
-	agents := &convUIFakeAgents{running: true}
+	agents := &convUIFakeAgents{running: true, safeStop: true}
 	f := startPageFixture(t, func(o *DaemonOptions) {
 		o.Port = 0
 		o.LAN = false

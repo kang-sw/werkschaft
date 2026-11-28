@@ -131,6 +131,7 @@
           var copy = reply.cloneNode(true);
           copy.removeAttribute("data-entry");
           copy.setAttribute("data-wb-clone", "1");
+          copy.setAttribute("data-wb-clone-entry", reply.getAttribute("data-entry") || "");
           drawer.appendChild(copy);
           clones.push(copy);
           reply.setAttribute("data-wb-folded", "1");

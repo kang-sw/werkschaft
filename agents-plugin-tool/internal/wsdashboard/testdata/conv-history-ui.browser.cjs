@@ -74,12 +74,13 @@ async function getJSON(url) {
       assert.deepEqual(calls, [{ method: 'POST', path: '/agents/leadsess/settings', body: { conv_history_access: true } }],
         `${theme}: toggle posts only plain /settings without stopping`);
 
-      // Click Stop now -> /agents/leadsess/stop, restart banner clears.
+      // Click Stop now -> /agents/leadsess/stop with safe_only:true, restart banner clears.
       await stopNow.click();
       await banner.waitFor({ state: 'hidden', timeout: 10000 });
       calls = await getJSON(ctrlUrl + '/calls');
       assert.equal(calls.length, 2);
       assert.equal(calls[1].path, '/agents/leadsess/stop', `${theme}: Stop now posts /stop`);
+      assert.deepEqual(calls[1].body, { safe_only: true }, `${theme}: idle Stop now sends safe_only:true`);
 
       // Close popover before moving to conv-reveal tests.
       await page.keyboard.press('Escape');
