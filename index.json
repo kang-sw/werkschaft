@@ -510,7 +510,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-28T01:59:18Z"
+        "touched_at": "2026-11-28T02:04:01Z",
+        "impl": {
+          "branch": "impl/develop/rogue-wing-shank"
+        }
       }
     },
     "261128-feat-ws-companion-soul-memory-and-pacing": {
