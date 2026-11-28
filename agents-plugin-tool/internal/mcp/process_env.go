@@ -76,6 +76,9 @@ type ServerOptions struct {
 	// phone messenger host. When nil and Live implements CompanionHost,
 	// NewServerWithOptions binds Live automatically.
 	Companion CompanionHost
+	// CompanionDelegation bridges ws/companion.delegate_work and
+	// ws/delegation.report to the daemon's in-memory delegation runtime.
+	CompanionDelegation CompanionDelegationHost
 	// EphemeralPool is the dashboard daemon's shared lightweight ephemeral
 	// harness pool used by opt-in dynamic tier routing on agent.spawn. Nil
 	// leaves dynamic tier routing inert (static fallback).
@@ -252,6 +255,7 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 			s.companion = host
 		}
 	}
+	s.companionDelegation = opts.CompanionDelegation
 	s.ephemeralPool = opts.EphemeralPool
 	s.exec, s.conversation = opts.Exec, opts.Conversation
 	s.cron = opts.Cron

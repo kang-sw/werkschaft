@@ -44,6 +44,7 @@ type ReplyEntry struct {
 	LastSeen string             `json:"last_seen"`
 	Harness  string             `json:"harness,omitempty"`
 	Cwd      string             `json:"cwd,omitempty"`
+	Hidden   bool               `json:"hidden,omitempty"`
 	Contacts map[string]Contact `json:"contacts,omitempty"`
 }
 
