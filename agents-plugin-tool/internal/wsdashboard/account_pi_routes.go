@@ -218,6 +218,17 @@ func (d *Daemon) handleAccountPiRuntimeInstall(w http.ResponseWriter, r *http.Re
 	c.progress = &piRuntimeProgressView{Phase: "verify_manifest"}
 	c.mu.Unlock()
 
+	if d.piLogin.isRunning() {
+		c.mu.Lock()
+		cancel()
+		c.cancel = nil
+		c.installing = false
+		c.progress = nil
+		c.mu.Unlock()
+		accountError(w, http.StatusConflict, "runtime_busy")
+		return
+	}
+
 	d.accountChanged()
 
 	go func() {
@@ -303,6 +314,14 @@ func (d *Daemon) handleAccountPiRuntimeUninstall(w http.ResponseWriter, r *http.
 	}
 	c.uninstalling = true
 	c.mu.Unlock()
+
+	if d.piLogin.isRunning() {
+		c.mu.Lock()
+		c.uninstalling = false
+		c.mu.Unlock()
+		accountError(w, http.StatusConflict, "runtime_busy")
+		return
+	}
 
 	err := d.piRuntime.Uninstall(r.Context())
 

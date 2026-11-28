@@ -426,6 +426,10 @@
 
     function pollExitOutcome(cur, triesLeft) {
       if (!cur || cur.closed) return;
+      if (cur.statusPollTimer !== null) {
+        window.clearTimeout(cur.statusPollTimer);
+        cur.statusPollTimer = null;
+      }
       cur.statusPollTimer = window.setTimeout(async () => {
         cur.statusPollTimer = null;
         if (cur.closed) return;

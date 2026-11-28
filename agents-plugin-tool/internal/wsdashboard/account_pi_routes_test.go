@@ -567,6 +567,10 @@ for line in sys.stdin:
 	if codeRem != http.StatusConflict || !strings.Contains(bodyRem, "login_in_progress") {
 		t.Fatalf("remove busy slot = %d (%s), want 409 login_in_progress", codeRem, bodyRem)
 	}
+	codeInst, bodyInst := piLoginHTTPDo(t, f, http.MethodPost, accountPrefix+"pi/runtime/install", `{}`)
+	if codeInst != http.StatusConflict || !strings.Contains(bodyInst, "runtime_busy") {
+		t.Fatalf("install during active login = %d (%s), want 409 runtime_busy", codeInst, bodyInst)
+	}
 	code, body = piLoginHTTPDo(t, f, http.MethodPost, accountPrefix+"pi/login/cancel", `{"attempt":"`+existAtt.Attempt+`"}`)
 	if code != http.StatusOK {
 		t.Fatalf("cancel existing re-auth = %d (%s)", code, body)
