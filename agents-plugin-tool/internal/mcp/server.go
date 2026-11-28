@@ -63,6 +63,7 @@ type Server struct {
 	tracker trackerLink
 	// agents is the dashboard daemon's runner.
 	agents          AgentHost
+	companion       CompanionHost
 	ephemeralPool   *wsagent.EphemeralPool
 	stopWorkerWatch func()
 	workerRowKeys   struct {

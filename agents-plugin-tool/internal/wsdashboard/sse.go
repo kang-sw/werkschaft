@@ -645,6 +645,22 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 			commandSeq = seq
 			return sink.event(companionCommandEvent, payload) == nil && sink.flush() == nil
 		}
+		var phoneWake <-chan struct{}
+		var phoneSeq uint64
+		sendPhone := func() bool {
+			seq, payload, wake := d.companionPhone.Current()
+			phoneWake = wake
+			if payload == nil {
+				return true
+			}
+			phoneSeq = seq
+			return sink.event(companionPhoneEvent, payload) == nil && sink.flush() == nil
+		}
+		if src.key.kind == regionRail {
+			if !sendPhone() {
+				return
+			}
+		}
 		send := func(pr pageRender, at uint64) bool {
 			d.broker.follow(sub, pr.deps, at)
 			if pr.err != nil {
@@ -744,6 +760,16 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 			case <-commandWake:
 				if !sendCommand() {
 					return
+				}
+				continue
+			case <-phoneWake:
+				seq, payload, wake := d.companionPhone.Current()
+				phoneWake = wake
+				if seq != phoneSeq && payload != nil {
+					phoneSeq = seq
+					if sink.event(companionPhoneEvent, payload) != nil || sink.flush() != nil {
+						return
+					}
 				}
 				continue
 			case <-keepAlive.C:

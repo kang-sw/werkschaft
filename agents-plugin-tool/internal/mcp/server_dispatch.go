@@ -111,11 +111,15 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	// regardless of which case below built it. See mailbox_tools.go.
 	// The adapter-only intake and inbox drain are no model-facing replies, so
 	// they carry no badge and cost no mailbox read on their call rate.
-	if keyStr, ok := params.Arguments["session_key"].(string); ok && params.Name != dashboardIntakeTool && params.Name != dashboardInboxDrainTool {
+	if params.Name != dashboardIntakeTool && params.Name != dashboardInboxDrainTool {
 		// Discovery output must stay compact JSON or one name per line.
 		jsonFormat := schemaOnly || params.Name == "call" || wantsJSON(params.Arguments)
+		keyStr, _ := params.Arguments["session_key"].(string)
 		defer func() {
-			resp = s.applyMailboxPiggyback(resp, keyStr, jsonFormat)
+			if keyStr != "" {
+				resp = s.applyMailboxPiggyback(resp, keyStr, jsonFormat)
+			}
+			resp = s.applyCompanionPhonePiggyback(resp, params.Name, jsonFormat)
 		}()
 	}
 	s.observeHarness("tools.call.meta", detectHarnessFromMeta(params.Meta))
@@ -224,6 +228,9 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	// Central argument precheck: refuse a call that misses a required
 	// property or carries an undeclared top-level argument before any handler
 	// runs, naming every problem and the tool's own schema at once.
+	if refusal := s.companionPostureRefusal(params.Name, callerKey); refusal != "" {
+		return toolErrorTextResponse(req.ID, refusal)
+	}
 	if refusal, ok := s.precheckToolArguments(params.Name, params.Arguments); !ok {
 		return toolErrorTextResponse(req.ID, refusal)
 	}
@@ -1689,6 +1696,9 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		return s.handleCompact(ctx, req.ID, params.Arguments)
 	case "agent.spawn", "agent.interrupt", "agent.list", "agent.tiers":
 		return s.handleAgentTool(ctx, req.ID, params.Name, params.Arguments)
+	case companionSpeakTool, companionFaceTool, companionMotionTool,
+		companionPhonePickupTool, companionPhoneReadTool, companionPhoneSendTool, companionPhonePutdownTool:
+		return s.handleCompanionTool(req.ID, params.Name, params.Arguments)
 	case "mailbox.send":
 		return s.handleMailboxSend(req.ID, params.Arguments)
 	case "mailbox.recv":

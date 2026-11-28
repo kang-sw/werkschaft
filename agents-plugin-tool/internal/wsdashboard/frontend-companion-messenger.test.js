@@ -1,0 +1,555 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const test = require("node:test");
+const vm = require("node:vm");
+
+function makeFakeElement(tag, doc) {
+  const el = {
+    tagName: tag.toUpperCase(),
+    className: "",
+    id: "",
+    title: "",
+    textContent: "",
+    value: "",
+    type: "",
+    rows: 1,
+    scrollHeight: 28,
+    scrollTop: 0,
+    clientHeight: 300,
+    disabled: false,
+    hidden: false,
+    open: false,
+    tabIndex: 0,
+    width: 0,
+    height: 0,
+    offsetWidth: 160,
+    offsetHeight: 32,
+    children: [],
+    dataset: {},
+    attrs: {},
+    listeners: {},
+    classList: {
+      add(...names) {
+        const cur = new Set(el.className.split(/\s+/).filter(Boolean));
+        names.forEach(n => n && cur.add(n));
+        el.className = [...cur].join(" ");
+      },
+      remove(...names) {
+        const cur = new Set(el.className.split(/\s+/).filter(Boolean));
+        names.forEach(n => cur.delete(n));
+        el.className = [...cur].join(" ");
+      },
+      contains(n) { return el.className.split(/\s+/).includes(n); }
+    },
+    ownerDocument: doc,
+    style: {
+      setProperty(k, v) { this[k] = v; },
+      getPropertyValue(k) { return this[k] || ""; },
+      removeProperty(k) { delete this[k]; }
+    },
+    setAttribute(k, v) {
+      this.attrs[k] = String(v);
+      if (k.startsWith("data-")) {
+        const key = k.slice(5).replace(/-([a-z])/g, (_, ch) => ch.toUpperCase());
+        this.dataset[key] = String(v);
+      }
+    },
+    getAttribute(k) { return this.attrs[k] ?? null; },
+    hasAttribute(k) { return Object.hasOwn(this.attrs, k); },
+    removeAttribute(k) {
+      delete this.attrs[k];
+      if (k.startsWith("data-")) {
+        const key = k.slice(5).replace(/-([a-z])/g, (_, ch) => ch.toUpperCase());
+        delete this.dataset[key];
+      }
+    },
+    addEventListener(type, fn, opts) {
+      (this.listeners[type] ||= []).push(fn);
+      if (opts && opts.signal) {
+        opts.signal.addEventListener("abort", () => {
+          this.listeners[type] = (this.listeners[type] || []).filter(f => f !== fn);
+        });
+      }
+    },
+    dispatchEvent(event) {
+      for (const fn of [...(this.listeners[event.type] || [])]) fn(event);
+    },
+    append(...items) { this.children.push(...items); },
+    prepend(...items) { this.children.unshift(...items); },
+    insertBefore(item) { this.children.push(item); },
+    replaceChildren(...items) { this.children = [...items]; },
+    remove() { this.removed = true; },
+    setPointerCapture() {},
+    getContext(kind) {
+      if (kind !== "2d") return null;
+      return {
+        canvas: this,
+        clearRect() {},
+        drawImage() {},
+        setTransform() {},
+        save() {},
+        restore() {},
+        translate() {},
+        rotate() {},
+        beginPath() {},
+        closePath() {},
+        moveTo() {},
+        lineTo() {},
+        arc() {},
+        ellipse() {},
+        quadraticCurveTo() {},
+        stroke() {},
+        fill() {},
+        fillText() {},
+        measureText: txt => ({ width: String(txt || "").length * 7 }),
+        getImageData: () => ({ data: [] })
+      };
+    },
+    getBoundingClientRect() {
+      return { left: 12, top: 720, right: 352, bottom: 960, width: 340, height: 240 };
+    },
+    all() {
+      return this.children.flatMap(child => [child, ...(child && typeof child.all === "function" ? child.all() : [])]);
+    },
+    contains(other) { return other === this || this.all().includes(other); },
+    querySelector(sel) {
+      if (sel.startsWith("#")) return this.all().find(n => n.id === sel.slice(1)) || null;
+      if (sel.startsWith(".")) return this.all().find(n => (n.className || "").split(/\s+/).includes(sel.slice(1))) || null;
+      return null;
+    },
+    querySelectorAll() { return []; },
+    focus() { this.focused = true; }
+  };
+  return el;
+}
+
+function loadCompanionWithMessenger(globals = {}) {
+  const win = {
+    innerWidth: 1680,
+    innerHeight: 960,
+    devicePixelRatio: 2,
+    addEventListener() {},
+    ...(globals.window || {})
+  };
+  const context = vm.createContext({
+    window: win,
+    URLSearchParams,
+    AbortController,
+    setTimeout,
+    clearTimeout,
+    performance: { now: () => 0 },
+    ...globals,
+    window: win
+  });
+  // Keep globalThis aliases consistent with browser window.
+  context.globalThis = context;
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-colead", "vrm", "stage", "messenger"]) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
+  }
+  return { C: context.window.WsCompanion, M: context.window.WsCompanionMessenger, context };
+}
+
+test("Step 4 Phase 1: cosmetic glass knock transitions (awake startle, 3+ rapid annoyed_tap, sleepy wakeup_jolt)", () => {
+  const { C } = loadCompanionWithMessenger();
+  const co = C.createVrmCoLead({});
+
+  // 1. Single knock while awake -> knock_startle.
+  const k1 = co.triggerKnock({ nowMs: 1000, sleepy: false });
+  assert.equal(k1.kind, "knock_startle");
+  assert.equal(k1.wokeFromSleepy, false);
+  const st1 = co.step({ dt: 0.05, elapsed: 1.05, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+  assert.equal(st1.mode, "knock-startle");
+  assert.equal(st1.actionFxKind, "knock-startle");
+  assert.ok(st1.exprOverlay && st1.exprOverlay.surprised > 0.8);
+
+  // 2. Two more rapid knocks within 4s window -> 3rd triggers playful annoyed_tap.
+  const k2 = co.triggerKnock({ nowMs: 1400, sleepy: false });
+  assert.equal(k2.kind, "knock_startle");
+  const k3 = co.triggerKnock({ nowMs: 1800, sleepy: false });
+  assert.equal(k3.kind, "annoyed_tap");
+  assert.equal(k3.wokeFromSleepy, false);
+  const st3 = co.step({ dt: 0.05, elapsed: 1.85, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+  assert.equal(st3.mode, "annoyed-tap");
+  assert.equal(st3.actionFxKind, "annoyed-tap");
+  assert.ok(st3.exprOverlay && st3.exprOverlay.angry > 0.5);
+
+  // 3. Sleepy knock -> crisp wakeup_jolt & clears sleepy weight.
+  co.setCoLeadBeat("sleepy");
+  const kSleep = co.triggerKnock({ nowMs: 7000, sleepy: true });
+  assert.equal(kSleep.kind, "wakeup_jolt");
+  assert.equal(kSleep.wokeFromSleepy, true);
+  assert.equal(co.getCoLeadState().overrideBeat, "auto", "wakeup knock must exit sleepy beat");
+  const stWake = co.step({ dt: 0.05, elapsed: 7.05, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+  assert.equal(stWake.mode, "wakeup-jolt");
+  assert.equal(stWake.actionFxKind, "wakeup-jolt");
+  assert.ok(stWake.exprOverlay && stWake.exprOverlay.surprised > 0.9);
+
+  // Verify drawActionFx renders non-empty canvas operations for all Step 4 cues.
+  let fills = 0, strokes = 0, texts = 0;
+  const fakeCtx = {
+    save() {}, restore() {}, translate() {}, rotate() {}, beginPath() {}, closePath() {},
+    moveTo() {}, lineTo() {}, arc() {}, quadraticCurveTo() {},
+    fill() { fills++; },
+    stroke() { strokes++; },
+    fillText() { texts++; },
+    measureText: txt => ({ width: String(txt || "").length * 7 })
+  };
+  for (const kind of ["knock-startle", "wakeup-jolt", "annoyed-tap", "phone-buzz", "phone-facedown-merong"]) {
+    const before = fills + strokes + texts;
+    C.vrmDizzyFx.drawActionFx(fakeCtx, { width: 340, height: 240, headX: 170, headY: 96, headRadius: 42, crownY: 42, kind, alpha: 1, time: 0.5 });
+    assert.ok(fills + strokes + texts > before, `drawActionFx(${kind}) must draw visible vector & badge FX`);
+  }
+  co.dispose();
+});
+
+test("Step 4 Phase 1: 3D desk smartphone posture choreography (buzz -> pickup -> typing -> normal putdown & facedown_merong)", () => {
+  const { C } = loadCompanionWithMessenger();
+  const co = C.createVrmCoLead({});
+
+  // Initial desk state.
+  assert.equal(co.getCoLeadState().phonePose, "desk");
+  assert.equal(co.getCoLeadState().phoneFaceDown, false);
+
+  // 1. Incoming user message -> phone_buzz.
+  co.setPhoneState({ state: "laptop_ambient", posture: "laptop", unreadAgent: 1, phoneFaceDown: false });
+  let t = 0.05;
+  let out = co.step({ dt: 0.05, elapsed: t, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+  assert.equal(out.phonePose, "buzz");
+  assert.equal(out.actionFxKind, "phone-buzz");
+  assert.ok(co.getCoLeadState().phoneScreenGlow > 0.25, "buzzing phone screen must brighten");
+
+  // 2. Companion picks up phone -> phone_active / held posture.
+  co.setPhoneState({ state: "phone_active", posture: "phone", unreadAgent: 0, phoneFaceDown: false });
+  for (let i = 0; i < 16; i++) {
+    t += 0.05;
+    out = co.step({ dt: 0.05, elapsed: t, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+  }
+  assert.equal(out.phonePose, "held");
+  assert.equal(out.phoneFaceDown, false);
+  // Verify phone-side arm raises cleanly from lowered resting pose.
+  assert.ok(out.boneTargets.leftUpperArm[2] > -1.05, `phone-side arm should raise cleanly (got z=${out.boneTargets.leftUpperArm[2]})`);
+  assert.ok(out.boneTargets.leftLowerArm[1] < -1.15, `phone-side forearm should flex toward chest (got y=${out.boneTargets.leftLowerArm[1]})`);
+
+  // 3. Normal putdown -> returns smoothly to desk face-up.
+  co.setPhoneState({ state: "laptop_ambient", posture: "laptop", unreadAgent: 0, phoneFaceDown: false });
+  for (let i = 0; i < 24; i++) {
+    t += 0.05;
+    out = co.step({ dt: 0.05, elapsed: t, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+  }
+  assert.equal(out.phonePose, "desk");
+  assert.equal(out.phoneFaceDown, false);
+
+  // 4. Cheeky facedown_merong putdown -> wink/merong overlay + phoneFaceDown persisted!
+  co.triggerGesture("phone_merong_facedown");
+  t += 0.05;
+  out = co.step({ dt: 0.05, elapsed: t, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+  assert.equal(out.mode, "phone-facedown-merong");
+  assert.equal(out.actionFxKind, "phone-facedown-merong");
+  assert.ok(out.exprOverlay && out.exprOverlay.wink > 0.9 && out.exprOverlay.merong > 0.8);
+  for (let i = 0; i < 40; i++) {
+    t += 0.05;
+    out = co.step({ dt: 0.05, elapsed: t, expression: "idle", rawPose: "stand", gazeX: 0, gazeY: 0, hover: false });
+  }
+  assert.equal(out.phoneFaceDown, true, "facedown_merong must leave smartphone face-down on desk");
+  assert.equal(out.phonePose, "facedown");
+  co.dispose();
+});
+
+test("Step 4 Phase 1: direct VRM click performs cosmetic glass knock and NEVER opens messenger; #companion-chat-btn toggles messenger", async () => {
+  let now = 0, raf = null, rafId = 0;
+  const docListeners = {}, winListeners = {};
+  const doc = {
+    hidden: false,
+    documentElement: { dataset: { rid: "s1" }, classList: { contains: () => false }, hasAttribute: () => true },
+    body: null,
+    getElementById: id => id === "rail" ? railEl : null,
+    createElement: tag => makeFakeElement(tag, doc),
+    createElementNS: (_ns, tag) => makeFakeElement(tag, doc),
+    addEventListener: (type, fn) => { (docListeners[type] ||= []).push(fn); }
+  };
+  doc.body = makeFakeElement("body", doc);
+  const slotEl = makeFakeElement("div", doc);
+  slotEl.id = "rail-companion-slot";
+  slotEl.hidden = true;
+  slotEl.getBoundingClientRect = () => slotEl.hidden
+    ? { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }
+    : { left: 12, top: 720, right: 352, bottom: 960, width: 340, height: 240 };
+  const railEl = makeFakeElement("aside", doc);
+  railEl.id = "rail";
+  railEl.getBoundingClientRect = () => ({ left: 12, top: 12, right: 352, bottom: 960, width: 340, height: 948 });
+  railEl.querySelector = sel => sel === "#rail-companion-slot" ? slotEl : null;
+  railEl.querySelectorAll = sel => sel.includes("#rail-companion-slot") ? [slotEl] : [];
+
+  const knockCalls = [];
+  const phoneCalls = [];
+  const { C, M } = loadCompanionWithMessenger({
+    document: doc,
+    getComputedStyle: () => ({ visibility: "visible", display: "flex" }),
+    window: {
+      innerWidth: 1680,
+      innerHeight: 960,
+      devicePixelRatio: 2,
+      matchMedia: () => ({ matches: true, addEventListener() {} }),
+      localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+      addEventListener: (type, fn) => { (winListeners[type] ||= []).push(fn); },
+      WsShell: { companionContext: () => ({ routeKind: "home", activity: "idle", landmarks: {}, events: [], rightColActive: false, drawerOpen: false }) },
+      wsCompanionModalRows: []
+    },
+    ResizeObserver: class { observe() {} disconnect() {} },
+    MutationObserver: class { observe() {} disconnect() {} },
+    performance: { now: () => now },
+    wsT: k => k,
+    requestAnimationFrame: fn => { raf = fn; return ++rafId; },
+    cancelAnimationFrame: () => { raf = null; },
+    fetch: async url => {
+      if (url.startsWith("/api/companion/packs?")) {
+        return { ok: true, json: async () => ({ resolvedAuto: { packId: "vrm1" }, packs: [{ id: "vrm1", rev: "rv1", renderer: "vrm", schema: "ws-companion-vrm/v1" }] }) };
+      }
+      if (url === "/api/companion/packs") {
+        return { ok: true, json: async () => ({ packs: [{ id: "vrm1", rev: "rv1", renderer: "vrm", schema: "ws-companion-vrm/v1" }] }) };
+      }
+      if (url.includes("/vrm1/pack.json")) {
+        return { ok: true, json: async () => ({ schema: "ws-companion-vrm/v1", id: "vrm1", model: "a.vrm" }) };
+      }
+      if (url === "/api/companion/phone/thread" || url === "/api/companion/phone/mark-read") {
+        return { ok: true, json: async () => ({ seq: 1, state: "laptop_ambient", posture: "laptop", messages: [], unreadClient: 0, unreadAgent: 0, tier1Summary: [] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    }
+  });
+
+  C.quickMenu = () => ({ rebuild() {}, measure() {}, place() {}, close() {} });
+  C.makeVrmAdapter = () => {
+    const viewObj = {
+      pose: "stand", gesture: null, expression: "idle", props: [],
+      handAnchor: [120, 170], articulatedDrag: false, seat: 1, bounds: [0, 0, 1, 1],
+      render() {}
+    };
+    return {
+      renderer: "vrm", width: 340, height: 240,
+      mount() { return Promise.resolve(); },
+      view() { return viewObj; },
+      prop() { return { data: null, drawable: false, draw() {} }; },
+      setGaze() {}, resize() {}, pause() {}, resume() {},
+      setPreset() {}, setWardrobe() {}, wardrobe() { return null; },
+      getCoLeadState() { return { mode: "typing", sleepyWeight: 0 }; },
+      triggerKnock(opts) { knockCalls.push(opts); return { kind: "knock_startle", count: knockCalls.length, wokeFromSleepy: false }; },
+      setPhoneState(snap) { phoneCalls.push(snap); },
+      dispose() {}
+    };
+  };
+
+  const stage = C.mount({ pack: "vrm1", preset: "" }, () => {}, () => {});
+  for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r));
+  if (raf) { now += 40; raf(now); }
+
+  const companionRoot = doc.body.children.find(el => el.className === "ws-companion");
+  assert.ok(companionRoot, "companion stage root mounted in document.body");
+  const popup = doc.body.children.find(el => el.id === "companion-messenger");
+  assert.ok(popup, "messenger popup mounted directly under document.body");
+  const characterBtn = companionRoot.all().find(el => el.className === "ws-companion-character");
+  const chatBtn = companionRoot.all().find(el => el.id === "companion-chat-btn");
+  const unreadBadge = companionRoot.all().find(el => el.className === "ws-companion-unread");
+  const knockLayer = companionRoot.all().find(el => el.className === "ws-companion-knock-fx");
+  assert.ok(characterBtn && chatBtn && unreadBadge && knockLayer);
+
+  // Direct click on VRM character MUST knock the glass and MUST NEVER open messenger.
+  assert.equal(M.isOpen(), false);
+  characterBtn.dispatchEvent({ type: "click", clientX: 180, clientY: 820 });
+  assert.equal(knockCalls.length, 1, "direct VRM click must trigger cosmetic knock");
+  assert.equal(M.isOpen(), false, "direct VRM click must NEVER open messenger popup");
+  assert.ok(knockLayer.all().some(el => el.className.includes("ws-knock-ring")), "knock must spawn glass ripple rings");
+  assert.ok(knockLayer.all().some(el => el.className === "ws-knock-word"), "knock must spawn soundless cue label");
+
+  // Unread phone state updates #companion-chat-btn badge.
+  stage.phoneState({ seq: 2, state: "laptop_ambient", posture: "laptop", unreadClient: 3, unreadAgent: 0 });
+  assert.equal(unreadBadge.hidden, false);
+  assert.equal(unreadBadge.textContent, "3");
+  assert.equal(chatBtn.dataset.unread, "1");
+  assert.equal(phoneCalls.length, 1);
+
+  // Clicking #companion-chat-btn opens messenger popup and updates aria-expanded.
+  chatBtn.dispatchEvent({ type: "click", stopPropagation() {} });
+  assert.equal(M.isOpen(), true, "clicking #companion-chat-btn must open messenger popup");
+  assert.equal(chatBtn.getAttribute("aria-expanded"), "true");
+
+  // Clicking #companion-chat-btn again closes it cleanly.
+  chatBtn.dispatchEvent({ type: "click", stopPropagation() {} });
+  assert.equal(M.isOpen(), false);
+  assert.equal(chatBtn.getAttribute("aria-expanded"), "false");
+
+  stage.dispose();
+});
+
+test("Step 4 Phase 1: messenger popup anchoring, Variant D rail widths, viewport clamping, pin/Escape, and send flow", async () => {
+  const { M } = loadCompanionWithMessenger();
+
+  // 1. Standard left-rail dock at 1680x960 (340px wide rail).
+  const r1 = M.computePopupRect(
+    { left: 12, top: 720, right: 352, bottom: 960, width: 340, height: 240 },
+    { width: 1680, height: 960 },
+    { width: 360, height: 540 }
+  );
+  assert.equal(r1.left, 364, "popup should anchor 12px right of rail slot");
+  assert.equal(r1.width, 360);
+  assert.equal(r1.height, 540);
+  assert.equal(r1.top, 408, "popup bottom aligns cleanly 12px above viewport bottom");
+  assert.equal(r1.caretSide, "left");
+
+  // 2. Variant D resized narrow rail (220px) and wide rail (360px) never overlap rail or clip viewport.
+  for (const railW of [220, 280, 360]) {
+    const r = M.computePopupRect(
+      { left: 0, top: 720, right: railW, bottom: 960, width: railW, height: 240 },
+      { width: 1680, height: 960 },
+      { width: 360, height: 540 }
+    );
+    assert.ok(r.left >= railW + 12, `railW=${railW}: popup must sit right of rail without overlapping`);
+    assert.ok(r.left + r.width <= 1680 - 12, `railW=${railW}: popup must stay inside viewport right edge`);
+    assert.ok(r.top >= 12 && r.top + r.height <= 960 - 12, `railW=${railW}: popup must stay inside viewport height`);
+  }
+
+  // 3. Right-side anchor flips caret to "right" and stays inside viewport.
+  const rRight = M.computePopupRect(
+    { left: 1320, top: 700, right: 1660, bottom: 940, width: 340, height: 240 },
+    { width: 1680, height: 960 },
+    { width: 360, height: 540 }
+  );
+  assert.equal(rRight.caretSide, "right");
+  assert.equal(rRight.left, 1320 - 12 - 360);
+
+  // 4. Tiny viewport clamps popup dimensions without negative coordinates.
+  const rTiny = M.computePopupRect(
+    { left: 0, top: 300, right: 200, bottom: 480, width: 200, height: 180 },
+    { width: 400, height: 420 },
+    { width: 360, height: 540 }
+  );
+  assert.ok(rTiny.left >= 12 && rTiny.top >= 12);
+  assert.ok(rTiny.width <= 376 && rTiny.height <= 396);
+
+  // 5. Controller mount/open/send/pin/Esc/Tier-1 flow.
+  const docListeners = {};
+  const doc = {
+    body: null,
+    createElement: tag => makeFakeElement(tag, doc),
+    createElementNS: (_ns, tag) => makeFakeElement(tag, doc),
+    addEventListener(type, fn, opts) {
+      (docListeners[type] ||= []).push(fn);
+      if (opts && opts.signal) {
+        opts.signal.addEventListener("abort", () => {
+          docListeners[type] = (docListeners[type] || []).filter(f => f !== fn);
+        });
+      }
+    }
+  };
+  doc.body = makeFakeElement("body", doc);
+
+  const sentBodies = [];
+  let resetCalls = 0;
+  let settingsOpens = 0;
+  M.mount({
+    document: doc,
+    getAnchorRect: () => ({ left: 12, top: 720, right: 352, bottom: 960, width: 340, height: 240 }),
+    openSettings: () => { settingsOpens++; },
+    fetch: async (url, init) => {
+      if (url === "/api/companion/phone/thread") {
+        return {
+          ok: true,
+          json: async () => ({
+            seq: 1,
+            state: "laptop_ambient",
+            posture: "laptop",
+            messages: [
+              { id: "m1", sender: "companion", text: "Ready on laptop!", tone: "laugh", createdAt: Date.now() }
+            ],
+            unreadClient: 0,
+            unreadAgent: 0,
+            tier1Summary: ["Checked build status on develop"],
+            rotationMeta: { turns: 3, maxTurns: 20, summaryCap: 10 }
+          })
+        };
+      }
+      if (url === "/api/companion/phone/send") {
+        const body = JSON.parse(init.body);
+        sentBodies.push(body);
+        return {
+          ok: true,
+          json: async () => ({
+            message: { id: "m2", sender: "user", text: body.text, createdAt: Date.now() },
+            snapshot: {
+              seq: 2,
+              state: "laptop_ambient",
+              posture: "laptop",
+              messages: [
+                { id: "m1", sender: "companion", text: "Ready on laptop!", tone: "laugh", createdAt: Date.now() },
+                { id: "m2", sender: "user", text: body.text, createdAt: Date.now() }
+              ],
+              unreadClient: 0,
+              unreadAgent: 1,
+              tier1Summary: ["Checked build status on develop"],
+              rotationMeta: { turns: 3, maxTurns: 20, summaryCap: 10 }
+            }
+          })
+        };
+      }
+      if (url === "/api/companion/phone/reset-summary") {
+        resetCalls++;
+        return {
+          ok: true,
+          json: async () => ({
+            seq: 3, state: "laptop_ambient", posture: "laptop",
+            messages: [], unreadClient: 0, unreadAgent: 0, tier1Summary: [],
+            rotationMeta: { turns: 0, maxTurns: 20, summaryCap: 10 }
+          })
+        };
+      }
+      return { ok: true, json: async () => ({}) };
+    }
+  });
+
+  M.open();
+  await new Promise(r => setImmediate(r));
+  assert.equal(M.isOpen(), true);
+  const popup = doc.body.children.find(el => el.id === "companion-messenger");
+  assert.ok(popup && !popup.classList.contains("is-closed"));
+
+  // Send message with Enter.
+  const input = popup.all().find(el => el.className === "ws-cm-input");
+  input.value = "Check tests please";
+  input.dispatchEvent({ type: "input" });
+  input.dispatchEvent({ type: "keydown", key: "Enter", shiftKey: false, isComposing: false, preventDefault() {} });
+  await new Promise(r => setImmediate(r));
+  assert.deepEqual(sentBodies, [{ text: "Check tests please" }]);
+  assert.equal(input.value, "");
+
+  // Toggle Tier-1 summary drawer and click reset.
+  const tier1Btn = popup.all().find(el => el.dataset?.action === "toggle-tier1");
+  const tier1Strip = popup.all().find(el => el.className === "ws-cm-tier1-strip");
+  const tier1Reset = popup.all().find(el => el.className === "ws-cm-tier1-reset");
+  assert.equal(tier1Strip.hidden, true);
+  tier1Btn.dispatchEvent({ type: "click" });
+  assert.equal(tier1Strip.hidden, false);
+  tier1Reset.dispatchEvent({ type: "click" });
+  await new Promise(r => setImmediate(r));
+  assert.equal(resetCalls, 1);
+
+  // Pin prevents Escape dismissal; unpinning allows Escape dismissal.
+  const pinBtn = popup.all().find(el => el.dataset?.action === "toggle-pin");
+  pinBtn.dispatchEvent({ type: "click" });
+  assert.equal(M.isPinned(), true);
+  for (const fn of docListeners.keydown || []) fn({ key: "Escape", preventDefault() {} });
+  assert.equal(M.isOpen(), true, "Escape must not close pinned messenger");
+
+  // Settings jump triggers callback without closing while pinned.
+  const settingsBtn = popup.all().find(el => el.dataset?.action === "open-settings");
+  settingsBtn.dispatchEvent({ type: "click" });
+  assert.equal(settingsOpens, 1);
+  assert.equal(M.isOpen(), true);
+
+  pinBtn.dispatchEvent({ type: "click" });
+  assert.equal(M.isPinned(), false);
+  for (const fn of docListeners.keydown || []) fn({ key: "Escape", preventDefault() {} });
+  assert.equal(M.isOpen(), false, "Escape must close unpinned messenger");
+
+  M.dispose();
+});

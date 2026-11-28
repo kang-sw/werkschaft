@@ -18,11 +18,11 @@ import (
 //     writes the other in the same locked file rewrite (the mirror), and a
 //     global read takes the legacy value as the enabled state when one is
 //     stored (the reconcile), so an older writer's change is honoured and an
-//     older reader sees a value that matches what the pet does.
+//     older reader sees a value that matches what the companion does.
 //   - sidecar and lead-tool are accepted values of companion_director and mean
 //     rules.
 //
-// 0.51.0 showed the pet for visual and for full alike and read no director
+// 0.51.0 showed the companion for visual and for full alike and read no director
 // value anywhere, so the mapping that keeps its visible behaviour is
 // off -> disabled, visual and full -> enabled, sidecar and lead-tool -> rules.
 // Neither starts the agent director, which would spend model calls 0.51.0
@@ -54,7 +54,7 @@ func CompanionLegacyDirector(value string) (string, bool) {
 }
 
 // CompanionModeEnabled reports whether a 0.51.0 companion_mode value shows the
-// pet, and whether the value is one 0.51.0 accepted.
+// companion, and whether the value is one 0.51.0 accepted.
 func CompanionModeEnabled(mode string) (enabled, valid bool) {
 	switch strings.TrimSpace(mode) {
 	case "off":
@@ -67,7 +67,7 @@ func CompanionModeEnabled(mode string) (enabled, valid bool) {
 
 // mirrorCompanionOverrides keeps companion_enabled and companion_mode equal
 // inside one config rewrite. The key just written wins; a reset of either key
-// resets both (the default of both is the disabled pet). A value that does not
+// resets both (the default of both is the disabled companion). A value that does not
 // parse is left alone: the write that carried it is refused or ignored on read.
 func mirrorCompanionOverrides(key string, overrides map[string]string, removed bool) {
 	switch key {

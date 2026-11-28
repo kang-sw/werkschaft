@@ -27,7 +27,7 @@ import (
 // preserved no-op, since the pre-rename tickets.sage_record was reachable by
 // a delegate-scoped key.
 func isLeadOnlyTool(name string) bool {
-	return sessionHireTool(name) || userCommandTool(name) || isPiTool(name) || isAgentTool(name) || name == bootstrapToolName || name == "workflow_manual" || name == "workflow_state" || name == "tickets.sage_stamp" || name == "tickets.index_init" || name == "git.merge" || name == "worktree.acquire" || name == "worktree.release" || name == "worktree.remove" || name == "worktree.list" || strings.HasPrefix(name, "lead.") || workflowPreferenceWriterTool(name)
+	return sessionHireTool(name) || userCommandTool(name) || isPiTool(name) || isAgentTool(name) || isCompanionTool(name) || name == bootstrapToolName || name == "workflow_manual" || name == "workflow_state" || name == "tickets.sage_stamp" || name == "tickets.index_init" || name == "git.merge" || name == "worktree.acquire" || name == "worktree.release" || name == "worktree.remove" || name == "worktree.list" || strings.HasPrefix(name, "lead.") || workflowPreferenceWriterTool(name)
 }
 
 func workflowPreferenceWriterTool(name string) bool {
@@ -136,6 +136,9 @@ func (s *Server) callDiscoveryTools(key string, entry sessionEntry, found bool) 
 			continue
 		}
 		if _, refusal := s.sessionToolAccess(name, key, entry); refusal != "" {
+			continue
+		}
+		if s.companionPostureRefusal(name, key) != "" {
 			continue
 		}
 		visible = append(visible, tool)

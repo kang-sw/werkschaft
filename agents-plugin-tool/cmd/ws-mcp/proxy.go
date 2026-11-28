@@ -185,6 +185,7 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 		}
 		if d := h.live.Load(); d != nil {
 			opts.Live = d
+			opts.Companion = d
 		}
 		if h.agents != nil {
 			if source, ok := h.agents.(mcp.AgentBackendRegistry); ok {

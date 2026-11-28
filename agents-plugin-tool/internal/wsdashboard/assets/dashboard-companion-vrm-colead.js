@@ -14,7 +14,9 @@
   const DEFAULT_ACCENT = "#7aa2ff";
   const VALID_BEATS = new Set([
     "auto", "typing", "glance-up", "working", "sleepy", "reading-left", "reading-right",
-    "swap-out", "swap-in", "dizzy", "dizzy-shake", "dizzy-recover"
+    "swap-out", "swap-in", "dizzy", "dizzy-shake", "dizzy-recover",
+    "knock-startle", "annoyed-tap", "wakeup-jolt",
+    "phone-buzz", "phone-pickup", "phone-typing", "phone-putdown", "phone-facedown-merong"
   ]);
 
   // Curated 6-color tasteful dark-UI-friendly session laptop palette.
@@ -38,6 +40,14 @@
   const DIZZY_RECOVER_DURATION = 0.75;
   const DIZZY_TOTAL_DURATION = DIZZY_SWAY_DURATION + DIZZY_RECOVER_DURATION; // 3.60s
   const DIZZY_COOLDOWN_SEC = 1.2;
+
+  const KNOCK_WINDOW_SEC = 4.0;
+  const KNOCK_ANNOYED_COUNT = 3;
+  const KNOCK_STARTLE_DURATION = 1.05;
+  const KNOCK_WAKEUP_DURATION = 1.35;
+  const KNOCK_ANNOYED_DURATION = 1.85;
+  const PHONE_PUTDOWN_DURATION = 0.72;
+  const PHONE_MERONG_DURATION = 1.75;
 
   const DIZZY_STAR_COLORS = Object.freeze(["#fde68a", "#7dd3fc", "#fbcfe8"]);
 
@@ -474,6 +484,182 @@
     return tex;
   }
 
+  // Paint a crisp minimalist smartphone front display texture (OLED notification card).
+  function makePhoneScreenTexture(THREE) {
+    if (typeof document === "undefined" || typeof THREE.CanvasTexture !== "function") return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = 128;
+    canvas.height = 256;
+    const ctx = canvas.getContext("2d");
+    if (!ctx || typeof ctx.createLinearGradient !== "function" || typeof ctx.fillRect !== "function") return null;
+
+    const bg = ctx.createLinearGradient(0, 0, 0, 256);
+    bg.addColorStop(0.0, "#1c2740");
+    bg.addColorStop(0.55, "#151d30");
+    bg.addColorStop(1.0, "#0f1422");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, 128, 256);
+
+    // Top status pill / notch
+    ctx.fillStyle = "rgba(180, 212, 255, 0.35)";
+    ctx.fillRect(42, 10, 44, 6);
+
+    // Bright chat notification banner card
+    ctx.fillStyle = "rgba(122, 162, 255, 0.92)";
+    ctx.fillRect(14, 42, 100, 46);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(24, 52, 54, 7);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.72)";
+    ctx.fillRect(24, 66, 76, 6);
+
+    // Warm chat reply bubble preview
+    ctx.fillStyle = "rgba(246, 228, 173, 0.92)";
+    ctx.fillRect(30, 106, 84, 34);
+    ctx.fillStyle = "#3c3222";
+    ctx.fillRect(40, 118, 60, 6);
+
+    // Incoming companion bubble preview
+    ctx.fillStyle = "rgba(226, 234, 250, 0.24)";
+    ctx.fillRect(14, 154, 82, 34);
+    ctx.fillStyle = "rgba(235, 242, 255, 0.8)";
+    ctx.fillRect(24, 166, 56, 6);
+
+    // Bottom home indicator bar
+    ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+    ctx.fillRect(42, 240, 44, 4);
+
+    const tex = new THREE.CanvasTexture(canvas);
+    if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  // Paint a sleek metallic back-shell texture with subtle matte gradient so the
+  // back side of the smartphone reads unmistakably apart from the OLED front.
+  function makePhoneBackTexture(THREE) {
+    if (typeof document === "undefined" || typeof THREE.CanvasTexture !== "function") return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = 128;
+    canvas.height = 256;
+    const ctx = canvas.getContext("2d");
+    if (!ctx || typeof ctx.createLinearGradient !== "function" || typeof ctx.fillRect !== "function") return null;
+
+    const grad = ctx.createLinearGradient(0, 0, 128, 256);
+    grad.addColorStop(0.0, "#c8d2e6");
+    grad.addColorStop(0.45, "#9eaac2");
+    grad.addColorStop(1.0, "#76829c");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 128, 256);
+
+    // Subtle frosted glass center accent mark
+    ctx.fillStyle = "rgba(255, 255, 255, 0.22)";
+    ctx.beginPath?.();
+    if (typeof ctx.arc === "function") {
+      ctx.arc(64, 134, 16, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const tex = new THREE.CanvasTexture(canvas);
+    if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  // Draw crisp 2D canvas FX cue (buzz waves, merong sparkle, startle burst) cleanly
+  // clamped inside the rail dock without covering the character's face.
+  function drawActionFx(ctx, opts = {}) {
+    if (!ctx || typeof ctx.fillText !== "function") return;
+    const kind = opts.kind || "";
+    const alpha = clamp(Number.isFinite(opts.alpha) ? opts.alpha : 0, 0, 1);
+    if (!kind || alpha <= 0.01) return;
+    const w = Math.max(80, Number.isFinite(opts.width) ? opts.width : 340);
+    const h = Math.max(80, Number.isFinite(opts.height) ? opts.height : 240);
+    const t = Number.isFinite(opts.time) ? opts.time : 0;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.font = "800 13px system-ui, -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    let label = "";
+    let bx = w * 0.76;
+    let by = h * 0.68;
+    let bg = "rgba(32, 36, 46, 0.90)";
+    let fg = "#fde68a";
+    let stroke = "rgba(122, 162, 255, 0.72)";
+
+    if (kind === "phone-buzz") {
+      label = "윙- ♪";
+      bx = clamp(w * 0.80, 52, w - 42);
+      by = clamp(h * 0.68 + Math.sin(t * 28) * 2.5, 34, h - 26);
+      fg = "#93c5fd";
+      stroke = "rgba(96, 165, 250, 0.85)";
+      // Vibrating concentric wave arcs beside the desk phone
+      ctx.strokeStyle = "rgba(125, 211, 252, 0.82)";
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 2; i++) {
+        const r = 10 + i * 7 + ((t * 24) % 8);
+        ctx.beginPath();
+        ctx.arc(bx - 2, by + 16, r, -Math.PI * 0.82, -Math.PI * 0.18);
+        ctx.stroke();
+      }
+    } else if (kind === "phone-facedown-merong") {
+      label = "메-롱 · 탁!";
+      bx = clamp(w * 0.75, 58, w - 52);
+      by = clamp(h * 0.24 + Math.sin(t * 5.2) * 2.5, 28, h - 32);
+      fg = "#f9a8d4";
+      stroke = "rgba(244, 143, 177, 0.82)";
+    } else if (kind === "wakeup-jolt") {
+      label = "화들짝!";
+      bx = clamp(w * 0.76, 52, w - 46);
+      by = clamp(h * 0.22, 28, h - 32);
+      fg = "#fde68a";
+      stroke = "rgba(251, 146, 60, 0.85)";
+    } else if (kind === "annoyed-tap") {
+      label = "톡톡톡!";
+      bx = clamp(w * 0.76, 52, w - 46);
+      by = clamp(h * 0.24, 28, h - 32);
+      fg = "#fdba74";
+      stroke = "rgba(245, 158, 11, 0.82)";
+    } else if (kind === "knock-startle") {
+      label = "!?";
+      bx = clamp(w * 0.74, 42, w - 38);
+      by = clamp(h * 0.22, 26, h - 32);
+      fg = "#fde68a";
+      stroke = "rgba(122, 162, 255, 0.80)";
+    }
+
+    if (label) {
+      const padX = 10;
+      const metrics = typeof ctx.measureText === "function" ? ctx.measureText(label) : { width: label.length * 9 };
+      const pw = Math.max(36, (metrics.width || 44) + padX * 2);
+      const ph = 24;
+      const rx = clamp(bx - pw * 0.5, 8, w - pw - 8);
+      const ry = clamp(by - ph * 0.5, 8, h - ph - 8);
+      const r = 12;
+      ctx.beginPath();
+      ctx.moveTo(rx + r, ry);
+      ctx.lineTo(rx + pw - r, ry);
+      ctx.quadraticCurveTo(rx + pw, ry, rx + pw, ry + r);
+      ctx.lineTo(rx + pw, ry + ph - r);
+      ctx.quadraticCurveTo(rx + pw, ry + ph, rx + pw - r, ry + ph);
+      ctx.lineTo(rx + r, ry + ph);
+      ctx.quadraticCurveTo(rx, ry + ph, rx, ry + ph - r);
+      ctx.lineTo(rx, ry + r);
+      ctx.quadraticCurveTo(rx, ry, rx + r, ry);
+      ctx.closePath();
+      ctx.fillStyle = bg;
+      ctx.fill();
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.fillStyle = fg;
+      ctx.fillText(label, rx + pw * 0.5, ry + ph * 0.5 + 0.5);
+    }
+    ctx.restore();
+  }
+
   // Build a smooth rounded-rectangle THREE.Shape centered at (0, 0) for the lid.
   function makeRoundedRectShape(THREE, w, h, radius) {
     const shape = new THREE.Shape();
@@ -504,6 +690,11 @@
     const swapActiveW = clamp(params.swapWeight || 0, 0, 1);
     const dizzyW = clamp(params.dizzyWeight || 0, 0, 1);
     const dizzyPhaseT = Number.isFinite(params.dizzyTime) ? params.dizzyTime : t;
+    const phoneHoldW = clamp(params.phoneHoldWeight || 0, 0, 1);
+    const phoneTypingW = clamp(params.phoneTypingWeight || 0, 0, 1);
+    const phoneMerongW = clamp(params.phoneMerongWeight || 0, 0, 1);
+    const knockJoltW = clamp(params.knockJoltWeight || 0, 0, 1);
+    const annoyedTapW = clamp(params.annoyedTapWeight || 0, 0, 1);
     const extraHeadRoll = Number.isFinite(params.extraHeadRoll) ? params.extraHeadRoll : 0;
     const tiltDir = params.tiltDir >= 0 ? 1 : -1;
     const headYaw = Number.isFinite(params.headYaw) ? params.headYaw : 0;
@@ -513,23 +704,26 @@
     // Gentle alive breathing (slower and deeper when sleepy).
     const breathFreq = 1.42 - sleepyW * 0.42 + workingW * 0.14;
     const breath = Math.sin(t * breathFreq);
-    const sway = Math.sin(t * 0.68) * (1 - workingW * 0.45 - sleepyW * 0.3 - dizzyW * 0.8);
+    const sway = Math.sin(t * 0.68) * (1 - workingW * 0.45 - sleepyW * 0.3 - dizzyW * 0.8 - phoneHoldW * 0.65);
 
     // Organic multi-harmonic alternating left/right keystroke cadence (zero metronome feel).
+    const keyMask = clamp(1 - phoneHoldW * 0.95 - knockJoltW * 0.9 - annoyedTapW * 0.9, 0, 1);
     const rate = 6.2 + workingW * 3.4;
-    const tapL = (Math.sin(t * rate) * 0.62 + Math.sin(t * rate * 1.73 + 0.9) * 0.38) * typingW;
-    const tapR = (Math.sin(t * rate + Math.PI * 0.92) * 0.62 + Math.sin(t * rate * 1.61 + 2.4) * 0.38) * typingW;
-    const wristL = Math.sin(t * rate * 1.15 + 0.4) * typingW;
-    const wristR = Math.sin(t * rate * 1.15 + 3.4) * typingW;
+    const tapL = (Math.sin(t * rate) * 0.62 + Math.sin(t * rate * 1.73 + 0.9) * 0.38) * typingW * keyMask;
+    const tapR = (Math.sin(t * rate + Math.PI * 0.92) * 0.62 + Math.sin(t * rate * 1.61 + 2.4) * 0.38) * typingW * keyMask;
+    const wristL = Math.sin(t * rate * 1.15 + 0.4) * typingW * keyMask;
+    const wristR = Math.sin(t * rate * 1.15 + 3.4) * typingW * keyMask;
 
-    // Cozy forward seated lean while typing; relaxes slightly upright when glancing up or dizzy.
-    const leanScale = clamp(1 - glanceW * 0.65 - reactionW * 0.45 - dizzyW * 0.50, 0.15, 1);
+    // Cozy forward seated lean while typing; straightens crisply on knock startle or phone lift.
+    const leanScale = clamp(1 - glanceW * 0.65 - reactionW * 0.45 - dizzyW * 0.50 - phoneHoldW * 0.55 - knockJoltW * 0.9, 0.10, 1);
     const dizzySpineYaw = Math.sin(dizzyPhaseT * 3.6) * 2.6 * DEG * dizzyW;
     const dizzySpineRoll = Math.cos(dizzyPhaseT * 3.6) * 2.4 * DEG * dizzyW;
     const swapTorsoYaw = swapSweep * 3.4 * DEG;
-    const spinePitch = (0.036 + workingW * 0.014) * leanScale + sleepyW * 0.030 + breath * 0.010;
-    const chestPitch = (0.028 + workingW * 0.012) * leanScale + sleepyW * 0.022 + breath * 0.015;
-    const upperChestPitch = 0.014 * leanScale + breath * 0.008;
+    const phoneTorsoYaw = 3.2 * DEG * phoneHoldW - 2.2 * DEG * annoyedTapW;
+    const phoneTorsoRoll = -2.4 * DEG * phoneHoldW + 3.5 * DEG * phoneMerongW;
+    const spinePitch = (0.036 + workingW * 0.014) * leanScale + sleepyW * 0.030 - knockJoltW * 0.055 + breath * 0.010;
+    const chestPitch = (0.028 + workingW * 0.012) * leanScale + sleepyW * 0.022 - knockJoltW * 0.045 + breath * 0.015;
+    const upperChestPitch = 0.014 * leanScale - knockJoltW * 0.025 + breath * 0.008;
 
     // Charming anime head-tilt on glance-up (+/-7.6 deg), figure-eight sway when dizzy,
     // plus gentle follow-through roll during laptop swaps.
@@ -544,68 +738,114 @@
     const neckYaw = headYaw * 0.36;
     const craniumYaw = headYaw * 0.64 + sway * 0.012 * (1 - glanceW - dizzyW * 0.8);
     const neckRoll = totalRoll * 0.35;
-    const craniumRoll = totalRoll * 0.65 + idleRoll * (1 - dizzyW);
+    const craniumRoll = totalRoll * 0.65 + idleRoll * (1 - dizzyW - phoneMerongW * 0.8);
 
-    // Relaxed lowered shoulders rolled subtly forward toward her desk, with subtle
-    // sweep follow-through during laptop swap and soft bobbing wave during dizzy.
+    // Relaxed lowered shoulders rolled subtly forward toward her desk, lifting gently
+    // on knock jolt or when raising her hand with the smartphone.
     const shForward = 0.048 * (1 - sleepyW * 0.45 - dizzyW * 0.28);
     const shDrop = 0.046 + sleepyW * 0.018;
     const dizzyShWave = Math.sin(dizzyPhaseT * 3.6 + 0.6) * 0.034 * dizzyW;
     const swapShLiftL = swapSweep * 0.032;
     const swapShLiftR = -swapSweep * 0.032;
+    const joltShLift = knockJoltW * 0.095;
     const lSh = [
-      0.012 + tapL * 0.006,
-      -shForward + swapSweep * 0.030,
-      -shDrop + breath * 0.012 + tapL * 0.007 + dizzyShWave + swapShLiftL
+      0.012 + tapL * 0.006 + phoneHoldW * 0.028,
+      -shForward + swapSweep * 0.030 - phoneHoldW * 0.048,
+      -shDrop + breath * 0.012 + tapL * 0.007 + dizzyShWave + swapShLiftL + joltShLift + phoneHoldW * 0.072 + annoyedTapW * 0.052
     ];
     const rSh = [
       0.012 + tapR * 0.006,
       shForward + swapSweep * 0.030,
-      shDrop - breath * 0.012 - tapR * 0.007 + dizzyShWave + swapShLiftR
+      shDrop - breath * 0.012 - tapR * 0.007 + dizzyShWave + swapShLiftR - joltShLift
     ];
 
-    // Upper arms stay naturally lowered along her sides (|z| >= 1.18) and swing
-    // gently forward so elbows clear the ribcage and hands stay strictly behind the lid.
+    // Upper arms stay naturally lowered along her sides (|z| >= 1.18) while typing,
+    // and smoothly lift her phone-side arm (character-left / viewer-right) when holding
+    // the smartphone or playfully tapping the glass back at the user.
     const activePoseBlend = clamp(1 - sleepyW * 0.55 - dizzyW * 0.25, 0.35, 1);
     const uPitch = -0.17 * activePoseBlend - workingW * 0.025 + glanceW * 0.03 + dizzyW * 0.05;
     const uYaw = 0.12 * activePoseBlend;
     const uDrop = 1.22 + sleepyW * 0.06 + dizzyW * 0.03;
 
-    const lUpper = [
-      uPitch + tapL * 0.015 - Math.max(0, swapSweep) * 0.05,
+    const thumbBob = Math.sin(t * 10.5) * 0.022 * phoneTypingW;
+    const tapGlassPulse = Math.sin(t * 11.0) * 0.09 * annoyedTapW;
+
+    const lUpperBase = [
+      uPitch + tapL * 0.015 - Math.max(0, swapSweep) * 0.05 - knockJoltW * 0.12,
       -uYaw + tapL * 0.010 + swapSweep * 0.09,
-      -uDrop - breath * 0.008 + swapActiveW * 0.02
+      -uDrop - breath * 0.008 + swapActiveW * 0.02 + knockJoltW * 0.14
     ];
-    const rUpper = [
-      uPitch + tapR * 0.015 - Math.max(0, -swapSweep) * 0.05,
-      uYaw - tapR * 0.010 + swapSweep * 0.09,
-      uDrop + breath * 0.008 - swapActiveW * 0.02
+    const lUpperPhone = [-0.58 + thumbBob * 0.4, -0.14, -0.82 + thumbBob * 0.3];
+    const lUpperTap = [-0.46 + tapGlassPulse * 0.35, -0.18, -0.84];
+    const lUpper = [
+      lerp(lerp(lUpperBase[0], lUpperPhone[0], phoneHoldW), lUpperTap[0], annoyedTapW),
+      lerp(lerp(lUpperBase[1], lUpperPhone[1], phoneHoldW), lUpperTap[1], annoyedTapW),
+      lerp(lerp(lUpperBase[2], lUpperPhone[2], phoneHoldW), lUpperTap[2], annoyedTapW)
     ];
 
-    // Forearms flex cleanly forward (Ry negative on left, positive on right)
-    // and angle gently inward onto the unseen laptop keyboard strictly behind the lid.
+    // Non-phone arm relaxes softly onto desk/lap while holding phone, and lifts slightly
+    // to steady/thumb-type when actively replying on the smartphone.
+    const rUpperBase = [
+      uPitch * (1 - phoneHoldW * 0.45) + tapR * 0.015 - Math.max(0, -swapSweep) * 0.05 - knockJoltW * 0.12,
+      uYaw * (1 - phoneHoldW * 0.35) - tapR * 0.010 + swapSweep * 0.09,
+      uDrop + breath * 0.008 - swapActiveW * 0.02 - knockJoltW * 0.14 + phoneHoldW * 0.05
+    ];
+    const rUpperType = [-0.34 - thumbBob * 0.35, 0.22, 1.04];
+    const rUpper = [
+      lerp(rUpperBase[0], rUpperType[0], phoneTypingW * 0.85),
+      lerp(rUpperBase[1], rUpperType[1], phoneTypingW * 0.85),
+      lerp(rUpperBase[2], rUpperType[2], phoneTypingW * 0.85)
+    ];
+
+    // Forearms flex cleanly forward onto keyboard, or flex up smoothly to hold smartphone.
     const fFlex = 1.12 * activePoseBlend + sleepyW * 0.28 - glanceW * 0.10 - dizzyW * 0.16 - swapActiveW * 0.08;
     const fInward = 0.28 * activePoseBlend + sleepyW * 0.06;
     const fTwist = 0.16 * activePoseBlend;
 
-    const lLower = [
+    const lLowerBase = [
       fTwist + tapL * 0.030,
-      -(fFlex + tapL * 0.045),
+      -(fFlex + tapL * 0.045 + knockJoltW * 0.18),
       -(fInward + tapL * 0.018 - swapSweep * 0.06)
     ];
-    const rLower = [
-      fTwist + tapR * 0.030,
-      fFlex + tapR * 0.045,
-      fInward + tapR * 0.018 + swapSweep * 0.06
+    const lLowerPhone = [0.56 + thumbBob, -(1.26 + thumbBob * 0.65), -0.28];
+    const lLowerTap = [0.22, -(1.56 + tapGlassPulse), -0.12];
+    const lLower = [
+      lerp(lerp(lLowerBase[0], lLowerPhone[0], phoneHoldW), lLowerTap[0], annoyedTapW),
+      lerp(lerp(lLowerBase[1], lLowerPhone[1], phoneHoldW), lLowerTap[1], annoyedTapW),
+      lerp(lerp(lLowerBase[2], lLowerPhone[2], phoneHoldW), lLowerTap[2], annoyedTapW)
     ];
 
-    // Delicate alternating wrist/hand key-tap articulation angled downward onto keys.
-    const lHand = [0.08 + wristL * 0.055, 0.05 + tapL * 0.035, 0.10 + wristL * 0.04];
-    const rHand = [0.08 + wristR * 0.055, -(0.05 + tapR * 0.035), -(0.10 + wristR * 0.04)];
+    const rLowerBase = [
+      fTwist * (1 - phoneHoldW * 0.4) + tapR * 0.030,
+      fFlex * (1 - phoneHoldW * 0.35) + tapR * 0.045 + knockJoltW * 0.18,
+      fInward * (1 - phoneHoldW * 0.4) + tapR * 0.018 + swapSweep * 0.06
+    ];
+    const rLowerType = [0.32 - thumbBob * 0.8, 1.38 + thumbBob * 0.9, 0.26];
+    const rLower = [
+      lerp(rLowerBase[0], rLowerType[0], phoneTypingW * 0.85),
+      lerp(rLowerBase[1], rLowerType[1], phoneTypingW * 0.85),
+      lerp(rLowerBase[2], rLowerType[2], phoneTypingW * 0.85)
+    ];
+
+    // Delicate alternating wrist/hand key-tap articulation or phone thumb-typing micro-motion.
+    const lHandBase = [0.08 + wristL * 0.055, 0.05 + tapL * 0.035, 0.10 + wristL * 0.04];
+    const lHandPhone = [0.18 + thumbBob * 1.4, 0.12 - thumbBob * 0.8, 0.24];
+    const lHand = [
+      lerp(lHandBase[0], lHandPhone[0], phoneHoldW),
+      lerp(lHandBase[1], lHandPhone[1], phoneHoldW),
+      lerp(lHandBase[2], lHandPhone[2], phoneHoldW)
+    ];
+    const rHandBase = [0.08 + wristR * 0.055, -(0.05 + tapR * 0.035), -(0.10 + wristR * 0.04)];
+    const rHandType = [0.16 - thumbBob * 1.6, -0.14 + thumbBob * 0.9, -0.18];
+    const rHand = [
+      lerp(rHandBase[0], rHandType[0], phoneTypingW * 0.85),
+      lerp(rHandBase[1], rHandType[1], phoneTypingW * 0.85),
+      lerp(rHandBase[2], rHandType[2], phoneTypingW * 0.85)
+    ];
 
     return {
-      spine: [spinePitch, sway * 0.009 * (1 - glanceW * 0.5) + dizzySpineYaw + swapTorsoYaw, dizzySpineRoll],
-      chest: [chestPitch, swapTorsoYaw * 0.65, dizzySpineRoll * 0.55],
+      spine: [spinePitch, sway * 0.009 * (1 - glanceW * 0.5) + dizzySpineYaw + swapTorsoYaw + phoneTorsoYaw, dizzySpineRoll + phoneTorsoRoll],
+      chest: [chestPitch, swapTorsoYaw * 0.65 + phoneTorsoYaw * 0.55, dizzySpineRoll * 0.55 + phoneTorsoRoll * 0.5],
       upperChest: [upperChestPitch, 0, 0],
       neck: [neckPitch, neckYaw, neckRoll],
       head: [craniumPitch, craniumYaw, craniumRoll],
@@ -663,6 +903,28 @@
     let dizzyCooldownUntil = -Infinity;
     let dizzyFxAlpha = 0;
 
+    // Cosmetic glass knock state machine (awake startle, 3+ rapid -> annoyed-tap, sleepy -> wakeup-jolt).
+    const knockTimestamps = [];
+    let knockKind = ""; // '' | 'knock-startle' | 'wakeup-jolt' | 'annoyed-tap'
+    let knockElapsed = 0;
+    let knockDuration = 0;
+    let knockCount = 0;
+
+    // Smartphone 3D prop & 4-state choreography state.
+    let phoneMode = "desk"; // 'desk' | 'buzz' | 'pickup' | 'typing' | 'putdown' | 'facedown-merong'
+    let phoneFaceDown = false;
+    let phoneAnimElapsed = 0;
+    let phoneUnreadAgent = 0;
+    let phoneLastSnapState = "laptop_ambient";
+    let phoneScreenGlow = 0.14;
+    let phoneHoldWeight = 0;
+    let phoneTypingWeight = 0;
+    let phoneMerongWeight = 0;
+    let knockJoltWeight = 0;
+    let annoyedTapWeight = 0;
+    let actionFxKind = "";
+    let actionFxAlpha = 0;
+
     // Smoothly damped blending weights (all frame-rate independent).
     let typingWeight = 1.0;
     let glanceWeight = 0.0;
@@ -674,14 +936,22 @@
     let screenGlow = 0.13;
     let bounceColorRgb = hexToRgb(DEFAULT_ACCENT);
 
-    // 3D foreground laptop prop + soft upward screen bounce light.
+    // 3D foreground laptop prop + minimalist 3D desk smartphone prop + soft bounce light.
     let laptopGroup = null;
     let lidMesh = null;
     let rimMesh = null;
     let emblemMesh = null;
+    let phoneGroup = null;
+    let phoneBodyMesh = null;
+    let phoneScreenMesh = null;
+    let phoneBackMesh = null;
+    let phoneCameraBumpMesh = null;
+    let phoneBuzzGlowMesh = null;
     let screenLight = null;
     let lidTexture = null;
     let emblemTexture = null;
+    let phoneScreenTexture = null;
+    let phoneBackTexture = null;
     const geometries = [];
     const materials = [];
     const textures = [];
@@ -691,6 +961,10 @@
     let basePos = { x: 0, y: 0, z: 0 };
     let baseScale = 0.4;
     let baseVisH = 0.85;
+    let baseVisHalfW = 0.45;
+    let phoneBasePos = { x: 0.25, y: 0, z: 0 };
+    let livePhonePose = { x: 0.25, y: 0, z: 0, rx: -48 * DEG, ry: -12 * DEG, rz: -6 * DEG };
+    let phonePoseInitialized = false;
     let lidTopWorldY = 0;
     let lidTopWorldZ = 0;
     let lidTopViewportPct = 0;
@@ -878,7 +1152,184 @@
 
       laptopGroup.rotation.set(LID_TILT_RAD, 0, 0, "XYZ");
       scene.add(laptopGroup);
+
+      // Minimalist 3D desk smartphone prop ("ws-colead-phone") resting beside the
+      // laptop on the viewer's right (+X), with an unmistakable OLED front screen
+      // (+Z) and matte titanium back shell + raised dual-lens camera island (-Z).
+      phoneGroup = new THREE.Group();
+      phoneGroup.name = "ws-colead-phone";
+      const phoneW = 0.21;
+      const phoneH = 0.39;
+      const phoneD = 0.018;
+      const phoneShape = makeRoundedRectShape(THREE, phoneW, phoneH, 0.032);
+      const phoneGeo = new THREE.ExtrudeGeometry(phoneShape, {
+        depth: phoneD,
+        bevelEnabled: true,
+        bevelThickness: 0.005,
+        bevelSize: 0.004,
+        bevelSegments: 3,
+        curveSegments: 8
+      });
+      phoneGeo.translate(0, 0, -phoneD * 0.5);
+      geometries.push(phoneGeo);
+
+      const phoneBodyMat = new THREE.MeshStandardMaterial({
+        color: 0x303645,
+        roughness: 0.32,
+        metalness: 0.52,
+        emissive: 0x0b0e14,
+        emissiveIntensity: 0.22
+      });
+      materials.push(phoneBodyMat);
+      phoneBodyMesh = new THREE.Mesh(phoneGeo, phoneBodyMat);
+      phoneBodyMesh.frustumCulled = false;
+      phoneGroup.add(phoneBodyMesh);
+
+      if (typeof THREE.PlaneGeometry === "function") {
+        // Front OLED screen (+Z face)
+        phoneScreenTexture = makePhoneScreenTexture(THREE);
+        if (phoneScreenTexture) textures.push(phoneScreenTexture);
+        const screenGeo = new THREE.PlaneGeometry(phoneW * 0.87, phoneH * 0.90);
+        const screenMat = new THREE.MeshStandardMaterial({
+          color: phoneScreenTexture ? 0xffffff : 0x3b82f6,
+          map: phoneScreenTexture || null,
+          roughness: 0.16,
+          metalness: 0.08,
+          emissive: 0x4f86ff,
+          emissiveIntensity: 0.18
+        });
+        geometries.push(screenGeo);
+        materials.push(screenMat);
+        phoneScreenMesh = new THREE.Mesh(screenGeo, screenMat);
+        phoneScreenMesh.name = "ws-colead-phone-screen";
+        phoneScreenMesh.position.set(0, 0, phoneD * 0.5 + 0.0062);
+        phoneScreenMesh.frustumCulled = false;
+        phoneGroup.add(phoneScreenMesh);
+
+        // Soft pulsing notification halo around front screen during phone_buzz
+        if (typeof THREE.MeshBasicMaterial === "function") {
+          const glowGeo = new THREE.PlaneGeometry(phoneW * 1.24, phoneH * 1.18);
+          const glowMat = new THREE.MeshBasicMaterial({
+            color: 0x60a5fa,
+            transparent: true,
+            opacity: 0.0,
+            depthWrite: false
+          });
+          geometries.push(glowGeo);
+          materials.push(glowMat);
+          phoneBuzzGlowMesh = new THREE.Mesh(glowGeo, glowMat);
+          phoneBuzzGlowMesh.position.set(0, 0, phoneD * 0.5 + 0.004);
+          phoneBuzzGlowMesh.frustumCulled = false;
+          phoneGroup.add(phoneBuzzGlowMesh);
+        }
+
+        // Matte light-titanium back panel (-Z face) so face-down stands out cleanly
+        phoneBackTexture = makePhoneBackTexture(THREE);
+        if (phoneBackTexture) textures.push(phoneBackTexture);
+        const backGeo = new THREE.PlaneGeometry(phoneW * 0.92, phoneH * 0.94);
+        const backMat = new THREE.MeshStandardMaterial({
+          color: phoneBackTexture ? 0xffffff : 0xaab6cc,
+          map: phoneBackTexture || null,
+          roughness: 0.36,
+          metalness: 0.42,
+          emissive: 0x1c2333,
+          emissiveIntensity: 0.25
+        });
+        geometries.push(backGeo);
+        materials.push(backMat);
+        phoneBackMesh = new THREE.Mesh(backGeo, backMat);
+        phoneBackMesh.name = "ws-colead-phone-back";
+        phoneBackMesh.position.set(0, 0, -(phoneD * 0.5 + 0.0062));
+        phoneBackMesh.rotation.set(0, Math.PI, 0);
+        phoneBackMesh.frustumCulled = false;
+        phoneGroup.add(phoneBackMesh);
+      }
+
+      // Raised dark-charcoal camera module island + dual chrome lenses on the BACK (-Z)
+      const camIslandShape = makeRoundedRectShape(THREE, 0.088, 0.118, 0.018);
+      const camIslandGeo = new THREE.ExtrudeGeometry(camIslandShape, {
+        depth: 0.012,
+        bevelEnabled: true,
+        bevelThickness: 0.003,
+        bevelSize: 0.002,
+        bevelSegments: 2,
+        curveSegments: 6
+      });
+      const camIslandMat = new THREE.MeshStandardMaterial({
+        color: 0x181c24,
+        roughness: 0.22,
+        metalness: 0.65,
+        emissive: 0x0a0d14,
+        emissiveIntensity: 0.2
+      });
+      geometries.push(camIslandGeo);
+      materials.push(camIslandMat);
+      phoneCameraBumpMesh = new THREE.Mesh(camIslandGeo, camIslandMat);
+      phoneCameraBumpMesh.name = "ws-colead-phone-camera";
+      phoneCameraBumpMesh.position.set(0.036, 0.098, -(phoneD * 0.5 + 0.017));
+      phoneCameraBumpMesh.frustumCulled = false;
+      phoneGroup.add(phoneCameraBumpMesh);
+
+      if (typeof THREE.CylinderGeometry === "function") {
+        const lensGeo = new THREE.CylinderGeometry(0.022, 0.022, 0.008, 16);
+        const lensMat = new THREE.MeshStandardMaterial({
+          color: 0x67e8f9,
+          roughness: 0.12,
+          metalness: 0.85,
+          emissive: 0x1e40af,
+          emissiveIntensity: 0.55
+        });
+        const flashGeo = new THREE.CylinderGeometry(0.009, 0.009, 0.006, 12);
+        const flashMat = new THREE.MeshStandardMaterial({
+          color: 0xfef08a,
+          roughness: 0.2,
+          metalness: 0.1,
+          emissive: 0xf59e0b,
+          emissiveIntensity: 0.45
+        });
+        geometries.push(lensGeo, flashGeo);
+        materials.push(lensMat, flashMat);
+
+        for (const ly of [0.126, 0.072]) {
+          const lens = new THREE.Mesh(lensGeo, lensMat);
+          lens.rotation.set(Math.PI * 0.5, 0, 0);
+          lens.position.set(0.052, ly, -(phoneD * 0.5 + 0.021));
+          lens.frustumCulled = false;
+          phoneGroup.add(lens);
+        }
+        const flash = new THREE.Mesh(flashGeo, flashMat);
+        flash.rotation.set(Math.PI * 0.5, 0, 0);
+        flash.position.set(0.014, 0.099, -(phoneD * 0.5 + 0.020));
+        flash.frustumCulled = false;
+        phoneGroup.add(flash);
+      }
+
+      scene.add(phoneGroup);
       applyAccentVisuals();
+    }
+
+    function applyPhoneTransform() {
+      if (!phoneGroup) return;
+      phoneGroup.position.set(livePhonePose.x, livePhonePose.y, livePhonePose.z);
+      phoneGroup.rotation.set(livePhonePose.rx, livePhonePose.ry, livePhonePose.rz, "XYZ");
+    }
+
+    // Anchor the held 3D smartphone cleanly to the avatar's actual posed left palm
+    // world position (post-vrm.update) so both VRM 1.0 and VRM 0.x physically hold
+    // the phone in hand with zero floating gap regardless of arm length.
+    function syncPhoneToHand(handWorldPos) {
+      if (!phoneGroup || !handWorldPos || phoneHoldWeight <= 0.01) return;
+      if (!Number.isFinite(handWorldPos.x) || !Number.isFinite(handWorldPos.y) || !Number.isFinite(handWorldPos.z)) return;
+      const holdBlend = easeInOutCubic(clamp(phoneHoldWeight, 0, 1));
+      const anchorX = handWorldPos.x + baseScale * 0.012;
+      const anchorY = Math.max(handWorldPos.y + baseScale * 0.145, lidTopWorldY + baseScale * 0.13);
+      // Sit tucked right inside her palm/fingers while staying clearly in front of torso.
+      const anchorZ = Math.max(handWorldPos.z + baseScale * 0.025, basePos.z - baseScale * 0.24);
+      phoneGroup.position.set(
+        lerp(livePhonePose.x, anchorX, holdBlend),
+        lerp(livePhonePose.y, anchorY, holdBlend),
+        lerp(livePhonePose.z, anchorZ, holdBlend)
+      );
     }
 
     // Position the sleek laptop lid strictly in the bottom ~16-18% of the bust viewport,
@@ -937,10 +1388,33 @@
       basePos = { x: centerX, y: centerY, z: laptopZ };
       baseScale = lidScale;
       baseVisH = visH;
+      baseVisHalfW = visHalfW;
+
+      // Resting desk position for the smartphone: right beside the laptop lid
+      // on the viewer's right (+X), strictly clamped inside the viewport.
+      const phoneDeskX = centerX + Math.min(lidScale * 0.67, Math.max(lidScale * 0.55, visHalfW - lidScale * 0.14));
+      const phoneDeskY = lidTopY - lidScale * 0.03;
+      const phoneDeskZ = laptopZ + lidScale * 0.045;
+      phoneBasePos = { x: phoneDeskX, y: phoneDeskY, z: phoneDeskZ };
 
       if (laptopGroup) {
         laptopGroup.scale.set(lidScale, lidScale, lidScale);
         applyLaptopTransform();
+      }
+      if (phoneGroup) {
+        phoneGroup.scale.set(lidScale, lidScale, lidScale);
+        if (!phonePoseInitialized) {
+          livePhonePose = {
+            x: phoneBasePos.x,
+            y: phoneBasePos.y,
+            z: phoneBasePos.z,
+            rx: -46 * DEG,
+            ry: phoneFaceDown ? 168 * DEG : -12 * DEG,
+            rz: -6 * DEG
+          };
+          phonePoseInitialized = true;
+        }
+        applyPhoneTransform();
       }
 
       // Position soft upward screen bounce light with gentle distance so it bathes chin &
@@ -1086,13 +1560,37 @@
         overrideBeat === "typing" || overrideBeat === "glance-up" ||
         overrideBeat === "reading-left" || overrideBeat === "reading-right" ||
         overrideBeat === "swap-out" || overrideBeat === "swap-in" ||
-        overrideBeat === "dizzy" || overrideBeat === "dizzy-shake" || overrideBeat === "dizzy-recover"
+        overrideBeat === "dizzy" || overrideBeat === "dizzy-shake" || overrideBeat === "dizzy-recover" ||
+        overrideBeat === "knock-startle" || overrideBeat === "annoyed-tap" || overrideBeat === "wakeup-jolt" ||
+        overrideBeat === "phone-buzz" || overrideBeat === "phone-pickup" || overrideBeat === "phone-typing" ||
+        overrideBeat === "phone-putdown" || overrideBeat === "phone-facedown-merong"
       ) {
         activity = "idle";
       }
 
-      // Advance active dizzy easter egg or laptop swap timelines when in auto mode.
+      // Advance active knock / phone / dizzy / laptop swap timelines when in auto mode.
       if (overrideBeat === "auto") {
+        if (knockKind) {
+          knockElapsed += dt;
+          if (knockElapsed >= knockDuration) {
+            knockKind = "";
+            knockElapsed = 0;
+            knockDuration = 0;
+          }
+        }
+        if (phoneMode === "pickup" || phoneMode === "putdown" || phoneMode === "facedown-merong") {
+          phoneAnimElapsed += dt;
+          if (phoneMode === "pickup" && phoneAnimElapsed >= 0.45) {
+            phoneMode = "typing";
+            phoneAnimElapsed = 0;
+          } else if (phoneMode === "putdown" && phoneAnimElapsed >= PHONE_PUTDOWN_DURATION) {
+            phoneMode = phoneUnreadAgent > 0 ? "buzz" : "desk";
+            phoneAnimElapsed = 0;
+          } else if (phoneMode === "facedown-merong" && phoneAnimElapsed >= PHONE_MERONG_DURATION) {
+            phoneMode = phoneUnreadAgent > 0 ? "buzz" : "desk";
+            phoneAnimElapsed = 0;
+          }
+        }
         if (dizzyPhase !== "none") {
           dizzyElapsed += dt;
           if (dizzyPhase === "sway" && dizzyElapsed >= DIZZY_SWAY_DURATION) {
@@ -1133,22 +1631,53 @@
       const forcedDizzy = overrideBeat === "dizzy";
       const forcedDizzyShake = overrideBeat === "dizzy-shake";
       const forcedDizzyRecover = overrideBeat === "dizzy-recover";
+      const forcedKnockStartle = overrideBeat === "knock-startle";
+      const forcedWakeupJolt = overrideBeat === "wakeup-jolt";
+      const forcedAnnoyedTap = overrideBeat === "annoyed-tap";
+      const forcedPhoneBuzz = overrideBeat === "phone-buzz";
+      const forcedPhonePickup = overrideBeat === "phone-pickup";
+      const forcedPhoneTyping = overrideBeat === "phone-typing";
+      const forcedPhonePutdown = overrideBeat === "phone-putdown";
+      const forcedPhoneMerong = overrideBeat === "phone-facedown-merong";
 
       const inDizzySway = forcedDizzy || (overrideBeat === "auto" && dizzyPhase === "sway");
       const inDizzyShake = forcedDizzyShake || (overrideBeat === "auto" && dizzyPhase === "recover" && dizzyElapsed < DIZZY_RECOVER_DURATION * 0.48);
       const inDizzyRecover = forcedDizzyRecover || (overrideBeat === "auto" && dizzyPhase === "recover" && dizzyElapsed >= DIZZY_RECOVER_DURATION * 0.48);
       const inAnyDizzy = inDizzySway || inDizzyShake || inDizzyRecover;
-      const inSwap = !inAnyDizzy && (forcedSwapOut || forcedSwapIn || (overrideBeat === "auto" && swapActive));
 
-      if (!inAnyDizzy && !inSwap) {
+      const activeKnockKind = forcedKnockStartle ? "knock-startle"
+        : forcedWakeupJolt ? "wakeup-jolt"
+          : forcedAnnoyedTap ? "annoyed-tap"
+            : (overrideBeat === "auto" ? knockKind : "");
+      const inAnyKnock = !inAnyDizzy && !!activeKnockKind;
+
+      const activePhoneStage = forcedPhoneBuzz ? "buzz"
+        : forcedPhonePickup ? "pickup"
+          : forcedPhoneTyping ? "typing"
+            : forcedPhonePutdown ? "putdown"
+              : forcedPhoneMerong ? "facedown-merong"
+                : (overrideBeat === "auto" ? phoneMode : "desk");
+      const inPhoneAction = !inAnyDizzy && !inAnyKnock && activePhoneStage !== "desk";
+      const inSwap = !inAnyDizzy && !inAnyKnock && !inPhoneAction && (forcedSwapOut || forcedSwapIn || (overrideBeat === "auto" && swapActive));
+
+      if (!inAnyDizzy && !inAnyKnock && !inPhoneAction && !inSwap) {
         advanceRhythm(dt, activity, hovered);
       }
 
-      const wantGlance = !inAnyDizzy && !inSwap && (overrideBeat === "glance-up" || (overrideBeat === "auto" && activity === "idle" && (hovered || phase === "glance-up")));
-      const wantSleepy = !inAnyDizzy && !inSwap && activity === "sleepy";
-      const wantReaction = !inAnyDizzy && !inSwap && activity === "reaction";
-      const wantWorking = !inAnyDizzy && !inSwap && activity === "working";
-      const wantTyping = !inAnyDizzy && !inSwap && !wantGlance && !wantSleepy && !wantReaction && (
+      const wantPhoneHold = !inAnyDizzy && !inAnyKnock && (
+        activePhoneStage === "pickup" || activePhoneStage === "typing" ||
+        (activePhoneStage === "facedown-merong" && !forcedPhoneMerong && phoneAnimElapsed < PHONE_MERONG_DURATION * 0.48)
+      );
+      const wantPhoneTyping = !inAnyDizzy && !inAnyKnock && activePhoneStage === "typing";
+      const wantPhoneMerong = !inAnyDizzy && !inAnyKnock && activePhoneStage === "facedown-merong";
+      const wantKnockJolt = activeKnockKind === "knock-startle" || activeKnockKind === "wakeup-jolt";
+      const wantAnnoyedTap = activeKnockKind === "annoyed-tap";
+
+      const wantGlance = !inAnyDizzy && !inAnyKnock && !inPhoneAction && !inSwap && (overrideBeat === "glance-up" || (overrideBeat === "auto" && activity === "idle" && (hovered || phase === "glance-up")));
+      const wantSleepy = !inAnyDizzy && !inAnyKnock && !inPhoneAction && !inSwap && activity === "sleepy";
+      const wantReaction = !inAnyDizzy && !inAnyKnock && !inPhoneAction && !inSwap && activity === "reaction";
+      const wantWorking = !inAnyDizzy && !inAnyKnock && !inPhoneAction && !inSwap && activity === "working";
+      const wantTyping = !inAnyDizzy && !inAnyKnock && !inPhoneAction && !inSwap && !wantGlance && !wantSleepy && !wantReaction && (
         overrideBeat === "typing" ||
         overrideBeat === "working" ||
         (overrideBeat === "auto" && phase === "typing")
@@ -1161,6 +1690,11 @@
       workingWeight = damp(workingWeight, wantWorking ? 1 : 0, 5.2, dt);
       swapWeight = damp(swapWeight, inSwap ? 1 : 0, inSwap ? 11.0 : 8.5, dt);
       dizzyWeight = damp(dizzyWeight, inDizzySway ? 1 : 0, inDizzySway ? 7.5 : 9.0, dt);
+      phoneHoldWeight = damp(phoneHoldWeight, wantPhoneHold ? 1 : 0, wantPhoneHold ? 8.5 : 9.5, dt);
+      phoneTypingWeight = damp(phoneTypingWeight, wantPhoneTyping ? 1 : 0, 8.0, dt);
+      phoneMerongWeight = damp(phoneMerongWeight, wantPhoneMerong ? 1 : 0, 9.5, dt);
+      knockJoltWeight = damp(knockJoltWeight, wantKnockJolt ? 1 : 0, wantKnockJolt ? 16.0 : 9.0, dt);
+      annoyedTapWeight = damp(annoyedTapWeight, wantAnnoyedTap ? 1 : 0, 10.0, dt);
 
       // Compute laptop animated offset, head/eye choreography, and expression overlays.
       const gx = clamp(Number.isFinite(ctx.gazeX) ? ctx.gazeX : 0, -1, 1);
@@ -1419,6 +1953,91 @@
 
       // Smoothly update laptop 3D transform (direct eased curve during swap for crisp tactile arc,
       // exponentially damped during dizzy/recovery/rest for zero snapping).
+      let targetActionFxKind = "";
+      let targetActionFxAlpha = 0;
+
+      if (inAnyKnock) {
+        if (activeKnockKind === "wakeup-jolt") {
+          const joltEnv = forcedWakeupJolt ? 1.0 : Math.sin(clamp(knockElapsed / Math.max(0.2, knockDuration), 0, 1) * Math.PI);
+          wantHeadYaw = gx * 4 * DEG;
+          wantHeadPitch = -4.2 * DEG * joltEnv;
+          extraHeadRoll = 4.0 * DEG * joltEnv;
+          eyeYaw = gx * 6 * DEG;
+          eyePitch = 4.5 * DEG;
+          exprOverlay = { mode: "wakeup-jolt", surprised: 0.96, blink: 0.0, allowBlink: false };
+          targetActionFxKind = "wakeup-jolt";
+          targetActionFxAlpha = Math.max(0.25, joltEnv);
+        } else if (activeKnockKind === "annoyed-tap") {
+          const tapEnv = forcedAnnoyedTap ? 1.0 : clamp(1 - knockElapsed / Math.max(0.3, knockDuration) * 0.25, 0.3, 1);
+          wantHeadYaw = -5.5 * DEG;
+          wantHeadPitch = -1.2 * DEG;
+          extraHeadRoll = -6.8 * DEG * tapEnv;
+          eyeYaw = -3.0 * DEG;
+          eyePitch = 2.0 * DEG;
+          exprOverlay = { mode: "annoyed-tap", angry: 0.62, blink: 0.10, allowBlink: false };
+          targetActionFxKind = "annoyed-tap";
+          targetActionFxAlpha = tapEnv;
+        } else {
+          const stEnv = forcedKnockStartle ? 1.0 : Math.sin(clamp(knockElapsed / Math.max(0.2, knockDuration), 0, 1) * Math.PI);
+          wantHeadYaw = gx * 5 * DEG;
+          wantHeadPitch = -3.0 * DEG * stEnv;
+          extraHeadRoll = -3.2 * DEG * stEnv;
+          eyeYaw = gx * 8 * DEG;
+          eyePitch = 3.0 * DEG;
+          exprOverlay = { mode: "knock-startle", surprised: 0.88, blink: 0.0, allowBlink: false };
+          targetActionFxKind = "knock-startle";
+          targetActionFxAlpha = Math.max(0.25, stEnv);
+        }
+      } else if (inPhoneAction) {
+        if (activePhoneStage === "buzz") {
+          wantHeadYaw = 12.5 * DEG;
+          wantHeadPitch = 8.5 * DEG;
+          extraHeadRoll = 4.5 * DEG;
+          eyeYaw = 18.0 * DEG;
+          eyePitch = -11.5 * DEG;
+          exprOverlay = { mode: "phone-buzz", surprised: 0.36, happy: 0.16, blink: 0.0, allowBlink: false };
+          targetActionFxKind = "phone-buzz";
+          targetActionFxAlpha = 1.0;
+        } else if (activePhoneStage === "pickup" || activePhoneStage === "typing") {
+          // Gently lowers laptop lid slightly so one-hand phone lifts cleanly beside it.
+          targetOffset = { dx: -baseScale * 0.03, dy: -baseVisH * 0.032, dz: 0, rx: 1.8 * DEG, ry: 0, rz: 0 };
+          wantHeadYaw = 10.5 * DEG;
+          wantHeadPitch = 6.2 * DEG;
+          extraHeadRoll = 5.4 * DEG;
+          eyeYaw = 14.5 * DEG;
+          eyePitch = -8.5 * DEG;
+          exprOverlay = {
+            mode: activePhoneStage === "typing" ? "phone-typing" : "phone-pickup",
+            happy: 0.28,
+            relaxed: 0.16,
+            allowBlink: true
+          };
+        } else if (activePhoneStage === "facedown-merong") {
+          // Cheeky anime wink + playful merong tilt while smartphone flips face-down ("탁!").
+          wantHeadYaw = 4.5 * DEG;
+          wantHeadPitch = -1.8 * DEG;
+          extraHeadRoll = 10.5 * DEG;
+          eyeYaw = 3.5 * DEG;
+          eyePitch = 2.0 * DEG;
+          exprOverlay = {
+            mode: "phone-facedown-merong",
+            wink: 0.96,
+            happy: 0.72,
+            merong: 0.85,
+            allowBlink: false
+          };
+          targetActionFxKind = "phone-facedown-merong";
+          targetActionFxAlpha = 1.0;
+        } else if (activePhoneStage === "putdown") {
+          wantHeadYaw = 7.5 * DEG;
+          wantHeadPitch = 7.2 * DEG;
+          extraHeadRoll = 2.2 * DEG;
+          eyeYaw = 11.0 * DEG;
+          eyePitch = -10.0 * DEG;
+          exprOverlay = { mode: "phone-putdown", happy: 0.22, relaxed: 0.14, allowBlink: true };
+        }
+      }
+
       if (immediateOffset) {
         liveLaptopOffset.dx = targetOffset.dx;
         liveLaptopOffset.dy = targetOffset.dy;
@@ -1436,6 +2055,90 @@
         liveLaptopOffset.rz += (targetOffset.rz - liveLaptopOffset.rz) * la;
       }
       applyLaptopTransform();
+
+      // Compute 3D smartphone target pose & notification screen glow.
+      const phoneIsFacedownNow = forcedPhoneMerong
+        ? true
+        : (activePhoneStage === "facedown-merong" && phoneAnimElapsed >= PHONE_MERONG_DURATION * 0.48) ||
+          (activePhoneStage === "desk" && phoneFaceDown);
+      let phoneTarget = {
+        x: phoneBasePos.x,
+        y: phoneBasePos.y,
+        z: phoneBasePos.z,
+        rx: phoneIsFacedownNow ? -44 * DEG : -46 * DEG,
+        ry: phoneIsFacedownNow ? 168 * DEG : -12 * DEG,
+        rz: -6 * DEG
+      };
+      let targetPhoneGlow = 0.14;
+      let targetBuzzRingAlpha = 0.0;
+
+      if (activePhoneStage === "buzz") {
+        const vib = Math.sin(elapsed * 52);
+        const vib2 = Math.cos(elapsed * 46);
+        phoneTarget = {
+          x: phoneBasePos.x + vib * baseScale * 0.016,
+          y: phoneBasePos.y + Math.abs(vib2) * baseScale * 0.008,
+          z: phoneBasePos.z + 0.005,
+          rx: -32 * DEG,
+          ry: -14 * DEG,
+          rz: -6 * DEG + vib * 6.5 * DEG
+        };
+        targetPhoneGlow = 0.95 + 0.30 * (0.5 + 0.5 * Math.sin(elapsed * 14));
+        targetBuzzRingAlpha = 0.42 + 0.28 * (0.5 + 0.5 * Math.sin(elapsed * 14));
+      } else if (wantPhoneHold) {
+        const thumbJiggle = wantPhoneTyping ? Math.sin(elapsed * 11) * baseScale * 0.006 : 0;
+        const heldX = basePos.x + Math.min(baseScale * 0.46, Math.max(baseScale * 0.34, baseVisHalfW - baseScale * 0.28));
+        const heldY = lidTopWorldY + baseVisH * 0.195 + thumbJiggle;
+        const heldZ = basePos.z - baseScale * 0.03;
+        phoneTarget = {
+          x: heldX,
+          y: heldY,
+          z: heldZ,
+          // Sleek 3/4 held angle: camera module & metallic back angled gently toward viewer
+          // while screen faces her across the glass wall (zero face occlusion!).
+          rx: -8 * DEG,
+          ry: 144 * DEG,
+          rz: 12 * DEG + (wantPhoneTyping ? Math.sin(elapsed * 9) * 2.5 * DEG : 0)
+        };
+        targetPhoneGlow = 0.72;
+      } else if (activePhoneStage === "facedown-merong") {
+        // Flipped face-down on desk with back camera bump unmistakably facing UP & camera!
+        phoneTarget = {
+          x: phoneBasePos.x,
+          y: phoneBasePos.y + baseScale * 0.015,
+          z: phoneBasePos.z + baseScale * 0.01,
+          rx: -36 * DEG,
+          ry: 168 * DEG,
+          rz: -5 * DEG
+        };
+        targetPhoneGlow = 0.04;
+      }
+
+      const phoneA = dampAlpha(11.0, dt);
+      livePhonePose.x += (phoneTarget.x - livePhonePose.x) * phoneA;
+      livePhonePose.y += (phoneTarget.y - livePhonePose.y) * phoneA;
+      livePhonePose.z += (phoneTarget.z - livePhonePose.z) * phoneA;
+      livePhonePose.rx += (phoneTarget.rx - livePhonePose.rx) * phoneA;
+      livePhonePose.ry += (phoneTarget.ry - livePhonePose.ry) * phoneA;
+      livePhonePose.rz += (phoneTarget.rz - livePhonePose.rz) * phoneA;
+      applyPhoneTransform();
+
+      phoneScreenGlow = damp(phoneScreenGlow, targetPhoneGlow, 10.0, dt);
+      if (phoneScreenMesh?.material) {
+        phoneScreenMesh.material.emissiveIntensity = phoneScreenGlow;
+      }
+      if (phoneBuzzGlowMesh?.material) {
+        phoneBuzzGlowMesh.material.opacity = damp(phoneBuzzGlowMesh.material.opacity ?? 0, targetBuzzRingAlpha, 12.0, dt);
+      }
+
+      if (targetActionFxKind) {
+        actionFxKind = targetActionFxKind;
+      }
+      actionFxAlpha = damp(actionFxAlpha, targetActionFxAlpha, targetActionFxAlpha > actionFxAlpha ? 14.0 : 10.0, dt);
+      if (actionFxAlpha < 0.01) {
+        actionFxAlpha = 0;
+        if (!targetActionFxKind) actionFxKind = "";
+      }
 
       // Smoothly interpolate screen bounce color toward active displayed accent.
       const goalRgb = hexToRgb(accentHex);
@@ -1497,6 +2200,11 @@
         swapWeight,
         dizzyWeight,
         dizzyTime,
+        phoneHoldWeight,
+        phoneTypingWeight,
+        phoneMerongWeight,
+        knockJoltWeight,
+        annoyedTapWeight,
         extraHeadRoll,
         tiltDir: glanceTiltDir,
         headYaw: wantHeadYaw,
@@ -1508,12 +2216,14 @@
         ? overrideBeat
         : inDizzySway ? "dizzy"
           : (inDizzyShake || inDizzyRecover) ? "dizzy-recover"
-            : swapStage !== "none" ? swapStage
-              : wantSleepy ? "sleepy"
-                : wantReaction ? "reaction"
-                  : wantGlance ? "glance-up"
-                    : wantWorking ? (wantTyping ? "working" : "working-read")
-                      : (wantTyping ? "typing" : "reading");
+            : inAnyKnock ? activeKnockKind
+              : inPhoneAction ? ("phone-" + activePhoneStage)
+                : swapStage !== "none" ? swapStage
+                  : wantSleepy ? "sleepy"
+                    : wantReaction ? "reaction"
+                      : wantGlance ? "glance-up"
+                        : wantWorking ? (wantTyping ? "working" : "working-read")
+                          : (wantTyping ? "typing" : "reading");
 
       return {
         beat: activeMode,
@@ -1531,6 +2241,10 @@
         dizzyActive: inAnyDizzy,
         dizzyFxAlpha,
         dizzyTime,
+        actionFxKind,
+        actionFxAlpha,
+        phonePose: wantPhoneHold ? "held" : (activePhoneStage === "buzz" ? "buzz" : (phoneIsFacedownNow ? "facedown" : "desk")),
+        phoneFaceDown: phoneIsFacedownNow,
         hover: hovered
       };
     }
@@ -1693,8 +2407,154 @@
         swapWeight = 0;
         dizzyWeight = 0;
         dizzyFxAlpha = key === "dizzy-shake" ? 0.30 : 0;
+      } else if (key === "knock-startle" || key === "wakeup-jolt" || key === "annoyed-tap") {
+        typingWeight = 0;
+        glanceWeight = 0;
+        sleepyWeight = 0;
+        workingWeight = 0;
+        swapWeight = 0;
+        dizzyWeight = 0;
+        dizzyFxAlpha = 0;
+        phoneHoldWeight = 0;
+        phoneTypingWeight = 0;
+        phoneMerongWeight = 0;
+        knockJoltWeight = key === "annoyed-tap" ? 0 : 1;
+        annoyedTapWeight = key === "annoyed-tap" ? 1 : 0;
+        actionFxKind = key;
+        actionFxAlpha = 1;
+      } else if (key === "phone-buzz" || key === "phone-pickup" || key === "phone-typing" || key === "phone-putdown" || key === "phone-facedown-merong") {
+        typingWeight = 0;
+        glanceWeight = 0;
+        sleepyWeight = 0;
+        workingWeight = 0;
+        swapWeight = 0;
+        dizzyWeight = 0;
+        dizzyFxAlpha = 0;
+        knockJoltWeight = 0;
+        annoyedTapWeight = 0;
+        phoneHoldWeight = (key === "phone-pickup" || key === "phone-typing") ? 1 : 0;
+        phoneTypingWeight = key === "phone-typing" ? 1 : 0;
+        phoneMerongWeight = key === "phone-facedown-merong" ? 1 : 0;
+        phoneFaceDown = key === "phone-facedown-merong";
+        actionFxKind = (key === "phone-buzz" || key === "phone-facedown-merong") ? key : "";
+        actionFxAlpha = actionFxKind ? 1 : 0;
       }
       return overrideBeat;
+    }
+
+    function triggerKnock(opts = {}) {
+      const nowSec = currentClockSec(opts?.nowMs);
+      while (knockTimestamps.length && nowSec - knockTimestamps[0] > KNOCK_WINDOW_SEC) {
+        knockTimestamps.shift();
+      }
+      const isSleepy = !!opts?.sleepy || sleepyWeight > 0.35 || overrideBeat === "sleepy" || lastActivity === "sleepy";
+      if (overrideBeat === "sleepy") overrideBeat = "auto";
+      knockTimestamps.push(nowSec);
+      knockCount = knockTimestamps.length;
+
+      if (isSleepy) {
+        knockTimestamps.length = 0;
+        knockCount = 1;
+        sleepyWeight = 0;
+        knockKind = "wakeup-jolt";
+        knockElapsed = 0;
+        knockDuration = KNOCK_WAKEUP_DURATION;
+        return { kind: "wakeup_jolt", count: 1, wokeFromSleepy: true };
+      }
+      if (knockTimestamps.length >= KNOCK_ANNOYED_COUNT) {
+        knockTimestamps.length = 0;
+        knockKind = "annoyed-tap";
+        knockElapsed = 0;
+        knockDuration = KNOCK_ANNOYED_DURATION;
+        return { kind: "annoyed_tap", count: knockCount, wokeFromSleepy: false };
+      }
+      knockKind = "knock-startle";
+      knockElapsed = 0;
+      knockDuration = KNOCK_STARTLE_DURATION;
+      return { kind: "knock_startle", count: knockCount, wokeFromSleepy: false };
+    }
+
+    function triggerGesture(gestureName) {
+      const g = typeof gestureName === "string" ? gestureName.trim().toLowerCase() : "";
+      if (!g) return false;
+      if (g === "phone_buzz") {
+        phoneFaceDown = false;
+        phoneMode = "buzz";
+        phoneAnimElapsed = 0;
+        return true;
+      }
+      if (g === "phone_pickup") {
+        phoneFaceDown = false;
+        phoneMode = "pickup";
+        phoneAnimElapsed = 0;
+        return true;
+      }
+      if (g === "phone_typing") {
+        phoneFaceDown = false;
+        phoneMode = "typing";
+        phoneAnimElapsed = 0;
+        return true;
+      }
+      if (g === "phone_putdown") {
+        phoneFaceDown = false;
+        phoneMode = "putdown";
+        phoneAnimElapsed = 0;
+        return true;
+      }
+      if (g === "phone_merong_facedown") {
+        phoneFaceDown = true;
+        phoneMode = "facedown-merong";
+        phoneAnimElapsed = 0;
+        return true;
+      }
+      if (g === "knock_startle") {
+        knockKind = "knock-startle";
+        knockElapsed = 0;
+        knockDuration = KNOCK_STARTLE_DURATION;
+        return true;
+      }
+      if (g === "wakeup_jolt") {
+        knockKind = "wakeup-jolt";
+        knockElapsed = 0;
+        knockDuration = KNOCK_WAKEUP_DURATION;
+        return true;
+      }
+      if (g === "annoyed_tap") {
+        knockKind = "annoyed-tap";
+        knockElapsed = 0;
+        knockDuration = KNOCK_ANNOYED_DURATION;
+        return true;
+      }
+      return false;
+    }
+
+    function setPhoneState(snap) {
+      if (!snap || typeof snap !== "object") return getCoLeadState();
+      const prevState = phoneLastSnapState;
+      const nextState = typeof snap.state === "string" && snap.state ? snap.state : "laptop_ambient";
+      const nextPosture = typeof snap.posture === "string" && snap.posture ? snap.posture : "laptop";
+      const unread = Number.isFinite(snap.unreadAgent) ? Math.max(0, snap.unreadAgent) : 0;
+      const faceDown = !!snap.phoneFaceDown;
+      phoneUnreadAgent = unread;
+      phoneFaceDown = faceDown;
+      phoneLastSnapState = nextState;
+
+      if (nextState === "phone_active" || nextPosture === "phone") {
+        if (phoneMode !== "pickup" && phoneMode !== "typing") {
+          phoneMode = "pickup";
+          phoneAnimElapsed = 0;
+        }
+      } else if (unread > 0) {
+        phoneMode = "buzz";
+        phoneAnimElapsed = 0;
+      } else if (prevState === "phone_active") {
+        phoneMode = faceDown ? "facedown-merong" : "putdown";
+        phoneAnimElapsed = 0;
+      } else if (phoneMode === "pickup" || phoneMode === "typing" || phoneMode === "buzz") {
+        phoneMode = faceDown ? "facedown-merong" : "putdown";
+        phoneAnimElapsed = 0;
+      }
+      return getCoLeadState();
     }
 
     function setHover(flag) {
@@ -1754,6 +2614,16 @@
         recentSwitchCount: switchTimestamps.length,
         screenGlow: Number(screenGlow.toFixed(3)),
         hasLaptopProp: !!laptopGroup,
+        hasPhoneProp: !!phoneGroup,
+        phoneMode: overrideBeat.startsWith("phone-") ? overrideBeat : phoneMode,
+        phonePose: phoneHoldWeight > 0.35 ? "held"
+          : (overrideBeat === "phone-buzz" || phoneMode === "buzz") ? "buzz"
+            : (overrideBeat === "phone-facedown-merong" || phoneFaceDown) ? "facedown" : "desk",
+        phoneFaceDown: overrideBeat === "phone-facedown-merong" ? true : phoneFaceDown,
+        phoneScreenGlow: Number(phoneScreenGlow.toFixed(3)),
+        knockActive: !!knockKind || overrideBeat === "knock-startle" || overrideBeat === "wakeup-jolt" || overrideBeat === "annoyed-tap",
+        knockKind: (overrideBeat === "knock-startle" || overrideBeat === "wakeup-jolt" || overrideBeat === "annoyed-tap") ? overrideBeat : knockKind,
+        knockCount,
         laptopTopViewportPct: Number(lidTopViewportPct.toFixed(2)),
         chinViewportPct: Number(chinViewportPct.toFixed(2)),
         headViewportPct: Number(headViewportPct.toFixed(2))
@@ -1766,6 +2636,7 @@
 
     function dispose() {
       if (laptopGroup && scene) scene.remove(laptopGroup);
+      if (phoneGroup && scene) scene.remove(phoneGroup);
       if (screenLight && scene) scene.remove(screenLight);
       for (const g of geometries) { try { g.dispose?.(); } catch (_) { /* ignore */ } }
       for (const m of materials) { try { m.dispose?.(); } catch (_) { /* ignore */ } }
@@ -1773,18 +2644,25 @@
       geometries.length = 0;
       materials.length = 0;
       textures.length = 0;
-      laptopGroup = lidMesh = rimMesh = emblemMesh = screenLight = lidTexture = emblemTexture = null;
+      laptopGroup = lidMesh = rimMesh = emblemMesh = null;
+      phoneGroup = phoneBodyMesh = phoneScreenMesh = phoneBackMesh = phoneCameraBumpMesh = phoneBuzzGlowMesh = null;
+      screenLight = lidTexture = emblemTexture = phoneScreenTexture = phoneBackTexture = null;
       lastFraming = null;
+      phonePoseInitialized = false;
     }
 
     return {
       layoutProp,
       step,
+      syncPhoneToHand,
       setLaptopAccent,
       syncInitialSession,
       onSessionSwitch,
       setCoLeadBeat,
       setHover,
+      triggerKnock,
+      triggerGesture,
+      setPhoneState,
       getCoLeadState,
       debugState,
       dispose
@@ -1797,6 +2675,7 @@
     vrmDizzyFx: {
       computeDizzyLayout,
       drawDizzyFx,
+      drawActionFx,
       DIZZY_STAR_COLORS
     },
     vrmCoLeadMath: {
