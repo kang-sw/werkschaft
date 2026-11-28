@@ -378,15 +378,14 @@ func (f *companionFixture) callMCP(hostedKey, method string, params any) rpcWire
 		convID = wsmailbox.ReplyID(hostedKey)
 	}
 	srv := mcp.NewServerWithOptions(mcp.ServerOptions{
-		Root:                f.root,
-		Version:             version,
-		Env:                 mcp.EnvFromMap(envMap),
-		Conversation:        convID,
-		Companion:           f.daemon,
-		CompanionDelegation: f.rt,
-		DaemonControl:       f.daemon,
-		RecordReader:        f.agents,
-		Agents:              f.agents,
+		Root:          f.root,
+		Version:       version,
+		Env:           mcp.EnvFromMap(envMap),
+		Conversation:  convID,
+		Companion:     f.daemon,
+		DaemonControl: f.daemon,
+		RecordReader:  f.agents,
+		Agents:        f.agents,
 	})
 	defer srv.Close()
 
@@ -486,7 +485,6 @@ func waitCompanionUntil(t *testing.T, timeout time.Duration, desc string, cond f
 
 func TestCompanionRuntimeIdlePerformsZeroHostedTurns(t *testing.T) {
 	f := newCompanionFixture(t, "agent")
-	f.rt.tickInterval = 25 * time.Millisecond
 	f.rt.Start()
 	time.Sleep(120 * time.Millisecond)
 	if b, w := f.rt.launchCounts(); b != 0 || w != 0 {

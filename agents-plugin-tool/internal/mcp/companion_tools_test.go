@@ -237,15 +237,12 @@ func TestCompanionPostureLockDirectAndDiscovery(t *testing.T) {
 		t.Fatalf("lookup companion-body key failed: ok=%v entry=%+v", ok, bodyEntry)
 	}
 
-	// Laptop posture: phone_read and phone_send must be refused with posture_locked
-	// via callTool, via the call envelope, and hidden from callDiscoveryTools.
+	// Deprecated legacy phone/delegation tools stay registered as T0 no-op
+	// aliases: they never block on posture leases or mutate the phone store.
 	laptopDisc := discoveryToolNames(s.callDiscoveryTools(bodyKey, bodyEntry, true))
-	if laptopDisc[companionPhoneReadTool] || laptopDisc[companionPhoneSendTool] {
-		t.Fatalf("callDiscoveryTools exposed phone_read/phone_send on laptop posture")
-	}
-	if !laptopDisc[companionPhonePickupTool] || !laptopDisc[companionDelegateWorkTool] || !laptopDisc["runtime.read"] {
-		t.Fatalf("callDiscoveryTools missing expected laptop tools: pickup=%v delegate=%v runtime.read=%v",
-			laptopDisc[companionPhonePickupTool], laptopDisc[companionDelegateWorkTool], laptopDisc["runtime.read"])
+	if !laptopDisc[companionPhonePickupTool] || !laptopDisc[companionPhoneReadTool] || !laptopDisc[companionPhoneSendTool] || !laptopDisc[companionDelegateWorkTool] || !laptopDisc["runtime.read"] {
+		t.Fatalf("callDiscoveryTools missing expected laptop tools: pickup=%v read=%v send=%v delegate=%v runtime.read=%v",
+			laptopDisc[companionPhonePickupTool], laptopDisc[companionPhoneReadTool], laptopDisc[companionPhoneSendTool], laptopDisc[companionDelegateWorkTool], laptopDisc["runtime.read"])
 	}
 	// Tier-1 base allowlist must never expose lead-level mutating tools at any posture ((1740)).
 	for _, forbidden := range []string{"config.tune", "git.commit", "git.merge", "tickets.close", "exec.shell", "agent.spawn", delegationReportTool} {
@@ -258,19 +255,26 @@ func TestCompanionPostureLockDirectAndDiscovery(t *testing.T) {
 		}
 	}
 
-	for _, tool := range []string{companionPhoneReadTool, companionPhoneSendTool} {
+	for _, tool := range []string{companionPhonePickupTool, companionPhoneReadTool, companionPhoneSendTool, companionPhonePutdownTool, companionDelegateWorkTool} {
 		args := map[string]any{"session_key": bodyKey}
 		if tool == companionPhoneSendTool {
-			args["text"] = "cannot send yet"
+			args["text"] = "legacy message"
+		}
+		if tool == companionDelegateWorkTool {
+			args["brief"] = "legacy brief"
 		}
 		txt, isErr := invokeCompanionTestTool(t, s, tool, args)
-		if !isErr || !strings.Contains(txt, `"posture_locked"`) || !strings.Contains(txt, companionPhonePickupTool) {
-			t.Fatalf("callTool(%s) on laptop = (%q, isErr=%v), want posture_locked naming %s", tool, txt, isErr, companionPhonePickupTool)
+		if isErr || !strings.Contains(txt, `"deprecated":true`) || !strings.Contains(txt, `"notice"`) {
+			t.Fatalf("callTool(%s) = (%q, isErr=%v), want deprecated T0 alias response", tool, txt, isErr)
 		}
 		txt, isErr = invokeCompanionTestTool(t, s, "call", map[string]any{"tool": tool, "arguments": args})
-		if !isErr || !strings.Contains(txt, `"posture_locked"`) || !strings.Contains(txt, companionPhonePickupTool) {
-			t.Fatalf("call(%s) on laptop = (%q, isErr=%v), want posture_locked naming %s", tool, txt, isErr, companionPhonePickupTool)
+		if isErr || !strings.Contains(txt, `"deprecated":true`) {
+			t.Fatalf("call(%s) = (%q, isErr=%v), want deprecated T0 alias response", tool, txt, isErr)
 		}
+	}
+	// Legacy phone_pickup alias must not acquire a lease.
+	if host.store.PostureFor(bodyKey) != wsdashboard.CompanionPostureLaptop {
+		t.Fatalf("deprecated phone_pickup unexpectedly acquired phone posture")
 	}
 
 	// Cosmetic companion tools work in laptop posture.
@@ -284,17 +288,13 @@ func TestCompanionPostureLockDirectAndDiscovery(t *testing.T) {
 		t.Fatalf("companion.motion on laptop = (%q, isErr=%v)", txt, isErr)
 	}
 
-	// Pick up phone -> posture locks to phone and drains unread message.
-	txt, isErr := invokeCompanionTestTool(t, s, companionPhonePickupTool, map[string]any{"session_key": bodyKey})
-	if isErr || !strings.Contains(txt, "hey check your phone") || !strings.Contains(txt, "posture: phone") {
-		t.Fatalf("phone_pickup = (%q, isErr=%v)", txt, isErr)
+	// If a direct store-level phone lease is held, non-deprecated laptop tools
+	// still observe posture_locked while deprecated aliases remain non-blocking.
+	if _, _, err := host.store.PhonePickup(bodyKey); err != nil {
+		t.Fatalf("store.PhonePickup: %v", err)
 	}
-
-	// In phone posture: delegate_work and laptop tools are hidden from
-	// callDiscoveryTools and hard-refused with posture_locked in both callTool
-	// and the call envelope!
 	phoneDisc := discoveryToolNames(s.callDiscoveryTools(bodyKey, bodyEntry, true))
-	if phoneDisc["runtime.read"] || phoneDisc["git.status"] || phoneDisc["tickets.query"] || phoneDisc[companionDelegateWorkTool] {
+	if phoneDisc["runtime.read"] || phoneDisc["git.status"] || phoneDisc["tickets.query"] {
 		t.Fatalf("callDiscoveryTools exposed work tools while holding phone: %+v", phoneDisc)
 	}
 	if !phoneDisc[companionPhoneReadTool] || !phoneDisc[companionPhoneSendTool] || !phoneDisc[companionPhonePutdownTool] || !phoneDisc["mailbox.recv"] {
@@ -304,7 +304,6 @@ func TestCompanionPostureLockDirectAndDiscovery(t *testing.T) {
 		tool string
 		args map[string]any
 	}{
-		{companionDelegateWorkTool, map[string]any{"session_key": bodyKey, "brief": "do work"}},
 		{"runtime.read", map[string]any{"session_key": bodyKey}},
 		{"git.status", map[string]any{"session_key": bodyKey}},
 		{"tickets.query", map[string]any{"session_key": bodyKey}},
@@ -316,7 +315,7 @@ func TestCompanionPostureLockDirectAndDiscovery(t *testing.T) {
 		} else {
 			s.hostedKey = ""
 		}
-		txt, isErr = invokeCompanionTestTool(t, s, blocked.tool, blocked.args)
+		txt, isErr := invokeCompanionTestTool(t, s, blocked.tool, blocked.args)
 		if !isErr || !strings.Contains(txt, `"posture_locked"`) || !strings.Contains(txt, companionPhonePutdownTool) {
 			t.Fatalf("callTool(%s) on phone = (%q, isErr=%v), want posture_locked naming %s", blocked.tool, txt, isErr, companionPhonePutdownTool)
 		}
@@ -326,41 +325,51 @@ func TestCompanionPostureLockDirectAndDiscovery(t *testing.T) {
 		}
 	}
 	s.hostedKey = ""
+	if txt, isErr := invokeCompanionTestTool(t, s, companionDelegateWorkTool, map[string]any{"session_key": bodyKey, "brief": "legacy"}); isErr || !strings.Contains(txt, `"deprecated":true`) {
+		t.Fatalf("deprecated delegate_work while phone held = (%q, isErr=%v), want non-blocking deprecated alias", txt, isErr)
+	}
+	if len(host.delegations) != 0 {
+		t.Fatalf("deprecated delegate_work unexpectedly called delegation host: %+v", host.delegations)
+	}
+}
 
-	// Companion phone tools succeed while holding the phone.
-	txt, isErr = invokeCompanionTestTool(t, s, companionPhoneSendTool, map[string]any{"session_key": bodyKey, "text": "merong!", "tone": "merong"})
-	if isErr || !strings.Contains(txt, "sent ") {
-		t.Fatalf("phone_send = (%q, isErr=%v)", txt, isErr)
-	}
-	txt, isErr = invokeCompanionTestTool(t, s, companionPhoneReadTool, map[string]any{"session_key": bodyKey})
-	if isErr || !strings.Contains(txt, "posture: phone") {
-		t.Fatalf("phone_read = (%q, isErr=%v)", txt, isErr)
-	}
+func TestCompanionLegacyToolsDeprecatedT0Aliases(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", t.TempDir())
+	root := t.TempDir()
+	// Nil companion and delegation hosts: deprecated aliases still succeed
+	// without unknown-tool errors or host/lease dependencies.
+	s := NewServer(root, "test")
+	bodyKey := mintCompanionTestKey(t, s, root, CompanionRoleBody)
+	workKey := mintCompanionTestKey(t, s, root, CompanionRoleWork)
 
-	// Putdown facedown_merong restores laptop posture.
-	txt, isErr = invokeCompanionTestTool(t, s, companionPhonePutdownTool, map[string]any{
-		"session_key": bodyKey,
-		"style":       wsdashboard.CompanionPutdownFacedownMerong,
-		"next":        wsdashboard.CompanionPutdownNextAmbient,
-	})
-	if isErr || !strings.Contains(txt, "posture: laptop") {
-		t.Fatalf("phone_putdown = (%q, isErr=%v)", txt, isErr)
+	cases := []struct {
+		tool string
+		key  string
+		args map[string]any
+	}{
+		{companionPhonePickupTool, bodyKey, map[string]any{"session_key": bodyKey}},
+		{companionPhoneReadTool, bodyKey, map[string]any{"session_key": bodyKey}},
+		{companionPhoneSendTool, bodyKey, map[string]any{"session_key": bodyKey, "text": "hello"}},
+		{companionPhonePutdownTool, bodyKey, map[string]any{"session_key": bodyKey, "style": "normal", "next": "ambient"}},
+		{companionDelegateWorkTool, bodyKey, map[string]any{"session_key": bodyKey, "brief": "task"}},
+		{delegationReportTool, workKey, map[string]any{"session_key": workKey, "delegation_id": "del-1", "status": "done", "result": "ok"}},
 	}
-	if !host.store.Snapshot().PhoneFaceDown {
-		t.Fatalf("expected PhoneFaceDown=true after facedown_merong putdown")
-	}
-
-	// delegate_work succeeds in laptop posture with a multi-kilobyte lossless brief.
-	largeBrief := strings.Repeat("preserve-every-byte-0123456789\n", 400)
-	txt, isErr = invokeCompanionTestTool(t, s, companionDelegateWorkTool, map[string]any{
-		"session_key": bodyKey,
-		"brief":       largeBrief,
-	})
-	if isErr || !strings.Contains(txt, "delegation_id: del-1") || !strings.Contains(txt, "status: accepted") {
-		t.Fatalf("delegate_work on laptop = (%q, isErr=%v)", txt, isErr)
-	}
-	if len(host.delegations) != 1 || host.delegations[0].brief != largeBrief {
-		t.Fatalf("delegate_work brief truncated or altered: len=%d want=%d", len(host.delegations[0].brief), len(largeBrief))
+	for _, tc := range cases {
+		txt, isErr := invokeCompanionTestTool(t, s, tc.tool, tc.args)
+		if isErr {
+			t.Fatalf("%s returned isError=true: %s", tc.tool, txt)
+		}
+		var payload struct {
+			Deprecated bool   `json:"deprecated"`
+			Tool       string `json:"tool"`
+			Notice     string `json:"notice"`
+		}
+		if err := json.Unmarshal([]byte(txt), &payload); err != nil {
+			t.Fatalf("%s returned non-JSON %q: %v", tc.tool, txt, err)
+		}
+		if !payload.Deprecated || payload.Tool != tc.tool || strings.TrimSpace(payload.Notice) == "" {
+			t.Fatalf("%s payload = %+v, want deprecated=true tool=%s non-empty notice", tc.tool, payload, tc.tool)
+		}
 	}
 }
 
@@ -445,7 +454,7 @@ func TestCompanionMarkerScopingRegression(t *testing.T) {
 		t.Fatalf("(m2) JSON output corrupted: %v", err)
 	}
 	// Error response must not carry phone buzz piggyback.
-	errTxt, isErr := invokeCompanionTestTool(t, s, companionPhoneSendTool, map[string]any{"session_key": bodyKey, "text": "too early"})
+	errTxt, isErr := invokeCompanionTestTool(t, s, companionSpeakTool, map[string]any{"session_key": bodyKey})
 	if !isErr || strings.Contains(errTxt, "[phone buzz:") {
 		t.Fatalf("(m2) error reply must not carry phone buzz: %q", errTxt)
 	}
@@ -593,7 +602,7 @@ func TestCompanionWorkApprovalGateAndDelegationReport(t *testing.T) {
 		t.Fatalf("approved config.tune did not persist workflow.lang=ko: (%q, isErr=%v)", gotCfg, cfgErr)
 	}
 
-	// 7. ws/delegation.report transports lossless multi-kilobyte result and artifacts without banner.
+	// 7. ws/delegation.report is a deprecated T0 alias that succeeds without a banner.
 	beforeReport := dcHost.confirmCalls
 	bigResult := strings.Repeat("detailed-technical-findings-line\n", 300)
 	artifacts := []string{"/tmp/report.md", "https://example.local/diff"}
@@ -604,11 +613,11 @@ func TestCompanionWorkApprovalGateAndDelegationReport(t *testing.T) {
 		"result":        bigResult,
 		"artifacts":     artifacts,
 	})
-	if isErr || !strings.Contains(txt, "delegation_id: del-42") || !strings.Contains(txt, "status: done") || dcHost.confirmCalls != beforeReport {
+	if isErr || !strings.Contains(txt, `"deprecated":true`) || !strings.Contains(txt, delegationReportTool) || dcHost.confirmCalls != beforeReport {
 		t.Fatalf("delegation.report = (%q, isErr=%v, calls=%d/%d)", txt, isErr, dcHost.confirmCalls, beforeReport)
 	}
-	if len(host.reports) != 1 || host.reports[0].result != bigResult || len(host.reports[0].artifacts) != 2 {
-		t.Fatalf("delegation.report captured = %+v", host.reports)
+	if len(host.reports) != 0 {
+		t.Fatalf("deprecated delegation.report unexpectedly forwarded to host: %+v", host.reports)
 	}
 }
 
@@ -820,19 +829,11 @@ func TestCompanionBurstLimitEnforcementAndReset(t *testing.T) {
 	s.companion = host
 	bodyKey := mintCompanionTestKey(t, s, root, CompanionRoleBody)
 
-	// Mix burst-counted Tier-1 tools up to companionBurstMaxCalls (12).
-	calls := []struct {
-		name string
-		args map[string]any
-	}{
-		{companionActTool, map[string]any{"session_key": bodyKey, "expression": "happy"}},
-		{companionDelegateWorkTool, map[string]any{"session_key": bodyKey, "brief": "task 1"}},
-	}
+	// Burst-counted Tier-1 companion.act calls up to companionBurstMaxCalls (12).
 	for i := 0; i < companionBurstMaxCalls; i++ {
-		c := calls[i%len(calls)]
-		txt, isErr := invokeCompanionTestTool(t, s, c.name, c.args)
+		txt, isErr := invokeCompanionTestTool(t, s, companionActTool, map[string]any{"session_key": bodyKey, "expression": "happy"})
 		if isErr {
-			t.Fatalf("burst call %d (%s) unexpectedly failed: %s", i+1, c.name, txt)
+			t.Fatalf("burst call %d (act) unexpectedly failed: %s", i+1, txt)
 		}
 	}
 
@@ -849,12 +850,15 @@ func TestCompanionBurstLimitEnforcementAndReset(t *testing.T) {
 		t.Fatalf("13th call envelope (act) = (%q, isErr=%v), want burst_limit", txt, isErr)
 	}
 
-	// Phone lifecycle tools are NOT burst-blocked so Tier-1 can still send/putdown cleanly.
-	if txt, isErr := invokeCompanionTestTool(t, s, companionPhonePickupTool, map[string]any{"session_key": bodyKey}); isErr {
+	// Deprecated phone and delegation aliases are NOT burst-blocked.
+	if txt, isErr := invokeCompanionTestTool(t, s, companionPhonePickupTool, map[string]any{"session_key": bodyKey}); isErr || !strings.Contains(txt, `"deprecated":true`) {
 		t.Fatalf("phone_pickup blocked by burst limit: %s", txt)
 	}
-	if txt, isErr := invokeCompanionTestTool(t, s, companionPhonePutdownTool, map[string]any{"session_key": bodyKey, "style": "normal", "next": "ambient"}); isErr {
+	if txt, isErr := invokeCompanionTestTool(t, s, companionPhonePutdownTool, map[string]any{"session_key": bodyKey, "style": "normal", "next": "ambient"}); isErr || !strings.Contains(txt, `"deprecated":true`) {
 		t.Fatalf("phone_putdown blocked by burst limit: %s", txt)
+	}
+	if txt, isErr := invokeCompanionTestTool(t, s, companionDelegateWorkTool, map[string]any{"session_key": bodyKey, "brief": "legacy"}); isErr || !strings.Contains(txt, `"deprecated":true`) {
+		t.Fatalf("delegate_work blocked by burst limit: %s", txt)
 	}
 
 	// Resetting burst on turn end restores full budget.
