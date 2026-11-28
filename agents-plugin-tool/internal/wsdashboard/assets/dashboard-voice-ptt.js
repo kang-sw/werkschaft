@@ -1,10 +1,10 @@
-// Inline voice span lifecycle and Spacebar 1.0 s hold push-to-talk gesture.
+// Inline voice span lifecycle and Spacebar 0.5 s hold push-to-talk gesture.
 // Coexists with WsCapsules (read() excludes [data-voice-span]) and WsMdEditor
 // (skips reconcile while a span is live, then reconciles once after commit).
 (function () {
   "use strict";
 
-  var DEFAULT_HOLD_MS = 1000;
+  var DEFAULT_HOLD_MS = 500;
 
   function translate(key) {
     if (typeof window.wsT === "function") return window.wsT(key);
@@ -13,6 +13,13 @@
 
   function isSpaceKey(e) {
     return !!(e && (e.key === " " || e.code === "Space"));
+  }
+
+  // Events an IME hands over without a usable key identity (macOS Korean IME
+  // reports held-Space repeats as keyCode 229 / key "Process"). While a Space
+  // hold is pending or active they can only belong to that held key.
+  function isImeKey(e) {
+    return !!(e && (e.keyCode === 229 || e.isComposing || e.key === "Process" || e.key === "Unidentified"));
   }
 
   // Collapse consecutive horizontal spaces immediately preceding the caret down
@@ -420,25 +427,30 @@
       if (armed && !active) disarm();
     }
 
-    // True when cur is prev plus exactly one inserted " " (the Space keystroke
-    // that armed the hold typing itself into the composer).
-    function isSingleSpaceInsertion(prev, cur) {
-      if (cur.length !== prev.length + 1) return false;
-      for (var i = 0; i < cur.length; i++) {
-        if (cur.charAt(i) === " " && cur.slice(0, i) + cur.slice(i + 1) === prev) return true;
-      }
-      return false;
+    // True when cur is prev plus one or more inserted spaces at a single point:
+    // the arming Space typing itself into the composer, plus any key-repeat
+    // spaces the browser inserted before PTT could suppress them (WebKit may
+    // type a trailing space as U+00A0, so both count as a space).
+    function isSpaceOnlyInsertion(prev, cur) {
+      prev = prev.replace(/ /g, " ");
+      cur = cur.replace(/ /g, " ");
+      if (cur.length <= prev.length) return false;
+      var i = 0;
+      while (i < prev.length && prev.charAt(i) === cur.charAt(i)) i++;
+      var added = cur.length - prev.length;
+      return cur.slice(i + added) === prev.slice(i) && /^ +$/.test(cur.slice(i, i + added));
     }
 
-    // Anything other than the arming Space's own typed character means the user
-    // is typing/clicking, not holding to talk.
+    // Anything other than the held Space's own typed character(s) means the user
+    // is typing/clicking, not holding to talk. Space repeats are not breakers:
+    // they begin well before holdMs and carry the same space data.
     function onPendingBreaker(e) {
       if (!armed || active) return;
       var type = e && e.type;
       if (type === "beforeinput" || type === "input") {
-        if (e.data === " ") return;
+        if (typeof e.data === "string" && /^[  ]+$/.test(e.data)) return;
         if (type === "input" && (e.data === undefined || e.data === null) &&
-            isSingleSpaceInsertion(armValue, String(ctext.value || ""))) return;
+            isSpaceOnlyInsertion(armValue, String(ctext.value || ""))) return;
       }
       disarm();
     }
@@ -457,14 +469,21 @@
     // on the editor). The `armed` guard below makes the second one a no-op.
     function onKeyDown(e) {
       if (!e) return;
-      if (!isSpaceKey(e)) {
-        disarmPending();
-        return;
-      }
+      // Key repeat belongs to the held key. Decide it before anything else so
+      // a repeat tick (before or after holdMs) can never disarm or restart the
+      // hold, even when an IME reports it without Space's key identity.
       if (e.repeat) {
         if (armed || active) {
-          if (typeof e.preventDefault === "function") e.preventDefault();
+          if (isSpaceKey(e) || isImeKey(e)) {
+            if (typeof e.preventDefault === "function") e.preventDefault();
+          } else {
+            disarmPending();
+          }
         }
+        return;
+      }
+      if (!isSpaceKey(e)) {
+        disarmPending();
         return;
       }
       if (!isComposerTarget(e.target)) return;
@@ -538,14 +557,16 @@
     }
 
     function onDocKeyUp(e) {
-      if (!isSpaceKey(e)) return;
       if (!armed && !active) return;
+      if (!isSpaceKey(e) && !isImeKey(e)) return;
       releaseFromPTT(e);
     }
 
+    // The recording lock disables the composer, so the editor loses focus by
+    // design (possibly after the lock guard lapsed). An active hold ends on
+    // Space keyup, window blur, Escape or teardown, never on that blur.
     function onEditorBlur() {
-      if (!armed && !active) return;
-      if (active && lockBlurSuppressed) return;
+      if (!armed || active) return;
       releaseFromPTT(null);
     }
 
