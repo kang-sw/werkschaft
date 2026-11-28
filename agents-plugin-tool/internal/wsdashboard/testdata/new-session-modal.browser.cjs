@@ -249,11 +249,21 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
           assert.equal(await modal.locator('.ns-adv-cap [data-mode="auto"]').isDisabled(), true, 'level locks Advanced native capsules');
           await page.screenshot({ path: out(`ns-danger-${theme}-${width}.png`) });
 
-          // Plugin isolation switch
+          // Plugin isolation, whiteboard-only, and conv-history switches
           const iso = modal.locator('[data-iso-switch]');
+          const wb = modal.locator('[data-wb-only-switch]');
+          const conv = modal.locator('[data-conv-history-switch]');
           assert.equal(await iso.getAttribute('aria-checked'), 'false');
+          assert.equal(await wb.getAttribute('aria-checked'), 'false');
+          assert.equal(await conv.getAttribute('aria-checked'), 'false');
           await iso.click();
+          await wb.click();
+          await conv.click();
           assert.equal(await iso.getAttribute('aria-checked'), 'true');
+          assert.equal(await wb.getAttribute('aria-checked'), 'true');
+          assert.equal(await conv.getAttribute('aria-checked'), 'true');
+          await page.waitForTimeout(180);
+          await page.screenshot({ path: out(`ns-toggles-${theme}-${width}.png`) });
 
           // Dismiss via x button, reopen, dismiss via backdrop scrim click
           await modal.locator('.ns-x').click();
@@ -286,6 +296,9 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
             await lin.fill('  스모크 라벨  ');
             await page.screenshot({ path: out(`ns-label-filled-${theme}-${width}.png`) });
           } else await lin.fill('  스모크 라벨  ');
+          // Enable both opt-in toggles to verify conv_history_access payload & whiteboardFirst seeding
+          await m.locator('[data-wb-only-switch]').click();
+          await m.locator('[data-conv-history-switch]').click();
           leadCreated = true;
           seq.length = 0; labels.length = 0;
           await lin.focus();
@@ -294,6 +307,13 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
           assert.deepEqual(seq, ['lead', 'label', 'nav'], `${theme}/${width}: create, then label, then navigation`);
           assert.deepEqual(labels, [{ label: '스모크 라벨' }], `${theme}/${width}: trimmed label payload`);
           assert.equal(posts.at(-1).path, '/agents/leads');
+          assert.equal(posts.at(-1).body.conv_history_access, true, `${theme}/${width}: conv_history_access=true sent on creation`);
+          const stored = await page.evaluate(() => ({
+            wbFirst: localStorage.getItem('ws.dashboard.whiteboardFirst.newsess'),
+            newSess: JSON.parse(localStorage.getItem('ws.dashboard.newSession') || '{}')
+          }));
+          assert.equal(stored.wbFirst, '1', `${theme}/${width}: whiteboardFirst.<id> seeded on 201`);
+          assert.equal(stored.newSess.whiteboardOnly, true, `${theme}/${width}: whiteboardOnly remembered in ws.dashboard.newSession`);
         }
 
         assert.deepEqual(errors, [], `${theme}/${width} page errors`);

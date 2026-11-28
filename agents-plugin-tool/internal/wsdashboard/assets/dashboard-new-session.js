@@ -51,7 +51,7 @@
     send();
   }
   function rpLeadMake() {
-    var P = { gen: 0, busy: false, loading: false, root: "", harness: "claude", model: "", effort: "", mode: "", iso: "default", level: "", dropped: "", refused: 0, statusText: "" };
+    var P = { gen: 0, busy: false, loading: false, root: "", harness: "claude", model: "", effort: "", mode: "", iso: "default", wbOnly: false, convHistory: false, level: "", dropped: "", refused: 0, statusText: "" };
     var settingsKey = "ws.dashboard.newSession", saved = {}, picks = Object.create(null);
     function readSettings() {
       try {
@@ -249,6 +249,25 @@
     isoSw.appendChild(mk("i"));
     var isoLbl = isoSw.appendChild(mk("span", null, wsT("js.lead.iso") + " · " + wsT("js.lead.iso.default")));
 
+    var footOpts = foot.appendChild(mk("div", "ns-foot-opts"));
+    var wbSw = footOpts.appendChild(rpBtn("ns-sw", ""));
+    wbSw.setAttribute("role", "switch");
+    wbSw.setAttribute("data-wb-only-switch", "1");
+    wbSw.setAttribute("aria-label", wsT("js.lead.wb_only"));
+    wbSw.setAttribute("aria-checked", "false");
+    wbSw.title = wsT("js.lead.wb_only.hint");
+    wbSw.appendChild(mk("i"));
+    wbSw.appendChild(mk("span", null, wsT("js.lead.wb_only")));
+
+    var convSw = footOpts.appendChild(rpBtn("ns-sw", ""));
+    convSw.setAttribute("role", "switch");
+    convSw.setAttribute("data-conv-history-switch", "1");
+    convSw.setAttribute("aria-label", wsT("js.lead.conv_history"));
+    convSw.setAttribute("aria-checked", "false");
+    convSw.title = wsT("js.lead.conv_history.hint");
+    convSw.appendChild(mk("i"));
+    convSw.appendChild(mk("span", null, wsT("js.lead.conv_history")));
+
     var pNativeNote = foot.appendChild(mk("p", "ns-adv-note spdesc"));
     pNativeNote.hidden = true;
     var pfine = foot.appendChild(mk("p", "ns-fine pmfine", wsT("js.perm.fine.intent")));
@@ -442,6 +461,10 @@
       var isolated = P.iso === "isolated";
       isoSw.setAttribute("aria-checked", String(isolated));
       isoSw.disabled = P.busy;
+      wbSw.setAttribute("aria-checked", String(!!P.wbOnly));
+      wbSw.disabled = P.busy;
+      convSw.setAttribute("aria-checked", String(!!P.convHistory));
+      convSw.disabled = P.busy;
       labelIn.disabled = P.busy;
       isoLbl.textContent = wsT("js.lead.iso") + " · " + wsT(isolated ? "js.lead.iso.isolated" : "js.lead.iso.default");
       isoSw.title = wsT(isolated ? "js.lead.iso.isolated.hint" : "js.lead.iso.default.hint");
@@ -493,19 +516,20 @@
       return {
         harness: P.harness,
         chosen: chosen,
-        form: { harness: P.harness, model: chosen.model, provider: chosen.provider, effort: effortOff() ? "" : P.effort, mode: level ? "" : freeMode(), isolation: P.iso, level: level, ack: ack }
+        wbOnly: !!P.wbOnly,
+        form: { harness: P.harness, model: chosen.model, provider: chosen.provider, effort: effortOff() ? "" : P.effort, mode: level ? "" : freeMode(), isolation: P.iso, level: level, ack: ack, convHistoryAccess: !!P.convHistory }
       };
     }
     function launch(snap) {
       notifAsk();
-      var gen = P.gen, chosenHarness = snap.harness, chosen = snap.chosen, form = snap.form, level = form.level;
+      var gen = P.gen, chosenHarness = snap.harness, chosen = snap.chosen, form = snap.form, level = form.level, wbOnly = !!snap.wbOnly;
       var label = leadLabelClean(labelIn.value);
       P.busy = true;
       P.statusText = wsT(level ? "js.perm.checking" : "js.lead.starting");
       setErr("");
       permDraw();
       sync();
-      if (!level) { post(gen, chosenHarness, chosen, "/agents/leads", form, label); return; }
+      if (!level) { post(gen, chosenHarness, chosen, "/agents/leads", form, label, wbOnly); return; }
       permPreflight(chosenHarness, level, function (ok) {
         if (!rpLive(P, gen)) { P.busy = false; P.statusText = ""; return; }
         if (!ok) {
@@ -520,23 +544,23 @@
         }
         P.statusText = wsT("js.lead.starting");
         drawCta();
-        post(gen, chosenHarness, chosen, "/agents/leads/permission", form, label);
+        post(gen, chosenHarness, chosen, "/agents/leads/permission", form, label, wbOnly);
       });
     }
-    function post(gen, chosenHarness, chosen, route, form, label) {
+    function post(gen, chosenHarness, chosen, route, form, label, wbOnly) {
       var perm = !!form.level;
       railPost(route, WsRail.leadBody(P.root, form), function (st, v, s) {
         var created = st === 201 && v.id;
         // A label to set keeps Start busy until its write ends; the session
         // exists by then, so the page opens it whatever the write answered.
         if (created && label) {
-          leadLabelSend(String(v.id), label, function () { opened(gen, chosenHarness, chosen, v); });
+          leadLabelSend(String(v.id), label, function () { opened(gen, chosenHarness, chosen, v, wbOnly); });
           return;
         }
         P.busy = false;
         P.statusText = "";
         sync();
-        if (created) { opened(gen, chosenHarness, chosen, v); return; }
+        if (created) { opened(gen, chosenHarness, chosen, v, wbOnly); return; }
         if (perm && permRefused(st)) {
           if (supChoices) supChoices.wsEpoch = -1;
           if (!rpLive(P, gen)) { toast(wsT("js.perm.refused", st)); return; }
@@ -554,7 +578,7 @@
       }, 20000);
     }
     // opened remembers the picks of a started session and opens its page.
-    function opened(gen, chosenHarness, chosen, v) {
+    function opened(gen, chosenHarness, chosen, v, wbOnly) {
       if (P.busy) {
         P.busy = false;
         P.statusText = "";
@@ -563,7 +587,12 @@
       var stored = readSettings(), byHarness = stored.harnesses;
       if (!byHarness || typeof byHarness !== "object" || Array.isArray(byHarness)) byHarness = {};
       byHarness[chosenHarness] = chosen;
-      try { localStorage.setItem(settingsKey, JSON.stringify({ harness: chosenHarness, harnesses: byHarness })); } catch (_) { /* storage may be unavailable */ }
+      var nextSettings = { harness: chosenHarness, harnesses: byHarness };
+      if (wbOnly) nextSettings.whiteboardOnly = true;
+      try { localStorage.setItem(settingsKey, JSON.stringify(nextSettings)); } catch (_) { /* storage may be unavailable */ }
+      if (wbOnly) {
+        try { localStorage.setItem("ws.dashboard.whiteboardFirst." + String(v.id), "1"); } catch (_) { /* storage may be unavailable */ }
+      }
       if (rpLive(P, gen)) railPopClose(false);
       railOpen(false);
       saveDraft();
@@ -587,6 +616,8 @@
       });
     }
     isoSw.addEventListener("click", function () { if (P.busy) return; P.iso = P.iso === "isolated" ? "default" : "isolated"; sync(); });
+    wbSw.addEventListener("click", function () { if (P.busy) return; P.wbOnly = !P.wbOnly; sync(); });
+    convSw.addEventListener("click", function () { if (P.busy) return; P.convHistory = !P.convHistory; sync(); });
     seg.addEventListener("click", function (e) { var b = e.target.closest && e.target.closest("[data-harness]"); if (b && !b.disabled) setHarness(b.getAttribute("data-harness")); });
     effRst.addEventListener("click", function () { if (P.busy || P.loading || !P.effort) return; P.effort = ""; tierPick.manual(); edited(); });
     xBtn.addEventListener("click", function () { railPopClose(true); });
@@ -612,6 +643,8 @@
       }
       P.harness = "claude";
       P.iso = "default";
+      P.wbOnly = saved.whiteboardOnly === true;
+      P.convHistory = false;
       P.loading = true;
       loc.textContent = "";
       loc.wsName = name;

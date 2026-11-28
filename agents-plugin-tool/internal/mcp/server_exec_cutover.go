@@ -33,10 +33,11 @@ func (s *Server) execToolsListed() bool {
 }
 
 // isDirectTool reports whether canonicalName is listed directly in tools/list
-// when descriptor.directTools restricts discovery. Cutover-listed tools are
-// always direct so directTools does not silently strip them behind call.
+// when descriptor.directTools restricts discovery. Cutover-listed tools and
+// opt-in conv.* tools are always direct so directTools does not silently strip
+// them behind call.
 func (s *Server) isDirectTool(descriptor connectionDescriptor, canonicalName string) bool {
-	return canonicalName == "call" || slices.Contains(descriptor.directTools, canonicalName) || s.cutoverListed(canonicalName)
+	return canonicalName == "call" || slices.Contains(descriptor.directTools, canonicalName) || s.cutoverListed(canonicalName) || (isConvTool(canonicalName) && s.convToolsListed())
 }
 
 // fsReadTools requires a trusted cutover binding to a backend that declares

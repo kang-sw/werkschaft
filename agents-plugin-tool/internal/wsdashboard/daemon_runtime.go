@@ -147,6 +147,7 @@ func (d *Daemon) poll(interval time.Duration) {
 		interval = DefaultPollInterval
 	}
 	d.index.Refresh()
+	d.scheduleConvBackfill()
 	d.auditFirstSweep()
 	d.pokeHires()
 	ticker := time.NewTicker(interval)
@@ -293,6 +294,7 @@ func (d *Daemon) Close() {
 		// usage probe, runner, and BeforeUnlock hook (including tracker
 		// hooks) has drained, and strictly before releasing dashboard.lock
 		// so a successor never overlaps a live writer (2122).
+		d.closeConvIndex()
 		if d.meta != nil {
 			if err := d.meta.Close(); err != nil {
 				fmt.Fprintf(d.log, "dashboard: metadata store close: %v\n", err)

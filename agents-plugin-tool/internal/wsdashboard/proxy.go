@@ -89,6 +89,10 @@ type ProxyHello struct {
 	// launched under the exec cutover (native shell tools removed in favour
 	// of the ws exec tools); set with Conversation and never decoded.
 	ExecCutover string `json:"-"`
+	// ConvHistoryAccess is the start-time opt-in snapshot for conv.* MCP
+	// tool discovery on this hosted lead process; set with Conversation and
+	// never decoded from a launcher's hello.
+	ConvHistoryAccess bool `json:"-"`
 	// FileWrites is populated with the authority and recorder of the
 	// live in-daemon process by its own token resolution.
 	FileWrites *wsfs.FileWriteSession `json:"-"`

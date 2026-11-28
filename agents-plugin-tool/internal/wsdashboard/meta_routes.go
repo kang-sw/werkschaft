@@ -298,6 +298,10 @@ func (d *Daemon) pruneRegistrationsInMeta(now time.Time, retention time.Duration
 		if err := d.deleteSessionMeta(replyID); err != nil && d.log != nil {
 			fmt.Fprintf(d.log, "dashboard: delete pruned session metadata %s: %v\n", replyID, err)
 		}
+		d.deleteConvIndexSession(replyID)
+		if d.index != nil {
+			d.index.Reread(replyID)
+		}
 	})
 }
 
