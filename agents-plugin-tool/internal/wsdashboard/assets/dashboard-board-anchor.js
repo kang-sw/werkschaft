@@ -2069,10 +2069,14 @@
     entries.forEach(function (e) {
       var box = e.contentBoxSize && e.contentBoxSize[0], bb = e.borderBoxSize && e.borderBoxSize[0];
       if (e.target === col) {
+        var bw = box ? box.inlineSize : e.contentRect.width, bh = box ? box.blockSize : e.contentRect.height;
+        // A hidden frame reports a 0x0 box: keep the last valid sizes so it never
+        // marks the board settled before a real box exists (boardRevealNow re-reads on show).
+        if (!(bw > 0 && bh > 0)) return;
         var cs = getComputedStyle(col);
         anchorSized.bounded = /auto|scroll/.test(cs.overflowY);
-        anchorSized.w = box ? box.inlineSize : e.contentRect.width;
-        anchorSized.h = anchorSized.bounded ? (box ? box.blockSize : e.contentRect.height) : 0;
+        anchorSized.w = bw;
+        anchorSized.h = anchorSized.bounded ? bh : 0;
         anchorSized.padTop = parseFloat(cs.paddingTop) || 0;
       } else if (e.target === face) {
         var nextBar = bb ? bb.blockSize : e.contentRect.height;
@@ -2223,20 +2227,7 @@
       boardEl.addEventListener("click", onBoardExemptEvt, { passive: true });
     }
     col.wbScrollOwner = true;
-    if (doc && doc.addEventListener) {
-      doc.addEventListener("ws-page-visibility", function () {
-        var hiddenNow = !!(doc.hidden || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-animation-paused"))) ||
-          (typeof shHidden !== "undefined" && !!shHidden);
-        if (!hiddenNow && typeof freeHeightCache !== "undefined" && freeHeightCache._skippedHidden) {
-          freeHeightCache._skippedHidden = false;
-          var bcol = $("bcol");
-          if (bcol) {
-            anchorApplySizes(bcol);
-            anchorSettle(null);
-          }
-        }
-      });
-    }
+    if (doc && doc.addEventListener && typeof boardRevealInit === "function") boardRevealInit();
     anchorApplySizes(col);
     anchorSettle(null);
     if (!freeActive && typeof virtualReconcile === "function") virtualReconcile({ full: true });
@@ -2262,6 +2253,7 @@
         if (!freeActive && !(opts && opts.skipVirtual) && typeof virtualReconcile === "function") virtualReconcile({ full: true });
         if (typeof boardDialSync === "function") boardDialSync();
       },
+      reveal: typeof boardRevealSchedule === "function" ? boardRevealSchedule : null,
       scrubbing: function () { return typeof dialScrubbing !== "undefined" && !!dialScrubbing; },
       scrolling: function () { return !!(freeActive && (freeScrollRaf || freeIdleTimer)); },
       keepFrame: function (t) { return !!(freeActive && (freePos.has(t) || ((freeScrollRaf || freeIdleTimer) && freeDeferredCollapse.has(t)))); },

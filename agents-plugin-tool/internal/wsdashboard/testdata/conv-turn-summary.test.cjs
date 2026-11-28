@@ -169,7 +169,7 @@ function matchSimple(el, sel) {
   return true;
 }
 
-function makeTurnSummaryEl({ entry, key, rev = "1:7:0:11400:2800:0:2", at = "2026-11-06T12:00:02Z", turnAt = "2026-11-06T12:00:08Z", failed = 0, live = false, wake = false, est = false, tokens = "+2.8k tok", countText = "7 tool calls", calls = [] }) {
+function makeTurnSummaryEl({ entry, key, turnKey, rev = "1:7:0:11400:2800:0:2", at = "2026-11-06T12:00:02Z", turnAt = "2026-11-06T12:00:08Z", failed = 0, live = false, wake = false, est = false, tokens = "+2.8k tok", countText = "7 tool calls", calls = [] }) {
   const countSpan = new FakeEl("span", { class: "d-turn-count", "data-conv-turn-count": true });
   countSpan.textContent = countText;
   const failsSpan = new FakeEl("span", { class: "d-turn-fails", "data-conv-turn-fails": true, hidden: failed === 0 });
@@ -199,6 +199,7 @@ function makeTurnSummaryEl({ entry, key, rev = "1:7:0:11400:2800:0:2", at = "202
     "data-turn-rev": rev,
   };
   if (entry) attrs["data-entry"] = entry;
+  if (turnKey) attrs["data-turn-key"] = turnKey;
   if (at) attrs["data-at"] = at;
   if (turnAt) attrs["data-turn-at"] = turnAt;
   if (failed > 0) attrs["data-turn-failed"] = String(failed);
@@ -338,6 +339,72 @@ test("SSE mergeEntries preserves expanded state across turn updates and keeps sc
     makeTurnSummaryEl({ entry: "002", rev: "1:7:1:11400:2800:0:2", failed: 1, est: false, tokens: "+2.8k tok", countText: "7 tool calls" }),
   ]);
   assert.equal(sandbox.__api.mergeEntries(box, unchanged).length, 0);
+});
+
+// One completed turn must never appear twice in #convo: a newest window or
+// history page that truncates the turn's head re-anchors its summary at a later
+// entry (new data-entry, smaller counts) while the closing turn is unchanged.
+test("mergeEntries keeps one summary per data-turn-key across window truncation and history paging", () => {
+  const mergeSection = sliceBetween(convSrc, "  function entryKeys(box) {", "\n  // gapped reports");
+  const sandbox = {
+    restoreOpen() {}, fmtTimes() {},
+    doc: { createElement: (tag) => new FakeEl(tag) },
+    Object, Array, JSON, String, RegExp,
+  };
+  vm.runInNewContext(mergeSection + ";globalThis.__merge = mergeEntries;", sandbox);
+  const merge = sandbox.__merge;
+  const T = "009";
+  const sum = (entry, mails) => makeTurnSummaryEl({ entry, turnKey: T, rev: `1:1:0:27000:2000:0:${mails}`, countText: `${mails} mails` });
+  const absorbed = (entry) => new FakeEl("span", { hidden: true, "data-entry": entry, "data-turn-absorbed": "1" });
+  const footer = (entry) => new FakeEl("details", { class: "turnline", "data-entry": entry, "data-key": `turn-${entry}` });
+  const visible = (box) => box.children.filter((c) => !c.hasAttribute("data-turn-absorbed"));
+  const summaries = (box) => box.querySelectorAll("[data-conv-turn-summary]").length;
+  const src = (...nodes) => new FakeEl("div", {}, nodes);
+
+  // 1. Newest window holds the whole turn: anchor 002 (5 mails), rest absorbed.
+  const box = new FakeEl("div", { class: "conv centries" });
+  merge(box, src(new FakeEl("div", { "data-entry": "001" }), sum("002", 5), absorbed("003"), absorbed("004"), absorbed("009")));
+  assert.equal(summaries(box), 1);
+
+  // 2. Window slides: 002 is gone, so the server anchors the same turn at 003
+  //    (new key, 3 mails) and absorbs the rest. The earlier anchor wins.
+  merge(box, src(sum("003", 3), absorbed("004"), absorbed("009")));
+  assert.equal(summaries(box), 1, "re-anchored later summary must not stack");
+  assert.equal(box.children.find((c) => c.getAttribute("data-entry") === "002").hasAttribute("data-conv-turn"), true);
+  assert.equal(box.children.find((c) => c.getAttribute("data-entry") === "003").getAttribute("data-turn-absorbed"), "1");
+
+  // 3. Window slides again and the closing turn alone remains as a footer: it
+  //    must stay hidden while the box already shows the turn's summary.
+  merge(box, src(footer("009")));
+  assert.equal(summaries(box), 1);
+  const f = box.children.find((c) => c.getAttribute("data-entry") === "009");
+  assert.equal(f.getAttribute("data-turn-absorbed"), "1", "closing turn must not surface as a footer");
+  assert.deepEqual(visible(box).map((c) => c.getAttribute("data-entry")), ["001", "002"]);
+
+  // 4. Order stays chronological and a repeat of the same window is a no-op.
+  assert.deepEqual(box.children.map((c) => c.getAttribute("data-entry")), ["001", "002", "003", "004", "009"]);
+  assert.equal(merge(box, src(sum("003", 3), absorbed("004"), absorbed("009"))).length, 0, "idempotent re-merge must not churn the DOM");
+
+  // 5. History pages in the full turn after a truncated tail was rendered: a
+  //    fresh box starts at the truncated anchor, then the older anchor arrives.
+  const hbox = new FakeEl("div", { class: "conv centries" });
+  merge(hbox, src(sum("003", 3), absorbed("004"), footer("009")));
+  assert.equal(summaries(hbox), 1);
+  merge(hbox, src(sum("002", 5), absorbed("003")));
+  assert.equal(summaries(hbox), 1, "older history anchor must supersede the later one");
+  assert.equal(hbox.children[0].getAttribute("data-entry"), "002");
+  assert.equal(hbox.children[0].hasAttribute("data-conv-turn"), true);
+  assert.equal(hbox.children.find((c) => c.getAttribute("data-entry") === "003").getAttribute("data-turn-absorbed"), "1");
+  assert.equal(hbox.children.find((c) => c.getAttribute("data-entry") === "009").getAttribute("data-turn-absorbed"), "1", "footer rendered before its summary is retired when the summary arrives");
+
+  // 6. A reasoning-summary host for the closing turn survives; its nested
+  //    footer is stripped when the summary is shown.
+  const rbox = new FakeEl("div", { class: "conv centries" });
+  const host = new FakeEl("div", { class: "turn-with-summary", "data-entry": T }, [new FakeEl("details", { class: "turnline" })]);
+  merge(rbox, src(host));
+  merge(rbox, src(sum("002", 5)));
+  assert.equal(rbox.children.find((c) => c.getAttribute("data-entry") === T).querySelector(".turnline"), null);
+  assert.equal(summaries(rbox), 1);
 });
 
 test("dashboard-audit-rows recognizes [data-conv-turn=1][data-turn-at] as turn footer", () => {
