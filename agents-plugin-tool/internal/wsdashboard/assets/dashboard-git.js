@@ -1,27 +1,39 @@
-  // --- pooled worktrees: the drawer card over the worktrees route ---------
-  // Each drawer opening reads the pool (worktrees.go): the list draws at
-  // once, and while sizes are still measured a second read waits for them.
-  // Leased worktrees come first, shown active; idle ones group by profile.
-  // The cleanup button asks the session to clean the pool up, then closes
-  // the drawer. The dashboard itself never removes a worktree.
-  function wtGet(wait, done) {
+  // --- pooled worktrees: the Git page's region over the worktrees route ----
+  // The page reads the pool cache-only (worktrees.go ?no_size=1): the list
+  // draws at once with the sizes already measured, "—" for the rest, and no
+  // disk walk starts. Only a full scan (the page's Refresh button) reads the
+  // pool plainly, which measures the sizes, and while they are still
+  // measured a second read waits for them. Leased worktrees come first,
+  // shown active; idle ones group by profile. The cleanup button asks the
+  // session to clean the pool up, then reads the list again. The dashboard
+  // itself never removes a worktree.
+  var wtlist = $("wtlist"), wtcount = $("wtcount"), wtnote = $("wtnote"), wtclean = $("wtclean"), wtSeq = 0, wtLast = null;
+  function wtGet(query, done) {
     if (!window.fetch) { done(false, wsT("js.post.nobrowser")); return; }
-    fetch("/s/" + rid + "/worktrees" + (wait ? "?wait=1" : ""), { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+    fetch("/s/" + rid + "/worktrees" + query, { credentials: "same-origin", cache: "no-store" }).then(function (r) {
       return r.text().then(function (s) {
         if (!r.ok) { done(false, s.trim() || "HTTP " + r.status); return; }
         try { done(true, JSON.parse(s)); } catch (e) { done(false, "malformed answer"); }
       });
     }, function () { done(false, wsT("js.post.unreachable")); });
   }
-  function wtLoad() {
+  // wtLoad reads the pool: cache-only, or (full) the measuring scan; done
+  // (optional) hears the last read's pool, or null when it failed or a later
+  // read replaced it.
+  function wtLoad(full, done) {
     if (!wtlist) return;
     var seq = ++wtSeq;
+    function end(pool) { if (done) done(seq === wtSeq ? pool : null); }
     if (!wtlist.firstChild) wtlist.textContent = wsT("js.wt.loading");
-    wtGet(false, function (ok, pool) {
-      if (seq !== wtSeq) return;
-      if (!ok) { wtFail(pool); return; }
-      wtDraw(pool);
-      if (pool.sizing) wtGet(true, function (ok2, sized) { if (seq === wtSeq && ok2) wtDraw(sized); });
+    wtGet(full ? "" : "?no_size=1", function (ok, pool) {
+      if (seq !== wtSeq) { end(null); return; }
+      if (!ok) { wtFail(pool); end(null); return; }
+      wtDraw(pool, full && pool.sizing);
+      if (!full || !pool.sizing) { end(pool); return; }
+      wtGet("?wait=1", function (ok2, sized) {
+        if (seq === wtSeq && ok2) wtDraw(sized, false);
+        end(ok2 ? sized : null);
+      });
     });
   }
   function wtFail(msg) {
@@ -50,7 +62,9 @@
     return Math.floor(m / 1440) + "d";
   }
   function wtStamp(ms) { return new Date(ms).toLocaleString(wsI18n.lang); }
-  function wtRow(w) {
+  // wtRow draws one worktree; a size not measured shows "…" while a scan
+  // measures it, "—" otherwise.
+  function wtRow(w, scanning) {
     var row = mk("div", "wtrow" + (w.leased ? " on" : "") + (w.quarantined ? " quar" : ""));
     row.title = w.path + (w.quarantined ? "\n" + wsT("js.wt.quarantined") : "");
     row.appendChild(mk("span", "wtdot"));
@@ -71,10 +85,15 @@
       age.title = wsT(w.leased ? "js.wt.held" : "js.wt.unused", wtStamp(at));
       row.appendChild(age);
     }
-    row.appendChild(mk("span", "wtsize", w.size == null ? "…" : wtSize(w.size)));
+    var size = mk("span", "wtsize" + (w.size == null ? (scanning ? " gp-wt-scan" : " gp-wt-none") : ""), w.size == null ? (scanning ? "…" : "—") : wtSize(w.size));
+    if (w.size == null && !scanning) size.title = wsT("js.gp.wt.unsized");
+    row.appendChild(size);
     return row;
   }
-  function wtDraw(pool) {
+  // wtDraw draws the pool, kept as wtLast so a starting scan can redraw it
+  // as measuring before its first answer.
+  function wtDraw(pool, scanning) {
+    wtLast = pool;
     var list = pool.worktrees || [], leased = [], groups = {}, order = [];
     list.forEach(function (w) {
       if (w.leased) { leased.push(w); return; }
@@ -87,7 +106,7 @@
     if (!list.length) wtlist.appendChild(mk("div", "wtempty", wsT("js.wt.empty")));
     if (leased.length) {
       var sec = mk("div", "wtsec on");
-      leased.forEach(function (w) { sec.appendChild(wtRow(w)); });
+      leased.forEach(function (w) { sec.appendChild(wtRow(w, scanning)); });
       wtlist.appendChild(sec);
     }
     order.sort().forEach(function (p) {
@@ -95,7 +114,7 @@
       head.appendChild(mk("span", "wtprof", p));
       head.appendChild(mk("span", "chip", String(groups[p].length)));
       sec.appendChild(head);
-      groups[p].forEach(function (w) { sec.appendChild(wtRow(w)); });
+      groups[p].forEach(function (w) { sec.appendChild(wtRow(w, scanning)); });
       wtlist.appendChild(sec);
     });
     if (wtcount) {
@@ -103,6 +122,7 @@
       wtcount.textContent = leased.length + "/" + list.length;
       wtcount.title = wsT("js.wt.count", leased.length, list.length);
     }
+    gpWtCount(list.length);
   }
   if (wtclean) wtclean.addEventListener("click", function () {
     if (wtclean.disabled) return;
@@ -110,8 +130,10 @@
     if (wtnote) wtnote.textContent = "";
     post("worktrees/cleanup", {}, function (ok, res) {
       wtclean.disabled = false;
+      if (wtnote) wtnote.classList.toggle("gp-ok", !!ok);
       if (!ok) { if (wtnote) wtnote.textContent = wsT("js.wt.cleanfail", res); return; }
-      drSetOpen(false);
+      if (wtnote) wtnote.textContent = wsT("js.gp.wt.cleanasked");
+      wtLoad(false);
     });
   });
 
@@ -280,19 +302,19 @@
     });
   }
 
-  // --- git drawer: the action panel over the git routes ---------------------
-  // Each opening of the git sheet asks the daemon to read the handle again
+  // --- git page: the action strip and changed files over the git routes ------
+  // Each showing of the Git page asks the daemon to read the git badge again
   // and reads the changed files (gitdrawer.go): the standing line, then the
   // staged, unstaged, and untracked groups, each file with its status and
   // line delta. Fetch, pull, and push post to their routes (gitpush.go), one
   // at a time: the pressed button shows busy and the others wait; the
-  // daemon's refusal or git's failure shows on the panel's message line, a
+  // daemon's refusal or git's failure shows on the page's message line, a
   // pull's "nothing to pull" as a plain note. Every answer reads the files
-  // again, and the graph with them; the handle's own re-read arrives
-  // through the stream.
-  var gref = $("gref"), gfiles = $("gfiles"), gmsg = $("gmsg"), gSeq = 0, gBusy = false, gitLast = null;
+  // again, and the graph with them; the badge's own re-read arrives through
+  // the stream (the git region, the page's data carrier).
+  var gpRoot = $("gitpage"), gfiles = $("gfiles"), gmsg = $("gmsg"), gSeq = 0, gBusy = false, gitLast = null;
   function gitOpened() {
-    if (!gbody || !window.fetch) return;
+    if (!gpRoot || !gfiles || !window.fetch) return;
     fetch("/s/" + rid + "/git", { method: "POST", credentials: "same-origin", cache: "no-store" }).catch(function () {});
     gitLoad();
     glLoad(false);
@@ -308,23 +330,10 @@
       });
     }, function () { if (seq === gSeq) gitFail(wsT("js.post.unreachable")); });
   }
-  // gitFail shows a failed read in place of the files; the standing line
-  // goes with them, since it is as old as the failed read says.
+  // gitFail shows a failed read in place of the files.
   function gitFail(msg) {
-    gref.textContent = "";
     gfiles.textContent = "";
     gfiles.appendChild(mk("div", "gempty err", wsT("js.git.fail", msg)));
-  }
-  // gitRef draws the standing line: branch, upstream, and the counts.
-  function gitRef(v) {
-    gref.textContent = "";
-    if (v.detached) { gref.appendChild(mk("b", "gbr", wsT("js.git.detached", v.branch))); return; }
-    gref.appendChild(mk("b", "gbr", v.branch));
-    if (!v.upstream) { gref.appendChild(mk("span", "gnoup", wsT("js.git.noupstream"))); return; }
-    gref.appendChild(mk("span", "gto", "\u2192"));
-    gref.appendChild(mk("span", "gup", v.upstream));
-    if (v.ahead) gref.appendChild(mk("b", "up", "\u2191" + v.ahead));
-    if (v.behind) gref.appendChild(mk("b", "dn", "\u2193" + v.behind));
   }
   function gitRow(f) {
     var row = mk("div", "gf"), slash = f.path.lastIndexOf("/");
@@ -345,7 +354,7 @@
   }
   function gitDraw(v) {
     gitLast = v;
-    gitRef(v);
+    gpRef(v);
     gfiles.textContent = "";
     var groups = [["staged", "js.git.staged"], ["unstaged", "js.git.unstaged"], ["untracked", "js.git.untracked"]], any = false;
     groups.forEach(function (g) {
@@ -373,6 +382,7 @@
       gfiles.appendChild(clean);
     }
     if (v.truncated) gfiles.appendChild(mk("div", "gempty", wsT("js.git.truncated", 300)));
+    gpFiles(v);
   }
   function gitMsg(text, err) {
     gmsg.textContent = text || "";
@@ -384,18 +394,19 @@
     if (gBusy || !window.fetch) return;
     var label = btn.querySelector("span"), idle = label.textContent;
     gBusy = true;
-    q(".gact", gbody).forEach(function (b) { b.disabled = true; });
+    q(".gact", gpRoot).forEach(function (b) { b.disabled = true; });
     btn.classList.add("busy");
     label.textContent = btn.getAttribute("data-busy");
     gitMsg("");
     function done(text, err) {
       gBusy = false;
-      q(".gact", gbody).forEach(function (b) { b.disabled = false; });
+      q(".gact", gpRoot).forEach(function (b) { b.disabled = false; });
       btn.classList.remove("busy");
       label.textContent = idle;
       gitMsg(text, err);
       gitLoad();
       glLoad(false);
+      gpActed();
     }
     fetch("/s/" + rid + "/git/" + btn.getAttribute("data-git"), { method: "POST", credentials: "same-origin", cache: "no-store" }).then(function (r) {
       return r.text().then(function (t) {
@@ -406,7 +417,7 @@
       });
     }, function () { done(gmsg.getAttribute("data-lost"), true); });
   }
-  if (gbody) gbody.addEventListener("click", function (e) {
+  if (gpRoot) gpRoot.addEventListener("click", function (e) {
     var b = e.target.closest && e.target.closest(".gact");
     if (b && !b.disabled) gitAct(b);
     // A changed file opens the commit window on the working tree.
@@ -414,22 +425,24 @@
     if (f) gwWorktree(f.getAttribute("data-side"), +f.getAttribute("data-i"));
   });
 
-  // --- git drawer: the commit graph and the commit window --------------------
+  // --- git page: the commit graph and the commit window ----------------------
   // The graph reads the session root's log a page at a time (gitlog.go, GET
   // git/log): every local branch, the upstreams they track, and detached
   // worktree HEADs, with the lanes the daemon laid out. A row's down
   // segments run from its node to the next row, so pages stack; the last
   // loaded row's run on dashed into the "more" row while a page remains.
-  // The graph is read-only. It loads with the git sheet and after each
-  // action, never while hidden (a narrow screen shows the panel alone). A
+  // The graph is read-only. It loads with the Git page and after each
+  // action, never while hidden (the narrow page's other tabs). A
   // row's hover shows its tooltip; a click (or Enter) opens the commit
   // window (GET git/commit/<oid>), a centred window over the page: header,
   // message, author and committer, copy-hash, parents (a parent opens in the
   // same window), the changed-file list, and the diff viewer below; the
   // working-tree file list opens the same window.
   var glog = $("glog"), glrows = $("glrows"), glscroll = $("glscroll"), glcount = $("glcount");
-  var GL_ROW = 26, GL_DX = 14, GL_X0 = 12, GL_MORE = 34;
-  var gl = { commits: [], by: {}, width: 1, more: 0, page: 0, head: "", seq: 0, busy: false, loaded: false, tipRow: null };
+  var GL_ROW = 28, GL_DX = 14, GL_X0 = 12, GL_MORE = 34;
+  // frontier is the review ledger's frontier head (the Git page sets it):
+  // its row keeps the Review Frontier mark.
+  var gl = { commits: [], by: {}, width: 1, more: 0, page: 0, head: "", seq: 0, busy: false, loaded: false, tipRow: null, frontier: "" };
   function svgEl(tag, attrs) {
     var e = doc.createElementNS(SVGNS, tag);
     for (var k in attrs) if (Object.prototype.hasOwnProperty.call(attrs, k)) e.setAttribute(k, attrs[k]);
@@ -567,15 +580,24 @@
         lines.appendChild(svgEl("path", a));
       });
       var x = glX(c.col), y = glY(i), lc = glLane(c.color), merge = c.parents.length > 1;
+      var front = glIsFrontier(c.oid);
       if (c.oid === gl.head) dots.appendChild(svgEl("circle", { "class": "head", cx: x, cy: y, r: 8 }));
+      if (front) dots.appendChild(svgEl("circle", { "class": "gp-ring", cx: x, cy: y, r: 10 }));
       if (c.remote) dots.appendChild(svgEl("circle", { "class": "rem", cx: x, cy: y, r: 4, stroke: lc }));
       else if (merge) dots.appendChild(svgEl("circle", { "class": "mg", cx: x, cy: y, r: 4, stroke: lc }));
       else dots.appendChild(svgEl("circle", { "class": "dot", cx: x, cy: y, r: 5, fill: lc }));
-      var row = mk("div", "glr" + (merge ? " mg" : "") + (c.remote ? " rem" : "") + (c.oid === gw.oid && gw.back && !gw.back.hidden ? " sel" : ""));
+      var row = mk("div", "glr" + (merge ? " mg" : "") + (c.remote ? " rem" : "") + (front ? " gp-front" : "") + (c.oid === gw.oid && gw.back && !gw.back.hidden ? " sel" : ""));
       row.tabIndex = 0;
       row.setAttribute("data-i", String(i));
       row.appendChild(mk("span"));
       var sub = mk("span", "gls");
+      if (front) {
+        var fb = mk("span", "gp-rf-front");
+        fb.appendChild(luIcon("shield-check"));
+        fb.appendChild(mk("span", "", wsT("js.gp.frontier.badge")));
+        fb.title = wsT("js.gp.frontier.title");
+        sub.appendChild(fb);
+      }
       glPills(c).forEach(function (p) { sub.appendChild(p); });
       sub.appendChild(mk("span", "glsub", c.subject));
       row.appendChild(sub);
@@ -600,12 +622,73 @@
     glrows.appendChild(frag);
     glscroll.scrollTop = keep;
   }
-  // glLoad reads the first page again, or (append) the next one.
-  function glLoad(append) {
-    if (!glog || !window.fetch) return;
+  // glIsFrontier tells whether oid is the review frontier's head (a full or
+  // abbreviated id).
+  function glIsFrontier(oid) {
+    var f = gl.frontier;
+    return !!f && f.length >= 7 && (oid === f || oid.indexOf(f) === 0 || f.indexOf(oid) === 0);
+  }
+  // glFind is the loaded row index of oid, or -1.
+  function glFind(oid) {
+    for (var i = 0; i < gl.commits.length; i++) if (gl.commits[i].oid === oid || gl.commits[i].oid.indexOf(oid) === 0) return i;
+    return -1;
+  }
+  // glWalkTo finds oid in the log: the loaded rows first, then further
+  // pages read one after another (at most cap of them), kept in memory and
+  // drawn once after the walk. done(index) hears the row, or -1 when the
+  // pages ran out, the cap was reached, or a read failed (msg). A later
+  // read of the log cancels the walk.
+  function glWalkTo(oid, cap, done) {
+    var at = glFind(oid);
+    if (at >= 0 || !window.fetch) { done(at); return; }
+    var seq = ++gl.seq, pages = 0;
+    gl.busy = true;
+    function finish(i, msg) {
+      if (seq !== gl.seq) return;
+      gl.busy = false;
+      glDraw();
+      done(i, msg);
+    }
+    function next() {
+      if (!gl.more || pages >= cap) { finish(-1); return; }
+      pages++;
+      fetch("/s/" + rid + "/git/log?offset=" + gl.more, { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+        return r.text().then(function (s) {
+          if (seq !== gl.seq) return;
+          var v = null;
+          try { v = r.ok ? JSON.parse(s) : null; } catch (e) { v = null; }
+          if (!v) { finish(-1, s.trim() || "HTTP " + r.status); return; }
+          var from = gl.commits.length;
+          gl.commits = gl.commits.concat(v.commits || []);
+          gl.width = Math.max(gl.width, v.width || 1);
+          gl.more = v.more || 0;
+          for (var i = from; i < gl.commits.length; i++) if (gl.commits[i].oid === oid || gl.commits[i].oid.indexOf(oid) === 0) { finish(i); return; }
+          next();
+        });
+      }, function () { finish(-1, wsT("js.post.unreachable")); });
+    }
+    next();
+  }
+  // glTrim drops the rows past the first page (the page hid): the next
+  // showing reads the log again from page one anyway.
+  function glTrim() {
+    if (!gl.page || gl.commits.length <= gl.page) return;
+    gl.seq++;
+    gl.busy = false;
+    gl.commits = gl.commits.slice(0, gl.page);
+    gl.more = gl.page;
+    glDraw();
+  }
+  // glRowEl is the drawn row of index i.
+  function glRowEl(i) { return glrows ? glrows.querySelector('.glr[data-i="' + i + '"]') : null; }
+  // glLoad reads the first page again, or (append) the next one; done
+  // (optional) hears whether that read drew.
+  function glLoad(append, done) {
+    function end(ok) { if (done) done(ok); }
+    if (!glog || !window.fetch) { end(false); return; }
     // Hidden (narrow layout): read it again once it shows.
-    if (!glog.offsetWidth) { if (!append) gl.loaded = false; return; }
-    if (append && (!gl.more || gl.busy)) return;
+    if (!glog.offsetWidth) { if (!append) gl.loaded = false; end(false); return; }
+    if (append && (!gl.more || gl.busy)) { end(false); return; }
     gl.loaded = true;
     var seq = ++gl.seq, offset = append ? gl.more : 0;
     gl.busy = true;
@@ -615,17 +698,18 @@
       return r.text().then(function (s) {
         if (seq !== gl.seq) return;
         gl.busy = false;
-        if (!r.ok) { glFail(s.trim() || "HTTP " + r.status, append); return; }
+        if (!r.ok) { glFail(s.trim() || "HTTP " + r.status, append); end(false); return; }
         var v;
-        try { v = JSON.parse(s); } catch (e) { glFail("malformed answer", append); return; }
+        try { v = JSON.parse(s); } catch (e) { glFail("malformed answer", append); end(false); return; }
         if (!append) { gl.commits = []; gl.width = 1; gl.page = (v.commits || []).length; }
         gl.commits = gl.commits.concat(v.commits || []);
         gl.width = Math.max(gl.width, v.width || 1);
         gl.more = v.more || 0;
         gl.head = v.head || "";
         glDraw();
+        end(true);
       });
-    }, function () { if (seq === gl.seq) { gl.busy = false; glFail(wsT("js.post.unreachable"), append); } });
+    }, function () { if (seq === gl.seq) { gl.busy = false; glFail(wsT("js.post.unreachable"), append); end(false); } });
   }
   // The tooltip: subject, refs, author, age, short hash, under the row.
   var gltip = null;
@@ -664,7 +748,7 @@
       if (row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); gwOpen(gl.commits[+row.getAttribute("data-i")].oid); }
     });
     // A screen widened past the narrow layout shows the graph: read it then.
-    window.addEventListener("resize", function () { if (!gl.loaded && drOpen && drMode === "git" && glog.offsetWidth) glLoad(false); });
+    window.addEventListener("resize", function () { if (!gl.loaded && gpShown() && glog.offsetWidth) glLoad(false); });
   }
 
   // The commit window, built on first use and kept on the body (outside the

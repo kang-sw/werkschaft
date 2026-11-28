@@ -22,16 +22,15 @@ function section(text, start, end) {
 }
 
 // room runs drRoom over one handle set: each width is the handle's measured
-// width, or 0 for an absent one (the panels handle with no panel, no git
-// region, no search handle).
+// width, or 0 for an absent one (the panels handle with no panel, no search
+// handle). The git handle retired with the gallery Git page.
 function room(h) {
   const props = {}, toggles = {};
   const box = width => ({ getBoundingClientRect: () => ({ width }) });
   const ctx = vm.createContext({
-    drHas: h.drawer > 0, drRoomW: -1, drGhOff: -1, drFoldW: -1, drFoldGw: -1,
-    drhandle: box(h.drawer), gitRegion: box(h.git),
+    drHas: h.drawer > 0, drRoomW: -1, drFoldW: -1,
+    drhandle: box(h.drawer),
     shandle: h.search ? box(h.search) : null,
-    ghandle: () => (h.git ? {} : null),
     drheader: { classList: { toggle: (k, on) => { toggles[k] = on; } } },
     doc: { documentElement: { style: { setProperty: (k, v) => { props[k] = v; } } } }
   });
@@ -39,11 +38,11 @@ function room(h) {
   return { props, room: toggles['dr-room'] };
 }
 
-// expect is an independent model: right to left, panels, search, git; each
-// present handle sits 6px left of the previous one.
+// expect is an independent model: right to left, panels then search; a
+// present search handle sits 6px left of a present panels handle.
 function expect(h) {
-  const order = [['drawer', null], ['search', '--shr'], ['git', '--ghr']];
-  const want = { '--shr': '0px', '--ghr': '0px' };
+  const order = [['drawer', null], ['search', '--shr']];
+  const want = { '--shr': '0px' };
   let acc = 0;
   for (const [name, prop] of order) {
     const w = h[name] || 0;
@@ -60,26 +59,24 @@ test('drRoom places every handle combination', () => {
   let n = 0;
   for (const drawerW of [0, 178]) {
     for (const search of [0, 35]) {
-      for (const git of [0, 90]) {
-        const h = { drawer: drawerW, search, git };
-        const got = room(h), want = expect(h);
-        const label = JSON.stringify(h);
-        for (const k of ['--shr', '--ghr', '--drhw']) assert.equal(got.props[k], want[k], label + ' ' + k);
-        assert.equal(got.props['--thr'], undefined, label + ' writes no --thr');
-        assert.equal(got.room, want['--drhw'] !== '0px', label + ' header room');
-        n++;
-      }
+      const h = { drawer: drawerW, search };
+      const got = room(h), want = expect(h);
+      const label = JSON.stringify(h);
+      for (const k of ['--shr', '--drhw']) assert.equal(got.props[k], want[k], label + ' ' + k);
+      assert.equal(got.props['--ghr'], undefined, label + ' writes no --ghr (the git handle retired)');
+      assert.equal(got.props['--thr'], undefined, label + ' writes no --thr');
+      assert.equal(got.room, want['--drhw'] !== '0px', label + ' header room');
+      n++;
     }
   }
-  assert.equal(n, 8);
+  assert.equal(n, 4);
 });
 
-test('git sits 6px left of the search handle, and the header reserves both', () => {
-  const got = room({ drawer: 178, search: 35, git: 90 }).props;
+test('search sits 6px left of the panels handle, and the header reserves both', () => {
+  const got = room({ drawer: 178, search: 35 }).props;
   assert.equal(got['--shr'], '184px');
-  assert.equal(got['--ghr'], '225px', '178 + 6 + 35 + 6');
-  assert.equal(got['--drhw'], '315px');
-  const noDrawer = room({ drawer: 0, search: 35, git: 0 }).props;
+  assert.equal(got['--drhw'], '219px', '178 + 6 + 35');
+  const noDrawer = room({ drawer: 0, search: 35 }).props;
   assert.equal(noDrawer['--shr'], '0px');
   assert.equal(noDrawer['--drhw'], '35px');
 });

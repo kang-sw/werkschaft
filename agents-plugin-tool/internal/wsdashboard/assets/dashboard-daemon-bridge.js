@@ -375,10 +375,7 @@
       if (typeof setCtab === "function" && grid) { setCtab("term"); return true; }
       return false;
     }
-    if (panel === "git") {
-      if (typeof drSetOpen === "function") { drSetOpen(true, "git"); return true; }
-      return typeof runGlobalShortcut === "function" ? runGlobalShortcut("git") : false;
-    }
+    if (panel === "git") return typeof runGlobalShortcut === "function" ? runGlobalShortcut("git") : false;
     if (panel === "overview") {
       if (window.WsOverview && typeof window.WsOverview.active === "function" && window.WsOverview.active()) return true;
       return typeof runGlobalShortcut === "function" ? runGlobalShortcut("overview") : false;
