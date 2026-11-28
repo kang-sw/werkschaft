@@ -451,7 +451,7 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--wb-ok) 10%, transparent);
 }
-:root[data-shell] .dwrap > .top .top-left:has(> .r-head:empty) > #sse,
+:root[data-shell] .dwrap > .top .top-left > .r-head:empty + #sse,
 :root[data-shell] .dwrap > .top .top-left:has(.host.sse) > #sse {
   display: none;
 }

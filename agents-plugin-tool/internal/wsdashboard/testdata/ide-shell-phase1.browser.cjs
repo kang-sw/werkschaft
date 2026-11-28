@@ -96,8 +96,8 @@ function rgbToHex(rgb) {
             botRect: bot.getBoundingClientRect().toJSON(),
             framesRect: frames.getBoundingClientRect().toJSON(),
             railRect: rail.getBoundingClientRect().toJSON(),
-            curAfterW: cur ? getComputedStyle(cur, '::after').width : '',
-            curAfterBg: cur ? getComputedStyle(cur, '::after').backgroundColor : '',
+            curBeforeW: cur ? getComputedStyle(cur, '::before').width : '',
+            curBeforeBg: cur ? getComputedStyle(cur, '::before').backgroundColor : '',
             curBg: cur ? getComputedStyle(cur).backgroundColor : ''
           };
         });
@@ -119,7 +119,7 @@ function rgbToHex(rgb) {
           assert.equal(Math.round(m.railRect.top), 36, `${theme}/${vp.width}: rail starts below 36px topbar`);
           assert.equal(Math.round(m.railRect.bottom), vp.height - 26, `${theme}/${vp.width}: rail ends above 26px bottom bar`);
           assert.equal(Math.round(m.wellRect.left), 280, `${theme}/${vp.width}: well left touches 280px rail`);
-          assert.equal(m.curAfterW, '2.5px', `${theme}/${vp.width}: active rail row left accent bar`);
+          assert.equal(m.curBeforeW, '2.5px', `${theme}/${vp.width}: active rail row left accent bar`);
           assert.notEqual(m.curBg, 'rgba(0, 0, 0, 0)', `${theme}/${vp.width}: active rail row tonal fill`);
         } else {
           assert.equal(Math.round(m.wellRect.left), 6, `${theme}/${vp.width}: narrow well has 6px left margin`);

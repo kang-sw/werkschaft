@@ -58,12 +58,13 @@ async function metrics(card) {
 
       await card.locator('.fentry[data-entry="devenv-explorer-workspace"]').dblclick();
       await card.locator('.ftab-select .fn', { hasText: 'devenv-explorer-workspace' }).first().waitFor({ state: 'attached' }); // a lone tab's chip is hidden
-      // Narrower card: add tabs until 12 exist, then force the card to 800 px (the 1440 board column is 826 px).
+      // Narrower card: add tabs until 12 exist, then constrain the card within the 1440 board column (which reserves 42px for the narrow gallery strip).
       for (let i = 1; i < 12; i++) await card.locator('.ftab-new').click();
       await wt.locator('.bcard[data-kind="explorer"] .ftab').nth(11).waitFor();
-      const w800 = await card.evaluate(el => { const host = el.closest('.bcard'); host.style.width = '800px'; host.style.maxWidth = '800px'; return el.getBoundingClientRect().width; });
+      const wideW = Math.min(800, Math.floor(one.card.width));
+      const w800 = await card.evaluate((el, px) => { const host = el.closest('.bcard'); host.style.width = px + 'px'; host.style.maxWidth = px + 'px'; return el.getBoundingClientRect().width; }, wideW);
       const w = {};
-      for (const [name, width] of [['tabs12', 800], ['tabs12-420', 420]]) {
+      for (const [name, width] of [['tabs12', wideW], ['tabs12-420', 420]]) {
         await card.evaluate((el, px) => { const host = el.closest('.bcard'); host.style.width = px + 'px'; host.style.maxWidth = px + 'px'; }, width);
         await tab.waitForTimeout(150);
         const m = await metrics(card);

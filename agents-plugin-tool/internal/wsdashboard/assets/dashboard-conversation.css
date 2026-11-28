@@ -1055,7 +1055,7 @@ html[data-mode="live"][data-sysopen] .exec-view-out[hidden] { display: none; }
   white-space: nowrap;
   margin-left: -6px;
 }
-.d-turn-head > .d-turn-meta:not(:has(> :not([hidden]):not(:empty))) { display: none; }
+.d-turn-head > .d-turn-meta:not(:has(> :not([hidden]))) { display: none; }
 .d-turn-wake { color: var(--conv-trace-accent); font-weight: 700; }
 .d-turn-count { color: var(--wb-fg); font-weight: 600; font-variant-numeric: tabular-nums; }
 .d-turn-mails { color: var(--wb-muted-fg); font-variant-numeric: tabular-nums; }

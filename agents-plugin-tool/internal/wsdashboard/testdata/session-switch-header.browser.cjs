@@ -43,7 +43,8 @@ const [base, shots] = process.argv.slice(2);
         // Cold load, then cached return. Sample the shell and the visible
         // document's actual content top every animation frame, not just endpoints.
         for (const [rid, cold] of [['boardsession', true], ['livesession', false]]) {
-          if (await page.locator('#railbtn').isVisible() && !await page.locator('html').evaluate(el => el.classList.contains('rail-open'))) await page.locator('#railbtn').click();
+          const row = page.locator(`.rs[data-rid="${rid}"] .rl`);
+          if (!await row.isVisible() && await page.locator('#railbtn').isVisible()) await page.locator('#railbtn').click();
           await page.evaluate(({ rid, cold }) => {
             if (cold) window.headerGate = { path: '/s/' + rid, messages: [] };
             window.headerSamples = [];

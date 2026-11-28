@@ -30,7 +30,7 @@
   // Heights outlive an evicted frame in the shell (dashboard-session-view.js).
   var freePos = new Map(), freeLaidH = new Map(), freeHeightCache = typeof boardHeightCache === "function" ? boardHeightCache() : new Map();
   var freeCardRO = null, freeObserved = new Set(), freeParkedByUs = new WeakSet(), freeDeferredCollapse = new Set();
-  var freeScrollRaf = 0, freeIdleTimer = 0, freeJump = null, freeStagePending = false, freeTopRebasePending = false, freeScrollGen = 0, freeLastScrollTop = 0, freeLastShift = 0, freePendingScrollEnd = false;
+  var freeScrollRaf = 0, freeStageRaf = 0, freeIdleTimer = 0, freeJump = null, freeStagePending = false, freeTopRebasePending = false, freeScrollGen = 0, freeLastScrollTop = 0, freeLastShift = 0, freePendingScrollEnd = false;
   var freePin = null, freePinTimer = 0, freePinRaf = 0;
 
   // --- windowed O(1) topic body virtualization --------------------------------
@@ -1017,6 +1017,10 @@
         if (moreBtn.style && moreBtn.style.top) moreBtn.style.top = "";
       }
     }
+    if (typeof freeStageRaf !== "undefined" && freeStageRaf) {
+      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(freeStageRaf);
+      freeStageRaf = 0;
+    }
     freeActive = false;
     freeWinStart = 0;
     freeWinEnd = -1;
@@ -1149,6 +1153,10 @@
     }
   }
   function freeUpdateMoreAndStage(board, list, winEnd, yEnd, hEnd, keepRunway) {
+    if (typeof freeStageRaf !== "undefined" && freeStageRaf) {
+      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(freeStageRaf);
+      freeStageRaf = 0;
+    }
     var moreBtn = board && board.querySelector ? board.querySelector("button.closed-more[data-closed-next]:not([hidden]):not([data-state-filtered])") : null;
     var stageH = FREE_RUNWAY_HEIGHT;
     if (winEnd === list.length - 1) {
@@ -1550,7 +1558,22 @@
     }
     if (freeWinEnd === list.length - 1) {
       var lastCard = list[freeWinEnd], yEnd = freePos.get(lastCard);
-      if (yEnd !== undefined) freeUpdateMoreAndStage(board, list, freeWinEnd, yEnd, freeLaidHeight(lastCard), !!freeIdleTimer);
+      if (yEnd !== undefined) {
+        // #r-board is shallower than its observed topic cards and is itself
+        // observed by cards.js; defer stage minHeight writes out of RO delivery.
+        if (typeof requestAnimationFrame !== "function") {
+          freeUpdateMoreAndStage(board, list, freeWinEnd, yEnd, freeLaidHeight(lastCard), !!freeIdleTimer);
+        } else if (!freeStageRaf) {
+          freeStageRaf = requestAnimationFrame(function () {
+            freeStageRaf = 0;
+            if (!freeActive || freeSuspended) return;
+            var curBoard = region("board"), curList = anchorCards();
+            if (!curBoard || !curList.length || freeWinEnd !== curList.length - 1) return;
+            var curLast = curList[freeWinEnd], curY = freePos.get(curLast);
+            if (curY !== undefined) freeUpdateMoreAndStage(curBoard, curList, freeWinEnd, curY, freeLaidHeight(curLast), !!freeIdleTimer);
+          });
+        }
+      }
     }
     freePinLayout();
   }

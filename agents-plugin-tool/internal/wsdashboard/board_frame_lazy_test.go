@@ -427,6 +427,7 @@ var bad = [];
 function check(what, ok) { if (!ok) bad.push(what); }
 var queries = 0, times = [{ id: "t1" }], paces = [{ id: "p1" }], formatted = [];
 var doc = { hidden: false }, shHidden = false;
+function docHidden() { return !!doc.hidden; }
 var window = { MutationObserver: function () {} };
 function q(sel) { queries++; return sel.indexOf("time") === 0 ? times.slice() : paces.slice(); }
 function fmtTime(t) { formatted.push(t.id); }

@@ -60,9 +60,9 @@ function decodePNG(buf) {
   if (shots) fs.mkdirSync(shots, { recursive: true });
   const browser = await chromium.launch({ headless: true });
   const cases = [
-    { name: 'dark', cookie: 'dark', colorScheme: 'light', wantBg: [20, 21, 24], forbidWhite: true },
-    { name: 'auto-dark', cookie: '', colorScheme: 'dark', wantBg: [20, 21, 24], forbidWhite: true },
-    { name: 'light', cookie: 'light', colorScheme: 'dark', wantBg: [243, 243, 240], forbidWhite: false }
+    { name: 'dark', cookie: 'dark', colorScheme: 'light', wantBg: [22, 24, 29], forbidWhite: true },
+    { name: 'auto-dark', cookie: '', colorScheme: 'dark', wantBg: [22, 24, 29], forbidWhite: true },
+    { name: 'light', cookie: 'light', colorScheme: 'dark', wantBg: [244, 244, 241], forbidWhite: false }
   ];
   try {
     for (const c of cases) {
@@ -87,15 +87,16 @@ function decodePNG(buf) {
       const box = await tab.evaluate(() => {
         const rail = document.getElementById('rail')?.getBoundingClientRect();
         const top = document.querySelector('.dwrap > .top')?.getBoundingClientRect();
+        const well = document.getElementById('stage-well-bg')?.getBoundingClientRect();
         const frame = document.querySelector('iframe.sframe.on')?.getBoundingClientRect();
         const left = Math.ceil((rail && rail.width > 0 ? rail.right : 0) + 12);
         // .top floating pills cast a drop shadow several pixels below .top.bottom.
         const minY = Math.ceil((top ? top.bottom : 0) + 28);
         return {
-          left: Math.max(left, Math.ceil(frame?.left || 0)),
-          top: Math.max(minY, Math.ceil(frame?.top || 0)),
-          right: Math.floor((frame?.right || window.innerWidth) - 8),
-          bottom: Math.floor((frame?.bottom || window.innerHeight) - 8)
+          left: Math.max(left, Math.ceil((well?.left || 0) + 8), Math.ceil(frame?.left || 0)),
+          top: Math.max(minY, Math.ceil((well?.top || 0) + 8), Math.ceil(frame?.top || 0)),
+          right: Math.floor(Math.min(well ? well.right : window.innerWidth, frame?.right || window.innerWidth) - 8),
+          bottom: Math.floor(Math.min(well ? well.bottom : window.innerHeight, frame?.bottom || window.innerHeight) - 8)
         };
       });
       const { data } = await cdp.send('Page.captureScreenshot', { format: 'png' });

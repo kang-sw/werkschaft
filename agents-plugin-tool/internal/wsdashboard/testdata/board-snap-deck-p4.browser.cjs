@@ -282,6 +282,7 @@ function buildBootstrapScript(opts = {}) {
       function setTab() {}
       function setCtab() {}
       function toggleStageFill() {}
+      function docHidden() { return !!doc.hidden; }
       function visible() { return true; }
       function pinned() { return false; }
       function pinConvo() {}

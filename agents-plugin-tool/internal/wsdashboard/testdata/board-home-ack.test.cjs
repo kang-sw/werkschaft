@@ -134,8 +134,10 @@ function returningBoard() {
     function tlCount() {}
     function tlShown() {}
     function connected() {}
+    function railNoteDisconnect() {}
     function trackerLost() {}
     var mainStream = null, mainRetry = null, mainProbe = null, mainEpoch = 0, mainPaused = false;
+    var daemonBridgeEnabled = false, daemonTabId = '';
     var mode = 'live', shell = false, worktree = false, framed = true, rid = 'session';
     function held() { return ''; }
     function boardInputFull(input) { return input; }

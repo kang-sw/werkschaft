@@ -75,7 +75,7 @@ func testEntryRowsBrowser(t *testing.T, script string) {
 			availableB = q.Get("value") == "on"
 			publish()
 		case "peer":
-			if err := writeSessionLabel(SessionDir(f.dir, "boardsession"), q.Get("value")); err != nil {
+			if err := f.d.setSessionLabel("boardsession", q.Get("value")); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -97,7 +97,7 @@ func testEntryRowsBrowser(t *testing.T, script string) {
 	}))
 	defer updates.Close()
 	functions := "var ENTRY_SLOT = /<!--ws-entry-row-(\\d+)-->/g; var ENTRY_CAP = 150;\n" + dashboardFuncs(t,
-		"frag", "entriesBox", "entryKeys", "resetEntries", "mergeEntries", "gapped", "evictEntries", "keyedSame", "keyedInputPatch", "keyedInputHTML", "entryInputFull", "entryRowNode", "entryInputPatch", "entryInputHTML", "mergeEntriesRegion", "firstEntryEl", "emitAuditEvent")
+		"frag", "entriesBox", "entryKeys", "turnSummaryEl", "absorbedMarker", "dedupTurn", "resetEntries", "mergeEntries", "gapped", "evictEntries", "keyedSame", "keyedInputPatch", "keyedInputHTML", "entryInputFull", "entryRowNode", "entryInputPatch", "entryInputHTML", "mergeEntriesRegion", "firstEntryEl", "emitAuditEvent")
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, node, script)

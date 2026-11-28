@@ -174,13 +174,19 @@ for (const address of [base, updates]) {
     assert.deepEqual(deltaKeys(await update('peer', 'Entry Peer Renamed')), [keys.a]); await waitHash(oldHash);
     assert((await frame.locator('[data-entry="' + keys.a + '"]').textContent()).includes('Entry Peer Renamed'), 'same-key peer presentation refreshes');
 
-    const browserHidden = value => frame.evaluate(hidden => {
-      window.entryTestHidden = hidden;
-      if (!Object.prototype.hasOwnProperty.call(document, 'hidden')) {
-        Object.defineProperty(document, 'hidden', { configurable: true, get: () => window.entryTestHidden });
-      }
-      document.dispatchEvent(new Event('visibilitychange'));
-    }, value);
+    const browserHidden = async value => {
+      const setHidden = hidden => {
+        window.entryTestHidden = hidden;
+        if (!Object.prototype.hasOwnProperty.call(document, 'hidden')) {
+          Object.defineProperty(document, 'hidden', { configurable: true, get: () => window.entryTestHidden });
+        }
+        if (!window._origHasFocus) window._origHasFocus = document.hasFocus.bind(document);
+        document.hasFocus = () => window.entryTestHidden ? false : window._origHasFocus();
+        document.dispatchEvent(new Event('visibilitychange'));
+      };
+      await page.evaluate(setHidden, value);
+      await frame.evaluate(setHidden, value);
+    };
     await browserHidden(true);
     oldHash = await hash();
     assert.deepEqual(deltaKeys(await update('a', 'off')), [keys.a]);

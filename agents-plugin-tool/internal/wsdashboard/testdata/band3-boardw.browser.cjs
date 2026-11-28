@@ -99,10 +99,10 @@ async function dragSplit(tab, page, dx) {
 (async () => {
   const browser = await chromium.launch({ headless: true });
   try {
-    // 1. 1660x960 (always-open Band 4) with legacy persisted bb=500, cw=380:
-    //    legacy bb is ignored (no data-boardw/--boardw), #bgal stays open
-    //    (data-gal="col", data-pincol), cw=380 applies to convo, and .dcv-edge
-    //    shifts width between convo and board while keeping the stage and #bgal steady.
+    // 1. 1660x960 (Band 3: narrow paged gallery, no 4th column) with legacy
+    //    persisted bb=500, cw=380: legacy bb is ignored (no data-boardw/--boardw),
+    //    cw=380 applies to convo, and .dcv-edge shifts width between convo and
+    //    board while keeping the stage steady.
     for (const colorScheme of ['dark', 'light']) {
       const { context, tab, page, pageErrors, consoleErrors, failedReqs } = await openLive(browser, {
         width: 1660,
@@ -111,11 +111,10 @@ async function dragSplit(tab, page, dx) {
         record: { cards: [], topics: [], bb: 500, cw: 380 },
       });
       const before = await measure(page);
-      assert.equal(before.gal, 'col', `${colorScheme} 1660: always-open Band 4 active`);
-      assert.equal(before.pincol, true, `${colorScheme} 1660: data-pincol always set`);
+      assert.equal(before.gal, 'narrow', `${colorScheme} 1660: Band 3 uses narrow gallery (4th column gated by spare width)`);
+      assert.equal(before.pincol, false, `${colorScheme} 1660: data-pincol unset in Band 3`);
       assert.equal(before.hasBoardw, false, `${colorScheme} 1660: legacy bb does not write data-boardw`);
       assert.equal(before.boardwVar, '', `${colorScheme} 1660: legacy bb does not write --boardw`);
-      assert(before.galW >= 350, `${colorScheme} 1660: #bgal always open (${before.galW}px)`);
       assert(Math.abs(before.convoW - 380) <= 2, `${colorScheme} 1660: persisted cw=380 applies to convo, got ${before.convoW}`);
       assert(Math.abs(before.boardW - (before.gridW - 8 - before.convoW)) <= 2, `${colorScheme} 1660: board takes remaining stage width, got ${before.boardW}`);
       if (shots) await tab.screenshot({ path: path.join(shots, `band3-1660-${colorScheme}.png`) });
@@ -124,7 +123,6 @@ async function dragSplit(tab, page, dx) {
         await dragSplit(tab, page, 50);
         const after = await measure(page);
         assert(Math.abs(after.gridW - before.gridW) <= 2, `1660 drag keeps total .dgrid.live width constant (${before.gridW} -> ${after.gridW})`);
-        assert(Math.abs(after.galW - before.galW) <= 2, `1660 drag keeps #bgal width constant (${before.galW} -> ${after.galW})`);
         assert(Math.abs((after.convoW - before.convoW) - 50) <= 2, `1660 drag widens convo by +50px (${before.convoW} -> ${after.convoW})`);
         assert(Math.abs((before.boardW - after.boardW) - 50) <= 2, `1660 drag narrows board by equal-and-opposite -50px (${before.boardW} -> ${after.boardW})`);
         assert.equal(after.hasBoardw, false, '1660 drag never sets data-boardw');
@@ -135,10 +133,10 @@ async function dragSplit(tab, page, dx) {
       await context.close();
     }
 
-    // 2. 1920x960 (always-open Band 4) with legacy bb=600, cw=0:
-    //    Stage fills the flexible column between rail and 540px #bgal with 5fr/7fr split.
-    //    Dragging .dcv-edge shifts width between convo and board without moving #bgal.
-    //    Widening to 2560x960 stays in Band 4 (data-gal="col") with #bgal at 540px.
+    // 2. 1920x960 (Band 3) with legacy bb=600, cw=0:
+    //    Stage keeps 5fr/7fr split and ignores legacy bb; dragging .dcv-edge
+    //    shifts width between convo and board. Widening to 2560x960 crosses
+    //    into Band 4 (data-gal="col", data-pincol) with #bgal at 540px.
     {
       const { context, tab, page, pageErrors, consoleErrors, failedReqs } = await openLive(browser, {
         width: 1920,
@@ -147,11 +145,10 @@ async function dragSplit(tab, page, dx) {
         record: { cards: [], topics: [], bb: 600, cw: 0 },
       });
       const m1920 = await measure(page);
-      assert.equal(m1920.gal, 'col', '1920: always-open Band 4 active');
-      assert.equal(m1920.pincol, true, '1920: data-pincol always set');
+      assert.equal(m1920.gal, 'narrow', '1920: Band 3 uses narrow gallery');
+      assert.equal(m1920.pincol, false, '1920: data-pincol unset in Band 3');
       assert.equal(m1920.hasBoardw, false, '1920: legacy bb ignored');
       assert.equal(m1920.hasConvow, false, '1920: cw=0 leaves data-convow unset');
-      assert(Math.abs(m1920.galW - 540) <= 2, `1920: #bgal defaults to 540px, got ${m1920.galW}`);
       const wantConvo5fr = Math.round((m1920.gridW - 8) * 5 / 12);
       const wantBoard7fr = Math.round((m1920.gridW - 8) * 7 / 12);
       assert(Math.abs(m1920.convoW - wantConvo5fr) <= 2 && Math.abs(m1920.boardW - wantBoard7fr) <= 2,
@@ -161,7 +158,6 @@ async function dragSplit(tab, page, dx) {
       await dragSplit(tab, page, 100);
       const dragged = await measure(page);
       assert(Math.abs(dragged.gridW - m1920.gridW) <= 2, `1920 drag keeps .dgrid.live constant (${m1920.gridW} -> ${dragged.gridW})`);
-      assert(Math.abs(dragged.galW - m1920.galW) <= 2, `1920 drag keeps #bgal constant (${m1920.galW} -> ${dragged.galW})`);
       assert(Math.abs((dragged.convoW - m1920.convoW) - 100) <= 2, `1920 drag widens convo by +100px (${m1920.convoW} -> ${dragged.convoW})`);
       assert(Math.abs((m1920.boardW - dragged.boardW) - 100) <= 2, `1920 drag narrows board by -100px (${m1920.boardW} -> ${dragged.boardW})`);
 
@@ -170,11 +166,11 @@ async function dragSplit(tab, page, dx) {
       await page.waitForFunction(() => !document.documentElement.hasAttribute('data-convow'));
 
       await tab.setViewportSize({ width: 2560, height: 960 });
-      await page.waitForFunction(() => innerWidth >= 2500);
+      await page.waitForFunction(() => document.documentElement.getAttribute('data-gal') === 'col');
       await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
       const m2560 = await measure(page);
-      assert.equal(m2560.gal, 'col', '2560: stays in always-open Band 4');
-      assert.equal(m2560.pincol, true, '2560: data-pincol stays set');
+      assert.equal(m2560.gal, 'col', '2560: crosses into Band 4');
+      assert.equal(m2560.pincol, true, '2560: data-pincol set in Band 4');
       assert.equal(m2560.hasBoardw, false, '2560: data-boardw stays unset');
       assert(Math.abs(m2560.galW - 540) <= 2, `2560: #bgal keeps default 540px (${m2560.galW}px)`);
       assert(m2560.boardW > m1920.boardW, `2560: flexible board expands with viewport (${m1920.boardW} -> ${m2560.boardW})`);
