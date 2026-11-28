@@ -24,6 +24,9 @@ async function openLive(browser, { width, height, colorScheme, record }) {
     if (url.origin !== base) return route.abort();
     if (url.pathname === '/rail/usage') return route.fulfill({ json: { entries: [], warnPercent: 80, critPercent: 95 } });
     if (url.pathname === '/tracker/stores') return route.fulfill({ json: { rev: 1, stores: [] } });
+    // The docked Ticket Map (the wide gallery's default page) reads the
+    // graph on load; this fixture has no ticket tree (its 404 logs an error).
+    if (url.pathname.endsWith('/tickets/graph')) return route.fulfill({ json: { nodes: [] } });
     return route.continue();
   });
   const tab = await context.newPage();

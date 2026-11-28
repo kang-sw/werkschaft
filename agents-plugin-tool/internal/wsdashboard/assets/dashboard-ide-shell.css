@@ -568,14 +568,9 @@
   background: var(--wb-wash);
   color: var(--wb-fg);
 }
-:root[data-frame] .dr-handle > .i,
-:root[data-frame] .d-tm-handle > svg {
+:root[data-frame] .dr-handle > .i {
   width: 14px;
   height: 14px;
-}
-:root[data-frame] .d-tm-handle {
-  width: 28px;
-  padding: 0;
 }
 :root[data-frame] .dr-handle .tdot {
   top: 4px;

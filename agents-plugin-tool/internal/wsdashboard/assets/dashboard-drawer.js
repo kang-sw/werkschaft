@@ -25,19 +25,12 @@
   var drRoomW = -1, drGhOff = -1, drEntries = [], drWant = false, drOpen = false, drHas = false, drTop = 0;
   var drMode = "panels", drShown = "", drfold = null, drFoldW = -1, drFoldGw = -1;
   var sbody = null, shandle = null;
-  // thandle opens the ticket map (dashboard-ticketmap.js), left of the
-  // search handle; thandleSync shows it while a ticket panel exists.
-  var thandle = null;
   if (drawer) {
     sbody = doc.createElement("div"); sbody.id = "sbody"; sbody.className = "dr-search"; sbody.hidden = true;
     drsheet.appendChild(sbody);
     shandle = doc.createElement("button"); shandle.type = "button"; shandle.id = "shandle"; shandle.className = "dr-handle dr-search-handle";
     shandle.title = wsT("js.tk.qs.tip") + " (Ctrl+K)"; shandle.setAttribute("aria-label", shandle.title); shandle.setAttribute("aria-controls", "drsheet");
     shandle.appendChild(luIcon("search")); drhandle.parentNode.insertBefore(shandle, drhandle);
-    thandle = doc.createElement("button"); thandle.type = "button"; thandle.id = "thandle"; thandle.className = "dr-handle d-tm-handle"; thandle.hidden = true;
-    thandle.title = wsT("js.tmap.open"); thandle.setAttribute("aria-label", thandle.title); thandle.setAttribute("aria-controls", "tmback");
-    thandle.setAttribute("aria-haspopup", "dialog"); thandle.setAttribute("aria-expanded", "false");
-    thandle.appendChild(luIcon("network")); drhandle.parentNode.insertBefore(thandle, shandle);
   }
   // ghandle is the git handle now: a region swap replaces it.
   function ghandle() { return $("ghandle"); }
@@ -116,16 +109,9 @@
         if (!drBooting) drApply(false);
       }
     }
-    thandleSync();
     drFill(true);
   }
   var drBooting = false;
-  // Phase 1 keeps #thandle live until Phase 2 docks the Ticket Map and retires it.
-  function thandleSync() {
-    if (!thandle) return;
-    var on = true;
-    if (thandle.hidden === on) { thandle.hidden = !on; if (!drBooting) drRoom(); }
-  }
   // Notes are fetched only on a panels opening or an explicit refresh. A wait
   // joins the server's existing worker rather than starting another read.
   var notesSeq = 0;
@@ -230,24 +216,18 @@
   }
   // drRoom keeps the header and the tracker's handle row clear of the
   // handles: --drhw is their width together (the header's padding and the
-  // tracker row read it), --shr, --thr and --ghr the search, ticket map and
-  // git handles' offsets from the right edge (the handles right of each and
-  // their 6px gaps, 0 when nothing is right of it or it is absent).
+  // tracker row read it), --shr and --ghr the search and git handles'
+  // offsets from the right edge (the handles right of each and their 6px
+  // gaps, 0 when nothing is right of it or it is absent).
   function drRoom() {
     var w = drHas ? Math.ceil(drhandle.getBoundingClientRect().width) : 0;
     var gw = ghandle() ? Math.ceil(gitRegion.getBoundingClientRect().width) : 0;
     var sw = shandle ? Math.ceil(shandle.getBoundingClientRect().width) : 0;
-    var tw = thandle && !thandle.hidden ? Math.ceil(thandle.getBoundingClientRect().width) : 0;
     var so = w && sw ? w + 6 : 0, afterS = sw ? so + sw : w;
-    var to = tw && afterS ? afterS + 6 : 0, beforeGit = tw ? to + tw : afterS;
-    var off = beforeGit && gw ? beforeGit + 6 : 0, all = gw ? off + gw : beforeGit;
+    var off = afterS && gw ? afterS + 6 : 0, all = gw ? off + gw : afterS;
     if (so !== drRoom._shr) {
       drRoom._shr = so;
       doc.documentElement.style.setProperty("--shr", so + "px");
-    }
-    if (to !== drRoom._thr) {
-      drRoom._thr = to;
-      doc.documentElement.style.setProperty("--thr", to + "px");
     }
     if (all !== drRoomW || off !== drGhOff) {
       drRoomW = all;
@@ -421,7 +401,6 @@
     shandle.addEventListener("click", function () {
       drSetOpen(!(drOpen && drMode === "search"), "search");
     });
-    thandle.addEventListener("click", function () { ticketMap.toggle(); });
     // The git handle toggles the git sheet, or brings it in place of the
     // panels; it is looked up per click, since a swap replaces it.
     doc.addEventListener("click", function (e) {
@@ -454,7 +433,7 @@
     doc.addEventListener("click", function (e) {
       var t = e.target;
       if (!drOpen || !t || !t.closest) return;
-      if (t.closest("#drclip, #drhandle, #shandle, #thandle, #drfold, #r-git, .lmenu, .gwin-back")) return;
+      if (t.closest("#drclip, #drhandle, #shandle, #drfold, #r-git, .lmenu, .gwin-back")) return;
       drSetOpen(false);
     }, true);
     // The header can wrap or change height (a chip appears): the sheet
@@ -478,7 +457,6 @@
         });
       });
       drRo.observe(drhandle);
-      if (thandle) drRo.observe(thandle);
       if (gitRegion) drRo.observe(gitRegion);
     }
     // The panels grid's column count follows the body's width: the last

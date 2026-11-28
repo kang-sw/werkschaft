@@ -1084,15 +1084,19 @@
     wpGrid.appendChild(makeZone("Manuals", "Context", "Project manuals and workflow references will dock alongside session context."));
     sysPageEls.workpanel = makeScaffold("workpanel", "Track 2C", "scaffold", "Legacy #drhandle stays active until gallery-workpanel-design.", wpGrid, "Open Ticket Map →");
 
-    var tmWrap = mk("div", "gal-sys-tm-placeholder");
-    var tmBtn = mk("button", "gal-sys-jump", "Open Ticket Map");
-    tmBtn.type = "button";
-    tmBtn.addEventListener("click", function () {
-      if (window.ticketMap && window.ticketMap.open) window.ticketMap.open();
-    });
-    tmWrap.appendChild(mk("p", "gal-sys-zone-desc", "Ticket Map dock placeholder (Phase 1). Open the full Ticket Map view."));
-    tmWrap.appendChild(tmBtn);
-    sysPageEls.ticketmap = makeScaffold("ticketmap", "Default", "scaffold", "", tmWrap, "");
+    // The Ticket Map page is one full-fill host: the ticket map
+    // (dashboard-ticketmap.js) docks its root in it when the page shows,
+    // and its bare shortcuts act only while focus is inside it.
+    var tmPg = mk("div", "gal-page gal-sys-page gal-sys-tmpage");
+    tmPg.setAttribute("data-page", "ticketmap");
+    tmPg.setAttribute("data-page-panel", "ticketmap");
+    var tmDock = mk("div", "tm-docked");
+    tmDock.id = "tmdock";
+    tmDock.tabIndex = 0;
+    tmDock.setAttribute("role", "region");
+    tmDock.setAttribute("aria-label", SYS_META.ticketmap.title);
+    tmPg.appendChild(tmDock);
+    sysPageEls.ticketmap = tmPg;
 
     var gitGrid = mk("div", "gal-sys-git-grid");
     gitGrid.appendChild(makeZone("Commit Graph", "Region 1", "Interactive branch and commit history graph migrates here in Track 2B."));
@@ -1753,6 +1757,7 @@
     lay = s;
     paintGallery();
     if (opt.layout) opt.layout(s);
+    notifyGalChange("layout");
   }
   // decorate gives every topic on the board a pin button in its title bar,
   // before the note pen, pressed while the topic is docked, and the

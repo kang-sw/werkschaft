@@ -26,8 +26,8 @@ func tmFileIndex(list []string, name string) int {
 }
 
 // TestTicketMapAssetPositions pins where the map's fragments join the
-// concatenation: the shell right after the drawer (it calls drSetOpen and
-// reads thandle), then View B, View C's pure geometry and View C, which
+// concatenation: the shell right after the drawer (it calls drSetOpen), then
+// View B, View C's pure geometry and View C, which
 // reads ticketMap.S and ticketMap.geom at load; the stylesheet right after
 // the drawer's.
 func TestTicketMapAssetPositions(t *testing.T) {
@@ -76,8 +76,8 @@ func TestTicketMapScriptScope(t *testing.T) {
 }
 
 // TestTicketMapCSSScope pins the collision rule for the map's stylesheet:
-// every class it styles starts with d-tm- and every id with tm (#thandle is
-// styled through its d-tm-handle class). The one exception is the
+// every class it styles starts with d-tm- and every id with tm (the gallery's
+// #tmdock host is reached only through its id). The one exception is the
 // dashboard's existing shown-state class .on, only compounded onto a d-tm-
 // class (View C's placed labels: .d-tm-lb.on); it is never a new name.
 func TestTicketMapCSSScope(t *testing.T) {
@@ -120,7 +120,9 @@ func TestTicketMapCSSScope(t *testing.T) {
 		`.d-tm-back { position: fixed; inset: 0; z-index: var(--z-modal);`,
 		`background: var(--wb-bg);`,
 		`z-index: calc(var(--z-modal) + 2);`,
-		`.d-tm-handle { right: calc(var(--dpad) + var(--thr, 0px)); width: 35px; padding: 2px 0 0; justify-content: center; }`,
+		`.d-tm-docked { container: tm-pane / inline-size;`,
+		`@container tm-pane (max-width: 410px)`,
+		`@container tm-pane (max-width: 760px)`,
 	} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("dashboard-ticketmap.css lacks %q", want)
@@ -139,9 +141,11 @@ func TestTicketMapCSSScope(t *testing.T) {
 }
 
 // TestTicketMapPageIntegration pins the edits outside the map's own files:
-// the shell lifts its frame over the overlay (dim), overview treats a click
-// inside it as the palette's, and the drawer gates, places and excludes the
-// handle.
+// the shell lifts its frame over the expanded overlay (dim), overview treats
+// a click inside it as the palette's, the gallery's ticketmap system page
+// hosts the docked root (#tmdock), Ctrl+B finds the docked page, and the
+// drawer keeps no ticket map handle (#thandle, thandleSync and --thr are
+// retired).
 func TestTicketMapPageIntegration(t *testing.T) {
 	life := dashboardJSBlock(t, "\n    function dim() {", "\n    function post() {")
 	if !strings.Contains(life, ".d-tm-back:not([hidden])") {
@@ -155,20 +159,35 @@ func TestTicketMapPageIntegration(t *testing.T) {
 	if !regexp.MustCompile(`t\.closest\("[^"]*\.d-tm-back[^"]*"\)\) return "palette"`).MatchString(classify) {
 		t.Errorf("overview.js classify() palette selector does not list .d-tm-back:\n%s", classify)
 	}
-	sync := dashboardJSBlock(t, "\n  function drawerSync() {", "\n  // Ideas belong")
-	if i, j := strings.Index(sync, "ticketIdeaSync();"), strings.Index(sync, "thandleSync();"); i < 0 || j < i {
-		t.Error("drawerSync does not call thandleSync() after ticketIdeaSync()")
+	cards, err := dashboardFS.ReadFile("assets/cards.js")
+	if err != nil {
+		t.Fatal(err)
 	}
-	drawer := dashboardJSBlock(t, "\n  var sbody = null, shandle = null;", "\n  // ghandle is the git handle")
-	for _, want := range []string{`thandle.id = "thandle"`, `"dr-handle d-tm-handle"`, `luIcon("network")`, `insertBefore(thandle, shandle)`, `"aria-haspopup", "dialog"`} {
-		if !strings.Contains(drawer, want) {
-			t.Errorf("the drawer's #thandle lacks %s", want)
+	for _, want := range []string{`"gal-page gal-sys-page gal-sys-tmpage"`, `mk("div", "tm-docked")`, `tmDock.id = "tmdock"`, `notifyGalChange("layout")`} {
+		if !strings.Contains(string(cards), want) {
+			t.Errorf("cards.js's docked ticket map page lacks %s", want)
 		}
 	}
-	rest := dashboardJSBlock(t, "\n  if (drawer) {\n    // The fold button", "\n    // The panels grid's column count")
-	for _, want := range []string{`"#drclip, #drhandle, #shandle, #thandle,`, "drRo.observe(thandle)", "ticketMap.toggle()"} {
-		if !strings.Contains(rest, want) {
-			t.Errorf("the drawer's wiring lacks %s", want)
+	avail := dashboardJSBlock(t, "\n  function ticketMapAvailable(d) {", "\n  function filesSheetOpenEl(d) {")
+	if !strings.Contains(avail, `"tmdock"`) || !strings.Contains(avail, `"tmback"`) {
+		t.Errorf("ticketMapAvailable does not accept the docked page or the expanded overlay:\n%s", avail)
+	}
+	js, err := dashboardTestAsset("assets/dashboard.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gone := range []string{"thandle", "--thr", "d-tm-handle", "js.tmap.open"} {
+		if strings.Contains(string(js), gone) {
+			t.Errorf("dashboard.js still names the retired %s", gone)
+		}
+	}
+	for _, name := range []string{"assets/dashboard-drawer.css", "assets/dashboard-ticketmap.css", "assets/dashboard-ide-shell.css", "assets/dashboard-rail.css"} {
+		raw, err := dashboardFS.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "d-tm-handle") || strings.Contains(string(raw), "--thr") {
+			t.Errorf("%s still styles the retired ticket map handle", name)
 		}
 	}
 }
