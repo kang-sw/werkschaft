@@ -190,7 +190,7 @@ func TestFrameScriptSourceMapSubFiles(t *testing.T) {
 		"stream.js", "stream-view.js", "panel-diff.js", "card-find.js",
 		"mermaid-init.js", "svg-view.js", "viewer.js", "toast.js", "hold-confirm.js",
 		"tracker.js", "tracker-mount.js", "mention.js", "ws-input.js",
-		"rail.js", "memo.js", "usage.js", "shell.js", "gallery.js", "cards.js",
+		"rail.js", "memo.js", "usage.js", "usage-charts.js", "usage-popover.js", "shell.js", "gallery.js", "cards.js",
 		"overview.js", "preview.js", "panelcard.js", "files.js",
 	}
 	lines := strings.Split(frameBody, "\n")

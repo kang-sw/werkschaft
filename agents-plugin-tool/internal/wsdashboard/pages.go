@@ -27,7 +27,7 @@ import (
 // (wswhiteboard.RenderRegions); the rest render from the view model
 // (pageview.go).
 
-//go:embed assets/dashboard.tmpl assets/dashboard-settings-catalog.json assets/dashboard.css assets/dashboard-*.css assets/dashboard.js assets/dashboard-*.js assets/sprite.svg assets/tracker.css assets/tracker.js assets/tracker-*.js assets/mention.js assets/capsules.js assets/md-parser.js assets/md-editor.js assets/ws-input.js assets/toast.js assets/confirm.js assets/hold-confirm.js assets/rail.js assets/memo.js assets/memo.css assets/usage.js assets/usage.css assets/gallery.js assets/gal-rail-preview.js assets/cards.js assets/preview.js assets/panelcard.js assets/files.js assets/terminal.js assets/shell.js assets/webcard.js assets/webframe.js assets/webinject.js assets/overview.js assets/brand/werkschaft-dark.svg assets/brand/werkschaft-light.svg
+//go:embed assets/dashboard.tmpl assets/dashboard-settings-catalog.json assets/dashboard.css assets/dashboard-*.css assets/dashboard.js assets/dashboard-*.js assets/sprite.svg assets/tracker.css assets/tracker.js assets/tracker-*.js assets/mention.js assets/capsules.js assets/md-parser.js assets/md-editor.js assets/ws-input.js assets/toast.js assets/confirm.js assets/hold-confirm.js assets/rail.js assets/memo.js assets/memo.css assets/usage.js assets/usage-*.js assets/usage.css assets/gallery.js assets/gal-rail-preview.js assets/cards.js assets/preview.js assets/panelcard.js assets/files.js assets/terminal.js assets/shell.js assets/webcard.js assets/webframe.js assets/webinject.js assets/overview.js assets/brand/werkschaft-dark.svg assets/brand/werkschaft-light.svg
 var dashboardFS embed.FS
 
 // These are ordered source fragments, not independently loaded scripts or
@@ -158,6 +158,12 @@ var trackerScriptFiles = []string{
 	"tracker-mount.js",
 }
 
+var usageScriptFiles = []string{
+	"usage.js",
+	"usage-charts.js",
+	"usage-popover.js",
+}
+
 func readDashboardSource(read func(string) ([]byte, error), name string) ([]byte, error) {
 	var files []string
 	switch name {
@@ -167,6 +173,8 @@ func readDashboardSource(read func(string) ([]byte, error), name string) ([]byte
 		files = dashboardStyleFiles
 	case "tracker.js":
 		files = trackerScriptFiles
+	case "usage.js":
+		files = usageScriptFiles
 	case "dashboard-companion.js":
 		files = companionScriptFiles
 	case "dashboard-companion.css":
@@ -337,6 +345,7 @@ type dashboardAssets struct {
 	wbViewerParts []scriptPart
 	trackerParts  []scriptPart
 	mentionParts  []scriptPart
+	usageParts    []scriptPart
 	cardsParts    []scriptPart
 }
 
@@ -543,6 +552,10 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 	if mErr != nil {
 		return nil, mErr
 	}
+	usageParts, usageJoined, uErr := readNamedScriptParts(read, usageScriptFiles, "")
+	if uErr != nil {
+		return nil, uErr
+	}
 	cardsParts, cardsJoined, cErr := readNamedScriptParts(read, []string{"gallery.js", "gal-rail-preview.js", "cards.js"}, "\n;\n")
 	if cErr != nil {
 		return nil, cErr
@@ -560,6 +573,7 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 		wbViewerParts: wbViewerParts,
 		trackerParts:  trackerParts,
 		mentionParts:  mentionParts,
+		usageParts:    usageParts,
 		cardsParts:    cardsParts,
 		data: pageAssetsData{
 			CSS:               template.CSS(get("dashboard.css") + "\n" + get("memo.css") + "\n" + get("usage.css")),
@@ -574,7 +588,7 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 			HoldConfirmScript: template.JS(get("hold-confirm.js")),
 			RailScript:        template.JS(get("rail.js")),
 			MemoScript:        template.JS(get("memo.js")),
-			UsageScript:       template.JS(get("usage.js")),
+			UsageScript:       template.JS(usageJoined),
 			ShellScript:       template.JS(get("shell.js")),
 			CompanionScript:   template.JS(get("dashboard-companion.js")),
 			CompanionCSS:      template.CSS(get("dashboard-companion.css")),

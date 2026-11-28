@@ -17,6 +17,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/wscred"
+	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wsmeta"
 )
 
 // Frozen latest-only wire types and read/write logic from
@@ -475,5 +479,146 @@ func TestPlanUsageCodexFiveHourT0CompatibilityAndSeparateFile(t *testing.T) {
 	}
 	if _, ok := without5h["codexFiveHourHistory"]; ok {
 		t.Fatalf("unexpected codexFiveHourHistory without 5h samples: %s", rec2.Body.String())
+	}
+}
+
+func TestPlanUsageSlotSnapshotsT0CompatibilityAndOldReaderLoad(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UnixMilli()
+	reset5h := now + 2*time.Hour.Milliseconds()
+	reset7d := now + 5*24*time.Hour.Milliseconds()
+
+	// 1. Default-slot-only install (legacy file mode): plan-usage.json bytes are
+	// byte-identical with pinned latest-only reader/writer, and slotId is omitted
+	// when no slot registry is active.
+	legacy := usageTestStore(t)
+	legacy.pushClaude(&wslive.Snapshot{
+		Adapter:   "claude",
+		UpdatedAt: now,
+		Usage: &wslive.Usage{
+			LimitsAsOf: now,
+			Limits:     []wslive.UsageLimit{{Kind: wslive.LimitFiveHour, Percent: 31, ResetsAt: reset5h}},
+		},
+	})
+	baselineLatest, err := os.ReadFile(filepath.Join(legacy.dir, planUsageCache))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinnedUsageReadWrite(t, legacy.dir)
+	afterPinned, err := os.ReadFile(filepath.Join(legacy.dir, planUsageCache))
+	if err != nil || !bytes.Equal(baselineLatest, afterPinned) {
+		t.Fatalf("default-slot-only plan-usage.json differed from pinned writer:\nbefore: %s\nafter:  %s", baselineLatest, afterPinned)
+	}
+
+	// 2. Pinned old history reader accepts stamped samples and preserves slotId
+	// through its retained Fields map on append/rewrite.
+	slotsFile := filepath.Join(t.TempDir(), "auth", wscred.AccountSlotsFileName)
+	slots := wscred.NewAccountSlotRegistry(slotsFile)
+	t.Cleanup(slots.Close)
+	workDir := filepath.Join(t.TempDir(), "claude-work")
+	if err := os.MkdirAll(workDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := slots.AddSlot(wscred.AccountSlot{ID: "work", Harness: "claude", Label: "Work", ConfigDir: workDir}); err != nil {
+		t.Fatal(err)
+	}
+	if err := slots.SetActive("claude", "work"); err != nil {
+		t.Fatal(err)
+	}
+	legacy.accountSlots = slots
+	legacy.seedSlots()
+	legacy.pushClaude(&wslive.Snapshot{
+		Adapter:   "claude",
+		UpdatedAt: now + 1000,
+		Usage: &wslive.Usage{
+			LimitsAsOf: now + 1000,
+			Limits:     []wslive.UsageLimit{{Kind: wslive.LimitFiveHour, Percent: 42, ResetsAt: reset5h}},
+		},
+	})
+	oldHist := &pinnedHistoryStore{dir: legacy.dir}
+	h, err := oldHist.pinnedHistoryRead()
+	if err != nil || len(h.Records) != 2 {
+		t.Fatalf("pinned history reader rejected stamped sample: len=%d err=%v", len(h.Records), err)
+	}
+	if string(h.Records[1].Fields["slotId"]) != `"work"` {
+		t.Fatalf("expected slotId preserved in Fields: %+v", h.Records[1].Fields)
+	}
+	oldHist.pinnedHistoryAppend([]pinnedHistorySample{{
+		Harness: "codex", Kind: "seven_day", Source: "via Pi", ResetsAt: reset7d, AsOf: now + 2000, Percent: 18,
+	}}, now+2000)
+	reopenedLegacy := newTestPlanUsageStore(legacy.dir, legacy.home, legacy.getenv)
+	gotSamples := reopenedLegacy.history(now + 2000).Samples
+	if len(gotSamples) != 3 || gotSamples[1].SlotID != "work" {
+		t.Fatalf("slotId lost after old history writer round-trip: %+v", gotSamples)
+	}
+
+	// 3. SQLite wsmeta store: "<provider>:<slotID>" entries sit beside unchanged
+	// "claude"/"gpt" entries, and an old-reader-shaped load (switching only on
+	// "claude" and "gpt") ignores them cleanly.
+	metaDir := filepath.Join(t.TempDir(), "dashboard")
+	meta, err := wsmeta.Open(metaDir, wsmeta.Options{CheckpointIdle: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = meta.Close() })
+	if _, err := meta.Cutover(ctx, wsmeta.CutoverOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := meta.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newPlanUsageStoreFromMeta(metaDir, t.TempDir(), func(string) string { return "" }, meta, snap)
+	s.harnesses = testHarnessTraits()
+	s.accountSlots = slots
+	s.seedSlots() // active claude slot is "work"
+	s.pushClaude(&wslive.Snapshot{
+		Adapter:   "claude",
+		UpdatedAt: now,
+		Usage: &wslive.Usage{
+			LimitsAsOf: now,
+			Limits:     []wslive.UsageLimit{{Kind: wslive.LimitFiveHour, Percent: 55, ResetsAt: reset5h}},
+		},
+	})
+	// Switch back to "default" so "claude:work" is stashed in wsmeta.
+	if err := slots.SetActive("claude", wscred.DefaultAccountSlotID); err != nil {
+		t.Fatal(err)
+	}
+	s.invalidateSlots()
+	s.pushClaude(&wslive.Snapshot{
+		Adapter:   "claude",
+		UpdatedAt: now + 5000,
+		Usage: &wslive.Usage{
+			LimitsAsOf: now + 5000,
+			Limits:     []wslive.UsageLimit{{Kind: wslive.LimitFiveHour, Percent: 12, ResetsAt: reset5h}},
+		},
+	})
+
+	loadedSnap, err := meta.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest := loadedSnap.LatestUsage[wsmeta.UsageSourcePlan]
+	var oldClaude, oldGPT pinnedUsageEntry
+	seenSlotKey := false
+	for _, e := range latest.Entries {
+		switch e.Key {
+		case "claude":
+			if err := json.Unmarshal(e.Body, &oldClaude); err != nil {
+				t.Fatalf("old reader failed on claude key: %v", err)
+			}
+		case "gpt":
+			if err := json.Unmarshal(e.Body, &oldGPT); err != nil {
+				t.Fatalf("old reader failed on gpt key: %v", err)
+			}
+		case "claude:work":
+			seenSlotKey = true
+		}
+	}
+	if !seenSlotKey {
+		t.Fatalf("expected persisted claude:work entry in wsmeta, got %+v", latest.Entries)
+	}
+	if len(oldClaude.Windows) != 1 || oldClaude.Windows[0].Percent != 12 {
+		t.Fatalf("old reader saw wrong active claude entry: %+v", oldClaude)
 	}
 }
