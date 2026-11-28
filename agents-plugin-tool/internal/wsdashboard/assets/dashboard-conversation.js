@@ -118,9 +118,11 @@
     for (var i = 0; i < list.length; i++) { var k = list[i].getAttribute("data-key"); if (!byKey[k]) byKey[k] = list[i]; }
   }
   function applyHandoffOpen(n, liveTurn, store, anyOpen) {
-    if ((liveTurn && liveTurn.open && !liveTurn.hasAttribute("data-ws-handed-off")) || store.turnOpen || anyOpen) {
-      preserveTurnOpen(n, true); if (liveTurn && liveTurn.setAttribute) liveTurn.setAttribute("data-ws-handed-off", "1"); store.turnOpen = false;
-    }
+    var freshLive = !!(liveTurn && !liveTurn.hasAttribute("data-ws-handed-off"));
+    var wantOpen = freshLive ? !!liveTurn.open : !!(store.turnOpen || anyOpen);
+    if (freshLive && liveTurn.setAttribute) liveTurn.setAttribute("data-ws-handed-off", "1");
+    if (wantOpen) preserveTurnOpen(n, true);
+    store.turnOpen = false;
   }
   // syncCallSummary patches the live summary to the fresh one field by
   // field: status class, icon, name, and the duration and token cells. The
@@ -186,19 +188,14 @@
     var src = typeof frag === "function" ? frag(html) : null;
     if (!src) { el.innerHTML = html; restoreOpen(el); fmtTimes(el); if (typeof sweepOutImgs === "function") sweepOutImgs(el); return; }
     var newTurn = src.querySelector ? src.querySelector("details.d-turn-live") : null;
-    var oldRev = oldTurn && oldTurn.getAttribute("data-turn-rev"), newRev = newTurn && newTurn.getAttribute("data-turn-rev");
-    if (oldTurn && newTurn && oldRev && oldRev === newRev && newTurn.parentNode) {
-      newTurn.parentNode.replaceChild(oldTurn, newTurn);
-    } else {
-      if (newTurn) { graftLiveCalls(el, newTurn, updated); if (oldTurn && oldTurn.open) preserveTurnOpen(newTurn, true); }
-      if (oldTurn) {
-        if (!newTurn && oldTurn.open && !oldTurn.hasAttribute("data-ws-handed-off")) store.turnOpen = true;
-        var leftovers = el.querySelectorAll ? el.querySelectorAll("details.au-call-details[data-key]") : [];
-        for (var i = 0; i < leftovers.length; i++) {
-          var d = leftovers[i], items = childByClass(d, "conv-audit-items");
-          if (d.open || d.hasAttribute("data-au-preview") || d.hasAttribute("data-au-out-pending") ||
-              d.hasAttribute("data-au-out-inflight") || (items && items.children && items.children.length)) liveCallStashPut(d.getAttribute("data-key"), d);
-        }
+    if (newTurn) { graftLiveCalls(el, newTurn, updated); if (oldTurn && oldTurn.open) preserveTurnOpen(newTurn, true); }
+    if (oldTurn) {
+      if (!newTurn && oldTurn.open && !oldTurn.hasAttribute("data-ws-handed-off")) store.turnOpen = true;
+      var leftovers = el.querySelectorAll ? el.querySelectorAll("details.au-call-details[data-key]") : [];
+      for (var i = 0; i < leftovers.length; i++) {
+        var d = leftovers[i], items = childByClass(d, "conv-audit-items");
+        if (d.open || d.hasAttribute("data-au-preview") || d.hasAttribute("data-au-out-pending") ||
+            d.hasAttribute("data-au-out-inflight") || (items && items.children && items.children.length)) liveCallStashPut(d.getAttribute("data-key"), d);
       }
     }
     el.textContent = ""; el.appendChild(src);

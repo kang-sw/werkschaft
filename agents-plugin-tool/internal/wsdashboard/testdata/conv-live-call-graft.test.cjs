@@ -599,4 +599,125 @@ test("in-flight completion race, non-dur signals (<1ms), and transient error ret
   await flush();
   assert.equal(dErr.hasAttribute("data-au-out-pending"), false);
   assert.equal(dErr.querySelector(".au-call-output").textContent, "Output\nOUT");
+
+  // 3. Initial open failure before data-au-out-pending was ever set still stamps pending and clears refresh-queued.
+  let failInit = true;
+  const hInitFail = harness({}, {
+    fetchImpl: (url) => {
+      if (url.includes("/events?call=initf")) {
+        if (failInit) return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve(null) });
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(bundle("initf", { result: phase === "done" })) });
+      }
+      const m = /part=(in|out)/.exec(url);
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ data: m[1].toUpperCase(), end: true }) });
+    },
+  });
+  phase = "running";
+  hInitFail.swapLive(liveRegionHtml("r1", [callLi("initf", { dur: "" })]));
+  const dInitFail = hInitFail.convlive.querySelector('details[data-key="call-initf"]');
+  dInitFail.open = true;
+  await flush();
+  assert.equal(dInitFail.hasAttribute("data-au-out-inflight"), false);
+  assert.equal(dInitFail.hasAttribute("data-au-refresh-queued"), false);
+  assert.equal(dInitFail.hasAttribute("data-au-out-pending"), true, "initial failure stamps data-au-out-pending");
+  failInit = false;
+  phase = "done";
+  hInitFail.swapLive(liveRegionHtml("r2", [callLi("initf", { dur: "5ms" })]));
+  await flush();
+  assert.equal(dInitFail.hasAttribute("data-au-out-pending"), false);
+  assert.equal(dInitFail.querySelector(".au-call-output").textContent, "Output\nOUT");
+
+  // 4. Order B detached abort: initial fetch resolves while detail is detached in stash; handoff retries cleanly.
+  let resolveDetached;
+  const hDetach = harness({}, {
+    fetchImpl: (url) => {
+      if (url.includes("/events?call=det1")) {
+        if (resolveDetached) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(bundle("det1", { result: true })) });
+        return new Promise((r) => {
+          resolveDetached = () => r({ ok: true, status: 200, json: () => Promise.resolve(bundle("det1", { result: false })) });
+        });
+      }
+      const m = /part=(in|out)/.exec(url);
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ data: m[1].toUpperCase(), end: true }) });
+    },
+  });
+  hDetach.swapLive(liveRegionHtml("r1", [callLi("det1", { dur: "" })]));
+  const dDetach = hDetach.convlive.querySelector('details[data-key="call-det1"]');
+  dDetach.open = true;
+  await Promise.resolve();
+  assert.equal(dDetach.hasAttribute("data-au-out-inflight"), true);
+  // Queue a refresh while inflight, then go idle so detail detaches before initial fetch resolves.
+  hDetach.doc.dispatchEvent(new hDetach.sandbox.CustomEvent("ws-call-details-updated", { detail: { el: dDetach, completed: true } }));
+  assert.equal(dDetach.hasAttribute("data-au-refresh-queued"), true);
+  hDetach.swapLive(`<div class="conv clive" data-phase="idle"></div>`);
+  assert.equal(dDetach.isConnected, false);
+  resolveDetached();
+  await flush();
+  assert.equal(dDetach.hasAttribute("data-au-out-inflight"), false);
+  assert.equal(dDetach.hasAttribute("data-au-refresh-queued"), false, "detached abort clears refresh-queued");
+  assert.equal(dDetach.hasAttribute("data-au-out-pending"), true, "detached abort stamps data-au-out-pending");
+  hDetach.sandbox.convoSwapping = 1;
+  hDetach.merge(completedTurn("010", "done", [callLi("det1", { dur: "3ms" })]));
+  hDetach.sandbox.convoSwapping = 0;
+  await flush();
+  const doneDet = hDetach.box.querySelector('details[data-entry="010"]');
+  assert.equal(doneDet.querySelector('details[data-key="call-det1"]'), dDetach);
+  assert.equal(dDetach.hasAttribute("data-au-out-pending"), false);
+  assert.equal(dDetach.querySelector(".au-call-output").textContent, "Output\nOUT");
+
+  // 5. Mid-run .au-tok change updates data-au-tok-snap when !settled so unrelated updates do not re-fetch.
+  const hSnap = harness({}, {
+    fetchImpl: (url) => {
+      if (url.includes("/events?call=snap1")) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(bundle("snap1", { result: false })) });
+      }
+      const m = /part=(in|out)/.exec(url);
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ data: m[1].toUpperCase(), end: true }) });
+    },
+  });
+  hSnap.swapLive(liveRegionHtml("r1", [callLi("snap1", { dur: "" }).replace("+1k", "")]));
+  const dSnap = hSnap.convlive.querySelector('details[data-key="call-snap1"]');
+  dSnap.open = true;
+  await flush();
+  assert.equal(dSnap.getAttribute("data-au-tok-snap"), "");
+  assert.equal(eventsFetches(hSnap, "snap1").length, 1);
+  // .au-tok changes mid-run while still unsettled -> triggers 1 refresh and updates snap to "+1k".
+  hSnap.swapLive(liveRegionHtml("r2", [callLi("snap1", { dur: "" })]));
+  await flush();
+  assert.equal(eventsFetches(hSnap, "snap1").length, 2);
+  assert.equal(dSnap.getAttribute("data-au-tok-snap"), "+1k");
+  // Unrelated summary update (tool title change, .au-tok unchanged at "+1k") must NOT re-fetch.
+  hSnap.swapLive(liveRegionHtml("r3", [callLi("snap1", { dur: "" }).replace("Bash", "Bash !")]));
+  await flush();
+  assert.equal(eventsFetches(hSnap, "snap1").length, 2, "unchanged .au-tok after snap update does not re-fetch");
+});
+
+test("swapConvLive rejects back-to-back live turn aliasing and respects collapsed outer liveTurn on handoff", async () => {
+  // Back-to-back live turns with identical data-turn-rev must NOT alias oldTurn.
+  const hAlias = harness({ t1: bundle("t1"), t2: bundle("t2") });
+  hAlias.swapLive(liveRegionHtml("1 call", [callLi("t1", { dur: "" })]));
+  const t1 = hAlias.convlive.querySelector('details[data-key="call-t1"]');
+  t1.open = true;
+  await flush();
+  hAlias.swapLive(liveRegionHtml("1 call", [callLi("t2", { dur: "" })]));
+  await flush();
+  assert.equal(hAlias.convlive.querySelector('details[data-key="call-t1"]'), null, "old turn call not aliased");
+  assert.ok(hAlias.convlive.querySelector('details[data-key="call-t2"]'), "new turn call rendered");
+
+  // Explicitly collapsed liveTurn (open=false) stays collapsed on Order A handoff even when nested call is open.
+  const hColl = harness({ c1: bundle("c1") });
+  hColl.swapLive(liveRegionHtml("r1", [callLi("c1", { dur: "" })]));
+  const liveColl = hColl.convlive.querySelector("details.d-turn-live");
+  const cColl = hColl.convlive.querySelector('details[data-key="call-c1"]');
+  cColl.open = true;
+  liveColl.open = false;
+  await flush();
+  hColl.sandbox.convoSwapping = 1;
+  hColl.merge(completedTurn("002", "done", [callLi("c1", { dur: "1ms" })]));
+  hColl.sandbox.convoSwapping = 0;
+  await flush();
+  const handedColl = hColl.box.querySelector('details[data-entry="002"]');
+  assert.equal(handedColl.open, false, "collapsed liveTurn stays collapsed despite open nested call");
+  assert.equal(handedColl.querySelector('details[data-key="call-c1"]'), cColl, "nested open call still grafted");
+  assert.equal(cColl.open, true);
 });

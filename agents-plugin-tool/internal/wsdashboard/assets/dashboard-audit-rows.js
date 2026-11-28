@@ -885,11 +885,9 @@
       auInlinePending.add(detail);
       var epoch = typeof auEpoch === "number" ? auEpoch : 0;
       var tokEl = detail.querySelector(".au-tok");
-      if (!detail.hasAttribute("data-au-tok-snap")) {
-        detail.setAttribute("data-au-tok-snap", tokEl ? tokEl.textContent.trim() : "");
-      }
+      detail.setAttribute("data-au-tok-snap", tokEl ? tokEl.textContent.trim() : "");
       detail.setAttribute("data-au-out-inflight", "");
-      var base = "/s/" + encodeURIComponent(auRowsRid) + "/audit", settled = false, failed = false;
+      var base = "/s/" + encodeURIComponent(auRowsRid) + "/audit", settled = false, failed = false, applied = false;
       auInlineJSON(base + "/events?call=" + encodeURIComponent(call)).then(function (bundle) {
         if (!bundle || epoch !== (typeof auEpoch === "number" ? auEpoch : 0) || !detail.isConnected) return;
         var result = (bundle.events || []).find(function (ev) { return auIsResultSummary(ev, call); });
@@ -898,6 +896,7 @@
       }).then(function (parts) {
         if (!parts || epoch !== (typeof auEpoch === "number" ? auEpoch : 0) || !detail.isConnected) return;
         auApplyPreview(detail, summary, parts);
+        applied = true;
         // A call without a result is still running: remember to read its
         // output once the live turn row reports it complete.
         if (settled) {
@@ -906,6 +905,8 @@
           detail.removeAttribute("data-au-tok-snap");
           auPreviewPut(call, parts);
         } else {
+          var curTok = detail.querySelector(".au-tok");
+          detail.setAttribute("data-au-tok-snap", curTok ? curTok.textContent.trim() : "");
           detail.setAttribute("data-au-out-pending", "");
         }
       }).catch(function () {
@@ -916,7 +917,14 @@
         auInlinePending.delete(detail);
         detail.removeAttribute("data-au-out-inflight");
         var curEpoch = typeof auEpoch === "number" ? auEpoch : 0;
-        if (!failed && epoch === curEpoch && detail.isConnected && !settled && detail.hasAttribute("data-au-refresh-queued")) {
+        var canRetry = !failed && epoch === curEpoch && detail.isConnected && !settled && detail.hasAttribute("data-au-refresh-queued");
+        if (failed || !detail.isConnected || epoch !== curEpoch) {
+          detail.removeAttribute("data-au-refresh-queued");
+        }
+        if ((!settled || !applied) && !detail.hasAttribute("data-au-preview") && epoch === curEpoch) {
+          detail.setAttribute("data-au-out-pending", "");
+        }
+        if (canRetry) {
           detail.removeAttribute("data-au-refresh-queued");
           detail.removeAttribute("data-au-preview");
           auLoadPreview(detail);
