@@ -583,11 +583,16 @@ func (c *conv) addApproval(a ApprovalRequest, quiet bool) {
 		// daemon allows or refuses it now, and it is never parked (see
 		// companion_permission.go). A replay or a quiet event parks it for
 		// the rejoin's end (settleCompanionPending).
-		if !c.settleCompanionApproval(a) {
+		if err := c.settleCompanionApproval(a); err != nil {
 			// The process still waits on a request nobody can answer and
 			// nothing is parked for the watchdogs: stop it so the companion
-			// restarts instead of waiting forever.
-			c.approvalFailed(errNoApprovalAnswer)
+			// restarts instead of waiting forever, preserving any transport
+			// write error sendApproval already recorded in c.lastErr.
+			if errors.Is(err, errNoApprovalAnswer) || c.lastErr == "" {
+				c.approvalFailed(errNoApprovalAnswer)
+			} else if c.proc != nil {
+				c.stopProcess("")
+			}
 		}
 		return
 	}

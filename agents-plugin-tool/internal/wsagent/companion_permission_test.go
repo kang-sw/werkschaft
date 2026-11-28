@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -364,4 +365,83 @@ func TestCompanionReplayUnanswerableApprovalFailsClosed(t *testing.T) {
 			}
 		})
 	}
+}
+
+// writeErrSpy is a Process whose approval answerer fails with a transport write error.
+type writeErrSpy struct {
+	Process
+	err error
+}
+
+func (s *writeErrSpy) AnswerApproval(ApprovalRequest, bool, string) error {
+	return s.err
+}
+
+// TestCompanionApprovalPreservesTransportWriteError verifies that when
+// sendApproval records a real transport write error in c.lastErr, neither
+// settleCompanionPending nor live addApproval overwrites it with
+// errNoApprovalAnswer.
+func TestCompanionApprovalPreservesTransportWriteError(t *testing.T) {
+	transportErr := errors.New("broken pipe")
+
+	t.Run("replay_pending", func(t *testing.T) {
+		h, id, _ := startAgyCompanion(t, companionRoleBody)
+		c := h.runner.conv(id)
+		execCh := make(chan execAnswer, 1)
+		var (
+			afterReplay []ApprovalRequest
+			execKept    bool
+			hasProc     bool
+			lastErr     string
+		)
+		c.do(func() {
+			c.proc = &writeErrSpy{Process: c.proc, err: transportErr}
+			c.replaying = true
+			c.addApproval(ApprovalRequest{ID: "replayed-1", Tool: "mcp_ws_call"}, false)
+			c.addApproval(ApprovalRequest{ID: "replayed-2", Tool: agyCommandTool}, false)
+			if c.execAnswers == nil {
+				c.execAnswers = map[string]chan execAnswer{}
+			}
+			c.execAnswers["exec-wait"] = execCh
+			c.approvals = append(c.approvals, ApprovalRequest{ID: "exec-wait", Tool: "exec_shell"})
+
+			c.replayDone(false)
+			afterReplay = append([]ApprovalRequest(nil), c.approvals...)
+			_, execKept = c.execAnswers["exec-wait"]
+			hasProc = c.proc != nil
+			lastErr = c.lastErr
+		})
+		if len(afterReplay) != 1 || afterReplay[0].ID != "exec-wait" || !execKept {
+			t.Fatalf("approvals=%+v execKept=%v want only exec-wait", afterReplay, execKept)
+		}
+		if hasProc {
+			t.Fatalf("process still running after transport write error")
+		}
+		if !strings.Contains(lastErr, transportErr.Error()) {
+			t.Fatalf("lastErr=%q want substring %q (must not be overwritten by %q)", lastErr, transportErr.Error(), errNoApprovalAnswer.Error())
+		}
+	})
+
+	t.Run("live_addApproval", func(t *testing.T) {
+		h, id, _ := startAgyCompanion(t, companionRoleBody)
+		c := h.runner.conv(id)
+		var (
+			parked  int
+			hasProc bool
+			lastErr string
+		)
+		c.do(func() {
+			c.proc = &writeErrSpy{Process: c.proc, err: transportErr}
+			c.addApproval(ApprovalRequest{ID: "live-1", Tool: "mcp_ws_call"}, false)
+			parked = len(c.approvals)
+			hasProc = c.proc != nil
+			lastErr = c.lastErr
+		})
+		if parked != 0 || hasProc {
+			t.Fatalf("parked=%d hasProc=%v want 0, false", parked, hasProc)
+		}
+		if !strings.Contains(lastErr, transportErr.Error()) {
+			t.Fatalf("lastErr=%q want substring %q", lastErr, transportErr.Error())
+		}
+	})
 }

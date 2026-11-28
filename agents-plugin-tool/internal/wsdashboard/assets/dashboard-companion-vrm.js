@@ -528,7 +528,8 @@
     let vrmaClips = new Map(), vrmaLoading = new Set(), vrmaFailed = new Set();
     const loadCancel = new AbortController();
     const clipRt = typeof C.vrmClip?.createPackClipRuntime === "function" ? C.vrmClip.createPackClipRuntime(pack, loadCancel.signal) : null;
-    let armChains = null, activeSentinelKey = "", activeVrmaIsSentinel = false;
+    let armChains = null, activeSentinelKey = "", activeVrmaIsSentinel = false, activeVrmaClip = null, activeVrmaLoop = true, activeVrmaCacheKey = "";
+    let vrmaSyncGen = 0, wantedVrmaKey = "", wantedVrmaCacheKey = "", clipTriggerSeq = 0;
     let width = LOGICAL_W, height = LOGICAL_H, dpr = 1;
     let overlayMode = false;
     let viewport = { width: LOGICAL_W, height: LOGICAL_H, dpr: 1 };
@@ -576,11 +577,18 @@
     }
 
     function disposeVrmOnly() {
+      vrmaSyncGen++;
+      wantedVrmaKey = "";
+      wantedVrmaCacheKey = "";
       if (activeVrmaAction) {
         activeVrmaAction.stop();
         activeVrmaAction = null;
         activeVrmaKey = "";
       }
+      activeVrmaIsSentinel = false;
+      activeVrmaClip = null;
+      activeVrmaLoop = true;
+      activeVrmaCacheKey = "";
       if (mixer) {
         mixer.stopAllAction();
         mixer = null;
@@ -1058,6 +1066,12 @@
       const clipFile = clipEntry && clipEntry.source !== "animations" ? (clipEntry.file || "") : "";
       const cacheKey = clipFile ? ("clip:" + clipFile) : key;
       const wanted = key && !vrmaFailed.has(cacheKey) && (clipFile || (pack?.animations && Object.hasOwn(pack.animations, key))) ? key : "";
+      const wantedCache = wanted ? cacheKey : "";
+      if (wanted !== wantedVrmaKey || wantedCache !== wantedVrmaCacheKey) {
+        vrmaSyncGen++;
+        wantedVrmaKey = wanted;
+        wantedVrmaCacheKey = wantedCache;
+      }
       if (!wanted) {
         if (activeVrmaAction) {
           syncBoneCacheFromRig();
@@ -1066,23 +1080,37 @@
           activeVrmaAction = null;
           activeVrmaKey = "";
           activeVrmaIsSentinel = false;
+          activeVrmaClip = null;
+          activeVrmaLoop = true;
+          activeVrmaCacheKey = "";
           resetExtraVrmaBones();
         }
         return;
       }
-      if (wanted === activeVrmaKey && activeVrmaAction) return;
+      const isOneShot = !!(clipEntry && clipEntry.loop === false);
+      if (wanted === activeVrmaKey && activeVrmaAction && activeVrmaCacheKey === cacheKey && activeVrmaLoop === !isOneShot) return;
       const clip = vrmaClips.get(cacheKey);
       if (!clip) {
+        const gen = vrmaSyncGen;
         ensureVrmaClip(wanted, clipFile).then(loaded => {
-          if (loaded && !disposed) syncVrma(wanted, clipEntry, isSentinel);
+          if (loaded && !disposed && gen === vrmaSyncGen && wantedVrmaKey === wanted && wantedVrmaCacheKey === cacheKey) {
+            syncVrma(wanted, clipEntry, isSentinel);
+          }
         });
         return;
       }
       const nextAction = mixer.clipAction(clip);
       nextAction.reset();
-      if (clipEntry && clipEntry.loop === false && runtime?.THREE?.LoopOnce !== undefined) {
-        nextAction.setLoop(runtime.THREE.LoopOnce, 1);
+      if (isOneShot) {
+        if (runtime?.THREE?.LoopOnce !== undefined && typeof nextAction.setLoop === "function") {
+          nextAction.setLoop(runtime.THREE.LoopOnce, 1);
+        }
         nextAction.clampWhenFinished = true;
+      } else {
+        if (runtime?.THREE?.LoopRepeat !== undefined && typeof nextAction.setLoop === "function") {
+          nextAction.setLoop(runtime.THREE.LoopRepeat, Infinity);
+        }
+        nextAction.clampWhenFinished = false;
       }
       nextAction.fadeIn(0.18);
       nextAction.play();
@@ -1092,6 +1120,19 @@
       activeVrmaAction = nextAction;
       activeVrmaKey = wanted;
       activeVrmaIsSentinel = !!isSentinel;
+      activeVrmaClip = clip;
+      activeVrmaLoop = !isOneShot;
+      activeVrmaCacheKey = cacheKey;
+    }
+
+    function isVrmaOneShotActive() {
+      if (!activeVrmaAction || activeVrmaIsSentinel) return false;
+      if (!activeVrmaLoop) {
+        if (typeof activeVrmaAction.isRunning === "function" && !activeVrmaAction.isRunning()) return false;
+        const dur = activeVrmaAction.getClip?.()?.duration ?? activeVrmaClip?.duration;
+        if (Number.isFinite(dur) && dur > 0 && Number.isFinite(activeVrmaAction.time) && activeVrmaAction.time >= dur - 1e-4) return false;
+      }
+      return true;
     }
 
     function syncBoneCacheFromRig() {
@@ -1252,7 +1293,7 @@
         });
       }
       activeSentinelKey = coState?.activeSentinel || "";
-      const clipSync = clipRt ? clipRt.sync(activeGesture, activeSentinelKey, durs => coLead?.setSentinelDurations?.(durs)) : null;
+      const clipSync = clipRt ? clipRt.sync(activeGesture, activeSentinelKey, durs => coLead?.setSentinelDurations?.(durs), clipTriggerSeq) : null;
       const legacyVrmaKey = !clipSync?.vrmaEntry && !clipSync?.clipEntry
         ? ((activeGesture && pack?.animations && Object.hasOwn(pack.animations, activeGesture))
             ? activeGesture
@@ -1776,10 +1817,12 @@
         coLead?.setHover(flag);
       },
       triggerKnock(opts) {
+        clipTriggerSeq++;
         return coLead ? coLead.triggerKnock(opts) : null;
       },
       triggerGesture(name) {
         if (!name) return false;
+        clipTriggerSeq++;
         if (coLead) return coLead.triggerGesture(name);
         bufferGesture(String(name));
         return true;
@@ -1908,7 +1951,7 @@
       pause() { paused = true; },
       resume() { paused = false; },
       isContextLost() { return contextLost; },
-      isClipOneShotActive() { return !!(clipRt?.isOneShotActive?.() || (activeVrmaAction && !activeVrmaIsSentinel)); },
+      isClipOneShotActive() { return !!(clipRt?.isOneShotActive?.() || isVrmaOneShotActive()); },
       setPreset() {},
       setWardrobe() {},
       wardrobe() { return null; },

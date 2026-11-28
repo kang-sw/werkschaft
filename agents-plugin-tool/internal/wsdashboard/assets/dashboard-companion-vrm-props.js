@@ -231,7 +231,7 @@
       return {
         offset: vec3(raw?.offset, -2, 2),
         rotation_deg: vec3(raw?.rotation_deg, -180, 180),
-        scale: Number.isFinite(raw?.scale) ? clamp(raw.scale, 0.25, 3.0) : 1
+        scale: Number.isFinite(raw?.scale) ? clamp(raw.scale, 0.25, 4.0) : 1
       };
     }
 

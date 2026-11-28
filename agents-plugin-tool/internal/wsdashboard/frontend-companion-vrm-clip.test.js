@@ -369,3 +369,357 @@ test("vrmCoLead sentinel mapping covers all 7 sentinels, propagates knock/wakeup
   assert.match(stageSrc, /BroadcastChannel\("ws-companion-packs"\)/, "stage.js listens to BroadcastChannel ws-companion-packs");
   assert.match(stageSrc, /isClipOneShotActive/, "stage.js uses isClipOneShotActive for idle cadence separation");
 });
+
+test("vrmClip one-shot fades out without re-triggering from t=0 and loading/failed clips stop prior clip", async () => {
+  const { C } = loadVrmStack();
+  const oneShotClip = {
+    schema: "ws-companion-clip/v1",
+    key: "wave_hi",
+    duration_s: 0.3,
+    loop: false,
+    keyframes: [
+      { t: 0, head: { yaw_deg: 0 } },
+      { t: 0.3, head: { yaw_deg: 24 } }
+    ]
+  };
+  const idleClip = {
+    schema: "ws-companion-clip/v1",
+    key: "idle",
+    duration_s: 1.0,
+    loop: true,
+    keyframes: [{ t: 0, head: { yaw_deg: 5 } }]
+  };
+
+  // 1. Direct player: calling play() again while fadingOut or after completion must NOT restart from t=0.
+  const player = C.vrmClip.createClipPlayer();
+  assert.equal(player.play("wave_hi", oneShotClip, { loop: false, immediate: true, token: 1 }), true);
+  player.step(0.15);
+  player.step(0.16); // crosses 0.3s -> done=true, fadingOut=true
+  let st = player.getState();
+  assert.ok(st && st.fadingOut === true, "one-shot enters fadingOut after duration");
+  const fadeStartWeight = st.weight;
+  const fadeStartTime = st.time;
+
+  // Repeated play() calls with same token during fadeout must not reset time or clear fadingOut.
+  assert.equal(player.play("wave_hi", oneShotClip, { loop: false, token: 1 }), false);
+  const midFade = player.step(0.08);
+  assert.ok(midFade && midFade.weight < fadeStartWeight, "weight must decrease during fadeout");
+  assert.ok(player.getState().time > fadeStartTime, "time must not reset to 0 during fadeout");
+  assert.equal(player.getState().fadingOut, true, "fadingOut must stay true");
+
+  // Step until completely faded out.
+  for (let i = 0; i < 6; i++) {
+    player.play("wave_hi", oneShotClip, { loop: false, token: 1 });
+    player.step(0.08);
+  }
+  assert.equal(player.getState(), null, "one-shot finishes fading out to null");
+
+  // Subsequent play() calls with the same token stay completed.
+  assert.equal(player.play("wave_hi", oneShotClip, { loop: false, token: 1 }), false);
+  assert.equal(player.getState(), null, "completed one-shot must not restart on same token");
+
+  // A new activation token restarts cleanly from t=0.
+  assert.equal(player.play("wave_hi", oneShotClip, { loop: false, token: 2, immediate: true }), true);
+  assert.equal(player.getState().time, 0);
+  assert.equal(player.getState().fadingOut, false);
+
+  // 2. Pack clip runtime: sync() every frame lets one-shot fade out, and stops prior clip while a new clip loads/fails.
+  let resolveSlow = null;
+  C.fetchPackClip = (_pack, file) => {
+    if (file === "clips/idle.clip.json") return Promise.resolve({ json: idleClip });
+    if (file === "clips/wave_hi.clip.json") return Promise.resolve({ json: oneShotClip });
+    if (file === "clips/slow.clip.json") return new Promise(res => { resolveSlow = res; });
+    return Promise.reject(new Error("404"));
+  };
+  const pack = {
+    sentinels: { idle: { kind: "clip", file: "clips/idle.clip.json", loop: true } },
+    actionMap: {
+      wave_hi: { key: "wave_hi", kind: "clip", file: "clips/wave_hi.clip.json", loop: false, duration_s: 0.3 },
+      slow: { key: "slow", kind: "clip", file: "clips/slow.clip.json", loop: false },
+      broken: { key: "broken", kind: "clip", file: "clips/broken.clip.json", loop: false }
+    }
+  };
+  const rt = C.vrmClip.createPackClipRuntime(pack, new AbortController().signal);
+  rt.sync("wave_hi", "idle");
+  await Promise.resolve();
+  rt.sync("wave_hi", "idle");
+  assert.equal(rt.getState().key, "wave_hi");
+  // Advance past 0.3s + 0.22s fadeout while calling sync("wave_hi", "idle") every frame.
+  let sawFadeOut = false;
+  let lastWeight = 0;
+  for (let i = 0; i < 12; i++) {
+    rt.sync("wave_hi", "idle");
+    const stepped = rt.step(0.08);
+    const cur = rt.getState();
+    if (cur?.fadingOut) {
+      if (sawFadeOut) assert.ok(cur.weight <= lastWeight, "fadeout weight must stay monotonic");
+      sawFadeOut = true;
+      lastWeight = cur.weight;
+    }
+    void stepped;
+  }
+  assert.equal(sawFadeOut, true, "one-shot clip entered fadeout via sync()");
+  assert.equal(rt.getState(), null, "one-shot clip faded out completely without restarting");
+
+  // Re-trigger via clearing action then requesting wave_hi again.
+  rt.sync("", "idle");
+  await Promise.resolve();
+  rt.sync("", "idle");
+  rt.step(0.05);
+  assert.equal(rt.getState().key, "idle");
+
+  // Requesting a loading clip ("slow") must immediately stop prior clip ("idle").
+  rt.sync("slow", "idle");
+  assert.equal(rt.getState().fadingOut, true, "prior clip must fade out while next clip is loading");
+  for (let i = 0; i < 6; i++) { rt.sync("slow", "idle"); rt.step(0.08); }
+  assert.equal(rt.getState(), null, "prior clip finishes fading out while slow clip is still loading");
+  if (resolveSlow) resolveSlow(null);
+
+  // Requesting a failed clip ("broken") must also stop prior clip ("idle").
+  rt.sync("", "idle");
+  rt.step(0.05);
+  assert.equal(rt.getState().key, "idle");
+  rt.sync("broken", "idle");
+  await Promise.resolve();
+  assert.equal(rt.getState().fadingOut, true, "prior clip must fade out when target clip fails");
+  rt.dispose();
+});
+
+test("vrm runtime fixes VRMA cached action loop leakage, async fetch race, and finished LoopOnce isClipOneShotActive", async () => {
+  const { C } = loadVrmStack();
+  const LoopOnce = 2200;
+  const LoopRepeat = 2201;
+
+  const actionsByClip = new Map();
+  let lastAction = null;
+  let mixerActions = [];
+
+  class Vector3 {
+    constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
+    set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; }
+    copy(v) { this.x = v.x; this.y = v.y; this.z = v.z; return this; }
+    clone() { return new Vector3(this.x, this.y, this.z); }
+    project() { return this; }
+  }
+  class Quaternion {
+    constructor(x = 0, y = 0, z = 0, w = 1) { this.x = x; this.y = y; this.z = z; this.w = w; }
+    set(x, y, z, w) { this.x = x; this.y = y; this.z = z; this.w = w; return this; }
+    slerp() { return this; }
+  }
+  class Object3D {
+    constructor() {
+      this.position = new Vector3();
+      this.rotation = { x: 0, y: 0, z: 0, order: "XYZ", set(x, y, z, o) { this.x = x; this.y = y; this.z = z; if (o) this.order = o; } };
+      this.quaternion = new Quaternion();
+      this.scale = new Vector3(1, 1, 1);
+      this.children = [];
+      this.visible = true;
+    }
+    add(...items) { this.children.push(...items); }
+    remove(item) { this.children = this.children.filter(c => c !== item); }
+    traverse(fn) { fn(this); this.children.forEach(c => c.traverse?.(fn)); }
+    updateMatrixWorld() {}
+    getWorldPosition(t) { return t.copy(this.position); }
+  }
+  class Box3 {
+    constructor() { this.min = new Vector3(0, 0, 0); this.max = new Vector3(0, 1.6, 0); }
+    isEmpty() { return false; }
+    union() { return this; }
+  }
+  class AnimationMixer {
+    constructor() { this._actions = []; }
+    clipAction(clip) {
+      if (actionsByClip.has(clip)) return actionsByClip.get(clip);
+      const act = {
+        _clip: clip,
+        time: 0,
+        loop: LoopRepeat,
+        repetitions: Infinity,
+        clampWhenFinished: false,
+        paused: false,
+        _playing: false,
+        getClip() { return clip; },
+        setLoop(mode, reps) { this.loop = mode; this.repetitions = reps; return this; },
+        reset() { this.time = 0; this.paused = false; return this; },
+        fadeIn() { return this; },
+        fadeOut() { return this; },
+        play() { this._playing = true; this.paused = false; return this; },
+        stop() { this._playing = false; return this; },
+        crossFadeTo() { return this; },
+        isRunning() { return this._playing && !this.paused; }
+      };
+      actionsByClip.set(clip, act);
+      this._actions.push(act);
+      mixerActions.push(act);
+      return act;
+    }
+    update(dt) {
+      for (const act of this._actions) {
+        if (!act._playing || act.paused) continue;
+        act.time += dt;
+        const dur = act._clip?.duration || 1;
+        if (act.loop === LoopOnce && act.time >= dur) {
+          act.time = dur;
+          if (act.clampWhenFinished) act.paused = true;
+          else act._playing = false;
+        }
+      }
+    }
+    stopAllAction() { for (const a of this._actions) a.stop(); }
+  }
+  class WebGLRenderer {
+    constructor() { this.shadowMap = { enabled: false }; this.info = { render: { calls: 1, triangles: 100 } }; }
+    setClearColor() {}
+    setPixelRatio() {}
+    setSize() {}
+    setViewport() {}
+    setScissor() {}
+    setScissorTest() {}
+    clear() {}
+    render() {}
+    dispose() {}
+    forceContextLoss() {}
+  }
+
+  const bones = {
+    hips: new Object3D(), spine: new Object3D(), chest: new Object3D(), head: new Object3D(),
+    leftUpperArm: new Object3D(), leftLowerArm: new Object3D(), leftHand: new Object3D(),
+    rightUpperArm: new Object3D(), rightLowerArm: new Object3D(), rightHand: new Object3D()
+  };
+  bones.chest.position.set(0, 1.15, 0);
+  bones.head.position.set(0, 1.48, 0);
+  const parsedClips = new Map();
+  class GLTFLoader {
+    register() {}
+    async parseAsync(buf) {
+      const tag = new TextDecoder().decode(new Uint8Array(buf));
+      if (tag === "VRM") {
+        return {
+          scene: new Object3D(),
+          userData: {
+            vrm: {
+              meta: { metaVersion: "1" },
+              scene: new Object3D(),
+              humanoid: { getNormalizedBoneNode: n => bones[n] || null },
+              expressionManager: { expressions: [], setValue() {} },
+              lookAt: {},
+              update() {}
+            }
+          }
+        };
+      }
+      return { userData: { vrmAnimations: [{ name: tag }] } };
+    }
+  }
+  const fakeRuntime = {
+    THREE: {
+      LoopOnce, LoopRepeat, Vector3, Quaternion, Object3D, Scene: Object3D, Group: Object3D,
+      PerspectiveCamera: class extends Object3D { constructor() { super(); this.fov = 26; this.aspect = 1; } lookAt() {} updateProjectionMatrix() {} },
+      DirectionalLight: Object3D, HemisphereLight: Object3D, PointLight: Object3D,
+      Box3, AnimationMixer, WebGLRenderer, SRGBColorSpace: 0, NoToneMapping: 0
+    },
+    GLTFLoader,
+    VRMLoaderPlugin: class {},
+    VRMAnimationLoaderPlugin: class {},
+    VRMUtils: { removeUnnecessaryVertices() {}, combineSkeletons() {}, rotateVRM0() {}, deepDispose() {} },
+    createVRMAnimationClip(anim) {
+      if (!parsedClips.has(anim.name)) parsedClips.set(anim.name, { name: anim.name, duration: 0.4 });
+      return parsedClips.get(anim.name);
+    }
+  };
+
+  let resolveSlowVrma = null;
+  const enc = s => new TextEncoder().encode(s).buffer;
+  C.vrmRuntimeLoader = async () => fakeRuntime;
+  C.fetchPackAsset = async () => ({ buffer: enc("VRM") });
+  C.fetchPackClip = (_pack, file) => {
+    if (file === "clips/shared.vrma") return Promise.resolve({ buffer: enc("SHARED") });
+    if (file === "clips/slow_race.vrma") return new Promise(res => { resolveSlowVrma = () => res({ buffer: enc("SLOW") }); });
+    return Promise.reject(new Error("missing"));
+  };
+
+  const makeEl = () => ({
+    className: "", hidden: false, textContent: "", width: 240, height: 280, dataset: {},
+    style: { setProperty() {}, removeProperty() {} },
+    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    setAttribute() {}, removeAttribute() {}, getAttribute() { return ""; },
+    addEventListener() {}, removeEventListener() {}, append() {}, replaceChildren() {},
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 240, height: 280 }),
+    getContext: () => null,
+    closest: () => null
+  });
+  const doc = {
+    createElement: () => makeEl(),
+    documentElement: { dataset: {}, getAttribute: () => "" },
+    addEventListener() {}, removeEventListener() {}
+  };
+  const container = makeEl();
+  container.ownerDocument = doc;
+
+  const pack = {
+    id: "vrm-test",
+    renderer: "vrm",
+    model: "model.vrm",
+    sentinels: {
+      idle: { kind: "vrma", file: "clips/shared.vrma", loop: true }
+    },
+    actionMap: {
+      oneshot_act: { key: "oneshot_act", kind: "vrma", file: "clips/shared.vrma", loop: false },
+      loop_act: { key: "loop_act", kind: "vrma", file: "clips/shared.vrma", loop: true },
+      slow_race: { key: "slow_race", kind: "vrma", file: "clips/slow_race.vrma", loop: false }
+    }
+  };
+
+  const rig = C.makeVrmRig(pack, {});
+  await rig.mount(container, { width: 240, height: 280 });
+  let simSec = 1.0;
+  const tick = (viewObj, stepSec) => {
+    simSec += stepSec;
+    viewObj.render(simSec, { x: 0, y: 0 }, null, null);
+  };
+
+  // (a) Play oneshot_act (LoopOnce), verify isClipOneShotActive() === true while running and false once finished.
+  const vOne = rig.view("stand", "oneshot_act", "idle", []);
+  tick(vOne, 0.016);
+  await new Promise(r => setTimeout(r, 10));
+  tick(vOne, 0.05);
+  assert.equal(rig.debugState().activeVrmaKey, "oneshot_act");
+  lastAction = actionsByClip.get(parsedClips.get("SHARED"));
+  assert.equal(lastAction.loop, LoopOnce);
+  assert.equal(lastAction.clampWhenFinished, true);
+  assert.equal(rig.isClipOneShotActive(), true, "LoopOnce VRMA active before duration");
+
+  // Advance past 0.4s duration in bounded frames so LoopOnce clamps and pauses.
+  for (let i = 0; i < 10; i++) tick(vOne, 0.05);
+  assert.equal(rig.isClipOneShotActive(), false, "finished LoopOnce VRMA must clear isClipOneShotActive()");
+
+  // Switch to loop_act reusing the SAME cached clip & AnimationAction -> must reset LoopRepeat & clampWhenFinished=false.
+  const vLoop = rig.view("stand", "loop_act", "idle", []);
+  tick(vLoop, 0.016);
+  assert.equal(rig.debugState().activeVrmaKey, "loop_act");
+  assert.equal(lastAction.loop, LoopRepeat, "reused cached VRMA action must reset to LoopRepeat");
+  assert.equal(lastAction.clampWhenFinished, false, "reused cached VRMA action must reset clampWhenFinished");
+
+  // (b) Async fetch race: request slow_race, then switch to loop_act before slow_race resolves.
+  const vSlow = rig.view("stand", "slow_race", "idle", []);
+  tick(vSlow, 0.016);
+  assert.ok(typeof resolveSlowVrma === "function", "slow_race fetch started");
+  const vLoop2 = rig.view("stand", "loop_act", "idle", []);
+  tick(vLoop2, 0.016);
+  assert.equal(rig.debugState().activeVrmaKey, "loop_act");
+
+  resolveSlowVrma();
+  await new Promise(r => setTimeout(r, 10));
+  assert.equal(rig.debugState().activeVrmaKey, "loop_act", "late-resolving superseded VRMA must not hijack playback");
+
+  rig.dispose();
+});
+
+test("vrmCoLeadProps calibration scale upper clamp matches backend 4.0 limit", () => {
+  const { C } = loadVrmStack();
+  const props = C.vrmCoLeadProps.createCoLeadProps({});
+  props.setCalibration({ props: { laptop: { scale: 3.8 }, smartphone: { scale: 5.5 } } });
+  const cal = props.getPropCalibration();
+  assert.equal(cal.laptop.scale, 3.8, "scale 3.8 must not be clamped to 3.0");
+  assert.equal(cal.smartphone.scale, 4.0, "scale > 4.0 must clamp at 4.0");
+});
