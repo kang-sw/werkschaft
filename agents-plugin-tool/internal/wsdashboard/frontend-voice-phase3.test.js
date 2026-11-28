@@ -748,7 +748,7 @@ test('postProcess hook transitions listening -> refining -> atomic span replacem
   handle2.destroy();
 });
 
-test('Spacebar 0.5s PTT: owner single-space trim rule, repeat suppression, short tap, preconditions, and release after lock-induced blur', async () => {
+test('Spacebar 1.0s PTT: owner single-space trim rule, repeat suppression, short tap, preconditions, and release after lock-induced blur', async () => {
   const env = makeVoiceEnv();
   const trim = (v, c) => ({ ...env.window.WsVoicePTT.trimPrecedingSpacesForPTT(v, c) });
 
@@ -786,19 +786,19 @@ test('Spacebar 0.5s PTT: owner single-space trim rule, repeat suppression, short
   env.ctext.value = ' ';
   env.ctext.selectionStart = env.ctext.selectionEnd = 1;
   env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', target: env.editor }));
-  timers.advance(600);
+  timers.advance(1100);
   assert.equal(startCount, 0, 'unconfigured user typing is untouched');
 
   // Enable backend.
   handle.controller.setCapabilities({ eligible: true, order: ['native'] });
 
-  // 2. Short tap (< 500ms) -> does not start dictation, keeps normal space.
+  // 2. Short tap (< 1000ms) -> does not start dictation, keeps normal space.
   env.ctext.value = '안녕 ';
   env.ctext.selectionStart = env.ctext.selectionEnd = 3;
   env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', target: env.editor }));
   timers.advance(300);
   env.doc.dispatchEvent(new FakeEvent('keyup', { key: ' ', code: 'Space' }));
-  timers.advance(300);
+  timers.advance(1100);
   assert.equal(startCount, 0, 'short tap types normal space without starting dictation');
   assert.equal(env.ctext.value, '안녕 ');
 
@@ -810,7 +810,7 @@ test('Spacebar 0.5s PTT: owner single-space trim rule, repeat suppression, short
   env.setPopupOpen(true);
   env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', target: env.editor }));
   env.setPopupOpen(false);
-  timers.advance(600);
+  timers.advance(1100);
   assert.equal(startCount, 0, 'IME, modifiers, and open menus must never trigger PTT');
 
   // 4. Full hold at start of empty composer: initial space trimmed to "", repeat prevented, lock-induced blur ignored, doc keyup stops & commits.
@@ -829,7 +829,9 @@ test('Spacebar 0.5s PTT: owner single-space trim rule, repeat suppression, short
   env.editor.dispatchEvent(repEv);
   assert.equal(repEv.defaultPrevented, true, 'key-repeat spaces suppressed while holding');
 
-  timers.advance(500);
+  timers.advance(999);
+  assert.equal(startCount, 0, 'not yet at the 1000ms hold threshold');
+  timers.advance(1);
   await flush();
   assert.equal(startCount, 1);
   assert.equal(stopCount, 0, 'lock-induced blur must NOT count as PTT release');
@@ -849,7 +851,7 @@ test('Spacebar 0.5s PTT: owner single-space trim rule, repeat suppression, short
   env.ctext.value = '안녕  ';
   env.ctext.selectionStart = env.ctext.selectionEnd = 4;
   env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', target: env.editor }));
-  timers.advance(500);
+  timers.advance(1000);
   await flush();
   assert.equal(env.ctext.value, '안녕 ', 'consecutive spaces after text collapse to exactly 1 space');
   env.doc.dispatchEvent(new FakeEvent('keyup', { key: ' ', code: 'Space' }));
@@ -858,6 +860,206 @@ test('Spacebar 0.5s PTT: owner single-space trim rule, repeat suppression, short
   assert.equal(env.ctext.value, '안녕 말하기', 'dictated text separates cleanly with 1 space');
 
   handle.destroy();
+});
+
+// Models production wiring: WsCapsules attaches first, so its editor listeners
+// run before PTT's, stop propagation of the real key event, and re-dispatch a
+// synthetic copy on ctext (bubbling up to document). PTT then listens on both
+// ctext and the editor, so one physical press reaches it twice.
+function makeCapsulesForwardingPTT(opts = {}) {
+  const env = makeVoiceEnv();
+  const timers = makeFakeTimers();
+  const counts = { start: 0, stop: 0 };
+  env.window.WsVoiceInput.registerBackend({
+    id: 'native', label: 'OS Native', kind: 'native',
+    available: () => true,
+    start: () => { counts.start++; return Promise.resolve(); },
+    stop: () => { counts.stop++; return Promise.resolve({ text: '말하기' }); },
+    cancel: () => {}
+  });
+  ['keydown', 'keyup'].forEach((type) => {
+    env.editor.addEventListener(type, (e) => {
+      if (e.defaultPrevented) return;
+      const fwd = new FakeEvent(type, {
+        key: e.key, code: e.code, keyCode: e.keyCode, repeat: e.repeat,
+        isComposing: !!e.isComposing, target: env.ctext
+      });
+      env.ctext.dispatchEvent(fwd);
+      env.doc.dispatchEvent(fwd);
+      if (fwd.defaultPrevented) e.preventDefault();
+    });
+  });
+  const handle = env.window.WsVoiceInput.attachComposer({
+    document: env.doc,
+    window: env.window,
+    autoDiscover: false,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout
+  });
+  handle.controller.setCapabilities({ eligible: true, order: ['native'] });
+  env.ctext.value = opts.value == null ? '안녕 ' : opts.value;
+  env.ctext.selectionStart = env.ctext.selectionEnd = env.ctext.value.length;
+  const down = (init) => env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', keyCode: 32, target: env.editor, ...(init || {}) }));
+  const up = () => env.editor.dispatchEvent(new FakeEvent('keyup', { key: ' ', code: 'Space', keyCode: 32, target: env.editor }));
+  return { env, timers, counts, handle, down, up };
+}
+
+test('PTT with capsules key forwarding: short Space taps never trigger via an orphaned timer', async () => {
+  for (const gap of [400, 600, 900]) {
+    const t = makeCapsulesForwardingPTT();
+    t.down();
+    assert.equal(t.timers.pendingCount(), 1, 'one press arms exactly one timer despite double delivery');
+    t.timers.advance(100);
+    t.up();
+    assert.equal(t.timers.pendingCount(), 0, 'keyup clears the only timer');
+    t.timers.advance(gap - 100);
+    t.down();
+    t.timers.advance(80);
+    t.up();
+    t.timers.advance(3000);
+    await flush();
+    assert.equal(t.counts.start, 0, `two short taps ${gap}ms apart must not start PTT`);
+    assert.equal(t.handle.controller.getState(), 'idle');
+    t.handle.destroy();
+  }
+
+  // Second press held, but still under the threshold when the first press's
+  // (orphaned) timer would have fired.
+  const t = makeCapsulesForwardingPTT();
+  t.down();
+  t.timers.advance(100);
+  t.up();
+  t.timers.advance(320);
+  t.down();
+  t.timers.advance(700);
+  await flush();
+  assert.equal(t.counts.start, 0, 'second press at 700ms hold must not start from the first press timer');
+  t.up();
+  t.timers.advance(3000);
+  await flush();
+  assert.equal(t.counts.start, 0);
+  t.handle.destroy();
+});
+
+test('PTT with capsules key forwarding: a 1000ms hold starts once and stops cleanly on keyup', async () => {
+  const t = makeCapsulesForwardingPTT({ value: '' });
+  t.down();
+  t.down({ repeat: true });
+  t.timers.advance(999);
+  await flush();
+  assert.equal(t.counts.start, 0);
+  t.timers.advance(1);
+  await flush();
+  assert.equal(t.counts.start, 1, 'PTT starts exactly once at 1000ms');
+  assert.equal(t.handle.controller.getState(), 'recording');
+  assert.equal(t.timers.pendingCount(), 0, 'no second timer left to disarm the active hold');
+  assert.equal(t.handle.ptt.isActive(), true, 'active hold survives the sibling listener');
+
+  t.up();
+  await flush();
+  await flush();
+  assert.equal(t.counts.stop, 1, 'keyup stops PTT exactly once');
+  assert.equal(t.env.ctext.value, '말하기');
+  assert.equal(t.handle.ptt.isArmed(), false);
+  t.handle.destroy();
+});
+
+test('PTT with capsules key forwarding: a 600ms hold does not trigger PTT', async () => {
+  const t = makeCapsulesForwardingPTT();
+  t.down();
+  t.timers.advance(600);
+  t.up();
+  t.timers.advance(3000);
+  await flush();
+  assert.equal(t.counts.start, 0);
+  assert.equal(t.counts.stop, 0);
+  t.handle.destroy();
+});
+
+test('PTT with capsules key forwarding: keyup on the editor alone still releases when forwarding is skipped', async () => {
+  const t = makeCapsulesForwardingPTT({ value: '' });
+  t.down();
+  t.timers.advance(1000);
+  await flush();
+  assert.equal(t.counts.start, 1);
+  // capsules skips forwarding when the real keyup is already defaultPrevented.
+  t.env.editor.dispatchEvent(new FakeEvent('keyup', { key: ' ', code: 'Space', keyCode: 32, target: t.env.editor, defaultPrevented: true }));
+  await flush();
+  await flush();
+  assert.equal(t.counts.stop, 1, 'editor keyup releases without the forwarded copy');
+  t.handle.destroy();
+});
+
+test('PTT with capsules key forwarding: composing Space, input, and pointer events disarm a pending arm', async () => {
+  const t = makeCapsulesForwardingPTT();
+  const disarmed = async (why, act) => {
+    t.down();
+    assert.equal(t.handle.ptt.isArmed(), true, why + ': armed first');
+    act();
+    assert.equal(t.handle.ptt.isArmed(), false, why + ': disarmed');
+    assert.equal(t.timers.pendingCount(), 0, why + ': no timer left');
+    t.timers.advance(3000);
+    await flush();
+    assert.equal(t.counts.start, 0, why + ': no PTT');
+    t.up();
+  };
+  const fire = (target, type, init) => target.dispatchEvent(new FakeEvent(type, { target, ...(init || {}) }));
+
+  await disarmed('isComposing Space', () => t.down({ isComposing: true }));
+  await disarmed('keyCode 229 Space', () => t.down({ keyCode: 229 }));
+  await disarmed('compositionstart', () => fire(t.env.editor, 'compositionstart'));
+  fire(t.env.editor, 'compositionend');
+  await disarmed('beforeinput (editor)', () => fire(t.env.editor, 'beforeinput', { inputType: 'insertText', data: 'a' }));
+  await disarmed('input (ctext)', () => fire(t.env.ctext, 'input', { inputType: 'insertText', data: 'a' }));
+  await disarmed('pointerdown', () => fire(t.env.editor, 'pointerdown'));
+  await disarmed('mousedown', () => fire(t.env.ctext, 'mousedown'));
+
+  // Composing Space never arms in the first place (IME not lost by forwarding).
+  t.down({ isComposing: true, keyCode: 229 });
+  assert.equal(t.handle.ptt.isArmed(), false);
+  assert.equal(t.timers.pendingCount(), 0);
+  t.up();
+
+  // The arming Space's own typed character is not a disarm trigger, whether it
+  // arrives as a native InputEvent (data " ") or as capsules' data-less input
+  // after ctext.value already contains the new space.
+  t.env.ctext.value = '안녕';
+  t.env.ctext.selectionStart = t.env.ctext.selectionEnd = 2;
+  t.down();
+  fire(t.env.editor, 'beforeinput', { inputType: 'insertText', data: ' ' });
+  t.env.ctext.value = '안녕 ';
+  fire(t.env.ctext, 'input');
+  fire(t.env.editor, 'input', { inputType: 'insertText', data: ' ' });
+  assert.equal(t.handle.ptt.isArmed(), true, 'own Space insertion keeps the hold armed');
+  t.timers.advance(1000);
+  await flush();
+  assert.equal(t.counts.start, 1);
+  t.up();
+  await flush();
+  await flush();
+  assert.equal(t.counts.stop, 1);
+  t.handle.destroy();
+});
+
+test('PTT detach removes every added listener and cancels pending arm', async () => {
+  const t = makeCapsulesForwardingPTT();
+  const names = ['keydown', 'keyup', 'blur', 'compositionstart', 'compositionend', 'mousedown', 'pointerdown', 'beforeinput', 'input'];
+  const before = (el) => names.map((n) => (el.listeners.get(n) || []).length);
+  const baseEditor = before(t.env.editor);
+  assert.ok(baseEditor.some((n) => n > 0));
+  t.down();
+  assert.equal(t.timers.pendingCount(), 1);
+  t.handle.destroy();
+  assert.equal(t.timers.pendingCount(), 0, 'destroy clears the pending timer');
+  for (const el of [t.env.ctext, t.env.editor]) {
+    for (const n of names) {
+      const left = (el.listeners.get(n) || []).length;
+      // Only the capsules-forwarding stub (keydown/keyup on editor) may remain.
+      const allowed = el === t.env.editor && (n === 'keydown' || n === 'keyup') ? 1 : 0;
+      assert.equal(left, allowed, `${n} listener cleanup on ${el.id || el.className}`);
+    }
+  }
+  assert.equal((t.env.doc.dispatchEvent(new FakeEvent('keyup', { key: ' ', code: 'Space' })), t.counts.stop), 0);
 });
 
 test('fallback #cvox-cap capsule activates when WsCapsules is absent', async () => {

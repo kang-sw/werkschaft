@@ -1,10 +1,10 @@
-// Inline voice span lifecycle and Spacebar 0.5 s hold push-to-talk gesture.
+// Inline voice span lifecycle and Spacebar 1.0 s hold push-to-talk gesture.
 // Coexists with WsCapsules (read() excludes [data-voice-span]) and WsMdEditor
 // (skips reconcile while a span is live, then reconciles once after commit).
 (function () {
   "use strict";
 
-  var DEFAULT_HOLD_MS = 500;
+  var DEFAULT_HOLD_MS = 1000;
 
   function translate(key) {
     if (typeof window.wsT === "function") return window.wsT(key);
@@ -359,10 +359,16 @@
     var onHoldingChange = opts.onHoldingChange || function () {};
 
     var timer = null;
+    // Generation counter bumped on every arm/disarm; each timer callback is
+    // bound to the token it was scheduled under, so a timer that somehow
+    // outlives its press can never fire for a later one.
+    var armToken = 0;
     var armed = false;
     var active = false;
     var composing = false;
     var lockBlurSuppressed = false;
+    // ctext.value when the pending arm began (before the Space itself is typed).
+    var armValue = "";
 
     function getEditor() {
       return (ctext && ctext.wsc && ctext.wsc.editor) || null;
@@ -379,6 +385,7 @@
     }
 
     function disarm() {
+      armToken++;
       if (timer !== null) {
         clearTimer(timer);
         timer = null;
@@ -389,19 +396,49 @@
       if (wasArmed) onHoldingChange(false);
     }
 
+    function disarmPending() {
+      if (armed && !active) disarm();
+    }
+
+    // True when cur is prev plus exactly one inserted " " (the Space keystroke
+    // that armed the hold typing itself into the composer).
+    function isSingleSpaceInsertion(prev, cur) {
+      if (cur.length !== prev.length + 1) return false;
+      for (var i = 0; i < cur.length; i++) {
+        if (cur.charAt(i) === " " && cur.slice(0, i) + cur.slice(i + 1) === prev) return true;
+      }
+      return false;
+    }
+
+    // Anything other than the arming Space's own typed character means the user
+    // is typing/clicking, not holding to talk.
+    function onPendingBreaker(e) {
+      if (!armed || active) return;
+      var type = e && e.type;
+      if (type === "beforeinput" || type === "input") {
+        if (e.data === " ") return;
+        if (type === "input" && (e.data === undefined || e.data === null) &&
+            isSingleSpaceInsertion(armValue, String(ctext.value || ""))) return;
+      }
+      disarm();
+    }
+
     function onCompositionStart() {
       composing = true;
-      if (armed && !active) disarm();
+      disarmPending();
     }
 
     function onCompositionEnd() {
       composing = false;
     }
 
+    // capsules.js re-dispatches editor key events onto ctext, so one physical
+    // key press can reach this handler twice (ctext copy, then the real event
+    // on the editor). The `armed` guard below makes the second one a no-op.
     function onKeyDown(e) {
       if (!e) return;
       if (!isSpaceKey(e)) {
-        if (armed && !active) disarm();
+        disarmPending();
         return;
       }
       if (e.repeat) {
@@ -411,16 +448,34 @@
         return;
       }
       if (!isComposerTarget(e.target)) return;
-      if (e.defaultPrevented || e.isComposing || e.keyCode === 229 || composing) return;
+      if (e.isComposing || e.keyCode === 229 || composing) {
+        disarmPending();
+        return;
+      }
+      if (e.defaultPrevented) {
+        // Someone consumed the key (e.g. a forwarded copy was handled): a
+        // pending arm from the sibling listener must not survive it.
+        disarmPending();
+        return;
+      }
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
       if (isPopupOpen(ctext, doc)) return;
       if (!controller || controller.getState() !== "idle") return;
       if (!controller.getResolvedBackend || !controller.getResolvedBackend()) return;
+      // Duplicate delivery of the same press (or a press while recording).
+      if (armed) return;
 
       armed = true;
       active = false;
+      armValue = String((ctext && ctext.value) || "");
+      var token = ++armToken;
+      if (timer !== null) {
+        clearTimer(timer);
+        timer = null;
+      }
       onHoldingChange(true);
       timer = setTimer(function () {
+        if (token !== armToken) return;
         timer = null;
         if (!armed) return;
         if (!controller || controller.getState() !== "idle" || !controller.getResolvedBackend()) {
@@ -479,19 +534,29 @@
       }
     }
 
+    // Listen on both ctext and (when WsCapsules is attached) its editor. Key
+    // events from the editor reach ctext only as capsules' forwarded copies,
+    // and capsules skips forwarding when the real event is already
+    // defaultPrevented, so keyup must be observed on the editor too to release
+    // reliably. Every handler is idempotent, so duplicate delivery is harmless.
     var editor = getEditor();
-    if (ctext && ctext.addEventListener) {
-      ctext.addEventListener("keydown", onKeyDown);
-      ctext.addEventListener("blur", onEditorBlur);
-      ctext.addEventListener("compositionstart", onCompositionStart);
-      ctext.addEventListener("compositionend", onCompositionEnd);
-    }
-    if (editor && editor !== ctext && editor.addEventListener) {
-      editor.addEventListener("keydown", onKeyDown);
-      editor.addEventListener("blur", onEditorBlur);
-      editor.addEventListener("compositionstart", onCompositionStart);
-      editor.addEventListener("compositionend", onCompositionEnd);
-    }
+    var boundTargets = [];
+    if (ctext && ctext.addEventListener) boundTargets.push(ctext);
+    if (editor && editor !== ctext && editor.addEventListener) boundTargets.push(editor);
+    var boundHandlers = [
+      ["keydown", onKeyDown],
+      ["keyup", onDocKeyUp],
+      ["blur", onEditorBlur],
+      ["compositionstart", onCompositionStart],
+      ["compositionend", onCompositionEnd],
+      ["mousedown", onPendingBreaker],
+      ["pointerdown", onPendingBreaker],
+      ["beforeinput", onPendingBreaker],
+      ["input", onPendingBreaker]
+    ];
+    boundTargets.forEach(function (target) {
+      boundHandlers.forEach(function (h) { target.addEventListener(h[0], h[1]); });
+    });
     if (doc && doc.addEventListener) {
       doc.addEventListener("keyup", onDocKeyUp);
     }
@@ -507,18 +572,10 @@
       endLockBlurGuard: endLockBlurGuard,
       destroy: function () {
         disarm();
-        if (ctext && ctext.removeEventListener) {
-          ctext.removeEventListener("keydown", onKeyDown);
-          ctext.removeEventListener("blur", onEditorBlur);
-          ctext.removeEventListener("compositionstart", onCompositionStart);
-          ctext.removeEventListener("compositionend", onCompositionEnd);
-        }
-        if (editor && editor !== ctext && editor.removeEventListener) {
-          editor.removeEventListener("keydown", onKeyDown);
-          editor.removeEventListener("blur", onEditorBlur);
-          editor.removeEventListener("compositionstart", onCompositionStart);
-          editor.removeEventListener("compositionend", onCompositionEnd);
-        }
+        boundTargets.forEach(function (target) {
+          if (typeof target.removeEventListener !== "function") return;
+          boundHandlers.forEach(function (h) { target.removeEventListener(h[0], h[1]); });
+        });
         if (doc && doc.removeEventListener) {
           doc.removeEventListener("keyup", onDocKeyUp);
         }
