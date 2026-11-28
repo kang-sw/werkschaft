@@ -1063,6 +1063,7 @@
       body.permission_level = String(f.level);
       if (body.permission_level === "full" && f.ack === true) body.permission_full_ack = true;
     } else if (f.mode) body.permission_mode = String(f.mode);
+    if (f.dashboardControl === true) body.dashboard_control_access = true;
     if (typeof f.convHistoryAccess === "boolean") body.conv_history_access = f.convHistoryAccess;
     return body;
   }

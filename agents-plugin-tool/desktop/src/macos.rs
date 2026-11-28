@@ -15,7 +15,10 @@ use objc2_foundation::{ns_string, MainThreadMarker};
 use objc2_web_kit::{WKNavigationDelegate, WKUIDelegate, WKWebView};
 use tauri::{Manager, WebviewWindow};
 
-use crate::{close, notify, shell::Connection, speech as native_speech, updates, webview_setup_failed};
+use crate::{
+    capture, close, notify, shell::Connection, speech as native_speech, updates,
+    webview_setup_failed,
+};
 use escape_guard::guard_escape;
 use webview_delegate::{
     Bridge, BridgeMessages, BridgeState, NavigationDelegate, NavigationState, UIDelegate, UIState,
@@ -115,6 +118,11 @@ pub fn install(
                     Bridge::Notify,
                     ns_string!("werkschaftNotify"),
                     target.try_state::<Arc<notify::Notifier>>().is_some(),
+                ),
+                (
+                    Bridge::Capture,
+                    ns_string!("werkschaftCapture"),
+                    target.try_state::<Arc<capture::Capturer>>().is_some(),
                 ),
                 (
                     Bridge::Speech,

@@ -7,6 +7,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -125,21 +126,27 @@ type settingsRequest struct {
 	Model  *string `json:"model"`
 	Effort *string `json:"effort"`
 	// PermissionMode is a claude lead session's only.
-	PermissionMode *string `json:"permission_mode"`
+	PermissionMode         *string `json:"permission_mode"`
 	// ConvHistoryAccess toggles opt-in conv.* MCP access on a lead session.
-	ConvHistoryAccess *bool `json:"conv_history_access"`
+	ConvHistoryAccess      *bool   `json:"conv_history_access"`
+	DashboardControlAccess *bool   `json:"dashboard_control_access"`
+}
+
+type dashboardControlRequest struct {
+	DashboardControlAccess *bool `json:"dashboard_control_access"`
 }
 
 type leadRequest struct {
 	permissionRequest
-	Root              string `json:"root"`
-	Harness           string `json:"harness"`
-	Provider          string `json:"provider,omitempty"`
-	Model             string `json:"model"`
-	Effort            string `json:"effort"`
-	PermissionMode    string `json:"permission_mode"`
-	PluginIsolation   string `json:"plugin_isolation"`
-	ConvHistoryAccess bool   `json:"conv_history_access"`
+	Root                   string `json:"root"`
+	Harness                string `json:"harness"`
+	Provider               string `json:"provider,omitempty"`
+	Model                  string `json:"model"`
+	Effort                 string `json:"effort"`
+	PermissionMode         string `json:"permission_mode"`
+	PluginIsolation        string `json:"plugin_isolation"`
+	ConvHistoryAccess      bool   `json:"conv_history_access"`
+	DashboardControlAccess bool   `json:"dashboard_control_access"`
 }
 
 type sleepIdleRequest struct {
@@ -187,7 +194,7 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 		}
 		return st
 	}
-	if req.Method == http.MethodPost && (id == leadsRoute || id == sleepIdleRoute || action == "settings" || action == "settings/permission" || action == "quota-continuation" || action == "quota-continuation/cancel" || leadMove(action) || (r.IsLead(id) && leadControl(action))) {
+	if req.Method == http.MethodPost && (id == leadsRoute || id == sleepIdleRoute || action == "settings" || action == "settings/permission" || action == "settings/dashboard-control" || action == "quota-continuation" || action == "quota-continuation/cancel" || leadMove(action) || (r.IsLead(id) && leadControl(action))) {
 		if !local {
 			http.Error(w, "unknown agent route", http.StatusNotFound)
 			return
@@ -234,10 +241,10 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		var body leadRequest
-		if !decodePermissionRequest(w, req, &body, action == "permission", "root", "harness", "provider", "model", "effort", "plugin_isolation", "conv_history_access") {
+		if !decodePermissionRequest(w, req, &body, action == "permission", "root", "harness", "provider", "model", "effort", "plugin_isolation", "conv_history_access", "dashboard_control_access") {
 			return
 		}
-		opts := LeadOptions{Model: body.Model, Provider: body.Provider, Effort: body.Effort, PermissionMode: body.PermissionMode, PluginIsolation: body.PluginIsolation, ConvHistoryAccess: body.ConvHistoryAccess}
+		opts := LeadOptions{Model: body.Model, Provider: body.Provider, Effort: body.Effort, PermissionMode: body.PermissionMode, PluginIsolation: body.PluginIsolation, ConvHistoryAccess: body.ConvHistoryAccess, DashboardControlAccess: body.DashboardControlAccess}
 		if action == "permission" {
 			level, ack, err := body.selection()
 			if err != nil {
@@ -302,9 +309,24 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 	case action == "close":
 		st, err := r.CloseConversation(id)
 		writeAnswer(w, http.StatusOK, view(st), err)
+	case action == "settings/dashboard-control":
+		if r.IsChild(id) {
+			http.Error(w, "child session settings are fixed at spawn", http.StatusForbidden)
+			return
+		}
+		var body dashboardControlRequest
+		if !decodeStrictFields(w, req, &body, "dashboard_control_access") {
+			return
+		}
+		if body.DashboardControlAccess == nil {
+			writeAnswer(w, 0, nil, badRequest("dashboard_control_access must be a boolean"))
+			return
+		}
+		st, err := r.SetDashboardControlAccess(id, *body.DashboardControlAccess)
+		writeAnswer(w, http.StatusOK, view(st), err)
 	case action == "settings/permission":
 		var body settingsRequest
-		if !decodePermissionRequest(w, req, &body, true, "model", "effort", "conv_history_access") {
+		if !decodePermissionRequest(w, req, &body, true, "model", "effort", "conv_history_access", "dashboard_control_access") {
 			return
 		}
 		level, ack, err := body.selection()
@@ -314,7 +336,7 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 		if err == nil && body.Effort != nil && *body.Effort != "" && !effortPattern.MatchString(*body.Effort) {
 			err = badRequest("invalid effort")
 		}
-		if err == nil && r.IsChild(id) && (body.Model != nil || body.Effort != nil) {
+		if err == nil && r.IsChild(id) && (body.Model != nil || body.Effort != nil || body.DashboardControlAccess != nil) {
 			err = &requestError{status: http.StatusForbidden, msg: "child session model and effort are fixed at spawn"}
 		}
 		if err == nil && r.IsChild(id) && body.ConvHistoryAccess != nil {
@@ -323,15 +345,25 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 		var st State
 		if err == nil {
 			st, err = r.act(id, func(c *conv) error {
+				if body.DashboardControlAccess != nil && !c.rec.Lead {
+					return badRequest("dashboard_control_access applies to a lead session only")
+				}
 				if err := c.checkModelSetting(body.Model); err != nil {
 					return err
 				}
 				if err := c.setPermissionLevel(level, true, ack); err != nil {
 					return err
 				}
-				c.setSettings(body.Model, body.Effort)
+				if body.Model != nil || body.Effort != nil {
+					c.setSettings(body.Model, body.Effort)
+				}
 				if body.ConvHistoryAccess != nil {
 					if err := c.setConvHistoryAccess(*body.ConvHistoryAccess); err != nil {
+						return err
+					}
+				}
+				if body.DashboardControlAccess != nil {
+					if err := c.setDashboardControlAccess(*body.DashboardControlAccess); err != nil {
 						return err
 					}
 				}
@@ -352,15 +384,46 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 			writeAnswer(w, 0, nil, badRequest("permission selection requires settings/permission"))
 			return
 		}
-		var (
-			st  State
-			err error
-		)
-		if body.Model != nil || body.Effort != nil || (body.PermissionMode == nil && body.ConvHistoryAccess == nil) {
-			st, err = r.SetSettings(id, body.Model, body.Effort)
+		var err error
+		if body.Model != nil && *body.Model != "" && !modelPattern.MatchString(*body.Model) {
+			err = badRequest("model %q must match %s", *body.Model, modelPattern.String())
+		}
+		if err == nil && body.Effort != nil && *body.Effort != "" && !effortPattern.MatchString(*body.Effort) {
+			err = badRequest("effort %q must be a lowercase word", *body.Effort)
 		}
 		if err == nil && body.PermissionMode != nil {
-			st, err = r.setPermissionMode(id, *body.PermissionMode, local && own)
+			modes := LeadPermissionModes
+			if rec, ok := r.recordOf(id); ok {
+				modes = permissionModes(rec.Backend, []map[string]BackendRegistration{r.opts.Backends})
+			}
+			if !slices.Contains(modes, *body.PermissionMode) {
+				err = categorized(ErrInvalidProfile, badRequest("permission_mode %q must be one of %s", *body.PermissionMode, strings.Join(modes, ", ")))
+			}
+		}
+		var st State
+		if err == nil {
+			st, err = r.act(id, func(c *conv) error {
+				if body.DashboardControlAccess != nil && !c.rec.Lead {
+					return badRequest("dashboard_control_access applies to a lead session only")
+				}
+				if err := c.checkModelSetting(body.Model); err != nil {
+					return err
+				}
+				if body.PermissionMode != nil {
+					if err := c.setNativePermissionMode(*body.PermissionMode, local && own); err != nil {
+						return err
+					}
+				}
+				if body.Model != nil || body.Effort != nil {
+					c.setSettings(body.Model, body.Effort)
+				}
+				if body.DashboardControlAccess != nil {
+					if err := c.setDashboardControlAccess(*body.DashboardControlAccess); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
 		}
 		if err == nil && body.ConvHistoryAccess != nil {
 			st, err = r.SetConvHistoryAccess(id, *body.ConvHistoryAccess)
@@ -452,6 +515,38 @@ func decode(w http.ResponseWriter, req *http.Request, v any) bool {
 	}
 	if strings.TrimSpace(string(raw)) == "" {
 		return true
+	}
+	if err := json.Unmarshal(raw, v); err != nil {
+		http.Error(w, "malformed JSON body: "+err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// decodeStrictFields requires a JSON object containing only fields, with no
+// null values, and unmarshals it into v.
+func decodeStrictFields(w http.ResponseWriter, req *http.Request, v any, fields ...string) bool {
+	var raw json.RawMessage
+	if !decode(w, req, &raw) {
+		return false
+	}
+	if len(raw) == 0 {
+		raw = json.RawMessage(`{}`)
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil || obj == nil {
+		http.Error(w, "request requires a JSON object", http.StatusBadRequest)
+		return false
+	}
+	allowed := make(map[string]bool, len(fields))
+	for _, field := range fields {
+		allowed[field] = true
+	}
+	for key, value := range obj {
+		if !allowed[key] || strings.TrimSpace(string(value)) == "null" {
+			http.Error(w, "unknown or null field: "+key, http.StatusBadRequest)
+			return false
+		}
 	}
 	if err := json.Unmarshal(raw, v); err != nil {
 		http.Error(w, "malformed JSON body: "+err.Error(), http.StatusBadRequest)

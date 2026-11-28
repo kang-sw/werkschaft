@@ -176,6 +176,10 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		spec.Env = environ()
 	}
 	c.mcpStale = false
+	dashboardControlEffective := rec.DashboardControlAccess
+	if attach {
+		dashboardControlEffective = rec.MCPDashboardControl
+	}
 	var mcpEnv map[string]string
 	switch {
 	case durable:
@@ -233,6 +237,9 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		if spec.MCPSession = c.r.attachMCP(rec.ReplyID, "", cmd.Env, rec.workDir(), 0, rec.Backend); spec.MCPSession != nil {
 			mcpEnv = cmd.Env
 		}
+	}
+	if spec.MCPSession != nil {
+		c.r.markMCPDashboardControl(rec.ReplyID, dashboardControlEffective)
 	}
 	var convHistoryEffective bool
 	if attach {
@@ -303,7 +310,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	if live, ok := proc.(liveLeadMode); ok {
 		activeMode = live.activePermissionMode()
 	}
-	c.setStatus(func() { c.proc, c.activeMode = proc, activeMode })
+	c.setStatus(func() { c.proc, c.activeMode, c.dashboardControlEffective = proc, activeMode, dashboardControlEffective })
 	c.events = proc.Events()
 	if durable {
 		c.bindDurableMCP(spec.MCPSession, rec, proc, level)
@@ -329,7 +336,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		rec.ExecCutoverHolder = cutoverHolder(cutover, id)
 		rec.forgetMCP()
 		if s := spec.MCPSession; s != nil && !durable {
-			rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder, rec.MCPConvHistoryAccess = s.Token, s.URL, mcpEnv, id, convHistoryEffective
+			rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder, rec.MCPConvHistoryAccess, rec.MCPDashboardControl = s.Token, s.URL, mcpEnv, id, convHistoryEffective, dashboardControlEffective
 		}
 	})
 	c.writeRegistration()

@@ -227,7 +227,7 @@ func (d *Daemon) accessGuard(next http.Handler) http.Handler {
 			if d.loginNavigation(w, r) {
 				return
 			}
-			if d.localhostAuthenticated(r) {
+			if d.localhostAuthenticated(r) || d.screenshotRenderAuthenticated(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -343,7 +343,7 @@ type LANAccess struct {
 // lanAccessFor returns the LAN access block for r, or nil unless LAN mode is
 // on and r is a local viewer: the token is shown to this machine only.
 func (d *Daemon) lanAccessFor(r *http.Request) *LANAccess {
-	if !d.lan || !localViewer(r) {
+	if !d.lan || !localViewer(r) || d.isScreenshotRenderOnly(r) {
 		return nil
 	}
 	var token string
