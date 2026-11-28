@@ -34,6 +34,8 @@
   "agents-plugin/dashboard-config-manifest.json#dashboard.companion_pack": "4513d7e13ad629f0",
   "agents-plugin/dashboard-config-manifest.json#dashboard.companion_palette": "4cb5903fe11727cf",
   "agents-plugin/dashboard-config-manifest.json#dashboard.companion_preset": "178a59f4933fa840",
+  "agents-plugin/dashboard-config-manifest.json#dashboard.companion_soul": "a748037511262fb2",
+  "agents-plugin/dashboard-config-manifest.json#dashboard.companion_soul_dir": "575202dc61445838",
   "agents-plugin/dashboard-config-manifest.json#dashboard.companion_sources": "aacd562a50b124f3",
   "agents-plugin/dashboard-config-manifest.json#dashboard.enabled": "c3124db07b520596",
   "agents-plugin/dashboard-config-manifest.json#dashboard.lan_enabled": "cd05a6b51944142e",

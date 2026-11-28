@@ -280,6 +280,7 @@ type Daemon struct {
 	auditRead auditViewer
 
 	dir       string
+	home      string
 	lock      *flock.Flock
 	server    *http.Server
 	listener  net.Listener
@@ -301,6 +302,9 @@ type Daemon struct {
 	companionCommands companionCommandHub
 	// companionPhone holds the in-memory 4-state embodiment & phone messenger store.
 	companionPhone CompanionPhoneStore
+	// companionMem coordinates Portable Soul RAM cache + lazy Local Episodes SQLite FTS5.
+	companionMemMu sync.Mutex
+	companionMem   *CompanionMemory
 	// companionWake, when bound by cmd/ws-mcp, wakes the Tier-1 companion burst
 	// session on incoming user messages or release with unread inbox.
 	companionWake atomic.Pointer[func(reason string)]

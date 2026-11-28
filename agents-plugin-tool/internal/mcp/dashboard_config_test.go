@@ -74,8 +74,8 @@ func TestShippedDashboardManifestsLoadBesideEachPackageManifest(t *testing.T) {
 				t.Fatalf("rejected: %v", declared.rejected)
 			}
 			own := loadDeclaredConfig(pkg.own)
-			if len(declared.keys) != len(own.keys)+24 {
-				t.Fatalf("%d keys loaded, want the package's %d plus 24 dashboard keys", len(declared.keys), len(own.keys))
+			if len(declared.keys) != len(own.keys)+26 {
+				t.Fatalf("%d keys loaded, want the package's %d plus 26 dashboard keys", len(declared.keys), len(own.keys))
 			}
 			for _, tc := range []struct {
 				key, kind, pattern string
@@ -94,6 +94,8 @@ func TestShippedDashboardManifestsLoadBesideEachPackageManifest(t *testing.T) {
 				// Entries are judged one by one in the modal, so the key itself
 				// accepts any text; an invalid entry never fails the whole key.
 				{"dashboard.companion_sources", "string", "", "", nil, "https://example.invalid/packs.git http://bad", nil},
+				{"dashboard.companion_soul", "string", "^([a-z0-9][a-z0-9_-]{0,63})?$", "", nil, "work_soul-1", []string{"Bad Soul", "-bad"}},
+				{"dashboard.companion_soul_dir", "string", "", "", nil, "~/companion-soul", nil},
 			} {
 				key, ok := declared.lookup(tc.key)
 				if !ok || key.Type != tc.kind || key.DefaultValue != tc.def || key.DefaultScope != wsconfig.ScopeGlobal || key.Pattern != tc.pattern || !reflect.DeepEqual(key.Enum, tc.enum) {

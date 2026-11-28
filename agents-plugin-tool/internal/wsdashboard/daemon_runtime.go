@@ -298,6 +298,7 @@ func (d *Daemon) Close() {
 				fmt.Fprintf(d.log, "dashboard: metadata store close: %v\n", err)
 			}
 		}
+		d.closeCompanionMemory()
 		removeEndpointIfOwned(d.dir, d.endpoint.Token)
 		fmt.Fprintf(d.log, "dashboard: stopped (pid %d)\n", d.endpoint.PID)
 		if d.endLog != nil {

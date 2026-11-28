@@ -193,7 +193,7 @@ func TestDashboardSettingsUICatalogSurface(t *testing.T) {
 		"dashboard.companion_attachments", "dashboard.companion_director", "dashboard.companion_enabled",
 		"dashboard.companion_eyes", "dashboard.companion_hair", "dashboard.companion_outfit",
 		"dashboard.companion_pack", "dashboard.companion_palette", "dashboard.companion_preset",
-		"dashboard.companion_sources",
+		"dashboard.companion_soul", "dashboard.companion_soul_dir", "dashboard.companion_sources",
 	}
 	slices.Sort(panelCompanion)
 	if !slices.Equal(panelCompanion, want) {

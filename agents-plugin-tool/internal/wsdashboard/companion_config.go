@@ -27,6 +27,8 @@ const (
 	CompanionAgentCooldownKey  = "dashboard.companion_agent_cooldown_seconds"
 	CompanionAgentHourlyCapKey = "dashboard.companion_agent_hourly_cap"
 	CompanionSourcesKey        = "dashboard.companion_sources"
+	CompanionSoulKey           = "dashboard.companion_soul"
+	CompanionSoulDirKey        = "dashboard.companion_soul_dir"
 
 	companionChangedPath  = "/config/companion-changed"
 	companionConfigHeader = "X-WS-Global-Config"
@@ -36,7 +38,8 @@ func IsCompanionConfigKey(key string) bool {
 	switch key {
 	case CompanionEnabledKey, CompanionModeKey, CompanionDirectorKey, CompanionPackKey, CompanionPresetKey,
 		CompanionOutfitKey, CompanionHairKey, CompanionEyesKey, CompanionAttachmentsKey, CompanionPaletteKey,
-		CompanionAgentCooldownKey, CompanionAgentHourlyCapKey, CompanionSourcesKey:
+		CompanionAgentCooldownKey, CompanionAgentHourlyCapKey, CompanionSourcesKey,
+		CompanionSoulKey, CompanionSoulDirKey:
 		return true
 	}
 	return false
@@ -88,6 +91,11 @@ type CompanionConfig struct {
 	// Sources is the raw dashboard.companion_sources value. The JSON form adds
 	// sourceEntries, the verdict of parseCompanionSources on it (MarshalJSON).
 	Sources string `json:"sources"`
+	// Soul selects the active Portable Soul ID (empty resolves to "default").
+	Soul string `json:"soul"`
+	// SoulDir optionally overrides the root directory storing Portable Souls
+	// (empty defaults to ~/.ws/companion-soul).
+	SoulDir string `json:"soulDir"`
 }
 
 // MarshalJSON adds sourceEntries: each entry of Sources as the source routes
@@ -141,6 +149,14 @@ func (d *Daemon) refreshCompanion() error {
 	if config != previous.config {
 		s.snapshot.Store(&companionConfigSnapshot{config: config, wake: make(chan struct{})})
 		close(previous.wake)
+		if config.Soul != previous.config.Soul || config.SoulDir != previous.config.SoulDir {
+			d.companionMemMu.Lock()
+			mem := d.companionMem
+			d.companionMemMu.Unlock()
+			if mem != nil {
+				mem.Soul().Invalidate()
+			}
+		}
 	}
 	return nil
 }
