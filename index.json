@@ -325,7 +325,14 @@
       "registered_at": "2026-11-18T07:11:45Z"
     },
     "261118-refactor-ws-split-agy-adapter": {
-      "registered_at": "2026-11-18T13:12:58Z"
+      "registered_at": "2026-11-18T13:12:58Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-28T10:11:17Z"
+      }
     },
     "261118-research-ws-agy-custom-agent-prompt": {
       "registered_at": "2026-11-18T07:09:55Z"
