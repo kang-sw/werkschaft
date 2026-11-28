@@ -142,6 +142,38 @@ func (d *Daemon) handleAccountSlotsRemove(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (d *Daemon) handleAccountSlotsRename(w http.ResponseWriter, r *http.Request) {
+	if d.accountSlots == nil {
+		accountError(w, http.StatusServiceUnavailable, "slot_registry_unavailable")
+		return
+	}
+	var body struct {
+		Harness string `json:"harness"`
+		SlotID  string `json:"slot_id"`
+		Label   string `json:"label"`
+	}
+	if !accountBody(w, r, &body) {
+		return
+	}
+	harness := strings.TrimSpace(body.Harness)
+	slotID := strings.TrimSpace(body.SlotID)
+	if !wscred.SupportedSlotHarness(harness) || slotID == "" {
+		accountError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	if err := d.accountSlots.UpdateSlotLabel(harness, slotID, body.Label); err != nil {
+		accountSlotError(w, err)
+		return
+	}
+	slot, ok := d.accountSlots.ResolveSlot(harness, slotID)
+	if !ok {
+		accountError(w, http.StatusNotFound, "account_slot_not_found")
+		return
+	}
+	d.accountChanged()
+	writeJSON(w, http.StatusOK, slot)
+}
+
 func (d *Daemon) handleAccountSlotsSwitch(w http.ResponseWriter, r *http.Request) {
 	if d.accountSlots == nil {
 		accountError(w, http.StatusServiceUnavailable, "slot_registry_unavailable")
