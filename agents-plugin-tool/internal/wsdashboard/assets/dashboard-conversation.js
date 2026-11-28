@@ -635,6 +635,8 @@
         }
       }
     }
+    // A row inside a whiteboard-only cluster is hidden until its cluster opens.
+    if (typeof wbRevealClustered === "function") wbRevealClustered(box, target);
     for (var p = target; p && p !== box; p = p.parentNode) {
       if (p.tagName === "DETAILS") p.open = true;
     }

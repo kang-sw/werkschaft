@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wsmailbox"
 )
 
 func renderIdleHistory(t *testing.T, ring []wslive.RingRecord, lang string) regionSet {
@@ -509,6 +510,49 @@ func TestTurnSummaryFoldedMailOnlyOpenBurstUnlinkedWakeAndBatchTokens(t *testing
 	} {
 		if !strings.Contains(liveHTML, want) {
 			t.Errorf("active live turn with mail missing %q:\n%s", want, liveHTML)
+		}
+	}
+}
+
+// The whiteboard-only cluster aggregates folded rows from locale-independent
+// attributes (never the localized chip text), so a completed turn must expose
+// its call/mail/token/time stats and a standalone system mail must be marked
+// while a peer mail must not.
+func TestTurnSummaryClusterAttributesAreLocaleIndependent(t *testing.T) {
+	ring := []wslive.RingRecord{
+		ringRecord(1, wslive.RingEntry{Kind: wslive.RingUser, Origin: wslive.OriginWhiteboard, Text: "Investigate"}),
+		ringRecord(2, wslive.RingEntry{Kind: wslive.RingTools, Tools: &wslive.ToolSummary{
+			Calls: 3, DurationMs: 4_000,
+			Batches: []wslive.ToolBatch{{Names: []string{"Read"}, Calls: 3, DurationMs: 4_000}},
+		}}),
+		ringRecord(3, wslive.RingEntry{Kind: wslive.RingMail, Direction: wslive.MailRecv, Peer: "worker-1", Title: "hello"}),
+		ringRecord(4, wslive.RingEntry{Kind: wslive.RingReply, Text: "Final answer"}),
+		ringRecord(5, wslive.RingEntry{Kind: wslive.RingTurn, Origin: wslive.OriginWhiteboard, Done: 3, DurationMs: 5_000, AddedTokens: 2_800, Reason: "completed"}),
+		ringRecord(6, wslive.RingEntry{Kind: wslive.RingMail, Direction: wslive.MailRecv, Peer: wsmailbox.SystemLabel, Title: "Whiteboard lead nudge (hourly)."}),
+		ringRecord(7, wslive.RingEntry{Kind: wslive.RingMail, Direction: wslive.MailRecv, Peer: "worker-2", Title: "peer note"}),
+	}
+	for _, lang := range []string{"en", "ko", "ja"} {
+		entries := stdhtml.UnescapeString(string(renderIdleHistory(t, ring, lang)[regionEntries].HTML))
+		wantTS := strconv.FormatInt(ring[4].At.UnixMilli(), 10)
+		for _, want := range []string{
+			`data-turn-calls="3"`,
+			`data-turn-mails="1"`,
+			`data-turn-tok="2800"`,
+			`data-turn-ts="` + wantTS + `"`,
+			`data-entry="` + ring[5].Name + `" data-mail-system="1" data-mail-ts="` + strconv.FormatInt(ring[5].At.UnixMilli(), 10) + `"`,
+		} {
+			if !strings.Contains(entries, want) {
+				t.Errorf("lang %s: missing %q:\n%s", lang, want, entries)
+			}
+		}
+		if strings.Contains(entries, `data-turn-tok-est`) {
+			t.Errorf("lang %s: exact tokens must not be marked estimated", lang)
+		}
+		if got := strings.Count(entries, `data-mail-system="1"`); got != 1 {
+			t.Errorf("lang %s: exactly the system mail is marked, got %d:\n%s", lang, got, entries)
+		}
+		if strings.Contains(entries, `data-entry="`+ring[6].Name+`" data-mail-system`) {
+			t.Errorf("lang %s: a peer mail must never be marked as system mail", lang)
 		}
 	}
 }

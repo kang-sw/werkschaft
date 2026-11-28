@@ -1298,6 +1298,27 @@ html[data-mode="live"][data-sysopen] .exec-view-out[hidden] { display: none; }
 .d-turn-folded[hidden] { display: none; }
 .d-turn-drawer > .msg.fromlead[data-wb-clone] { align-self: stretch; max-width: none; background: color-mix(in srgb, var(--wb-fg) 4%, transparent); border-radius: 6px; padding: 4px 8px; }
 .d-turn[hidden] { display: none; }
+/* Whiteboard-only folded-turn cluster: one unboxed tonal trace row stands in for a run of folded rows. The rows stay in place; data-wb-clustered hides them, data-wb-cluster-open indents them under the header. */
+[data-wb-clustered] { display: none !important; }
+.wb-turn-cluster { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto 18px; column-gap: 8px; align-items: center; align-self: stretch; width: 100%; margin-block: 3px; padding: 5px 6px 5px 2px; border: 0; border-radius: 8px; background: color-mix(in srgb, var(--wb-muted) 34%, transparent); color: var(--wb-muted-fg); font: inherit; font-size: 12.5px; line-height: 1.35; text-align: left; cursor: pointer; user-select: none; transition: background .12s ease, color .12s ease; }
+.wb-turn-cluster:hover, .wb-turn-cluster[aria-expanded="true"] { background: color-mix(in srgb, var(--wb-muted) 70%, transparent); color: var(--wb-fg); }
+.wb-turn-cluster:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 2px; }
+.wbc-ico { justify-self: center; display: inline-flex; color: var(--wb-ck-ok, #6cc39a); }
+.wbc-ico .i, .wbc-chev .i { width: 14px; height: 14px; }
+.wbc-main { display: flex; align-items: baseline; gap: 6px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.wbc-main > * { flex: none; }
+.wbc-count { color: var(--wb-fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+.wbc-chip { font-variant-numeric: tabular-nums; }
+.wbc-chip[hidden] { display: none; }
+.wbc-chip::before { content: "\00b7"; margin-right: 6px; opacity: .45; }
+.wbc-tok { color: var(--wb-primary); font-family: var(--wb-mono); font-size: 11.5px; font-weight: 600; }
+.wbc-time { font-size: 11px; opacity: .78; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.wbc-chev { display: inline-flex; align-items: center; justify-content: center; color: var(--wb-muted-fg); opacity: .55; transform: rotate(-90deg); transition: transform .15s ease, opacity .12s ease; }
+.wb-turn-cluster[aria-expanded="true"] .wbc-chev { transform: rotate(0deg); opacity: .88; }
+.d-turn[data-wb-cluster-open], .turn-plain-host[data-wb-cluster-open] > .d-turn, .mailline[data-wb-cluster-open], .mail-block[data-wb-cluster-open], .mail-notification[data-wb-cluster-open] { margin-left: 15px; padding-left: 8px; box-shadow: inset 2px 0 0 color-mix(in srgb, var(--wb-line) 85%, transparent); }
+@media (prefers-reduced-motion: reduce) {
+  .wb-turn-cluster, .wbc-chev { transition: none; }
+}
 
 /* Add-command request (<ws:ucmd-add>): tonal violet variant of the request card. */
 .ucmd-req.is-add {
