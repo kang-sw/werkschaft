@@ -99,6 +99,17 @@ than `rollback/`, `bin/` and `sessions/`, the legacy `PruneRegistrations`.
 - Verified: `go build ./...`, `go vet ./...`, `GOOS=windows go vet ./...`, `go test -race ./internal/wsstate/...`, and `go test -race ./internal/wsdashboard -run 'TestStageExecutable|TestPrune|TestCacheGC|TestRegistry'` all pass. Full non-targeted `internal/wsdashboard`, `internal/wsagent` and `cmd/ws-mcp` suites were slow on this machine and were not confirmed to completion.
 - Known minor gap: a partial `RemoveAll` of a dead worktree dir on Windows could leave a dir without `worktree.json`, which the skip-if-unreadable rule then never collects.
 
+#### Edition (768fab892) - 2026-11-29
+
+Addressed the cross-model `agy.large` review of `1120e3294` (1 Critical, 3 Important, 3 Minor); no-deadlock in `cacheGCLoop`/`Close`, T0 and the T2 Pi-history invariant were confirmed by the reviewer and are unchanged.
+
+- **Critical:** `stagedBuildName` now also matches the macOS/Linux released-runtime names. The launcher stages `ws-mcp-<version>-<12hex>` through `filepath.Ext`, which cuts at the version's last dot, giving `ws-mcp-dashboard-<16hex>.2-abcdef123456`. The pattern is `(\.exe|\.[0-9a-z-]*-[0-9a-f]{12})?`; `.tmp`, `.bak`, `.metadata.json`, wrong-length hashes and other suffixes are still foreign. Sidecar cleanup and pin-hash extraction share the regex. Tests: `TestStagedBuildNameMatchesStagedNamesOnly` (also drives the real `stagedExecutableName`), `TestPruneStagedExecutablesHandlesPosixVersionedRuntimeNames`, `TestPruneStagedExecutablesPinsAVersionedBuildByRecordedHash`.
+- **Important:** the dead-worktree `SessionActive` check reads the registry with `readRegistrations` and fails closed when the sessions directory or any registration cannot be read. Test: `TestRunCacheGCKeepsDeadWorktreeWhenSessionRegistryIsUncertain` (certain baseline removes; unparsable `registration.json` and an unlistable `sessions/` keep).
+- **Important:** `pruneRollbackDir` takes the daemon stop and checks it between entries; `wsstate.measureEntry` takes `stop` and ends the walk with `fs.SkipAll`, so `Close` does not wait on a long walk. Tests: `TestMeasureEntryStopsMidWalk`, `TestPruneRollbackDirSkipsSymlinksAndHonoursStop`.
+- **Important:** `measureEntry` fails closed (`ok=false`) on any `WalkDir`/`Info` error other than a file vanishing mid-walk, so an unreadable subtree cannot make a live directory look expired. Test: `TestGCProjectsUnreadableChildFailsClosed`.
+- **Minor:** the GC loop's config and `gcDone` are decided before `Serve` starts (the loop still starts afterwards), so a `Serve` failure calling `Close` cannot race the assignment; `PruneRollbackDir` skips symlinks and irregular entries (junctions) and never counts them toward the newest keep; public `PruneStagedExecutables` hashes `exe` so direct callers also pin the content-addressed twin of a stable path (`TestPruneStagedExecutablesPublicEntryPinsTheExeContentTwin`).
+- Verified: `go build ./...`, `go vet ./...`, `GOOS=windows go vet ./...`, `go test -race -count=1 ./internal/wsstate/...`, and `go test -race -count=1 -run 'TestStageExecutable|TestPrune|TestCacheGC|TestRegistry|TestDaemon|TestStagedBuildName|TestRunCacheGC|TestStartDaemonRunsBackground|TestPoll' ./internal/wsdashboard/...` pass. `cmd/ws-mcp` `TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild` still fails here on missing `generated/inventory.json` assets (environmental, unrelated).
+
 
 ## Resolution (2026-11-29)
 
