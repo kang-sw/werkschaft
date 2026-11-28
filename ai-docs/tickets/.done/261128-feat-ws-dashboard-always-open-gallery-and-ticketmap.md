@@ -6,6 +6,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 981ea9fc5e9b851b
 sage-review-completeness-reviewed: 981ea9fc5e9b851b
+completed: 2026-11-28
 ---
 
 # Always-Open #bgal Docking Gallery, Docked Ticket Map, and Workpanel/Git Scaffolds
@@ -189,6 +190,25 @@ Two sequential phases: Phase 1 establishes the always-open `#bgal` container, `.
 5. **Update tests and run full verification:** Update `ticketmap_assets_test.go`, `ticketmap_browser_test.go`, `ticketmap_graph_browser_test.go`, `ticketmap-state.test.cjs`, `ticketmap.browser.cjs`, `ticketmap-graph.browser.cjs`, `ticketmap-hier.test.cjs`, `fullscreen-width.browser.cjs`, and add tests for `.gal-rail` fixed/user order, docked `@container` `380px` overflow, `(1730)=a` collapsed-by-default bottom sheet opening on node click, container-scoped shortcuts, and docked ↔ `#tmback` state sync.
 
 **Phase 2 done when:** the docked Ticket Map has `0px` horizontal overflow at `380px` and `540px`; the inspector starts collapsed and opens on node/card click; `1`/`2`/`/`/`Esc` act only while the docked pane has focus; Ctrl+B and `ticketMap.open()` activate the docked page; docked and `#tmback` state stay in sync across `⤢` and close; `#thandle` is gone and the remaining top-right handles do not overlap.
+
+### Result (52b68f9e) - 2026-11-28
+
+- **Landed (`0ba248b0`, `52b68f9e`):**
+  - The Ticket Map now mounts in `#bgal`'s `ticketmap` system page (`#tmdock`) and fills the page. It fetches `/s/<rid>/tickets/graph` when the page first shows. The two-row `@container tm-pane` toolbar has the view toggle, search, cluster popover, refresh and `⤢` in row 1, and status pills plus the pane-shortcut badge in row 2. Its overflow is `0px` at `380px` and `540px`. `.d-tm-cvp` was added to `cards.js` `OWN`. View C refits a camera the user has not moved on dock/modal switches and docked resizes, and keeps the center of a moved camera. View B clamps wire labels inside its host.
+  - Docked, `.d-tm-insp` is a bottom sheet. It starts closed (`(1730)=a`) and opens on a View B card or View C star click. It has a grip, expand and close controls, Full View and Open File under its header, explicit links, and similar tickets.
+  - The bare keys `1`/`2`/`/`/`Esc` are scoped to the pane. A window-capture listener acts only when the target is inside `#tmdock` and outside text inputs. That listener runs before the tracker palette's document-capture `/`. In the docked pane, Esc closes the sheet first and never closes the pane (`tmEscStep`). `#composer` and `#cvox` are unaffected.
+  - `#tmback` sync works by moving the one `.d-tm-root` between `#tmdock` and `#tmback`. View, selection, query, filters, keyword and camera are shared, so no sync layer exists. `⤢` (toolbar and sheet) expands. Esc, `#tmclose` or Ctrl+B docks it back and restores focus. Ctrl+B and `ticketMap.open()` show and focus the docked page. They expand instead when the gallery is hidden or narrow-view `data-away` is set.
+  - `#thandle`, `thandleSync`, `.d-tm-handle` and the `--thr` term in `drRoom()` were retired. `#ghandle`/`#drhandle`/`#shandle`/`#tkhandles` stay aligned. The `network` Lucide icon, which only `#thandle` drew, was un-vendored.
+  - i18n: `js.tmap.expand`, `js.tmap.insp.close` and `js.tmap.scope` were added in all 11 locale tables. `js.tmap.open` and the Phase-1-orphaned `js.drawer.idea*`/`js.drawer.unread` were removed.
+- **Verification:**
+  - `node --test frontend-drawer.test.js testdata/{gallery-state,ticketmap-state,ticketmap-hier,overview-preview-shape,global-shortcuts}.test.cjs frontend-perf-1642.test.js`: PASS (69/69).
+  - `GOOS=windows go vet ./...`: PASS.
+  - Playwright Chromium: `TestTicketMapBrowser`, the new `TestTicketMapDockBrowser` (Dark/Light × `540px`/`380px`), `TestTicketMapGraphBrowser`, `TestGalleryBrowser`, `TestCSSClassesDoNotCollideAcrossModules`, `TestPanelRowsBrowser` and `TestBand3BoardWidthDoesNotLeakBrowser` all PASS.
+  - `TestBoardStateFilterBrowser` FAILS (`filterordinary-dark-800-all row 1 aligned`). It fails identically on exports of `a8f6b505` and `00bd2ee5` (before Phase 1), so the failure predates this ticket.
+  - `go test ./internal/wsdashboard/... ./internal/mcp/... ./internal/wsi18n/...`: `wsi18n` PASS. Ticket Map, i18n, drawer and Lucide tests PASS. 9 `wsdashboard` tests fail (`TestBoardKeepWiring`, `TestBoardToolbarPlacementAndCounts`, `TestConversationPresentationMergePreservesIdentityAndDisclosures`, `TestFilesExplorerInstances`, `TestSearchDrawerSplitOwnership`, `TestFreshSessionLoadClient`, `TestShellSwitchesFramesThroughItsGlue`, `TestShellPostLayout`, `TestSessionURLServesTheShellAroundItsFramedPage`). 12 `mcp` tier-routing/settings-catalog tests also fail. All 21 fail identically on the `a8f6b505` export, so they predate Phase 2.
+  - Visual comparison of `/tmp/tm2shots/dock-{b,sheet,c-sheet}-{dark,light}-gal{540,380}.png` (desktop `540px` and narrow `380px`) with `ai-docs/assets/mockups/261128/gallery-ticketmap-always-open/index.html`: match. The intentional `(1730)=a` delta: the sheet is closed on load and opens on click.
+- **Review (`code-review-lite`, clean, 0 Critical/0 Important, 2 Minor, both fixed in `52b68f9e`):** (1) The dock test no longer falls back to Ctrl+B and instead asserts that the wide idle view shows the docked map by default. (2) If the user leaves the dock during the first fetch, `loaded()` now skips `show()` until they return.
+- **Decisions:** `fullscreen-width.browser.cjs` was left unchanged: it doesn't mention the Ticket Map, and no Go test runs it. The docked ↔ `#tmback` sync is a re-parent of one root, not a copy of state.
 
 ## Verification
 
