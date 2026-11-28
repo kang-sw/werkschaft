@@ -6,13 +6,15 @@
   }
   function vendorOrder(entry) {
     if (entry.harness === "claude") return 0;
-    if (entry.harness === "codex") return 1;
+    if (entry.harness === "codex" || entry.harness === "codex_openai") return 1;
     if (entry.harness === "agy") {
       if (entry.group === "gemini") return 2;
       if (entry.group === "claude_gpt") return 3;
       return 4;
     }
-    return 5;
+    if (entry.harness === "werk_openai") return 5;
+    if (entry.harness === "openrouter") return 6;
+    return 7;
   }
   function sorted(entries) {
     return entries.slice().sort(function (a, b) { return vendorOrder(a) - vendorOrder(b); });
@@ -30,8 +32,22 @@
   function entryName(entry) {
     if (entry.harness === "claude") return "Claude";
     if (entry.harness === "codex") return "Codex / GPT";
+    if (entry.harness === "codex_openai") return entry.label || "Codex / OpenAI";
+    if (entry.harness === "werk_openai") return entry.label || "Werk (OpenAI)";
+    if (entry.harness === "openrouter") return entry.label || "OpenRouter";
     if (entry.harness === "agy") return entry.label || "Antigravity";
     return entry.label || String(entry.harness || "");
+  }
+  function formatUsd(value) {
+    if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+    if (Math.abs(value) > 0 && Math.abs(value) < 0.01) return "$" + value.toFixed(4);
+    return "$" + value.toFixed(2);
+  }
+  function formatTokens(count) {
+    if (typeof count !== "number" || !Number.isFinite(count) || count <= 0) return "0";
+    if (count >= 1000000) return (count / 1000000).toFixed(1).replace(/\.0$/, "") + "M";
+    if (count >= 1000) return (count / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+    return String(Math.round(count));
   }
   function footerGroupLabel(entry) {
     if (entry.harness !== "agy" || !entry.label) return "";
@@ -64,12 +80,13 @@
       else { indices[key] = samples.length; samples.push(s); }
     }
     var entryGroup = entry.group || "";
+    var historyHarness = entry.harness === "codex_openai" ? "codex" : entry.harness;
     if (history && history.schema_version === 1 && history.status === "ok" && Array.isArray(history.samples)) {
       history.samples.forEach(function (s) {
-        if (s.harness === entry.harness && (s.group || "") === entryGroup && s.kind === w.kind && valid(s) && s.asOf <= at) upsert(s);
+        if (s.harness === historyHarness && (s.group || "") === entryGroup && s.kind === w.kind && valid(s) && s.asOf <= at) upsert(s);
       });
     }
-    var current = { harness: entry.harness, group: entryGroup, kind: w.kind, source: entry.source || "", resetsAt: reset, asOf: at, percent: w.percent };
+    var current = { harness: historyHarness, group: entryGroup, kind: w.kind, source: entry.source || "", resetsAt: reset, asOf: at, percent: w.percent };
     if (valid(current)) upsert(current);
     samples.sort(function (a, b) {
       return a.asOf - b.asOf || (identity(a) < identity(b) ? -1 : identity(a) > identity(b) ? 1 : 0);
@@ -160,7 +177,19 @@
       switchedDefault: "js.usage.switched_default", switchedDefaultOnly: "js.usage.switched_default_only",
       switchedQueued: "js.usage.switched_queued", switchedNow: "js.usage.switched_now",
       switchFailed: "js.usage.switch_failed", cancel: "js.usage.cancel", werkOpenai: "js.usage.werk_openai",
-      singleAccount: "js.usage.single_account"
+      singleAccount: "js.usage.single_account",
+      codexOpenai: "js.usage.codex_openai", openrouter: "js.usage.openrouter",
+      keyBal: "js.usage.key_bal", keyRem: "js.usage.key_rem", keyDay: "js.usage.key_day", keyTok: "js.usage.key_tok",
+      balance: "js.usage.balance", creditsUsed: "js.usage.credits_used", creditsRestricted: "js.usage.credits_restricted",
+      keyLimit: "js.usage.key_limit", keyRemaining: "js.usage.key_remaining",
+      spendDaily: "js.usage.spend_daily", spendWeekly: "js.usage.spend_weekly", spendMonthly: "js.usage.spend_monthly",
+      modelUsage: "js.usage.model_usage", colModel: "js.usage.col_model", colTokens: "js.usage.col_tokens",
+      colCost: "js.usage.col_cost", colEstCost: "js.usage.col_est_cost",
+      tokensTotal: "js.usage.tokens_total", tokensIo: "js.usage.tokens_io", estCost: "js.usage.est_cost",
+      localUsage: "js.usage.local_usage", planPaused: "js.usage.plan_paused", keyRejected: "js.usage.key_rejected",
+      fallbackConsent: "js.usage.fallback_consent", fallbackClaim: "js.usage.fallback_claim",
+      fallbackAuth: "js.usage.fallback_auth", fallbackDisabled: "js.usage.fallback_disabled",
+      noModelUsage: "js.usage.no_model_usage"
     };
     function t(key) { return window.wsT.apply(null, [keys[key]].concat(Array.prototype.slice.call(arguments, 1))); }
     function locale() { return window.wsI18n.lang; }
@@ -179,8 +208,23 @@
     }
     function statusText(status) {
       if (status === "sign-in required") return t("signInRequired");
+      if (status === "key rejected") return t("keyRejected");
       if (!status || status === "usage unavailable") return t("unavailable");
       return status;
+    }
+    function localizedEntryName(entry) {
+      if (entry.harness === "codex_openai") return t("codexOpenai");
+      if (entry.harness === "werk_openai") return t("werkOpenai");
+      if (entry.harness === "openrouter") return t("openrouter");
+      return entryName(entry);
+    }
+    function fallbackText(reason) {
+      if (reason === "consent_required") return t("fallbackConsent");
+      if (reason === "missing_claim") return t("fallbackClaim");
+      if (reason === "auth_rejected") return t("fallbackAuth");
+      if (reason === "plan_disabled") return t("fallbackDisabled");
+      if (reason === "plan_paused") return t("planPaused");
+      return "";
     }
     function icon(entry, small) { var n = el("span", small ? "hb sm" : "hb"); n.setAttribute("data-h", String(entry.harness || "")); return n; }
     // mini is the compact trigger the handle steps down to where the header
@@ -238,11 +282,68 @@
         var entry = item.entry, enabled = item.enabled;
         var group = el("span", "usage-harness");
         var mark = el("span", "usage-mark"), columns = el("span", "usage-columns"), hasStale = false;
-        var name = entryName(entry), groupLabel = footerGroupLabel(entry);
+        var name = localizedEntryName(entry), groupLabel = footerGroupLabel(entry);
         mark.appendChild(icon(entry, true)); group.appendChild(mark);
         if (agyCount >= 2 && groupLabel) {
           group.appendChild(el("span", "usage-group-label", groupLabel));
         }
+        if (entry.harness === "openrouter" && entry.openrouter) {
+          var or = entry.openrouter;
+          var orCol = null;
+          if (typeof or.balance === "number") {
+            orCol = el("span", "usage-column");
+            var orCur = el("span", "usage-current");
+            orCur.appendChild(el("span", "usage-key", t("keyBal")));
+            orCur.appendChild(el("span", "usage-number", formatUsd(or.balance)));
+            orCol.appendChild(orCur);
+            if (typeof or.usageDaily === "number") {
+              orCol.appendChild(el("span", "usage-pace", formatUsd(or.usageDaily)));
+            }
+            orCol.title = name + " " + t("balance") + ": " + formatUsd(or.balance);
+          } else if (typeof or.limitRemaining === "number") {
+            orCol = el("span", "usage-column");
+            var remCur = el("span", "usage-current");
+            remCur.appendChild(el("span", "usage-key", t("keyRem")));
+            remCur.appendChild(el("span", "usage-number", formatUsd(or.limitRemaining)));
+            orCol.appendChild(remCur);
+            orCol.title = name + " " + t("keyLimit") + ": " + formatUsd(or.limitRemaining);
+          } else if (typeof or.usageDaily === "number") {
+            orCol = el("span", "usage-column");
+            var dayCur = el("span", "usage-current");
+            dayCur.appendChild(el("span", "usage-key", t("keyDay")));
+            dayCur.appendChild(el("span", "usage-number", formatUsd(or.usageDaily)));
+            orCol.appendChild(dayCur);
+            orCol.title = name + " " + t("spendDaily") + ": " + formatUsd(or.usageDaily);
+          } else if (or.totalCostUsd > 0 || (or.totalInputTokens || 0) + (or.totalOutputTokens || 0) > 0) {
+            orCol = el("span", "usage-column");
+            var locCur = el("span", "usage-current");
+            var orTok = (or.totalInputTokens || 0) + (or.totalOutputTokens || 0);
+            locCur.appendChild(el("span", "usage-key", or.totalCostUsd > 0 ? t("keyDay") : t("keyTok")));
+            locCur.appendChild(el("span", "usage-number", or.totalCostUsd > 0 ? formatUsd(or.totalCostUsd) : formatTokens(orTok)));
+            orCol.appendChild(locCur);
+            orCol.title = name + ": " + (or.totalCostUsd > 0 ? formatUsd(or.totalCostUsd) : formatTokens(orTok));
+          }
+          if (orCol) {
+            orCol.setAttribute("aria-label", orCol.title);
+            columns.appendChild(orCol);
+          }
+        } else if (entry.harness === "werk_openai" && !enabled.length && entry.werk) {
+          var wk = entry.werk;
+          var wkTok = (wk.totalInputTokens || 0) + (wk.totalOutputTokens || 0);
+          if (wkTok > 0 || wk.planPaused) {
+            var wkCol = el("span", "usage-column");
+            var wkCur = el("span", "usage-current");
+            wkCur.appendChild(el("span", "usage-key", t("keyTok")));
+            wkCur.appendChild(el("span", "usage-number", formatTokens(wkTok)));
+            wkCol.appendChild(wkCur);
+            if (wk.planPaused) {
+              wkCol.appendChild(el("span", "usage-pace over", t("planPaused")));
+            }
+            wkCol.title = name + ": " + formatTokens(wkTok) + (wk.planPaused ? " (" + t("planPaused") + ")" : "");
+            wkCol.setAttribute("aria-label", wkCol.title);
+            columns.appendChild(wkCol);
+          }
+        } else {
         ["five_hour", "seven_day"].forEach(function (kind) {
           var w = enabled.filter(function (v) { return v.kind === kind; })[0];
           if (!w) return;
@@ -274,10 +375,11 @@
           column.setAttribute("aria-label", column.title);
           columns.appendChild(column); hasStale = hasStale || old;
         });
+        }
         if (hasStale) mark.appendChild(clock());
         group.title = name;
         if (columns.children.length) group.appendChild(columns);
-        else group.appendChild(el("span", "usage-empty", entry.status === "sign-in required" ? t("signInRequired") : "usage unavailable"));
+        else group.appendChild(el("span", "usage-empty", entry.harness === "werk_openai" && entry.werk ? t("localUsage") : (entry.status === "sign-in required" ? t("signInRequired") : (entry.status === "key rejected" ? t("keyRejected") : "usage unavailable"))));
         button.appendChild(group); rendered++;
       });
       if (!rendered) button.appendChild(el("span", "usage-empty", "Plan usage"));
@@ -295,7 +397,7 @@
     }
     function entryHistory(entry, kind) {
       if (entry.harness === "agy") return data.agyHistory || data.history;
-      if (entry.harness === "codex" && kind === "five_hour") return data.codexFiveHourHistory || data.history;
+      if ((entry.harness === "codex" || entry.harness === "codex_openai") && kind === "five_hour") return data.codexFiveHourHistory || data.history;
       return data.history;
     }
     function drawChart(entry, w, old, noRecent, now) {
@@ -441,25 +543,177 @@
       card.title = note;
       return card;
     }
+    function statBox(labelText, valText, subText) {
+      var box = el("div", "usage-stat");
+      box.appendChild(el("span", "usage-stat-label", labelText));
+      box.appendChild(el("span", "usage-stat-val", valText));
+      if (subText) box.appendChild(el("span", "usage-stat-sub", subText));
+      return box;
+    }
+    function buildModelTable(models, tokenFirst) {
+      var wrap = el("div", "usage-model-section");
+      wrap.appendChild(el("div", "usage-model-title", t("modelUsage")));
+      var table = el("table", "usage-model-table");
+      var thead = el("thead"), hrow = el("tr");
+      hrow.appendChild(el("th", "", t("colModel")));
+      if (tokenFirst) {
+        hrow.appendChild(el("th", "num", t("colTokens")));
+        hrow.appendChild(el("th", "num", t("colEstCost")));
+      } else {
+        hrow.appendChild(el("th", "num", t("colTokens")));
+        hrow.appendChild(el("th", "num", t("colCost")));
+      }
+      thead.appendChild(hrow); table.appendChild(thead);
+      var tbody = el("tbody");
+      models.forEach(function (m) {
+        var tr = el("tr");
+        var nameTd = el("td", "usage-model-name", m.model);
+        nameTd.title = m.model;
+        tr.appendChild(nameTd);
+        var tokTotal = (m.inputTokens || 0) + (m.outputTokens || 0);
+        var tokTd = el("td", "num", formatTokens(tokTotal));
+        tokTd.title = t("tokensIo", formatTokens(m.inputTokens || 0), formatTokens(m.outputTokens || 0));
+        tr.appendChild(tokTd);
+        var costText = m.costUsd > 0 ? formatUsd(m.costUsd) : (tokenFirst ? "—" : "$0.00");
+        tr.appendChild(el("td", "num", costText));
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+      return wrap;
+    }
+    function buildOpenRouterCard(entry, now) {
+      var or = entry.openrouter || {};
+      var card = el("section", "usage-metric-card");
+      card.setAttribute("data-harness", "openrouter");
+      var head = el("div", "usage-metric-head");
+      head.appendChild(icon(entry));
+      head.appendChild(el("b", "", localizedEntryName(entry)));
+      if (entry.accountLabel) head.appendChild(el("span", "usage-acct-label", entry.accountLabel));
+      var meta = el("div", "usage-metric-meta");
+      if (entry.status === "key rejected") meta.appendChild(el("span", "usage-metric-pill fail", t("keyRejected")));
+      if (entry.asOf) {
+        var ageEl = el("span", "usage-vage", shortAge(entry.asOf, now));
+        ageEl.title = observedAge(entry.asOf, now);
+        meta.appendChild(ageEl);
+      }
+      if (meta.children.length) head.appendChild(meta);
+      card.appendChild(head);
+
+      var stats = el("div", "usage-stat-grid");
+      if (typeof or.balance === "number") {
+        var usedSub = (typeof or.totalUsage === "number" && typeof or.totalCredits === "number")
+          ? t("creditsUsed", formatUsd(or.totalUsage), formatUsd(or.totalCredits)) : "";
+        stats.appendChild(statBox(t("balance"), formatUsd(or.balance), usedSub));
+      }
+      if (typeof or.limit === "number" || typeof or.limitRemaining === "number") {
+        var limVal = typeof or.limit === "number" ? formatUsd(or.limit) : formatUsd(or.limitRemaining);
+        var limSub = (typeof or.limit === "number" && typeof or.limitRemaining === "number")
+          ? t("keyRemaining", formatUsd(or.limitRemaining)) : "";
+        stats.appendChild(statBox(t("keyLimit"), limVal, limSub));
+      }
+      if (typeof or.usageDaily === "number") stats.appendChild(statBox(t("spendDaily"), formatUsd(or.usageDaily)));
+      if (typeof or.usageWeekly === "number") stats.appendChild(statBox(t("spendWeekly"), formatUsd(or.usageWeekly)));
+      if (typeof or.usageMonthly === "number") stats.appendChild(statBox(t("spendMonthly"), formatUsd(or.usageMonthly)));
+      if (stats.children.length) card.appendChild(stats);
+
+      if (or.creditsRestricted) {
+        card.appendChild(el("p", "usage-metric-note", t("creditsRestricted")));
+      }
+      if (entry.status && entry.status !== "key rejected" && !stats.children.length && !(or.models && or.models.length)) {
+        card.appendChild(el("p", "usage-metric-note", statusText(entry.status)));
+      }
+      if (Array.isArray(or.models) && or.models.length) {
+        card.appendChild(buildModelTable(or.models, false));
+      } else if (!stats.children.length && !entry.status) {
+        card.appendChild(el("p", "usage-metric-note", t("noModelUsage")));
+      }
+      return card;
+    }
+    function buildWerkOpenAICard(entry, now) {
+      var wk = entry.werk || {};
+      var card = el("section", "usage-metric-card");
+      card.setAttribute("data-harness", entry.harness);
+      var head = el("div", "usage-metric-head");
+      head.appendChild(icon(entry));
+      head.appendChild(el("b", "", localizedEntryName(entry)));
+      if (entry.accountLabel) head.appendChild(el("span", "usage-acct-label", entry.accountLabel));
+      var meta = el("div", "usage-metric-meta");
+      if (wk.planPaused) meta.appendChild(el("span", "usage-metric-pill warn", t("planPaused")));
+      else if (wk.mode === "local") meta.appendChild(el("span", "usage-metric-pill", t("localUsage")));
+      if (entry.asOf) {
+        var ageEl = el("span", "usage-vage", shortAge(entry.asOf, now));
+        ageEl.title = observedAge(entry.asOf, now);
+        meta.appendChild(ageEl);
+      }
+      if (meta.children.length) head.appendChild(meta);
+      card.appendChild(head);
+
+      var totalTok = (wk.totalInputTokens || 0) + (wk.totalOutputTokens || 0);
+      var stats = el("div", "usage-stat-grid");
+      stats.appendChild(statBox(
+        t("tokensTotal"),
+        formatTokens(totalTok),
+        t("tokensIo", formatTokens(wk.totalInputTokens || 0), formatTokens(wk.totalOutputTokens || 0))
+      ));
+      if (wk.estimatedCostUsd > 0) {
+        stats.appendChild(statBox(t("colEstCost"), t("estCost", formatUsd(wk.estimatedCostUsd))));
+      }
+      card.appendChild(stats);
+
+      var note = fallbackText(wk.fallbackReason);
+      if (note && wk.mode === "local") {
+        card.appendChild(el("p", "usage-metric-note" + (wk.planPaused ? " warn" : ""), note));
+      }
+      if (Array.isArray(wk.models) && wk.models.length) {
+        card.appendChild(buildModelTable(wk.models, true));
+      } else {
+        card.appendChild(el("p", "usage-metric-note", t("noModelUsage")));
+      }
+      return card;
+    }
     function drawPopover() {
       if (!popover || !shown) return;
       var list = popover.querySelector(".usage-details"); list.textContent = "";
       var now = Date.now(), entries = sorted(data.entries);
-      popover.setAttribute("data-cols", String(entries.length));
       if (!entries.length) {
+        popover.setAttribute("data-cols", "0");
         list.appendChild(el("p", "usage-status", t("notLoggedIn")));
         place();
         return;
       }
+      var quotaEntries = [], detailCards = [];
+      entries.forEach(function (entry) {
+        if (entry.harness === "openrouter") {
+          detailCards.push(entry);
+          return;
+        }
+        if (entry.harness === "werk_openai") {
+          if (active(entry, now).length || entry.pending) {
+            quotaEntries.push(entry);
+            if (entry.werk && ((entry.werk.models && entry.werk.models.length) || entry.werk.planPaused)) detailCards.push(entry);
+          } else {
+            detailCards.push(entry);
+          }
+          return;
+        }
+        quotaEntries.push(entry);
+        if (entry.harness === "codex_openai" && entry.werk && ((entry.werk.models && entry.werk.models.length) || entry.werk.planPaused)) {
+          detailCards.push(entry);
+        }
+      });
+      popover.setAttribute("data-cols", String(quotaEntries.length || (detailCards.length ? 1 : 0)));
+
+      if (quotaEntries.length) {
       var agyIdx = [];
-      entries.forEach(function (entry, idx) {
+      quotaEntries.forEach(function (entry, idx) {
         if (entry.harness === "agy" && entry.group) agyIdx.push(idx);
       });
       var hasBracket = agyIdx.length >= 2 && agyIdx[agyIdx.length - 1] - agyIdx[0] === agyIdx.length - 1;
       var agyStart = hasBracket ? agyIdx[0] : -1, agyEnd = hasBracket ? agyIdx[agyIdx.length - 1] : -1;
 
       var grid = el("div", "usage-layout" + (hasBracket ? " usage-has-bracket" : ""));
-      setVar(grid, "--usage-cols", entries.length);
+      setVar(grid, "--usage-cols", quotaEntries.length);
 
       [["five_hour", "5 h"], ["seven_day", "7 d"]].forEach(function (item) {
         var lab = el("div", "usage-row-label");
@@ -475,7 +729,7 @@
       });
 
       var cRow = 2, cnRow = 2;
-      entries.forEach(function (entry, idx) {
+      quotaEntries.forEach(function (entry, idx) {
         var inBracket = hasBracket && idx >= agyStart && idx <= agyEnd;
         if (hasBracket && idx === agyStart) {
           var bracket = el("div", "usage-vendor-bracket");
@@ -515,11 +769,13 @@
         var vhead = el("div", "usage-vhead" + (inBracket ? "" : " usage-vhead-tall"));
         var head = el("div", "usage-heading");
         head.appendChild(icon(entry));
-        head.appendChild(el("b", "", entryName(entry)));
+        head.appendChild(el("b", "", localizedEntryName(entry)));
         vhead.appendChild(head);
         var vmeta = el("div", "usage-vmeta");
+        if (entry.accountLabel) vmeta.appendChild(el("span", "usage-acct-label", entry.accountLabel));
+        if (entry.accountLabel && entry.plan) vmeta.appendChild(el("span", "usage-vdot", "\u00b7"));
         if (entry.plan) vmeta.appendChild(el("span", "usage-plan", entry.plan));
-        if (entry.plan && groupAt) vmeta.appendChild(el("span", "usage-vdot", "\u00b7"));
+        if ((entry.plan || entry.accountLabel) && groupAt) vmeta.appendChild(el("span", "usage-vdot", "\u00b7"));
         if (groupAt) {
           var ageEl = el("span", "usage-vage", shortAge(groupAt, now));
           ageEl.title = observedAge(groupAt, now);
@@ -558,6 +814,15 @@
         grid.appendChild(row);
       });
       list.appendChild(grid);
+      }
+      if (detailCards.length) {
+        var cardsWrap = el("div", "usage-werk-cards");
+        detailCards.forEach(function (entry) {
+          if (entry.harness === "openrouter") cardsWrap.appendChild(buildOpenRouterCard(entry, now));
+          else if (entry.werk) cardsWrap.appendChild(buildWerkOpenAICard(entry, now));
+        });
+        list.appendChild(cardsWrap);
+      }
       place();
       armReset();
     }
