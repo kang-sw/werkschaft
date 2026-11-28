@@ -403,6 +403,26 @@ async function exercise(page) {
   assert.equal(await section(frame, 'voice').getAttribute('aria-current'), 'true');
   await frame.locator('[data-voice-section]').waitFor();
 
+  // Regression: the precedence strip and filter bar live in the right column (.smain),
+  // so toggling scoped vs non-scoped sections never shifts the left .snav vertically.
+  for (const viewport of [{width:1680, height:1000}, {width:1280, height:900}, {width:1120, height:800}, {width:390, height:844}]) {
+    await page.setViewportSize(viewport);
+    await page.goto(origin + '/settings?section=workflow');
+    await section(frame, 'workflow').waitFor();
+    const snavTop = () => frame.locator('.snav').evaluate(node => node.getBoundingClientRect().top);
+    const baseline = await snavTop();
+    for (const name of ['workflow', 'account', 'voice', 'workflow']) {
+      await section(frame, name).click();
+      await section(frame, name).evaluate(node => node.getAttribute('aria-current') === 'true' || Promise.reject(new Error('section not current')));
+      const scoped = name !== 'account' && name !== 'voice';
+      assert.equal(await frame.locator('[data-settings-precedence]').isVisible(), scoped, `${viewport.width}: ${name} precedence strip visibility`);
+      assert.equal(await frame.locator('.snav').evaluate(node => node.getBoundingClientRect().top), baseline, `${viewport.width}: .snav top moved on ${name}`);
+      assert.equal(await frame.locator('[data-settings-view]').evaluate(node => node.scrollWidth <= node.clientWidth + 1), true, `${viewport.width}: horizontal overflow on ${name}`);
+    }
+    assert.equal(await snavTop(), baseline, `${viewport.width}: .snav top moved after round trip`);
+  }
+  await page.setViewportSize({width:1280, height:900});
+
   assert.deepEqual(state.errors, []);
   assert.deepEqual(state.consoleErrors.filter(msg => !msg.startsWith('Failed to load resource:')), []);
   console.log('Account lifecycle, slot rename, Voice split, scope, model remedies, masked key operations, and local/LAN consent stream passed.');

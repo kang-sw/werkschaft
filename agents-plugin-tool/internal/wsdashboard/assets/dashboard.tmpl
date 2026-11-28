@@ -677,14 +677,15 @@ once in a few seconds per tab; a refused mint shows the note. */}}
 <div class="shd-top"><div class="shd-title">{{icon "gear"}}<h1 id="settings-title">{{t "js.settings.title"}}</h1><span class="route-pill">/settings</span></div>
 <div class="scope-target-pill" data-settings-target-display><span></span><code></code></div>
 <button type="button" data-settings-close aria-label="{{t "js.card.close"}}">×</button></div>
-<nav class="prec-strip" data-settings-precedence aria-label="{{t "js.settings.precedence"}}"></nav>
 </header>
+<div class="sbody"><nav class="snav" data-settings-sections aria-label="{{t "js.settings.categories"}}"></nav>
+<div class="smain">
+<nav class="prec-strip" data-settings-precedence aria-label="{{t "js.settings.precedence"}}"></nav>
 <div class="filter-bar">
 <div class="search-wrap"><input class="search-input" type="search" data-settings-search placeholder="{{t "js.settings.search"}}" aria-label="{{t "js.settings.search"}}"></div>
 <div class="fchips" data-settings-filters role="group" aria-label="{{t "js.settings.filters"}}"></div>
 <span class="ov-counter" data-settings-count></span>
 </div>
-<div class="sbody"><nav class="snav" data-settings-sections aria-label="{{t "js.settings.categories"}}"></nav>
-<section class="scontent" data-settings-content></section></div>
+<section class="scontent" data-settings-content></section></div></div>
 <div data-settings-proposal hidden></div>
 </main></div></div></body></html>{{end}}

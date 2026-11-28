@@ -45,7 +45,10 @@ async function captureSettingsFull(page, frame, outPath) {
   const prevHeight = await modal.evaluate(el => el.style.height);
   const contentHeight = await frame.locator('.scontent').evaluate(el => {
     el.scrollTop = 0;
-    const header = document.querySelector('.shd')?.getBoundingClientRect().height || 64;
+    // Chrome = everything in the stage that is not the scroller (.shd plus the
+    // right-column .prec-strip / .filter-bar, which live in .smain).
+    const stage = document.querySelector('[data-settings-view]');
+    const header = stage ? Math.max(64, stage.getBoundingClientRect().height - el.clientHeight) : 64;
     return Math.ceil(el.scrollHeight + header + 24);
   });
   const targetH = Math.max(920, Math.min(2400, contentHeight));
