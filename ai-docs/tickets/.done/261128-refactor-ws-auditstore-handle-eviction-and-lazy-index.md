@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: d616993da1e00665
 sage-review-completeness-reviewed: d616993da1e00665
+completed: 2026-11-28
 ---
 
 # Stop preloading idle `wsauditstore` rings and unload idle ring handles and indexes
@@ -302,3 +303,25 @@ Verification boundary:
   record a Windows heavy-security-software validation under
   `261111-bug-ws-dashboard-daemon-idle-cpu-windows` or as an appended Edition
   once measured on Windows.
+
+### Result (5d19d8f) - 2026-11-28
+
+- **What landed** (`9976937`, `5d19d8f`):
+  - Removed eager `store.Preload` from `wsdashboard.Daemon.auditSessionSeen` (`agents-plugin-tool/internal/wsdashboard/audit.go`), retaining `Touch` only so ended and historical sessions do not open segment handles or load ring indexes at startup.
+  - Added unified idle ring unloading in `internal/wsauditstore` (`store.go`, `store_writer.go`, `store_evict.go`, `store_view.go`, `ring_write.go`, `fileops.go`): 15-minute idle TTL (`DefaultIdleTTL`), 64-ring total LRU ceiling (`DefaultMaxLoadedRings`, capping pinned + unpinned by evicting oldest unpinned rings even within 15 minutes), separate in-memory `sessionInfo.lastActive` tracking (updated on `AppendSourced`, `Recover`, `Retained`, `RecoverCompactionBaseline`, pin, and unpin without mutating persisted `info.lastSeen`), refcounted `PinCapture`/`UnpinCapture`, `UnloadIdle`, and `LoadedRings`.
+  - Handled all six design traps: defensive `openAppend` reopen in `ring_write.go` returning errors instead of spuriously rotating (Trap 1); full unload/reload preserving `ledger.retained` (Trap 2); `info.changing()` coordination with cold `View` readers and zero data deletion (Trap 3); closing `r.file` and keeping cold total-cap tombstones unloaded in `Store.removeRing` (Trap 4); flushing `r.pendingLines()` before unload and aborting on flush error (Trap 5); and separate `lastActive` vs `info.lastSeen` (Trap 6). Added `Store.loadedRing` so `scan()` and `RecoverCompactionBaseline()` do not observe nil if an unpinned ring unloads immediately after load.
+  - Wired `internal/wsagent/audit_capture.go` via optional narrow local interface `auditCapturePinner` (no `wsauditstore` import), pinning in `newAuditCapture` before `Recover` and unpinning via LIFO `defer` in `auditCapture.run` after drain, flush, and `finalize()` and before `close(c.done)`.
+  - Added deterministic unit and race tests in `wsauditstore/idle_unload_test.go`, `wsauditstore/view_test.go`, `wsagent/audit_capture_test.go`, `wsagent/audit_store_test.go`, and `wsdashboard/audit_test.go`.
+- **Verification**:
+  - `go test -race -count=3 -v -run 'TestIdle|TestReopenAfterIdle|TestColdTombstone|TestLedgerRetainedPreserved|TestConcurrentViewDuringIdle' ./internal/wsauditstore/...`: PASS (1.723s), including real `*os.File` closure checks (`os.ErrClosed`) for idle unload and cold-tombstone `removeRing`.
+  - `go test -count=1 ./internal/wsauditstore/...`: PASS (49.237s); full `wsauditstore -race` pre-existing suite also verified cleanly (and `TestColdViewNeverSpansAnEviction` passed under `-race`).
+  - `go test -race -count=1 ./internal/wsagent/...`: PASS (223.692s); post-fix targeted `TestAuditCapture|TestAuditStore -race`: PASS (2.042s).
+  - `go test -race -count=1 -run 'TestAudit' ./internal/wsdashboard/...`: PASS (147.866s); post-fix targeted audit lifecycle/preload tests `-race`: PASS (2.299s).
+  - `GOOS=windows go vet ./...`: PASS.
+  - Live macOS post-swap `lsof` and heap `inuse_space` capture runs post-swap on `develop` (to be recorded as a post-swap Edition); Windows heavy-security-software validation remains a post-merge manual follow-up per `(2002)=a`.
+- **Review (`code-review-lite`, one pass)**: 0 Critical, 2 Important (missing real handle-close assertion; potential batch race in `TestIdlePinnedRingsSkipEvictionAndDrainOnUnpin`), 3 Minor. Both Important findings and Minor 1 (`ring_write.go` returning `openAppend` error) were fixed in `5d19d8f`; remaining Minors (over-ceiling flush-failure log rate on disk-full and cold no-state `info.session` population) left as minor observations.
+
+
+## Resolution (2026-11-28)
+
+Completed Phase 1: removed eager startup Preload from wsdashboard.auditSessionSeen, implemented unified 15-minute idle TTL and 64-ring LRU ceiling ring unloading with refcounted capture pins in wsauditstore and wsagent, closed cold-tombstone segment handles in Store.removeRing, and verified with deterministic unit/race tests and GOOS=windows go vet ./... (live macOS post-swap capture runs after merge/swap on develop; Windows validation is a post-merge follow-up).
