@@ -111,6 +111,7 @@ func TestAccountSlotRoutesAccessControl(t *testing.T) {
 		{http.MethodPost, "sign-in/complete"},
 		{http.MethodPost, "slots/add"},
 		{http.MethodPost, "slots/remove"},
+		{http.MethodPost, "slots/rename"},
 		{http.MethodPost, "slots/switch"},
 		{http.MethodPost, "slots/sign-in/start"},
 		{http.MethodGet, "slots/sign-in/status"},
@@ -622,4 +623,94 @@ sleep 30
 			t.Fatalf("cancelled slot dir was not cleaned up: %v", err)
 		}
 	})
+}
+
+func TestAccountSlotsRenameAndSignInLabelRuneBound(t *testing.T) {
+	d := authFixture(t)
+	d.dir = t.TempDir()
+
+	// Unavailable registry returns 503.
+	if w := requestAccount(t, d, http.MethodPost, "slots/rename", `{"harness":"codex","slot_id":"work","label":"Team"}`); w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), `"slot_registry_unavailable"`) {
+		t.Fatalf("nil registry rename = %d %s", w.Code, w.Body.String())
+	}
+
+	d.accountSlots = wscred.NewAccountSlotRegistry(filepath.Join(d.dir, "auth", wscred.AccountSlotsFileName))
+	t.Cleanup(d.accountSlots.Close)
+	workDir := filepath.Join(t.TempDir(), "codex-work")
+	if err := os.MkdirAll(workDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.accountSlots.AddSlot(wscred.AccountSlot{
+		ID:        "work",
+		Harness:   "codex",
+		Label:     "Work",
+		ConfigDir: workDir,
+		Managed:   false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Valid rename with 80 multibyte runes and surrounding whitespace.
+	label80 := strings.Repeat("한", 80)
+	label81 := strings.Repeat("한", 81)
+	revBefore := d.accountRev.Load()
+	w := requestAccount(t, d, http.MethodPost, "slots/rename",
+		fmt.Sprintf(`{"harness":"codex","slot_id":"work","label":%s}`, strconv.Quote("  "+label80+"  ")))
+	if w.Code != http.StatusOK {
+		t.Fatalf("valid rename = %d %s", w.Code, w.Body.String())
+	}
+	var renamed wscred.AccountSlot
+	if err := json.Unmarshal(w.Body.Bytes(), &renamed); err != nil {
+		t.Fatalf("decode rename response: %v", err)
+	}
+	if renamed.ID != "work" || renamed.Harness != "codex" || renamed.Label != label80 {
+		t.Fatalf("unexpected renamed slot: %+v", renamed)
+	}
+	if d.accountRev.Load() <= revBefore {
+		t.Fatal("accountRev did not bump after slots/rename")
+	}
+
+	// Default slot is immutable.
+	if w := requestAccount(t, d, http.MethodPost, "slots/rename", `{"harness":"codex","slot_id":"default","label":"Nope"}`); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"default_slot_immutable"`) {
+		t.Fatalf("default rename = %d %s", w.Code, w.Body.String())
+	}
+	// Empty slot_id or unsupported harness rejected before registry.
+	if w := requestAccount(t, d, http.MethodPost, "slots/rename", `{"harness":"codex","slot_id":"","label":"Nope"}`); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"invalid_request"`) {
+		t.Fatalf("empty slot_id rename = %d %s", w.Code, w.Body.String())
+	}
+	if w := requestAccount(t, d, http.MethodPost, "slots/rename", `{"harness":"unknown","slot_id":"work","label":"Nope"}`); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"invalid_request"`) {
+		t.Fatalf("unsupported harness rename = %d %s", w.Code, w.Body.String())
+	}
+	// Empty/whitespace and >80-rune labels rejected with invalid_slot.
+	if w := requestAccount(t, d, http.MethodPost, "slots/rename", `{"harness":"codex","slot_id":"work","label":"   "}`); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"invalid_slot"`) {
+		t.Fatalf("blank label rename = %d %s", w.Code, w.Body.String())
+	}
+	if w := requestAccount(t, d, http.MethodPost, "slots/rename", fmt.Sprintf(`{"harness":"codex","slot_id":"work","label":%s}`, strconv.Quote(label81))); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"invalid_slot"`) {
+		t.Fatalf("overlong label rename = %d %s", w.Code, w.Body.String())
+	}
+	// Unknown slot returns 404.
+	if w := requestAccount(t, d, http.MethodPost, "slots/rename", `{"harness":"codex","slot_id":"missing","label":"Valid"}`); w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), `"account_slot_not_found"`) {
+		t.Fatalf("missing slot rename = %d %s", w.Code, w.Body.String())
+	}
+	// Unknown field rejected by DisallowUnknownFields.
+	if w := requestAccount(t, d, http.MethodPost, "slots/rename", `{"harness":"codex","slot_id":"work","label":"Valid","extra":true}`); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"invalid_request"`) {
+		t.Fatalf("unknown field rename = %d %s", w.Code, w.Body.String())
+	}
+
+	// Sign-in start uses the same trimmed-rune bound (80 runes passes label check, 81 fails with invalid_request).
+	cmdCalled := false
+	d.slotLoginCmd = func(string, wscred.SlotLoginMode) (string, []string, error) {
+		cmdCalled = true
+		return "", nil, errors.New("cli unavailable in test")
+	}
+	w81 := requestAccount(t, d, http.MethodPost, "slots/sign-in/start",
+		fmt.Sprintf(`{"harness":"codex","slot_id":"rune-over","label":%s,"mode":"browser"}`, strconv.Quote(label81)))
+	if w81.Code != http.StatusBadRequest || !strings.Contains(w81.Body.String(), `"invalid_request"`) || cmdCalled {
+		t.Fatalf("sign-in start 81 runes = %d %s (cmdCalled=%v)", w81.Code, w81.Body.String(), cmdCalled)
+	}
+	w80 := requestAccount(t, d, http.MethodPost, "slots/sign-in/start",
+		fmt.Sprintf(`{"harness":"codex","slot_id":"rune-ok","label":%s,"mode":"browser"}`, strconv.Quote("  "+label80+"  ")))
+	if w80.Code != http.StatusServiceUnavailable || !strings.Contains(w80.Body.String(), `"cli_unavailable"`) || !cmdCalled {
+		t.Fatalf("sign-in start 80 runes = %d %s (cmdCalled=%v)", w80.Code, w80.Body.String(), cmdCalled)
+	}
 }

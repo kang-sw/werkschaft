@@ -908,10 +908,206 @@
   border: 0;
 }
 
+/* Portable Soul & Local Episodes Memory Drawer — borderless tonal surfaces */
+.cs-memory-body {
+  gap: 12px;
+}
+.cs-mem-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.cs-mem-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--cs-well);
+  flex-wrap: wrap;
+}
+.cs-mem-tab {
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--wb-muted-fg);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .12s, color .12s;
+}
+.cs-mem-tab:hover {
+  color: var(--wb-fg);
+  background: color-mix(in srgb, var(--wb-fg) 5%, transparent);
+}
+.cs-mem-tab.active {
+  background: var(--wb-card);
+  color: var(--wb-fg);
+  box-shadow: var(--wb-shadow);
+}
+.cs-mem-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cs-mem-doc-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.cs-mem-card {
+  padding: 13px 15px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--cs-surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.cs-mem-pending-card {
+  background: color-mix(in srgb, var(--wb-warn) 8%, var(--cs-surface-2));
+}
+.cs-mem-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cs-mem-card-head h4 {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 800;
+  color: var(--wb-fg);
+}
+.cs-mem-hint {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--wb-muted-fg);
+  line-height: 1.45;
+  word-break: keep-all;
+}
+.cs-mem-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 8px;
+  background: var(--cs-well);
+  color: var(--wb-fg);
+  padding: 9px 11px;
+  font-size: 12px;
+  line-height: 1.48;
+  resize: vertical;
+  min-height: 82px;
+}
+.cs-mem-textarea:focus {
+  outline: 2px solid color-mix(in srgb, var(--wb-primary) 55%, transparent);
+  outline-offset: 1px;
+}
+.cs-mem-empty {
+  padding: 14px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--cs-well);
+  color: var(--wb-muted-fg);
+  font-size: 12px;
+  text-align: center;
+}
+.cs-mem-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cs-mem-item {
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--wb-card);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cs-mem-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cs-mem-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cs-mem-tag {
+  font-size: 11px;
+  color: var(--wb-muted-fg);
+  background: var(--cs-well);
+  padding: 2px 7px;
+  border-radius: 6px;
+}
+.cs-mem-time {
+  font-size: 11px;
+  color: var(--wb-muted-fg);
+}
+.cs-mem-item-body {
+  font-size: 12.5px;
+  color: var(--wb-fg);
+  line-height: 1.48;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.cs-mem-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cs-mem-search-row .inp {
+  flex: 1 1 200px;
+}
+.cs-mem-search-row .sel {
+  flex: 0 1 180px;
+}
+.cs-mem-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cs-mem-kv-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--wb-card);
+}
+.cs-mem-kv-row code {
+  font-size: 11.5px;
+  color: var(--wb-fg);
+  word-break: break-all;
+}
+.cs-feedback.warn {
+  background: color-mix(in srgb, var(--wb-warn) 16%, var(--wb-card));
+  color: var(--wb-fg);
+}
+
 @media (max-width: 820px) {
   .cs-avatar-hero { grid-template-columns: 52px minmax(0, 1fr); }
   .cs-avatar-emblem { width: 52px; height: 52px; }
   .cs-avatar-emblem svg { width: 28px; height: 28px; }
   .cs-avatar-hero-right { grid-column: 1 / -1; flex-direction: row; align-items: center; justify-content: flex-start; }
-  .cs-wardrobe-grid, .cs-adv-grid { grid-template-columns: minmax(0, 1fr); }
+  .cs-wardrobe-grid, .cs-adv-grid, .cs-mem-doc-grid { grid-template-columns: minmax(0, 1fr); }
 }

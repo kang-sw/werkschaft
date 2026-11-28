@@ -73,11 +73,15 @@
     var getEndpoints = deps.getEndpoints;
     var onChange = deps.onChange || function () {};
     var onOpenLocal = deps.onOpenLocal || function () {};
+    var onOpenAccount = typeof deps.onOpenAccount === "function" ? deps.onOpenAccount : null;
     var doc = deps.document || document;
     var win = deps.window || window;
     var t = function (key) {
-      if (typeof win.wsT === "function") return win.wsT.apply(win, arguments);
-      return key;
+      var out = typeof win.wsT === "function" ? win.wsT.apply(win, arguments) : key;
+      for (var i = 1; i < arguments.length; i++) {
+        out = String(out).replace(/%[sd]/, String(arguments[i]));
+      }
+      return out;
     };
     var btn = function (label, action, primary) {
       return button("btn" + (primary ? " pri" : ""), label, action);
@@ -792,6 +796,13 @@
               : "js.settings.voice.or_hint_unset");
           }
           acts.append(btn(t("js.settings.voice.configure"), openOpenRouterModal));
+          if (onOpenAccount) {
+            var accountBtn = button("vprow-chip-link", t("js.settings.voice.manage_shared_key"), function () {
+              onOpenAccount();
+            });
+            accountBtn.dataset.voiceOpenAccount = "1";
+            acts.append(accountBtn);
+          }
         } else {
           var st = keyState[id] || { busy: false, error: "", form: null };
           if (ev.configured) {
@@ -888,6 +899,9 @@
       render: render,
       applyConfigSnapshot: applyConfigSnapshot,
       refreshConfig: refreshConfig,
+      isSharedOpenRouterKey: function () {
+        return evalProvider("openrouter").mode === "shared";
+      },
       closeEditors: function () {
         closeOpenRouterModal();
         Object.keys(keyState).forEach(closeKeyForm);

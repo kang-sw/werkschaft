@@ -97,7 +97,22 @@ async function shot(page, name) {
         overflow: sc.scrollWidth > sc.clientWidth + 1
       };
     });
-    assert.deepEqual(state.groups, ['core', 'avatar', 'sources', 'wardrobe', 'advanced']);
+    assert.deepEqual(state.groups, ['core', 'avatar', 'memory', 'sources', 'wardrobe', 'advanced']);
+    // Verify Memory / Soul drawer renders editors, scrubber approval flow, episodes, and sync tabs cleanly in Chromium.
+    await panel.locator('[data-companion-soul-editor="profile.md"]').waitFor();
+    await panel.locator('[data-companion-soul-editor="profile.md"]').fill('Contact dev@corp.example for weekly recap');
+    await panel.locator('[data-companion-soul-save="profile.md"]').click();
+    await panel.locator('[data-companion-memory-feedback="warn"]').waitFor();
+    await panel.locator('[data-companion-memory-tab="approvals"]').click();
+    await panel.locator('[data-companion-pending-list]').waitFor();
+    await panel.locator('[data-companion-pending-editor]').first().fill('Prefers concise weekly recaps.');
+    await panel.locator('[data-companion-pending-approve]').first().click();
+    await panel.locator('[data-companion-memory-feedback="ok"]').waitFor();
+    await panel.locator('[data-companion-memory-tab="episodes"]').click();
+    await panel.locator('[data-companion-episodes-search]').waitFor();
+    await panel.locator('[data-companion-memory-tab="sync"]').click();
+    await panel.locator('[data-companion-soul-export]').waitFor();
+    await panel.locator('[data-companion-memory-tab="soul"]').click();
     assert.match(state.personaText, /Fixture Fox/);
     assert.match(state.personaText, /short, upbeat lines/);
     assert.equal(state.selectCount, 1, 'default fixture exposes preset select (no unused empty outfit/hair/eyes selects)');

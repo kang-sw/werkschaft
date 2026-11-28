@@ -142,6 +142,10 @@ func StageExecutable(exe, binDir string) (string, error) {
 	return target, err
 }
 
+func stagedExecutableName(exe, sum string) string {
+	return "ws-mcp-dashboard-" + sum[:16] + strings.ToLower(filepath.Ext(exe))
+}
+
 func stageExecutable(exe, binDir string) (string, string, error) {
 	sum, err := fileSHA256(exe)
 	if err != nil {
@@ -150,7 +154,7 @@ func stageExecutable(exe, binDir string) (string, string, error) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return "", "", err
 	}
-	name := "ws-mcp-dashboard-" + sum[:16] + strings.ToLower(filepath.Ext(exe))
+	name := stagedExecutableName(exe, sum)
 	target := filepath.Join(binDir, name)
 	if existing, err := fileSHA256(target); err != nil || existing != sum {
 		if err := copyExecutable(exe, target); err != nil {

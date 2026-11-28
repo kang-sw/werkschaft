@@ -124,7 +124,7 @@ test("dashboard.tmpl places #cvox outside #csend-wrap in a self-contained bottom
   assert.match(cfootMatch[0], /<span class="cvox-badge" aria-hidden="true"><\/span>/);
 });
 
-test("eligible-but-unconfigured #cvox click opens /settings?section=account&provider=voice via wsOpenSettings (top-level) and postMessage (framed)", async () => {
+test("eligible-but-unconfigured #cvox click opens /settings?section=voice via wsOpenSettings (top-level) and postMessage (framed)", async () => {
   // Top-level / shell path via wsOpenSettings
   const opened = [];
   const env1 = loadComposerEnv({
@@ -146,7 +146,7 @@ test("eligible-but-unconfigured #cvox click opens /settings?section=account&prov
 
   env1.btn.click();
   assert.equal(opened.length, 1);
-  assert.equal(opened[0].href, "/settings?section=account&provider=voice");
+  assert.equal(opened[0].href, "/settings?section=voice");
   assert.equal(opened[0].opener, env1.btn);
   handle1.destroy();
 
@@ -165,7 +165,7 @@ test("eligible-but-unconfigured #cvox click opens /settings?section=account&prov
   assert.equal(posted.length, 1);
   assert.deepEqual(JSON.parse(JSON.stringify(posted[0].msg)), {
     wsShell: "nav",
-    href: "http://127.0.0.1:19544/settings?section=account&provider=voice"
+    href: "http://127.0.0.1:19544/settings?section=voice"
   });
   assert.equal(posted[0].targetOrigin, "http://127.0.0.1:19544");
   handle2.destroy();

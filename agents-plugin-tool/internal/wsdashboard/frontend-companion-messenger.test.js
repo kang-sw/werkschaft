@@ -611,6 +611,7 @@ test("Stage VRM slot expanded messenger toggle: outside bbox toggles once, insid
 
   let currentBounds = { x: 90, y: 30, width: 160, height: 200 };
   const knockCalls = [];
+  const knockFetches = [];
   const { C, M } = loadCompanionWithMessenger({
     document: doc,
     getComputedStyle: () => ({ visibility: "visible", display: "flex" }),
@@ -630,7 +631,11 @@ test("Stage VRM slot expanded messenger toggle: outside bbox toggles once, insid
     wsT: k => k,
     requestAnimationFrame: fn => { raf = fn; return ++rafId; },
     cancelAnimationFrame: () => { raf = null; },
-    fetch: async url => {
+    fetch: async (url, opts) => {
+      if (url === "/api/companion/knock") {
+        knockFetches.push({ url, opts });
+        return { ok: true, json: async () => ({ ok: true, woken: 0 }) };
+      }
       if (url.startsWith("/api/companion/packs?")) {
         return { ok: true, json: async () => ({ resolvedAuto: { packId: "vrm1" }, packs: [{ id: "vrm1", rev: "rv1", renderer: "vrm", schema: "ws-companion-vrm/v1" }] }) };
       }
@@ -719,10 +724,14 @@ test("Stage VRM slot expanded messenger toggle: outside bbox toggles once, insid
   assert.equal(closeCalls, 1);
   assert.equal(knockCalls.length, 0);
 
-  // (c) Click inside character bbox knocks and NEVER opens messenger.
+  // (c) Click inside character bbox knocks, posts POST /api/companion/knock (D10), and NEVER opens messenger.
   clickAt(characterBtn, 180, 820); // local (168, 100) -> inside bbox
   assert.equal(M.isOpen(), false, "click inside character bbox must NOT open messenger");
   assert.equal(knockCalls.length, 1, "click inside character bbox must knock");
+  assert.equal(knockFetches.length, 1, "glass knock must fire POST /api/companion/knock");
+  assert.equal(knockFetches[0].opts.method, "POST");
+  assert.equal(knockFetches[0].opts.credentials, "same-origin");
+  assert.deepEqual(JSON.parse(knockFetches[0].opts.body), { kind: "knock_startle", count: 1 });
 
   // (d) Pointer drag > 6px outside bbox does NOT toggle messenger.
   clickAt(characterBtn, 40, 760, 12, 0);

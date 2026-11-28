@@ -65,6 +65,8 @@ type Server struct {
 	agents                    AgentHost
 	companion                 CompanionHost
 	companionDelegation       CompanionDelegationHost
+	companionBurstMu          sync.Mutex
+	companionBurstCounts      map[string]int
 	daemonControl             DaemonControlHost
 	dashboardControlEffective bool
 	conv                      ConvHost

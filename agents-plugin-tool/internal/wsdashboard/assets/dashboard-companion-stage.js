@@ -1437,6 +1437,17 @@
               ? tOr("js.companion.knock.annoyed", "콕!")
               : tOr("js.companion.knock.cue", "톡톡");
           spawnKnockFx(event?.clientX, event?.clientY, label);
+          if (typeof fetch === "function") {
+            fetch("/api/companion/knock", {
+              method: "POST",
+              credentials: "same-origin",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                kind: typeof res?.kind === "string" && res.kind ? res.kind : "knock_startle",
+                count: Number.isFinite(res?.count) && res.count > 0 ? res.count : 1
+              })
+            }).catch(() => {});
+          }
           schedule();
         } else {
           fire("user.poke");

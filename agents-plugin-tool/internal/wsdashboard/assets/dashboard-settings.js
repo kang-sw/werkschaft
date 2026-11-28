@@ -25,7 +25,7 @@ var wsSettingsChoiceLabels = {
   if (modal) document.documentElement.setAttribute("data-settings-modal", "");
 
   var scopes = ["builtin", "synced", "global", "repo", "project", "session"];
-  var sections = ["workflow", "agents", "tier_routing", "account", "compaction", "adapters", "companion", "profiles", "prompts"];
+  var sections = ["workflow", "agents", "tier_routing", "account", "voice", "compaction", "adapters", "companion", "profiles", "prompts"];
   var adapters = ["claude", "agy", "dashboard"];
   var tierHarnessOrder = ["claude", "codex", "agy", "werk"];
   var filterLabels = {
@@ -47,6 +47,7 @@ var wsSettingsChoiceLabels = {
     agents: "js.settings.section.agents",
     tier_routing: "js.settings.section.tier_routing",
     account: "js.settings.section.account",
+    voice: "js.settings.section.voice",
     compaction: "js.settings.section.compaction",
     adapters: "js.settings.section.adapters",
     companion: "js.settings.section.companion",
@@ -61,6 +62,7 @@ var wsSettingsChoiceLabels = {
     agents: "js.settings.section_note.agents",
     tier_routing: "js.settings.section_note.tier_routing",
     account: "js.settings.section_note.account",
+    voice: "js.settings.section_note.voice",
     compaction: "js.settings.section_note.compaction",
     adapters: "js.settings.section_note.adapters",
     companion: "js.settings.section_note.companion",
@@ -101,6 +103,10 @@ var wsSettingsChoiceLabels = {
     target: query.get("target") || "",
     context: {worktree: query.get("worktree") || "", session: query.get("session") || ""}
   };
+  if (requestedSection === "account" && requestedProvider === "voice") {
+    requestedSection = "voice";
+    requestedProvider = "";
+  }
   var snapshot = null, failure = "", activeSection = sections.includes(requestedSection) ? requestedSection : "workflow";
   var adapter = "claude", filter = "all", focusedTierProvider = "";
   var buckets = new Map(), warnings = new Map(), openLayers = new Set();
@@ -116,14 +122,41 @@ var wsSettingsChoiceLabels = {
 
   var tr = window.wsT;
   var accountSpec = catalog.find(function (spec) { return spec.control === "werk_endpoints"; });
+  var voice = null;
+  var voicePanel = null;
   var account = view.hasAttribute("data-settings-account") && accountSpec && window.WsSettingsAccount && window.WsSettingsAccount.create({
     el, button, append, svgIcon, request, showTiers, endpointSpec: accountSpec,
+    openVoice: function (provider) { selectSection("voice", provider); },
+    isVoiceOpenRouterShared: function () {
+      return !!(voice && typeof voice.isSharedOpenRouterKey === "function" && voice.isSharedOpenRouterKey());
+    },
+    onStatusChange: function () {
+      if (voice) voice.render();
+    },
+    onConfigSnapshot: function (cfg) {
+      if (voice) {
+        voice.applyConfigSnapshot(cfg);
+        if (account && typeof account.syncVoiceState === "function") account.syncVoiceState();
+      }
+    },
     onChange: function () {
       renderAccountCount();
       content.querySelectorAll("[data-account-tier-provider]").forEach(syncAccountRemedy);
     }
   });
+  if (account && typeof account.voiceDeps === "function" && window.WsSettingsVoice && typeof window.WsSettingsVoice.create === "function") {
+    voice = window.WsSettingsVoice.create(Object.assign(account.voiceDeps(), {
+      onChange: function () {
+        if (typeof account.syncVoiceState === "function") account.syncVoiceState();
+        renderAccountCount();
+      },
+      onOpenLocal: function () { selectSection("account", "local"); },
+      onOpenAccount: function () { selectSection("account", "openrouter"); }
+    }));
+    voicePanel = append(el("div", "voice-panel"), voice.element);
+  }
   if (!account && activeSection === "account") activeSection = "workflow";
+  if (!voice && activeSection === "voice") activeSection = "workflow";
 
   function el(tag, cls, text) {
     var node = document.createElement(tag);
@@ -398,7 +431,7 @@ var wsSettingsChoiceLabels = {
 
   function renderHeader() {
     var display = view.querySelector("[data-settings-target-display]");
-    var accountActive = activeSection === "account";
+    var accountActive = activeSection === "account" || activeSection === "voice";
     view.classList.toggle("account-active", accountActive);
     display.className = "scope-target-pill" + (accountActive ? " scope-machine" : scopes.includes(scope) ? " scope-" + scope : "");
     var label = display.querySelector("span");
@@ -1104,10 +1137,21 @@ var wsSettingsChoiceLabels = {
   }
 
   function selectSection(name, provider) {
+    if (name === "account" && provider === "voice") {
+      name = "voice";
+      provider = "";
+    }
+    if (name === "account" && !account) return;
+    if (name === "voice" && !voice) return;
     var wasAccount = activeSection === "account";
+    var wasVoice = activeSection === "voice";
+    var wasMachine = wasAccount || wasVoice;
     var goingToAccount = name === "account";
-    if (wasAccount && !goingToAccount) account.closeEditors();
-    if (!wasAccount && goingToAccount) {
+    var goingToVoice = name === "voice";
+    var goingToMachine = goingToAccount || goingToVoice;
+    if (wasAccount && !goingToAccount && account) account.closeEditors();
+    if (wasVoice && !goingToVoice && voice) voice.closeEditors();
+    if (!wasMachine && goingToMachine && account) {
       account.refreshStatus();
       account.ensureEndpoints(true);
     }
@@ -1116,10 +1160,11 @@ var wsSettingsChoiceLabels = {
     view.querySelectorAll("[data-settings-section]").forEach(function (item) {
       item.setAttribute("aria-current", String(item.dataset.settingsSection === name));
     });
-    if (wasAccount !== goingToAccount) renderHeader();
+    if (wasMachine !== goingToMachine) renderHeader();
     renderContent();
     content.scrollTop = 0;
-    if (goingToAccount && provider) account.focus(provider);
+    if (goingToAccount && provider && account) account.focus(provider);
+    if (goingToVoice && provider && voice) voice.focus(provider);
   }
 
   function showTiers(provider) {
@@ -1654,7 +1699,7 @@ var wsSettingsChoiceLabels = {
     var n = snapshot ? snapshot.entries.filter(function (entry) { return selected(entry) !== undefined; }).length : 0;
     count.textContent = snapshot ? tr("js.settings.override_count", n) : "";
     renderAccountCount();
-    for (var node of view.querySelectorAll("[data-settings-section]:not([data-settings-section='account'])")) {
+    for (var node of view.querySelectorAll("[data-settings-section]:not([data-settings-section='account']):not([data-settings-section='voice'])")) {
       var total = sectionEntries(node.dataset.settingsSection).filter(function (entry) { return selected(entry) !== undefined; }).length;
       node.querySelector(".cnt").textContent = total || "";
       node.querySelector(".dot").classList.toggle("none", !total);
@@ -1672,12 +1717,35 @@ var wsSettingsChoiceLabels = {
 
   function renderSections() {
     var nav = view.querySelector("[data-settings-sections]");
-    nav.replaceChildren(...sections.filter(function (name) { return name !== "account" || account; }).map(function (name) {
+    var visibleSections = sections.filter(function (name) {
+      if (name === "account") return !!account;
+      if (name === "voice") return !!voice;
+      return true;
+    });
+    var navItems = [];
+    var hasAuthGroup = visibleSections.includes("account") || visibleSections.includes("voice");
+    var authGroupOpened = false;
+    visibleSections.forEach(function (name, idx) {
+      var isAuth = name === "account" || name === "voice";
+      if (isAuth && hasAuthGroup && !authGroupOpened) {
+        authGroupOpened = true;
+        var grpLbl = el("div", "snav-group-lbl", tr("js.settings.nav.account_auth"));
+        grpLbl.dataset.settingsNavGroup = "account-auth";
+        grpLbl.setAttribute("aria-hidden", "true");
+        navItems.push(grpLbl);
+      }
       var node = button("snav-btn", "", function () { selectSection(name); });
       node.dataset.settingsSection = name;
       node.setAttribute("aria-current", String(name === activeSection));
-      return append(node, el("span", "dot none"), el("span", "", sectionName(name)), el("span", "cnt"));
-    }));
+      navItems.push(append(node, el("span", "dot none"), el("span", "", sectionName(name)), el("span", "cnt")));
+      var nextIsAuth = idx + 1 < visibleSections.length && (visibleSections[idx + 1] === "account" || visibleSections[idx + 1] === "voice");
+      if (isAuth && !nextIsAuth && idx + 1 < visibleSections.length) {
+        var sep = el("div", "snav-sep");
+        sep.setAttribute("aria-hidden", "true");
+        navItems.push(sep);
+      }
+    });
+    nav.replaceChildren(...navItems);
     var bar = view.querySelector("[data-settings-filters]");
     bar.replaceChildren(...Object.keys(filterLabels).map(function (name) {
       var node = button("fchip", tr(filterLabels[name]), function () {
@@ -1768,6 +1836,15 @@ var wsSettingsChoiceLabels = {
           el("p", "", tr(sectionNotes.account))), account.panel);
       }
       account.ensureEndpoints();
+      return;
+    }
+    if (activeSection === "voice" && voice && voicePanel) {
+      if (!voicePanel.isConnected) {
+        preferenceEditor = null;
+        content.replaceChildren(append(el("header", "sec-head"), el("h2", "", sectionName("voice")),
+          el("p", "", tr(sectionNotes.voice))), voicePanel);
+      }
+      if (account) account.ensureEndpoints();
       return;
     }
     preferenceEditor = null;
@@ -1904,8 +1981,11 @@ var wsSettingsChoiceLabels = {
       window.addEventListener("pagehide", function () {
         window.parent.document.removeEventListener("ws-openai-consent", account.refreshStatus);
         window.parent.document.removeEventListener("ws-account-changed", account.refreshStatus);
+        if (typeof account.destroy === "function") account.destroy();
+        if (voice && typeof voice.destroy === "function") voice.destroy();
       });
       if (activeSection === "account" && requestedProvider) account.focus(requestedProvider);
+      if (activeSection === "voice" && voice && requestedProvider) voice.focus(requestedProvider);
     }
     try {
       var loaded = await request("/api/config/snapshot" + (query.size ? "?" + query.toString() : ""));

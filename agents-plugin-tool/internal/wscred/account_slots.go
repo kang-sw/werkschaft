@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kang-sw/devenv/internal/wsstate"
 )
@@ -24,9 +25,10 @@ const (
 	AccountSlotsFileName = "account-slots.json"
 	// DefaultAccountSlotID identifies the implicit default-home slot for a
 	// harness (empty ConfigDir, resolving through the D10 fallback chain).
-	DefaultAccountSlotID = "default"
-	slotsDirName         = "slots"
-	accountSlotsSchema   = 1
+	DefaultAccountSlotID     = "default"
+	slotsDirName             = "slots"
+	accountSlotsSchema       = 1
+	maxAccountSlotLabelRunes = 80
 )
 
 var (
@@ -668,6 +670,9 @@ func (r *AccountSlotRegistry) AddSlot(slot AccountSlot) (AccountSlot, error) {
 		return AccountSlot{}, fmt.Errorf("%w: config_dir must be an absolute path", ErrInvalidAccountSlot)
 	}
 	slot.ConfigDir = filepath.Clean(slot.ConfigDir)
+	if utf8.RuneCountInString(slot.Label) > maxAccountSlotLabelRunes {
+		return AccountSlot{}, fmt.Errorf("%w: label exceeds %d characters", ErrInvalidAccountSlot, maxAccountSlotLabelRunes)
+	}
 	if slot.Label == "" {
 		slot.Label = slot.ID
 	}
@@ -789,7 +794,7 @@ func (r *AccountSlotRegistry) UpdateSlotLabel(harness, slotID, label string) err
 	harness = strings.TrimSpace(harness)
 	id := strings.TrimSpace(slotID)
 	label = strings.TrimSpace(label)
-	if !SupportedSlotHarness(harness) || label == "" {
+	if !SupportedSlotHarness(harness) || label == "" || utf8.RuneCountInString(label) > maxAccountSlotLabelRunes {
 		return ErrInvalidAccountSlot
 	}
 	if id == "" || id == DefaultAccountSlotID {

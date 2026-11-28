@@ -183,7 +183,8 @@ func TestLaunchExecutableReplacesSymlinkAndPreservesRunningExecutableRecord(t *t
 
 	// Recording the running executable from the stable launch path still writes
 	// the content-addressed ws-mcp-dashboard-<sum16> path expected by old launchers.
-	if err := recordRunningExecutable(dir, got, "0.50.8-dev", 456); err != nil {
+	sum := ExecutableContentHash(src)
+	if err := recordRunningExecutable(dir, got, sum, "0.50.8-dev", 456); err != nil {
 		t.Fatalf("recordRunningExecutable: %v", err)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, RunningExecutableFile))
@@ -194,7 +195,6 @@ func TestLaunchExecutableReplacesSymlinkAndPreservesRunningExecutableRecord(t *t
 	if err := json.Unmarshal(raw, &rec); err != nil {
 		t.Fatal(err)
 	}
-	sum := ExecutableContentHash(src)
 	wantStaged := filepath.Join(binDir, "ws-mcp-dashboard-"+sum[:16])
 	if rec.SchemaVersion != 1 || rec.Executable != wantStaged || rec.SHA256 != sum || rec.Version != "0.50.8-dev" {
 		t.Fatalf("last-running-executable.json = %+v, want executable=%q sha256=%q", rec, wantStaged, sum)

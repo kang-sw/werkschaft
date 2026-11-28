@@ -154,6 +154,8 @@ func companionSettingsBackend(t *testing.T, initial CompanionConfig) *ConfigBack
 		{Key: "dashboard.companion_agent_cooldown_seconds", Type: "integer", Minimum: int64Ptr(10), Maximum: int64Ptr(3600), Default: "30", GlobalOnly: true, Decode: parseInt},
 		{Key: "dashboard.companion_agent_hourly_cap", Type: "integer", Minimum: int64Ptr(1), Maximum: int64Ptr(120), Default: "20", GlobalOnly: true, Decode: parseInt},
 		{Key: "dashboard.companion_sources", Type: "string", Default: "", GlobalOnly: true},
+		{Key: "dashboard.companion_soul", Type: "string", Default: "", GlobalOnly: true},
+		{Key: "dashboard.companion_soul_dir", Type: "string", Default: "", GlobalOnly: true},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -173,6 +175,12 @@ func companionSettingsBackend(t *testing.T, initial CompanionConfig) *ConfigBack
 	}
 	if initial.Sources != "" {
 		overrides["dashboard.companion_sources"] = initial.Sources
+	}
+	if initial.Soul != "" {
+		overrides["dashboard.companion_soul"] = initial.Soul
+	}
+	if initial.SoulDir != "" {
+		overrides["dashboard.companion_soul_dir"] = initial.SoulDir
 	}
 	if initial.Outfit != "" {
 		overrides["dashboard.companion_outfit"] = initial.Outfit
@@ -246,6 +254,12 @@ func companionSettingsBackend(t *testing.T, initial CompanionConfig) *ConfigBack
 		}
 		if v, ok := file.Overrides["dashboard.companion_sources"]; ok {
 			cfg.Sources = v
+		}
+		if v, ok := file.Overrides["dashboard.companion_soul"]; ok {
+			cfg.Soul = v
+		}
+		if v, ok := file.Overrides["dashboard.companion_soul_dir"]; ok {
+			cfg.SoulDir = v
 		}
 		if v, ok := file.Overrides["dashboard.companion_agent_cooldown_seconds"]; ok {
 			if n, err := strconv.Atoi(v); err == nil {
