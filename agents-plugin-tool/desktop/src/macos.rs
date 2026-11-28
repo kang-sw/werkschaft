@@ -1,6 +1,7 @@
 mod escape_guard;
 pub(crate) mod speech;
 mod tray_hide;
+mod visibility_nudge;
 mod webview_delegate;
 
 pub use tray_hide::{hide_to_tray, keep_shown};
@@ -71,6 +72,7 @@ pub fn install(
             return;
         };
         guard_escape(webview);
+        visibility_nudge::observe_transitions(webview);
         let main = close::checks_draft(target.label());
         let epoch = connection.window_epoch();
         let delegate = marker
