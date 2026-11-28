@@ -896,7 +896,8 @@ function makeCapsulesForwardingPTT(opts = {}) {
     setTimeout: timers.setTimeout,
     clearTimeout: timers.clearTimeout
   });
-  handle.controller.setCapabilities({ eligible: true, order: ['native'] });
+  (opts.extraBackends || []).forEach((b) => env.window.WsVoiceInput.registerBackend(b));
+  handle.controller.setCapabilities({ eligible: true, order: opts.order || ['native'] });
   env.ctext.value = opts.value == null ? '안녕 ' : opts.value;
   env.ctext.selectionStart = env.ctext.selectionEnd = env.ctext.value.length;
   const down = (init) => env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', keyCode: 32, target: env.editor, ...(init || {}) }));
@@ -1141,6 +1142,114 @@ test('PTT drops a stale active hold (lost keyup, failed recording) so the next p
   await flush();
   await flush();
   assert.equal(t.handle.controller.getState(), 'idle');
+  t.handle.destroy();
+});
+
+// OS Native -> next backend fallback on unavailability.
+function makeFallbackEnv(nativeMode, opts = {}) {
+  const log = [];
+  let nativeErr = null, nativePartial = null;
+  const native = {
+    id: 'native', label: 'OS Native', kind: 'native', available: () => true,
+    onError: (cb) => { nativeErr = cb; },
+    onPartial: (cb) => { nativePartial = cb; },
+    start: () => {
+      log.push('native.start');
+      if (nativeMode.reject) return Promise.reject(Object.assign(new Error('n'), { code: nativeMode.reject }));
+      if (nativeMode.throw) throw Object.assign(new Error('n'), { code: nativeMode.throw });
+      return Promise.resolve();
+    },
+    stop: () => { log.push('native.stop'); return Promise.resolve({ text: 'native-text' }); },
+    cancel: () => { log.push('native.cancel'); }
+  };
+  const router = {
+    id: 'openrouter', label: 'OpenRouter', kind: 'external', available: () => opts.routerAvailable !== false,
+    start: () => { log.push('router.start'); return Promise.resolve(); },
+    stop: () => { log.push('router.stop'); return Promise.resolve({ text: '말하기' }); },
+    cancel: () => { log.push('router.cancel'); }
+  };
+  const t = makeCapsulesForwardingPTT({ value: '', backend: native, extraBackends: [router], order: opts.order || ['native', 'openrouter'] });
+  return Object.assign(t, { log, fireNativeError: (c) => nativeErr({ code: c }), nativePartial: (x) => nativePartial(x) });
+}
+
+test('native unavailable on start rejection or throw falls back to the next backend; Space keyup stops the fallback', async () => {
+  for (const mode of [{ reject: 'recognizer_unavailable' }, { throw: 'bridge_error' }, { reject: 'unavailable' }, { reject: 'privacy_disabled' }, { reject: 'language_unavailable' }]) {
+    const t = makeFallbackEnv(mode);
+    t.down();
+    t.timers.advance(1000);
+    await flush();
+    assert.deepEqual(t.log, ['native.start', 'native.cancel', 'router.start'], JSON.stringify(mode));
+    assert.equal(t.handle.controller.getState(), 'recording', 'the held gesture keeps recording on the fallback');
+    t.up();
+    await flush(); await flush();
+    assert.deepEqual(t.log.slice(3), ['router.stop'], 'keyup stops the fallback backend once');
+    assert.equal(t.handle.controller.getState(), 'idle');
+    assert.equal(t.env.ctext.value, '말하기');
+    assert.equal(t.env.ctext.disabled, false);
+    t.handle.destroy();
+  }
+});
+
+test('an early async native onError (LSR 201 after start resolved) falls back, also from the mic button', async () => {
+  const t = makeFallbackEnv({});
+  t.env.btn.click();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'recording');
+  t.fireNativeError('recognizer_unavailable');
+  await flush();
+  assert.deepEqual(t.log, ['native.start', 'native.cancel', 'router.start']);
+  assert.equal(t.handle.controller.getState(), 'recording');
+  t.fireNativeError('recognizer_unavailable'); // a late duplicate from the released native attempt is ignored
+  assert.equal(t.handle.controller.getState(), 'recording');
+  t.env.btn.click();
+  await flush(); await flush();
+  assert.deepEqual(t.log.slice(3), ['router.stop']);
+  assert.equal(t.env.ctext.value, '말하기');
+  t.handle.destroy();
+});
+
+test('native fallback is refused for mic errors, after a transcript, after release, with no next backend, and never loops', async () => {
+  // mic_denied: any recorder would hit the same microphone.
+  for (const mode of [{ reject: 'mic_denied' }, { reject: 'mic_unavailable' }, { reject: 'permission_denied' }, { reject: 'cancelled' }]) {
+    const t = makeFallbackEnv(mode);
+    t.env.btn.click();
+    await flush();
+    assert.equal(t.log.includes('router.start'), false, JSON.stringify(mode));
+    assert.equal(t.handle.controller.getState(), mode.reject === 'cancelled' ? 'idle' : 'error');
+    t.handle.destroy();
+  }
+  // Transcript already received.
+  let t = makeFallbackEnv({});
+  t.env.btn.click(); await flush();
+  t.nativePartial('hel');
+  t.fireNativeError('recognizer_unavailable');
+  assert.equal(t.handle.controller.getState(), 'error');
+  assert.equal(t.log.includes('router.start'), false);
+  t.handle.destroy();
+  // Released before the error arrived: the gesture is over, no surprise recording.
+  t = makeFallbackEnv({});
+  t.env.btn.click(); await flush();
+  t.env.btn.click(); // stop -> transcribing
+  t.fireNativeError('recognizer_unavailable');
+  assert.equal(t.log.includes('router.start'), false);
+  assert.equal(t.handle.controller.getState(), 'error');
+  t.handle.destroy();
+  // Fallback backend unavailable or absent from the order: error with the unavailable label.
+  for (const o of [{ routerAvailable: false }, { order: ['native'] }]) {
+    t = makeFallbackEnv({ reject: 'recognizer_unavailable' }, o);
+    t.env.btn.click(); await flush();
+    assert.equal(t.handle.controller.getState(), 'error');
+    assert.equal(t.log.includes('router.start'), false);
+    assert.equal(t.env.cap.querySelector('.cvox-text').textContent, 'js.voice.err.unavailable');
+    t.handle.destroy();
+  }
+  // A failing fallback ends in error and never falls back again.
+  t = makeFallbackEnv({ reject: 'recognizer_unavailable' });
+  t.env.window.WsVoiceInput.getBackend('openrouter').start = () => { t.log.push('router.start'); return Promise.reject(Object.assign(new Error('r'), { code: 'unavailable' })); };
+  t.env.btn.click(); await flush(); await flush();
+  assert.equal(t.log.filter((x) => x === 'router.start').length, 1);
+  assert.equal(t.log.filter((x) => x === 'native.start').length, 1);
+  assert.equal(t.handle.controller.getState(), 'error');
   t.handle.destroy();
 });
 
