@@ -259,6 +259,12 @@ func withGODEBUG(env []string, setting string) []string {
 // session/resume with the ws MCP server, then the conversation's model,
 // effort and mode.
 func (b AgyBackend) Start(ctx context.Context, spec StartSpec) (Process, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if spec.Ephemeral {
 		spec.Lead = nil
 		spec.Holder = nil
@@ -335,7 +341,7 @@ func (b AgyBackend) Start(ctx context.Context, spec StartSpec) (Process, error) 
 	if spec.Lead != nil && spec.Lead.Spawned != nil {
 		spec.Lead.Spawned(holder, pid)
 	}
-	if err := p.open(spec); err != nil {
+	if err := p.open(ctx, spec); err != nil {
 		_ = p.Close()
 		return nil, fmt.Errorf("agy backend: %w", err)
 	}

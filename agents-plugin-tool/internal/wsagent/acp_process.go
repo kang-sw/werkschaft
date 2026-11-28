@@ -91,12 +91,15 @@ func (p *acpProcess) callContext(ctx context.Context, kind, method string, param
 }
 
 // open runs a new process's handshake.
-func (p *acpProcess) open(spec StartSpec) error {
+func (p *acpProcess) open(ctx context.Context, spec StartSpec) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	version := ""
 	if spec.Lead != nil {
 		version = spec.Lead.DaemonVersion
 	}
-	init, err := p.call(acpKindInit, "initialize", map[string]any{
+	init, err := p.callContext(ctx, acpKindInit, "initialize", map[string]any{
 		"protocolVersion": 1,
 		// Without fs or terminal capabilities the agent runs its own tools.
 		"clientCapabilities": map[string]any{"fs": map[string]any{"readTextFile": false, "writeTextFile": false}, "terminal": false},
@@ -111,10 +114,13 @@ func (p *acpProcess) open(spec StartSpec) error {
 	if json.Unmarshal(init, &reply) != nil || reply.ProtocolVersion != 1 {
 		return fmt.Errorf("%s answered initialize with ACP protocol version %d; ws speaks version 1", p.m.d.label(), reply.ProtocolVersion)
 	}
-	return p.openSession(context.Background(), spec)
+	return p.openSession(ctx, spec)
 }
 
 func (p *acpProcess) openSession(ctx context.Context, spec StartSpec) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	mcpServers := []any{}
 	if !spec.Ephemeral && spec.MCPSession != nil {
 		mcpServers = []any{acpHTTPServer(spec.MCPSession)}
@@ -157,11 +163,15 @@ func (p *acpProcess) openSession(ctx context.Context, spec StartSpec) error {
 	if !spec.Ephemeral && spec.MCPSession != nil {
 		if c := spec.MCPSession.Connected; c != nil {
 			wait := p.m.d.timing().mcpConnect
+			timer := time.NewTimer(wait)
+			defer timer.Stop()
 			select {
 			case <-c:
+			case <-ctx.Done():
+				return ctx.Err()
 			case <-p.exited:
 				return fmt.Errorf("%s exited while it opened its session", p.m.d.label())
-			case <-time.After(wait):
+			case <-timer.C:
 				return fmt.Errorf("%s did not reach the ws MCP route within %s of opening its session (a refused token only hides the ws tools), so the process was not started without them", p.m.d.label(), wait)
 			}
 		}
@@ -178,12 +188,12 @@ func (p *acpProcess) openSession(ctx context.Context, spec StartSpec) error {
 		model = *stored
 	}
 	if model != "" {
-		if err := p.SetModel(model); err != nil {
+		if err := p.setModelContext(ctx, model); err != nil {
 			return fmt.Errorf("model: %w", err)
 		}
 	}
 	if model == "" && effort != "" {
-		if err := p.SetEffort(effort); err != nil {
+		if err := p.setEffortContext(ctx, effort); err != nil {
 			return fmt.Errorf("effort: %w", err)
 		}
 	}
@@ -201,7 +211,7 @@ func (p *acpProcess) openSession(ctx context.Context, spec StartSpec) error {
 		mode = p.m.d.cutoverMode()
 	}
 	if mode != "" && mode != p.m.mode() {
-		if err := p.SetPermissionMode(mode); err != nil {
+		if err := p.setPermissionModeContext(ctx, mode); err != nil {
 			return fmt.Errorf("permission mode: %w", err)
 		}
 	}
@@ -286,6 +296,10 @@ func (p *acpProcess) Interrupt() error {
 // that offers a thought level gets the conversation's again: the agent may
 // reset it on a switch.
 func (p *acpProcess) SetModel(model string) error {
+	return p.setModelContext(context.Background(), model)
+}
+
+func (p *acpProcess) setModelContext(ctx context.Context, model string) error {
 	if model == "" {
 		return ErrUnsupported
 	}
@@ -300,7 +314,7 @@ func (p *acpProcess) SetModel(model string) error {
 			}
 		}
 		if effort := p.effort.Load(); effort != nil {
-			if ok, err := p.setModelVariant(base, *effort); ok || err != nil {
+			if ok, err := p.setModelVariantContext(ctx, base, *effort); ok || err != nil {
 				if err == nil {
 					p.model.Store(&base)
 				}
@@ -308,12 +322,12 @@ func (p *acpProcess) SetModel(model string) error {
 			}
 		}
 	}
-	if err := p.setConfig("model", base); err != nil {
+	if err := p.setConfigContext(ctx, "model", base); err != nil {
 		return err
 	}
 	p.model.Store(&base)
 	if effort := p.effort.Load(); effort != nil && *effort != "" {
-		return p.SetEffort(*effort)
+		return p.setEffortContext(ctx, *effort)
 	}
 	return nil
 }
@@ -322,13 +336,17 @@ func (p *acpProcess) SetModel(model string) error {
 // variant. A worker fails rather than silently running at another tier's
 // effort. A lead keeps an unavailable effort for its next model, as before.
 func (p *acpProcess) SetEffort(effort string) error {
+	return p.setEffortContext(context.Background(), effort)
+}
+
+func (p *acpProcess) setEffortContext(ctx context.Context, effort string) error {
 	if effort == "" {
 		return ErrUnsupported
 	}
 	p.effort.Store(&effort)
 	d := p.m.d
 	if option := d.effortOption(); p.m.offersValue(option, effort) {
-		if err := p.setConfig(option, effort); err != nil {
+		if err := p.setConfigContext(ctx, option, effort); err != nil {
 			return err
 		}
 		p.emit(Event{Notice: d.label() + " honored effort " + effort + " via " + option})
@@ -339,7 +357,7 @@ func (p *acpProcess) SetEffort(effort string) error {
 		model = *requested
 	}
 	base, _ := d.baseModel(model)
-	if ok, err := p.setModelVariant(base, effort); ok || err != nil {
+	if ok, err := p.setModelVariantContext(ctx, base, effort); ok || err != nil {
 		return err
 	}
 	if p.worker {
@@ -349,15 +367,15 @@ func (p *acpProcess) SetEffort(effort string) error {
 	return nil
 }
 
-func (p *acpProcess) setModelVariant(base, effort string) (bool, error) {
+func (p *acpProcess) setModelVariantContext(ctx context.Context, base, effort string) (bool, error) {
 	d := p.m.d
 	variant := d.modelVariant(base, effort)
 	if p.m.offersValue("model", variant) {
-		if err := p.setConfig("model", variant); err != nil {
+		if err := p.setConfigContext(ctx, "model", variant); err != nil {
 			return true, err
 		}
 	} else if p.m.hasModel(variant) {
-		body, err := p.call(acpKindConfig, "session/set_model", map[string]any{"sessionId": p.m.session(), "modelId": variant}, d.timing().control)
+		body, err := p.callContext(ctx, acpKindConfig, "session/set_model", map[string]any{"sessionId": p.m.session(), "modelId": variant}, d.timing().control)
 		if err != nil {
 			return true, err
 		}
@@ -377,10 +395,10 @@ func (p *acpProcess) setModelVariant(base, effort string) (bool, error) {
 	return true, nil
 }
 
-// setConfig sets one config option and checks that the agent took the
+// setConfigContext sets one config option and checks that the agent took the
 // value: a value it does not apply comes back unchanged rather than refused.
-func (p *acpProcess) setConfig(option, value string) error {
-	body, err := p.call(acpKindConfig, "session/set_config_option", map[string]any{"sessionId": p.m.session(), "configId": option, "value": value}, p.m.d.timing().control)
+func (p *acpProcess) setConfigContext(ctx context.Context, option, value string) error {
+	body, err := p.callContext(ctx, acpKindConfig, "session/set_config_option", map[string]any{"sessionId": p.m.session(), "configId": option, "value": value}, p.m.d.timing().control)
 	if err != nil {
 		return err
 	}
@@ -392,11 +410,15 @@ func (p *acpProcess) setConfig(option, value string) error {
 
 // SetPermissionMode sets the session's mode.
 func (p *acpProcess) SetPermissionMode(mode string) error {
+	return p.setPermissionModeContext(context.Background(), mode)
+}
+
+func (p *acpProcess) setPermissionModeContext(ctx context.Context, mode string) error {
 	modes := p.m.d.permissionModes()
 	if mode == "bypass" || !slices.Contains(modes, mode) {
 		return fmt.Errorf("%s has no permission mode %q; its modes are %s", p.m.d.label(), mode, strings.Join(modes, ", "))
 	}
-	_, err := p.call(acpKindMode, "session/set_mode", map[string]any{"sessionId": p.m.session(), "modeId": mode}, p.m.d.timing().control)
+	_, err := p.callContext(ctx, acpKindMode, "session/set_mode", map[string]any{"sessionId": p.m.session(), "modeId": mode}, p.m.d.timing().control)
 	return err
 }
 
