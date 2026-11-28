@@ -184,6 +184,8 @@
           // The morph retains unchanged topic nodes, including hydrated closed
           // pages. Their image frames still follow the board's external-file stamp.
           if (window.wbHistory && window.wbHistory.refreshImages) window.wbHistory.refreshImages(doc);
+        } else if (name === "convlive") {
+          swapConvLive(el, html);
         } else {
           el.innerHTML = html;
           if (name === "rail" && WsRail) railHoverUpdates = WsRail.hoverUpdates(el);
