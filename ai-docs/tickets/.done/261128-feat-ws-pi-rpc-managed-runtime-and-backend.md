@@ -6,6 +6,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 41d482b4bc812638
 sage-review-completeness-reviewed: 41d482b4bc812638
+completed: 2026-11-29
 ---
 
 # Managed Pi Runtime Downloader and pi-rpc wsagent Backend
@@ -160,6 +161,17 @@ Create `agents-plugin-tool/internal/wspiruntime/` to manage the pinned standalon
 4. **Phase 1 Verification:**
    - Offline `httptest.Server` unit tests covering: `.tar.gz` and `.zip` installs preserving executable + sibling files (`package.json`, `photon_rs_bg.wasm`, `theme/`, `native/`), `.ws-ready` present atomically with the swapped directory, reinstall/repair over an existing populated `<installDir>` (including rollback when swap fails and cleanup of `.old-*`), SHA-256 mismatch rejection (tampered `SHA256SUMS` and tampered archive bytes), zip-slip and tar path-traversal / symlink-escape rejection, concurrent single-flight install, in-memory readiness cache (verifying repeated `Status()` calls do not re-stat disk), `Uninstall()` + cache reset, and content-hashed `BridgePath()` extraction idempotency.
 
+### Result (06d8118f) - 2026-11-29
+
+- Implemented `agents-plugin-tool/internal/wspiruntime/` (`manifest.go`, `manager.go`, `archive.go`, `bridge.go`, `pirpc_bridge.mjs`, `rename_unix.go`, `rename_windows.go`, `manager_test.go`).
+- Pinned upstream `earendil-works/pi` `v1.5.2` across all 6 target platforms with dual SHA-256 verification (fetched `SHA256SUMS` + hardcoded digest table + streamed archive hash), cross-process flock + in-process single-flight coordination, torn-readiness-free staging swap with `.ws-ready` atomic write and `.old-*` backup/rollback + Windows AV retry backoff, in-memory readiness cache (`Status()` never re-stats disk after warm), and content-hashed embedded `pirpc_bridge.mjs` extraction (`BridgePath()`).
+- Live-verified Pi `v1.5.2` (`pi --help`, RPC protocol, and `registerMcpServer` with `exposure: "direct"`, `lifecycle: "eager"`, `clientInfo: { name: "ws-pi-rpc-bridge" }`) against `/opt/homebrew/bin/pi` 1.5.2.
+- Verified with `go test -race -v ./internal/wspiruntime/...` and `GOOS=windows go vet ./internal/wspiruntime/...`.
+
+#### Edition (0e8b5c26) - 2026-11-29
+
+- Addressed `code-review-lite` Critical & Important findings: hardened `archive.go` against chained/nested symlink traversal, forward-referenced symlink chains, and hardlinks via symlinked ancestors (`mkdirNoSymlink`, `ensurePathNoSymlinks`, `prepareLeafForReplace`, `O_EXCL`, and post-extraction `verifyExtractedSymlinks`), and fixed `manager.go` single-flight waiter-cancellation teardown race using `Manager.mu` + `execSem` with regression tests in `manager_test.go`.
+
 ### Phase 2: `pi-rpc` `wsagent` Backend, Registration, Config/Slot Wiring & Credential Protection
 
 Build the `pi-rpc` `wsagent` backend on top of Phase 1's `internal/wspiruntime`, register it in the builtin floor, and wire `wsconfig`, multi-slot `PI_CODING_AGENT_DIR`, and `fs_denied` / `fs_outside` protection.
@@ -231,3 +243,21 @@ Build the `pi-rpc` `wsagent` backend on top of Phase 1's `internal/wspiruntime`,
      - MCP client detection test verifying `clientInfo.name == "ws-pi-rpc-bridge"` resolves to `BackendPiRPC` while legacy `"ws-pi-bridge"` still resolves to `BackendPi`.
      - Slot, usage & credential tests: `internal/wscred` D10 resolution + T0 round-trip preservation for `"pi-rpc"` slots; `internal/wsdashboard` `TestFSLocalDeniedProviderCredentials` covering `.pi/agent/auth.json` and `PI_CODING_AGENT_DIR/auth.json`, plus a `planUsageStore.classifyActiveSlotsLocked` regression test proving `"pi-rpc"` never leaks into `gptHarness` even when `"codex"` is absent; `internal/wsconfig` tests verifying `"pi-rpc"` tier writes with `openrouter/anthropic/claude-3.7-sonnet` and `openai/gpt-5` preserve `Backend: "pi-rpc"`, effort-only edits on unset `"pi-rpc"` tiers do not seed Codex defaults, bucket default scopes work, and `InspectTier` stays explicit-only.
      - Full regression check: `go test ./internal/wspiruntime/... ./internal/wsagent/... ./internal/wsconfig/... ./internal/wscred/... ./internal/wsdashboard/... ./internal/mcp/...` including `TestCommonCodeHasNoHarnessNameBranch` (`harness_name_scan_test.go:555`) with the `TestHarnessNameScan*` helpers and the retired `BackendPi` test suite.
+
+### Result (111ab928) - 2026-11-29
+
+- Implemented adapter-owned `PiRPCBackend` (`internal/wsagent/pirpc.go`, `pirpc_process.go`, `pirpc_mapper.go`, `instructions/agent-worker-pi-rpc.md`) registered in `builtinRegistrations` as `BackendPiRPC = "pi-rpc"`, `LeadProfilePiRPC = "lead-pi-rpc"`, `BridgeClientName = "ws-pi-rpc-bridge"` (T0 transparent; retired `BackendPi` and `ws-pi-bridge` untouched).
+- Wired `piRuntimeBinder` / `Options.PiRuntime` / `WithPiRuntime` (including `cmd/ws-mcp/dashboard.go`), runtime-only `LifecyclePolicy.RestartLeadOnPermissionChange` seam (`backend_policy.go`, `runner_lead_start.go`, `permission.go`, `runner_events.go`) for truthful `PermissionPolicy{LegacyDefault: PermissionWorkdirWrite}` restarts between `-nbt` and `--exclude-tools bash`, explicit-only backend-preserving `wsconfig` `"pi-rpc"` bucket handling (`config.go`, `scope.go`, `snapshot.go`), multi-slot `PI_CODING_AGENT_DIR` (`wscred/account_slots.go`), `planUsageStore.classifyActiveSlotsLocked` guard (`wsdashboard/plan_usage.go`), `fs_denied.go` / `fs_outside.go` `auth.json` protection, and `harness_name_scan_test.go` allowlist updates.
+- All Pi `v1.5.2` CLI flags and RPC payloads were live-verified against `/opt/homebrew/bin/pi` 1.5.2 (no unverified flag/payload assumptions remaining).
+- Verified with `-race` on `internal/wspiruntime`, `internal/wsconfig`, `internal/wscred`, targeted `internal/wsdashboard` (`TestFSLocal|TestPlanUsage|TestQuota|TestAccountSlot|TestDashboardAssetSourceAssembly`), targeted `internal/wsagent` (`TestPiRPC|TestBuiltin|TestHarnessNameScan|TestCommonCodeHasNoHarnessNameBranch|TestRetiredPi`), full non-race `internal/wsagent`, targeted `internal/mcp`, and `GOOS=windows go vet ./...`. Pre-existing unrelated exclusions noted: full `internal/wsdashboard` has a known unrelated timeout in `board_frame_lazy_test.go` on `develop`, and full `-race` `internal/wsagent` hit one pre-existing flaky race in untouched `wsdashboard/agent_sessions.go:284` on `TestDeadBindingCheckoutDeleteWhileReleasePublishesEndedRow` (which passed 5/5 under `-race -count=5`).
+- Diff-budget advisory: total diff across Phase 1, Phase 2, and review fixes is +5,316 / -80 lines across 46 files (~2,320 test lines across new/updated test suites; kept full test coverage per ticket instructions).
+
+#### Edition (0e8b5c26) - 2026-11-29
+
+- Addressed `code-review-lite` Important finding in `pirpc_mapper.go`: replaced unkeyed `finalStats bool` with `finalStatsIDs map[string]struct{}` keyed by `get_session_stats` request ID so overlapping `compaction_end`/ad-hoc stats responses or empty settlement stats never steal or leak `FinalUsage: true`; added `TestPiRPCMapperFinalUsageCorrelatedToSettlementID` and re-verified with `-race` and `GOOS=windows go vet ./...`.
+- Recorded 1 Minor review finding (not fixed per lite-review policy): `probePiRPCChoices` (`internal/wsagent/pirpc.go:355-377`) drops `resp.Error` when `resp.Success == false`, allowing `Support` to cache an empty model list for `choicesTTL` (5m) rather than `choicesFailTTL` (30s).
+
+
+## Resolution (2026-11-29)
+
+Implemented Phase 1 (`internal/wspiruntime` pinned v1.5.2 standalone downloader, dual SHA-256 verification, atomic staging swap + rollback, symlink-chain traversal defense, in-memory readiness cache, embedded `pirpc_bridge.mjs`) and Phase 2 (`PiRPCBackend`, `LifecyclePolicy.RestartLeadOnPermissionChange`, shared `wspiruntime.Manager` runner binder, explicit-only `wsconfig` `"pi-rpc"` bucket, `wscred` `PI_CODING_AGENT_DIR` multi-slot support, `planUsageStore` guard, `fs_denied`/`fs_outside` `auth.json` protection, `harness_name_scan_test.go` allowlist, and comprehensive `-race` unit/integration tests). Completed `code-review-lite` (`agy.medium`) and fixed all 3 Critical/Important findings (`0e8b5c26`).
