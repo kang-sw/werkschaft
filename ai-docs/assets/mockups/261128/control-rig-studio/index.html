@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Control-Rig &amp; Pack Clip Studio — Companion 팩 목업</title>
+<link rel="stylesheet" href="./studio.css">
+</head>
+<body>
+<div class="app">
+  <!-- ═══ Top Studio Bar ═══ -->
+  <header class="topbar">
+    <div class="brand"><span class="logo">◈</span><b>Rig Studio</b></div>
+    <button class="pill pack-pill" id="packPill" title="클릭하여 로드된 VRM 팩 전환 (목업)">
+      <span class="vdot" id="packDot"></span><span class="pn" id="packName"></span><span class="sw">⇄</span>
+    </button>
+    <span class="kitchip" id="kitChip"></span>
+    <span class="sumbadge" id="sumBadge"></span>
+    <span class="grow"></span>
+    <button class="tbtn" id="btnImport" title="외부 툴에서 만든 .vrma 모션 가져오기">↥ Import .vrma</button>
+    <button class="tbtn" id="btnExport" title="현재 클립을 .clip.json 으로 내보내기">↧ Export JSON</button>
+    <button class="tbtn primary" id="btnSave">팩에 저장 <span class="cnt num" id="saveCnt">0</span></button>
+  </header>
+
+  <main class="work">
+    <!-- ═══ Left Rail ═══ -->
+    <aside class="card rail">
+      <div class="rail-scroll" id="railScroll"></div>
+      <div class="rail-foot"><span id="railFootL"></span><span class="mono" id="railFootR"></span></div>
+    </aside>
+
+    <!-- ═══ Center Stage ═══ -->
+    <section class="stage">
+      <div class="viewport" id="vp" data-theme="dark">
+        <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
+
+        <div class="float f-tl">
+          <div class="seg modes" id="segModes">
+            <button data-mode="ik" class="on" title="손 목표(IK) 링을 드래그"><span class="sw" style="background:var(--c-l)"></span>양손 IK</button>
+            <button data-mode="pole" title="팔꿈치 폴 벡터 다이아몬드를 드래그"><span class="sw" style="background:var(--c-pole);transform:rotate(45deg) scale(.85)"></span>팔꿈치 폴</button>
+            <button data-mode="look" title="머리 방향·시선 레티클을 드래그"><span class="sw" style="background:var(--c-look);border-radius:50%"></span>머리/시선</button>
+            <button data-mode="prop" title="프롭 앵커(XYZ 트라이어드)를 드래그"><span class="sw" style="background:var(--c-prop)"></span>프롭 오프셋</button>
+          </div>
+        </div>
+        <div class="float f-tr">
+          <div class="seg" id="segSlot"><span class="seg-lbl">슬롯</span>
+            <button data-slot="220">220px</button><button data-slot="280" class="on">280px</button><button data-slot="360">360px</button>
+          </div>
+        </div>
+        <div class="float f-bl">
+          <div class="seg" id="segProp"><span class="seg-lbl">프롭</span>
+            <button data-prop="laptop">노트북</button><button data-prop="phone">스마트폰</button><button data-prop="mug">머그컵</button><button data-prop="none">없음</button>
+          </div>
+        </div>
+        <div class="float f-br">
+          <div class="seg" id="segTheme"><span class="seg-lbl">프리뷰</span>
+            <button data-theme="dark" class="on">Dark</button><button data-theme="light">Light</button>
+          </div>
+        </div>
+        <div class="float f-hint"><span class="hint" id="vpHint">핸들 드래그 = 포즈 수정 (범위 제한) · Space = 재생</span></div>
+        <div class="toast" id="toast"></div>
+      </div>
+
+      <!-- Mini keyframe timeline: 140px -->
+      <section class="tl" id="tl">
+        <div class="tl-bar">
+          <button class="ibtn play" id="btnPlay" title="재생 / 일시정지 (Space)">▶</button>
+          <button class="ibtn" id="btnLoop" title="루프">⟳</button>
+          <span class="tl-time" id="tlTime"></span>
+          <span class="grow"></span>
+          <button class="tpill" id="pSpeed" title="재생 속도"><i>SPEED</i><span class="num" id="vSpeed">1.0x</span></button>
+          <button class="tpill" id="pDur" title="클립 길이 (키프레임 비례 스케일)"><i>DUR</i><span class="num" id="vDur">1.4s</span></button>
+          <button class="tpill" id="pEase" title="구간 이징"><i>EASE</i><span id="vEase">Ease Out Back</span></button>
+          <button class="tl-add" id="btnSnap">+ 포즈 스냅샷</button>
+        </div>
+        <div class="track" id="track">
+          <div class="ruler" id="ruler"></div>
+          <div class="lane" id="lane"></div>
+          <div class="playhead" id="playhead"></div>
+        </div>
+      </section>
+    </section>
+
+    <!-- ═══ Right Inspector ═══ -->
+    <aside class="card insp">
+      <div class="tabs">
+        <button class="tab on" data-tab="rig">릭 &amp; 프롭</button>
+        <button class="tab" data-tab="agent">에이전트 노출 <span class="bdg" id="tabBadge">0</span></button>
+      </div>
+      <div class="insp-head" id="inspHead"></div>
+      <div class="insp-body" id="inspBody"></div>
+      <button class="expo-strip" id="expoStrip"></button>
+    </aside>
+  </main>
+</div>
+
+<div class="scrim" id="scrim">
+  <div class="modal">
+    <header><span id="mdTitle">Export JSON</span><span class="grow"></span><span class="badge mut mono">.clip.json</span></header>
+    <pre id="mdPre"></pre>
+    <footer><button class="tbtn" id="mdCopy">복사</button><button class="tbtn primary" id="mdClose">닫기</button></footer>
+  </div>
+</div>
+<script src="./studio-data.js"></script>
+<script src="./studio.js"></script>
+</body>
+</html>
