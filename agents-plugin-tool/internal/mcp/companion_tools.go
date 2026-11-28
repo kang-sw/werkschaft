@@ -262,7 +262,7 @@ func companionTools() []map[string]any {
 				"properties": map[string]any{
 					"session_key": stringProperty(sessionKeyPropertyDescription),
 					"expression":  stringProperty("Optional facial expression ID (e.g. idle, focused, happy, wink, merong, startled, annoyed, cry)."),
-					"gesture":     stringProperty("Optional gesture ID (e.g. wave, point, headrub, coffee, knock_startle, phone_typing)."),
+					"gesture":     stringProperty("Optional gesture ID (e.g. wave, point, headrub, coffee, knock_startle, phone_typing) or an action key from the ACTIONS block."),
 					"prop":        stringProperty("Optional prop ID (e.g. smartphone, drone, coffee, mail)."),
 					"fx":          stringProperty("Optional visual effect badge ID (e.g. sparkle, sweat, question, exclamation)."),
 					"speech":      stringProperty("Optional short floating speech/quip bubble text (clamped to 140 runes)."),

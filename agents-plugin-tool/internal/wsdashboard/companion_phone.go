@@ -1246,9 +1246,9 @@ func (d *Daemon) CompanionDirectorEnabled() bool {
 	return cfg.Enabled && cfg.Director == "agent"
 }
 
-// CompanionActivePersona returns the currently focused pack's persona and
-// resolved language for building the Tier-1 Companion persona prompt.
-func (d *Daemon) CompanionActivePersona() (*CompanionPersona, string) {
+// companionActivePackID returns the pack of the most recently focused
+// director stream, or the built-in pack.
+func (d *Daemon) companionActivePackID() string {
 	packID := companionDefaultID
 	d.director.mu.Lock()
 	var bestSeq uint64
@@ -1259,7 +1259,13 @@ func (d *Daemon) CompanionActivePersona() (*CompanionPersona, string) {
 		}
 	}
 	d.director.mu.Unlock()
-	pack := d.companionPackFor(packID)
+	return packID
+}
+
+// CompanionActivePersona returns the currently focused pack's persona and
+// resolved language for building the Tier-1 Companion persona prompt.
+func (d *Daemon) CompanionActivePersona() (*CompanionPersona, string) {
+	pack := d.companionPackFor(d.companionActivePackID())
 	lang := ""
 	if pack.persona != nil {
 		lang = pack.persona.QuipLanguage
