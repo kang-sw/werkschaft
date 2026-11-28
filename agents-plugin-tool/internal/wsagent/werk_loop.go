@@ -40,6 +40,22 @@ type werkLoop struct {
 	audit           *auditCapture
 	steer           uint64
 	agent           *werk.Agent
+	provider        string
+	onUsage         func(wsdashboard.WerkUsageDelta)
+	accountMu       sync.Mutex
+	turnAccount     string
+}
+
+func (p *werkLoop) setTurnAccount(id string) {
+	p.accountMu.Lock()
+	p.turnAccount = id
+	p.accountMu.Unlock()
+}
+
+func (p *werkLoop) currentTurnAccount() string {
+	p.accountMu.Lock()
+	defer p.accountMu.Unlock()
+	return p.turnAccount
 }
 
 type openAIAccountPinKey struct{}
@@ -68,15 +84,13 @@ func (b WerkBackend) startLoop(ctx context.Context, spec StartSpec) (Process, er
 		return nil, err
 	}
 	spec.modelContextWindow = func(model string) int64 { return b.providerContextWindow(spec.Provider, model) }
-	var wrapTurn func(context.Context) context.Context
+	var activeAccount func() string
 	if spec.Provider == string(wscred.ProviderOpenAI) {
 		if source, ok := b.credentials.(interface{ ActiveOpenAIAccount() string }); ok {
-			wrapTurn = func(tctx context.Context) context.Context {
-				return withOpenAIAccountPin(tctx, source.ActiveOpenAIAccount())
-			}
+			activeAccount = source.ActiveOpenAIAccount
 		}
 	}
-	return startWerkLoopWithTurnHook(ctx, spec, endpoint, wrapTurn)
+	return startWerkLoopWithHooks(ctx, spec, endpoint, activeAccount, b.onUsage)
 }
 
 func (b WerkBackend) loopResponder() (*werk.Client, error) { return b.loopResponderFor("") }
@@ -152,10 +166,18 @@ func validateWerkStart(spec StartSpec) error {
 }
 
 func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder) (*werkLoop, error) {
-	return startWerkLoopWithTurnHook(ctx, spec, endpoint, nil)
+	return startWerkLoopWithHooks(ctx, spec, endpoint, nil, nil)
 }
 
 func startWerkLoopWithTurnHook(ctx context.Context, spec StartSpec, endpoint werk.Responder, wrapTurn func(context.Context) context.Context) (*werkLoop, error) {
+	return startWerkLoopConfigured(ctx, spec, endpoint, wrapTurn, nil, nil)
+}
+
+func startWerkLoopWithHooks(ctx context.Context, spec StartSpec, endpoint werk.Responder, activeAccount func() string, onUsage func(wsdashboard.WerkUsageDelta)) (*werkLoop, error) {
+	return startWerkLoopConfigured(ctx, spec, endpoint, nil, activeAccount, onUsage)
+}
+
+func startWerkLoopConfigured(ctx context.Context, spec StartSpec, endpoint werk.Responder, wrapTurn func(context.Context) context.Context, activeAccount func() string, onUsage func(wsdashboard.WerkUsageDelta)) (*werkLoop, error) {
 	if err := validateWerkStart(spec); err != nil {
 		return nil, err
 	}
@@ -182,12 +204,29 @@ func startWerkLoopWithTurnHook(ctx context.Context, spec StartSpec, endpoint wer
 		secrets = append(secrets, spec.MCPSession.Token)
 	}
 	ctx, cancel := context.WithCancel(ctx)
+	providerName := spec.Provider
+	if providerName == "" {
+		providerName = string(wscred.ProviderOpenRouter)
+	}
 	p := &werkLoop{
 		ctx: ctx, cancel: cancel, done: make(chan struct{}),
 		cmds: make(chan werk.Command, 32), events: make(chan Event, 256),
 		mapper: newWerkMapper(spec.SessionID), lead: !spec.Ephemeral && spec.Lead != nil,
 		ephemeral: spec.Ephemeral,
 		secrets:   secrets,
+		provider:  providerName,
+		onUsage:   onUsage,
+	}
+	if activeAccount != nil {
+		prevWrap := wrapTurn
+		wrapTurn = func(tctx context.Context) context.Context {
+			if prevWrap != nil {
+				tctx = prevWrap(tctx)
+			}
+			id := activeAccount()
+			p.setTurnAccount(id)
+			return withOpenAIAccountPin(tctx, id)
+		}
 	}
 	p.mapper.restoreUsage(spec.restoredUsage)
 	if !spec.Ephemeral && spec.Lead != nil {
@@ -350,6 +389,28 @@ func (p *werkLoop) emit(line werk.Line) {
 		} else if raw, err := json.Marshal(line); err == nil {
 			p.audit.line(raw, 0, false)
 		}
+	}
+	if line.T == werk.LineUsage && p.onUsage != nil && line.Model != "" {
+		var cacheWrite int64
+		if line.CacheWriteTokens != nil {
+			cacheWrite = *line.CacheWriteTokens
+		}
+		var cost float64
+		if line.CostUSD != nil {
+			cost = *line.CostUSD
+		}
+		p.onUsage(wsdashboard.WerkUsageDelta{
+			Provider:         p.provider,
+			AccountKey:       p.currentTurnAccount(),
+			Model:            line.Model,
+			InputTokens:      line.InputTokens,
+			OutputTokens:     line.OutputTokens,
+			CachedTokens:     line.CachedTokens,
+			CacheWriteTokens: cacheWrite,
+			ReasoningTokens:  line.ReasoningTokens,
+			CostUSD:          cost,
+			At:               lineTime(line),
+		})
 	}
 	for _, event := range p.mapper.mapEvent(line) {
 		p.deliver(event)

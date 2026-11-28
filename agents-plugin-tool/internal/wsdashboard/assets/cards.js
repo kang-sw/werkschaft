@@ -361,6 +361,7 @@
       stateFilter = value;
       opt.save(opt.key + ".state-filter", value);
       countTopics();
+      if (window.WsBoardAnchor && window.WsBoardAnchor.reveal) window.WsBoardAnchor.reveal(true);
       if (dismiss) stateUI.close(true);
       else if (focus) (stateUI.inline.hidden && stateUI.inline.contains(focus) ? stateUI.trigger : focus).focus({ preventScroll: true });
       if (after) after();

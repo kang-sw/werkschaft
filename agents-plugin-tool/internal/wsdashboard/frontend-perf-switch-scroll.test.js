@@ -18,6 +18,7 @@ const railSrc = readAssetSource('wsdashboard', 'rail.js');
 const dashRailSrc = readAssetSource('wsdashboard', 'dashboard-rail.js');
 const shellSrc = readAssetSource('wsdashboard', 'shell.js');
 const lifecycleSrc = readAssetSource('wsdashboard', 'dashboard-lifecycle.js');
+const revealSrc = readAssetSource('wsdashboard', 'dashboard-board-reveal.js');
 
 function extractFunc(source, name) {
   const re = new RegExp('\\n  function ' + name + '\\([^\\n]*\\{[^\\n]*\\}\\n|\\n  function ' + name + '\\([\\s\\S]*?\\n  \\}\\n');
@@ -999,3 +1000,130 @@ test('terminal rgb() avoids DOM probe for hex/rgb colors, panel-diff layout() an
     { name: 'rail', hash: 'h3', html: '<div>rail-3</div>' },
   ], 'window.wsBoardScrollIdle flushes held rail swap once shell frame scroll settles');
 });
+
+// Bug: a frame loaded or kept hidden lays #bcol out at 0px, and nothing re-measured or settled
+// the free-canvas windows when it became visible, leaving the middle viewport blank.
+function makeRevealCtx(over = {}) {
+  const rafs = [], docH = {}, winH = {};
+  const calls = { settle: 0, apply: 0, cancelled: [] };
+  const col = { clientHeight: 700, clientWidth: 900 };
+  const ctx = {
+    calls, rafs, docH, winH, col,
+    doc: { hidden: false, documentElement: { hasAttribute: () => false }, addEventListener: (t, f) => { (docH[t] ||= []).push(f); } },
+    shHidden: false,
+    anchorSized: { w: 0, h: 0, bar: 0, padTop: 0, bounded: false },
+    freeHeightCache: Object.assign(new Map(), { _skippedHidden: false }),
+    free: true,
+    $: id => (id === 'bcol' ? col : null),
+    getComputedStyle: () => ({ overflowY: 'auto', paddingTop: '10px', paddingBottom: '6px', paddingLeft: '0px', paddingRight: '0px' }),
+    anchorApplySizes: () => { calls.apply++; },
+    anchorCards: () => [{}],
+    freeEnabled() { return ctx.free; },
+    requestAnimationFrame: fn => { rafs.push(fn); return rafs.length; },
+    cancelAnimationFrame: id => { calls.cancelled.push(id); rafs[id - 1] = null; },
+    flush() { for (let i = 0; i < 10 && rafs.some(Boolean); i++) rafs.splice(0).forEach(f => f && f()); },
+    ...over,
+  };
+  ctx.window = { WsBoardAnchor: { settle: () => { calls.settle++; } }, addEventListener: (t, f) => { winH[t] = f; } };
+  vm.createContext(ctx);
+  vm.runInContext(revealSrc + '\nboardRevealInit();', ctx);
+  return ctx;
+}
+
+test('every hidden-to-visible edge re-measures #bcol and settles, with no _skippedHidden gate and no scroll event', () => {
+  const ctx = makeRevealCtx();
+  ctx.anchorSized.h = 0; // measured while hidden
+  ctx.shHidden = true;
+  docEmit(ctx, 'ws-page-visibility');
+  assert.equal(ctx.calls.settle, 0, 'hiding never settles');
+  ctx.shHidden = false;
+  assert.equal(ctx.freeHeightCache._skippedHidden, false, 'precondition: nothing was skipped');
+  docEmit(ctx, 'ws-page-visibility');
+  assert.equal(ctx.calls.settle, 1, 'visible edge settles even when no card measurement was skipped');
+  assert.equal(ctx.calls.apply, 1);
+  assert.equal(ctx.anchorSized.h, 700 - 10 - 6, 'content-box height re-read from the laid-out column');
+  assert.equal(ctx.anchorSized.bounded, true);
+  assert.equal(ctx.rafs.length, 0, 'the edge itself schedules no frame loop');
+});
+
+test('boardRevealSchedule coalesces to one post-layout settle (double rAF) and cancels the superseded pass', () => {
+  const ctx = makeRevealCtx();
+  vm.runInContext('boardRevealSchedule(); boardRevealSchedule(); boardRevealSchedule();', ctx);
+  assert.equal(ctx.rafs.filter(Boolean).length, 1, 'only the latest scheduled frame stays pending');
+  assert.equal(ctx.calls.cancelled.length, 2);
+  ctx.rafs.splice(0).forEach(f => f && f());
+  assert.equal(ctx.calls.settle, 0, 'first frame only waits for layout to commit');
+  assert.equal(ctx.rafs.filter(Boolean).length, 1);
+  ctx.flush();
+  assert.equal(ctx.calls.settle, 1, 'three requests settle exactly once; cancelled passes never settle');
+  assert.equal(ctx.rafs.filter(Boolean).length, 0, 'idle again: no frames scheduled');
+});
+
+test('visibilitychange, pageshow, and filter/tab transitions schedule a reveal; free-only gates on freeEnabled', () => {
+  const ctx = makeRevealCtx();
+  ctx.doc.hidden = true;
+  docEmit(ctx, 'visibilitychange');
+  assert.equal(ctx.rafs.length, 0, 'becoming hidden does not schedule');
+  ctx.doc.hidden = false;
+  docEmit(ctx, 'visibilitychange');
+  ctx.flush();
+  assert.equal(ctx.calls.settle, 1);
+  ctx.winH.pageshow();
+  ctx.flush();
+  assert.equal(ctx.calls.settle, 2);
+  ctx.free = false;
+  vm.runInContext('boardRevealSchedule(true);', ctx);
+  assert.equal(ctx.rafs.length, 0, 'filter/tab/view transitions skip boards outside free-canvas mode');
+  ctx.free = true;
+  vm.runInContext('boardRevealSchedule(true);', ctx);
+  ctx.flush();
+  assert.equal(ctx.calls.settle, 3);
+  ctx.shHidden = true;
+  vm.runInContext('boardRevealSchedule();', ctx);
+  ctx.flush();
+  assert.equal(ctx.calls.settle, 3, 'a pass that lands while hidden is dropped');
+});
+
+test('a still-unsized #bcol keeps the last valid sizes but still settles', () => {
+  const ctx = makeRevealCtx();
+  ctx.anchorSized.h = 555;
+  ctx.col.clientHeight = 0;
+  docEmit(ctx, 'ws-page-visibility');
+  assert.equal(ctx.anchorSized.h, 555);
+  assert.equal(ctx.calls.apply, 0);
+  assert.equal(ctx.calls.settle, 1);
+});
+
+test('anchorSize ignores a transient hidden 0x0 #bcol report so it cannot clobber sizes or mark the board settled', () => {
+  const col = {};
+  const calls = { settle: 0, apply: 0 };
+  const ctx = {
+    $: id => (id === 'bcol' ? col : null),
+    anchorObserveAux() {}, anchorFaceEl: null, anchorReplyEl: null,
+    anchorSized: { w: 800, h: 600, bar: 0, reply: 0, padTop: 8, bounded: true },
+    getComputedStyle: () => ({ overflowY: 'auto', paddingTop: '8px' }),
+    anchorApplySizes() { calls.apply++; }, anchorSettle() { calls.settle++; },
+    freeActive: false, freeWinStart: 0, anchorProg: null, anchorRealign() {},
+    boardDialSync() {}, virtualReconcile() {},
+  };
+  vm.createContext(ctx);
+  vm.runInContext(extractFunc(anchorSrc, 'anchorSize'), ctx);
+  const rep = (w, h) => [{ target: col, contentBoxSize: [{ inlineSize: w, blockSize: h }], contentRect: { width: w, height: h } }];
+  ctx.anchorSize(rep(0, 0));
+  assert.equal(ctx.anchorSized.h, 600, 'hidden report leaves the valid height alone');
+  assert.equal(ctx.anchorSized.w, 800);
+  assert.equal(calls.settle, 0, 'a zero box never marks the board settled');
+  ctx.anchorSize(rep(800, 420));
+  assert.equal(ctx.anchorSized.h, 420);
+  assert.equal(calls.settle, 1, 'the first real box settles');
+});
+
+test('session switch (shown:true) schedules a coalesced reveal after showRegions and mountFramesPaced; anchor no longer gates on _skippedHidden', () => {
+  const shown = lifecycleSrc.slice(lifecycleSrc.indexOf('shHidden = false;\n        syncPageVisibility();'));
+  const iShow = shown.indexOf('showRegions();'), iMount = shown.indexOf('mountFramesPaced(doc);'), iReveal = shown.indexOf('boardRevealSchedule()');
+  assert.ok(iShow > 0 && iMount > iShow && iReveal > iMount && iReveal < shown.indexOf('queue();'), 'reveal is scheduled once the held board swap and frames were applied');
+  assert.ok(!anchorSrc.includes('freeHeightCache._skippedHidden) {'), 'ws-page-visibility handler is no longer gated on _skippedHidden');
+  assert.ok(anchorSrc.includes('boardRevealInit()'));
+});
+
+function docEmit(ctx, type) { (ctx.docH[type] || []).forEach(f => f()); }

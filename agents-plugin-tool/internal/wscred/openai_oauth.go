@@ -397,13 +397,19 @@ func parseOpenAICallback(q url.Values, clientID string) openAICode {
 	return openAICode{code: q.Get("code"), clientID: clientID}
 }
 
+type openAIAuthClaims struct {
+	ChatGPTAccountID string `json:"chatgpt_account_id"`
+}
+
 type openAIIdentity struct {
 	jwt.RegisteredClaims
-	Nonce         string `json:"nonce"`
-	Email         string `json:"email"`
-	EmailVerified bool   `json:"email_verified"`
-	Authorized    string `json:"azp"`
-	AccessHash    string `json:"at_hash"`
+	Nonce         string            `json:"nonce"`
+	Email         string            `json:"email"`
+	EmailVerified bool              `json:"email_verified"`
+	Authorized    string            `json:"azp"`
+	AccessHash    string            `json:"at_hash"`
+	Auth          *openAIAuthClaims `json:"https://api.openai.com/auth"`
+	AccountID     string            `json:"-"`
 }
 
 func (o openAIOAuth) verifyIdentity(ctx context.Context, tokens openAITokens, clientID, nonce string, now func() time.Time) (openAIIdentity, error) {
@@ -428,7 +434,34 @@ func (o openAIOAuth) verifyIdentity(ctx context.Context, tokens openAITokens, cl
 			return openAIIdentity{}, errors.New("OpenAI returned mismatched access and identity tokens")
 		}
 	}
+	if identity.Auth != nil {
+		identity.AccountID = strings.TrimSpace(identity.Auth.ChatGPTAccountID)
+	}
+	if identity.AccountID == "" && tokens.AccessToken != "" {
+		identity.AccountID = extractChatGPTAccountIDFromJWT(tokens.AccessToken)
+	}
 	return identity, nil
+}
+
+// extractChatGPTAccountIDFromJWT decodes the payload of a JWT without
+// validating its signature to read https://api.openai.com/auth.chatgpt_account_id
+// from tokens already obtained directly from the OpenAI token endpoint.
+func extractChatGPTAccountIDFromJWT(rawJWT string) string {
+	parts := strings.Split(rawJWT, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		Auth *openAIAuthClaims `json:"https://api.openai.com/auth"`
+	}
+	if json.Unmarshal(payload, &claims) != nil || claims.Auth == nil {
+		return ""
+	}
+	return strings.TrimSpace(claims.Auth.ChatGPTAccountID)
 }
 
 func (o openAIOAuth) verificationKey(ctx context.Context, kid string) (*rsa.PublicKey, error) {

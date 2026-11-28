@@ -130,6 +130,12 @@ func dashboardCommand(args []string) {
 			}
 		},
 	}
+	var werkUsage atomic.Pointer[func(wsdashboard.WerkUsageDelta)]
+	callWerkUsage := func(delta wsdashboard.WerkUsageDelta) {
+		if fn := werkUsage.Load(); fn != nil && *fn != nil {
+			(*fn)(delta)
+		}
+	}
 	// Bound once the mailbox sweep and tracker hooks start; Close calls them
 	// before closing SQLite and releasing the dashboard lock (2122).
 	var exportMailbox lateFunc
@@ -161,7 +167,7 @@ func dashboardCommand(args []string) {
 	} else {
 		accountSlots = wscred.NewAccountSlotRegistry(slotsPath)
 	}
-	agents := newAgentRunnerWithHooks(dir, logw, trackerChanged.call, agyActivity.call, callQuotaResetAt, callOnHired, companionHooks, holders, boards, labels.label, credentials, accountSlots)
+	agents := newAgentRunnerWithHooks(dir, logw, trackerChanged.call, agyActivity.call, callQuotaResetAt, callOnHired, callWerkUsage, companionHooks, holders, boards, labels.label, credentials, accountSlots)
 	// The hosted exec jobs bind after the runner starts (openHostedExec):
 	// until then no held report is released and no session sleeps.
 	agents.ExpectExecJobs()
@@ -340,6 +346,8 @@ func dashboardCommand(args []string) {
 	agyActivity.set(daemon.AgyActivity)
 	quotaFn := daemon.QuotaResetAt
 	quotaResetAt.Store(&quotaFn)
+	werkUsageFn := daemon.RecordWerkUsage
+	werkUsage.Store(&werkUsageFn)
 	host.live.Store(daemon)
 	labels.daemon.Store(daemon)
 	daemon.SetCompanionHolderAlive(companion.IsHolderAlive)
@@ -632,7 +640,7 @@ func newDashboardHolders(dir string, logw io.Writer, execLink *hostedExecLink) *
 // agyActivity runs after a hosted agy turn settles. labels resolves the
 // sender legend of the mail the runner delivers; nil shows none.
 func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func(), quotaResetAt func(backend, model string) int64, holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials *wscred.Store) *wsagent.Runner {
-	return newAgentRunnerWithHired(dir, logw, trackerChanged, agyActivity, quotaResetAt, nil, holders, boards, labels, credentials, nil)
+	return newAgentRunnerWithHired(dir, logw, trackerChanged, agyActivity, quotaResetAt, nil, nil, holders, boards, labels, credentials, nil)
 }
 
 type companionRunnerHooks struct {
@@ -641,11 +649,11 @@ type companionRunnerHooks struct {
 	onClose    func(role, replyID, wsKey, reason string)
 }
 
-func newAgentRunnerWithHired(dir string, logw io.Writer, trackerChanged, agyActivity func(), quotaResetAt func(backend, model string) int64, onHired func(replyID, requestID, label string), holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials *wscred.Store, accountSlots *wscred.AccountSlotRegistry) *wsagent.Runner {
-	return newAgentRunnerWithHooks(dir, logw, trackerChanged, agyActivity, quotaResetAt, onHired, companionRunnerHooks{}, holders, boards, labels, credentials, accountSlots)
+func newAgentRunnerWithHired(dir string, logw io.Writer, trackerChanged, agyActivity func(), quotaResetAt func(backend, model string) int64, onHired func(replyID, requestID, label string), onWerkUsage func(wsdashboard.WerkUsageDelta), holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials *wscred.Store, accountSlots *wscred.AccountSlotRegistry) *wsagent.Runner {
+	return newAgentRunnerWithHooks(dir, logw, trackerChanged, agyActivity, quotaResetAt, onHired, onWerkUsage, companionRunnerHooks{}, holders, boards, labels, credentials, accountSlots)
 }
 
-func newAgentRunnerWithHooks(dir string, logw io.Writer, trackerChanged, agyActivity func(), quotaResetAt func(backend, model string) int64, onHired func(replyID, requestID, label string), companion companionRunnerHooks, holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials *wscred.Store, accountSlots *wscred.AccountSlotRegistry) *wsagent.Runner {
+func newAgentRunnerWithHooks(dir string, logw io.Writer, trackerChanged, agyActivity func(), quotaResetAt func(backend, model string) int64, onHired func(replyID, requestID, label string), onWerkUsage func(wsdashboard.WerkUsageDelta), companion companionRunnerHooks, holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, credentials *wscred.Store, accountSlots *wscred.AccountSlotRegistry) *wsagent.Runner {
 	modelWaitSeconds := wsagent.DefaultAgyModelWaitTimeoutSeconds
 	modelWaitRetries := wsagent.DefaultAgyModelWaitRetries
 	if name, _, err := wsagent.ResolveHostedPackage(); err == nil && name == "wsflow" {
@@ -657,6 +665,9 @@ func newAgentRunnerWithHooks(dir string, logw io.Writer, trackerChanged, agyActi
 	if credentials != nil {
 		backends = wsagent.WithProviderCredentials(backends, credentials, credentialStatus(credentials))
 		loadProviderConfig = credentials.LoadLocalEndpoints
+	}
+	if onWerkUsage != nil {
+		backends = wsagent.WithWerkUsageReporter(backends, onWerkUsage)
 	}
 	mail := mcp.NewLeadMailbox(dir).WithLabels(labels)
 	var runner *wsagent.Runner

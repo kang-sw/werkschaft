@@ -1,0 +1,140 @@
+---
+title: "대시보드 외곽 쉘 IDE 스타일 개편(D안·하단 전역 상태바·상단 구역 분리)"
+related:
+  261119-feat-ws-dashboard-shell-topbar-rail-redesign: prior topbar and full-height rail shell baseline superseded by Variant D outer chrome
+  261119-feat-ws-dashboard-paged-docking-gallery: Band 4 gallery (#bgal) coexistence invariant; Track 2 always-open gallery rework is separate
+  261127-feat-ws-harness-account-switcher-and-slot-continuity: preserves .usage-toggle 1-click account switcher popover contract when relocated to bottom-right status bar
+  261127-feat-ws-werk-usage-metrics-and-openai-codex-unification: soft overlap - its OpenRouter and Werk (OpenAI) usage cards render in the relocated bottom-right usage popover and must fit the 26px bar contract
+  261115-feat-ws-session-hire-approval: soft overlap - its planned top-bar approval badge belongs in the Top-Right global zone of the new 3-column topbar
+sage-review-design: completed
+sage-review-completeness: completed
+sage-review-design-reviewed: 88bd63c8c3049bea
+sage-review-completeness-reviewed: 88bd63c8c3049bea
+---
+
+# Dashboard Outer Shell IDE-Style Overhaul (Variant D, Global Bottom Bar, and Topbar Zone Split)
+
+## Background
+
+The Werkschaft dashboard currently mixes floating cards, a top bar that carries both per-session identity and global usage/alert chrome, and a left rail whose footer holds global navigation (`Home`, global settings, and `#gear`) directly competing for vertical space with the session tree and VRM Companion dock. During visual exploration (`dashboard-shell-ide-style`), the owner evaluated four shell archetypes and a card-harmony matrix and settled on **Variant D** (seamless IDE outer chrome wrapping an inset rounded stage well) paired with a dedicated **26px Global Bottom Status Bar** and a clear **Per-Session / Centered Search / Global** topbar architecture.
+
+This ticket delivers **Track 1** (the outer shell overhaul). Always-open Paged Docking Gallery (`#bgal`), migrating Ticket Map (`#thandle`) into `#bgal`, and reworking `#drawer` workpanels (`todo`, `agenda`, `tickets`, `mailbox`, `worktrees`, `holders`, `notes`, `git`) are intentionally split into a separate Track 2 design effort so the outer shell can land cleanly without blocking on gallery rework.
+
+## Decisions
+
+- **Compatibility tier: T0 transparent.** All changes are limited to dashboard frontend templates, stylesheets, client-side JavaScript, tests, and `ai-docs/manuals/dashboard-style.md`. No MCP tool schemas, `/mcp` hello payloads, tracker wire formats, or on-disk store shapes change.
+- **Variant D outer chrome + inset rounded stage well (`(1707)=a`, `(1710)=d`).** Render a continuous outer frame surface (`#111216` dark / `#e7e7e2` light) unifying the `36px` topbar, collapsible & drag-resizable (`220px–360px`, default `280px`) left session rail, and `26px` bottom status bar with no harsh `1px` grid dividers between chrome bands. Wrap the inner workspace stage in an inset rounded `12px` well (`#16181d` dark / `#f4f4f1` light, subtle `1px` rim, `6px` right margin, and `6px` left margin when the rail is collapsed) so existing `12px` Material tonal chat and whiteboard cards sit inside unchanged.
+  - *Rejected:* Variant A (VS Code 0px sharp full-bleed gridlines), Variant B (Arc/Linear floating rounded rail and stage cards), Variant C (JetBrains/Zed dense flat toolbar), Variant E (flattening inner cards to match sharp IDE borders), Variant F (double-boxed cards with drop shadows).
+- **26px Global Bottom Status Bar & bottom-right `.usage-toggle` (`(1708)=a`).** Add a seamless `26px` bottom bar structured as a 3-column CSS Grid (`minmax(0, 1fr) auto minmax(0, 1fr)`) holding strictly **Global Only** controls:
+  - **Bottom-Left:** `.rail-home` (Home), `.r-config-global` (Global Settings), and `#gear` → `#gmenu` (upward-opening, viewport-clamped popover for Theme, Motion, Input, Language `#glang`, Login link copy, and Settings link), retiring `.rfoot` from desktop `.rail-session-panel` so the rail maximizes vertical room above `#rail-companion-slot`.
+  - **Bottom-Center:** `#talert` cross-session global alert strip, centered at `0px` horizontal offset, gracefully collapsible when no cross-session alert is active.
+  - **Bottom-Right:** `.usage-toggle` ("Plan usage" + 1-click account switcher popover), preserving its DOM anchor, SSE `account-changed` updates, and switcher contents while flipping popover placement **upward** (viewport-clamped above the `26px` bar).
+  - *Rejected:* Keeping `.usage-toggle` in the topbar (`(1708)=b`); moving `.usage-toggle` into the left rail (`(1708)=c`); retaining `.rfoot` inside the desktop rail alongside the bottom bar.
+- **Scoped chrome hairline exception & tonal active rail row (`(1709)=a`).** Document an explicit scoped exception in `ai-docs/manuals/dashboard-style.md` permitting a subtle `1px` rim around the Variant D inset stage well and outer shell chrome boundaries while preserving the borderless Material tonal surface rule for all inner cards and panels. Render active session rows in `#rlist` with tonal fill and a clean left accent bar.
+  - *Rejected:* Pure zero-hairline stage well with low edge contrast; neon glow / boxed outline active rail rows.
+- **Topbar zone split: Per-Session Left + Centered Search + Global Right (`(1711)`, `(1713)=c`).** Structure the `36px` topbar as a 3-column CSS Grid (`minmax(0, 1fr) auto minmax(0, 1fr)`):
+  - **Top-Left (Per-Session):** `#railbtn` (rail collapse toggle, `Ctrl+\``), current session identity (`.tph-parent`, `.sren`, `.snm`, `.sseq`, `.child-close`), and per-session live telemetry — worktree branch badge (when git-backed), harness/host badge, and `#sse` Live stream indicator. On non-session pages (Home/Index, Settings), per-session telemetry hides cleanly without JS errors.
+  - **Top-Center (True Visual Center):** `#qsslot` / `#tkqs` / `#shandle` IDE-style centered search trigger pill (`⌘K` / `Ctrl+K`), responsive across `1200px`–`1920px+` without colliding with left or right clusters.
+  - **Top-Right (Global Zone + Temporary Legacy Session Handles):** Keep daemon-global tracker store handles `#tkhandles` (`.tk-handle` + `#tkadd`) in Top-Right so `#tkdrawer` continues sliding smoothly from the right edge. Preserve existing `#drhandle`, `#ghandle`, and `#thandle` beside them without behavioral regression during Track 1 until Track 2 migrates session surfaces into `#bgal`.
+  - *Rejected:* Moving `#tkhandles` into the `26px` bottom bar (`(1713)=a`) or left rail (`(1713)=b`).
+- **Frame geometry: the session iframe stays window-wide; the stage well is a shell-painted backdrop (`(1715)`, technical).** The shell's `.frames` layer (`position: fixed; inset: 0`, iframe fills the window, framed page lays out against the window as it does standing alone) keeps its full window width, so `matchMedia`/`innerWidth`, `WIDE` (`gallery.js`, `dashboard-board.js`, `dashboard-rail.js`), `canFitFourCol` (`cards.js`) and the iframe-owned `drRoom()` / `--drhw` / `--tkhw` handle math keep measuring window width, and `#drhandle` / `#shandle` / `#thandle` / `#tkhandles` stay iframe-owned in the top `36px` band (they visually sit on the outer chrome). The Variant D well is painted by the shell page **behind** the transparent frames layer (rounded `12px` rect inset from the topbar, rail, and bottom bar, with the `(1709)=a` rim); it is a visual backdrop, not a clip, so framed cards, drawers, and popovers are never cut off (the one exception is `(1721)`: while a whole-page-scrolling frame is scrolled, the layer is clipped to the well). The frames layer's bottom edge moves up by the `26px` bottom bar (`.frames` bottom offset), a height-only change; the shell's rail, topbar, and bottom bar stay shell-owned overlays above/around it as today.
+  - *Rejected:* shrinking the iframe to the well (changes `innerWidth` so WIDE and `canFitFourCol` would measure stage width, double-counts the `railph` placeholder, and forces re-hosting the iframe-owned handles); clipping the iframe with the well (covers the top-band handles).
+- **Live rail width reaches the framed page through one shared variable (`(1716)`, technical).** The hard-coded `348px` rail reservation (`cards.js` `stageW = vw - 32 - 348`, `dashboard-rail.css` stage-side/top-margin/`--pbw` rules, `dashboard-account-consent.css`, the `railph` placeholder) becomes a `--rail-w`-based reservation (live rail width plus the existing gutter) with default `280px`. The shell pushes the live width to the framed page over the existing shell-to-frame message channel (`dashboard-lifecycle.js`), and `canFitFourCol` keeps its formula with the live width substituted. "Preserve" in the Responsive constraint means this formula, not the `348` literal; the four-column activation point legitimately shifts with the new default width.
+  - *Rejected:* leaving `348px` in the framed page while only the shell rail resizes (stale left margin and four-column fit after a drag).
+- **Narrow viewports and `.rfoot` retirement (`(1717)`, technical).** The `26px` bottom status bar is shown on every viewport width (it is not part of the slide-over rail), and `.rfoot` is retired from shell-framed rail rendering entirely (unframed standalone renders: see `(1724)`), including the `< 1600px` slide-over rail, so `Home`, global settings, and `#gear` / `#gmenu` exist exactly once (in the bottom bar) with no duplicate IDs and remain reachable on narrow viewports. Code that queries `.rfoot` (for example the companion stage footer lookup in `dashboard-companion-stage.js`) is retargeted.
+  - *Rejected:* keeping a footer in the slide-over rail (duplicate `#gear`, two global-control homes).
+- **Top-Left telemetry reuses existing elements (`(1718)`, technical).** The worktree branch badge (`.worktree-branch`) and harness/host badge (`.tph-hs`) already exist in the session header template and are populated from data the dashboard already receives; this ticket relocates and regroups them in the Top-Left cluster and adds no new data path or payload field (T0). When a session is not git-backed, or on non-session pages, the badge hides without a JS error.
+  - *Rejected:* a new telemetry data source (breaks T0 transparency).
+- **`.usage-toggle` selectors and compact mode follow the relocation (`(1719)`, technical).** Usage styles currently scoped to `.tcen > .usage-toggle` / `.dwrap > .top.tu`, the compact step-down driven by topbar width (`dashboard-rail.js` `topFit`), and the popover anchor lookup (`dashboard-rail-popovers.js`, `topEl.querySelector(".usage-toggle")`) are retargeted to the bottom bar. The trigger and popover DOM class names stay; compact mode in the bar is driven by the bar's right-cell width, and the usage cards from the sibling usage ticket must fit the upward popover.
+  - *Rejected:* leaving topbar-scoped selectors in place (the relocated toggle would lose its styling, compact step-down, and popover anchoring).
+- **Supersession of earlier rail-footer placement (`(1720)`, announced).** This ticket supersedes the Settings/Home footer placement inside `.rail-session-panel` from `344452e44` and the `.rfoot`-adjacent home placement in `261122-epic-werkschaft-lead-companion`'s cross-child decisions; the VRM Companion slot contract in those commits (`#rail-companion-slot` geometry, zero jitter, `document.body`-mounted messenger) is unchanged. `344452e44`'s own message anticipates this overhaul.
+- **Whole-page-scrolling frames stay inside the well (`(1721)`, technical).** Because the backdrop is not a clip, pages that scroll as a whole inside the frame (index/Home, worktree, Ticket Map; the shell header already translates away via `shScroll` in `dashboard-lifecycle.js`) must not paint over the top chrome band, the well rim, or the side margins. While such a frame is scrolled (`ent.y > 0`) the shell clips the frames layer to the well rectangle (`clip-path` on `.frames` or a shell-owned cover strip; the implementer picks one), restoring the full-window layer at scroll top (a small threshold or short transition is allowed to avoid an abrupt toggle at the first pixel) so the top-band handles stay visible and clickable.
+  - *Rejected:* leaving scrolled content to overdraw the chrome band (breaks Variant D and the non-session "render cleanly" constraint); restyling each framed page's own scroller.
+- **Bottom bar joins the shell's modal dimming and click-blocking (`(1722)`, technical).** Because the frames layer now ends above the bar, the bar is outside the iframe scrim: extend the `data-fdim` pointer-events rule and the dim to the bar, bound the rail's bottom edge at the bar's top, and let the Top-Right grid cell pass clicks through to the iframe-owned handles beneath it (as `.tcen` does today).
+  - *Rejected:* leaving the bar interactive and undimmed under an iframe modal.
+- **Topbar height is one value for the shell and the framed page (`(1723)`, technical).** The code today uses `--toph: 34px` (shell and framed document, handle tab height). The mockup-approved value is `36px`: Phase 1 sets `--toph` to `36px` in both documents (single custom-property change) and starts the well at that height, so no interim mismatch exists between phases.
+  - *Rejected:* keeping `34px` under a `36px` well (2px interim mismatch).
+- **Unframed standalone renders keep their in-page footer and `tcen` (`(1724)`, technical).** The `Frame: false` templates render their own `.top`, `tcen`, and rail footer; the shell-owned bottom bar does not exist there. Those renders keep their current in-page controls unchanged (no regression, T0); the relocation, `.rfoot` retirement, and single-`#gear` rules apply to shell-framed rendering. Phase 2 records in its Result which routes still render unframed.
+  - *Rejected:* retiring `.rfoot`/`tcen` from the shared rail template unconditionally (an unframed render would lose Home, `#gear`, usage, and `#talert`); deleting unframed code paths here (out of scope).
+- **Track 1 / Track 2 boundary (`(1714)=a`).** Do not change `#bgal` always-open semantics, Ticket Map `#tmback` modal behavior, or `#drawer` workpanel internals in this ticket; those belong to the separate Track 2 design and implementation ticket.
+
+## Constraints
+
+- Convention: ai-docs/manuals/shipped-surface-boundary.md (declared for agents-plugin-tool/)
+- Convention: ai-docs/manuals/release-compatibility.md (declared for agents-plugin-tool/internal/)
+- Convention: ai-docs/manuals/performance.md (declared for agents-plugin-tool/)
+- Convention: ai-docs/manuals/dashboard-style.md (declared for agents-plugin-tool/internal/wsdashboard/assets/, ai-docs/assets/mockups/)
+- **Implementation Conventions manuals (must be read before editing):**
+  - `ai-docs/manuals/dashboard-style.md` — borderless Material tonal tokens, Dark/Light parity, plus the `(1709)=a` scoped outer-chrome hairline exception.
+  - `ai-docs/manuals/performance.md` — Frontend Minimal Updates: no per-frame layout thrash, RAF-throttled splitter drag via CSS custom properties, no unnecessary DOM rebuilds on SSE updates.
+  - `ai-docs/manuals/shipped-surface-boundary.md` and `ai-docs/manuals/release-compatibility.md` — T0 compatibility verification.
+- **Approved visual reference:** `ai-docs/assets/mockups/261127/dashboard-shell-d-layout/index.html` (with sibling `styles.css` and `app.js`). Note one deliberate delta from the mockup's Preset 1: per `(1713)=c`, `#tkhandles` (`.tk-handle` + `#tkadd`) remain in Top-Right (Global Zone) alongside temporary `#drhandle`/`#ghandle`/`#thandle` rather than moving to the bottom bar.
+- **Left-rail VRM Companion contract (`(148)=a`, landed in `344452e44` & `b326952ee`):** Preserve `.rail[data-companion-dock="rail-slot"]` (`>= 1600px`) flex-column layout with `.rail-session-panel` (`flex: 1 1 0; min-height: 0`) above fixed-height `#rail-companion-slot` (`flex: 0 0 auto; width: 100%; box-sizing: border-box`). Expanding/collapsing `details.rws-unreg` or scrolling `#rlist` must keep `0px` vertical jitter on `#rail-companion-slot`; dragging the rail splitter across `220px–360px` must smoothly resize `#rail-companion-slot` and wake the idle VRM loop in `dashboard-companion-stage.js`; the `document.body`-mounted Companion Messenger popup must remain unclipped by outer shell overflow rules.
+- **Usage & Account Switcher contract (`261127-feat-ws-harness-account-switcher-and-slot-continuity`, landed in `83b6741c7`):** Preserve `.usage-toggle` trigger/popover DOM selectors, `account-changed` SSE updates, and 1-click account switching inside the upward-anchored bottom-right popover.
+- **Responsive breakpoints & gallery coexistence:** Preserve the `1600px` `WIDE` threshold (`gallery.js`), Band 4 `canFitFourCol` formula (`cards.js`, with the live rail width per `(1716)`), `data-pincol`, narrow `< 1600px` slide-over rail with scrim, and `drRoom()` / `--drhw` / `--tkhw` layout calculations so Top-Right handles and centered search never overlap at `1200px`, `1440px`, or `1920px+`. Keep global utilities (`Home`, global settings, `#gear`) reachable on narrow viewports as well.
+- **Non-session pages:** Index/Home, Settings (`?section=...`), and Worktree pages must render cleanly inside the Variant D outer shell and bottom status bar without broken selectors or orphan spacing.
+- **Modular JS/CSS hygiene:** Avoid further inflating oversized monoliths (`dashboard-rail.css`, `dashboard-rail.js`, `dashboard-leads.js`); isolate new shell/splitter/bottom-bar CSS and JS cleanly where appropriate.
+
+## Prior Decisions
+
+- 344452e4 (2026-11-28, commit): "Keeps #rail-companion-slot responsive (width: 100%, box-sizing: border-box, zero hardcoded 340px width ...) and wakes idle VRM layout immediately on width/position change so upcoming Variant D resizable left-rail overhaul rebases cleanly." — bearing: constrains
+- 344452e4 (2026-11-28, commit): "wraps Sessions, Unregistered workspaces, and Settings/Home footer inside .rail-session-panel and hands the dedicated bottom-left corner (#rail-companion-slot) to Companion Mode with strictly 0px vertical jitter" — bearing: constrains
+- 3e30b026 (2026-11-28, commit): "Keep .ws-companion ... mounted in document.body anchored to #rail-companion-slot.getBoundingClientRect() rather than reparenting it into #r-rail; this prevents .rail { overflow: hidden } from clipping" — bearing: constrains
+- 261127-feat-ws-harness-account-switcher-and-slot-continuity (2026-11-28, ticket Resolution): "Completed Phases 1-3 ... shared account slot registry ... assets/usage.js assets/usage.css assets/dashboard-rail-popovers.js" — bearing: constrains
+- 261119-feat-ws-dashboard-shell-topbar-rail-redesign (2026-11-19, commit cb363b32): "Implemented and reviewed under peer lead AGY-5 against the approved mockup shell-redesign-v4.html; ticket closed in 6d80aa6f2." — bearing: supports
+- 17fc5c8f (2026-11-19, commit): "Preserved existing overlay iframe shell architecture and top-right iframe-owned handles as technical/owner constraints; compatibility tier is T0 (internal dashboard assets only)." — bearing: supports
+- 261122-epic-werkschaft-lead-companion (2026-11-22, Cross-Child Decisions): "App-scoped shell mount & rail-bottom default home: Mount once on the persistent outer shell (shell.js / dashboard.tmpl) ... default home rests on the left session rail bottom divider above .rws-unreg / .rfoot" — bearing: constrains
+
+## Route Facts
+
+| fact | value | evidence |
+|---|---|---|
+| scope.span | multi-file | agents-plugin-tool/internal/wsdashboard/assets/dashboard.tmpl, dashboard-rail.css, dashboard-rail.js, dashboard-drawer.js, dashboard-drawer.css, usage.js, usage.css, dashboard-rail-popovers.js, tracker-mount.js, new shell/splitter/bottom-bar CSS and JS, ai-docs/manuals/dashboard-style.md |
+| scope.surface | cross-module | topbar and rail templates, drawer/tracker handle layout (drRoom, --drhw, --tkhw), usage popover, companion slot sizing; no Go exported symbol named |
+| scope.new_public_symbol | no | none; new frontend files are internal assets and no exported Go symbol is named |
+| scope.new_type_contract | no | none; T0 transparent, no wire or store shape change |
+| scope.test_surface | existing | agents-plugin-tool/internal/wsdashboard/usage.test.js, frontend-drawer.test.js, frontend-companion*.test.js, shell_test.go, rail_test.go, testdata/shell-topbar.browser.cjs, testdata/usage-footer.browser.cjs, testdata/companion-vrm-rail-dock.browser.cjs |
+| complexity.reuse_points | confirmed | existing selectors present in dashboard.tmpl (tcen, qsslot, railbtn, rfoot, rail-companion-slot) and usage.js .usage-toggle; mockup ai-docs/assets/mockups/261127/dashboard-shell-d-layout/ exists |
+| complexity.side_effect_risk | high | relocating .usage-toggle, #talert, #gear/#gmenu and retiring .rfoot touches rail JS, companion stage sizing, drawer room math and many DOM-selector tests |
+| risk.correctness | high | layout calculations (drRoom, canFitFourCol, 1600px WIDE, rail width variable) interact with the companion slot and gallery at three viewport sizes |
+| risk.fit | moderate | large existing monoliths (dashboard-rail.css/js, dashboard-leads.js) must not grow; new modules required |
+| risk.test | high | acceptance depends on Playwright visual checks at 1200/1440/1920 in dark and light; many existing browser tests reference moved selectors |
+| risk.security_or_contract | moderate | account switcher popover contract and SSE account-changed behavior must survive relocation; no wire change |
+
+## Phases
+
+Three sequential phases, each a reviewable slice that leaves the dashboard working; Phases 2 and 3 depend on Phase 1's shell geometry. Each phase runs its own verification below, and Phase 3 closes with the full visual acceptance matrix.
+
+### Phase 1: Variant D Outer Chrome, Stage Well, and Resizable Rail
+
+Per `(1715)` and `(1716)`:
+
+1. Apply the continuous outer chrome background (`#111216` dark / `#e7e7e2` light) across the shell's topbar band, left rail, and the (still empty) bottom-bar band, with `--toph` set to `36px` in the shell and framed documents per `(1723)`, and the `12px`-rounded inset well (`#16181d` dark / `#f4f4f1` light, subtle `1px` rim, `6px` right margin, `6px` left margin when the rail is collapsed) painted by the shell behind the transparent `.frames` layer; the frames layer's bottom edge is offset by the `26px` bar height.
+2. Add a persisted (`localStorage`), RAF-throttled drag splitter on the left rail (`220px–360px`, default `280px`) that updates `--rail-w` via CSS custom property, replace the hard-coded `348px` reservations with the `--rail-w`-based reservation, and push the live width to the framed page over the existing shell-to-frame message channel so `canFitFourCol` / `placeGallery`, the `railph` placeholder, and `#rail-companion-slot` (`width: 100%`) stay synchronized.
+3. Style active session rows in `#rlist` with tonal background fill + left accent bar (`(1709)=a`).
+4. Update `ai-docs/manuals/dashboard-style.md` to record the `(1709)=a` scoped hairline exception for outer shell chrome and the inset stage well.
+5. Update existing tests that pin the moved geometry (`348px` assertions, `testdata/shell-topbar.browser.cjs`, `testdata/companion-vrm-rail-dock.browser.cjs`) and add checks for the rail width variable at `220px`, `280px`, and `360px`.
+
+Verification: `go test ./internal/wsdashboard/...`, `GOOS=windows go vet ./...`, the affected Node suites (drawer, rail, companion), and a Playwright check at `1200×800`, `1440×900`, `1920×1080` (Dark and Light) of `0px` horizontal overflow, drag resize `220px` ↔ `360px` with collapse/expand, `0px` vertical jitter on `#rail-companion-slot` when toggling `details.rws-unreg` or scrolling `#rlist`, framed-page four-column fit following the live width, Band 4 (`#bgal`) coexistence, and a scrolled index and worktree page staying clipped inside the well with no overdraw of the chrome band or margins per `(1721)`.
+
+### Phase 2: Global Bottom Status Bar (`26px`, 3-Column Grid)
+
+Per `(1708)=a`, `(1717)`, and `(1719)`:
+
+1. Left cluster: relocate `.rail-home`, `.r-config-global`, and `#gear` → `#gmenu` out of `.rfoot` into the bottom-left global bar, retire `.rfoot` from shell-framed rail rendering entirely (including the slide-over rail; unframed standalone renders keep their in-page footer per `(1724)`), retarget `.rfoot` lookups (such as the companion stage footer lookup), and flip `#gmenu` to open **upward**, clamped within the viewport. The bar is visible on every viewport width.
+2. Center cluster: relocate the `#talert` cross-session alert strip into bottom-center, supporting both empty and active states, collapsing gracefully when no alert is active.
+3. Right cluster: relocate `.usage-toggle` into bottom-right with **upward**, viewport-clamped popover anchoring, retarget its topbar-scoped selectors, compact step-down, and popover anchor lookup per `(1719)`, and preserve all `83b6741c7` 1-click account switcher, `account-changed` SSE, and usage card behaviors.
+4. Extend the `data-fdim` click-blocking and dimming to the bar and bound the rail's bottom edge at the bar per `(1722)`.
+5. Update existing tests that pin the old locations (`testdata/usage-footer.browser.cjs`, `usage.test.js` anchors, rail/shell tests that query `.rfoot` or the topbar `.usage-toggle`).
+
+Verification: Go, vet, and Node suites as in Phase 1 (including `usage.test.js` and companion tests), plus Playwright at the three viewports in both themes: upward clamping of `#gmenu` and the `.usage-toggle` account switcher popover, `Home` / global settings / `#gear` reachable below `1600px` with exactly one `#gear` in the DOM, `#talert` empty and active states with no overlap among the three bottom-bar clusters, the bar dimmed and non-interactive while an iframe modal is open, `0px` horizontal overflow, and non-session pages (Home/Index, Settings, Worktree) rendering cleanly with the bar.
+
+### Phase 3: Topbar Zone Split and Final Visual Acceptance
+
+Per `(1711)`, `(1713)=c`, and `(1718)`:
+
+1. Structure the shell's `36px` topbar as a 3-column grid (`minmax(0, 1fr) auto minmax(0, 1fr)`). Left: `#railbtn`, session header region (`.tph-parent`, `.sren`, `.snm`, `.sseq`, `.child-close`), the existing branch badge (`.worktree-branch`, git-backed sessions only) and harness/host badge (`.tph-hs`), and `#sse`. Center: the `#qsslot` / `#tkqs` / `#shandle` search pill (`⌘K` / `Ctrl+K`) at the true visual center, shrinking gracefully down to `1200px`. Right: global `#tkhandles` (`.tk-handle` + `#tkadd`) plus the preserved `#drhandle`, `#ghandle`, and `#thandle`, with `drRoom()` / `--drhw` / `--tkhw` updated so handles never collide with the centered search.
+2. On non-session pages (Home/Index, Settings) per-session telemetry hides without JS errors.
+3. Update tests pinning the old topbar clusters (`testdata/shell-topbar.browser.cjs`, `shell_test.go`, `rail_test.go`).
+
+Verification: Go, vet, and Node suites as in Phase 1, plus Playwright at `1200×800`, `1440×900`, `1920×1080` in Dark and Light: `0px` horizontal overflow, no overlap between the centered search and the left/right topbar clusters, the Top-Right cell passing clicks through to the iframe-owned handles, handles aligned with the drawer and tracker slide-out, and a final side-by-side capture of the result against the approved visual reference `ai-docs/assets/mockups/261127/dashboard-shell-d-layout/index.html` (Dark and Light). Parity means the checklist of: chrome and well fills, rim and `12px` radius, rail/topbar/bottom-bar band heights (`36px` / `26px`), splitter range, active-row tonal fill with left accent bar, centered search position, and bottom-bar cluster contents (non-git-backed sessions are exercised with a session fixture lacking a worktree branch, and non-session pages with the Home and Settings routes); the only intentional delta is `(1713)=c` (`#tkhandles` in Top-Right), and any other difference is recorded in the Result.
