@@ -176,6 +176,10 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		spec.Env = environ()
 	}
 	c.mcpStale = false
+	dashboardControlEffective := rec.DashboardControlAccess
+	if attach {
+		dashboardControlEffective = rec.MCPDashboardControl
+	}
 	var mcpEnv map[string]string
 	switch {
 	case durable:
@@ -234,11 +238,24 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 			mcpEnv = cmd.Env
 		}
 	}
+	if spec.MCPSession != nil {
+		c.r.markMCPDashboardControl(rec.ReplyID, dashboardControlEffective)
+	}
+	var convHistoryEffective bool
 	if attach {
 		spec.ExecCutover = c.rejoinExecCutover(rec)
+		if durable {
+			// Durable leads always mint a fresh in-daemon MCP session (never persist MCPToken).
+			convHistoryEffective = rec.Lead && rec.ConvHistoryAccess
+		} else {
+			convHistoryEffective = rec.Lead && rec.MCPToken != "" && rec.MCPHolder == rec.HolderID && rec.MCPConvHistoryAccess
+		}
 	} else {
 		c.decideExecCutover(rec, def, &spec, mcpEnv)
+		convHistoryEffective = rec.Lead && rec.ConvHistoryAccess
 	}
+	c.setStatus(func() { c.convHistoryAccessEffective = convHistoryEffective })
+	c.r.markMCPConvHistoryAccess(rec.ReplyID, convHistoryEffective)
 	cutover = spec.ExecCutover
 	if durable {
 		spec.PermissionLevel = level
@@ -293,7 +310,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	if live, ok := proc.(liveLeadMode); ok {
 		activeMode = live.activePermissionMode()
 	}
-	c.setStatus(func() { c.proc, c.activeMode = proc, activeMode })
+	c.setStatus(func() { c.proc, c.activeMode, c.dashboardControlEffective = proc, activeMode, dashboardControlEffective })
 	c.events = proc.Events()
 	if durable {
 		c.bindDurableMCP(spec.MCPSession, rec, proc, level)
@@ -319,7 +336,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		rec.ExecCutoverHolder = cutoverHolder(cutover, id)
 		rec.forgetMCP()
 		if s := spec.MCPSession; s != nil && !durable {
-			rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, s.URL, mcpEnv, id
+			rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder, rec.MCPConvHistoryAccess, rec.MCPDashboardControl = s.Token, s.URL, mcpEnv, id, convHistoryEffective, dashboardControlEffective
 		}
 	})
 	c.writeRegistration()

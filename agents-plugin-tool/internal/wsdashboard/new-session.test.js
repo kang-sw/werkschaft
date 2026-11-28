@@ -727,3 +727,61 @@ for (const field of ['model', 'effort']) {
     assert.equal(body[field], '');
   });
 }
+
+test('whiteboard-only toggle remembers last choice and seeds whiteboardFirst.<id> before navigation', () => {
+  const store = new Map(), log = [];
+  let pending, reply;
+  const hs = [{ harness: 'claude', lead: true, available: true, models: [{ id: 'opus' }], efforts: ['high'], permission_modes: ['auto'] }];
+  const env = makeEnv({
+    wsT: s => s,
+    localStorage: {
+      getItem: k => store.has(k) ? store.get(k) : null,
+      setItem: (k, v) => { store.set(k, v); log.push(['ls', k, v]); }
+    },
+    tkFetch(path, opt, cb) { pending = cb; },
+    railPost(path, body, cb) { log.push(['post', path, body]); reply = cb; }
+  });
+  env.c.go = href => log.push(['go', href]);
+  const wbSw = env.find(env.p.el, e => e.attrs['data-wb-only-switch']);
+  const convSw = env.find(env.p.el, e => e.attrs['data-conv-history-switch']);
+  assert.ok(wbSw && convSw, 'both footer opt-in switches exist');
+  assert.equal(wbSw.attrs['aria-checked'], 'false');
+  assert.equal(convSw.attrs['aria-checked'], 'false');
+
+  env.p.open('root', 'name', env.btn);
+  pending(200, { harnesses: hs });
+  wbSw.events.click();
+  convSw.events.click();
+  assert.equal(wbSw.attrs['aria-checked'], 'true');
+  assert.equal(convSw.attrs['aria-checked'], 'true');
+
+  // Failed start writes neither storage key.
+  env.start.events.click({ target: env.start });
+  assert.equal(log[0][2].convHistoryAccess, true);
+  reply(500, {}, 'fail');
+  assert.equal(store.size, 0);
+
+  // Successful 201 saves wbOnly in newSession and seeds whiteboardFirst.<id>="1" before go().
+  log.length = 0;
+  env.start.events.click({ target: env.start });
+  reply(201, { id: 'sess9' });
+  const wbIdx = log.findIndex(e => e[0] === 'ls' && e[1] === 'ws.dashboard.whiteboardFirst.sess9');
+  const goIdx = log.findIndex(e => e[0] === 'go' && e[1] === '/s/sess9');
+  assert.ok(wbIdx >= 0 && goIdx > wbIdx, 'whiteboardFirst.<id> is seeded before go()');
+  assert.equal(store.get('ws.dashboard.whiteboardFirst.sess9'), '1');
+  assert.equal(JSON.parse(store.get('ws.dashboard.newSession')).whiteboardOnly, true);
+
+  // Reopening restores whiteboardOnly=true while convHistory resets to false (never remembered).
+  env.p.open('root', 'name', env.btn);
+  pending(200, { harnesses: hs });
+  assert.equal(wbSw.attrs['aria-checked'], 'true', 'whiteboardOnly restores from ws.dashboard.newSession');
+  assert.equal(convSw.attrs['aria-checked'], 'false', 'convHistory resets to false on reopen');
+
+  // Turning whiteboardOnly back OFF does not seed whiteboardFirst for the next session.
+  wbSw.events.click();
+  assert.equal(wbSw.attrs['aria-checked'], 'false');
+  env.start.events.click({ target: env.start });
+  reply(201, { id: 'sess10' });
+  assert.equal(store.has('ws.dashboard.whiteboardFirst.sess10'), false);
+  assert.equal('whiteboardOnly' in JSON.parse(store.get('ws.dashboard.newSession')), false);
+});

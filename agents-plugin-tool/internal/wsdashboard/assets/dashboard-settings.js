@@ -101,7 +101,7 @@ var wsSettingsChoiceLabels = {
     target: query.get("target") || "",
     context: {worktree: query.get("worktree") || "", session: query.get("session") || ""}
   };
-  var snapshot = null, failure = "", activeSection = requestedSection === "account" || requestedSection === "tier_routing" || requestedSection === "companion" ? requestedSection : "workflow";
+  var snapshot = null, failure = "", activeSection = sections.includes(requestedSection) ? requestedSection : "workflow";
   var adapter = "claude", filter = "all", focusedTierProvider = "";
   var buckets = new Map(), warnings = new Map(), openLayers = new Set();
   var catalog = window.WsSettingsCatalog;
@@ -166,6 +166,119 @@ var wsSettingsChoiceLabels = {
     send("companion-context", window.WsShell.companionContext("settings"));
   }
 
+  var dcSettingsGen = 0;
+  var dcSettingsRefs = new Map();
+  var dcSettingsSensitiveRe = /(?:password|passwd|secret|token|api[-_\s]?key|credential|cookie|bearer|private[-_\s]?key|auth[-_\s]?key)/i;
+  function dcSettingsRedact(s) {
+    return String(s || "")
+      .replace(/([?&](?:token|login)=)[^&#\s"'<>]+/g, "$1[REDACTED]")
+      .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [REDACTED]")
+      .replace(/(ws_dashboard_(?:localhost|token|screenshot_render)=)[^;\s"'<>]+/g, "$1[REDACTED]")
+      .replace(/\b(?:sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|AIza[A-Za-z0-9_-]{20,})\b/g, "[REDACTED]");
+  }
+  function dcSettingsSensitiveInput(el) {
+    if (!el || (el.tagName !== "INPUT" && el.tagName !== "TEXTAREA")) return false;
+    var t = el.tagName === "INPUT" ? String(el.getAttribute("type") || el.type || "text").toLowerCase() : "textarea";
+    if (t === "password") return true;
+    if ([el.getAttribute("name"), el.getAttribute("id"), el.getAttribute("autocomplete"), el.getAttribute("placeholder"), el.getAttribute("aria-label"), el.getAttribute("title")].some(function (v) {
+      return !!(v && dcSettingsSensitiveRe.test(v));
+    })) return true;
+    if (el.attributes) {
+      for (var i = 0; i < el.attributes.length; i++) {
+        var a = el.attributes[i];
+        if (a && a.name && a.name.indexOf("data-ws-") === 0 && (dcSettingsSensitiveRe.test(a.name) || dcSettingsSensitiveRe.test(a.value || ""))) return true;
+      }
+    }
+    return false;
+  }
+  function dcSettingsDataWS(el) {
+    if (!el.attributes) return null;
+    var out = null;
+    for (var i = 0; i < el.attributes.length; i++) {
+      var a = el.attributes[i];
+      if (a && a.name && a.name.indexOf("data-ws-") === 0) {
+        if (!out) out = {};
+        out[a.name] = dcSettingsRedact(String(a.value || "").slice(0, 200));
+      }
+    }
+    return out;
+  }
+  function handleSettingsDaemonBridgeReq(msg) {
+    var id = msg.id, op = msg.op, params = msg.params || {};
+    function reply(ok, payload, err) {
+      send("daemon-bridge-res", { id: id, ok: !!ok, payload: payload || null, error: err || null });
+    }
+    if (op === "dom.snapshot") {
+      dcSettingsGen = Number(params.generation) || 1;
+      dcSettingsRefs.clear();
+      var maxNodes = Math.min(1500, Math.max(1, Number(params.max_nodes) || 1500));
+      var refSeq = Number(params.ref_start) || 0;
+      var nodes = [];
+      var truncated = false;
+      var selector = "button, a[href], input, textarea, select, h1, h2, h3, [role='button'], [role='switch'], [role='tab'], [data-ws-panel]";
+      var list = document.body ? document.body.querySelectorAll(selector) : [];
+      for (var i = 0; i < list.length; i++) {
+        var node = list[i];
+        if (node.closest && node.closest('[data-ws-dom-exclude="1"]')) continue;
+        if (node.hidden || (node.getClientRects && node.getClientRects().length === 0)) continue;
+        if (nodes.length >= maxNodes) { truncated = true; break; }
+        var tag = node.tagName.toLowerCase();
+        var interactive = tag === "button" || tag === "a" || tag === "input" || tag === "textarea" || tag === "select" || node.hasAttribute("role");
+        var entry = { scope: "settings", tag: tag };
+        if (node.getAttribute("role")) entry.role = node.getAttribute("role");
+        if (interactive) {
+          refSeq += 1;
+          entry.ref = "g" + dcSettingsGen + "-r" + refSeq;
+          dcSettingsRefs.set(entry.ref, node);
+        }
+        var label = node.getAttribute("aria-label") || node.getAttribute("placeholder") || node.getAttribute("title") || node.textContent || "";
+        label = dcSettingsRedact(label.replace(/\s+/g, " ").trim().slice(0, 160));
+        if (label) entry.name = label;
+        var dws = dcSettingsDataWS(node);
+        if (dws) entry.data_ws = dws;
+        if (tag === "input" || tag === "textarea" || tag === "select") {
+          if (tag === "input") entry.input_type = String(node.getAttribute("type") || node.type || "text").toLowerCase();
+          if (dcSettingsSensitiveInput(node)) {
+            entry.masked = true;
+            if (node.value) entry.value = "[REDACTED]";
+          } else if (tag === "input" && (entry.input_type === "checkbox" || entry.input_type === "radio")) {
+            entry.checked = !!node.checked;
+          } else if (node.value) {
+            entry.value = dcSettingsRedact(String(node.value).slice(0, 240));
+          }
+        }
+        if (node.disabled || node.getAttribute("aria-disabled") === "true") entry.disabled = true;
+        nodes.push(entry);
+      }
+      reply(true, { nodes: nodes, truncated: truncated, ref_end: refSeq }, null);
+      return;
+    }
+    if (op === "ui.click_ref" || op === "ui.fill_ref") {
+      var gen = Number(params.generation) || 0;
+      if (!dcSettingsGen || (gen && gen !== dcSettingsGen)) { reply(false, null, "stale_ref"); return; }
+      var el = dcSettingsRefs.get(String(params.ref || ""));
+      if (!el) { reply(false, null, "ref_not_found"); return; }
+      if (!el.isConnected) { reply(false, null, "stale_ref"); return; }
+      if (el.closest && el.closest('[data-ws-dom-exclude="1"]')) { reply(false, null, "denied"); return; }
+      if (el.disabled || el.getAttribute("aria-disabled") === "true") { reply(false, null, "denied"); return; }
+      if (typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest", inline: "nearest" });
+      if (typeof el.focus === "function") el.focus({ preventScroll: true });
+      if (op === "ui.click_ref") {
+        el.click();
+        reply(true, { route: location.pathname }, null);
+      } else {
+        if (el.readOnly) { reply(false, null, "denied"); return; }
+        var masked = dcSettingsSensitiveInput(el);
+        el.value = String(params.value === undefined || params.value === null ? "" : params.value);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        reply(true, { route: location.pathname, masked: masked }, null);
+      }
+      return;
+    }
+    reply(false, null, "invalid_request");
+  }
+
   window.addEventListener("message", function (event) {
     if (event.source !== window.parent || event.origin !== location.origin) return;
     var message = window.WsShell.message(event.data);
@@ -178,6 +291,7 @@ var wsSettingsChoiceLabels = {
         else delete document.documentElement.dataset.theme;
         break;
       case "search": search.focus(); break;
+      case "daemon-bridge-req": handleSettingsDaemonBridgeReq(message); break;
     }
   });
   document.addEventListener("pointerdown", function () { send("press"); }, true);

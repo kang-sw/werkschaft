@@ -930,6 +930,16 @@ func (r *Runner) closeOne(id string) (State, error) {
 	return st, nil
 }
 
+// SetDashboardControlAccess toggles a hosted lead conversation's persisted
+// ws/daemon.* dashboard-control opt-in without stopping a running process.
+// Revocation takes effect immediately on server-side MCP dispatch; newly
+// enabling takes effect after the next process start.
+func (r *Runner) SetDashboardControlAccess(id string, enabled bool) (State, error) {
+	return r.act(id, func(c *conv) error {
+		return c.setDashboardControlAccess(enabled)
+	})
+}
+
 // SetSettings changes the conversation's model or effort (nil leaves one
 // unchanged, "" returns it to the harness default). The change applies at
 // the next turn boundary: in-stream when the backend has a control for it,
@@ -948,6 +958,56 @@ func (r *Runner) SetSettings(id string, model, effort *string) (State, error) {
 		c.setSettings(model, effort)
 		return nil
 	})
+}
+
+// SetConvHistoryAccess updates a lead conversation's persisted
+// conv_history_access flag immediately without stopping a running process.
+func (r *Runner) SetConvHistoryAccess(id string, enabled bool) (State, error) {
+	return r.act(id, func(c *conv) error {
+		return c.setConvHistoryAccess(enabled)
+	})
+}
+
+// ConvHistoryAccess reports the live persisted conv_history_access flag for
+// replyID from memory (zero disk I/O). Non-leads and unknown IDs return false.
+func (r *Runner) ConvHistoryAccess(id string) bool {
+	rec, ok := r.RecordByReplyID(id)
+	return ok && rec.Lead && rec.ConvHistoryAccess
+}
+
+// ReviveLead unhides an archived lead or reopens a closed lead. Live leads are
+// a no-op; child/worker sessions and unknown/pruned IDs return a clear error.
+func (r *Runner) ReviveLead(id string) error {
+	r.mu.Lock()
+	c, open := r.convs[id]
+	rec, closed := r.closed[id]
+	parked := r.parked[id]
+	r.mu.Unlock()
+	if !open && parked {
+		if c = r.unpark(id); c != nil {
+			open = true
+		}
+	}
+	switch {
+	case open:
+		rRec := c.record()
+		if !rRec.Lead {
+			return badRequest("revive applies to lead sessions only")
+		}
+		if c.state().Hidden {
+			_, err := r.SetHidden(id, false)
+			return err
+		}
+		return nil
+	case closed:
+		if !rec.Lead {
+			return badRequest("revive applies to lead sessions only")
+		}
+		_, err := r.Reopen(id)
+		return err
+	default:
+		return errUnknown
+	}
 }
 
 // open returns the open conversation id: errClosed for a closed one,

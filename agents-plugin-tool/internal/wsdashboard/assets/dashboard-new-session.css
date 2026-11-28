@@ -534,6 +534,15 @@
   justify-content: space-between;
   min-width: 0;
 }
+.rpop.ns-modal .ns-foot-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  align-items: center;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--wb-line) 65%, transparent);
+  min-width: 0;
+}
 .rpop.ns-modal .ns-fg {
   display: flex;
   flex-wrap: wrap;

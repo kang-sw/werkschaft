@@ -109,7 +109,17 @@
     "companion.remember_soul": ">=0.53.2-dev <0.54.0",
     "companion.remember_episode": ">=0.53.2-dev <0.54.0",
     "companion.recall_memory": ">=0.53.2-dev <0.54.0",
-    "delegation.report": ">=0.53.2-dev <0.54.0"
+    "delegation.report": ">=0.53.2-dev <0.54.0",
+    "daemon.curl": ">=0.53.2-dev <0.54.0",
+    "daemon.tabs": ">=0.53.2-dev <0.54.0",
+    "daemon.dom": ">=0.53.2-dev <0.54.0",
+    "daemon.ui": ">=0.53.2-dev <0.54.0",
+    "daemon.screenshot": ">=0.53.2-dev <0.54.0",
+    "conv.sessions": ">=0.53.2-dev <0.54.0",
+    "conv.search": ">=0.53.2-dev <0.54.0",
+    "conv.history": ">=0.53.2-dev <0.54.0",
+    "conv.read": ">=0.53.2-dev <0.54.0",
+    "conv.reveal": ">=0.53.2-dev <0.54.0"
   },
   "commands": {
     "runtime.info": ">=0.53.2-dev <0.54.0",

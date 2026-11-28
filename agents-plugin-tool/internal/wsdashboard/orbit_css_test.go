@@ -63,10 +63,10 @@ func TestRailUnreadAttentionCSS(t *testing.T) {
 	css := mustAsset(t, "dashboard.css")
 	for _, want := range []string{
 		"background: linear-gradient(90deg, var(--wb-accent-policy) 0%, color-mix(in srgb, var(--wb-accent-policy) 68%, transparent) 60%, color-mix(in srgb, var(--wb-accent-policy) 18%, transparent) 100%);",
-		"animation: attn-breathe 1s ease-in-out infinite;",
-		"animation: attn-breathe-ring 1s ease-in-out infinite;",
-		".rail .rs.attn.attn-flash::before { animation: attn-flash .38s ease-in-out 3, attn-breathe 1s ease-in-out 1.14s infinite; }",
-		".rail .rs.attn.attn-flash .hb::after { animation: attn-flash-ring .38s ease-in-out 3, attn-breathe-ring 1s ease-in-out 1.14s infinite; }",
+		"animation: attn-breathe 1s ease-in-out var(--attn-breathe-delay, 0s) infinite;",
+		"animation: attn-breathe-ring 1s ease-in-out var(--attn-breathe-delay, 0s) infinite;",
+		".rail .rs.attn.attn-flash::before { animation: attn-flash .38s ease-in-out calc(-1 * var(--attn-t, 0s)) 3, attn-breathe 1s ease-in-out calc(1.14s - var(--attn-t, 0s)) infinite; }",
+		".rail .rs.attn.attn-flash .hb::after { animation: attn-flash-ring .38s ease-in-out calc(-1 * var(--attn-t, 0s)) 3, attn-breathe-ring 1s ease-in-out calc(1.14s - var(--attn-t, 0s)) infinite; }",
 		"@keyframes attn-flash { 0%, 100% { opacity: .04; } 50% { opacity: .44; } }",
 		"@keyframes attn-breathe { 0%, 100% { opacity: .04; } 50% { opacity: .28; } }",
 		".rail .rs.attn::before { animation: none !important; opacity: .16; }",

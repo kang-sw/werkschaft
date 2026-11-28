@@ -70,10 +70,13 @@ type LeadOptions struct {
 	// AccountSlotID selects the harness account slot for the new lead (empty
 	// uses the harness's active default slot). Additive T0 field.
 	AccountSlotID string
+	// ConvHistoryAccess opts the new lead into conv.* MCP tools. Additive T0.
+	ConvHistoryAccess bool
 	// Common intent is transient; selection is stored separately from Record.
-	PermissionLevel   PermissionLevel
-	PermissionFullAck bool
-	permissionUser    bool // set by the trusted control owner, never request JSON
+	PermissionLevel        PermissionLevel
+	PermissionFullAck      bool
+	permissionUser         bool // set by the trusted control owner, never request JSON
+	DashboardControlAccess bool
 }
 
 // leadPluginIsolation supplies the additive field's legacy default.
@@ -314,8 +317,12 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 	}
 	if lead != nil {
 		rec.Lead = true
+		rec.ConvHistoryAccess = lead.ConvHistoryAccess
+		rec.DashboardControlAccess = lead.DashboardControlAccess
 		if lead.CompanionRole != "" {
 			rec.Listed = false
+			rec.ConvHistoryAccess = false
+			rec.DashboardControlAccess = false
 			rec.CompanionRole = lead.CompanionRole
 			rec.CompanionSystemPrompt = lead.CompanionSystemPrompt
 		}

@@ -241,6 +241,9 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	if refusal := s.companionWorkApprovalRefusal(caller, callerFound, params.Name, params.Arguments); refusal != "" {
 		return toolErrorTextResponse(req.ID, refusal)
 	}
+	if refusal := s.convAccessRefusal(params.Name); refusal != "" {
+		return toolErrorTextResponse(req.ID, refusal)
+	}
 	// Central argument precheck: refuse a call that misses a required
 	// property or carries an undeclared top-level argument before any handler
 	// runs, naming every problem and the tool's own schema at once.
@@ -1722,6 +1725,10 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		return s.handleCompanionTool(ctx, req.ID, params.Name, params.Arguments, callerKey, caller, callerFound)
 	case delegationReportTool:
 		return s.handleDelegationReport(req.ID, params.Arguments, callerKey, caller, callerFound)
+	case daemonCurlTool, daemonTabsTool, daemonDOMTool, daemonUITool, daemonScreenshotTool:
+		return s.handleDaemonTool(ctx, req.ID, params.Name, params.Arguments)
+	case convSessionsTool, convSearchTool, convHistoryTool, convReadTool, convRevealTool:
+		return s.handleConvTool(ctx, req.ID, params.Name, params.Arguments, params.Meta)
 	case "mailbox.send":
 		return s.handleMailboxSend(req.ID, params.Arguments)
 	case "mailbox.recv":

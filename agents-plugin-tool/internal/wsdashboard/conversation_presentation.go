@@ -106,13 +106,42 @@ func (e ConvEntry) MailPreview() string {
 type conversationEffectRow struct {
 	Kind, Target, ID, Text string
 	Parts                  []conversationBoardText
+	TextHTML               template.HTML
 	PreviewHTML            template.HTML
+}
+
+type conversationEffectRowGroup struct {
+	IsLog bool
+	Rows  []conversationEffectRow
 }
 
 type conversationEffectTopic struct {
 	Name, Label, Target string
 	Rows                []conversationEffectRow
 	Items               []conversationEffectRow
+}
+
+// RowGroups groups contiguous log rows so templates can wrap consecutive logs
+// in a single shared well while leaving Rows flat for existing callers/tests.
+func (t conversationEffectTopic) RowGroups() []conversationEffectRowGroup {
+	if len(t.Rows) == 0 {
+		return nil
+	}
+	var groups []conversationEffectRowGroup
+	for i := 0; i < len(t.Rows); {
+		if t.Rows[i].Kind == "log" {
+			j := i + 1
+			for j < len(t.Rows) && t.Rows[j].Kind == "log" {
+				j++
+			}
+			groups = append(groups, conversationEffectRowGroup{IsLog: true, Rows: t.Rows[i:j]})
+			i = j
+			continue
+		}
+		groups = append(groups, conversationEffectRowGroup{Rows: t.Rows[i : i+1]})
+		i++
+	}
+	return groups
 }
 
 type conversationEffectCard struct {
@@ -197,6 +226,9 @@ func (e ConvEntry) WhiteboardCard() conversationEffectCard {
 		for j := range card.Topics[i].Rows {
 			row := &card.Topics[i].Rows[j]
 			row.Parts = conversationBoardTextParts(row.Text, e.BoardTargets)
+			if row.Kind == "log" {
+				row.TextHTML = renderConversationLogMarkdown(row.Text, e.BoardTargets)
+			}
 		}
 	}
 	return card

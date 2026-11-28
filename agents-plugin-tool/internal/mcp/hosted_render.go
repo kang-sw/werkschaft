@@ -8,6 +8,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wsmailbox"
 	"github.com/kang-sw/devenv/internal/wsrsrc"
 	"github.com/kang-sw/devenv/internal/wsstate"
 )
@@ -29,6 +30,7 @@ type HostedRender struct {
 	CallFallback         bool
 	DirectTools          []string
 	ExecCutover          string
+	DashboardControl     bool
 	Boards               *WhiteboardStores
 	Records              AgentRecordReader
 }
@@ -75,6 +77,13 @@ func hostedRenderServer(env []string, root string, render HostedRender, key stri
 	s.descriptorResolved = true
 	if render.ExecCutover != "" {
 		s.execCutover = render.ExecCutover
+	}
+	if render.DashboardControl {
+		s.dashboardControlEffective = true
+	} else if render.Records != nil {
+		if rec, ok := render.Records.RecordByReplyID(wsmailbox.ReplyID(key)); ok && rec.Lead && rec.Parent == nil && rec.ClosedAt == "" && !isCompanionBodyRecord(rec) && rec.DashboardControlAccess {
+			s.dashboardControlEffective = true
+		}
 	}
 	// A render may start the session-start tracker check (a background
 	// fetch); the server is released once that settles, without holding up

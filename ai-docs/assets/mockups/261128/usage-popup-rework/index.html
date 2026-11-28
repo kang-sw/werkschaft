@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Werkschaft · 플랜 사용량 · 계정 팝오버 리워크 (1821)=a</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<!-- Mockup control strip: outside dashboard chrome -->
+<div class="m-bar" role="toolbar" aria-label="목업 컨트롤">
+  <span class="m-badge">MOCKUP</span>
+  <div class="m-group"><span class="m-lbl">테마</span>
+    <div class="m-seg" id="m-theme"><button class="m-opt is-on" data-v="dark">Dark</button><button class="m-opt" data-v="light">Light</button></div></div>
+  <div class="m-group"><span class="m-lbl">시나리오</span>
+    <div class="m-seg" id="m-scn">
+      <button class="m-opt is-on" data-v="multi">다중 슬롯 · 엇갈린 리셋</button>
+      <button class="m-opt" data-v="over">오버페이스 · 지연/갭</button>
+      <button class="m-opt" data-v="unauth">미설정 · 재인증</button></div></div>
+  <div class="m-group"><span class="m-lbl">팝오버 폭</span>
+    <div class="m-seg" id="m-w">
+      <button class="m-opt is-on" data-v="auto">자동 (680px)</button>
+      <button class="m-opt" data-v="compact">컴팩트 (480px)</button>
+      <button class="m-opt" data-v="narrow">좁음 (360px)</button></div></div>
+</div>
+
+<div class="vp-host"><div class="viewport" id="viewport">
+  <div class="ws-app">
+    <header class="shell-top">
+      <div class="top-left"><span class="crumb">Werkschaft <i>/</i> <b>devenv</b> <i>/</i> <em>develop</em></span></div>
+      <div class="tkqs"><span>티켓 검색…</span><kbd>⌘K</kbd></div>
+      <div class="top-right"><span class="t-seg">티켓 <span class="tk-cnt">7</span></span></div>
+    </header>
+    <div class="ws-body">
+      <aside class="rail">
+        <div class="rhd">워크스페이스 <span class="chip-live"><span class="dot"></span>live</span></div>
+        <div class="rlist">
+          <div class="wsbar"><span class="nm">devenv</span><span class="ct">4</span></div>
+          <div class="rkids">
+            <div class="rs cur"><span class="rs-name">usage rework</span><span class="rs-when live">진행</span></div>
+            <div class="rs"><span class="rs-name">holders popup</span><span class="rs-when">12분</span></div>
+            <div class="rs"><span class="rs-name">account panel</span><span class="rs-when">1시간</span></div>
+          </div>
+        </div>
+      </aside>
+      <div class="stage-well" id="stage"><div class="stage"><div class="view">
+        <section class="card chat-card">
+          <div class="ctabs"><span class="ctab is-on">대화</span><span class="ctab">로그</span><span class="rsp"></span><span class="meta-pill">claude · Default</span></div>
+          <div class="cstream">
+            <div class="pin-card"><b>핀</b> 사용량 팝오버를 그래프 뷰 중심으로 재구성합니다.</div>
+            <p class="msg"><b>lead</b><span class="dim">방금</span><br>슬롯 전환은 제공자 헤더에서 바로 합니다.</p>
+          </div>
+          <div class="composer">메시지 입력…</div>
+        </section>
+        <section class="card board-card">
+          <div class="tbar"><b>보드</b><span class="t-chip">진행 중</span></div>
+          <div class="board-body">
+            <div class="bcard"><b>usage-popup-rework</b><p>drawChart 그래프 보존 · 슬롯 인라인 전환</p></div>
+            <div class="bcard"><b>global-holders-popup</b><p>하단 바 상향 팝업 — 승인됨</p></div>
+          </div>
+        </section>
+      </div></div></div>
+    </div>
+
+    <footer class="shell-bottom">
+      <div class="bot-left"><span class="talert"><span class="talert-main"><span class="talert-dot"></span><span class="talert-txt">알림 없음</span></span></span></div>
+      <div class="bot-center"></div>
+      <div class="bot-right">
+        <button class="usage-toggle" id="usage-toggle" aria-haspopup="dialog" aria-expanded="false" aria-controls="usage-pop" title="플랜 사용량"></button>
+        <button class="holders-pill" id="holders-pill" data-state="warn" aria-haspopup="dialog" aria-expanded="false" title="Holders">
+          <span class="hp-dot"></span><span>Holders</span><span class="hp-count">3</span></button>
+      </div>
+    </footer>
+  </div>
+</div></div>
+
+<!-- Usage popover -->
+<div class="rpop usage-pop" id="usage-pop" role="dialog" aria-label="플랜 사용량 · 계정" data-w="auto" hidden>
+  <div class="usage-hd">
+    <span class="up-title">플랜 사용량 · 계정</span>
+    <span class="sync" id="sync" data-tone="ok"><span class="sdot"></span><span id="sync-t">방금 동기화</span></span>
+    <span class="rsp"></span>
+    <div class="axis-seg" id="axis-seg" role="tablist" aria-label="축 모드">
+      <button class="as-opt is-on" data-v="progress" role="tab" aria-selected="true">진행률 %</button>
+      <button class="as-opt" data-v="timeline" role="tab" aria-selected="false">타임라인 · 간트</button>
+    </div>
+    <button class="ibtn" id="btn-refresh" title="새로 고침" aria-label="새로 고침"><svg class="ic" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/></svg></button>
+    <button class="ibtn" id="btn-legend" title="차트 범례" aria-label="차트 범례" aria-expanded="false" style="font-weight:800;font-size:13px">?</button>
+    <button class="ibtn" id="btn-settings" title="계정 설정 (/settings?section=account)" aria-label="계정 설정"><svg class="ic" viewBox="0 0 24 24"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg></button>
+    <button class="ibtn" id="btn-close" title="닫기" aria-label="닫기"><svg class="ic" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </div>
+  <div class="up-banner" id="up-banner" hidden></div>
+  <div class="legend" id="legend" hidden></div>
+  <div class="up-scroll" id="up-scroll">
+    <section class="charts" id="charts"></section>
+    <section class="grp" id="grp1"></section>
+    <section class="grp" id="grp2"></section>
+  </div>
+</div>
+
+<!-- Holders stub popover (mutual exclusivity demo) -->
+<div class="rpop holders-pop" id="holders-pop" role="dialog" aria-label="Holders" hidden>
+  <div class="hp-hd"><span class="hp-title">Holders</span><span class="hp-sum" data-tone="warn">3 실행 중</span><span class="rsp"></span>
+    <button class="ibtn" id="hp-close" aria-label="닫기"><svg class="ic" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+  <div class="hp-body">
+    <div class="wtrow"><span class="wtdot"></span><span class="wtline"><span class="wtname">go test ./internal/wsdashboard</span><span class="wtage">2m</span></span><span class="hdmeta"><span class="pid">pid 48213</span><span>worker-3</span></span></div>
+    <div class="wtrow lost"><span class="wtdot"></span><span class="wtline"><span class="wtname">dev server :8080</span><span class="wtage">41m</span></span><span class="hdmeta"><span class="pid">pid 47102</span><span class="hdcause">고아 가능</span></span></div>
+    <div class="wtrow"><span class="wtdot"></span><span class="wtline"><span class="wtname">node build watch</span><span class="wtage">1h</span></span><span class="hdmeta"><span class="pid">pid 45990</span></span></div>
+  </div>
+  <div class="hp-note">스텁 — 사용량 팝오버와 동시에 열리지 않습니다</div>
+</div>
+
+<script src="./mock-api.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>

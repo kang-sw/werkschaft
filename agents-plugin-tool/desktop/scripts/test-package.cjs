@@ -90,10 +90,15 @@ test('release overlays retain the exact updater version and platform installer c
   assert.match(hooks, /!macro NSIS_HOOK_PREINSTALL\s+RMDir \/r "\$INSTDIR\\daemon"\s+!macroend/);
 });
 
-test('macOS voice bundle verification requires microphone usage description and audio-input entitlement', () => {
-  verifyMacVoicePlist({ NSMicrophoneUsageDescription: 'Push-to-talk voice typing' });
+test('macOS voice bundle verification requires microphone and speech usage descriptions and audio-input entitlement', () => {
+  verifyMacVoicePlist({
+    NSMicrophoneUsageDescription: 'Push-to-talk voice typing',
+    NSSpeechRecognitionUsageDescription: 'Native voice typing',
+  });
   assert.throws(() => verifyMacVoicePlist({}), /NSMicrophoneUsageDescription/);
-  assert.throws(() => verifyMacVoicePlist({ NSMicrophoneUsageDescription: '   ' }), /NSMicrophoneUsageDescription/);
+  assert.throws(() => verifyMacVoicePlist({ NSMicrophoneUsageDescription: '   ', NSSpeechRecognitionUsageDescription: 'ok' }), /NSMicrophoneUsageDescription/);
+  assert.throws(() => verifyMacVoicePlist({ NSMicrophoneUsageDescription: 'ok' }), /NSSpeechRecognitionUsageDescription/);
+  assert.throws(() => verifyMacVoicePlist({ NSMicrophoneUsageDescription: 'ok', NSSpeechRecognitionUsageDescription: '   ' }), /NSSpeechRecognitionUsageDescription/);
 
   verifyMacVoiceEntitlements({ 'com.apple.security.device.audio-input': true });
   assert.throws(() => verifyMacVoiceEntitlements({}), /com\.apple\.security\.device\.audio-input/);
@@ -118,7 +123,9 @@ test('macOS voice bundle verification requires microphone usage description and 
     verifyMacVoicePlist(readMacPlist(infoPlistPath));
     verifyMacVoiceEntitlements(readMacPlist(entitlementsPath));
   } else {
-    assert.match(fs.readFileSync(infoPlistPath, 'utf8'), /<key>NSMicrophoneUsageDescription<\/key>/);
+    const rawPlist = fs.readFileSync(infoPlistPath, 'utf8');
+    assert.match(rawPlist, /<key>NSMicrophoneUsageDescription<\/key>/);
+    assert.match(rawPlist, /<key>NSSpeechRecognitionUsageDescription<\/key>/);
     assert.match(fs.readFileSync(entitlementsPath, 'utf8'), /<key>com\.apple\.security\.device\.audio-input<\/key>\s*<true\/>/);
   }
 });

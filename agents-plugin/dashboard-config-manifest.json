@@ -195,7 +195,22 @@
       "pattern": "^([a-z0-9][a-z0-9_/-]{0,79})?$",
       "default": "",
       "default_scope": "global",
-      "description": "Selects the speech-to-text backend for dashboard composer voice typing (for example openai_api, groq, openrouter, native, or local/<name>). Empty leaves voice typing off unless a backend is selected and usable. Only the global value applies."
+      "description": "Legacy single speech-to-text backend for dashboard composer voice typing (for example openai_api, groq, openrouter, native, or local/<name>). Honored when dashboard.voice_backend_order is unset; otherwise dashboard.voice_backend_order takes precedence. Only the global value applies."
+    },
+    {
+      "key": "dashboard.voice_backend_order",
+      "type": "string",
+      "pattern": "^([a-z0-9][a-z0-9_/-]*(\\s+[a-z0-9][a-z0-9_/-]*)*)?$",
+      "default": "",
+      "default_scope": "global",
+      "description": "Ordered priority list of speech-to-text backends for dashboard composer voice typing, as whitespace-separated backend IDs (for example native openrouter openai_api groq local/<name>). The first backend available in the current environment is used. When empty, falls back to dashboard.voice_backend if set, or native by default. Only the global value applies."
+    },
+    {
+      "key": "dashboard.voice_openrouter_shared_key",
+      "type": "boolean",
+      "default": false,
+      "default_scope": "global",
+      "description": "When true, OpenRouter voice transcription may reuse the top-level OpenRouter agent API key instead of requiring a dedicated OpenRouter (Voice) key. Default false so configuring the agent key never silently enables paid voice transcription. Only the global value applies."
     },
     {
       "key": "dashboard.voice_model",
