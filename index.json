@@ -500,19 +500,6 @@
     "261127-refactor-split-oversized-multi-responsibility-files": {
       "registered_at": "2026-11-27T01:26:05Z"
     },
-    "261128-feat-conv-history-mcp-api-and-session-permission-toggle": {
-      "registered_at": "2026-11-28T01:45:34Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-28T03:29:43Z",
-        "impl": {
-          "branch": "impl/develop/rogue-wing-shank"
-        }
-      }
-    },
     "261128-feat-ws-companion-soul-memory-and-pacing": {
       "registered_at": "2026-11-28T00:24:19Z",
       "lease": {
