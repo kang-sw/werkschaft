@@ -50,16 +50,20 @@ func TestCompactionHardSteersAtParallelBoundariesUntilRequest(t *testing.T) {
 	}
 	feed(batch.addCall("next", "c", "three", "", 0, 5))
 	feed(batch.endCall("c", false, 0, 6))
-	if got := h.userInputs(holder); len(got) != 3 {
-		t.Fatalf("pending request allowed more guidance or mid-turn compaction: %q", got)
+	// A queued request waits for the idle boundary but must not silence hard
+	// guidance for a turn that keeps running past hard: the boundary keeps
+	// steering the turn to end, and nothing compacts mid-turn.
+	got = h.userInputs(holder)
+	if len(got) != 4 || !strings.HasPrefix(got[3], "Hard 250k,") {
+		t.Fatalf("queued request did not keep steering the open turn: %q", got)
 	}
 	c.do(func() { c.endTurn("", false) })
-	if got := h.userInputs(holder); len(got) != 4 || got[3] != "/compact" {
+	if got := h.userInputs(holder); len(got) != 5 || got[4] != "/compact" {
 		t.Fatalf("turn boundary did not dispatch the request once: %q", got)
 	}
 	compactBoundary(h, id, holder)
 	got = h.userInputs(holder)
-	if len(got) != 5 || !strings.Contains(got[4], "Context was compacted") || !strings.Contains(got[4], "Continue the work") {
+	if len(got) != 6 || !strings.Contains(got[5], "Context was compacted") || !strings.Contains(got[5], "Continue the work") {
 		t.Fatalf("request continuation = %q", got)
 	}
 }

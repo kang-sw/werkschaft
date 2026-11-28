@@ -64,9 +64,19 @@ func TestEmptyWorkerSummaryShape(t *testing.T) {
 // wsWorkerHarness runs a claude worker under compaction.worker_mode=ws.
 func wsWorkerHarness(t *testing.T) (*leadHarness, string, string) {
 	t.Helper()
+	return wsWorkerHarnessWith(t, nil)
+}
+
+// wsWorkerHarnessWith is wsWorkerHarness with an optional tweak of the claude
+// registration, e.g. to give the worker a steer-capable lifecycle.
+func wsWorkerHarnessWith(t *testing.T, tweak func(*BackendRegistration)) (*leadHarness, string, string) {
+	t.Helper()
 	h := newLeadHarness(t)
 	reg := h.opts.Backends[BackendClaude]
 	reg.Catalog = ClaudeCatalog()
+	if tweak != nil {
+		tweak(&reg)
+	}
 	h.opts.Backends[BackendClaude] = reg
 	resolver := wsconfig.NewResolver(h.opts.Config, nil, nil, nil)
 	for _, kv := range [][2]string{{wsconfig.ItemCompactionWorkerMode, wsconfig.CompactionModeWS}, {"compaction.worker_advisory", "50%|160k"}, {"compaction.worker_hard", "80%|200k"}} {
