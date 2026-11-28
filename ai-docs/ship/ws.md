@@ -317,75 +317,120 @@ independent of the release.
 ## Desktop canary procedure
 
 This is a separate owner-operated prerelease path. It publishes a desktop test
-build from reviewed `develop` without promoting `main` or merging its canary-only
+build directly from `develop` without promoting `main` or merging a canary-only
 version bump back into `develop`. Complete the manual install and return checks
 below before treating a canary as accepted. Keep the stable procedure above as
 the authority for stable publication.
 
+### Primary path: 1-click `develop` canary workflow (`ws-canary.yml`)
+
+Dispatch `.github/workflows/ws-canary.yml` directly from `develop` (zero `main`
+merge, zero ephemeral `release/canary-*` branch, zero manual tag push):
+
+- **`artifact` mode** (`mode=artifact`, default):
+  - Runs on `develop` (or any dispatched branch) and builds `ws-mcp-assets`
+    (all 6 native binaries, `.metadata.json`, and `SHA256SUMS`) plus
+    `werkschaft-tauri-assets` (macOS arm64 + Windows x64 installers, `.sig`
+    files, and `werkschaft-tauri-update.json`) as GitHub Actions workflow
+    artifacts without creating a GitHub Release or mutating `develop`/`main`.
+  - Skips `ws-mcp-ci.yml` and review-watermark gates by default (pass
+    `-f run_ci=true` and optionally `-f long_tests=true` to include CI).
+  - Uses `<current-core>-canary.0` from `agents-plugin/runtime.json` without
+    bumping versions.
+  - **Signing posture:** defaults to `signing=eval` (`WERKSCHAFT_EVALUATION=1`,
+    signed with `WERKSCHAFT_EVAL_UPDATER_*` keys so the artifact is installable
+    and runnable against an evaluation/loopback feed without exposing
+    production keys). `signing=production` is strictly restricted to
+    `refs/heads/develop` (non-`develop` branches fail fast in
+    `resolve-canary-version.py` and never receive `TAURI_SIGNING_PRIVATE_KEY`).
+- **`prerelease` mode** (`mode=prerelease`):
+  - Enforces `github.ref == 'refs/heads/develop'` strictly (fails fast on any
+    other ref).
+  - Emits a **non-blocking** `::warning::` via
+    `agents-plugin-tool/scripts/resolve-canary-version.py watermark` if
+    `develop` is ahead of the review-watermark frontier
+    (`ai-docs/.review-ledger.md`) or has a trailing `block` entry (advisory
+    only; never blocks).
+  - Automatically runs `.github/workflows/ws-mcp-ci.yml` via `workflow_call`
+    (with optional `-f long_tests=true`) and requires it to pass before
+    building.
+  - Automatically derives the **next patch core** `X.Y.(Z+1)` from
+    `agents-plugin/runtime.json` (strictly patch-only — **do not publish a
+    minor-core canary** unless a separately approved T3 flow is defined, because
+    a higher minor would raise the shared daemon floor, break older plugin
+    sessions, and `Back to stable` would not restore that daemon), and picks
+    the lowest unclaimed integer `N >= 1` for `v<next-patch-core>-canary.<N>`
+    across remote tags (`git ls-remote --tags origin`) and GitHub Releases.
+  - Ephemerally runs `agents-plugin-tool/scripts/bump-ws-version.sh
+    <next-patch-core>` inside every checkout job (`build`, `windows-smoke`,
+    `werkschaft-tauri-build.yml` `package` and `combine`) without committing or
+    pushing to `develop`/`main`, so embedded package inventories, binary
+    metadata, `agents-plugin-wsflow/runtime.json`, `package.cjs`, `release.cjs`,
+    and `werkschaft-tauri-update.json` all agree on `<next-patch-core>-canary.<N>`.
+  - Signs with production `TAURI_SIGNING_PRIVATE_KEY` and
+    `WERKSCHAFT_UPDATER_PUBLIC_KEY` (`WERKSCHAFT_EVALUATION` unset), verifies
+    `SHA256SUMS` and `release.cjs --verify`, and publishes an **atomic
+    draft-then-undraft** prerelease targeting `GITHUB_SHA` (`gh release create
+    --draft --prerelease --latest=false` -> upload all native + Tauri assets ->
+    verify every asset is `uploaded` -> `gh release edit --draft=false
+    --prerelease --latest=false`), so the in-app canary updater (`feed.rs`)
+    never observes a half-uploaded release.
+
+Before dispatching `prerelease` mode, grade the payload under
+`ai-docs/manuals/release-compatibility.md` (T4 cannot ship; a T3 change must not
+use this patch-core canary flow).
+
+```sh
+# Artifact build on develop (evaluation signing, skips CI):
+gh workflow run ws-canary.yml --ref develop -f mode=artifact
+
+# Full CI-gated prerelease directly from develop:
+gh workflow run ws-canary.yml --ref develop -f mode=prerelease
+gh run list --workflow ws-canary.yml --branch develop --event workflow_dispatch
+gh run watch <run-id> --exit-status
+```
+
+Verify a downloaded `prerelease` payload locally with the production public key:
+
+```sh
+mkdir -p tauri-canary && gh release download "v<core>-canary.<N>" -D tauri-canary
+export WERKSCHAFT_UPDATER_PUBLIC_KEY="$(gh variable get WERKSCHAFT_UPDATER_PUBLIC_KEY --repo kang-sw/werkschaft --json value --jq .value)"
+node agents-plugin-tool/desktop/scripts/release.cjs --verify --input tauri-canary --version "<core>-canary.<N>"
+```
+
+(Or verify `werkschaft-tauri-assets` downloaded from an `artifact` run with
+`WERKSCHAFT_EVAL_UPDATER_PUBLIC_KEY` when `signing=eval`.)
+
+### Acceptance and `Back to stable` daemon check
+
+On a test machine, use the explicit `Canary 빌드로 업데이트` action to install
+the canary, restart, and confirm the desktop reports the suffixed version and
+connects to its bundled daemon. Exercise `Back to stable`, confirm the selected
+`/releases/latest` stable desktop installs and reports its stable version, then
+inspect the shared daemon version and source. App SemVer puts a same-core canary
+below stable, while daemon retention keeps a healthy equal-core daemon
+regardless of suffix. `Back to stable` changes app bytes; it never drains or
+downgrades the shared daemon. If equal-core canary daemon bytes must be replaced,
+use the explicit `Replace daemon (same core)` action or shut down the daemon and
+reconnect with the stable app. A lower-core stable app attaches to a healthy
+higher-core daemon; shut that daemon down explicitly before reconnecting if
+stable daemon bytes are required.
+
+### Fallback: tag-based canary (`ws-mcp-release.yml`)
+
+When an isolated branch/tag cut is explicitly needed (for example testing a
+pinned pre-bump commit or reproducing a tagged release path), the legacy
+tag-driven path remains intact:
+
 1. Fetch origin and tags, confirm local `develop` contains `origin/develop`, and
-   run the review-watermark release gate over the intended `develop` cut as in
-   Pre-flight. Cut an ephemeral `release/canary-<core>` branch in its own worktree
-   at that reviewed commit. Record the cut SHA. No unreviewed commit may enter
-   the branch except its generated version bump, which is tested on its final
-   SHA. Stop if the review gate has no clear cut or needs an override that the
-   owner has not approved.
-2. Choose the **next patch core** after the latest claimed stable tag, within
-   the current minor (for example, stable `v0.50.8` gives core `0.50.9`). Run
-   `agents-plugin-tool/scripts/bump-ws-version.sh <core>` on the ephemeral
-   branch and commit its generated changes. Confirm both runtime contracts
-   retain numeric `plugin_version=<core>` and `release_tag=v<core>`; the canary
-   suffix belongs to the tag and native binary metadata. **Do not publish a
-   minor-core canary** unless a separately approved T3 flow is defined. A
-   higher minor would replace the shared daemon across minors, break older
-   plugin sessions, and Back to stable would not restore that daemon.
-3. Grade the actual canary payload under
-   `ai-docs/manuals/release-compatibility.md`: cite old/new read and write
-   paths, the highest tier, and recovery on reopening. The canary label alone
-   has no compatibility grade. T4 cannot ship; a T3 change stops this patch-core
-   procedure. Run the normal local release tests and contract/marketplace
-   checks on the branch head. Push the ephemeral branch, dispatch `ws-mcp CI`
-   for that exact SHA, and require its Linux and Windows jobs to pass with the
-   selected long-test policy, as in Publish. Record that SHA as the tag target.
-4. Refresh remote tags before choosing `N`. For `v<core>-canary.N`, use the
-   lowest non-negative decimal counter not already claimed on origin; never
-   overwrite or delete an existing canary tag to resolve a collision. Recheck
-   the chosen remote ref immediately before publishing. If another publisher
-   claims it, increment `N`, recheck, and tag the same tested SHA. Show the
-   owner the core, counter, branch, tested SHA, compatibility verdict, and
-   publication sequence for approval. Push only the canary tag; leave `main`
-   and `develop` untouched. A tag exactly shaped `vX.Y.Z-canary.N` creates the
-   same tag release with `--prerelease --latest=false`; native and desktop jobs
-   upload to that one release.
-5. Watch the complete `ws-mcp release` run, including native build, Windows
-   smoke, and all `Tauri desktop` package, combine and publish jobs. Confirm
-   the release is a prerelease, is excluded from latest, and its tag and target
-   SHA match the approved values. Download the native assets and check
-   `shasum -a 256 -c SHA256SUMS` in their directory. Download the three actual
-   Tauri packages listed in Build, their `.sig` files and
-   `werkschaft-tauri-update.json` into a separate directory, `tauri-canary`.
-   Load the production public key and verify the complete payload and feed:
-
-   ```sh
-   export WERKSCHAFT_UPDATER_PUBLIC_KEY="$(gh variable get WERKSCHAFT_UPDATER_PUBLIC_KEY --repo kang-sw/werkschaft --json value --jq .value)"
-   node agents-plugin-tool/desktop/scripts/release.cjs --verify --input tauri-canary --version "<core>-canary.N"
-   ```
-
-   This checks exact file names, hashes, byte counts, signatures and canonical
-   feed URLs for the approved version. A green native upload alone is incomplete.
-6. On a test machine, use the explicit `Canary 빌드로 업데이트` action to install
-   the canary, restart, and confirm the desktop reports the suffixed version and
-   connects to its bundled daemon. Exercise `Back to stable`, confirm the
-   selected `/releases/latest` stable desktop installs and reports its stable
-   version, then inspect the shared daemon version and source. App SemVer puts
-   a same-core canary below stable, while daemon retention keeps a healthy
-   equal-core daemon regardless of suffix. Back to stable changes app bytes;
-   it never drains or downgrades the shared daemon. If equal-core canary daemon
-   bytes must be replaced, use the explicit `Replace daemon (same core)` action
-   or shut down the daemon and reconnect with the stable app. A lower-core
-   stable app attaches to a healthy higher-core daemon; shut that daemon down
-   explicitly before reconnecting if stable daemon bytes are required.
-7. Record the acceptance result and remove the ephemeral worktree and local
-   branch. Delete the remote canary branch after verification; retain the
-   published tag/release for traceability. Do not merge the canary-only bump
-   into `develop` and do not promote `main`. A later stable ship derives its own
-   version from the stable flow above.
+   cut an ephemeral `release/canary-<core>` branch in its own worktree.
+2. Run `agents-plugin-tool/scripts/bump-ws-version.sh <core>` (`X.Y.(Z+1)`,
+   never a minor bump) on that branch, commit, and verify `plugin_version=<core>`
+   and `release_tag=v<core>`.
+3. Push the ephemeral branch, dispatch `ws-mcp CI` for that exact SHA, and wait
+   for green Linux and Windows legs.
+4. Refresh remote tags, pick the lowest unclaimed `v<core>-canary.N` tag, and
+   push only the tag (`ws-mcp-release.yml` creates the `--prerelease
+   --latest=false` release and uploads native + Tauri assets).
+5. Clean up the ephemeral worktree and branch after verification; never merge
+   the canary-only bump into `develop` and never promote `main`.

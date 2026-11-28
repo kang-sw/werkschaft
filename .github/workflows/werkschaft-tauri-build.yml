@@ -12,6 +12,10 @@ on:
       updater_public_key:
         type: string
         required: true
+      bump_core:
+        type: string
+        required: false
+        default: ""
     secrets:
       signing_key:
         required: true
@@ -55,8 +59,17 @@ jobs:
           cache-dependency-path: agents-plugin-tool/desktop/package-lock.json
 
       - uses: actions/setup-python@v6
+        if: inputs.bump_core != ''
         with:
           python-version: "3.12"
+
+      - name: Apply ephemeral canary core version
+        if: inputs.bump_core != ''
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        env:
+          BUMP_CORE: ${{ inputs.bump_core }}
+        run: sh agents-plugin-tool/scripts/bump-ws-version.sh "$BUMP_CORE"
 
       - name: Set up pinned Rust toolchain
         run: |
@@ -121,6 +134,19 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
+
+      - uses: actions/setup-python@v6
+        if: inputs.bump_core != ''
+        with:
+          python-version: "3.12"
+
+      - name: Apply ephemeral canary core version
+        if: inputs.bump_core != ''
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        env:
+          BUMP_CORE: ${{ inputs.bump_core }}
+        run: sh agents-plugin-tool/scripts/bump-ws-version.sh "$BUMP_CORE"
 
       - uses: actions/download-artifact@v5
         with:

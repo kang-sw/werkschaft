@@ -2623,10 +2623,29 @@ separate `long` invocation when explicitly requested.
 Workflow `.github/workflows/ws-mcp-release.yml` requires a successful CI run
 on the tagged commit, allowing only the two named long jobs to be skipped.
 It cross-compiles assets, uploads workflow artifacts, and publishes GitHub
-release assets for pushed `v*` tags. Pull requests touching workflow or
+release assets for pushed `v*` tags (passing the resolved build version to
+both the native build and `windows-smoke`). Pull requests touching workflow or
 plugin/runtime paths run checks without publishing. This project's
 `ai-docs/ship/ws.md` records the owner's long-test choice and requires those
 jobs to succeed when requested.
+
+Workflow `.github/workflows/ws-canary.yml` provides a one-click
+`workflow_dispatch` canary build directly from `develop` without merging to
+`main`, cutting an ephemeral branch, or pushing tags manually.
+`agents-plugin-tool/scripts/resolve-canary-version.py` resolves the build plan
+and emits non-blocking `::warning::` annotations if `develop` is ahead of the
+review-watermark frontier (`ai-docs/.review-ledger.md`):
+
+- `mode=artifact` builds `ws-mcp-assets` and `werkschaft-tauri-assets` at
+  `<current-core>-canary.0` (skipping CI by default unless `run_ci=true`). It
+  defaults to evaluation signing (`signing=eval`, `WERKSCHAFT_EVALUATION=1`),
+  and restricts `signing=production` to `refs/heads/develop`.
+- `mode=prerelease` enforces `refs/heads/develop`, runs `.github/workflows/ws-mcp-ci.yml`
+  via `workflow_call`, selects the next patch core `X.Y.(Z+1)` (never a minor
+  bump) and lowest unclaimed `v<next-patch-core>-canary.<N>` (`N >= 1`), runs
+  `bump-ws-version.sh` ephemerally in each checkout job (including
+  `.github/workflows/werkschaft-tauri-build.yml` via `bump_core`), and publishes
+  an atomic draft-then-undraft GitHub prerelease targeting `GITHUB_SHA`.
 
 ## Local Devenv Repair
 

@@ -22,6 +22,12 @@ on:
       - "agents-plugin-tool/**"
       - "agents-plugin/**"
       - "agents-plugin-wsflow/**"
+  workflow_call:
+    inputs:
+      long_tests:
+        description: "Also run the long test group"
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       long_tests:
@@ -159,7 +165,7 @@ jobs:
   # dispatch run on a tagged commit always runs and passes the desktop tests.
   desktop-changes:
     name: desktop change detection
-    if: github.event_name != 'workflow_dispatch' || inputs.windows_shard == '' || inputs.windows_shard == 'all'
+    if: github.event_name != 'workflow_dispatch' || !inputs.windows_shard || inputs.windows_shard == 'all'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -228,7 +234,7 @@ jobs:
   # so the release gate can allow exactly these two skips.
   long-ubuntu:
     name: go test (ubuntu-latest, long)
-    if: github.event_name == 'workflow_dispatch' && inputs.long_tests == true && (inputs.windows_shard == '' || inputs.windows_shard == 'all')
+    if: inputs.long_tests == true && (!inputs.windows_shard || inputs.windows_shard == 'all')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     defaults:
@@ -260,7 +266,7 @@ jobs:
 
   long-windows:
     name: go test (windows-latest, long)
-    if: github.event_name == 'workflow_dispatch' && inputs.long_tests == true && (inputs.windows_shard == '' || inputs.windows_shard == 'all')
+    if: inputs.long_tests == true && (!inputs.windows_shard || inputs.windows_shard == 'all')
     runs-on: windows-latest
     timeout-minutes: 25
     defaults:

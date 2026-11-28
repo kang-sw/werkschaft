@@ -179,12 +179,27 @@ jobs:
           cache-dependency-path: agents-plugin-tool/go.sum
 
       - name: Build Windows executable
+        shell: pwsh
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
         run: |
+          $ErrorActionPreference = "Stop"
+          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and -not [string]::IsNullOrWhiteSpace($env:DISPATCH_VERSION)) {
+            $buildVersion = $env:DISPATCH_VERSION.Trim() -replace '^v', ''
+          } elseif ("${{ github.ref }}" -like "refs/tags/*") {
+            $buildVersion = "${{ github.ref_name }}" -replace '^v', ''
+          } else {
+            $buildVersion = "0.53.2-dev"
+          }
+          $sourceCommit = (git rev-parse --short=12 HEAD 2>$null)
+          if (-not $sourceCommit) { $sourceCommit = "unknown" }
           New-Item -ItemType Directory -Force dist | Out-Null
           python scripts/generate-package-assets.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          go build -trimpath -ldflags "-s -w -X main.version=0.53.2-dev" -o dist/ws-mcp-windows-amd64.exe ./cmd/ws-mcp
-          python scripts/write-runtime-metadata.py dist/ws-mcp-windows-amd64.exe --version 0.53.2-dev
+          go build -trimpath -ldflags "-s -w -X main.version=$buildVersion -X main.sourceCommit=$sourceCommit" -o dist/ws-mcp-windows-amd64.exe ./cmd/ws-mcp
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/write-runtime-metadata.py dist/ws-mcp-windows-amd64.exe --version "$buildVersion" --source-commit "$sourceCommit"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run Windows executable smoke
         shell: pwsh
