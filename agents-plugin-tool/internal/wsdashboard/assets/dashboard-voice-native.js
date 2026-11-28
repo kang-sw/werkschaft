@@ -58,13 +58,15 @@
     return str.slice(pos);
   }
 
+  // Trade-off: an identical single-word repetition right across a pause is treated
+  // as flicker re-emission rather than intentional duplicate dictation.
   function stripCommittedPrefix(committedJoined, rawNext) {
     var cNfc = normalizeNFC(committedJoined).trim();
-    if (!cNfc) return rawNext;
+    if (!cNfc) return { matched: false, rest: rawNext };
     var iTrim = normalizeNFC(rawNext).replace(/^\s+/, "");
-    if (!iTrim) return "";
+    if (!iTrim) return { matched: false, rest: rawNext };
     var cTokens = tokensWithEnd(cNfc);
-    if (!cTokens.length) return rawNext;
+    if (!cTokens.length) return { matched: false, rest: rawNext };
     var iTokens = tokensWithEnd(iTrim);
     if (iTokens.length >= cTokens.length) {
       var match = true;
@@ -75,18 +77,26 @@
         }
       }
       if (match) {
-        return advancePastSep(iTrim, iTokens[cTokens.length - 1].end);
+        return { matched: true, rest: advancePastSep(iTrim, iTokens[cTokens.length - 1].end) };
       }
     }
     var cCore = cNfc.replace(TRAILING_SEP_PUNCT_RE, "");
     if (cCore && cCore !== cNfc && iTrim.indexOf(cNfc) === 0) {
-      return advancePastSep(iTrim, cNfc.length);
+      return { matched: true, rest: advancePastSep(iTrim, cNfc.length) };
     }
     if (cCore && iTrim.indexOf(cCore) === 0) {
       var nextCh = iTrim.charAt(cCore.length);
       if (!nextCh || SEP_PUNCT_OR_WS_RE.test(nextCh)) {
-        return advancePastSep(iTrim, cCore.length);
+        return { matched: true, rest: advancePastSep(iTrim, cCore.length) };
       }
+    }
+    return { matched: false, rest: rawNext };
+  }
+
+  function stripCommittedSegmentsPrefix(segments, rawNext) {
+    for (var start = 0; start < segments.length; start++) {
+      var res = stripCommittedPrefix(segments.slice(start).join(" "), rawNext);
+      if (res.matched) return res.rest;
     }
     return rawNext;
   }
@@ -99,6 +109,7 @@
     var nextChars = Array.from(nextTrim);
     var prevTokens = tokensWithEnd(prevTrim);
     var nextTokens = tokensWithEnd(nextTrim);
+    if (!prevTokens.length || !nextTokens.length) return false;
     if (prevChars.length < 6 && prevTokens.length < 2) return false;
     if (nextChars.length * 2 >= prevChars.length) return false;
     var prefixLen = 0;
@@ -148,8 +159,9 @@
     }
 
     function applyIncoming(raw, promoteEmpty) {
-      var committed = committedSegments.join(" ");
-      var next = committed ? stripCommittedPrefix(committed, raw) : raw;
+      var next = committedSegments.length && String(raw == null ? "" : raw).trim()
+        ? stripCommittedSegmentsPrefix(committedSegments, raw)
+        : raw;
       if (!next.trim()) {
         if (promoteEmpty && currentPartial.trim()) {
           committedSegments.push(normalizeNFC(currentPartial.trim()));
@@ -652,6 +664,7 @@
             var bridge = getBridge();
             if (!bridge) {
               sessionActive = false;
+              speechAcc.reset();
               settleStop(makeVoiceError("unavailable", "desktop_only"));
               return;
             }
@@ -659,6 +672,7 @@
           } else {
             if (!sendToTop({ wsVoiceRelay: true, op: "stop" })) {
               sessionActive = false;
+              speechAcc.reset();
               settleStop(makeVoiceError("bridge_error", "relay_failed"));
             }
           }

@@ -279,6 +279,7 @@
       var str = String(text == null ? "" : text);
       if (liveSpan) {
         if (!str.trim() && liveSpan.textContent && liveSpan.textContent.trim()) return;
+        if (liveSpan.textContent === str) return;
         liveSpan.textContent = str;
         var editor = getEditor();
         if (editor && typeof editor.scrollHeight === "number") {
@@ -290,6 +291,7 @@
         var node = cap.querySelector(".cvox-text");
         if (node) {
           if (!str.trim() && node.textContent && node.textContent.trim()) return;
+          if (node.textContent === str) return;
           node.textContent = str;
         }
       }

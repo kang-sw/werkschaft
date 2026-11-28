@@ -1992,3 +1992,158 @@ test('native non-cancelled Error after partials rescues accumulated text, zero-s
   t5.native.destroy();
   t5.handle.destroy();
 });
+
+test('native multi-pause suffix dedup, punctuation-only guard, consecutive sessions, dual-layer Rust stream, and fallback capsule blank guard', async () => {
+  // 1. 2 pauses + Final(seg2) on Stop must not duplicate seg2.
+  const m1 = makeNativeBridgeComposer({ value: '' });
+  m1.click();
+  await flush();
+  m1.speech({ type: 'partial', text: '첫 번째 문장입니다' });
+  m1.speech({ type: 'partial', text: '' });
+  m1.speech({ type: 'partial', text: '두 번째 문장입니다' });
+  m1.speech({ type: 'partial', text: '' });
+  m1.click();
+  await flush();
+  m1.speech({ type: 'final', text: '두 번째 문장입니다' });
+  await flush();
+  await flush();
+  assert.equal(m1.env.ctext.value, '첫 번째 문장입니다 두 번째 문장입니다');
+  m1.native.destroy();
+  m1.handle.destroy();
+
+  // 2. Pause 1 (reset) + Pause 2 (transient empty flicker) + continuation of seg2.
+  const m2 = makeNativeBridgeComposer({ value: '' });
+  m2.click();
+  await flush();
+  m2.speech({ type: 'partial', text: '첫 번째 문장입니다' });
+  m2.speech({ type: 'partial', text: '' });
+  m2.speech({ type: 'partial', text: '두 번째' });
+  m2.speech({ type: 'partial', text: '' });
+  m2.speech({ type: 'partial', text: '두 번째 문장입니다' });
+  assert.equal(m2.env.editor.querySelector('[data-voice-span]').textContent, '첫 번째 문장입니다 두 번째 문장입니다');
+  m2.speech({ type: 'final', text: '두 번째 문장입니다' });
+  await flush();
+  await flush();
+  assert.equal(m2.env.ctext.value, '첫 번째 문장입니다 두 번째 문장입니다');
+  m2.native.destroy();
+  m2.handle.destroy();
+
+  // 3. Disjoint jump + transient empty flicker + continuation.
+  const m3 = makeNativeBridgeComposer({ value: '' });
+  m3.click();
+  await flush();
+  m3.speech({ type: 'partial', text: '첫 번째 문장입니다' });
+  m3.speech({ type: 'partial', text: '두 번째' });
+  m3.speech({ type: 'partial', text: '' });
+  m3.speech({ type: 'partial', text: '두 번째 문장입니다' });
+  assert.equal(m3.env.editor.querySelector('[data-voice-span]').textContent, '첫 번째 문장입니다 두 번째 문장입니다');
+  m3.speech({ type: 'final', text: '두 번째 문장입니다' });
+  await flush();
+  await flush();
+  assert.equal(m3.env.ctext.value, '첫 번째 문장입니다 두 번째 문장입니다');
+  m3.native.destroy();
+  m3.handle.destroy();
+
+  // 4. Punctuation-only partial ("." / "...") does not falsely trigger disjoint jump.
+  for (const punct of ['.', '...']) {
+    const mp = makeNativeBridgeComposer({ value: '' });
+    mp.click();
+    await flush();
+    mp.speech({ type: 'partial', text: '첫 번째 문장입니다' });
+    mp.speech({ type: 'partial', text: punct });
+    assert.equal(mp.env.editor.querySelector('[data-voice-span]').textContent, punct);
+    mp.speech({ type: 'final', text: '첫 번째 문장입니다.' });
+    await flush();
+    await flush();
+    assert.equal(mp.env.ctext.value, '첫 번째 문장입니다.');
+    mp.native.destroy();
+    mp.handle.destroy();
+  }
+
+  // 5. Consecutive sessions on the SAME native + handle after error rescue and Escape/Cancel,
+  //    plus dual-layer Rust-accumulated events (zero duplication when both layers run).
+  const reuse = makeNativeBridgeComposer({ value: '' });
+  // Session A: error rescue.
+  reuse.click();
+  await flush();
+  reuse.speech({ type: 'partial', text: '오류 전 문장입니다' });
+  reuse.speech({ type: 'error', code: 'recognition_error', reason: 'timeout' });
+  await flush();
+  await flush();
+  assert.equal(reuse.handle.controller.getState(), 'idle');
+  assert.equal(reuse.env.ctext.value, '오류 전 문장입니다');
+  assert.equal(reuse.env.editor.querySelector('[data-voice-span]'), null);
+  assert.equal(reuse.env.cap.hidden, true);
+
+  // Session B: Escape/Cancel on same instance.
+  reuse.click();
+  await flush();
+  reuse.speech({ type: 'partial', text: '버릴 문장' });
+  reuse.env.doc.dispatchEvent(new FakeEvent('keydown', { key: 'Escape' }));
+  await flush();
+  assert.equal(reuse.handle.controller.getState(), 'idle');
+  assert.equal(reuse.env.ctext.value, '오류 전 문장입니다');
+  assert.equal(reuse.env.editor.querySelector('[data-voice-span]'), null);
+  assert.equal(reuse.env.cap.hidden, true);
+
+  // Session C: Dual-layer Rust-accumulated partials + Final on same instance.
+  reuse.click();
+  await flush();
+  reuse.speech({ type: 'partial', text: '첫 번째 문장입니다' });
+  reuse.speech({ type: 'partial', text: '첫 번째 문장입니다' });
+  reuse.speech({ type: 'partial', text: '첫 번째 문장입니다 두 번째 문장입니다' });
+  reuse.speech({ type: 'final', text: '첫 번째 문장입니다 두 번째 문장입니다' });
+  await flush();
+  await flush();
+  assert.equal(reuse.handle.controller.getState(), 'idle');
+  assert.equal(reuse.env.ctext.value, '오류 전 문장입니다 첫 번째 문장입니다 두 번째 문장입니다');
+
+  // Session D: Dual-layer Rust error-rescued Final after partial.
+  reuse.click();
+  await flush();
+  reuse.speech({ type: 'partial', text: '세 번째' });
+  reuse.speech({ type: 'final', text: '세 번째 문장' });
+  await flush();
+  await flush();
+  assert.equal(reuse.env.ctext.value, '오류 전 문장입니다 첫 번째 문장입니다 두 번째 문장입니다 세 번째 문장');
+  reuse.native.destroy();
+  reuse.handle.destroy();
+
+  // 6. Fallback capsule (withCapsules: false) preserves non-empty text across blank partial
+  //    and skips redundant textContent writes on unchanged partials.
+  const fbEnv = makeVoiceEnv({ withCapsules: false });
+  let fbPartial = null;
+  fbEnv.window.WsVoiceInput.registerBackend({
+    id: 'native', label: 'OS Native', kind: 'native',
+    available: () => true,
+    onPartial: (cb) => { fbPartial = cb; },
+    start: () => Promise.resolve(),
+    stop: () => Promise.resolve({ text: '캡슐 완료' }),
+    cancel: () => {}
+  });
+  const fbHandle = fbEnv.window.WsVoiceInput.attachComposer({
+    document: fbEnv.doc, window: fbEnv.window, autoDiscover: false
+  });
+  fbHandle.controller.setCapabilities({ eligible: true, order: ['native'] });
+  fbEnv.btn.click();
+  await flush();
+  const capNode = fbEnv.cap.querySelector('.cvox-text');
+  let capWrites = 0;
+  const origDesc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(capNode), 'textContent');
+  Object.defineProperty(capNode, 'textContent', {
+    get() { return origDesc.get.call(this); },
+    set(v) { capWrites++; origDesc.set.call(this, v); }
+  });
+  fbPartial('유지될 텍스트');
+  assert.equal(capNode.textContent, '유지될 텍스트');
+  assert.equal(capWrites, 1);
+  fbPartial('');
+  fbPartial('   ');
+  fbPartial('유지될 텍스트');
+  assert.equal(capNode.textContent, '유지될 텍스트', 'blank and identical partials do not wipe or rewrite capsule');
+  assert.equal(capWrites, 1);
+  fbEnv.btn.click();
+  await flush();
+  assert.equal(fbEnv.ctext.value, '캡슐 완료');
+  fbHandle.destroy();
+});

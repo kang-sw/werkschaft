@@ -256,20 +256,22 @@ fn advance_past_sep(s: &str, pos: usize) -> String {
     rest.trim_start_matches(is_sep_punct_or_ws).to_owned()
 }
 
-fn strip_committed_prefix(committed_joined: &str, raw_next: &str) -> String {
+// Trade-off: an identical single-word repetition right across a pause is treated
+// as flicker re-emission rather than intentional duplicate dictation.
+fn strip_committed_prefix(committed_joined: &str, raw_next: &str) -> Option<String> {
     let c_nfc = normalize_hangul_nfc(committed_joined);
     let c_trim = c_nfc.trim();
     if c_trim.is_empty() {
-        return raw_next.to_owned();
+        return None;
     }
     let i_nfc = normalize_hangul_nfc(raw_next);
     let i_trim = i_nfc.trim_start();
     if i_trim.is_empty() {
-        return String::new();
+        return None;
     }
     let c_tokens = tokens_with_end(c_trim);
     if c_tokens.is_empty() {
-        return raw_next.to_owned();
+        return None;
     }
     let i_tokens = tokens_with_end(i_trim);
     if i_tokens.len() >= c_tokens.len()
@@ -278,19 +280,29 @@ fn strip_committed_prefix(committed_joined: &str, raw_next: &str) -> String {
             .zip(c_tokens.iter())
             .all(|(a, b)| a.0 == b.0)
     {
-        return advance_past_sep(i_trim, i_tokens[c_tokens.len() - 1].1);
+        return Some(advance_past_sep(i_trim, i_tokens[c_tokens.len() - 1].1));
     }
     let c_core = c_trim.trim_end_matches(is_sep_punct_or_ws);
     if !c_core.is_empty() && c_core != c_trim && i_trim.starts_with(c_trim) {
-        return advance_past_sep(i_trim, c_trim.len());
+        return Some(advance_past_sep(i_trim, c_trim.len()));
     }
     if !c_core.is_empty() && i_trim.starts_with(c_core) {
         let after = &i_trim[c_core.len()..];
         if after.is_empty() || after.chars().next().is_some_and(is_sep_punct_or_ws) {
-            return advance_past_sep(i_trim, c_core.len());
+            return Some(advance_past_sep(i_trim, c_core.len()));
         }
     }
-    raw_next.to_owned()
+    None
+}
+
+fn strip_committed_segments_prefix(segments: &[String], raw_next: &str) -> Option<String> {
+    for start in 0..segments.len() {
+        let suffix = segments[start..].join(" ");
+        if let Some(rest) = strip_committed_prefix(&suffix, raw_next) {
+            return Some(rest);
+        }
+    }
+    None
 }
 
 fn is_disjoint_jump(prev: &str, next: &str) -> bool {
@@ -305,6 +317,9 @@ fn is_disjoint_jump(prev: &str, next: &str) -> bool {
     let next_chars = next_trim.chars().count();
     let prev_tokens = tokens_with_end(prev_trim);
     let next_tokens = tokens_with_end(next_trim);
+    if prev_tokens.is_empty() || next_tokens.is_empty() {
+        return false;
+    }
 
     if prev_chars < 6 && prev_tokens.len() < 2 {
         return false;
@@ -377,11 +392,11 @@ impl SpeechAccumulator {
     }
 
     fn apply_incoming(&mut self, raw: &str, promote_empty: bool) -> String {
-        let committed = self.committed_segments.join(" ");
-        let next = if committed.is_empty() {
+        let next = if self.committed_segments.is_empty() || raw.trim().is_empty() {
             raw.to_owned()
         } else {
-            strip_committed_prefix(&committed, raw)
+            strip_committed_segments_prefix(&self.committed_segments, raw)
+                .unwrap_or_else(|| raw.to_owned())
         };
         if next.trim().is_empty() {
             if promote_empty && !self.current_partial.trim().is_empty() {
@@ -1227,5 +1242,88 @@ mod tests {
                 reason: Some("LSR 201".into())
             })
         );
+    }
+
+    #[test]
+    fn session_state_multi_pause_suffix_dedup_and_punctuation_guard() {
+        let mut s = SessionState::default();
+
+        // 1. 2 pauses + Final(seg2) on Stop must not duplicate seg2.
+        let id1 = s.start().unwrap();
+        let _ = s.on_partial(id1, "첫 번째 문장입니다".into());
+        let _ = s.on_partial(id1, "".into());
+        let _ = s.on_partial(id1, "두 번째 문장입니다".into());
+        let _ = s.on_partial(id1, "".into());
+        assert_eq!(
+            s.on_final(id1, "두 번째 문장입니다".into()),
+            Some(SpeechEvent::Final {
+                text: "첫 번째 문장입니다 두 번째 문장입니다".into()
+            })
+        );
+
+        // 2. Pause 1 (reset) + Pause 2 (transient empty flicker) + continuation of seg2.
+        let id2 = s.start().unwrap();
+        let _ = s.on_partial(id2, "첫 번째 문장입니다".into());
+        let _ = s.on_partial(id2, "".into());
+        let _ = s.on_partial(id2, "두 번째".into());
+        let _ = s.on_partial(id2, "".into());
+        assert_eq!(
+            s.on_partial(id2, "두 번째 문장입니다".into()),
+            Some(SpeechEvent::Partial {
+                text: "첫 번째 문장입니다 두 번째 문장입니다".into()
+            })
+        );
+        assert_eq!(
+            s.on_final(id2, "두 번째 문장입니다".into()),
+            Some(SpeechEvent::Final {
+                text: "첫 번째 문장입니다 두 번째 문장입니다".into()
+            })
+        );
+
+        // 3. Disjoint jump + transient empty flicker + continuation.
+        let id3 = s.start().unwrap();
+        let _ = s.on_partial(id3, "첫 번째 문장입니다".into());
+        let _ = s.on_partial(id3, "두 번째".into());
+        let _ = s.on_partial(id3, "".into());
+        assert_eq!(
+            s.on_partial(id3, "두 번째 문장입니다".into()),
+            Some(SpeechEvent::Partial {
+                text: "첫 번째 문장입니다 두 번째 문장입니다".into()
+            })
+        );
+        assert_eq!(
+            s.on_final(id3, "두 번째 문장입니다".into()),
+            Some(SpeechEvent::Final {
+                text: "첫 번째 문장입니다 두 번째 문장입니다".into()
+            })
+        );
+
+        // 4. Punctuation-only incoming partial must not falsely trigger disjoint jump.
+        assert!(!is_disjoint_jump("첫 번째 문장입니다", "."));
+        assert!(!is_disjoint_jump("첫 번째 문장입니다", "..."));
+        assert!(!is_disjoint_jump("첫 번째 문장입니다", "?"));
+        let id4 = s.start().unwrap();
+        let _ = s.on_partial(id4, "첫 번째 문장입니다".into());
+        assert_eq!(
+            s.on_partial(id4, ".".into()),
+            Some(SpeechEvent::Partial { text: ".".into() })
+        );
+        assert_eq!(
+            s.on_final(id4, "첫 번째 문장입니다.".into()),
+            Some(SpeechEvent::Final {
+                text: "첫 번째 문장입니다.".into()
+            })
+        );
+    }
+
+    #[test]
+    fn normalize_hangul_nfc_boundaries() {
+        assert_eq!(normalize_hangul_nfc("hello"), "hello");
+        assert_eq!(normalize_hangul_nfc("\u{1100}\u{1161}"), "가"); // L + V
+        assert_eq!(normalize_hangul_nfc("\u{1100}\u{1161}\u{11A8}"), "각"); // L + V + T
+        assert_eq!(normalize_hangul_nfc("\u{AC00}\u{11A8}"), "각"); // LV + T
+        assert_eq!(normalize_hangul_nfc("\u{AC01}\u{11A8}"), "\u{AC01}\u{11A8}"); // LVT + T stays distinct
+        assert_eq!(normalize_hangul_nfc("\u{1100}\u{11A8}"), "\u{1100}\u{11A8}"); // L + T stays distinct
+        assert_eq!(normalize_hangul_nfc("e\u{0301}"), "e\u{0301}"); // Non-Hangul combining mark untouched
     }
 }
