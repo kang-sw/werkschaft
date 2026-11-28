@@ -9,24 +9,24 @@ import (
 )
 
 const (
-	// agyOutputRateWindow is the maximum number of recent eligible responses
+	// acpOutputRateWindow is the maximum number of recent eligible responses
 	// aggregated into the token-weighted output rate.
-	agyOutputRateWindow = 8
-	// agyOutputRateMinSpanMs rejects burst-flushed responses whose summed
+	acpOutputRateWindow = 8
+	// acpOutputRateMinSpanMs rejects burst-flushed responses whose summed
 	// message-delta span is too short to measure reliably.
-	agyOutputRateMinSpanMs = 250
-	// agyOutputRateMinTokens rejects responses with too few visible tokens.
-	agyOutputRateMinTokens = 8
+	acpOutputRateMinSpanMs = 250
+	// acpOutputRateMinTokens rejects responses with too few visible tokens.
+	acpOutputRateMinTokens = 8
 )
 
-type agyRateSample struct {
+type acpRateSample struct {
 	tokens int64
 	ms     int64
 }
 
-// agyPromptSpan tracks the local receipt span of consecutive
+// acpPromptSpan tracks the local receipt span of consecutive
 // agent_message_chunk runs for one in-flight session/prompt request.
-type agyPromptSpan struct {
+type acpPromptSpan struct {
 	id       string
 	spanMs   int64
 	inRun    bool
@@ -35,7 +35,7 @@ type agyPromptSpan struct {
 	replayed bool
 }
 
-func (s *agyPromptSpan) recordMessageChunk(now int64) {
+func (s *acpPromptSpan) recordMessageChunk(now int64) {
 	if !s.inRun {
 		s.inRun = true
 		s.runFirst = now
@@ -47,7 +47,7 @@ func (s *agyPromptSpan) recordMessageChunk(now int64) {
 	}
 }
 
-func (s *agyPromptSpan) closeRun() {
+func (s *acpPromptSpan) closeRun() {
 	if !s.inRun {
 		return
 	}
@@ -57,23 +57,23 @@ func (s *agyPromptSpan) closeRun() {
 	s.inRun = false
 }
 
-func (s *agyPromptSpan) finish() int64 {
+func (s *acpPromptSpan) finish() int64 {
 	s.closeRun()
 	return s.spanMs
 }
 
-// agyOutputRateTracker holds in-memory per-prompt spans and the rolling window
+// acpOutputRateTracker holds in-memory per-prompt spans and the rolling window
 // of eligible completed responses for one acpMapper.
-type agyOutputRateTracker struct {
-	spans  []*agyPromptSpan
-	window []agyRateSample
+type acpOutputRateTracker struct {
+	spans  []*acpPromptSpan
+	window []acpRateSample
 }
 
-func (t *agyOutputRateTracker) promptSent(id string) {
-	t.spans = append(t.spans, &agyPromptSpan{id: id})
+func (t *acpOutputRateTracker) promptSent(id string) {
+	t.spans = append(t.spans, &acpPromptSpan{id: id})
 }
 
-func (t *agyOutputRateTracker) promptDropped(id string) {
+func (t *acpOutputRateTracker) promptDropped(id string) {
 	for i, s := range t.spans {
 		if s.id == id {
 			t.spans = append(t.spans[:i], t.spans[i+1:]...)
@@ -85,16 +85,16 @@ func (t *agyOutputRateTracker) promptDropped(id string) {
 // dropUntracked discards leading spans opened without a tracked prompt id
 // (for example, an unsolicited background-wakeup turn that closed quietly or
 // was superseded by a tracked prompt).
-func (t *agyOutputRateTracker) dropUntracked() {
+func (t *acpOutputRateTracker) dropUntracked() {
 	for len(t.spans) > 0 && t.spans[0].id == "" {
 		t.spans = t.spans[1:]
 	}
 }
 
 // messageChunk attributes a visible text chunk to the oldest unanswered prompt.
-func (t *agyOutputRateTracker) messageChunk(now int64, replaying bool) {
+func (t *acpOutputRateTracker) messageChunk(now int64, replaying bool) {
 	if len(t.spans) == 0 {
-		t.spans = append(t.spans, &agyPromptSpan{replayed: replaying})
+		t.spans = append(t.spans, &acpPromptSpan{replayed: replaying})
 	}
 	s := t.spans[0]
 	if replaying {
@@ -106,7 +106,7 @@ func (t *agyOutputRateTracker) messageChunk(now int64, replaying bool) {
 // breakRun closes any open message-delta run on the oldest unanswered prompt
 // when another session update (thought chunk, tool call, usage update, etc.)
 // intervenes.
-func (t *agyOutputRateTracker) breakRun(replaying bool) {
+func (t *acpOutputRateTracker) breakRun(replaying bool) {
 	if len(t.spans) == 0 {
 		return
 	}
@@ -118,11 +118,11 @@ func (t *agyOutputRateTracker) breakRun(replaying bool) {
 }
 
 // clearWindow resets the rolling window on a model change without publishing.
-func (t *agyOutputRateTracker) clearWindow() {
+func (t *acpOutputRateTracker) clearWindow() {
 	t.window = nil
 }
 
-func (t *agyOutputRateTracker) popSpan(id string) *agyPromptSpan {
+func (t *acpOutputRateTracker) popSpan(id string) *acpPromptSpan {
 	for i, s := range t.spans {
 		if s.id == id {
 			t.spans = append(t.spans[:i], t.spans[i+1:]...)
@@ -141,17 +141,17 @@ func (t *agyOutputRateTracker) popSpan(id string) *agyPromptSpan {
 // complete closes the prompt span matching id, evaluates eligibility against
 // the prompt result's visible tokens (outputTokens - thoughtTokens) and span,
 // and returns the updated token-weighted rolling rate when eligible.
-func (t *agyOutputRateTracker) complete(id string, msg acpMessage, replaying bool) (float64, bool) {
+func (t *acpOutputRateTracker) complete(id string, msg acpMessage, replaying bool) (float64, bool) {
 	span := t.popSpan(id)
 	if replaying || span == nil || span.replayed {
 		return 0, false
 	}
 	spanMs := span.finish()
-	if msg.Error != nil || spanMs < agyOutputRateMinSpanMs {
+	if msg.Error != nil || spanMs < acpOutputRateMinSpanMs {
 		return 0, false
 	}
-	visibleTokens, ok := agyVisibleOutputTokens(msg.Result)
-	if !ok || visibleTokens < agyOutputRateMinTokens {
+	visibleTokens, ok := acpVisibleOutputTokens(msg.Result)
+	if !ok || visibleTokens < acpOutputRateMinTokens {
 		return 0, false
 	}
 	sampleRate := float64(visibleTokens) * 1000 / float64(spanMs)
@@ -159,8 +159,8 @@ func (t *agyOutputRateTracker) complete(id string, msg acpMessage, replaying boo
 		return 0, false
 	}
 	next := t.window
-	if len(next) >= agyOutputRateWindow {
-		next = next[len(next)-(agyOutputRateWindow-1):]
+	if len(next) >= acpOutputRateWindow {
+		next = next[len(next)-(acpOutputRateWindow-1):]
 	}
 	totalTokens := visibleTokens
 	totalMs := spanMs
@@ -175,15 +175,15 @@ func (t *agyOutputRateTracker) complete(id string, msg acpMessage, replaying boo
 	if math.IsNaN(rate) || math.IsInf(rate, 0) || rate <= 0 || rate > wslive.MaxOutputTps {
 		return 0, false
 	}
-	t.window = append(next, agyRateSample{tokens: visibleTokens, ms: spanMs})
+	t.window = append(next, acpRateSample{tokens: visibleTokens, ms: spanMs})
 	return rate, true
 }
 
-// agyVisibleOutputTokens parses usage.outputTokens - usage.thoughtTokens from
+// acpVisibleOutputTokens parses usage.outputTokens - usage.thoughtTokens from
 // an ACP session/prompt result. Missing or non-numeric outputTokens, a
 // non-numeric thoughtTokens, a non-normal stopReason, or a negative difference
 // returns ok=false. An absent or null thoughtTokens counts as 0.
-func agyVisibleOutputTokens(result json.RawMessage) (int64, bool) {
+func acpVisibleOutputTokens(result json.RawMessage) (int64, bool) {
 	var r struct {
 		StopReason string `json:"stopReason"`
 		Usage      *struct {

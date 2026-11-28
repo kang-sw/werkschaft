@@ -63,6 +63,9 @@ type acpDialect interface {
 	// newAudit returns the audit harness name and adapter; a nil adapter
 	// keeps no audit capture.
 	newAudit(sessionID string) (string, auditAdapter)
+	// nativeRowPrefix prefixes a native subagent launch's tool call id to
+	// form its live agent row id.
+	nativeRowPrefix() string
 }
 
 // acpTiming are a dialect's request timeouts and wakeup quiet windows.

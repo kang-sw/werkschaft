@@ -104,7 +104,7 @@ type acpMapper struct {
 	// lastContext retains the latest usage_update context so KindStatus rate
 	// events preserve it instead of clearing Usage.Context.
 	lastContext *wslive.UsageContext
-	rate        agyOutputRateTracker
+	rate        acpOutputRateTracker
 	// now is an optional local clock seam (epoch ms) for deterministic tests.
 	now func() int64
 }

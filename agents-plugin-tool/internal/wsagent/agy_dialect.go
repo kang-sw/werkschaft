@@ -92,6 +92,8 @@ func (agyDialect) mcpToolMatches(name, server, tool string) bool {
 
 func (agyDialect) replyFailure(reply string) string { return agyReplyTailFailure(reply) }
 
+func (agyDialect) nativeRowPrefix() string { return wslive.NativeAgyPrefix }
+
 func (agyDialect) usageLimit(msg acpMessage, modelFailure string, now int64) *wslive.Notice {
 	return agyUsageLimitAlert(msg, modelFailure, now)
 }

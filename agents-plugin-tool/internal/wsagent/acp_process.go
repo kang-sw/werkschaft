@@ -10,8 +10,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"github.com/kang-sw/devenv/internal/wslive"
 )
 
 // acp_process.go is the shared ACP agent process: the handshake, the
@@ -424,6 +422,6 @@ func (p *acpProcess) forgetNativeLaunches(rowIDs []string) {
 	p.m.mu.Lock()
 	defer p.m.mu.Unlock()
 	for _, id := range rowIDs {
-		delete(p.m.nativeLaunch, strings.TrimPrefix(id, wslive.NativeAgyPrefix))
+		delete(p.m.nativeLaunch, strings.TrimPrefix(id, p.m.d.nativeRowPrefix()))
 	}
 }

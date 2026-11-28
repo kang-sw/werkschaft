@@ -9,6 +9,10 @@ import (
 	"github.com/kang-sw/devenv/internal/wslive"
 )
 
+// acpPartialEvery is the least time, in ms, between two sends of the
+// streaming reply: every reply event makes the runner take a snapshot.
+const acpPartialEvery = 100
+
 // startTurn opens a turn at its first content: a turn ws's own prompt began
 // is already running in the runner and a replayed one is rebuilt here. Live
 // content without a known prompt opens an unsolicited turn bounded by wakeTimer.
@@ -167,7 +171,7 @@ func (m *acpMapper) update(params json.RawMessage, replies lineReplies, now int6
 			m.stripReplyFailure(oldFailure)
 			m.reply.WriteString(c.Text)
 		}
-		if m.replyAt != 0 && now-m.replyAt < claudePartialEvery {
+		if m.replyAt != 0 && now-m.replyAt < acpPartialEvery {
 			return out
 		}
 		m.replyAt = now
@@ -285,7 +289,7 @@ func (m *acpMapper) toolStatus(u acpSessionUpdate, replaying bool, now int64) []
 		// logical turn end. A failed launch ends the row here.
 		delete(m.nativeLaunch, u.ToolCallID)
 		if failed {
-			out = append(out, Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: wslive.NativeAgyPrefix + u.ToolCallID, Status: wslive.StatusFailed, At: now}})
+			out = append(out, Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: m.d.nativeRowPrefix() + u.ToolCallID, Status: wslive.StatusFailed, At: now}})
 		}
 	}
 	if id, ok := m.approvalOf[u.ToolCallID]; ok {
@@ -325,9 +329,9 @@ func (m *acpMapper) nativeStart(u acpSessionUpdate, label string, now int64) []E
 	if u.Status != "completed" && u.Status != "failed" {
 		m.nativeLaunch[u.ToolCallID] = true
 	}
-	out := []Event{{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: wslive.NativeAgyPrefix + u.ToolCallID, Label: label, Status: wslive.StatusRunning, At: now}}}
+	out := []Event{{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: m.d.nativeRowPrefix() + u.ToolCallID, Label: label, Status: wslive.StatusRunning, At: now}}}
 	if u.Status == "failed" {
-		out = append(out, Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: wslive.NativeAgyPrefix + u.ToolCallID, Status: wslive.StatusFailed, At: now}})
+		out = append(out, Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: m.d.nativeRowPrefix() + u.ToolCallID, Status: wslive.StatusFailed, At: now}})
 	}
 	return out
 }
