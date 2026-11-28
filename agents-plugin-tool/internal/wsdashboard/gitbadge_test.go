@@ -386,11 +386,12 @@ func TestGitDataRendersEachState(t *testing.T) {
 
 // TestGitPageMarkup pins the Git page's static markup: one #gitpage root,
 // hidden until the gallery's Git page host (#gitdock) adopts it, outside the
-// top bar and the drawer, carrying the git region, the action strip (no
-// commit action), the review pill, the narrow tabs, and the three regions
-// (graph, changes, worktrees). The retired drawer git sheet and handle are
-// gone. A page without a git read still carries the page (its empty state
-// shows) but no data carrier.
+// top bar and the drawer, carrying the git region, the action strip (icon-
+// only fetch, pull, and push named by aria-label; no commit action), the
+// review pill, the Worktrees button with the popover it controls, and one
+// panel: the commit graph. No tabs, no change list, no region grid. The
+// retired drawer git sheet and handle are gone. A page without a git read
+// still carries the page (its empty state shows) but no data carrier.
 func TestGitPageMarkup(t *testing.T) {
 	view := SessionView{ReplyID: "x", Git: &GitBadge{State: gitPending, Root: "/p"}}
 	regions, err := renderSessionRegions(view, nil)
@@ -404,11 +405,28 @@ func TestGitPageMarkup(t *testing.T) {
 	if n := strings.Count(page, `id="gitpage"`); n != 1 {
 		t.Fatalf("pages carry %d #gitpage roots", n)
 	}
-	root, data, strip, pill, tabs, glog, gfiles, wt := strings.Index(page, `<div class="gp-page" id="gitpage" data-tab="graph" hidden>`), strings.Index(page, `id="gitdata"`),
-		strings.Index(page, `class="gp-strip"`), strings.Index(page, `id="gppill"`), strings.Index(page, `class="gp-tabs" role="tablist"`),
-		strings.Index(page, `id="glog"`), strings.Index(page, `id="gfiles"`), strings.Index(page, `id="wtcard"`)
-	if root < 0 || data < root || strip < data || pill < strip || tabs < pill || glog < tabs || gfiles < glog || wt < gfiles {
-		t.Fatalf("git page order: root %d, data %d, strip %d, pill %d, tabs %d, graph %d, changes %d, worktrees %d", root, data, strip, pill, tabs, glog, gfiles, wt)
+	root, data, strip, acts, pill, btn, pop, glog, empty := strings.Index(page, `<div class="gp-page" id="gitpage" hidden>`), strings.Index(page, `id="gitdata"`),
+		strings.Index(page, `class="gp-strip"`), strings.Index(page, `class="gp-acts"`), strings.Index(page, `id="gppill"`), strings.Index(page, `id="gpwtbtn"`),
+		strings.Index(page, `id="gpwtpop"`), strings.Index(page, `<section class="gp-card glog" id="glog"`), strings.Index(page, `id="gpempty"`)
+	if root < 0 || data < root || strip < data || acts < strip || pill < acts || btn < pill || pop < btn || glog < pop || empty < glog {
+		t.Fatalf("git page order: root %d, data %d, strip %d, actions %d, pill %d, worktrees button %d, popover %d, graph %d, empty %d", root, data, strip, acts, pill, btn, pop, glog, empty)
+	}
+	acts0 := page[acts:strings.Index(page[acts:], `</span>`)+acts]
+	if strings.Contains(page[root:empty], `data-tab=`) {
+		t.Error("the git page carries a tab state")
+	}
+	for _, w := range []string{`data-git="fetch" data-busy=`, `aria-label="Fetch">`, `aria-label="Pull">`, `aria-label="Push">`} {
+		if !strings.Contains(acts0, w) {
+			t.Errorf("the strip actions lack %q", w)
+		}
+	}
+	if strings.Contains(acts0, "<span") {
+		t.Errorf("the strip actions carry a text label: %s", acts0)
+	}
+	for _, w := range []string{`aria-haspopup="dialog" aria-controls="gpwtpop" aria-expanded="false"`, `id="wtcount" hidden`, `<div class="gp-wtpop" id="gpwtpop" role="dialog" aria-label=`} {
+		if !strings.Contains(page, w) {
+			t.Errorf("the Worktrees button or popover lacks %q", w)
+		}
 	}
 	top := page[strings.Index(page, `<div class="top">`):strings.Index(page, `<div class="drawer"`)]
 	drawer := page[strings.Index(page, `<div class="drawer"`):root]
@@ -418,12 +436,13 @@ func TestGitPageMarkup(t *testing.T) {
 		}
 	}
 	for _, w := range []string{`data-git="fetch"`, `data-git="pull"`, `data-git="push"`, `id="glrows"`, `aria-label="commit graph"`, `data-lost="the dashboard did not answer"`,
-		`data-gp-tab="graph"`, `data-gp-tab="diff"`, `data-gp-tab="worktrees"`, `id="gpempty"`, `id="gptoast"`} {
+		`id="gpempty"`, `id="gptoast"`} {
 		if !strings.Contains(page, w) {
 			t.Errorf("the git page lacks %q", w)
 		}
 	}
-	for _, n := range []string{`data-git="commit"`, "gitpop", `id="gbody"`, `id="ghandle"`, `id="p-worktrees"`} {
+	for _, n := range []string{`data-git="commit"`, "gitpop", `id="gbody"`, `id="ghandle"`, `id="p-worktrees"`, `gp-tabs`, `data-gp-tab`, `id="gfiles"`, `id="gpanel"`,
+		`gp-regions`, `id="wtcard"`} {
 		if strings.Contains(page, n) {
 			t.Errorf("the page carries %q", n)
 		}

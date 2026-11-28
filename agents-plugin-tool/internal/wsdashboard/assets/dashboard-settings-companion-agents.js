@@ -11,6 +11,9 @@
     { id: "work", key: "dashboard.companion_work_tier", hint: "js.settings.companion.agents.work_hint" }
   ];
   var AUTO = "auto";
+  // The harness whose consumer terms the lead modal warns about
+  // (dashboard-new-session.js shows js.lead.agy.terms for the same name).
+  var TERMS_HARNESS = "agy";
 
   var state = { data: null, loading: false, error: "", seq: 0 };
 
@@ -157,8 +160,37 @@
     return row;
   }
 
+  // The harness a shown value launches on, from the readback options (which
+  // resolve aliases and bundles); a dotted value is read by its prefix only
+  // while no readback has loaded. Auto never lands on the terms harness.
+  function valueHarness(value) {
+    if (!value || value === AUTO) return "";
+    var options = state.data && Array.isArray(state.data.options) ? state.data.options : null;
+    var hit = options && options.find(function (option) { return option && option.value === value; });
+    if (hit) return hit.harness || "";
+    return !options && value.indexOf(".") > 0 ? value.split(".")[0] : "";
+  }
+
+  // The agy consumer-terms notice of the lead modal (same text), shown once
+  // when either listed role is set to launch on it.
+  function termsNotice(ctx, roles) {
+    var used = roles.some(function (role) {
+      var entry = ctx.byKey.get(role.key);
+      return entry && valueHarness(currentValue(ctx, entry)) === TERMS_HARNESS;
+    });
+    if (!used) return null;
+    var note = ctx.el("p", "cs-agent-reason cs-agent-terms", ctx.tr("js.lead.agy.terms"));
+    note.dataset.companionAgentTerms = "1";
+    note.setAttribute("role", "note");
+    return note;
+  }
+
   function render(ctx) {
-    var rows = ROLES.map(function (role) { return renderRole(ctx, role); }).filter(Boolean);
+    var shown = [], rows = [];
+    ROLES.forEach(function (role) {
+      var row = renderRole(ctx, role);
+      if (row) { shown.push(role); rows.push(row); }
+    });
     if (!rows.length) return null;
     if (!state.data && !state.loading && !state.error) load(ctx.rerender);
     var card = ctx.el("div", "cs-agents-card");
@@ -167,6 +199,8 @@
       ctx.el("span", "cs-agents-title", ctx.tr("js.settings.companion.agents.title")),
       ctx.el("span", "cs-agents-sub", ctx.tr("js.settings.companion.agents.sub")));
     card.append(head, ...rows);
+    var terms = termsNotice(ctx, shown);
+    if (terms) card.append(terms);
     return card;
   }
 

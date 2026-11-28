@@ -200,6 +200,285 @@
     return { cls: "", label: k };
   }
 
+  // ==========================================================================
+  // Safe Markdown + badge rendering for bubbles.
+  // The tree is built only with createElement / createTextNode / textContent;
+  // user or companion text never reaches innerHTML, so markup such as
+  // <img onerror> or <script> stays inert literal text. Links are limited to
+  // http(s)/mailto. Supported: paragraphs, headings, fenced code, quotes,
+  // flat lists, hr, **bold**, *italic*, ~~strike~~, `code`, [links], bare
+  // URLs, <mailbox .../> tags and @mention badges.
+  // ==========================================================================
+  const MD_MAX_DEPTH = 4;
+  const SAFE_URL_RE = /^(?:https?:\/\/|mailto:)[^\s<>"']+$/i;
+  const BARE_URL_RE = /^https?:\/\/[^\s<>"'`]+/i;
+  const MENTION_RE = /^@[A-Za-z0-9_][A-Za-z0-9_./:-]*/;
+
+  function mdText(doc, s) {
+    if (typeof doc.createTextNode === "function") return doc.createTextNode(s);
+    const span = doc.createElement("span");
+    span.textContent = s;
+    return span;
+  }
+
+  function mdEl(doc, tag, cls) {
+    const el = doc.createElement(tag);
+    if (cls) el.className = cls;
+    return el;
+  }
+
+  function safeHref(url) {
+    const u = String(url || "").replace(/[\u0000-\u001f\u007f\s]+/g, "");
+    return SAFE_URL_RE.test(u) ? u : "";
+  }
+
+  function unescapeXml(s) {
+    return String(s).replace(/&(amp|lt|gt|quot);/g, (m, n) => (n === "amp" ? "&" : n === "lt" ? "<" : n === "gt" ? ">" : '"'));
+  }
+
+  // Parses a <mailbox .../> tag at text[start]. Prefers the dashboard's own
+  // WsCapsules parser (same grammar the composer capsules use); falls back to
+  // a strict self-contained one when capsules.js is absent.
+  function parseMailboxAt(text, start) {
+    const caps = global.WsCapsules;
+    if (caps && typeof caps.parseMailboxTag === "function") {
+      const hit = caps.parseMailboxTag(text, start);
+      if (!hit) return null;
+      const label = typeof caps.formatMailboxLabel === "function" ? caps.formatMailboxLabel(hit.tag, {}) : (hit.tag.label || hit.tag.id);
+      const title = typeof caps.formatMailboxTooltip === "function" ? caps.formatMailboxTooltip(hit.tag) : "id: " + hit.tag.id;
+      return { end: hit.end, label, title };
+    }
+    const m = /^<mailbox\s+((?:[a-z][a-z0-9_-]*="[^"<>\r\n]*"\s*)+)\/>/.exec(text.slice(start, start + 600));
+    if (!m) return null;
+    const attrs = {};
+    m[1].replace(/([a-z][a-z0-9_-]*)="([^"]*)"/g, (_, k, v) => { attrs[k] = unescapeXml(v); return ""; });
+    if (!attrs.id) return null;
+    return { end: start + m[0].length, label: attrs.label || attrs.id.slice(0, 9), title: "id: " + attrs.id };
+  }
+
+  function mdBadge(doc, kind, label, title) {
+    const b = mdEl(doc, "span", "ws-cm-badge " + kind);
+    b.textContent = label;
+    if (title) b.title = title;
+    return b;
+  }
+
+  function findClose(text, from, delim) {
+    for (let k = text.indexOf(delim, from); k >= 0; k = text.indexOf(delim, k + 1)) {
+      if (k > from && !/\s/.test(text.charAt(k - 1))) return k;
+    }
+    return -1;
+  }
+
+  function renderInline(doc, parent, text, depth) {
+    let buf = "";
+    const flush = () => {
+      if (buf) { parent.append(mdText(doc, buf)); buf = ""; }
+    };
+    const n = text.length;
+    for (let i = 0; i < n;) {
+      const ch = text.charAt(i);
+      const prev = i > 0 ? text.charAt(i - 1) : "";
+      if (ch === "\\" && i + 1 < n && /[!-/:-@[-`{-~]/.test(text.charAt(i + 1))) {
+        buf += text.charAt(i + 1); i += 2; continue;
+      }
+      if (ch === "\n") { flush(); parent.append(doc.createElement("br")); i++; continue; }
+      if (ch === "`") {
+        let run = 1;
+        while (text.charAt(i + run) === "`") run++;
+        const close = text.indexOf("`".repeat(run), i + run);
+        if (close > i + run) {
+          flush();
+          const code = mdEl(doc, "code", "ws-cm-md-code");
+          code.textContent = text.slice(i + run, close).replace(/^ (.*) $/s, "$1");
+          parent.append(code);
+          i = close + run; continue;
+        }
+        buf += "`".repeat(run); i += run; continue;
+      }
+      if (ch === "<" && text.startsWith("<mailbox ", i)) {
+        const mb = parseMailboxAt(text, i);
+        if (mb) { flush(); parent.append(mdBadge(doc, "mailbox", mb.label, mb.title)); i = mb.end; continue; }
+      }
+      if ((ch === "[" || (ch === "!" && text.charAt(i + 1) === "[")) && depth < MD_MAX_DEPTH) {
+        const open = ch === "!" ? i + 1 : i;
+        const closeBr = text.indexOf("]", open + 1);
+        if (closeBr > open + 1 && text.charAt(closeBr + 1) === "(") {
+          const closeP = text.indexOf(")", closeBr + 2);
+          if (closeP > closeBr + 2) {
+            const label = text.slice(open + 1, closeBr);
+            const href = safeHref(text.slice(closeBr + 2, closeP).trim().split(/\s+/)[0]);
+            flush();
+            if (href) {
+              const a = mdEl(doc, "a", "ws-cm-md-link");
+              a.setAttribute("href", href);
+              a.setAttribute("target", "_blank");
+              a.setAttribute("rel", "noopener noreferrer");
+              renderInline(doc, a, ch === "!" ? (label || href) : label, depth + 1);
+              parent.append(a);
+            } else {
+              parent.append(mdText(doc, label));
+            }
+            i = closeP + 1; continue;
+          }
+        }
+      }
+      if ((ch === "h" || ch === "H") && !/[A-Za-z0-9]/.test(prev)) {
+        const bare = BARE_URL_RE.exec(text.slice(i));
+        if (bare) {
+          const url = bare[0].replace(/[.,;:!?)\]]+$/, "");
+          const href = safeHref(url);
+          if (href) {
+            flush();
+            const a = mdEl(doc, "a", "ws-cm-md-link");
+            a.setAttribute("href", href);
+            a.setAttribute("target", "_blank");
+            a.setAttribute("rel", "noopener noreferrer");
+            a.textContent = url;
+            parent.append(a);
+            i += url.length; continue;
+          }
+        }
+      }
+      if (ch === "@" && (!prev || /[\s(]/.test(prev))) {
+        const m = MENTION_RE.exec(text.slice(i));
+        if (m) {
+          const tok = m[0].replace(/[.,:;!?)]+$/, "");
+          if (tok.length > 1) {
+            flush();
+            parent.append(mdBadge(doc, "mention", tok, ""));
+            i += tok.length; continue;
+          }
+        }
+      }
+      if ((ch === "*" || ch === "_" || ch === "~") && depth < MD_MAX_DEPTH) {
+        let delim = "";
+        if (ch === "~") delim = text.startsWith("~~", i) ? "~~" : "";
+        else if (text.startsWith(ch + ch, i)) delim = ch + ch;
+        else delim = ch;
+        const intraword = ch === "_" && /[A-Za-z0-9]/.test(prev);
+        if (delim && !intraword && i + delim.length < n && !/\s/.test(text.charAt(i + delim.length))) {
+          const close = findClose(text, i + delim.length, delim);
+          const after = close >= 0 ? text.charAt(close + delim.length) : "";
+          if (close > 0 && !(ch === "_" && /[A-Za-z0-9]/.test(after))) {
+            flush();
+            const tag = delim === "~~" ? "del" : delim.length === 2 ? "strong" : "em";
+            const el = doc.createElement(tag);
+            renderInline(doc, el, text.slice(i + delim.length, close), depth + 1);
+            parent.append(el);
+            i = close + delim.length; continue;
+          }
+        }
+      }
+      buf += ch; i++;
+    }
+    flush();
+  }
+
+  const BLOCK_START_RE = /^(?: {0,3}(?:#{1,6}\s|>|```|~~~|[-*+]\s|\d{1,9}[.)]\s)|[ \t]*(?:[-*_][ \t]*){3,}$)/;
+
+  function renderBlocks(doc, parent, text, depth) {
+    const lines = String(text).replace(/\r\n?/g, "\n").split("\n");
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (!line.trim()) { i++; continue; }
+      const fence = /^ {0,3}(```+|~~~+)\s*([\w+#.-]*)/.exec(line);
+      if (fence) {
+        const mark = fence[1];
+        const body = [];
+        i++;
+        while (i < lines.length && !new RegExp("^ {0,3}" + mark.charAt(0) + "{" + mark.length + ",}\\s*$").test(lines[i])) body.push(lines[i++]);
+        i++;
+        const pre = mdEl(doc, "pre", "ws-cm-md-pre");
+        const code = doc.createElement("code");
+        code.textContent = body.join("\n");
+        if (fence[2]) pre.setAttribute("data-lang", fence[2].slice(0, 24));
+        pre.append(code);
+        parent.append(pre);
+        continue;
+      }
+      const head = /^ {0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/.exec(line);
+      if (head) {
+        const h = mdEl(doc, "div", "ws-cm-md-h ws-cm-md-h" + head[1].length);
+        h.setAttribute("role", "heading");
+        h.setAttribute("aria-level", String(head[1].length));
+        renderInline(doc, h, head[2], 0);
+        parent.append(h);
+        i++; continue;
+      }
+      if (/^[ \t]*(?:[-*_][ \t]*){3,}$/.test(line)) {
+        parent.append(doc.createElement("hr"));
+        i++; continue;
+      }
+      if (/^ {0,3}>/.test(line)) {
+        const quoted = [];
+        while (i < lines.length && /^ {0,3}>/.test(lines[i])) quoted.push(lines[i++].replace(/^ {0,3}>[ \t]?/, ""));
+        const bq = doc.createElement("blockquote");
+        if (depth < MD_MAX_DEPTH) renderBlocks(doc, bq, quoted.join("\n"), depth + 1);
+        else bq.textContent = quoted.join("\n");
+        parent.append(bq);
+        continue;
+      }
+      const li = /^( *)([-*+]|\d{1,9}[.)])\s+(.*)$/.exec(line);
+      if (li) {
+        const ordered = /\d/.test(li[2]);
+        const list = doc.createElement(ordered ? "ol" : "ul");
+        if (ordered && li[2].replace(/\D/g, "") !== "1") list.setAttribute("start", String(parseInt(li[2], 10)));
+        while (i < lines.length) {
+          const m = /^( *)([-*+]|\d{1,9}[.)])\s+(.*)$/.exec(lines[i]);
+          if (!m || /\d/.test(m[2]) !== ordered) break;
+          const itemLines = [m[3]];
+          i++;
+          while (i < lines.length && lines[i].trim() && /^ {2,}\S/.test(lines[i]) && !/^ *([-*+]|\d{1,9}[.)])\s+/.test(lines[i])) itemLines.push(lines[i++].trim());
+          const item = doc.createElement("li");
+          let body = itemLines.join("\n");
+          const task = /^\[([ xX])\]\s+/.exec(body);
+          if (task) {
+            body = body.slice(task[0].length);
+            item.className = "ws-cm-md-task";
+            item.append(mdText(doc, task[1] === " " ? "☐ " : "☑ "));
+          }
+          renderInline(doc, item, body, 0);
+          list.append(item);
+        }
+        parent.append(list);
+        continue;
+      }
+      const para = [line];
+      i++;
+      while (i < lines.length && lines[i].trim() && !BLOCK_START_RE.test(lines[i])) para.push(lines[i++]);
+      const p = mdEl(doc, "p", "ws-cm-md-p");
+      renderInline(doc, p, para.join("\n"), 0);
+      parent.append(p);
+    }
+  }
+
+  // Replaces container's content with the rendered Markdown of text.
+  function renderMarkdownInto(doc, container, text) {
+    const frag = doc.createElement("div");
+    renderBlocks(doc, frag, String(text == null ? "" : text), 0);
+    container.replaceChildren(...(frag.children || []));
+  }
+
+  // Minimal keyed patch: keeps nodes that are already in place, appends pure
+  // tails, and only falls back to replaceChildren for real reorders.
+  function patchChildren(parent, next) {
+    const cur = Array.from(parent.children || []);
+    let i = 0;
+    while (i < next.length && i < cur.length && cur[i] === next[i]) i++;
+    if (i === cur.length && i === next.length) return;
+    if (i === next.length && typeof parent.removeChild === "function") {
+      for (let j = cur.length - 1; j >= i; j--) parent.removeChild(cur[j]);
+      return;
+    }
+    if (i === cur.length) {
+      parent.append(...next.slice(i));
+      return;
+    }
+    parent.replaceChildren(...next);
+  }
+
   function createMessengerController() {
     let mounted = false;
     let opts = null;
@@ -228,6 +507,10 @@
     let tier1Strip = null, tier1Metrics = null, tier1SummaryEl = null, tier1ResetBtn = null;
     let threadEl = null, typingEl = null, typingLabel = null;
     let inputEl = null, sendBtn = null;
+    // WsInput instance owning inputEl (null in the plain-textarea fallback)
+    // and per-key rendered thread nodes.
+    let inputApi = null;
+    const nodeCache = new Map();
 
     function docRef() {
       return opts?.document || (typeof document !== "undefined" ? document : null);
@@ -386,10 +669,51 @@
 
     function syncInputSize() {
       if (!inputEl) return;
-      inputEl.style.height = "auto";
-      const nextH = clamp(inputEl.scrollHeight || 28, 28, 92);
-      inputEl.style.height = nextH + "px";
+      // With WsInput the visible field is the capsule editor, sized by CSS
+      // (min/max-height + overflow); only the plain textarea needs a measure.
+      if (!inputApi) {
+        inputEl.style.height = "auto";
+        const nextH = clamp(inputEl.scrollHeight || 28, 28, 92);
+        inputEl.style.height = nextH + "px";
+      }
       if (sendBtn) sendBtn.disabled = sending || !inputEl.value.trim();
+    }
+
+    // Attaches the shared WsInput primitive (capsule editor + live markdown
+    // via WsMdEditor, list continuation, IME composition guard) to the
+    // composer textarea. global.WsInput is resolved here, at mount time, so
+    // script order never matters; a missing WsInput leaves the plain textarea
+    // with its own Enter handler (see mount()).
+    function attachWsInput() {
+      const WsInput = global.WsInput;
+      if (!inputEl || !WsInput || typeof WsInput.attach !== "function") return null;
+      try {
+        return WsInput.attach(inputEl, {
+          // Messenger chat convention: Enter sends, Shift+Enter adds a line.
+          keymap: () => "enter-send",
+          features: {
+            markdown: true,
+            capsules: true,
+            mentions: false,
+            topics: false,
+            slash: false,
+            imagePaste: false,
+            longPaste: false,
+            listContinuation: true,
+            bangMode: false,
+            autoGrow: true
+          },
+          onChange: () => { syncInputSize(); },
+          onSubmit: () => { sendMessage(); }
+        });
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function resetComposer() {
+      if (inputApi && typeof inputApi.setValue === "function") inputApi.setValue("");
+      else if (inputEl) inputEl.value = "";
     }
 
     function reposition() {
@@ -525,68 +849,90 @@
 
       if (threadEl) {
         const wasNearBottom = (threadEl.scrollHeight - threadEl.scrollTop - threadEl.clientHeight) < 48;
-        threadEl.replaceChildren();
         const msgs = Array.isArray(snapshot.messages) ? snapshot.messages : [];
         const pendingApproval = snapshot.pendingApproval && snapshot.pendingApproval.requestId ? snapshot.pendingApproval : null;
+        // Patch by key: each row (and the empty/echo blocks) is cached with a
+        // signature of everything it displays. A typing/state-only snapshot
+        // re-uses the same nodes, so unchanged bubbles are neither re-parsed
+        // as Markdown nor re-inserted (which would replay the entry animation).
+        const used = new Set();
+        const keyed = (key, sig, build) => {
+          used.add(key);
+          const hit = nodeCache.get(key);
+          if (hit && hit.sig === sig) return hit.node;
+          const node = build();
+          nodeCache.set(key, { sig, node });
+          return node;
+        };
+        const nextNodes = [];
         if (msgs.length === 0 && !pendingApproval) {
-          const empty = doc.createElement("div");
-          empty.className = "ws-cm-empty";
-          empty.textContent = t("js.companion.messenger.empty", "Send a quick note — it buzzes your companion's desk smartphone.");
-          threadEl.append(empty);
+          nextNodes.push(keyed("empty", "empty", () => {
+            const empty = doc.createElement("div");
+            empty.className = "ws-cm-empty";
+            empty.textContent = t("js.companion.messenger.empty", "Send a quick note — it buzzes your companion's desk smartphone.");
+            return empty;
+          }));
         } else {
           let prevSender = "";
-          for (const msg of msgs) {
+          msgs.forEach((msg, idx) => {
             const isUser = msg.sender === "user";
             const isCont = prevSender === msg.sender;
             prevSender = msg.sender;
-            const row = doc.createElement("div");
-            row.className = "ws-cm-msg " + (isUser ? "user" : "ai") + (isCont ? " is-cont" : "");
+            const card = msg.confirmCard && typeof msg.confirmCard === "object" ? msg.confirmCard : null;
+            const sig = JSON.stringify([
+              msg.sender, isCont, msg.text || "", msg.tone || "", msg.createdAt || 0,
+              card ? [card, localCardStatus.get(card.id) || ""] : null
+            ]);
+            nextNodes.push(keyed("m:" + (msg.id || "#" + idx), sig, () => {
+              const row = doc.createElement("div");
+              row.className = "ws-cm-msg " + (isUser ? "user" : "ai") + (isCont ? " is-cont" : "");
 
-            if (!isUser) {
-              const av = doc.createElement("div");
-              av.className = "ws-cm-msg-av" + (isCont ? " is-cont" : "");
-              if (!isCont) av.append(makeSvg(doc, ICONS.avatar));
-              row.append(av);
-            }
+              if (!isUser) {
+                const av = doc.createElement("div");
+                av.className = "ws-cm-msg-av" + (isCont ? " is-cont" : "");
+                if (!isCont) av.append(makeSvg(doc, ICONS.avatar));
+                row.append(av);
+              }
 
-            const col = doc.createElement("div");
-            col.className = "ws-cm-msg-col";
-            if (!isUser && !isCont) {
-              const sender = doc.createElement("span");
-              sender.className = "ws-cm-sender";
-              sender.textContent = t("js.companion.messenger.title", "Companion");
-              col.append(sender);
-            }
+              const col = doc.createElement("div");
+              col.className = "ws-cm-msg-col";
+              if (!isUser && !isCont) {
+                const sender = doc.createElement("span");
+                sender.className = "ws-cm-sender";
+                sender.textContent = t("js.companion.messenger.title", "Companion");
+                col.append(sender);
+              }
 
-            const line = doc.createElement("div");
-            line.className = "ws-cm-bubble-line";
-            const bubble = doc.createElement("div");
-            bubble.className = "ws-cm-bubble";
-            bubble.textContent = msg.text || "";
-            const time = doc.createElement("time");
-            time.className = "ws-cm-time";
-            time.textContent = formatTime(msg.createdAt);
-            line.append(bubble, time);
-            col.append(line);
+              const line = doc.createElement("div");
+              line.className = "ws-cm-bubble-line";
+              const bubble = doc.createElement("div");
+              bubble.className = "ws-cm-bubble ws-cm-md";
+              renderMarkdownInto(doc, bubble, msg.text || "");
+              const time = doc.createElement("time");
+              time.className = "ws-cm-time";
+              time.textContent = formatTime(msg.createdAt);
+              line.append(bubble, time);
+              col.append(line);
 
-            const tm = !isUser ? toneMeta(msg.tone) : null;
-            if (tm) {
-              const pills = doc.createElement("div");
-              pills.className = "ws-cm-meta-pills";
-              const pill = doc.createElement("span");
-              pill.className = "ws-cm-react-pill" + (tm.cls ? " " + tm.cls : "");
-              pill.textContent = tm.label;
-              pills.append(pill);
-              col.append(pills);
-            }
-            if (msg.confirmCard && typeof msg.confirmCard === "object") {
-              col.append(renderConfirmCard(doc, msg.confirmCard));
-            }
-            row.append(col);
-            threadEl.append(row);
-          }
+              const tm = !isUser ? toneMeta(msg.tone) : null;
+              if (tm) {
+                const pills = doc.createElement("div");
+                pills.className = "ws-cm-meta-pills";
+                const pill = doc.createElement("span");
+                pill.className = "ws-cm-react-pill" + (tm.cls ? " " + tm.cls : "");
+                pill.textContent = tm.label;
+                pills.append(pill);
+                col.append(pills);
+              }
+              if (card) col.append(renderConfirmCard(doc, card));
+              row.append(col);
+              return row;
+            }));
+          });
         }
         if (pendingApproval) {
+          const echoSig = JSON.stringify([pendingApproval.requestId, pendingApproval.tool || "", pendingApproval.summary || ""]);
+          nextNodes.push(keyed("echo", echoSig, () => {
           const echo = doc.createElement("div");
           echo.className = "ws-cm-pause-echo";
           echo.setAttribute("role", "status");
@@ -617,8 +963,13 @@
           hint.className = "ws-cm-pause-hint";
           hint.textContent = t("js.companion.messenger.approval_paused_hint", "Approve or deny in the top confirmation banner to continue.");
           echo.append(hint);
-          threadEl.append(echo);
+          return echo;
+          }));
         }
+        for (const key of [...nodeCache.keys()]) {
+          if (!used.has(key)) nodeCache.delete(key);
+        }
+        patchChildren(threadEl, nextNodes);
         if (wasNearBottom || msgs.length <= 2 || Boolean(pendingApproval)) {
           threadEl.scrollTop = threadEl.scrollHeight;
         }
@@ -677,10 +1028,12 @@
           return;
         }
         const data = await res.json();
-        inputEl.value = "";
-        if (data?.snapshot) {
-          applySnapshot(data.snapshot);
-          opts?.onSnapshot?.(data.snapshot);
+        resetComposer();
+        // The server answers {message, thread}; `snapshot` is kept as a fallback.
+        const next = data?.thread || data?.snapshot;
+        if (next) {
+          applySnapshot(next);
+          opts?.onSnapshot?.(next);
         }
       } catch (_) {
         global.WsToast?.show?.(t("js.companion.messenger.send_failed", "Failed to send message."), { kind: "warn" });
@@ -711,6 +1064,10 @@
 
     function applySnapshot(next) {
       if (!next || typeof next !== "object") return;
+      // SSE events and POST responses race: drop a snapshot older than the
+      // one shown (same daemon epoch, lower seq).
+      const newer = global.WsCompanion?.phoneSnapNewer;
+      if (typeof newer === "function" && !newer(snapshot, next)) return;
       const pendingApproval = next.pendingApproval && typeof next.pendingApproval === "object" && next.pendingApproval.requestId
         ? next.pendingApproval
         : null;
@@ -787,13 +1144,19 @@
       tier1ResetBtn.addEventListener("click", () => resetSummary(), sig);
       sendBtn.addEventListener("click", () => sendMessage(), sig);
 
-      inputEl.addEventListener("input", syncInputSize, sig);
-      inputEl.addEventListener("keydown", event => {
-        if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-          event.preventDefault();
-          sendMessage();
-        }
-      }, sig);
+      // WsInput, when present, owns Enter (send) / Shift+Enter (newline), the
+      // IME composition guard and list continuation; its onChange keeps the
+      // send button state in sync. The plain textarea gets the same keys.
+      inputApi = attachWsInput();
+      if (!inputApi) {
+        inputEl.addEventListener("input", syncInputSize, sig);
+        inputEl.addEventListener("keydown", event => {
+          if (event.key === "Enter" && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
+            event.preventDefault();
+            sendMessage();
+          }
+        }, sig);
+      }
 
       doc.addEventListener("keydown", event => {
         if (event.key === "Escape" && openState && !pinned) {
@@ -826,6 +1189,9 @@
     function dispose() {
       cancel?.abort();
       cancel = null;
+      try { inputApi?.destroy?.(); } catch (_) { /* best effort */ }
+      inputApi = null;
+      nodeCache.clear();
       popup?.remove?.();
       popup = caret = statusDot = subtitleEl = null;
       tier1Btn = tier1Dot = pinBtn = settingsBtn = closeBtn = null;

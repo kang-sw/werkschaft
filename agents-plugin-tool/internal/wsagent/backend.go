@@ -535,8 +535,8 @@ type Event struct {
 	// (agent text, thought, or plan): the current model request has a
 	// response, so it is not a headerless stall.
 	ModelContent bool
-	// agyReplay carries the mapper's in-memory observation at ReplayDone.
-	agyReplay *agyReplayObservation
+	// acpReplay carries the mapper's in-memory observation at ReplayDone.
+	acpReplay *acpReplayObservation
 	// CompactRequested (with TurnEnd): the ending turn carried a successful
 	// harness compaction lever call. The runner holds queued
 	// input until that compaction starts (leverHoldCap at most), so the

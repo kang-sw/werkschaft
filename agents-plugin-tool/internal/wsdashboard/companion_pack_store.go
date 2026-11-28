@@ -1,10 +1,8 @@
 package wsdashboard
 
 import (
-	"crypto/sha256"
 	"embed"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash"
@@ -44,6 +42,7 @@ type CompanionPackStore struct {
 	trace     func(op string)                     // counts installer file operations in tests
 	rename    func(oldPath, newPath string) error // injects rename failures in tests; nil selects os.Rename
 	removeAll func(path string) error             // injects removal failures in tests; nil selects os.RemoveAll
+	fault     func(op, name string) error         // injects clip write rename/remove failures in tests
 }
 
 type companionPackOpen func(parent companionPackFile, name string, directory bool) (companionPackFile, error)
@@ -71,6 +70,9 @@ type companionPackInfo struct {
 	// Origin is the install sidecar of an installed local pack, read during
 	// a scan; a hand-made pack or a malformed sidecar has none.
 	Origin *companionSidecar `json:"origin,omitempty"`
+	// ClipWarnings lists dropped actions/sentinels entries, disabled clips
+	// and ignored reserved fields of a VRM pack; the pack still loads.
+	ClipWarnings []string `json:"clipWarnings,omitempty"`
 }
 
 type companionPackError struct {
@@ -84,6 +86,13 @@ type companionPack struct {
 	manifest []byte
 	assets   map[string][]byte
 	size     int
+	// files is the validator's flat asset order, which the revision hashes.
+	files []string
+	// catalog is the parsed actions/sentinels state of a VRM pack, and clips
+	// holds the loaded, validated clip files by clips/-prefixed name. Both
+	// are immutable once the pack is published.
+	catalog *companionClipCatalog
+	clips   map[string][]byte
 }
 
 type companionSnapshot struct {
@@ -237,6 +246,9 @@ func loadCompanionLocal(open companionPackOpen, root companionPackFile, id strin
 	// The sidecar is read here only, during a scan or reload; warm requests
 	// serve the snapshot. It is not counted against the cache budget.
 	pack.info.Origin = readCompanionSidecar(open, dir)
+	// Clip files load after the flat assets, through a pinned clips/ open,
+	// and only those the catalog names.
+	loadCompanionLocalClips(open, dir, pack, budget)
 	return pack, name, nil
 }
 
@@ -248,26 +260,33 @@ func companionDirectory(f companionPackFile) bool {
 var errCompanionFileLimit = errors.New("file byte limit exceeded")
 
 func readCompanionLocalFile(open companionPackOpen, parent companionPackFile, name string, limit int) ([]byte, error) {
+	raw, _, err := readCompanionLocalFileMode(open, parent, name, limit)
+	return raw, err
+}
+
+// readCompanionLocalFileMode is readCompanionLocalFile that also reports the
+// file's permission bits from the same handle.
+func readCompanionLocalFileMode(open companionPackOpen, parent companionPackFile, name string, limit int) ([]byte, fs.FileMode, error) {
 	file, err := open(parent, name, false)
 	if err != nil {
-		return nil, fmt.Errorf("cannot open file (only plain files are allowed)")
+		return nil, 0, fmt.Errorf("cannot open file (only plain files are allowed)")
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("expected a regular file")
+		return nil, 0, fmt.Errorf("expected a regular file")
 	}
 	if info.Size() > int64(limit) {
-		return nil, errCompanionFileLimit
+		return nil, 0, errCompanionFileLimit
 	}
 	raw, err := io.ReadAll(io.LimitReader(file, int64(limit)+1))
 	if err != nil {
-		return nil, fmt.Errorf("cannot read file")
+		return nil, 0, fmt.Errorf("cannot read file")
 	}
 	if len(raw) > limit {
-		return nil, errCompanionFileLimit
+		return nil, 0, errCompanionFileLimit
 	}
-	return raw, nil
+	return raw, info.Mode().Perm(), nil
 }
 
 func loadCompanionPack(id, source string, budget int, read func(string, int) ([]byte, error)) (*companionPack, string, error) {
@@ -308,9 +327,7 @@ func loadCompanionPackWithValidator(
 		renderer = companionPackRendererVRM
 		packCap = companionVrmPackCap
 	}
-	pack := &companionPack{manifest: raw, assets: make(map[string][]byte, len(files)), size: len(raw)}
-	revision := sha256.New()
-	hashCompanionPart(revision, raw)
+	pack := &companionPack{manifest: raw, assets: make(map[string][]byte, len(files)), size: len(raw), files: files}
 	for _, name := range files {
 		data, err := readWithinBudget(name, companionAssetCapFor(manifest.Schema, name), pack.size)
 		if err != nil {
@@ -330,8 +347,6 @@ func loadCompanionPackWithValidator(
 		}
 		pack.size += len(data)
 		pack.assets[name] = data
-		hashCompanionPart(revision, []byte(name))
-		hashCompanionPart(revision, data)
 	}
 
 	auto := manifest.AutoMatch
@@ -343,8 +358,14 @@ func loadCompanionPackWithValidator(
 	}
 	pack.info = companionPackInfo{
 		ID: id, Name: manifest.Name, Schema: manifest.Schema, Renderer: renderer, Source: source,
-		Rev: hex.EncodeToString(revision.Sum(nil)[:16]), Presets: sortedCompanionKeys(manifest.Presets), AutoMatch: auto,
+		Rev: companionPackRevision(raw, files, pack.assets, nil), Presets: sortedCompanionKeys(manifest.Presets), AutoMatch: auto,
 		Persona: manifest.Persona,
+	}
+	if manifest.Schema == companionPackVRMSchema {
+		// The validator accepted the manifest, so it is a JSON object.
+		if obj, err := parseCompanionObject(raw); err == nil {
+			pack.catalog, pack.info.ClipWarnings = parseCompanionClipCatalog(obj)
+		}
 	}
 	return pack, "", nil
 }

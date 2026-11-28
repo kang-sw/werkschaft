@@ -257,7 +257,8 @@
       }
       return r.height > 0 && bottom - top >= 1 && right - left >= 1;
     }
-    function reading(scroller) {
+    // reading(scroller, scope) picks only among scope and its descendants.
+    function reading(scroller, scope) {
       if (doc && (doc.hidden || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-animation-paused")))) return null;
       // One synchronous capture has one viewport. Re-scanning every sticky
       // head for every candidate makes history initialization/resize cubic
@@ -266,7 +267,7 @@
       var selector = '.entry-panel, .wb-entry:not(.panel), .doc-frame, [data-card]', rects = new Map();
       function read(n) { if (!rects.has(n)) rects.set(n, n.getBoundingClientRect()); return rects.get(n); }
       function eligible(n) {
-        if (!rendered(n) || (n.matches('.doc-frame') && n.closest('.entry-panel'))) return false;
+        if ((scope && !scope.contains(n)) || !rendered(n) || (n.matches('.doc-frame') && n.closest('.entry-panel'))) return false;
         return exposed(n, scroller, view, read) && scrollerOf(n) === scroller;
       }
       // Frame-height batches normally capture the unit under the reading line
@@ -283,7 +284,7 @@
       // Gaps, overlays and old engines retain the exact previous selection
       // rule, but hidden history/system runs are never measured and each
       // candidate rect is read once, including sorting/line selection.
-      var nodes = Array.from(root.querySelectorAll(selector)).filter(rendered).filter(eligible);
+      var nodes = Array.from((scope || root).querySelectorAll(selector)).concat(scope && scope.matches(selector) ? [scope] : []).filter(rendered).filter(eligible);
       nodes.sort(function (a, b) { return read(a).top - read(b).top; });
       return nodes.find(function (n) { var r = read(n); return r.top <= line && r.bottom > line; }) ||
         nodes.find(function (n) { return read(n).top > line; }) || null;
@@ -375,22 +376,28 @@
       var inspect = { scroller: scroller, visible: function (n) { return exposed(n, scroller); }, viewport: function () { return viewport(scroller); }, apply: function () {}, end: function () {} };
       if (opt.capture === false) return inspect;
       if (boardPinning(scroller)) return inspect;
+      // The free canvas lays every card out from the anchor card's own place,
+      // so only a unit inside the anchor card (scope) keeps the reader's
+      // place: another card's unit moves with each relayout, and following it
+      // would throw the scroll by however far a half-built card moved it.
+      var free = false, scope = null;
       if (scroller && scroller.hasAttribute && scroller.hasAttribute('data-board-free') &&
-          win.WsBoardAnchor && win.WsBoardAnchor.windowInfo && node && node !== scroller) {
+          win.WsBoardAnchor && win.WsBoardAnchor.windowInfo) {
         var wi = win.WsBoardAnchor.windowInfo();
         if (wi && wi.active) {
-          var ownerCard = win.WsBoardAnchor.owner ? win.WsBoardAnchor.owner(node) : (node.closest && node.closest('section.topic[data-topic], .bcard[data-card]'));
+          var ownerCard = node && node !== scroller && (win.WsBoardAnchor.owner ? win.WsBoardAnchor.owner(node) : (node.closest && node.closest('section.topic[data-topic], .bcard[data-card]')));
           if (ownerCard) {
             var cardIdx = wi.indexOf(ownerCard);
             if (cardIdx >= 0 && cardIdx !== wi.anchorIdx) return inspect;
           }
+          free = true; scope = wi.list && wi.list[wi.anchorIdx] || null;
         }
       }
       if (s && s.follow) return s.handle;
       if (!o.ready()) return inspect;
       var t = o.transaction;
       if (!t) {
-        var ref = typeof opt.offset === 'number' ? node : reading(scroller);
+        var ref = typeof opt.offset === 'number' ? node : !free ? reading(scroller) : scope && reading(scroller, scope);
         var id = ref && ref.id, topic = ref && ref.closest('.topic'), name = topic && topic.getAttribute('data-topic');
         var key = ref && ref.getAttribute('data-doc-key');
         var offset = ref && (typeof opt.offset === 'number' ? opt.offset + scrollerTop(scroller) : layoutTop(ref, scroller));

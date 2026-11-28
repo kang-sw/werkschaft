@@ -307,9 +307,10 @@ func TestPersonaWakeOverrideReachesLiveBody(t *testing.T) {
 	}
 	checkFrame := func(env string, override bool) {
 		t.Helper()
-		want := 6
+		// SOUL, MOOD, ACTIONS and RECALL, plus the sheet pair on an override.
+		want := 8
 		if override {
-			want = 8
+			want = 10
 		}
 		if strings.Count(env, "<<<") != want || strings.Count(env, ">>>") != want {
 			t.Fatalf("delimiters <<<=%d >>>=%d, want %d:\n%s", strings.Count(env, "<<<"), strings.Count(env, ">>>"), want, env)
