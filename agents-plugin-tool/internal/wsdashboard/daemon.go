@@ -342,6 +342,14 @@ type Daemon struct {
 	// companionWake, when bound by cmd/ws-mcp, wakes the Tier-1 companion burst
 	// session on incoming user messages or release with unread inbox.
 	companionWake atomic.Pointer[func(reason string)]
+	// companionMessengerClosed, when bound by cmd/ws-mcp, gets one debounced
+	// call when the last Messenger closes while the companion holds the phone
+	// (companion_phone_presence.go); companionPresence owns the debounce.
+	companionMessengerClosed atomic.Pointer[func(holder string)]
+	companionPresence        companionPresenceDebounce
+	// messengerRing persists Messenger history (companion_messenger_ring.go).
+	messengerRingMu sync.Mutex
+	messengerRing   *companionMessengerRing
 	// companionAgents, when bound by cmd/ws-mcp, computes the companion tier
 	// readback (companion_agents_route.go).
 	companionAgents atomic.Pointer[func() any]
