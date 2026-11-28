@@ -41,8 +41,9 @@
     const visibleBustSpan = Math.max(bustSpan * 2.1, topY - waistY);
     const heightFrame = visibleBustSpan / (1 - ratio);
     const distForHeight = heightFrame * 0.5 / tanHalf;
-    // Width must fit on the front plane (frontOffset nearer than the head plane).
-    const distForWidth = (upperWidth / aspect) * 0.5 / tanHalf + frontOffset * 0.5;
+    // Width must fit on the front plane, frontOffset nearer than the head plane:
+    // (dist - frontOffset) * 2 * tanHalf * aspect >= upperWidth.
+    const distForWidth = (upperWidth / aspect) * 0.5 / tanHalf + frontOffset;
     const limitedBy = distForWidth > distForHeight ? "width" : "height";
     const dist = Math.max(distForHeight, distForWidth);
     const frameHeight = 2 * dist * tanHalf;
@@ -110,8 +111,9 @@
   // ---------------------------------------------------------------------------
   // Theme-adaptive studio lighting presets
   // ---------------------------------------------------------------------------
-  // Dark keeps the original flat-anime MToon look (warm key + cool separation rim
-  // against #111216). Light lowers the rim, warms the fill, and lifts the
+  // Dark stays close to the Phase 1 flat-anime MToon rig (warm key + cool
+  // separation rim against #111216), trimming key/hemisphere slightly to make room
+  // for a soft cool fill. Light lowers the rim, warms the fill, and lifts the
   // hemisphere ground so the avatar never reads muddy on #e7e7e2 nor clips white.
   const STUDIO_PRESETS = Object.freeze({
     dark: Object.freeze({
@@ -208,6 +210,7 @@
     let themeChanges = 0;
     let observer = null;
     let mediaQuery = null;
+    let envTarget = null;
     let envTexture = null;
     let envFailed = false;
     const envMaterials = new Set();
@@ -230,7 +233,6 @@
       for (const m of shadowMaterials) {
         if (!m.userData) m.userData = {};
         m.userData.studioOpacity = preset.shadowOpacity;
-        if (m.userData.staticShadow) m.opacity = preset.shadowOpacity * (m.userData.shadowScale ?? 1);
       }
     }
 
@@ -281,14 +283,20 @@
       try {
         pmrem = new THREE.PMREMGenerator(renderer);
         built = makeStudioEnvScene(THREE);
-        envTexture = pmrem.fromScene(built.envScene, 0.035)?.texture || null;
+        // Keep the PMREM output target: disposing only its texture leaks the FBO.
+        envTarget = pmrem.fromScene(built.envScene, 0.035) || null;
+        envTexture = envTarget?.texture || null;
       } catch (_) {
         envTexture = null;
       } finally {
         if (built) for (const d of built.disposables) { try { d.dispose?.(); } catch (_) { /* ignore */ } }
         try { pmrem?.dispose?.(); } catch (_) { /* ignore */ }
       }
-      if (!envTexture) envFailed = true;
+      if (!envTexture) {
+        envFailed = true;
+        try { envTarget?.dispose?.(); } catch (_) { /* ignore */ }
+        envTarget = null;
+      }
       return envTexture;
     }
 
@@ -352,7 +360,12 @@
       for (const m of envMaterials) { if (m.envMap === envTexture) m.envMap = null; }
       envMaterials.clear();
       shadowMaterials.clear();
-      try { envTexture?.dispose?.(); } catch (_) { /* ignore */ }
+      // WebGLRenderTarget.dispose releases the FBO and its texture together.
+      try {
+        if (envTarget && typeof envTarget.dispose === "function") envTarget.dispose();
+        else envTexture?.dispose?.();
+      } catch (_) { /* ignore */ }
+      envTarget = null;
       envTexture = null;
     }
 

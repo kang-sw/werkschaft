@@ -921,7 +921,11 @@
       if (!camera || !(fr.frameHeight > 0)) return;
       const rect = overlayMode ? R : { left: 0, top: 0, width, height };
       const probe = C.vrmStudio?.measureAlphaTopRow?.(renderer.getContext?.(), rect, overlayMode ? bounds.vh : height, renderer.getPixelRatio?.() || 1);
-      if (!probe || probe.ratio < 0) return;
+      if (!probe || probe.ratio < 0) {
+        // Unreadable or empty slot (e.g. a frame before the avatar shows): bounded retry.
+        if (++calibPasses <= 2) calibFrames = 4;
+        return;
+      }
       const err = probe.ratio - fr.headroomRatio;
       fr.qa = { ...(fr.qa || {}), pixelHeadroomPct: Number((probe.ratio * 100).toFixed(2)), calibPasses };
       if (Math.abs(err) < 0.006 || calibPasses >= 2) return;
@@ -1243,16 +1247,15 @@
         }
 
         const lerpAlpha = 1 - Math.exp(-8.5 * dt);
+        // Inline VRM 0.x conjugation ([-x, y, -z]) so the 45-bone loop allocates nothing.
+        const conjSign = isVrm0 ? -1 : 1;
         for (const boneName of POSE_BONES) {
           const node = vrm.humanoid?.getNormalizedBoneNode(boneName);
           if (!node) continue;
           const rawTarget = targets[boneName] || ZERO_EULER;
-          const [tx, ty, tz] = conjugateVrm0Euler(
-            Number.isFinite(rawTarget[0]) ? rawTarget[0] : 0,
-            Number.isFinite(rawTarget[1]) ? rawTarget[1] : 0,
-            Number.isFinite(rawTarget[2]) ? rawTarget[2] : 0,
-            isVrm0
-          );
+          const tx = conjSign * (Number.isFinite(rawTarget[0]) ? rawTarget[0] : 0);
+          const ty = Number.isFinite(rawTarget[1]) ? rawTarget[1] : 0;
+          const tz = conjSign * (Number.isFinite(rawTarget[2]) ? rawTarget[2] : 0);
           let cur = boneRotations.get(boneName);
           if (!cur) {
             cur = [tx, ty, tz];

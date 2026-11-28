@@ -142,14 +142,19 @@ func startCompanionVrmBrowserFixture(t *testing.T, prefix string) companionVrmBr
 // at 220/280/360px rail widths in Dark and Light themes, the 14-19% laptop lid band
 // below the chin, theme-following studio lighting with sane exposure, and the
 // held-phone palm grip. Optional WS_COMPANION_PHASE2_QA_SHOTS (absolute dir)
-// writes the contact sheets.
+// writes the contact sheets; optional WS_COMPANION_PHASE2_QA_PNGS (absolute dir)
+// writes crisp 2x per-VRM/theme/width laptop_work and phone_hold PNGs and checks
+// the held phone at every rail width.
 func TestCompanionVrmPhase2StudioBrowser(t *testing.T) {
 	shots := os.Getenv("WS_COMPANION_PHASE2_QA_SHOTS")
 	if shots != "" && !filepath.IsAbs(shots) {
 		t.Fatal("WS_COMPANION_PHASE2_QA_SHOTS must be absolute")
 	}
+	if pngs := os.Getenv("WS_COMPANION_PHASE2_QA_PNGS"); pngs != "" && !filepath.IsAbs(pngs) {
+		t.Fatal("WS_COMPANION_PHASE2_QA_PNGS must be absolute")
+	}
 	fx := startCompanionVrmBrowserFixture(t, "phase2")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "node", "testdata/companion-vrm-phase2-studio.browser.cjs", fx.base, shots, fx.vrm0ID, fx.vrm1ID).CombinedOutput()
 	t.Log(string(out))

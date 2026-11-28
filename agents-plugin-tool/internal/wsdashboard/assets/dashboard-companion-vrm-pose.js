@@ -11,7 +11,7 @@
   //
   // Extension hooks:
   //   - params.fingerPreset (force one finger curl preset on both hands)
-  //   - params.fingerOut (caller-owned scratch map for zero-allocation finger targets)
+  //   - params.fingerOut (caller-owned scratch map; the 30 finger target arrays are reused across frames)
   //   - params.breakoutPose (Phase 3: bleed/roam lean & walk overrides)
 
   const DEG = Math.PI / 180;

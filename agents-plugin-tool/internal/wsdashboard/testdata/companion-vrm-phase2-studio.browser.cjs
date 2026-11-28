@@ -15,6 +15,11 @@ const { chromium } = require(process.env.WS_PLAYWRIGHT_MODULE);
 const [base, shots, vrm0ID, vrm1ID] = process.argv.slice(2);
 const WIDTHS = [220, 280, 360];
 const THEMES = ['dark', 'light'];
+// Optional crisp per-pose PNGs (absolute dir, 2x device scale) for visual tuning;
+// also extends the held-phone checks to every rail width.
+const pngDir = process.env.WS_COMPANION_PHASE2_QA_PNGS || '';
+const pngPath = (tag, theme, w, pose) =>
+  path.join(pngDir, `${tag === 'VRM 1.0' ? 'vrm1' : 'vrm0x'}-${theme}-${w}px-${pose}.png`);
 
 async function composeGrid(browser, outPath, title, panels, opts = {}) {
   if (!outPath || !panels.length) return;
@@ -120,7 +125,8 @@ async function analyzeMask(analysisPage, withBuf, withoutBuf) {
     args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist']
   });
   try {
-    const context = await browser.newContext({ viewport: { width: 1680, height: 960 }, colorScheme: 'dark' });
+    if (pngDir) fs.mkdirSync(pngDir, { recursive: true });
+    const context = await browser.newContext({ viewport: { width: 1680, height: 960 }, colorScheme: 'dark', deviceScaleFactor: pngDir ? 2 : 1 });
     await context.addInitScript(() => {
       if (self !== top) return;
       const workers = navigator.serviceWorker;
@@ -163,6 +169,23 @@ async function analyzeMask(analysisPage, withBuf, withoutBuf) {
         await page.mouse.move(900 + (i % 3) * 14, 180 + (i % 2) * 10);
         await page.waitForTimeout(Math.round(settleMs / steps));
       }
+      // Per-frame followers converge in frames, not wall time: under heavy host
+      // load (~15fps) a fixed delay can sample mid-transition. Wait (bounded)
+      // until the lid/chin layout stops moving across rendered frames.
+      const layoutSample = () => page.evaluate(() => {
+        const v = window.WsCompanion.debugStage()?.vrm;
+        const co = v?.coLead || {};
+        return { f: v?.framesRendered || 0, lid: co.laptopTopViewportPct, chin: co.chinViewportPct };
+      });
+      let prev = await layoutSample();
+      for (let i = 0, stable = 0; i < 40 && stable < 2; i++) {
+        await page.waitForTimeout(120);
+        const cur = await layoutSample();
+        if (cur.f <= prev.f) continue;
+        const still = Math.abs((cur.lid ?? 0) - (prev.lid ?? 0)) < 0.1 && Math.abs((cur.chin ?? 0) - (prev.chin ?? 0)) < 0.1;
+        stable = still ? stable + 1 : 0;
+        prev = cur;
+      }
       return page.evaluate(() => window.WsCompanion.debugStage()?.vrm || null);
     };
 
@@ -171,7 +194,7 @@ async function analyzeMask(analysisPage, withBuf, withoutBuf) {
       await page.evaluate(t => { document.documentElement.dataset.theme = t; }, theme);
       await page.waitForFunction(t => {
         const studio = window.WsCompanion?.debugStage?.()?.vrm?.studio;
-        return !studio || studio.mode === t;
+        return !!studio && studio.mode === t;
       }, theme, { timeout: 3000 });
     };
 
@@ -282,6 +305,7 @@ async function analyzeMask(analysisPage, withBuf, withoutBuf) {
           check(stats.blownPct < 4, `${label}: blown highlights ${stats.blownPct}%`);
           check(stats.crushedPct < 6, `${label}: crushed shadows ${stats.crushedPct}%`);
           check(stats.meanLum > 45 && stats.meanLum < 225, `${label}: avatar mean luminance ${stats.meanLum}`);
+          if (pngDir) fs.writeFileSync(pngPath(entry.tag, theme, w, 'laptop_work'), withBuf);
           if (shots) {
             sweepShots[theme].push({
               label: `${label} · head ${stats.headroomPct}% · lid ${co.laptopTopViewportPct}% · chin ${co.chinViewportPct}% · ${qa.limitedBy}`,
@@ -291,28 +315,34 @@ async function analyzeMask(analysisPage, withBuf, withoutBuf) {
           }
         }
 
-        // Held phone: palm grip at the middle rail width.
-        await setWidth(280);
-        const ph = await settleBeat('phone-typing', 1100);
-        const grip = ph.coLead.palmGrip;
-        check(grip && grip.weight > 0.95, `${entry.tag} ${theme}: phone must be held (${JSON.stringify(grip)})`);
-        if (fingers >= 9) {
-          checkEq(grip.mode, 'palm', `${entry.tag} ${theme}: finger rigs grip the phone with the palm frame`);
-          check(grip.screenFacing > 0.2, `${entry.tag} ${theme}: phone screen must face the avatar (${grip.screenFacing})`);
-        } else {
-          checkEq(grip.mode, 'anchor', `${entry.tag} ${theme}: finger-less rigs fall back to the knuckle anchor`);
-        }
-        const sp = ph.slotPoints || {};
-        inFrame(sp.phone, `${entry.tag} ${theme} phone`);
-        inFrame(sp.leftHand, `${entry.tag} ${theme} held hand`);
-        summary[entry.tag][`phone-${theme}`] = { mode: grip.mode, screenFacing: Number((grip.screenFacing || 0).toFixed(3)), phoneUpDot: Number((grip.phoneUpDot || 0).toFixed(3)), phone: sp.phone };
-        if (shots) {
-          const clip = await anchorClip();
-          phoneShots.push({
-            label: `${entry.tag} ${theme} · held phone (${grip.mode}, facing ${(grip.screenFacing || 0).toFixed(2)})`,
-            buf: await page.screenshot({ clip }),
-            maxW: 420
-          });
+        // Held phone: palm grip at the middle rail width (every width with pngDir).
+        for (const pw of pngDir ? WIDTHS : [280]) {
+          await setWidth(pw);
+          const ph = await settleBeat('phone-typing', 1100);
+          const grip = ph.coLead.palmGrip;
+          const pl = `${entry.tag} ${theme} ${pw}px`;
+          check(grip && grip.weight > 0.95, `${pl}: phone must be held (${JSON.stringify(grip)})`);
+          if (fingers >= 9) {
+            checkEq(grip.mode, 'palm', `${pl}: finger rigs grip the phone with the palm frame`);
+            check(grip.screenFacing > 0.2, `${pl}: phone screen must face the avatar (${grip.screenFacing})`);
+          } else {
+            checkEq(grip.mode, 'anchor', `${pl}: finger-less rigs fall back to the knuckle anchor`);
+          }
+          const sp = ph.slotPoints || {};
+          inFrame(sp.phone, `${pl} phone`);
+          inFrame(sp.leftHand, `${pl} held hand`);
+          const clip = (shots || pngDir) ? await anchorClip() : null;
+          const buf = clip ? await page.screenshot({ clip }) : null;
+          if (pngDir) fs.writeFileSync(pngPath(entry.tag, theme, pw, 'phone_hold'), buf);
+          if (pw !== 280) continue;
+          summary[entry.tag][`phone-${theme}`] = { mode: grip.mode, screenFacing: Number((grip.screenFacing || 0).toFixed(3)), phoneUpDot: Number((grip.phoneUpDot || 0).toFixed(3)), phone: sp.phone };
+          if (shots) {
+            phoneShots.push({
+              label: `${entry.tag} ${theme} · held phone (${grip.mode}, facing ${(grip.screenFacing || 0).toFixed(2)})`,
+              buf,
+              maxW: 420
+            });
+          }
         }
         await page.evaluate(() => window.WsCompanion.setCoLeadBeat('typing'));
       }

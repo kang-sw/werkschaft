@@ -416,8 +416,10 @@ test("Phase 2 studio lighting: Dark/Light preset selection, live theme following
   const env = makeThemeEnv(null, true);
   const scene = new THREE.Scene();
   const fakeEnvTex = { isTexture: true, disposed: false, dispose() { this.disposed = true; } };
+  // PMREM returns a render target; disposing it (not just .texture) frees the FBO.
+  const fakeEnvTarget = { texture: fakeEnvTex, disposed: false, dispose() { this.disposed = true; this.texture.dispose(); } };
   class FakePMREM {
-    fromScene(envScene) { assert.ok(envScene.children.length >= 1, "procedural env scene"); return { texture: fakeEnvTex }; }
+    fromScene(envScene) { assert.ok(envScene.children.length >= 1, "procedural env scene"); return fakeEnvTarget; }
     dispose() {}
   }
   const renderer = { getRenderTarget() { return null; }, setRenderTarget() {} };
@@ -491,6 +493,7 @@ test("Phase 2 studio lighting: Dark/Light preset selection, live theme following
   studio.dispose();
   assert.equal(scene.children.some(c => /^ws-studio-/.test(c.name)), false);
   assert.equal(metal.envMap, null);
+  assert.equal(fakeEnvTarget.disposed, true, "PMREM render target disposed");
   assert.equal(fakeEnvTex.disposed, true);
   assert.equal(env.observers[0].active, false);
   assert.equal(env.mqListeners.size, 0);
@@ -526,9 +529,42 @@ test("Phase 2 bust framing solver keeps 10-14% headroom and clear side margins a
     const qa = S.measureFraming(THREE, cam, { topY: b.topY, chestY: 1.3, upperWidth: b.upperWidth, centerX: 0, headZ: 0, limitedBy: fr.limitedBy });
     assert.ok(qa.headroomPct >= 10 && qa.headroomPct <= 14, `aspect ${aspect}: headroom ${qa.headroomPct}% outside 10-14%`);
     assert.ok(qa.sideMarginPct >= 0, `aspect ${aspect}: upper body clips horizontally (${qa.sideMarginPct}%)`);
+    // Width must also fit on the nearer front plane (hair/shoulders in front of the head).
+    const front = S.measureFraming(THREE, cam, { topY: b.topY, chestY: 1.3, upperWidth: b.upperWidth, centerX: 0, headZ: b.frontOffset, limitedBy: fr.limitedBy });
+    assert.ok(front.sideMarginPct >= -0.01, `aspect ${aspect}: front plane clips horizontally (${front.sideMarginPct}%)`);
+    if (fr.limitedBy === "width") assert.ok(front.sideMarginPct < 0.5, `aspect ${aspect}: width-limited fit is tight on the front plane (${front.sideMarginPct}%)`);
   }
   assert.ok(limits.has("width") && limits.has("height"), "wide hair in a narrow slot is width-limited (frame grows downward)");
   // Out-of-range headroom requests are clamped into 10-14%.
   assert.equal(S.solveBustFraming({ ...body, headroomRatio: 0.3 }).headroomRatio, 0.14);
   assert.equal(S.solveBustFraming({ ...body, headroomRatio: 0.01 }).headroomRatio, 0.10);
+});
+
+test("Phase 2 pixel headroom probe reads the slot rect bottom-up and ignores antialias specks", () => {
+  const { C } = loadCompanion();
+  const S = C.vrmStudio;
+  // 10x20 CSS-px slot at (4, 6) in a 40px-tall viewport, dpr 2 -> 20x40 device px.
+  const calls = [];
+  const makeGl = (fill) => ({
+    RGBA: 0x1908, UNSIGNED_BYTE: 0x1401,
+    readPixels(x, y, w, h, fmt, type, buf) { calls.push({ x, y, w, h }); buf.fill(0, 0, w * h * 4); fill(w, h, buf); }
+  });
+  const setAlpha = (buf, w, glRow, col, a = 255) => { buf[(glRow * w + col) * 4 + 3] = a; };
+  const rect = { left: 4, top: 6, width: 10, height: 20 };
+  // Silhouette top 8 device rows below the slot top (GL row h-1-8), plus a lone speck at row 2.
+  const gl = makeGl((w, h, buf) => {
+    setAlpha(buf, w, h - 1 - 2, 5);
+    setAlpha(buf, w, h - 1 - 8, 3); setAlpha(buf, w, h - 1 - 8, 4);
+    for (let r = 9; r < h; r++) for (let c = 6; c < 14; c++) setAlpha(buf, w, h - 1 - r, c);
+  });
+  const p = S.measureAlphaTopRow(gl, rect, 40, 2);
+  assert.deepEqual(calls[0], { x: 8, y: 28, w: 20, h: 40 }, "GL origin is bottom-left in device px");
+  assert.equal(p.topRow, 8);
+  assert.equal(p.height, 40);
+  assert.equal(p.ratio, 0.2);
+  // Faint (alpha <= 12) pixels never count; an empty slot reports ratio -1.
+  const faint = S.measureAlphaTopRow(makeGl((w, h, buf) => { for (let c = 0; c < w; c++) setAlpha(buf, w, h - 1, c, 10); }), rect, 40, 2);
+  assert.equal(faint.ratio, -1);
+  assert.equal(S.measureAlphaTopRow(null, rect, 40, 2), null);
+  assert.equal(S.measureAlphaTopRow(makeGl(() => { throw new Error("lost"); }), rect, 40, 2), null);
 });
