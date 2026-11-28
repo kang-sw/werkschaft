@@ -140,6 +140,49 @@ func TestCompanionTimingDiagnostics(t *testing.T) {
 	}
 }
 
+func TestCompanionPersonaVoiceByLang(t *testing.T) {
+	const base = `{"schema":"ws-companion/v1","id":"my-buddy","name":"My Buddy",
+		"canvas":[512,512],"poses":{"stand":{"layers":[{"file":"stand.webp"}]}},"persona":{"name":"Kit","voice":"Dry."%s}}`
+	parse := func(t *testing.T, extra string) *CompanionPersona {
+		t.Helper()
+		m, _, err := validateCompanionManifest([]byte(fmt.Sprintf(base, extra)), "my-buddy")
+		if err != nil {
+			t.Fatalf("voice_by_lang must never reject the pack: %v", err)
+		}
+		if m.Persona == nil {
+			t.Fatal("voice_by_lang must never drop the persona")
+		}
+		return m.Persona
+	}
+	if got := parse(t, ""); got.VoiceByLang != nil {
+		t.Fatalf("absent voice_by_lang = %v", got.VoiceByLang)
+	}
+	got := parse(t, `,"voice_by_lang":{"ko":" 해요체로. \n짧게. ","pt-BR":"Leve.","en_US; x":"bad tag","de":7,"fr":"","it":"a\u001b[31m","ja":"`+strings.Repeat("ね", companionPersonaVoiceMax+1)+`","es":"`+strings.Repeat("s", companionPersonaVoiceMax)+`","ru":"tab\tok"}`)
+	want := map[string]string{"ko": "해요체로. \n짧게.", "pt-BR": "Leve.", "es": strings.Repeat("s", companionPersonaVoiceMax), "ru": "tab\tok"}
+	if !reflect.DeepEqual(got.VoiceByLang, want) {
+		t.Fatalf("voice_by_lang = %q, want %q", got.VoiceByLang, want)
+	}
+	for name, extra := range map[string]string{
+		"not an object": `,"voice_by_lang":"ko"`,
+		"array":         `,"voice_by_lang":["ko"]`,
+		"null":          `,"voice_by_lang":null`,
+		"all bad":       `,"voice_by_lang":{"x y":"a","ko":""}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := parse(t, extra); got.VoiceByLang != nil {
+				t.Fatalf("malformed voice_by_lang kept: %v", got.VoiceByLang)
+			}
+		})
+	}
+	var many strings.Builder
+	for i := 0; i < companionVoiceByLangMaxEntries+8; i++ {
+		fmt.Fprintf(&many, `%s"xx-%02d":"v"`, map[bool]string{true: "", false: ","}[i == 0], i)
+	}
+	if got := parse(t, `,"voice_by_lang":{`+many.String()+`}`); len(got.VoiceByLang) != companionVoiceByLangMaxEntries {
+		t.Fatalf("voice_by_lang kept %d entries, want %d", len(got.VoiceByLang), companionVoiceByLangMaxEntries)
+	}
+}
+
 func TestCompanionPersona(t *testing.T) {
 	const base = `{"schema":"ws-companion/v1","id":"my-buddy","name":"My Buddy",
 		"canvas":[512,512],"poses":{"stand":{"layers":[{"file":"stand.webp"}]}}%s}`
@@ -155,7 +198,7 @@ func TestCompanionPersona(t *testing.T) {
 		t.Fatalf("absent persona = %+v", got)
 	}
 	got := parse(t, `,"persona":{"name":" Kit ","voice":"Dry, curt.\nNever shouts.","quipLanguage":"ko-KR","extra":1}`)
-	if want := (CompanionPersona{Name: "Kit", Voice: "Dry, curt.\nNever shouts.", QuipLanguage: "ko-KR"}); got == nil || *got != want {
+	if want := (CompanionPersona{Name: "Kit", Voice: "Dry, curt.\nNever shouts.", QuipLanguage: "ko-KR"}); got == nil || !reflect.DeepEqual(*got, want) {
 		t.Fatalf("persona = %+v, want %+v", got, want)
 	}
 	if got := parse(t, `,"persona":{"name":"`+strings.Repeat("가", companionPersonaNameMax)+`","voice":"`+strings.Repeat("v", companionPersonaVoiceMax)+`"}`); got == nil {

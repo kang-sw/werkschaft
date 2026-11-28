@@ -1709,8 +1709,8 @@ ko
 				t.Fatalf("Tier-1 launch instructions missing %q:\n%s", want, bodyProcs[0].instructions)
 			}
 		}
-		// Per-wake delivery must carry delimiter-safe <<<SOUL>>> / <<<MOOD>>> / <<<RECALL>>> blocks.
-		if strings.Count(wake1, "<<<") != 6 || strings.Count(wake1, ">>>") != 6 {
+		// Per-wake delivery must carry delimiter-safe <<<SOUL>>> / <<<MOOD>>> / <<<ACTIONS>>> / <<<RECALL>>> blocks.
+		if strings.Count(wake1, "<<<") != 8 || strings.Count(wake1, ">>>") != 8 {
 			t.Fatalf("wake 1 delimiter count broken (<<<=%d >>>=%d):\n%s", strings.Count(wake1, "<<<"), strings.Count(wake1, ">>>"), wake1)
 		}
 		for _, want := range []string{"<<<SOUL>>>", "Dry-witted orbital copilot", "User prefers short bullet summaries", "<<<MOOD>>>", "last_signal: user_message", "<<<RECALL>>>", "Earlier discussion about how is the refactor looking?"} {

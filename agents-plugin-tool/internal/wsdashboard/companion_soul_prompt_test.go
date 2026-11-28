@@ -246,6 +246,10 @@ ko
 		t.Fatal(err)
 	}
 
+	// The store caches the Soul's absence in RAM (no per-call stat); files
+	// written behind its back become visible after an explicit Invalidate,
+	// as a soul config change or an import does.
+	d.companionMemoryStore().Soul().Invalidate()
 	gotPersona, gotLang = d.resolveAmbientCompanionPersona(packPersona)
 	if gotPersona == nil || gotPersona.Name != "LunaSoul" || gotLang != "ko" {
 		t.Fatalf("with Soul: got persona=%+v lang=%q, want LunaSoul/ko", gotPersona, gotLang)
