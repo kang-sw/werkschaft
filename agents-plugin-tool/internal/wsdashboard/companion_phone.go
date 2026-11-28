@@ -327,6 +327,17 @@ func (s *CompanionPhoneStore) OldestUnreadID() string {
 	return s.unreadAgent[0].ID
 }
 
+// LatestUnreadHint returns a compact one-line preview of the newest unread user
+// message for recall-provider queries (never echoed verbatim before phone_pickup).
+func (s *CompanionPhoneStore) LatestUnreadHint() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.unreadAgent) == 0 {
+		return ""
+	}
+	return companionCut(s.unreadAgent[len(s.unreadAgent)-1].Text, 160)
+}
+
 func boundCompanionPhoneText(text string) string {
 	text = strings.TrimSpace(text)
 	if utf8.RuneCountInString(text) <= companionPhoneMaxTextRunes {
@@ -1259,6 +1270,7 @@ func (d *Daemon) handleCompanionPhoneSend(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	d.ObserveCompanionMood(CompanionMoodEventUserMessage)
 	d.PublishCompanionCommand(CompanionCommand{
 		SessionID: companionPhoneBroadcastSession,
 		Gesture:   "phone_buzz",

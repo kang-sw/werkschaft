@@ -300,6 +300,9 @@ func (d *Daemon) directorObserveSnapshot(replyID string, snap *wslive.Snapshot, 
 	}
 	c.mu.Unlock()
 	for _, kind := range triggers {
+		if ev := companionMoodEventForDirectorTrigger(kind); ev != "" {
+			d.ObserveCompanionMood(ev)
+		}
 		d.directorFire(replyID, kind)
 	}
 }
@@ -353,6 +356,7 @@ func (d *Daemon) directorIdle(sessionID string) {
 	}
 	c.mu.Unlock()
 	if fire {
+		d.ObserveCompanionMood(CompanionMoodEventIdle)
 		d.directorFire(sessionID, companionTriggerIdle)
 	}
 }
@@ -565,22 +569,14 @@ func (d *Daemon) directorRun(call companionCall) (string, bool) {
 	provider := slot.Provider
 	pack := d.companionPackFor(call.pack)
 	allowed := companionAllowedIDs(pack)
-	lang := ""
-	if pack.persona != nil {
-		lang = pack.persona.QuipLanguage
-	}
-	if lang == "" {
-		if overrides, err := wsconfig.GlobalOverrides(opts); err == nil {
-			lang = overrides[wsconfig.ItemWorkflowLang]
-		}
-	}
+	persona, lang := d.resolveAmbientCompanionPersona(pack.persona)
 	digest := companionDigest(call, d.companionRing(call.sessionID), d.companionPhone.LatestSummary())
 	c.mu.Lock()
 	c.recordLocked(c.clock())
 	c.digests++
 	c.spawns++
 	c.mu.Unlock()
-	prompt := companionPrompt(call.kind, pack.persona, lang, allowed, digest)
+	prompt := companionPrompt(call.kind, persona, lang, allowed, digest)
 	ctx, cancel := context.WithTimeout(context.Background(), companionDirectorTimeout)
 	defer cancel()
 	go func() {

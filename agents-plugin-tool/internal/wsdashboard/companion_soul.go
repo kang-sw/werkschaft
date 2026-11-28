@@ -310,6 +310,91 @@ func (s *CompanionSoulStore) Load(customDir, rawSoulID string, starterPersona *C
 	return s.snapshotLocked(root, defaultRoot, recentLimit), nil
 }
 
+// PeekExisting returns the RAM-cached SoulSnapshot for (customDir, rawSoulID)
+// only if that Soul already exists in memory or on disk (persona.md present).
+// Unlike Load, it never creates directories, never seeds starter files, and
+// never writes companion-machine-id — returning (zero, false, nil) when no
+// Soul exists yet so callers can fall back to the visual pack persona (D9).
+func (s *CompanionSoulStore) PeekExisting(customDir, rawSoulID string, recentLimit int) (SoulSnapshot, bool, error) {
+	root, err := s.ResolveRootDir(customDir)
+	if err != nil {
+		return SoulSnapshot{}, false, err
+	}
+	defaultRoot, _ := s.DefaultRootDir()
+	soulID, err := ResolveSoulID(rawSoulID)
+	if err != nil {
+		return SoulSnapshot{}, false, err
+	}
+	if recentLimit <= 0 {
+		recentLimit = companionSoulRecentDefault
+	}
+
+	s.mu.RLock()
+	if s.loaded && s.loadedRoot == root && s.loadedID == soulID {
+		snap := s.snapshotLocked(root, defaultRoot, recentLimit)
+		s.mu.RUnlock()
+		return snap, true, nil
+	}
+	s.mu.RUnlock()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.loaded && s.loadedRoot == root && s.loadedID == soulID {
+		return s.snapshotLocked(root, defaultRoot, recentLimit), true, nil
+	}
+	personaPath := filepath.Join(root, soulID, "persona.md")
+	if _, err := os.Lstat(personaPath); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return SoulSnapshot{}, false, nil
+		}
+		return SoulSnapshot{}, false, err
+	}
+	if err := s.loadExistingColdLocked(root, soulID); err != nil {
+		return SoulSnapshot{}, false, err
+	}
+	return s.snapshotLocked(root, defaultRoot, recentLimit), true, nil
+}
+
+func (s *CompanionSoulStore) loadExistingColdLocked(root, soulID string) error {
+	// Read existing machine-id if present without creating/writing files on disk.
+	if s.machineID == "" && strings.TrimSpace(s.stateDir) != "" {
+		if raw, err := os.ReadFile(filepath.Join(s.stateDir, companionMachineIDFile)); err == nil {
+			if sanitized := sanitizeMachineID(string(raw)); sanitized != "" {
+				s.machineID = sanitized
+			}
+		}
+	}
+	s.diskReads.Add(1)
+
+	soulDir := filepath.Join(root, soulID)
+	persona, exists, err := readOptionalRegularFile(filepath.Join(soulDir, "persona.md"), companionSoulDocMaxBytes)
+	if err != nil {
+		return fmt.Errorf("read persona.md: %w", err)
+	}
+	if !exists {
+		return fs.ErrNotExist
+	}
+	profile, _, err := readOptionalRegularFile(filepath.Join(soulDir, "profile.md"), companionSoulDocMaxBytes)
+	if err != nil {
+		return fmt.Errorf("read profile.md: %w", err)
+	}
+	entries, entryIDs, shardFiles, err := loadSoulShards(filepath.Join(soulDir, "log"))
+	if err != nil {
+		return fmt.Errorf("load soul shards: %w", err)
+	}
+
+	s.loaded = true
+	s.loadedRoot = root
+	s.loadedID = soulID
+	s.persona = persona
+	s.profile = profile
+	s.entries = entries
+	s.entryIDs = entryIDs
+	s.shardFiles = shardFiles
+	s.seededFromPack = false
+	return nil
+}
+
 func (s *CompanionSoulStore) loadColdLocked(root, soulID string, starterPersona *CompanionPersona) error {
 	if _, err := s.ensureMachineIDLocked(); err != nil {
 		return err

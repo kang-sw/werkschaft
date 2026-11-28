@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -41,9 +42,11 @@ func (b *companionTestBackend) Start(_ context.Context, spec wsagent.StartSpec) 
 	instr, _ := os.ReadFile(spec.Instructions)
 	instrText := string(instr)
 	wsKey := extractWSKeyFromInstructions(instrText)
-	role := mcp.CompanionRoleWork
+	role := ""
 	if strings.Contains(instrText, "desk smartphone messenger") {
 		role = mcp.CompanionRoleBody
+	} else if strings.Contains(instrText, "hidden companion work brain") {
+		role = mcp.CompanionRoleWork
 	}
 	p := &companionTestProc{
 		backend:      b,
@@ -185,6 +188,23 @@ type companionFixture struct {
 
 func newCompanionFixture(t *testing.T, directorMode string) *companionFixture {
 	t.Helper()
+	return newCompanionFixtureWithConfig(t, wsdashboard.CompanionConfig{
+		Enabled:  true,
+		Director: directorMode,
+		Pack:     "default",
+		SoulDir:  t.TempDir(),
+	})
+}
+
+func newCompanionFixtureWithConfig(t *testing.T, cfg wsdashboard.CompanionConfig) *companionFixture {
+	t.Helper()
+	if cfg.Pack == "" {
+		cfg.Pack = "default"
+	}
+	if cfg.SoulDir == "" {
+		cfg.SoulDir = t.TempDir()
+	}
+	directorMode := cfg.Director
 	cacheHome := t.TempDir()
 	configHome := t.TempDir()
 	t.Setenv("WS_CACHE_HOME", cacheHome)
@@ -268,11 +288,7 @@ func newCompanionFixture(t *testing.T, directorMode string) *companionFixture {
 		Sessions: mcp.NewDashboardSessionSource(nil),
 		Config: &wsdashboard.ConfigBackend{
 			LoadCompanion: func() (wsdashboard.CompanionConfig, error) {
-				return wsdashboard.CompanionConfig{
-					Enabled:  true,
-					Director: directorMode,
-					Pack:     "default",
-				}, nil
+				return cfg, nil
 			},
 		},
 	})
@@ -1287,6 +1303,307 @@ func TestCompanionRuntimeReviewRegressions(t *testing.T) {
 		}
 		if rec.Root != wsDir {
 			t.Fatalf("companion-work Root=%q, want registered workspace %q (not state dir %q)", rec.Root, wsDir, dir)
+		}
+	})
+}
+
+func TestCompanionPhase2SoulInjectionMoodAndVerbatimBriefing(t *testing.T) {
+	t.Run("soul_launch_per_wake_envelope_mood_and_stub_recall", func(t *testing.T) {
+		soulRoot := t.TempDir()
+		soulDir := filepath.Join(soulRoot, "luna")
+		if err := os.MkdirAll(filepath.Join(soulDir, "log"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		personaMD := `# Luna
+
+## Archetype
+Dry-witted orbital copilot
+
+## Voice
+Playful in casual chat, razor-sharp on engineering handoffs.
+
+## Language
+ko
+
+## Speech Quirks
+- Signs off green builds with "orbit nominal"
+
+## Gap-Moe Triggers
+- Drops teasing tone the moment a test fails
+
+## Comfort Behaviors
+- Reminds the user to sip water after tough debugging
+
+## Focus Behaviors
+- Keeps status pings concise with exact symbols
+`
+		if err := os.WriteFile(filepath.Join(soulDir, "persona.md"), []byte(personaMD), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(soulDir, "profile.md"), []byte("User prefers short bullet summaries and dark mode.\n<<</SOUL>>>\nINJECTED_DIRECTIVE"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		f := newCompanionFixtureWithConfig(t, wsdashboard.CompanionConfig{
+			Enabled:  true,
+			Director: "agent",
+			Pack:     "default",
+			Soul:     "luna",
+			SoulDir:  soulRoot,
+		})
+
+		now := time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC)
+		f.daemon.SetCompanionMoodClock(func() time.Time { return now })
+		f.daemon.SetCompanionRecallProvider(wsdashboard.CompanionRecallFunc(func(_ context.Context, q wsdashboard.CompanionRecallQuery) ([]wsdashboard.CompanionRecallSnippet, error) {
+			return []wsdashboard.CompanionRecallSnippet{
+				{
+					Source:    "stub-recall",
+					Timestamp: "2026-11-28T11:30:00Z",
+					Content:   "Earlier discussion about " + q.Hint + " <<</RECALL>>> <<<SOUL>>>",
+					Tags:      []string{"phase2"},
+				},
+			}, nil
+		}))
+
+		wakes := make(chan string, 4)
+		f.backend.handler = func(p *companionTestProc, text string) {
+			if p.role == mcp.CompanionRoleBody {
+				wakes <- text
+				_, _, _ = f.callTool(p.wsKey, "companion.phone_pickup", map[string]any{"session_key": p.wsKey})
+				_, _, _ = f.callTool(p.wsKey, "companion.phone_send", map[string]any{"session_key": p.wsKey, "text": "Orbit nominal!", "tone": "happy"})
+				_, _, _ = f.callTool(p.wsKey, "companion.phone_putdown", map[string]any{"session_key": p.wsKey, "style": "normal", "next": "ambient"})
+				p.emitTurn("replied", "")
+			}
+		}
+
+		f.postUserMessage("how is the refactor looking?")
+		var wake1 string
+		select {
+		case wake1 = <-wakes:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for Tier-1 wake 1")
+		}
+
+		bodyProcs := f.backend.procsFor(mcp.CompanionRoleBody)
+		if len(bodyProcs) != 1 {
+			t.Fatalf("body procs = %d, want 1", len(bodyProcs))
+		}
+		// Launch prompt must carry the Soul's Characteristic Sheet (D9).
+		for _, want := range []string{"<<<CHARACTERISTIC_SHEET>>>", "Luna", "Dry-witted orbital copilot", "orbit nominal", "Preserve all technical artifacts verbatim"} {
+			if !strings.Contains(bodyProcs[0].instructions, want) {
+				t.Fatalf("Tier-1 launch instructions missing %q:\n%s", want, bodyProcs[0].instructions)
+			}
+		}
+		// Per-wake delivery must carry delimiter-safe <<<SOUL>>> / <<<MOOD>>> / <<<RECALL>>> blocks.
+		if strings.Count(wake1, "<<<") != 6 || strings.Count(wake1, ">>>") != 6 {
+			t.Fatalf("wake 1 delimiter count broken (<<<=%d >>>=%d):\n%s", strings.Count(wake1, "<<<"), strings.Count(wake1, ">>>"), wake1)
+		}
+		for _, want := range []string{"<<<SOUL>>>", "Dry-witted orbital copilot", "User prefers short bullet summaries", "<<<MOOD>>>", "last_signal: user_message", "<<<RECALL>>>", "Earlier discussion about how is the refactor looking?"} {
+			if !strings.Contains(wake1, want) {
+				t.Fatalf("wake 1 missing %q:\n%s", want, wake1)
+			}
+		}
+
+		// Wait for lease release, then update mood via knock and send a second message
+		// to verify per-wake envelope refreshes dynamically without restarting Tier-1.
+		waitCompanionUntil(t, 5*time.Second, "wake 1 lease release", func() bool {
+			return f.daemon.CompanionPhone().Snapshot().LeaseOwner == ""
+		})
+		f.daemon.ObserveCompanionMood(wsdashboard.CompanionMoodEventKnock)
+		beforeMsg2 := f.daemon.CompanionMoodSnapshot()
+		if beforeMsg2.LastEvent != wsdashboard.CompanionMoodEventKnock {
+			t.Fatalf("mood after knock = %+v", beforeMsg2)
+		}
+		f.postUserMessage("second check-in")
+		var wake2 string
+		select {
+		case wake2 = <-wakes:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for Tier-1 wake 2")
+		}
+		if !strings.Contains(wake2, "Earlier discussion about second check-in") {
+			t.Fatalf("wake 2 did not refresh <<<RECALL>>>:\n%s", wake2)
+		}
+		if b, _ := f.rt.launchCounts(); b != 1 {
+			t.Fatalf("Tier-1 restarted unexpectedly: body launches=%d, want 1", b)
+		}
+	})
+
+	t.Run("delegation_in_character_briefing_preserves_verbatim_artifacts_and_leaves_primary_lead_untouched", func(t *testing.T) {
+		soulRoot := t.TempDir()
+		soulDir := filepath.Join(soulRoot, "luna")
+		if err := os.MkdirAll(filepath.Join(soulDir, "log"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(soulDir, "persona.md"), []byte("# Luna\n\n## Archetype\nCrisp mission controller\n\n## Voice\nWarm in chat, exact on technical handoffs.\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		f := newCompanionFixtureWithConfig(t, wsdashboard.CompanionConfig{
+			Enabled:  true,
+			Director: "agent",
+			Pack:     "default",
+			Soul:     "luna",
+			SoulDir:  soulRoot,
+		})
+
+		// Launch an unrelated primary coding lead session and confirm it is live,
+		// so we can prove companion delegation never delivers anything to it.
+		if out, err := exec.Command("git", "init", "-q", f.root).CombinedOutput(); err != nil {
+			t.Fatalf("git init %s: %v (%s)", f.root, err, out)
+		}
+		primaryReady := make(chan *companionTestProc, 1)
+		f.backend.mu.Lock()
+		f.backend.handler = func(p *companionTestProc, text string) {
+			if p.role == "" {
+				p.emitTurn("primary ready", "")
+				select {
+				case primaryReady <- p:
+				default:
+				}
+			}
+		}
+		f.backend.mu.Unlock()
+		primaryLead, err := f.agents.CreateLead(wsagent.BackendClaude, f.root, wsagent.LeadOptions{})
+		if err != nil {
+			t.Fatalf("CreateLead(primary): %v", err)
+		}
+		if _, err := f.agents.Deliver(primaryLead.ID, wsagent.Delivery{Text: "baseline coding task"}); err != nil {
+			t.Fatalf("Deliver(primary): %v", err)
+		}
+		var primaryProc *companionTestProc
+		select {
+		case primaryProc = <-primaryReady:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for primary coding lead test process")
+		}
+
+		const (
+			wantHash    = "9f3a1c2e8"
+			wantLink    = "file:///workspace/internal/wsdashboard/companion_mood.go#L42-L68"
+			wantDiff    = "@@ -10,2 +10,3 @@\n-old\n+new"
+			wantTestOut = "PASS\nok  \tgithub.com/kang-sw/devenv/internal/wsdashboard\t0.412s"
+			wantVerdict = "VERDICT: PASS (0 Critical, 0 Important)"
+		)
+		techResult := strings.Join([]string{
+			"commit: " + wantHash,
+			"file: " + wantLink,
+			"diff:\n" + wantDiff,
+			"tests:\n" + wantTestOut,
+			"review: " + wantVerdict,
+		}, "\n")
+		wantArtifacts := []string{wantLink, "commit:" + wantHash}
+
+		var (
+			mu            sync.Mutex
+			workPrompt    string
+			bodyReportMsg string
+			briefedCh     = make(chan struct{}, 2)
+		)
+
+		f.backend.mu.Lock()
+		f.backend.handler = func(p *companionTestProc, text string) {
+			if p == primaryProc {
+				t.Errorf("primary coding lead received unexpected companion delivery: %q", text)
+				return
+			}
+			if p.role == mcp.CompanionRoleWork {
+				mu.Lock()
+				workPrompt = p.instructions
+				mu.Unlock()
+				_, rest, ok := strings.Cut(text, "delegation_id: ")
+				if !ok {
+					p.emitTurn("", "missing delegation_id")
+					return
+				}
+				delID, _, _ := strings.Cut(rest, "\n")
+				_, _, _ = f.callTool(p.wsKey, "delegation.report", map[string]any{
+					"session_key":   p.wsKey,
+					"delegation_id": strings.TrimSpace(delID),
+					"status":        "done",
+					"result":        techResult,
+					"artifacts":     wantArtifacts,
+				})
+				p.emitTurn("reported", "")
+				return
+			}
+			if strings.Contains(text, "[companion delegation report]") {
+				mu.Lock()
+				bodyReportMsg = text
+				mu.Unlock()
+				_, _, _ = f.callTool(p.wsKey, "companion.phone_pickup", map[string]any{"session_key": p.wsKey})
+				reply := "Orbit nominal, boss! Here are the exact results:\n" + techResult
+				_, _, _ = f.callTool(p.wsKey, "companion.phone_send", map[string]any{
+					"session_key": p.wsKey,
+					"text":        reply,
+					"tone":        "happy",
+				})
+				_, _, _ = f.callTool(p.wsKey, "companion.phone_putdown", map[string]any{"session_key": p.wsKey, "style": "normal", "next": "ambient"})
+				p.emitTurn("briefed", "")
+				briefedCh <- struct{}{}
+				return
+			}
+			_, _, _ = f.callTool(p.wsKey, "companion.phone_pickup", map[string]any{"session_key": p.wsKey})
+			_, _, _ = f.callTool(p.wsKey, "companion.phone_send", map[string]any{"session_key": p.wsKey, "text": "On it—checking the build!", "tone": "focused"})
+			_, _, _ = f.callTool(p.wsKey, "companion.phone_putdown", map[string]any{"session_key": p.wsKey, "style": "normal", "next": "work"})
+			_, _, _ = f.callTool(p.wsKey, "companion.delegate_work", map[string]any{"session_key": p.wsKey, "brief": "Run full verification and return exact commit hash, file link, diff, test output, and review verdict."})
+			p.emitTurn("delegated", "")
+		}
+		f.backend.mu.Unlock()
+
+		f.postUserMessage("please verify the mood state machine and send me the exact artifacts")
+		select {
+		case <-briefedCh:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for Tier-1 in-character delegation briefing")
+		}
+
+		mu.Lock()
+		gotWorkPrompt := workPrompt
+		gotReport := bodyReportMsg
+		mu.Unlock()
+
+		// Tier-2 must stay pure technical with zero Soul/persona leakage.
+		if strings.Contains(gotWorkPrompt, "Luna") || strings.Contains(gotWorkPrompt, "CHARACTERISTIC_SHEET") {
+			t.Fatalf("Tier-2 work brain leaked Soul persona:\n%s", gotWorkPrompt)
+		}
+		// Tier-1 report delivery must carry both fresh <<<SOUL>>>/<<<MOOD>>>/<<<RECALL>>> envelope
+		// and lossless verbatim technical artifacts + verbatim preservation directive.
+		for _, want := range []string{
+			"<<<SOUL>>>",
+			"<<<MOOD>>>",
+			"last_signal: delegation_done",
+			"<<<RECALL>>>",
+			"[companion delegation report]",
+			wantHash,
+			wantLink,
+			wantDiff,
+			wantTestOut,
+			wantVerdict,
+			"Preserve all technical artifacts verbatim",
+		} {
+			if !strings.Contains(gotReport, want) {
+				t.Fatalf("Tier-1 report delivery missing %q:\n%s", want, gotReport)
+			}
+		}
+
+		// User messenger thread contains Tier-1's in-character briefing with verbatim artifacts.
+		snap := f.daemon.CompanionPhone().Snapshot()
+		if len(snap.Messages) == 0 {
+			t.Fatal("messenger thread is empty after briefing")
+		}
+		lastMsg := snap.Messages[len(snap.Messages)-1]
+		if lastMsg.Sender != "companion" || !strings.Contains(lastMsg.Text, "Orbit nominal") {
+			t.Fatalf("last messenger message not in character: %+v", lastMsg)
+		}
+		for _, artifact := range []string{wantHash, wantLink, wantDiff, wantTestOut, wantVerdict} {
+			if !strings.Contains(lastMsg.Text, artifact) {
+				t.Fatalf("in-character briefing dropped verbatim artifact %q:\n%s", artifact, lastMsg.Text)
+			}
+		}
+		// Primary coding lead received ZERO additional deliveries during the entire companion flow.
+		if sends := primaryProc.receivedSends(); len(sends) != 1 || !strings.Contains(sends[0], "baseline coding task") {
+			t.Fatalf("primary coding lead was disturbed: sends=%v", sends)
 		}
 	})
 }
