@@ -92,7 +92,7 @@ class El {
 }
 
 const railSrc = readAssetSource('wsdashboard', 'dashboard-rail.js');
-const revealBlock = railSrc.match(/  var railRevealState = null,[\s\S]*?\n  \/\/ A creation intent/);
+const revealBlock = railSrc.match(/  var railRevealState = null,[\s\S]*?\n  \/\/ railFocus is what holds/);
 assert.ok(revealBlock, 'railReveal helpers exist in dashboard-rail.js');
 
 function makeRailEnv(opts = {}) {
@@ -140,7 +140,7 @@ function makeRailEnv(opts = {}) {
     clearTimeout: id => { if (timers[id - 1]) timers[id - 1].cleared = true; }
   };
   vm.createContext(ctx);
-  vm.runInContext(revealBlock[0].replace(/\n  \/\/ A creation intent$/, '') + '\nthis.api = { railReveal, railRevealApply, railRevealClear };', ctx);
+  vm.runInContext(revealBlock[0].replace(/\n  \/\/ railFocus is what holds$/, '') + '\nthis.api = { railReveal, railRevealApply, railRevealClear };', ctx);
   return { ctx, rail, ws, parentRow, childRow, toggledWs, toggledKids, navs, timers };
 }
 
