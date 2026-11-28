@@ -474,6 +474,9 @@
     "261127-refactor-split-oversized-multi-responsibility-files": {
       "registered_at": "2026-11-27T01:26:05Z"
     },
+    "261128-feat-ws-companion-interactive-guide-highlight-and-monitor": {
+      "registered_at": "2026-11-28T08:34:37Z"
+    },
     "261128-feat-ws-companion-visual-polish-and-metafiction-overlay": {
       "registered_at": "2026-11-28T06:52:51Z"
     },
@@ -498,19 +501,6 @@
     },
     "261128-feat-ws-dashboard-global-holders-popup": {
       "registered_at": "2026-11-28T03:57:30Z"
-    },
-    "261128-feat-ws-usage-popup-unified-2slot-graph-and-slot-hover-preview": {
-      "registered_at": "2026-11-28T05:07:36Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-28T05:46:19Z",
-        "impl": {
-          "branch": "impl/develop/rule-chevy-pox"
-        }
-      }
     }
   }
 }
