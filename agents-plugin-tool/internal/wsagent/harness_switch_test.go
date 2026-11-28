@@ -261,7 +261,8 @@ func TestSwitchHarnessIdleLeadAndPostSwitchState(t *testing.T) {
 	if c == nil {
 		t.Fatal("resident conv missing")
 	}
-	// Populate fields that must be cleared atomically on switch, plus cached compaction mode.
+	// Populate fields that must be cleared atomically on switch, plus cached
+	// compaction mode, retired-process host state, and source hard-overflow state.
 	c.do(func() {
 		c.update(func(rec *Record) {
 			rec.SessionFile = "/tmp/old-session.jsonl"
@@ -277,6 +278,20 @@ func TestSwitchHarnessIdleLeadAndPostSwitchState(t *testing.T) {
 		c.compactWorkerMode = "ws"
 		c.compactWorkerModeGen = 42
 		c.compactModeMu.Unlock()
+		c.setStatus(func() {
+			bgCount := 1
+			monCount := 1
+			c.bgTasks = 2
+			c.background = &bgCount
+			c.monitors = &monCount
+		})
+		c.retry = &wslive.Retry{Attempt: 2}
+		c.alerted = true
+		c.compactTokens = 95000
+		c.compactWindow = 100000
+		c.compactHardAtStart = true
+		c.compactPostRotationNoShrink = 2
+		c.syncHost(false)
 	})
 	recBefore := env.diskRecord(st.ID)
 
@@ -286,6 +301,47 @@ func TestSwitchHarnessIdleLeadAndPostSwitchState(t *testing.T) {
 		Effort:  "medium",
 	}); err != nil {
 		t.Fatalf("SwitchHarness: %v", err)
+	}
+
+	// Verify retired-process host fields and source hard-overflow/no-shrink state
+	// were cleared and synced to the host snapshot (Invariant 3).
+	var (
+		afterBgTasks       int
+		afterBgPtr         *int
+		afterMonPtr        *int
+		afterRetry         *wslive.Retry
+		afterAlerted       bool
+		afterCompactTokens float64
+		afterCompactWindow float64
+		afterPostRotCheck  bool
+		afterPostRotNoShrk int
+		afterHostBgTasks   int
+		afterHostRetry     *wslive.Retry
+	)
+	c.do(func() {
+		afterBgTasks = c.bgTasks
+		afterBgPtr = c.background
+		afterMonPtr = c.monitors
+		afterRetry = c.retry
+		afterAlerted = c.alerted
+		afterCompactTokens = c.compactTokens
+		afterCompactWindow = c.compactWindow
+		afterPostRotCheck = c.compactPostRotationCheck
+		afterPostRotNoShrk = c.compactPostRotationNoShrink
+		snap := c.live.st.Snapshot(env.now.UnixMilli())
+		if snap.Host != nil {
+			afterHostBgTasks = snap.Host.BackgroundTasks
+			afterHostRetry = snap.Host.Retry
+		}
+	})
+	if afterBgTasks != 0 || afterBgPtr != nil || afterMonPtr != nil || afterRetry != nil || afterAlerted ||
+		afterHostBgTasks != 0 || afterHostRetry != nil {
+		t.Fatalf("retired host state lingered after switch: bg=%d/%v/%v retry=%+v alerted=%v hostBg=%d hostRetry=%+v",
+			afterBgTasks, afterBgPtr, afterMonPtr, afterRetry, afterAlerted, afterHostBgTasks, afterHostRetry)
+	}
+	if afterCompactTokens != 0 || afterCompactWindow != 0 || afterPostRotCheck || afterPostRotNoShrk != 0 {
+		t.Fatalf("source compaction/hard-overflow state carried onto target: tokens=%v window=%v check=%v noShrink=%d",
+			afterCompactTokens, afterCompactWindow, afterPostRotCheck, afterPostRotNoShrk)
 	}
 
 	// Verify atomic persisted record state.
@@ -781,6 +837,74 @@ func TestSwitchHarnessPermission1838(t *testing.T) {
 			t.Fatalf("HTTP switch wrote an explicit permission selection: explicit=%v err=%v", explicit, err)
 		}
 	})
+
+	t.Run("builtin_unresolved_levels_fail_closed_for_companion_allowed_for_user", func(t *testing.T) {
+		env := newSwitchTestEnv(t, nil)
+
+		// 1. Builtin claude (plan -> read-only) -> codex/agy ("" unresolved): companion refused 403 before retirement; HTTP allowed.
+		stPlan := env.createLead(BackendClaude, LeadOptions{PermissionMode: "plan"})
+		oldPlanProc := env.sendAndSettle(stPlan.ID, "plan mode", env.claude, "claude-plan-1")
+		wsPlan := env.diskRecord(stPlan.ID).WSKey
+		for _, target := range []string{BackendCodex, BackendAgy} {
+			err := env.runner.SwitchCompanionHarness(context.Background(), wsPlan, HarnessSwitchSpec{Backend: target})
+			var re *requestError
+			if !errors.As(err, &re) || re.status != http.StatusForbidden {
+				t.Fatalf("companion plan->%s err = %v, want 403", target, err)
+			}
+			if oldPlanProc.closed {
+				t.Fatalf("old process retired despite 403 for plan->%s", target)
+			}
+		}
+		if w := env.httpSwitch(stPlan.ID, HarnessSwitchSpec{Backend: BackendCodex}, true, true); w.Code != http.StatusOK {
+			t.Fatalf("HTTP plan->codex status = %d body=%s", w.Code, w.Body.String())
+		}
+
+		// 2. Builtin claude (bypassPermissions -> full) -> codex ("" unresolved): already max rank, companion allowed.
+		stFull := env.createLead(BackendClaude, LeadOptions{PermissionMode: "bypassPermissions"})
+		env.sendAndSettle(stFull.ID, "full mode", env.claude, "claude-full-1")
+		wsFull := env.diskRecord(stFull.ID).WSKey
+		if err := env.runner.SwitchCompanionHarness(context.Background(), wsFull, HarnessSwitchSpec{Backend: BackendCodex}); err != nil {
+			t.Fatalf("companion full->codex failed: %v", err)
+		}
+
+		// 3. Builtin idle codex (proc==nil -> sourceLevel "") -> claude (workdir-write): companion refused 403; HTTP allowed.
+		stIdleCodex := env.createLead(BackendCodex, LeadOptions{})
+		wsIdleCodex := env.diskRecord(stIdleCodex.ID).WSKey
+		err := env.runner.SwitchCompanionHarness(context.Background(), wsIdleCodex, HarnessSwitchSpec{Backend: BackendClaude})
+		var re *requestError
+		if !errors.As(err, &re) || re.status != http.StatusForbidden {
+			t.Fatalf("companion idle codex->claude err = %v, want 403", err)
+		}
+		if w := env.httpSwitch(stIdleCodex.ID, HarnessSwitchSpec{Backend: BackendClaude}, true, true); w.Code != http.StatusOK {
+			t.Fatalf("HTTP idle codex->claude status = %d body=%s", w.Code, w.Body.String())
+		}
+
+		// 4. Builtin live codex (workspace-write -> workdir-write) -> claude (workdir-write): equal rank, companion allowed.
+		stLiveCodex := env.createLead(BackendCodex, LeadOptions{})
+		env.sendAndSettle(stLiveCodex.ID, "live codex", env.codex, "codex-live-1")
+		cLive := env.runner.resident(stLiveCodex.ID)
+		cLive.do(func() { cLive.setStatus(func() { cLive.activeMode = "read-only" }) })
+		wsLive := env.diskRecord(stLiveCodex.ID).WSKey
+		err = env.runner.SwitchCompanionHarness(context.Background(), wsLive, HarnessSwitchSpec{Backend: BackendClaude})
+		if !errors.As(err, &re) || re.status != http.StatusForbidden {
+			t.Fatalf("companion live codex(read-only)->claude err = %v, want 403", err)
+		}
+		cLive.do(func() { cLive.setStatus(func() { cLive.activeMode = "workspace-write" }) })
+		if err := env.runner.SwitchCompanionHarness(context.Background(), wsLive, HarnessSwitchSpec{Backend: BackendClaude}); err != nil {
+			t.Fatalf("companion live codex(workspace-write)->claude failed: %v", err)
+		}
+
+		// 5. Builtin agy ("" unresolved) -> claude (workdir-write): companion refused 403; HTTP allowed.
+		stAgy := env.createLead(BackendAgy, LeadOptions{})
+		wsAgy := env.diskRecord(stAgy.ID).WSKey
+		err = env.runner.SwitchCompanionHarness(context.Background(), wsAgy, HarnessSwitchSpec{Backend: BackendClaude})
+		if !errors.As(err, &re) || re.status != http.StatusForbidden {
+			t.Fatalf("companion agy->claude err = %v, want 403", err)
+		}
+		if w := env.httpSwitch(stAgy.ID, HarnessSwitchSpec{Backend: BackendClaude}, true, true); w.Code != http.StatusOK {
+			t.Fatalf("HTTP agy->claude status = %d body=%s", w.Code, w.Body.String())
+		}
+	})
 }
 
 func TestSwitchCompanionHarnessAndHasUsableHarness(t *testing.T) {
@@ -793,6 +917,10 @@ func TestSwitchCompanionHarnessAndHasUsableHarness(t *testing.T) {
 		CompanionRole:         "companion-body",
 		CompanionSystemPrompt: "companion prompt",
 	})
+	// Explicit permission selection carries across supported companion harnesses (claude <-> codex).
+	if err := env.runner.writePermissionSelection(st.ID, wsdashboard.SessionDir(env.dir, st.ID), PermissionWorkdirWrite); err != nil {
+		t.Fatal(err)
+	}
 	rec := env.diskRecord(st.ID)
 	wsKey := rec.WSKey
 

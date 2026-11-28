@@ -623,15 +623,23 @@
       getState: state,
       getId: function () { return P.rid; },
       isBusy: function () { return P.busy; },
-      setBusy: function (on) { P.busy = !!on; P.draw(); },
+      onStart: function (target) {
+        if (P.rid === target) { P.busy = true; P.draw(); }
+      },
+      onDone: function (target) {
+        if (P.rid === target) { P.busy = false; P.draw(); }
+      },
       isLive: function (gen) { return P.live(gen); },
       getGen: function () { return P.gen; },
-      onUpdated: function (v, gen) {
+      onUpdated: function (target, v, gen) {
         if (inRow && gen === P.gen) P.st = v;
-        if (rid === P.rid && (hostedPage || handedPage)) lead.st = v;
+        if (rid === target && (hostedPage || handedPage)) lead.st = v;
         P.redraw();
       },
-      onError: function () { P.fetch(); },
+      onError: function (target, _status, _msg, gen) {
+        if (P.live(gen)) P.fetch();
+        else if (rid === target && (hostedPage || handedPage)) leadFetch();
+      },
       onResize: function () { if (typeof railPopPlace === "function") railPopPlace(); }
     }) : null;
     if (hswitch) el.appendChild(hswitch.el);
@@ -1418,8 +1426,9 @@
       quotaState.sig = "";
       return;
     }
+    var canSwitch = can && (typeof harnessSwitchCurrentSupported !== "function" || harnessSwitchCurrentSupported(st.backend));
     var sig = JSON.stringify([
-      mode, can, quotaState.busy, String(st.backend || ""),
+      mode, can, canSwitch, quotaState.busy, String(st.backend || ""),
       fail ? Number(fail.resetsAt || 0) : 0,
       qc ? [qc.status || "", Number(qc.resume_at || 0), Number(qc.attempts || 0), Number(qc.max_attempts || 0)] : null
     ]);
@@ -1474,12 +1483,14 @@
         schedBtn.disabled = quotaState.busy;
         schedBtn.addEventListener("click", function () { quotaAction("schedule"); });
       }
-      var swBtn = act.appendChild(rpBtn("btn qcswitch", wsT("js.quota.switch_harness")));
-      swBtn.setAttribute("data-qc-act", "switch-harness");
-      swBtn.disabled = quotaState.busy;
-      swBtn.addEventListener("click", function () {
-        if (typeof openHarnessSwitcher === "function") openHarnessSwitcher(swBtn);
-      });
+      if (canSwitch) {
+        var swBtn = act.appendChild(rpBtn("btn qcswitch", wsT("js.quota.switch_harness")));
+        swBtn.setAttribute("data-qc-act", "switch-harness");
+        swBtn.disabled = quotaState.busy;
+        swBtn.addEventListener("click", function () {
+          if (typeof openHarnessSwitcher === "function") openHarnessSwitcher(swBtn);
+        });
+      }
     }
     box.appendChild(card);
     box.hidden = false;

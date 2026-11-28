@@ -16,6 +16,17 @@ function extractSlice(src, startMarker, endMarker) {
 
 function makeEnv(opts = {}) {
   let domMutations = 0;
+  let mutatedNodes = [];
+  function recordMutation(node) {
+    domMutations++;
+    mutatedNodes.push(node);
+  }
+  function isDescendant(node, ancestor) {
+    for (let cur = node; cur; cur = cur.parentNode) {
+      if (cur === ancestor) return true;
+    }
+    return false;
+  }
   class Node {
     constructor(tag, cls = '', text = '') {
       this.tag = tag;
@@ -49,7 +60,7 @@ function makeEnv(opts = {}) {
       if (c.parentNode) c.parentNode.removeChild(c);
       c.parentNode = this;
       this.children.push(c);
-      domMutations++;
+      recordMutation(this);
       return c;
     }
     insertBefore(c, ref) {
@@ -58,7 +69,7 @@ function makeEnv(opts = {}) {
       c.parentNode = this;
       if (i < 0) this.children.push(c);
       else this.children.splice(i, 0, c);
-      domMutations++;
+      recordMutation(this);
       return c;
     }
     removeChild(c) {
@@ -66,7 +77,7 @@ function makeEnv(opts = {}) {
       if (i >= 0) {
         this.children.splice(i, 1);
         c.parentNode = null;
-        domMutations++;
+        recordMutation(this);
       }
       return c;
     }
@@ -78,11 +89,11 @@ function makeEnv(opts = {}) {
       return this._text + this.children.map(c => c.textContent).join('');
     }
     set textContent(v) {
-      if (this.children.length) domMutations++;
+      if (this.children.length) recordMutation(this);
       this.children.forEach(c => { c.parentNode = null; });
       this.children.length = 0;
       this._text = v == null ? '' : String(v);
-      domMutations++;
+      recordMutation(this);
     }
     get value() { return this._value; }
     set value(v) { this._value = v == null ? '' : String(v); }
@@ -196,7 +207,8 @@ function makeEnv(opts = {}) {
     popOpens,
     getFocused: () => focused,
     getMutations: () => domMutations,
-    resetMutations: () => { domMutations = 0; }
+    mutationsUnder: ancestor => mutatedNodes.filter(n => isDescendant(n, ancestor)).length,
+    resetMutations: () => { domMutations = 0; mutatedNodes = []; }
   };
 }
 
@@ -328,11 +340,22 @@ test('one-click Switch harness in #qcbox opens switcher with current harness & h
   assert.equal(submitBtn.disabled, true, 'submit disabled until user picks target');
   assert.equal(env.getFocused(), targetSel, 'focus moves to target selector');
 
-  // Unchanged state redraw preserves options without DOM rebuild.
+  // Unchanged state redraw preserves options and button/error text with zero DOM mutations inside switcher.
+  const prevOpts = targetSel.children.slice();
   env.resetMutations();
   sess.draw();
-  // Select options were not cleared/re-appended (targetSig unchanged).
-  assert.deepEqual(targetSel.children.map(o => o.value), ['', 'beta']);
+  assert.equal(env.mutationsUnder(sec), 0, 'unchanged redraw causes zero DOM mutations in switcher');
+  assert.equal(targetSel.children.length, prevOpts.length);
+  for (let i = 0; i < prevOpts.length; i++) {
+    assert.equal(targetSel.children[i], prevOpts[i], 'option node ' + i + ' must not be recreated');
+  }
+
+  // With a target selected, unchanged redraw also produces zero DOM mutations in switcher (models/efforts/button).
+  targetSel.value = 'beta';
+  targetSel.fire('change');
+  env.resetMutations();
+  sess.draw();
+  assert.equal(env.mutationsUnder(sec), 0, 'unchanged redraw with target selected causes zero DOM mutations in switcher');
 });
 
 test('submitting harness switch posts POST /agents/<id>/harness with omitted defaults or chosen model/effort/provider', () => {
@@ -420,11 +443,31 @@ test('busy (409) and unsupported (400) errors surface localized inline feedback 
   assert.equal(errLine.textContent, 'js.hswitch.err.unchanged');
 });
 
-test('switcher is hidden for durable (harness_switch:false) current harness and child sessions', () => {
+test('switcher and #qcbox button are hidden for durable (harness_switch:false) current harness and child sessions', () => {
+  const durableState = {
+    id: 'lead-1',
+    lead: true,
+    can_control: true,
+    backend: 'gamma-durable',
+    status: 'idle',
+    quota_continuation: { status: 'exhausted', attempts: 6, max_attempts: 6 }
+  };
   const env = makeEnv({
-    state: { id: 'lead-1', lead: true, can_control: true, backend: 'gamma-durable', status: 'idle' },
+    state: durableState,
     supChoices: SAMPLE_CHOICES
   });
+  env.ctx.quotaDraw(durableState);
+  assert.equal(env.qcbox.hidden, false, '#qcbox still shows exhausted card');
+  assert.equal(env.qcbox.querySelector('[data-qc-act="switch-harness"]'), null, '#qcbox hides switch button for harness_switch:false');
+
+  // If choices arrive later flipping switchability, memoization signature updates #qcbox.
+  const envLate = makeEnv({ state: durableState, supChoices: null });
+  envLate.ctx.quotaDraw(durableState);
+  assert.ok(envLate.qcbox.querySelector('[data-qc-act="switch-harness"]'), 'button visible before choices load');
+  envLate.ctx.supChoices = SAMPLE_CHOICES;
+  envLate.ctx.quotaDraw(durableState);
+  assert.equal(envLate.qcbox.querySelector('[data-qc-act="switch-harness"]'), null, 'button removed once harness_switch:false loads');
+
   env.ctx.railPopOpen('sess', env.headChip);
   const sec = env.ctx.rp.P.el.querySelector('[data-harness-switch="1"]');
   assert.equal(sec.hidden, true, 'durable harness hides switcher');
@@ -432,4 +475,79 @@ test('switcher is hidden for durable (harness_switch:false) current harness and 
   env.ctx.lead.st = { id: 'lead-1', lead: true, is_child: true, can_control: true, backend: 'alpha', status: 'idle' };
   env.ctx.rp.P.draw();
   assert.equal(sec.hidden, true, 'child session hides switcher');
+});
+
+test('shared rail row popover isolates cross-session switches without corrupting viewed lead.st or other rows', () => {
+  const stB = { id: 'lead-B', lead: true, can_control: true, backend: 'alpha', status: 'idle' };
+  const stA = { id: 'lead-A', lead: true, can_control: true, backend: 'alpha', status: 'idle' };
+  const env = makeEnv({ rid: 'lead-B', state: stB, supChoices: SAMPLE_CHOICES });
+
+  const rowPop = env.ctx.rpSessMake(true);
+  env.ctx.rp = { P: rowPop, kind: 'row', ws: 'lead-A', btn: env.headChip };
+  rowPop.open('lead-A');
+  rowPop.st = stA;
+  rowPop.draw();
+
+  const sec = rowPop.el.querySelector('[data-harness-switch="1"]');
+  const targetSel = sec.querySelector('[data-hs-target="1"]');
+  const submitBtn = sec.querySelector('[data-hs-submit="1"]');
+  const errLine = sec.querySelector('[data-hs-error="1"]');
+
+  // Start switching row A while page views session B.
+  rowPop.openHarnessSwitch(false);
+  targetSel.value = 'beta';
+  targetSel.fire('change');
+  submitBtn.click();
+  assert.equal(env.posts.length, 1);
+  assert.equal(env.posts[0].route, '/agents/lead-A/harness');
+  assert.equal(submitBtn.textContent, 'js.hswitch.switching');
+
+  // Now open row B in the same shared popover while A's request is still in flight.
+  rowPop.open('lead-B');
+  rowPop.st = stB;
+  rowPop.draw();
+  rowPop.openHarnessSwitch(false);
+  assert.equal(submitBtn.textContent, 'js.hswitch.go', 'row B must not inherit row A switching state');
+  assert.equal(targetSel.disabled, false, 'row B selector must stay unlocked');
+
+  // Row A's 200 arrives: must NOT overwrite viewed lead.st (lead-B), rowPop.st (lead-B), or close row B's section.
+  const nextA = { id: 'lead-A', lead: true, can_control: true, backend: 'beta', status: 'idle' };
+  env.posts[0].done(200, nextA, '');
+  assert.equal(env.ctx.lead.st.id, 'lead-B', 'viewed lead.st must remain lead-B');
+  assert.equal(env.ctx.lead.st.backend, 'alpha', 'viewed lead.st backend must not be corrupted');
+  assert.equal(rowPop.st.id, 'lead-B', 'row popover state must remain lead-B');
+  assert.equal(sec.open, true, 'row B switcher disclosure must stay open');
+
+  // Conversely, start switching viewed session B from its row menu, then open row A's menu before 200 arrives.
+  targetSel.value = 'beta';
+  targetSel.fire('change');
+  submitBtn.click();
+  assert.equal(env.posts.length, 2);
+  assert.equal(env.posts[1].route, '/agents/lead-B/harness');
+
+  rowPop.open('lead-A');
+  rowPop.st = nextA;
+  rowPop.draw();
+  const nextB = { id: 'lead-B', lead: true, can_control: true, backend: 'beta', status: 'idle' };
+  env.posts[1].done(200, nextB, '');
+  assert.equal(env.ctx.lead.st.id, 'lead-B');
+  assert.equal(env.ctx.lead.st.backend, 'beta', 'viewed lead.st updates when its own row switch completes');
+  assert.equal(rowPop.st.id, 'lead-A', 'other open row popover state stays untouched');
+
+  // Error on row A after switching popover to row B routes to toast, not row B's inline error or P.fetch().
+  targetSel.value = 'alpha';
+  targetSel.fire('change');
+  submitBtn.click();
+  assert.equal(env.posts.length, 3);
+  assert.equal(env.posts[2].route, '/agents/lead-A/harness');
+
+  rowPop.open('lead-B');
+  rowPop.st = nextB;
+  rowPop.draw();
+  const fetchesBefore = env.fetches.length;
+  const toastsBefore = env.toasts.length;
+  env.posts[2].done(409, {}, 'conversation_busy');
+  assert.equal(errLine.hidden, true, 'row B inline error must not show row A error');
+  assert.equal(env.fetches.length, fetchesBefore, 'must not trigger row B P.fetch for row A error');
+  assert.equal(env.toasts.length, toastsBefore + 1, 'stale row error surfaces via toast');
 });

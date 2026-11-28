@@ -68,13 +68,17 @@
     errLine.setAttribute("data-hs-error", "1");
     errLine.hidden = true;
 
+    var switchingIds = new Set();
     var state = {
       backend: "",
       targetSig: "",
       target: "",
-      switching: false,
       err: ""
     };
+
+    function isSwitching(id) {
+      return !!(id && switchingIds.has(id));
+    }
 
     function syncTargetDetails(target, off) {
       var hasTarget = !!target;
@@ -91,7 +95,9 @@
     }
 
     function syncControls(st) {
-      var busy = state.switching || !!(opts.isBusy && opts.isBusy());
+      var curId = opts.getId ? opts.getId() : "";
+      var switching = isSwitching(curId);
+      var busy = switching || !!(opts.isBusy && opts.isBusy());
       var can = !!(st && st.can_control && !leadGone(st));
       var off = busy || !can;
       var targets = harnessSwitchChoices(st ? st.backend : "");
@@ -103,9 +109,10 @@
         effortRow.sel.value = "";
       }
       syncTargetDetails(state.target, off);
-      submitBtn.textContent = wsT(state.switching ? "js.hswitch.switching" : "js.hswitch.go");
+      var btnText = wsT(switching ? "js.hswitch.switching" : "js.hswitch.go");
+      if (submitBtn.textContent !== btnText) submitBtn.textContent = btnText;
       submitBtn.disabled = off || !state.target || !targets.length;
-      errLine.textContent = state.err;
+      if (errLine.textContent !== state.err) errLine.textContent = state.err;
       errLine.hidden = !state.err;
     }
 
@@ -158,7 +165,7 @@
       var st = opts.getState();
       var id = opts.getId();
       var target = String(targetRow.sel.value || "");
-      if (state.switching || (opts.isBusy && opts.isBusy()) || !st || !st.can_control || leadGone(st) || !id || !target) return;
+      if (isSwitching(id) || (opts.isBusy && opts.isBusy()) || !st || !st.can_control || leadGone(st) || !id || !target) return;
       if (target === String(st.backend || "")) {
         state.err = wsT("js.hswitch.err.unchanged");
         syncControls(st);
@@ -182,36 +189,38 @@
       }
       if (!effortRow.sel.disabled && effortRow.sel.value) payload.effort = String(effortRow.sel.value);
 
-      state.switching = true;
+      switchingIds.add(id);
       state.err = "";
-      if (opts.setBusy) opts.setBusy(true);
+      if (opts.onStart) opts.onStart(id, gen);
       else syncControls(st);
 
       railPost("/agents/" + encodeURIComponent(id) + "/harness", payload, function (status, v, text) {
         if (typeof leadActions !== "undefined") leadActions.delete(id);
-        state.switching = false;
+        switchingIds.delete(id);
+        var live = !opts.isLive || opts.isLive(gen);
+        if (opts.onDone) opts.onDone(id, gen);
         if (status === 200 && v && v.id) {
-          state.target = "";
-          state.err = "";
-          targetRow.sel.value = "";
-          modelRow.sel.value = "";
-          effortRow.sel.value = "";
-          sec.open = false;
-          if (opts.setBusy) opts.setBusy(false);
-          if (opts.onUpdated) opts.onUpdated(v, gen);
+          if (live) {
+            state.target = "";
+            state.err = "";
+            targetRow.sel.value = "";
+            modelRow.sel.value = "";
+            effortRow.sel.value = "";
+            sec.open = false;
+          }
+          if (opts.onUpdated) opts.onUpdated(id, v, gen);
           if (typeof toast === "function") toast(wsT("js.hswitch.done", String(v.backend || target)));
           return;
         }
         var msg = harnessSwitchErr(status, text);
-        if (opts.setBusy) opts.setBusy(false);
-        if (!opts.isLive || opts.isLive(gen)) {
+        if (live) {
           state.err = msg;
           syncControls(opts.getState());
           if (opts.onResize) opts.onResize();
         } else if (typeof toast === "function") {
           toast(msg);
         }
-        if (opts.onError) opts.onError(status, msg);
+        if (opts.onError) opts.onError(id, status, msg, gen);
       });
     });
 

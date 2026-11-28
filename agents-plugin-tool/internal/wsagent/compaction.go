@@ -1327,9 +1327,11 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd, Trigger: trigger})
 		// The replacement session starts with a clean immediate hard-cap slate;
 		// if its first fresh usage sample is still >= hard, observeCompaction
-		// restores the no-shrink count from compactPostRotationNoShrink.
+		// restores the no-shrink count from compactPostRotationNoShrink. A
+		// cross-harness switch moves to a different harness/window, so it never
+		// carries the source harness's hard-cap/no-shrink state forward.
 		c.resetHardOverflow()
-		if wasHard {
+		if wasHard && req.target == nil {
 			c.compactPostRotationCheck = true
 			c.compactPostRotationNoShrink = prevPostRotationNoShrink + 1
 		}
@@ -1347,7 +1349,11 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 		c.accountSlotBoundaryPending = false
 		c.slot2aVerifyPending = false
 		if switchState != nil {
-			c.commitHarnessSwitch(switchState, req.target, pending)
+			if err := c.commitHarnessSwitch(switchState, req.target, pending); err != nil {
+				retireErr := c.retireCompactionProcess()
+				c.rollbackHarnessSwitch(switchState, noteBefore)
+				return errors.Join(fmt.Errorf("persist switched record: %w", err), retireErr)
+			}
 		} else {
 			c.update(func(rec *Record) {
 				sends := rec.Sends

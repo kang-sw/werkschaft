@@ -154,7 +154,7 @@ func (c *conv) switchHarness(ctx context.Context, spec HarnessSwitchSpec, user b
 	} else {
 		sourceLevel := c.r.projectLiveMode(c.r.legacyLeadPermission(rec), rec, "legacy-derived", c.activeMode, c.proc != nil)
 		targetLevel := c.r.legacyLeadPermission(Record{Lead: true, Backend: targetBackend})
-		if targetLevel.rank() > sourceLevel.rank() && !user {
+		if !user && mayRaisePermission(sourceLevel, targetLevel) {
 			return &requestError{status: http.StatusForbidden, msg: "only the user may raise permission_level"}
 		}
 	}
@@ -198,6 +198,20 @@ func (c *conv) switchHarness(ctx context.Context, spec HarnessSwitchSpec, user b
 	return nil
 }
 
+// mayRaisePermission reports whether switching from sourceLevel to targetLevel
+// without user authority could raise the session's permission level.
+// An unresolved ("") level cannot be proven equal-or-lower unless the source is
+// already at PermissionFull or the target is PermissionReadOnly.
+func mayRaisePermission(sourceLevel, targetLevel PermissionLevel) bool {
+	if sourceLevel == PermissionFull || targetLevel == PermissionReadOnly {
+		return false
+	}
+	if sourceLevel == "" || targetLevel == "" {
+		return true
+	}
+	return targetLevel.rank() > sourceLevel.rank()
+}
+
 func (c *conv) switchBusy(rec Record) bool {
 	if c.turn || c.compacting || c.compactCommand {
 		return true
@@ -217,6 +231,7 @@ func (c *conv) switchBusy(rec Record) bool {
 type harnessSwitchState struct {
 	prevRec                   Record
 	hadQuotaContinuation      bool
+	hadRetiredHostState       bool
 	hadHostAlert              bool
 	prevRecordDirty           bool
 	prevFailure               *wslive.Notice
@@ -256,10 +271,12 @@ func (c *conv) beginHarnessSwitch(target *harnessTarget) *harnessSwitchState {
 		f := *c.failure
 		prevFailure = &f
 	}
+	hadRetiredHostState := c.bgTasks != 0 || c.background != nil || c.monitors != nil || c.retry != nil || c.alerted
 	s := &harnessSwitchState{
 		prevRec:                 prevRec,
 		hadQuotaContinuation:    prevRec.QuotaContinuation != nil,
-		hadHostAlert:            prevRec.QuotaContinuation != nil || c.failure != nil || len(c.mcpBroken) > 0,
+		hadRetiredHostState:     hadRetiredHostState,
+		hadHostAlert:            prevRec.QuotaContinuation != nil || c.failure != nil || len(c.mcpBroken) > 0 || hadRetiredHostState,
 		prevRecordDirty:         c.recordDirty,
 		prevFailure:             prevFailure,
 		prevMCPBroken:           slices.Clone(c.mcpBroken),
@@ -309,11 +326,16 @@ func (c *conv) beginHarnessSwitch(target *harnessTarget) *harnessSwitchState {
 		c.failure = nil
 		c.mcpBroken = nil
 		c.activeMode = ""
+		c.bgTasks = 0
+		c.background = nil
+		c.monitors = nil
 		c.dashboardControlEffective = false
 		c.lastErr = ""
 		c.unrequestedCmdWarn = ""
 		c.actionNeeded = ""
 	})
+	c.retry = nil
+	c.alerted = false
 	c.usageLimitSettled = false
 	c.exhausted = nil
 	c.exhaustReport = ""
@@ -434,19 +456,15 @@ func (c *conv) rollbackHarnessSwitch(s *harnessSwitchState, noteBefore string) {
 	c.loadCompaction()
 	c.loadModelWait()
 	c.restoreQuotaContinuation()
+	if s.hadRetiredHostState {
+		c.syncHost(false)
+	}
 	c.writeRegistration()
 }
 
 // commitHarnessSwitch persists all switched harness fields and PendingCompaction
 // in one atomic WAL commit, rewrites registration.json, and notifies watchers.
-func (c *conv) commitHarnessSwitch(s *harnessSwitchState, target *harnessTarget, pending *PendingCompaction) {
-	c.setStatus(func() {
-		c.contextTokens = nil
-		c.contextWindow = 0
-		c.contextCompaction = nil
-		c.observed = nil
-		c.observations = nil
-	})
+func (c *conv) commitHarnessSwitch(s *harnessSwitchState, target *harnessTarget, pending *PendingCompaction) error {
 	c.wmu.Lock()
 	c.deferRecordPersist = false
 	c.mu.Lock()
@@ -470,8 +488,24 @@ func (c *conv) commitHarnessSwitch(s *harnessSwitchState, target *harnessTarget,
 	c.rec.PendingCompaction = saved
 	c.syncStateLocked()
 	c.mu.Unlock()
-	_ = c.persistRecord()
+	err := c.persistRecord()
 	c.wmu.Unlock()
+	if err != nil {
+		return err
+	}
+
+	c.setStatus(func() {
+		c.contextTokens = nil
+		c.contextWindow = 0
+		c.contextCompaction = nil
+		c.observed = nil
+		c.observations = nil
+	})
+	c.compactTokens = 0
+	c.compactWindow = 0
+	c.compactPostRotationCheck = false
+	c.compactPostRotationNoShrink = 0
+	c.compactTurnRotations = 0
 
 	c.writeRegistration()
 	if s.hadHostAlert {
@@ -479,6 +513,7 @@ func (c *conv) commitHarnessSwitch(s *harnessSwitchState, target *harnessTarget,
 	}
 	c.changed(false)
 	c.watched()
+	return nil
 }
 
 // residentByWSKey returns the open resident conversation carrying wsKey without
