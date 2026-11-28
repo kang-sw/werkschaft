@@ -490,19 +490,6 @@
     "261128-feat-ws-cross-harness-session-switch": {
       "registered_at": "2026-11-28T10:35:30Z"
     },
-    "261128-feat-ws-dashboard-global-holders-popup": {
-      "registered_at": "2026-11-28T03:57:30Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-28T10:26:58Z",
-        "impl": {
-          "branch": "impl/develop/kitty-traps-shady"
-        }
-      }
-    },
     "261128-refactor-ws-auditstore-handle-eviction-and-lazy-index": {
       "registered_at": "2026-11-28T11:39:31Z"
     },
