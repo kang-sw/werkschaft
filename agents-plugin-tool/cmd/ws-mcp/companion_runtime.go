@@ -244,6 +244,15 @@ func (r *companionRuntime) OnUserWake(reason string) {
 		ProjectKey: companionProjectKey(r.launchRoot(d)),
 		Hint:       phone.LatestUnreadHint(),
 	})
+	// Re-check unread inbox right before delivering the content-free nudge: if
+	// an interrupting ws/companion.act call consumed the inbox concurrently,
+	// drop the nudge cleanly so Tier-1 is never re-woken for consumed mail (D7, D11).
+	unread = phone.UnreadAgentCount()
+	oldestUnreadID = phone.OldestUnreadID()
+	if unread <= 0 {
+		d.CompanionForceRelease(bodyKey)
+		return
+	}
 	msg := envelope + "\n\n" + formatBodyUserWakePrompt(unread, reason)
 	r.mu.Lock()
 	if r.bodyReplyID == bodyID {
@@ -344,13 +353,15 @@ func (r *companionRuntime) handleCompanionTurnEnd(role, replyID, wsKey, status, 
 		if failed {
 			phone.RecordWakeFailure()
 		}
-		// Turn-end failsafe: always release any unclosed Embodiment Lease
-		// (settling to laptop_work if a delegation is in flight, and triggering
-		// unread re-wake if messages remain and not unavailable). Even when
-		// Tier-1 already released its lease cleanly via phone_putdown before
-		// TurnEnd settled, a user message may have arrived while the turn was
-		// running (suppressed to avoid preempting the turn); trigger an unread
-		// re-wake here if unread messages remain and no queued turn is pending.
+		// Turn-end failsafe: reset burst counter and release any unclosed
+		// Embodiment Lease (settling to laptop_work if a delegation is in
+		// flight, and triggering unread re-wake if messages remain and not
+		// unavailable). Even when Tier-1 already released its lease cleanly via
+		// phone_putdown before TurnEnd settled, a user message may have arrived
+		// while the turn was running (suppressed to avoid preempting the turn);
+		// trigger an unread re-wake here if unread messages remain and no queued
+		// turn is pending.
+		d.CompanionResetBurst(wsKey)
 		released := d.CompanionForceRelease(wsKey)
 		if !released && !stillPending && phone.UnreadAgentCount() > 0 && !phone.Snapshot().Unavailable {
 			go r.OnUserWake("release-unread")

@@ -302,6 +302,12 @@ type Daemon struct {
 	companionCommands companionCommandHub
 	// companionPhone holds the in-memory 4-state embodiment & phone messenger store.
 	companionPhone CompanionPhoneStore
+	// companionAct fans out user messages and glass-knock events into blocked
+	// ws/companion.act waiters strictly in memory.
+	companionActOnce sync.Once
+	companionAct     companionActHub
+	// companionBurst tracks per-turn Tier-1 burst call counts strictly in memory (D11).
+	companionBurst companionBurstHub
 	// companionMem coordinates Portable Soul RAM cache + lazy Local Episodes SQLite FTS5.
 	companionMemMu sync.Mutex
 	companionMem   *CompanionMemory

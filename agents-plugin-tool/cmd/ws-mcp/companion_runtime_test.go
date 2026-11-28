@@ -1647,3 +1647,342 @@ func TestCompanionPickLaunchSpecFollowsBuiltinHarnessOrder(t *testing.T) {
 		t.Fatalf("pickLaunchSpec picked %q, want %q (earliest available in BuiltinHarnessNames %v)", spec.Backend, second, names)
 	}
 }
+
+func (f *companionFixture) postKnock(kind string, count int) {
+	f.t.Helper()
+	ep := f.daemon.Endpoint()
+	body, _ := json.Marshal(map[string]any{"kind": kind, "count": count})
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/companion/knock", ep.Port)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		f.t.Fatalf("NewRequest(knock): %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", fmt.Sprintf("http://127.0.0.1:%d", ep.Port))
+	req.AddCookie(f.authCookie)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		f.t.Fatalf("POST /api/companion/knock: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		f.t.Fatalf("POST knock status=%d body=%s", resp.StatusCode, string(raw))
+	}
+}
+
+func TestCompanionPhase3ActInboxConsumptionAndNudgeDedup(t *testing.T) {
+	f := newCompanionFixture(t, "agent")
+	neverTimer := make(chan time.Time)
+	f.daemon.SetCompanionActTimer(func(time.Duration) (<-chan time.Time, func()) {
+		return neverTimer, func() {}
+	})
+
+	var (
+		actResult1 string
+		actResult2 string
+		turnDone   = make(chan struct{}, 4)
+	)
+	f.backend.mu.Lock()
+	f.backend.handler = func(p *companionTestProc, text string) {
+		if p.role != mcp.CompanionRoleBody {
+			p.emitTurn("ok", "")
+			return
+		}
+		_, _, _ = f.callTool(p.wsKey, "companion.phone_pickup", map[string]any{"session_key": p.wsKey})
+		_, _, _ = f.callTool(p.wsKey, "companion.phone_send", map[string]any{"session_key": p.wsKey, "text": "Got msg 1!", "tone": "happy"})
+		// Call act #1 -> interrupted by incoming user message #2 (consumes inbox).
+		actResult1, _, _ = f.callTool(p.wsKey, "companion.act", map[string]any{
+			"session_key": p.wsKey,
+			"expression":  "happy",
+			"fx":          "sparkle",
+			"speech":      "Waiting for your follow-up...",
+			"delay_ms":    4000,
+		})
+		// Call act #2 -> interrupted by POST /api/companion/knock.
+		actResult2, _, _ = f.callTool(p.wsKey, "companion.act", map[string]any{
+			"session_key": p.wsKey,
+			"expression":  "focused",
+			"delay_ms":    4000,
+		})
+		_, _, _ = f.callTool(p.wsKey, "companion.phone_send", map[string]any{"session_key": p.wsKey, "text": "Heard both msg 2 and the knock!", "tone": "wink"})
+		_, _, _ = f.callTool(p.wsKey, "companion.phone_putdown", map[string]any{"session_key": p.wsKey, "style": "normal", "next": "ambient"})
+		p.emitTurn("done", "")
+		turnDone <- struct{}{}
+	}
+	f.backend.mu.Unlock()
+
+	// Wake Tier-1 with user message #1.
+	f.postUserMessage("message 1: start burst")
+	waitCompanionUntil(t, 5*time.Second, "Tier-1 blocked in act #1", func() bool {
+		return f.daemon.CompanionActWaiterCount() == 1
+	})
+
+	// Send user message #2 while Tier-1 is blocked in act #1.
+	f.postUserMessage("message 2: interrupt mid-act")
+	// Wait until act #1 wakes, consumes message #2, and Tier-1 enters act #2.
+	waitCompanionUntil(t, 5*time.Second, "act #1 consumed msg 2 and entered act #2", func() bool {
+		return f.daemon.CompanionPhone().UnreadAgentCount() == 0 && f.daemon.CompanionActWaiterCount() == 1
+	})
+
+	// Send glass knock while Tier-1 is blocked in act #2.
+	f.postKnock("knock_startle", 1)
+
+	select {
+	case <-turnDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for Tier-1 burst turn completion")
+	}
+	waitCompanionUntil(t, 5*time.Second, "lease released cleanly", func() bool {
+		return f.daemon.CompanionPhone().Snapshot().LeaseOwner == ""
+	})
+
+	if !strings.Contains(actResult1, "wake_reason: user_message") || !strings.Contains(actResult1, "message 2: interrupt mid-act") {
+		t.Fatalf("act #1 result = %q, want user_message wake carrying message 2", actResult1)
+	}
+	if !strings.Contains(actResult2, "wake_reason: glass_knock") || !strings.Contains(actResult2, "knock_startle") {
+		t.Fatalf("act #2 result = %q, want glass_knock wake", actResult2)
+	}
+
+	// Verify content-free nudge drop: invoking OnUserWake directly while unread
+	// inbox is empty drops the nudge and NEVER re-wakes Tier-1.
+	f.rt.OnUserWake("user-message")
+	// Idle glass knock also never wakes Tier-1.
+	f.postKnock("annoyed_tap", 3)
+
+	procs := f.backend.procsFor(mcp.CompanionRoleBody)
+	if len(procs) != 1 {
+		t.Fatalf("expected 1 body proc, got %d", len(procs))
+	}
+	if sends := procs[0].receivedSends(); len(sends) != 1 {
+		t.Fatalf("Tier-1 received %d deliveries, want exactly 1 (message 2 consumed by act + empty nudge dropped + idle knock ignored): %v", len(sends), sends)
+	}
+}
+
+func TestCompanionPhase3ActiveBurstE2E(t *testing.T) {
+	soulRoot := t.TempDir()
+	soulDir := filepath.Join(soulRoot, "luna")
+	if err := os.MkdirAll(filepath.Join(soulDir, "log"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	persona := "# Luna\n\n## Archetype\nPlayful mission controller\n\n## Voice\nWarm and crisp.\n"
+	if err := os.WriteFile(filepath.Join(soulDir, "persona.md"), []byte(persona), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	f := newCompanionFixtureWithConfig(t, wsdashboard.CompanionConfig{
+		Enabled:  true,
+		Director: "agent",
+		Pack:     "default",
+		Soul:     "luna",
+		SoulDir:  soulRoot,
+	})
+	projectKey := filepath.Base(filepath.Clean(f.root))
+
+	// Pre-seed Portable Soul + Local Episode so default per-wake <<<RECALL>>> and
+	// companion.recall_memory both return real persisted memories.
+	if _, err := f.daemon.CompanionRememberSoul(context.Background(), "", "Prefers green tea over espresso during evening reviews.", "preference", projectKey, []string{"tea"}); err != nil {
+		t.Fatalf("seed soul: %v", err)
+	}
+	if _, err := f.daemon.CompanionRememberEpisode(context.Background(), "", projectKey, "Earlier refactor tightened companion pacing bounds to 1500..6000ms.", []string{"pacing"}); err != nil {
+		t.Fatalf("seed episode: %v", err)
+	}
+
+	neverTimer := make(chan time.Time)
+	f.daemon.SetCompanionActTimer(func(time.Duration) (<-chan time.Time, func()) {
+		return neverTimer, func() {}
+	})
+
+	var (
+		mu              sync.Mutex
+		wake1Envelope   string
+		recallOut       string
+		actOut          string
+		epSaveOut       string
+		soulCleanOut    string
+		soulSecretOut   string
+		soulDowngrade   string
+		workSawLaptopWk   bool
+		workSawCompaction bool
+		workSnapState     string
+		workInFlight      bool
+		bodyKeyUsed       string
+		doneCh            = make(chan struct{}, 2)
+	)
+
+	f.backend.mu.Lock()
+	f.backend.handler = func(p *companionTestProc, text string) {
+		if p.role == mcp.CompanionRoleWork {
+			_, rest, ok := strings.Cut(text, "delegation_id: ")
+			if !ok {
+				// Idle-boundary compaction turn queued after delegation settlement (D4).
+				mu.Lock()
+				workSawCompaction = true
+				mu.Unlock()
+				p.emitTurn("compacted", "")
+				return
+			}
+			// Verify VRM entered laptop_work while headless Tier-2 executes the delegation.
+			snap := f.daemon.CompanionPhone().Snapshot()
+			mu.Lock()
+			workSawLaptopWk = snap.State == wsdashboard.CompanionStateLaptopWork && snap.DelegationInFlight
+			workSnapState = snap.State
+			workInFlight = snap.DelegationInFlight
+			mu.Unlock()
+			// Tier-2 must never access Phase 3 companion memory/act tools.
+			if _, _, rpcErr := f.callTool(p.wsKey, "companion.recall_memory", map[string]any{"session_key": p.wsKey}); rpcErr == "" {
+				t.Errorf("Tier-2 unexpectedly reached companion.recall_memory")
+			}
+			delID, _, _ := strings.Cut(rest, "\n")
+			_, _, _ = f.callTool(p.wsKey, "delegation.report", map[string]any{
+				"session_key":   p.wsKey,
+				"delegation_id": strings.TrimSpace(delID),
+				"status":        "done",
+				"result":        "VERDICT: PASS\ncommit: abc1234",
+				"artifacts":     []string{"commit:abc1234"},
+			})
+			p.emitTurn("delegation done", "")
+			return
+		}
+
+		if strings.Contains(text, "[companion delegation report]") {
+			// Wake 2 (delegation report): save episode + scrubbed soul writes, reply in character, exit cleanly.
+			epTxt, _, _ := f.callTool(p.wsKey, "companion.remember_episode", map[string]any{
+				"session_key": p.wsKey,
+				"summary":     "Verified pacing suite and commit abc1234 passed.",
+				"tags":        []string{"verification"},
+			})
+			cleanTxt, _, _ := f.callTool(p.wsKey, "companion.remember_soul", map[string]any{
+				"session_key": p.wsKey,
+				"kind":        "rapport",
+				"content":     "Celebrates clean green builds with a quick coffee stretch.",
+			})
+			secretTxt, _, _ := f.callTool(p.wsKey, "companion.remember_soul", map[string]any{
+				"session_key": p.wsKey,
+				"content":     "Backup token ghp_1234567890abcdefghijklmnopqrstuvwxyzABCD",
+			})
+			downTxt, _, _ := f.callTool(p.wsKey, "companion.remember_soul", map[string]any{
+				"session_key": p.wsKey,
+				"content":     "Closed 261128-feat-ws-companion-soul-memory-and-pacing phase 3 verification.",
+			})
+			mu.Lock()
+			epSaveOut = epTxt
+			soulCleanOut = cleanTxt
+			soulSecretOut = secretTxt
+			soulDowngrade = downTxt
+			mu.Unlock()
+
+			_, _, _ = f.callTool(p.wsKey, "companion.phone_pickup", map[string]any{"session_key": p.wsKey})
+			_, _, _ = f.callTool(p.wsKey, "companion.phone_send", map[string]any{
+				"session_key": p.wsKey,
+				"text":        "Green tea break earned! VERDICT: PASS — commit: abc1234",
+				"tone":        "happy",
+			})
+			_, _, _ = f.callTool(p.wsKey, "companion.phone_putdown", map[string]any{
+				"session_key": p.wsKey,
+				"style":       "normal",
+				"next":        "ambient",
+			})
+			p.emitTurn("briefed", "")
+			doneCh <- struct{}{}
+			return
+		}
+
+		// Wake 1: recall_memory -> phone_pickup -> act (interrupted by follow-up user message) -> delegate_work.
+		recTxt, _, _ := f.callTool(p.wsKey, "companion.recall_memory", map[string]any{
+			"session_key": p.wsKey,
+			"query":       "pacing",
+			"scope":       "all",
+		})
+		_, _, _ = f.callTool(p.wsKey, "companion.phone_pickup", map[string]any{"session_key": p.wsKey})
+		actTxt, _, _ := f.callTool(p.wsKey, "companion.act", map[string]any{
+			"session_key": p.wsKey,
+			"expression":  "focused",
+			"fx":          "sparkle",
+			"speech":      "Checking past pacing notes...",
+		})
+		mu.Lock()
+		wake1Envelope = text
+		recallOut = recTxt
+		actOut = actTxt
+		bodyKeyUsed = p.wsKey
+		mu.Unlock()
+
+		_, _, _ = f.callTool(p.wsKey, "companion.phone_send", map[string]any{
+			"session_key": p.wsKey,
+			"text":        "Got your follow-up — running verification now!",
+			"tone":        "focused",
+		})
+		_, _, _ = f.callTool(p.wsKey, "companion.phone_putdown", map[string]any{
+			"session_key": p.wsKey,
+			"style":       "normal",
+			"next":        "work",
+		})
+		_, _, _ = f.callTool(p.wsKey, "companion.delegate_work", map[string]any{
+			"session_key": p.wsKey,
+			"brief":       "Run pacing verification suite and return commit hash + verdict.",
+		})
+		p.emitTurn("delegated", "")
+	}
+	f.backend.mu.Unlock()
+
+	// Kick off Wake 1.
+	f.postUserMessage("let's check the pacing bounds and green tea notes")
+	waitCompanionUntil(t, 5*time.Second, "Tier-1 blocked in act during E2E burst", func() bool {
+		return f.daemon.CompanionActWaiterCount() == 1
+	})
+
+	// Interrupt act mid-beat with a follow-up user message.
+	f.postUserMessage("also run the verification suite please")
+
+	select {
+	case <-doneCh:
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for Phase 3 E2E burst completion")
+	}
+
+	// Settled back to 0-token procedural idle (laptop_ambient) with empty lease & unread queue,
+	// and Tier-2 idle compaction ran cleanly.
+	waitCompanionUntil(t, 5*time.Second, "settled to laptop_ambient idle and Tier-2 compacted", func() bool {
+		snap := f.daemon.CompanionPhone().Snapshot()
+		mu.Lock()
+		compacted := workSawCompaction
+		mu.Unlock()
+		return compacted && snap.State == wsdashboard.CompanionStateLaptopAmbient && snap.Posture == wsdashboard.CompanionPostureLaptop && snap.LeaseOwner == "" && !snap.DelegationInFlight
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(wake1Envelope, "<<<RECALL>>>") || !strings.Contains(wake1Envelope, "1500..6000ms") {
+		t.Fatalf("wake 1 envelope missing real FTS5 <<<RECALL>>> snippet:\n%s", wake1Envelope)
+	}
+	if !strings.Contains(recallOut, "1500..6000ms") {
+		t.Fatalf("recall_memory output missing seeded episode: %q", recallOut)
+	}
+	if !strings.Contains(actOut, "wake_reason: user_message") || !strings.Contains(actOut, "also run the verification suite please") {
+		t.Fatalf("act interruption output unexpected: %q", actOut)
+	}
+	if !workSawLaptopWk {
+		t.Fatalf("expected VRM state to be laptop_work while Tier-2 executed delegation (got state=%q inFlight=%v)", workSnapState, workInFlight)
+	}
+	if !strings.Contains(epSaveOut, "saved episode #") {
+		t.Fatalf("remember_episode output unexpected: %q", epSaveOut)
+	}
+	if !strings.Contains(soulCleanOut, "status: saved") {
+		t.Fatalf("clean remember_soul output unexpected: %q", soulCleanOut)
+	}
+	if !strings.Contains(soulSecretOut, "status: rejected_secret") {
+		t.Fatalf("secret remember_soul output unexpected: %q", soulSecretOut)
+	}
+	if !strings.Contains(soulDowngrade, "status: downgraded_episode") {
+		t.Fatalf("ticket-stem remember_soul output unexpected: %q", soulDowngrade)
+	}
+	// Verify Tier-1 burst counter resets on turn end (async OnCompanionTurnEnd
+	// settles shortly after phone_putdown releases the lease), then next call starts at 1.
+	waitCompanionUntil(t, 5*time.Second, "Tier-1 burst counter reset on turn end", func() bool {
+		return f.daemon.CompanionBurstCount(bodyKeyUsed) == 0
+	})
+	if count, ok := f.daemon.CompanionConsumeBurstCall(bodyKeyUsed, wsdashboard.CompanionBurstMaxCalls); !ok || count != 1 {
+		t.Fatalf("burst counter not reset after turn end: count=%d ok=%v", count, ok)
+	}
+}

@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/kang-sw/devenv/internal/wsstate"
@@ -353,6 +354,131 @@ func (s *CompanionSoulStore) PeekExisting(customDir, rawSoulID string, recentLim
 		return SoulSnapshot{}, false, err
 	}
 	return s.snapshotLocked(root, defaultRoot, recentLimit), true, nil
+}
+
+// SearchCached searches the active Soul's RAM-cached shard entries without
+// auto-creating Soul files on disk. Warm calls perform zero disk reads. When
+// query is empty, returns up to limit newest entries (newest first).
+func (s *CompanionSoulStore) SearchCached(customDir, rawSoulID, query string, limit int) ([]SoulShardEntry, bool, error) {
+	if limit <= 0 {
+		limit = companionRecallDefaultLimit
+	}
+	root, err := s.ResolveRootDir(customDir)
+	if err != nil {
+		return nil, false, err
+	}
+	soulID, err := ResolveSoulID(rawSoulID)
+	if err != nil {
+		return nil, false, err
+	}
+
+	s.mu.RLock()
+	if s.loaded && s.loadedRoot == root && s.loadedID == soulID {
+		out := matchSoulEntriesLocked(s.entries, query, limit)
+		s.mu.RUnlock()
+		return out, true, nil
+	}
+	s.mu.RUnlock()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.loaded && s.loadedRoot == root && s.loadedID == soulID {
+		return matchSoulEntriesLocked(s.entries, query, limit), true, nil
+	}
+	personaPath := filepath.Join(root, soulID, "persona.md")
+	if _, err := os.Lstat(personaPath); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if err := s.loadExistingColdLocked(root, soulID); err != nil {
+		return nil, false, err
+	}
+	return matchSoulEntriesLocked(s.entries, query, limit), true, nil
+}
+
+func matchSoulEntriesLocked(entries []SoulShardEntry, query string, limit int) []SoulShardEntry {
+	if len(entries) == 0 || limit <= 0 {
+		return nil
+	}
+	tokens := tokenizeCompanionSearchQuery(query)
+	if len(tokens) == 0 {
+		n := min(limit, len(entries))
+		out := make([]SoulShardEntry, 0, n)
+		for i := len(entries) - 1; i >= 0 && len(out) < n; i-- {
+			out = append(out, cloneSoulShardEntry(entries[i]))
+		}
+		return out
+	}
+
+	type scored struct {
+		entry SoulShardEntry
+		score int
+		idx   int
+	}
+	var matches []scored
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		haystack := strings.ToLower(e.Content + " " + e.Kind + " " + strings.Join(e.Tags, " "))
+		score := 0
+		for _, tok := range tokens {
+			if strings.Contains(haystack, tok) {
+				score++
+			}
+		}
+		if score > 0 {
+			matches = append(matches, scored{entry: e, score: score, idx: i})
+		}
+	}
+	if len(matches) == 0 {
+		return nil
+	}
+	sort.SliceStable(matches, func(i, j int) bool {
+		if matches[i].score != matches[j].score {
+			return matches[i].score > matches[j].score
+		}
+		return matches[i].idx > matches[j].idx
+	})
+	n := min(limit, len(matches))
+	out := make([]SoulShardEntry, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, cloneSoulShardEntry(matches[i].entry))
+	}
+	return out
+}
+
+func cloneSoulShardEntry(e SoulShardEntry) SoulShardEntry {
+	if len(e.Tags) > 0 {
+		e.Tags = append([]string(nil), e.Tags...)
+	}
+	return e
+}
+
+func tokenizeCompanionSearchQuery(raw string) []string {
+	var tokens []string
+	seen := make(map[string]struct{})
+	var cur []rune
+	flush := func() {
+		if len(cur) == 0 {
+			return
+		}
+		tok := strings.ToLower(string(cur))
+		cur = cur[:0]
+		if _, dup := seen[tok]; !dup {
+			seen[tok] = struct{}{}
+			tokens = append(tokens, tok)
+		}
+	}
+	for _, r := range raw {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-' {
+			cur = append(cur, r)
+		} else {
+			flush()
+		}
+	}
+	flush()
+	return tokens
 }
 
 func (s *CompanionSoulStore) loadExistingColdLocked(root, soulID string) error {
@@ -1138,10 +1264,11 @@ type CompanionMemory struct {
 
 	soul *CompanionSoulStore
 
-	epMu       sync.Mutex
-	episodes   *CompanionEpisodesStore
-	epClosed   bool
-	epIdleWait time.Duration
+	epMu          sync.Mutex
+	episodes      *CompanionEpisodesStore
+	epClosed      bool
+	epAbsentKnown bool
+	epIdleWait    time.Duration
 }
 
 // NewCompanionMemory creates the daemon's companion memory coordinator.
@@ -1190,7 +1317,48 @@ func (m *CompanionMemory) Episodes() (*CompanionEpisodesStore, error) {
 		return nil, err
 	}
 	m.episodes = store
+	m.epAbsentKnown = false
 	return store, nil
+}
+
+// EpisodesIfPresent returns the held Local Episodes store when already open or
+// when companion-episodes.sqlite already exists on disk. Unlike Episodes(), it
+// never creates a new SQLite file on a read-only wake/recall, and caches
+// absence in RAM so repeated warm wakes incur zero disk stat calls.
+func (m *CompanionMemory) EpisodesIfPresent() (*CompanionEpisodesStore, bool, error) {
+	if m == nil {
+		return nil, false, nil
+	}
+	m.epMu.Lock()
+	if m.epClosed {
+		m.epMu.Unlock()
+		return nil, false, errCompanionEpisodesClosed
+	}
+	if m.episodes != nil {
+		ep := m.episodes
+		m.epMu.Unlock()
+		return ep, true, nil
+	}
+	if m.epAbsentKnown || strings.TrimSpace(m.stateDir) == "" {
+		m.epMu.Unlock()
+		return nil, false, nil
+	}
+	dbPath := filepath.Join(m.stateDir, companionEpisodesDBName)
+	if _, err := os.Stat(dbPath); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			m.epAbsentKnown = true
+			m.epMu.Unlock()
+			return nil, false, nil
+		}
+		m.epMu.Unlock()
+		return nil, false, err
+	}
+	m.epMu.Unlock()
+	ep, err := m.Episodes()
+	if err != nil {
+		return nil, false, err
+	}
+	return ep, true, nil
 }
 
 // Close closes the held SQLite episodes handle (if opened) during daemon drain.
