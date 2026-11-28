@@ -526,15 +526,11 @@ func (r *Runner) finishMCPRejoin() {
 	r.rejoinOnce.Do(func() { close(r.rejoined) })
 }
 
-// durableDropEnv names parent-harness session prefixes that a durable
-// in-daemon session must not inherit from the daemon's own environment.
-var durableDropEnv = []string{"CLAUDE", "CODEX_", "PI_", "ORCA_", "WS_PI_"}
-
 // durableEnv returns base without inherited ws session identity or parent
 // harness session variables, keeping user state such as PATH, HOME,
 // USERPROFILE, WS_CACHE_HOME, and WS_CONFIG_HOME.
 func durableEnv(base []string) []string {
-	return harnessEnv(wsharnessenv.Drop(base), durableDropEnv, nil, nil)
+	return wsharnessenv.DropDurable(base)
 }
 
 // mcpHello is the hello the stdio launcher would have sent for a harness
