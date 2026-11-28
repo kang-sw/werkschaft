@@ -803,6 +803,7 @@
       auFailedJobs = [];
       auFetchQueue = Promise.resolve();
       auEventsById = Object.create(null);
+      auPreviewCache.clear();
       auScheduleReconcile();
       if (oldest) auInitialSync();
     });
@@ -821,44 +822,92 @@
       });
     }
 
+    // Completed calls are immutable, so their fetched input/output preview is
+    // kept by call id (bounded, least recently used first out). A details that
+    // is rendered anew, or opened again, applies it synchronously: no fetch and
+    // no frame in which the preview is missing.
+    var AU_PREVIEW_CAP = 48, auPreviewCache = new Map();
+    function auPreviewGet(call) {
+      var v = auPreviewCache.get(call);
+      if (v) { auPreviewCache.delete(call); auPreviewCache.set(call, v); }
+      return v || null;
+    }
+    function auPreviewPut(call, v) {
+      auPreviewCache.delete(call);
+      auPreviewCache.set(call, v);
+      while (auPreviewCache.size > AU_PREVIEW_CAP) auPreviewCache.delete(auPreviewCache.keys().next().value);
+    }
+
+    // auApplyPreview writes parts ([input, output]) into detail, touching only
+    // what differs so an update of an open preview never changes its height
+    // twice. It reports whether the DOM changed.
+    function auApplyPreview(detail, summary, parts) {
+      var input = detail.querySelector(".au-call-input"), changed = false;
+      if (parts[0]) {
+        if (!input) {
+          input = doc.createElement("pre");
+          input.className = "au-call-input";
+          detail.insertBefore(input, summary.nextSibling);
+          changed = true;
+        }
+        if (input.textContent !== parts[0]) { input.textContent = parts[0]; changed = true; }
+      }
+      if (parts[1]) {
+        var text = wsT("js.audit.tab.out") + "\n" + parts[1];
+        var output = detail.querySelector(".au-call-output");
+        if (!output) {
+          output = doc.createElement("pre");
+          output.className = "au-call-output";
+          detail.insertBefore(output, auDirectItems(detail));
+          changed = true;
+        }
+        if (output.textContent !== text) { output.textContent = text; changed = true; }
+      }
+      detail.setAttribute("data-au-preview", "");
+      if (changed && detail.open && typeof stick !== "undefined" && stick && typeof pinConvo === "function") pinConvo();
+      return changed;
+    }
+
     var auInlinePending = new WeakSet();
-    doc.addEventListener("toggle", function (e) {
-      var detail = e.target;
+    function auLoadPreview(detail) {
       if (!detail.matches || !detail.matches(".au-call-details[open]") ||
           detail.hasAttribute("data-au-preview") || auInlinePending.has(detail)) return;
       var summary = detail.querySelector(".au-row[data-call]");
       if (!summary) return;
+      var call = summary.getAttribute("data-call"), cached = auPreviewGet(call);
+      if (cached) { auApplyPreview(detail, summary, cached); return; }
       auInlinePending.add(detail);
-      var call = summary.getAttribute("data-call");
-      var base = "/s/" + encodeURIComponent(auRowsRid) + "/audit";
+      var base = "/s/" + encodeURIComponent(auRowsRid) + "/audit", settled = false;
       auInlineJSON(base + "/events?call=" + encodeURIComponent(call)).then(function (bundle) {
         if (!bundle || !detail.isConnected) return;
         var result = (bundle.events || []).find(function (ev) { return auIsResultSummary(ev, call); });
+        settled = !!result;
         return Promise.all([auInlineCallBody(base, bundle.call, "in"), auInlineCallBody(base, result, "out")]);
       }).then(function (parts) {
         if (!parts || !detail.isConnected) return;
-        var input = detail.querySelector(".au-call-input"), changed = false;
-        if (parts[0]) {
-          if (!input) {
-            input = doc.createElement("pre");
-            input.className = "au-call-input";
-            detail.insertBefore(input, summary.nextSibling);
-          }
-          if (input.textContent !== parts[0]) { input.textContent = parts[0]; changed = true; }
-        }
-        if (parts[1]) {
-          var output = doc.createElement("pre");
-          output.className = "au-call-output";
-          output.textContent = wsT("js.audit.tab.out") + "\n" + parts[1];
-          detail.insertBefore(output, auDirectItems(detail));
-          changed = true;
-        }
-        detail.setAttribute("data-au-preview", "");
-        if (changed && detail.open && typeof stick !== "undefined" && stick && typeof pinConvo === "function") pinConvo();
+        auApplyPreview(detail, summary, parts);
+        // A call without a result is still running: remember to read its
+        // output once the live turn row reports it complete.
+        if (settled) { detail.removeAttribute("data-au-out-pending"); auPreviewPut(call, parts); }
+        else detail.setAttribute("data-au-out-pending", "");
       }).catch(function () {
         // A later open retries a failed bundle or body.
       }).finally(function () { auInlinePending.delete(detail); });
-    }, true);
+    }
+    doc.addEventListener("toggle", function (e) { auLoadPreview(e.target); }, true);
+    // The conversation merge keeps an open call's details alive and syncs its
+    // summary in place. A call that was running when its preview loaded has no
+    // output yet; once its summary shows a duration the output is read, in
+    // place, beside the input already shown.
+    doc.addEventListener("ws-call-details-updated", function (e) {
+      var detail = e.detail && e.detail.el;
+      if (!detail || !detail.hasAttribute || !detail.hasAttribute("data-au-out-pending")) return;
+      var dur = detail.querySelector(".au-dur");
+      if (!dur || !dur.textContent.trim()) return;
+      detail.removeAttribute("data-au-out-pending");
+      detail.removeAttribute("data-au-preview");
+      auLoadPreview(detail);
+    });
 
     doc.addEventListener("ws-approval-rows-changed", auScheduleReconcile);
     var liveRegion = doc.getElementById("r-convlive");

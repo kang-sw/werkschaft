@@ -80,6 +80,66 @@
     }
     return n;
   }
+  // A turn summary's data-turn-rev moves on nearly every event of a running
+  // turn, so its node is replaced often. The tool-call details inside it carry
+  // reader state the server markup cannot (the open preview with its fetched
+  // input/output, the audit rows reconciled into it, scroll position), and
+  // rebuilding them re-fires toggle, refetches the preview and collapses then
+  // regrows the row. graftLiveCalls moves each live details[data-key] of the
+  // outgoing node into the incoming one, in place of its fresh twin, after
+  // syncing the summary in place; calls new to the turn stay fresh markup.
+  function callSummary(d) {
+    var s = d.firstElementChild;
+    return s && s.tagName === "SUMMARY" ? s : null;
+  }
+  function childByClass(el, cls) {
+    for (var c = el.firstElementChild; c; c = c.nextElementSibling) if (c.classList && c.classList.contains(cls)) return c;
+    return null;
+  }
+  // syncCallSummary patches the live summary to the fresh one field by
+  // field: status class, icon, name, and the duration and token cells. The
+  // approval badge cell and the keyboard cursor class belong to the live node.
+  function syncCallSummary(cur, fresh) {
+    var changed = false, cls = fresh.getAttribute("class") || "";
+    if (cur.classList.contains("au-cur")) cls += " au-cur";
+    if ((cur.getAttribute("class") || "") !== cls) { cur.setAttribute("class", cls); changed = true; }
+    [".row-icon", ".row-content", ".au-dur", ".au-tok"].forEach(function (sel) {
+      var o = cur.querySelector(sel), f = fresh.querySelector(sel);
+      if (o && f && o.outerHTML !== f.outerHTML) { o.parentNode.replaceChild(f, o); changed = true; }
+    });
+    return changed;
+  }
+  function syncCallDetails(cur, fresh) {
+    var cs = callSummary(cur), fs = callSummary(fresh);
+    if (!cs || !fs) return;
+    var changed = syncCallSummary(cs, fs);
+    // A preview already loaded in the live node may be longer than the
+    // server's argument preview; only an input it never had is added.
+    var fin = childByClass(fresh, "au-call-input");
+    if (fin && !childByClass(cur, "au-call-input")) { cur.insertBefore(fin, cs.nextSibling); changed = true; }
+    if (changed && cur.hasAttribute("data-au-out-pending")) emitAuditEvent("ws-call-details-updated", { el: cur });
+  }
+  function graftLiveCalls(old, n) {
+    if (!old.querySelectorAll || !n.querySelectorAll) return;
+    var sel = "details.au-call-details[data-key]";
+    var live = old.querySelectorAll(sel), byKey = Object.create(null), i;
+    var oldItems = childByClass(old, "conv-audit-items"), newItems = childByClass(n, "conv-audit-items");
+    // A completed turn's own audit rows (system events, turn references).
+    if (oldItems && newItems && oldItems !== newItems) n.replaceChild(oldItems, newItems);
+    if (!live.length) return;
+    for (i = 0; i < live.length; i++) {
+      var k = live[i].getAttribute("data-key");
+      if (!byKey[k]) byKey[k] = live[i];
+    }
+    var fresh = n.querySelectorAll(sel);
+    for (i = 0; i < fresh.length; i++) {
+      var f = fresh[i], cur = byKey[f.getAttribute("data-key")];
+      if (!cur || cur === f) continue;
+      delete byKey[f.getAttribute("data-key")];
+      syncCallDetails(cur, f);
+      f.parentNode.replaceChild(cur, f);
+    }
+  }
   // mergeEntries inserts each node of src whose name box lacks at its sorted
   // place and returns inserted/replaced nodes, in order. Existing entries
   // stay put unless their mail-wake presentation changes: a hidden mail
@@ -101,6 +161,7 @@
               old.getAttribute("data-turn-live-absorbed") === n.getAttribute("data-turn-live-absorbed") &&
               old.getAttribute("data-conv-turn") === n.getAttribute("data-conv-turn") &&
               old.getAttribute("data-turn-rev") === n.getAttribute("data-turn-rev")) return;
+          graftLiveCalls(old, n);
           box.replaceChild(n, old);
         } else {
           // New entries are usually the newest (live) or the oldest (history),
