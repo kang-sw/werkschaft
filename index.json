@@ -520,7 +520,14 @@
       "registered_at": "2026-11-28T00:24:19Z"
     },
     "261128-feat-ws-dashboard-control-mcp-api": {
-      "registered_at": "2026-11-28T01:51:40Z"
+      "registered_at": "2026-11-28T01:51:40Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-28T02:06:37Z"
+      }
     },
     "261128-feat-ws-dashboard-ide-shell-overhaul": {
       "registered_at": "2026-11-28T01:59:43Z"
