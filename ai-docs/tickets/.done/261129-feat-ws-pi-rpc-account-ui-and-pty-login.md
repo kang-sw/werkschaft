@@ -6,6 +6,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 66adc2d8900573a3
 sage-review-completeness-reviewed: 66adc2d8900573a3
+completed: 2026-11-29
 ---
 
 # Managed Pi (pi-rpc) Account UI, Ephemeral PTY Login, and Harness Integration
@@ -237,6 +238,23 @@ Wire the shared managed Pi runtime across daemon and runner, fix `probePiRPCChoi
        - `/api/account/pi/login/*` end-to-end with fake PTY login script + real `wsholder.Manager`: start -> WS `hello`/`out`/`in`/`size`/`exit` -> staging dir protected by `RegisterTempSlotDir` -> `SlotAuthReady` validation -> `AddSlot` commit -> choices invalidation; plus cancel cleanup (temp dir removed), failed/unready exit cleanup, single-attempt `409`, WS disconnect grace cleanup, existing-slot re-auth (never deletes dir), `POST /api/account/slots/remove` returning `409 login_in_progress` while an `existing: true` login targets that slot, startup sweep stopping crash-orphaned `kind: "pi-login"` holders, invalid provider rejection, and `Daemon.Close()` holder cleanup.
    - Run `go test -race ./internal/wsagent -run 'TestPiRPC|TestSupport|TestCommonCodeHasNoHarnessNameBranch|TestHarnessNameScan'`, `go test -race ./internal/wscred/...`, `go test -race ./internal/wsdashboard -run 'TestAccount|TestPiAccount|TestPiLogin|TestPiRuntime'`, and `GOOS=windows go vet ./...`.
 
+### Result (6548955a) - 2026-11-29
+
+- **What landed:**
+  - Fixed `probePiRPCChoices` error propagation (`internal/wsagent/pirpc.go`) so `resp.Success == false` or premature exit returns a non-nil error (cached under `choicesFailTTL` 30s instead of `choicesTTL` 5m), exported `wsagent.ClearPiRPCChoices(home)` and `(*wsagent.Support).InvalidateChoices(harness)`.
+  - Hoisted shared `wspiruntime.NewManager` in `cmd/ws-mcp/dashboard.go`, wired `DaemonOptions.PiRuntime` and `DaemonOptions.OnPiRuntimeChanged` (invalidating both caches with `""` to keep `(1881)` clean), added daemon startup sweep for crash-orphaned `kind: "pi-login"` holders (`daemon_start.go`), and added `Daemon.Close()` teardown for active installs and PTY logins (`daemon_runtime.go`).
+  - Extended `wscred.SlotAuthReady("pi-rpc", dir)` (`internal/wscred/slot_login.go`) to verify `<dir>/auth.json` has at least one provider object with a non-empty string field without leaking secrets, while keeping `SlotLoginHarnesses()` unchanged (`["codex", "claude"]`).
+  - Extended `/api/account/status` (`account_routes.go`) with additive `pi_runtime`, `pi_login`, and `slots["pi-rpc"]` (T0), guarded `handleAccountSlotsRemove` (`account_slots_routes.go`) with `409 login_in_progress`, and added adapter-owned `account_pi_routes.go` and `account_pi_login.go` implementing local-only `/api/account/pi/runtime/{install,uninstall}` and `/api/account/pi/login/{start,status,complete,cancel,ws}` over `wsholder` PTY + `RegisterTempSlotDir`.
+  - Updated `internal/wsagent/harness_name_scan_test.go` (`adapterOwned` regex + two `classExternal` struct-tag allowlist pins) and added unit/integration tests in `internal/wsagent/pirpc_test.go`, `internal/wscred/account_slots_pirpc_test.go`, and `internal/wsdashboard/account_pi_routes_test.go`.
+- **Verification:**
+  - `go test -race ./internal/wsdashboard -run 'TestAccount|TestPiAccount|TestPiLogin|TestPiRuntime'`: pass (`6.602s`)
+  - `go test -race ./internal/wsagent -run 'TestPiRPC|TestSupport|TestCommonCodeHasNoHarnessNameBranch|TestHarnessNameScan'`: pass (`19.744s`)
+  - `go test -race ./internal/wscred/...`: pass
+  - `GOOS=windows go vet ./...`: pass
+- **Decisions:**
+  - Cleared `piLogin.active` synchronously inside `finalizeAttempt` before emitting completion/removal notifications so staging directory cleanup completes deterministically before status observes `"failed"`/`"cancelled"`.
+  - Added nil-broker safety check in `Daemon.accountChanged()` for unit-test fixtures that construct a `Daemon` without starting SSE brokers.
+
 ### Phase 2: Frontend Settings UI, Ephemeral `xterm.js` Modal, Topbar/Settings Wiring, and 11-Locale i18n
 
 Build the Settings -> Account Pi UI and ephemeral `xterm.js` PTY login modal on top of Phase 1's endpoints, wire topbar switching, harness badges, tier/settings ordering, and all 11 locale tables.
@@ -308,3 +326,26 @@ Build the Settings -> Account Pi UI and ephemeral `xterm.js` PTY login modal on 
      - `go test -race ./internal/wsdashboard -run 'TestDashboardAssetSourceAssembly|TestAccount|TestPiAccount|TestPiLogin|TestPiRuntime|TestSettingsPage'`
      - `go test -race ./internal/wsagent -run 'TestPiRPC|TestSupport|TestCommonCodeHasNoHarnessNameBranch|TestHarnessNameScan'`
      - `GOOS=windows go vet ./...`
+
+### Result (01d693b2) - 2026-11-29
+
+- **What landed (`6d7b6f2a`, review follow-up `01d693b2`):**
+  - Plumbed `XtermFile` (`data-term` + `FrameXtermFile` stylesheet) and `hasAccount` (`d.piRuntime != nil`) through `pages.go`, `config_routes.go`, and `dashboard.tmpl` (`config-settings`), and registered `dashboard-settings-account-pirpc.js` in `SettingsScript`.
+  - Added modular `assets/dashboard-settings-account-pirpc.js` (`980` lines, `< 1,000`), wired into `dashboard-settings-account.js` as Group 3 (`data-account-group="pirpc"`), with managed Pi runtime install/reinstall/progress (`transform: scaleX(...)`)/uninstall (`WsHoldConfirm` 1.5s holdBar), multi-slot switch/rename/remove/Terminal Login, lazy-loaded `xterm.js` + `FitAddon` ephemeral PTY modal, and `WsSettingsCombobox.invalidateChoices()` invalidation.
+  - Filtered `"pi-rpc"` out of Group 1 (`dashboard-settings-account-harness.js`), added Pi error code mappings (`dashboard-settings-account-shared.js`), added borderless tonal CSS with zero `:has()` (`dashboard-settings-account.css`), added `.hb[data-h="pi-rpc"]` (`dashboard.css`) and `.up-hb[data-k="pi-rpc"]` (`usage.css`), isolated `pi-rpc` from quota `DEFS`/dimming while rendering a compact multi-slot switcher row and session rows (`usage-charts.js`, `usage-popover.js`, `usage.js`), updated `tierHarnessOrder`/`harnessChoices`/`bucketName` (`dashboard-settings.js`), and added translated keys across all 11 locale tables (`internal/wsi18n/tables/*.json`).
+  - Added/extended tests in `frontend-settings-account-rework.test.js`, `usage.test.js`, and `account_pi_routes_test.go` (`TestSettingsPageEmitsXtermAssetAndAccountFlagForPiRuntime`).
+  - Resolved both Minor findings from `code-review-lite` (`01d693b2`): closed runtime install/uninstall vs active `pi-login` busy/TOCTOU windows in `account_pi_routes.go` (preserving `piLogin.mu -> piRuntimeState.mu` lock order) and deduplicated `pollExitOutcome` timers in `dashboard-settings-account-pirpc.js`.
+- **Verification:**
+  - `node --test` (8 frontend suites including `frontend-settings-account-rework.test.js` and `usage.test.js`): 87/87 pass
+  - `go test -race ./internal/wsi18n/...`: pass (`51.185s`)
+  - `go test -race ./internal/wsdashboard -run 'TestDashboardAssetSourceAssembly|TestAccount|TestPiAccount|TestPiLogin|TestPiRuntime|TestSettingsPage'`: pass (`6.783s`)
+  - `go test -race ./internal/wsagent -run 'TestPiRPC|TestSupport|TestCommonCodeHasNoHarnessNameBranch|TestHarnessNameScan'`: pass (`20.075s`)
+  - `go test -race ./internal/wscred/...`: pass (`3.660s`)
+  - `GOOS=windows go vet ./...`: pass
+- **Decisions:**
+  - Used `js.settings.save` and `js.settings.account.cancel` in `dashboard-settings-account-pirpc.js` rather than `js.card.close` so the Settings page client i18n table remains strictly scoped to `js.settings.*` (enforced by `TestSettingsPageCarriesTheCompanionAgentsTermsNotice`).
+
+
+## Resolution (2026-11-29)
+
+Completed Phase 1 (shared managed Pi runtime manager, probePiRPCChoices error fix, SlotAuthReady, local-only runtime & ephemeral wsholder PTY login endpoints) and Phase 2 (Settings -> Account Group 3 Pi card, lazy-loaded xterm.js PTY login modal, topbar switcher/session isolation, harness badges, tier ordering, 11-locale i18n, and full frontend/Go test coverage). Resolved both Minor code-review-lite findings in 01d693b2.
