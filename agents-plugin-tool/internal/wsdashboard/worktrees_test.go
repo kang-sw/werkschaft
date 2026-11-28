@@ -235,16 +235,16 @@ func TestByteSize(t *testing.T) {
 }
 
 // TestWorktreesCardInTheDrawer pins the drawer's pooled-worktree card: on a
-// session page of a daemon that reads pools, after the panels inside the
-// drawer, its cleanup button live with an adapter and disabled
-// with the reason without one; a daemon without a worktree source has no
-// card.
+// session page of a daemon that reads pools, inside the drawer's body (the
+// panels region lives in the Workpanel, not the drawer), its cleanup button
+// live with an adapter and disabled with the reason without one; a daemon
+// without a worktree source has no card.
 func TestWorktreesCardInTheDrawer(t *testing.T) {
 	f, _, _, _ := worktreeFixture(t)
 	_, live := get(t, f.base+"/s/livesession?frame=1")
-	panels, card, end := strings.Index(live, `data-region="panels"`), strings.Index(live, `id="p-worktrees"`), strings.Index(live, `<button type="button" class="dr-handle"`)
-	if panels < 0 || card < panels || end < card {
-		t.Fatalf("drawer order: panels %d, worktrees %d, handle %d", panels, card, end)
+	body, card, end := strings.Index(live, `id="drbody"`), strings.Index(live, `id="p-worktrees"`), strings.Index(live, `<button type="button" class="dr-handle"`)
+	if body < 0 || card < body || end < card {
+		t.Fatalf("drawer order: drbody %d, worktrees %d, handle %d", body, card, end)
 	}
 	assertSettingsOwner(t, live, false)
 	for _, want := range []string{`id="wtlist"`, `id="wtcount"`, `<button type="button" class="btn wtclean" id="wtclean" title="ask the session to clean up unused worktrees">Request cleanup</button>`} {
