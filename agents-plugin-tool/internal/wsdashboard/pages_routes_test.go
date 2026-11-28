@@ -214,6 +214,60 @@ func TestMermaidAssetIsServedBesideThePages(t *testing.T) {
 	}
 }
 
+func TestSessionCompactFrameRoute(t *testing.T) {
+	f := startPageFixture(t)
+	htmlTag := func(doc string) string {
+		i := strings.Index(doc, "<html")
+		if i < 0 {
+			return ""
+		}
+		j := strings.IndexByte(doc[i:], '>')
+		if j < 0 {
+			return ""
+		}
+		return doc[i : i+j+1]
+	}
+
+	// Framed + compact=1 emits data-frame="1" and data-compact="1" with frame-ancestors 'self'.
+	resp, err := testClient().Get(f.base + "/s/livesession?frame=1&compact=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	body := string(bodyBytes)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /s/livesession?frame=1&compact=1 = %d, want 200", resp.StatusCode)
+	}
+	if csp := resp.Header.Get("Content-Security-Policy"); csp != "frame-src 'self'; frame-ancestors 'self'" {
+		t.Errorf("compact frame CSP = %q, want frame-src 'self'; frame-ancestors 'self'", csp)
+	}
+	if tag := htmlTag(body); !strings.Contains(tag, `data-frame="1"`) || !strings.Contains(tag, `data-compact="1"`) {
+		t.Errorf("compact framed <html> missing data-frame/data-compact attributes: %s", tag)
+	}
+	if !strings.Contains(frameDependencies(t, body), `:root[data-compact="1"]`) {
+		t.Errorf("compact framed page stylesheet bundle missing dashboard-compact.css rules")
+	}
+
+	// Standard framed page must NOT carry data-compact="1" on <html>.
+	code, framed := get(t, f.base+"/s/livesession?frame=1")
+	if code != http.StatusOK {
+		t.Fatalf("GET /s/livesession?frame=1 = %d", code)
+	}
+	if tag := htmlTag(framed); strings.Contains(tag, `data-compact="1"`) {
+		t.Errorf("standard framed session <html> unexpectedly carried data-compact=1: %s", tag)
+	}
+
+	// Unframed ?compact=1 must NOT render compact mode on <html> (shell page is never compact).
+	code, unframed := get(t, f.base+"/s/livesession?compact=1")
+	if code != http.StatusOK {
+		t.Fatalf("GET /s/livesession?compact=1 = %d", code)
+	}
+	if tag := htmlTag(unframed); strings.Contains(tag, `data-compact="1"`) {
+		t.Errorf("unframed ?compact=1 <html> unexpectedly carried data-compact=1: %s", tag)
+	}
+}
+
 // TestFrameAssetsAreServedBesideThePages pins the shared topic-body frame
 // assets (wswhiteboard.FrameAsset): a frame's document links its stylesheet
 // and script by relative, content-hashed names instead of inlining them,

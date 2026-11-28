@@ -73,6 +73,8 @@
     let gizmoDragging = false;
     let resizeObserver = null;
     let vrmLoadToken = 0;
+    let vrmaLoadToken = 0;
+    let activeVrmaLoop = true;
 
     const gizmos = {
       group: null,
@@ -263,6 +265,7 @@
     }
 
     function disposeVrmOnly() {
+      vrmaLoadToken++;
       if (activeVrmaAction) {
         try { activeVrmaAction.stop(); } catch (_) {}
         activeVrmaAction = null;
@@ -464,7 +467,10 @@
       loader.register(p => new VRMLoaderPlugin(p));
       loader.register(p => new VRMAnimationLoaderPlugin(p));
       const gltf = await loader.parseAsync(buf.slice(0), "");
-      if (disposed || token !== vrmLoadToken) return null;
+      if (disposed || token !== vrmLoadToken) {
+        try { VRMUtils?.deepDispose?.(gltf?.userData?.vrm?.scene || gltf?.scene); } catch (_) {}
+        return null;
+      }
       const loaded = gltf.userData?.vrm;
       if (!loaded) throw new Error("Invalid VRM payload");
 
@@ -503,10 +509,13 @@
 
     async function loadVrmaBuffer(arrayBuffer, loop) {
       if (!vrm || !runtime || !mixer) return null;
+      const token = ++vrmaLoadToken;
+      const curVrm = vrm, curMixer = mixer;
       const { GLTFLoader, VRMAnimationLoaderPlugin, createVRMAnimationClip, THREE } = runtime;
       const loader = new GLTFLoader();
       loader.register(p => new VRMAnimationLoaderPlugin(p));
       const gltf = await loader.parseAsync(arrayBuffer.slice(0), "");
+      if (disposed || token !== vrmaLoadToken || vrm !== curVrm || mixer !== curMixer) return null;
       const anims = gltf.userData?.vrmAnimations;
       if (!anims || !anims.length) throw new Error("No VRMC_vrm_animation tracks in file");
       const clip = createVRMAnimationClip(anims[0], vrm);
@@ -514,17 +523,35 @@
         try { activeVrmaAction.stop(); } catch (_) {}
       }
       activeVrmaClip = clip;
+      activeVrmaLoop = loop !== false;
       activeVrmaAction = mixer.clipAction(clip);
       activeVrmaAction.reset();
-      activeVrmaAction.setLoop(loop === false ? THREE.LoopOnce : THREE.LoopRepeat, loop === false ? 1 : Infinity);
-      activeVrmaAction.clampWhenFinished = loop === false;
+      activeVrmaAction.setLoop?.(activeVrmaLoop ? THREE.LoopRepeat : THREE.LoopOnce, activeVrmaLoop ? Infinity : 1);
+      activeVrmaAction.clampWhenFinished = !activeVrmaLoop;
+      activeVrmaAction.paused = false;
       activeVrmaAction.play();
+      mixer.update(0);
+      vrm.update(0);
       playingKind = "vrma";
       markActive();
       return { duration_s: Number((clip.duration || 1).toFixed(2)) };
     }
 
+    function setVrmaLoop(loop) {
+      activeVrmaLoop = !!loop;
+      if (!activeVrmaAction || !runtime?.THREE) return;
+      const { THREE } = runtime;
+      activeVrmaAction.setLoop?.(activeVrmaLoop ? THREE.LoopRepeat : THREE.LoopOnce, activeVrmaLoop ? Infinity : 1);
+      activeVrmaAction.clampWhenFinished = !activeVrmaLoop;
+      if (activeVrmaLoop && activeVrmaAction.paused) {
+        activeVrmaAction.paused = false;
+        activeVrmaAction.play?.();
+      }
+      markActive();
+    }
+
     function stopVrma() {
+      vrmaLoadToken++;
       if (activeVrmaAction) {
         try { activeVrmaAction.stop(); } catch (_) {}
         activeVrmaAction = null;
@@ -729,7 +756,7 @@
       gizmos.prop.visible = activeMode === "prop" && activePropId !== "none";
     }
 
-    function syncGizmoAttachment() {
+    function syncGizmoAttachment(triggerActive = true) {
       if (!transform) return;
       syncGizmoPositions();
       let target = null;
@@ -741,7 +768,7 @@
       if (activeMode === "prop" && activePropId !== "none") target = gizmos.prop;
       if (target && target.visible) transform.attach(target);
       else transform.detach();
-      markActive();
+      if (triggerActive !== false) markActive();
     }
 
     function handleTransformDrag() {
@@ -857,8 +884,27 @@
       if (orbit) orbit.update();
       if (isPlaying) {
         if (playingKind === "vrma" && mixer && vrm) {
-          mixer.update(dt * (opts.getSpeed ? opts.getSpeed() : 1));
-          vrm.update(dt);
+          const speed = opts.getSpeed ? opts.getSpeed() : 1;
+          if (activeVrmaAction) {
+            if (activeVrmaAction.paused) activeVrmaAction.paused = false;
+            mixer.update(dt * speed);
+            vrm.update(dt);
+            const dur = Math.max(0.01, Number(activeVrmaClip?.duration) || 1);
+            const curT = Number.isFinite(activeVrmaAction.time) ? activeVrmaAction.time : 0;
+            const notRunning = typeof activeVrmaAction.isRunning === "function" && !activeVrmaAction.isRunning();
+            const finished = !activeVrmaLoop && (notRunning || curT >= dur - 1e-4);
+            const reportedT = finished ? dur : (activeVrmaLoop ? (((curT % dur) + dur) % dur) : clamp(curT, 0, dur));
+            if (finished) {
+              isPlaying = false;
+              activeUntil = 0;
+              syncGizmoAttachment(false);
+            }
+            opts.onPlayStep?.(reportedT, finished, "vrma");
+          } else {
+            isPlaying = false;
+            activeUntil = 0;
+            opts.onPlayStep?.(0, true, "vrma");
+          }
         } else {
           opts.onPlayStep?.(dt);
         }
@@ -876,6 +922,7 @@
       init,
       loadVrm,
       loadVrmaBuffer,
+      setVrmaLoop,
       stopVrma,
       applyClipSample,
       setMode(mode) { activeMode = mode; syncGizmoAttachment(); },
@@ -898,13 +945,23 @@
         markActive();
       },
       setPlaying(flag, kind) {
+        const wasPlaying = isPlaying;
         isPlaying = !!flag;
         if (kind) playingKind = kind;
-        syncGizmoAttachment();
+        if (isPlaying && playingKind === "vrma" && activeVrmaAction) {
+          const dur = Number(activeVrmaClip?.duration) || 0;
+          if (activeVrmaAction.paused || (!activeVrmaLoop && dur > 0 && activeVrmaAction.time >= dur - 1e-4)) {
+            activeVrmaAction.paused = false;
+            if (!activeVrmaLoop && dur > 0 && activeVrmaAction.time >= dur - 1e-4) activeVrmaAction.time = 0;
+            activeVrmaAction.play?.();
+          }
+        }
+        if (wasPlaying !== isPlaying) syncGizmoAttachment(isPlaying);
         if (isPlaying) markActive();
       },
       seekVrma(timeSec) {
         if (activeVrmaAction && mixer && vrm) {
+          activeVrmaAction.paused = false;
           activeVrmaAction.time = Number(timeSec) || 0;
           mixer.update(0);
           vrm.update(0);
@@ -931,6 +988,7 @@
           playing: isPlaying,
           playingKind,
           vrmaLoaded: !!activeVrmaClip,
+          vrmaLoop: activeVrmaLoop,
           tetherCount: lastTethers.length
         };
       },

@@ -195,7 +195,7 @@
       "pattern": "^([a-z0-9][a-z0-9_:-]{0,63}(\\.[a-z0-9][a-z0-9_-]{0,15})?)?$",
       "default": "",
       "default_scope": "global",
-      "description": "Agent tier for the Lightweight (body) companion session: empty or auto picks the small tier on the first available harness, or name <harness>.<tier>, a bare tier, an agent.tier_aliases name, or an agent.tier_routing token. Applies at the next companion launch; a value that cannot launch falls back to auto with a reason shown in Settings. Only the global value applies."
+      "description": "Agent tier for the Lightweight Cosmetic Puppeteer (body) that drives VRM reactions and stage speech quips: empty or auto picks the small tier on the first available harness, or name <harness>.<tier>, a bare tier, an agent.tier_aliases name, or an agent.tier_routing token. Applies at the next companion reaction; a value that cannot launch falls back to auto with a reason shown in Settings. Only the global value applies."
     },
     {
       "key": "dashboard.companion_work_tier",
@@ -203,7 +203,7 @@
       "pattern": "^([a-z0-9][a-z0-9_:-]{0,63}(\\.[a-z0-9][a-z0-9_-]{0,15})?)?$",
       "default": "",
       "default_scope": "global",
-      "description": "Agent tier for the Work companion session: empty or auto picks the medium tier on the first available harness, or name <harness>.<tier>, a bare tier, an agent.tier_aliases name, or an agent.tier_routing token. Applies at the next companion launch; a value that cannot launch falls back to auto with a reason shown in Settings. Only the global value applies."
+      "description": "Agent tier for the High-Tier Mobile Full Lead (brain) powering Companion Messenger, Soul/Episodes memory, and background subagent orchestration: empty or auto picks the medium tier on the first available harness, or name <harness>.<tier>, a bare tier, an agent.tier_aliases name, or an agent.tier_routing token. Applies at the next companion handoff or launch; a value that cannot launch falls back to auto with a reason shown in Settings. Only the global value applies."
     },
     {
       "key": "dashboard.voice_backend",

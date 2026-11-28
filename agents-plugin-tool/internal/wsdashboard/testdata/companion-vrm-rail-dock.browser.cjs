@@ -116,6 +116,12 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
         slotBorderTopWidth: slotStyle.borderTopWidth,
         slotBorderBottomWidth: slotStyle.borderBottomWidth,
         slotBgImage: slotStyle.backgroundImage,
+        slotBgColor: slotStyle.backgroundColor,
+        slotPointerEvents: slotStyle.pointerEvents,
+        hitPointerEvents: hit ? getComputedStyle(hit).pointerEvents : '',
+        charPointerEvents: document.querySelector('.ws-companion-character') ? getComputedStyle(document.querySelector('.ws-companion-character')).pointerEvents : '',
+        canvasPointerEvents: document.querySelector('.ws-companion-vrm-canvas') ? getComputedStyle(document.querySelector('.ws-companion-vrm-canvas')).pointerEvents : '',
+        rlistPaddingBottom: rlist ? parseFloat(getComputedStyle(rlist).paddingBottom) || 0 : 0,
         panelBg: panelStyle.backgroundColor,
         railBg: railStyle.backgroundColor,
         railRect: rect(rail),
@@ -125,6 +131,8 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
         rfootRect: rect(rfoot),
         slotRect: rect(slot),
         hitRect: rect(hit),
+        laptopHitRect: rect(document.querySelector('.ws-companion-laptop-hit')),
+        laptopHitSource: document.querySelector('.ws-companion-laptop-hit')?.dataset?.source || '',
         stage: window.WsCompanion?.debugStage?.() || null
       };
     });
@@ -147,28 +155,38 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
       return { x: Math.max(0, Math.floor(r.left - 8)), y: 0, width: Math.ceil(r.width + 18), height: window.innerHeight };
     });
 
-    // 1. VRM 1.0 & VRM 0.x in 3-column (1680x960), Unregistered workspaces collapsed:
-    //    upper session panel (.rlist + details.rws-unreg + .rfoot) ends cleanly above #rail-companion-slot,
-    //    and #rail-companion-slot owns the true bottom-left corner flush to the viewport bottom.
+    // 1. VRM 1.0 & VRM 0.x in 3-column (1680x960), seamless Variant A overlay:
+    //    details.rws-unreg lives inline inside #rlist right after registered workspaces,
+    //    #rlist runs the full height of the unified --wb-card rail with dynamic bottom scroll
+    //    padding (--companion-slot + 28px), and #rail-companion-slot floats transparently in the
+    //    foreground (z-index: 4, pointer-events: none) flush above the 26px bottom bar.
     await applyPack(vrm1ID);
     const collapsed = await readLayout();
-    assert.equal(collapsed.unregInsideRlist, false, 'details.rws-unreg must sit outside #rlist');
+    assert.equal(collapsed.unregInsideRlist, true, 'details.rws-unreg must sit inline inside #rlist');
     assert.equal(collapsed.unregInsidePanel, true, 'details.rws-unreg must sit inside .rail-session-panel');
     assert.equal(collapsed.rfootInsidePanel, false, 'retired .rfoot must be absent from shell .rail-session-panel');
     assert.equal(collapsed.rfootRect, null, 'retired .rfoot must not render inside shell rail');
     assert.equal(collapsed.slotInsidePanel, false, '#rail-companion-slot must sit outside .rail-session-panel as final sibling');
     assert.ok(Number(collapsed.unregCount) >= 3, `expected >= 3 pending unregistered workspaces, got ${collapsed.unregCount}`);
-    assert.ok(collapsed.slotRect.top >= collapsed.panelRect.bottom - 1,
-      `slot (${JSON.stringify(collapsed.slotRect)}) must sit below .rail-session-panel (${JSON.stringify(collapsed.panelRect)})`);
-    assert.ok(collapsed.slotRect.top >= collapsed.unregRect.bottom - 1,
-      `slot (${JSON.stringify(collapsed.slotRect)}) must sit below details.rws-unreg (${JSON.stringify(collapsed.unregRect)})`);
+    assert.ok(Math.abs(collapsed.rlistRect.bottom - collapsed.railRect.bottom) <= 2,
+      `#rlist must run full height behind #rail-companion-slot: rlist=${JSON.stringify(collapsed.rlistRect)} rail=${JSON.stringify(collapsed.railRect)}`);
+    assert.ok(collapsed.rlistPaddingBottom >= collapsed.slotRect.height + 24,
+      `#rlist padding-bottom (${collapsed.rlistPaddingBottom}) must reserve slot height (${collapsed.slotRect.height}) + clearance`);
     assert.ok(Math.abs(collapsed.slotRect.bottom - collapsed.railRect.bottom) <= 1,
       `slot must be flush to #rail bottom: slot=${JSON.stringify(collapsed.slotRect)} rail=${JSON.stringify(collapsed.railRect)}`);
     assert.ok(Math.abs(collapsed.slotRect.bottom - (collapsed.vh - 26)) <= 1,
       `slot must sit flush above the 26px bottom bar: slotBottom=${collapsed.slotRect.bottom} vh=${collapsed.vh}`);
     assert.equal(collapsed.slotBorderTopWidth, '0px', '#rail-companion-slot must be borderless');
     assert.equal(collapsed.slotBorderBottomWidth, '0px', '#rail-companion-slot must be borderless');
-    assert.equal(collapsed.railBg, 'rgba(0, 0, 0, 0)', 'outer .rail must become transparent in rail-slot mode');
+    assert.equal(collapsed.slotBgImage, 'none', '#rail-companion-slot must have no gradient backdrop');
+    assert.equal(collapsed.slotBgColor, 'rgba(0, 0, 0, 0)', '#rail-companion-slot must have transparent background');
+    assert.equal(collapsed.slotPointerEvents, 'none', '#rail-companion-slot must be pointer-events:none');
+    assert.equal(collapsed.hitPointerEvents, 'none', '.ws-companion-hit must be pointer-events:none in docked overlay');
+    assert.equal(collapsed.charPointerEvents, 'none', '.ws-companion-character must be pointer-events:none in docked overlay');
+    assert.equal(collapsed.canvasPointerEvents, 'none', '.ws-companion-vrm-canvas must be pointer-events:none');
+    assert.notEqual(collapsed.railBg, 'rgba(0, 0, 0, 0)', 'Variant A outer .rail keeps unified --wb-card background');
+    assert.ok(collapsed.laptopHitRect && collapsed.laptopHitRect.width >= 24 && collapsed.laptopHitRect.height >= 20,
+      `expected interactive .ws-companion-laptop-hit box, got ${JSON.stringify(collapsed.laptopHitRect)}`);
     assert.ok(Math.abs(collapsed.hitRect.left - collapsed.slotRect.left) <= 2 &&
       Math.abs(collapsed.hitRect.bottom - collapsed.slotRect.bottom) <= 2 &&
       Math.abs(collapsed.hitRect.width - (collapsed.slotRect.width - 4)) <= 2 &&
@@ -204,7 +222,7 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
     const scrollBefore = await page.evaluate(() => {
       const rlist = document.getElementById('rlist');
       rlist.scrollTop = rlist.scrollHeight;
-      const rows = Array.from(rlist.querySelectorAll('.rs'));
+      const rows = Array.from(rlist.querySelectorAll(':scope > section.rws .rs'));
       const last = rows[rows.length - 1];
       const lr = last.getBoundingClientRect();
       const hitEl = document.elementFromPoint(Math.floor(lr.left + lr.width / 2), Math.floor(lr.top + lr.height / 2));
@@ -216,6 +234,60 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
     });
     assert.equal(scrollBefore.overflows, true, '#rlist must overflow to verify bottom scroll');
     assert.equal(scrollBefore.clickable, true, 'last session row must be clickable above unreg/footer');
+
+    // 2a. Transparent click pass-through & wheel pass-through over #rail-companion-slot:
+    //     scroll to top so rows / unreg sit behind #rail-companion-slot, verify
+    //     elementFromPoint in the transparent upper area hits #rlist content directly
+    //     (not intercepted by Companion), and verify mouse wheel over the Companion
+    //     scrolls #rlist down and back up smoothly.
+    const passThrough = await page.evaluate(() => {
+      const rlist = document.getElementById('rlist');
+      const slot = document.getElementById('rail-companion-slot').getBoundingClientRect();
+      const laptop = document.querySelector('.ws-companion-laptop-hit').getBoundingClientRect();
+      rlist.scrollTop = 0;
+      const probeY = Math.floor(slot.top + Math.min(48, Math.max(18, (laptop.top - slot.top) * 0.45)));
+      const probeX = Math.floor(slot.left + 26);
+      const hitEl = document.elementFromPoint(probeX, probeY);
+      const row = hitEl ? hitEl.closest('.rs, .rws, .rws-unreg, #rlist') : null;
+      return {
+        probeX,
+        probeY,
+        hitTag: hitEl?.tagName || '',
+        hitClass: hitEl?.className || '',
+        hitsRlistRow: !!(row && (row === rlist || rlist.contains(row))),
+        hitsCompanion: !!(hitEl && hitEl.closest('.ws-companion')),
+        scrollBeforeWheel: rlist.scrollTop,
+        maxScroll: rlist.scrollHeight - rlist.clientHeight,
+        slotCenterX: Math.floor(slot.left + slot.width * 0.5),
+        slotCenterY: Math.floor(slot.top + 36)
+      };
+    });
+    assert.equal(passThrough.hitsCompanion, false, `upper companion area must pass through to #rlist, got ${JSON.stringify(passThrough)}`);
+    assert.equal(passThrough.hitsRlistRow, true, `probe inside upper companion area must hit #rlist content, got ${JSON.stringify(passThrough)}`);
+    await page.mouse.move(passThrough.slotCenterX, passThrough.slotCenterY);
+    await page.mouse.wheel(0, 180);
+    await page.waitForFunction(prev => document.getElementById('rlist').scrollTop > prev, passThrough.scrollBeforeWheel, { timeout: 3000 });
+    await page.waitForTimeout(180);
+    const scrollAfterWheelDown = await page.evaluate(() => document.getElementById('rlist').scrollTop);
+    assert.ok(scrollAfterWheelDown > passThrough.scrollBeforeWheel,
+      `mouse wheel down over #rail-companion-slot must scroll #rlist: before=${passThrough.scrollBeforeWheel} after=${scrollAfterWheelDown} max=${passThrough.maxScroll}`);
+    await page.mouse.wheel(0, -240);
+    await page.waitForFunction(prev => document.getElementById('rlist').scrollTop < prev, scrollAfterWheelDown, { timeout: 3000 });
+    const scrollAfterWheelUp = await page.evaluate(() => document.getElementById('rlist').scrollTop);
+    assert.ok(scrollAfterWheelUp < scrollAfterWheelDown,
+      `mouse wheel up over #rail-companion-slot must scroll #rlist back up: down=${scrollAfterWheelDown} up=${scrollAfterWheelUp}`);
+
+    // 2b. Clicking .ws-companion-laptop-hit opens Companion Messenger and toggles cleanly.
+    const laptopHitLoc = page.locator('.ws-companion-laptop-hit');
+    await laptopHitLoc.click();
+    await page.waitForFunction(() => window.WsCompanionMessenger?.isOpen?.() === true, null, { timeout: 3000 });
+    await laptopHitLoc.click();
+    await page.waitForFunction(() => window.WsCompanionMessenger?.isOpen?.() === false, null, { timeout: 3000 });
+    await page.evaluate(() => {
+      const rlist = document.getElementById('rlist');
+      rlist.scrollTop = rlist.scrollHeight;
+    });
+    await page.waitForTimeout(120);
 
     await page.locator('#rail details.rws-unreg > summary').click();
     await page.waitForTimeout(350);
@@ -229,26 +301,27 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
     assert.equal(shiftOpen.top, 0, `slot top shifted on unreg expand: ${JSON.stringify(shiftOpen)}`);
     assert.equal(shiftOpen.bottom, 0, `slot bottom shifted on unreg expand: ${JSON.stringify(shiftOpen)}`);
     assert.equal(shiftOpen.height, 0, `slot height shifted on unreg expand: ${JSON.stringify(shiftOpen)}`);
-    assert.ok(expanded.slotRect.top >= expanded.panelRect.bottom - 1,
-      `expanded .rail-session-panel must not overlap #rail-companion-slot: panel=${JSON.stringify(expanded.panelRect)} slot=${JSON.stringify(expanded.slotRect)}`);
     assert.ok(Math.abs(expanded.hitRect.bottom - expanded.slotRect.bottom) <= 1,
       `VRM hit drifted after unreg expand: hit=${JSON.stringify(expanded.hitRect)} slot=${JSON.stringify(expanded.slotRect)}`);
 
     const scrollAfterExpand = await page.evaluate(() => {
       const rlist = document.getElementById('rlist');
       rlist.scrollTop = rlist.scrollHeight;
-      const rows = Array.from(rlist.querySelectorAll('.rs'));
+      const rows = Array.from(rlist.querySelectorAll(':scope > section.rws .rs'));
       const last = rows[rows.length - 1];
       const lr = last.getBoundingClientRect();
       const ur = document.querySelector('#rail details.rws-unreg').getBoundingClientRect();
+      const sr = document.getElementById('rail-companion-slot').getBoundingClientRect();
       const hitEl = document.elementFromPoint(Math.floor(lr.left + lr.width / 2), Math.floor(lr.top + lr.height / 2));
       return {
         lastRid: last.dataset.rid,
         clickable: !!(hitEl && last.contains(hitEl)),
-        rowAboveUnreg: lr.bottom <= ur.top + 2
+        rowAboveUnreg: lr.bottom <= ur.top + 2,
+        unregAboveSlot: ur.bottom <= sr.top + 2
       };
     });
     assert.equal(scrollAfterExpand.clickable, true, 'last session row must stay clickable when .rws-unreg is expanded');
+    assert.equal(scrollAfterExpand.unregAboveSlot, true, 'max-bottom scroll must clear expanded details.rws-unreg above #rail-companion-slot');
 
     const expandedRailShot = shots ? await page.screenshot({ clip: await railFullClip() }) : null;
     const expandedFullShot = shots ? await page.screenshot() : null;
@@ -285,7 +358,7 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
     await page.waitForTimeout(250);
     const lightLayout = await readLayout();
     assert.equal(lightLayout.slotBorderTopWidth, '0px', 'light theme slot must remain borderless');
-    assert.ok(lightLayout.slotBgImage && lightLayout.slotBgImage !== 'none', 'light theme slot must render tonal surface gradient');
+    assert.equal(lightLayout.slotBgImage, 'none', 'light theme slot must remain transparent (no backdrop gradient)');
     const lightRailShot = shots ? await page.screenshot({ clip: await railFullClip() }) : null;
     const lightCropShot = shots ? await page.screenshot({ clip: await railBottomClip() }) : null;
 
@@ -513,8 +586,12 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
     }, null, { timeout: 8000 });
     await page.waitForTimeout(280);
 
-    // Hover over companion hit box -> gear button is unclipped and clickable inside #rail-companion-slot.
-    await page.locator('.ws-companion-hit').hover();
+    // Hover over companion slot -> gear button is unclipped and clickable inside #rail-companion-slot.
+    const hoverTarget = await readLayout();
+    await page.mouse.move(
+      Math.floor(hoverTarget.slotRect.left + hoverTarget.slotRect.width * 0.5),
+      Math.floor(hoverTarget.slotRect.top + hoverTarget.slotRect.height * 0.5)
+    );
     await page.waitForTimeout(180);
     const hoverCheck = await page.evaluate(() => {
       const gear = document.querySelector('.ws-companion-gear');
@@ -568,8 +645,8 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
       if (shots && fx === 'alert') fxAlertShot = await page.screenshot({ clip: await railBottomClip() });
     }
 
-    // Open quick menu via keyboard Shift+F10 first to verify immediate placement without mouse right-click.
-    await page.locator('.ws-companion-character').focus();
+    // Open quick menu via keyboard Shift+F10 on the interactive laptop hit button.
+    await page.locator('.ws-companion-laptop-hit').focus();
     await page.keyboard.press('Shift+F10');
     await page.locator('.ws-companion-menu:not([hidden])').waitFor({ timeout: 3000 });
     const kbMenuBox = await page.evaluate(() => {
@@ -581,8 +658,8 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
     await page.keyboard.press('Escape');
     await page.waitForTimeout(120);
 
-    // Open quick menu via right-click -> verify upward/rightward placement 100% inside viewport.
-    await page.locator('.ws-companion-character').click({ button: 'right' });
+    // Open quick menu via right-click on the laptop hit button -> verify upward/rightward placement 100% inside viewport.
+    await page.locator('.ws-companion-laptop-hit').click({ button: 'right' });
     await page.locator('.ws-companion-menu:not([hidden])').waitFor({ timeout: 3000 });
     await page.waitForTimeout(180);
     const menuBox = await page.evaluate(() => {

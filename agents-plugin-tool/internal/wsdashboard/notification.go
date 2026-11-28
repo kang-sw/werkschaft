@@ -1,6 +1,10 @@
 package wsdashboard
 
-import "path/filepath"
+import (
+	"path/filepath"
+
+	"github.com/kang-sw/devenv/internal/wsinbox"
+)
 
 // ChangeHost optionally accepts hosted store invalidations without HTTP.
 // handled is false when the host cannot serve this state directory.
@@ -21,6 +25,8 @@ func (d *Daemon) NotifySessionChange(stateDir string, body NudgeBody) (int, bool
 		return 0, false
 	default:
 	}
+	d.invalidateInboxNames(body.ReplyID)
+	d.invalidateSnapshot(body.ReplyID)
 	if d.mailWake != nil {
 		d.mailWake.Nudge()
 	}
@@ -29,4 +35,16 @@ func (d *Daemon) NotifySessionChange(stateDir string, body NudgeBody) (int, bool
 		return 0, true
 	}
 	return d.endpoint.Port, true
+}
+
+// invalidateInboxNames expires wsinbox's cached-polling listings before a nudge
+// wakes readers so external ws-mcp inbox writes and drains are observed on the
+// woken read rather than waiting for the 5 s fallback window.
+func (d *Daemon) invalidateInboxNames(replyID string) {
+	if d.dir != "" && ValidReplyID(replyID) {
+		inbox := wsinbox.Dir(SessionDir(d.dir, replyID))
+		wsinbox.InvalidateNames(inbox, wsinbox.DrainedDir(inbox))
+		return
+	}
+	wsinbox.InvalidateNames()
 }

@@ -326,7 +326,7 @@
             phoneAnimElapsed = 0;
           }
         }
-        if (phoneSnapHeld === false && (phoneMode === "pickup" || phoneMode === "typing")) {
+        if (phoneSnapHeld === false && (phoneMode === "pickup" || phoneMode === "typing") && !C.reflex?.isPhoneHoldActive?.()) {
           phoneUnconfirmedElapsed += dt;
           if (phoneUnconfirmedElapsed >= PHONE_UNCONFIRMED_GRACE) {
             phoneMode = phoneFaceDown ? "facedown-merong" : "putdown";
@@ -1007,6 +1007,8 @@
       setSentinelDurations,
       setCalibration: props.setCalibration,
       getPropAnchorWorld: props.getPropAnchorWorld,
+      getLaptopObject: props.getLaptopObject,
+      projectLaptopBounds: props.projectLaptopBounds,
       getPropObjects: props.getPropObjects,
       getCoLeadState,
       debugState: getCoLeadState,

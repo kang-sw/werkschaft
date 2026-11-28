@@ -102,7 +102,9 @@ func TestReadStateTouchesRecord(t *testing.T) {
 // explicitly by the ticket as bypass seams.
 func TestGetOverrideAndListOverrideKeysTouchRecord(t *testing.T) {
 	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	now := time.Now()
 	s := newSessionStore()
+	s.now = func() time.Time { return now }
 	key, err := s.mint("/some/root", roleLead, "")
 	if err != nil {
 		t.Fatalf("mint: %v", err)
@@ -123,7 +125,8 @@ func TestGetOverrideAndListOverrideKeysTouchRecord(t *testing.T) {
 		t.Fatalf("getOverride did not refresh mtime: before=%v after=%v", staleMtime, refreshed)
 	}
 
-	// listOverrideKeys
+	// listOverrideKeys (after touchGuardWindow elapses)
+	now = now.Add(touchGuardWindow + time.Minute)
 	backdateMtime(t, path, touchGuardWindow+time.Minute)
 	staleMtime = mtimeOf(t, path)
 	if keys := s.listOverrideKeys(key); len(keys) != 1 {

@@ -266,6 +266,11 @@ type DaemonOptions struct {
 	piLoginDisconnectGrace time.Duration
 	// piLoginCommand replaces the managed Pi binary/args for PTY login in tests.
 	piLoginCommand func(provider string) (string, []string, error)
+	// CacheGC overrides the cache GC bounds; nil reads the WS_CACHE_GC*
+	// environment once at start (CacheGCConfigFromEnv).
+	CacheGC *CacheGCConfig
+	// sessionPruneEvery overrides the hourly registration prune tick in tests.
+	sessionPruneEvery time.Duration
 }
 
 // MailWaker receives the daemon's mailbox wake signals (DaemonOptions.MailWake).
@@ -374,6 +379,17 @@ type Daemon struct {
 	// companionAgents, when bound by cmd/ws-mcp, computes the companion tier
 	// readback (companion_agents_route.go).
 	companionAgents atomic.Pointer[func() any]
+	// companionBrain, when bound by cmd/ws-mcp, lazily ensures/attaches the
+	// Mobile Full Lead Brain session (companion_brain_route.go).
+	companionBrain atomic.Pointer[func() (CompanionBrainInfo, error)]
+	// companionBrainReplyID holds the active Brain replyID atomically for
+	// lock-free Puppeteer direct observation (companion_director.go).
+	companionBrainReplyID atomic.Pointer[string]
+	// companionPuppeteerTier, when bound by cmd/ws-mcp, resolves Puppeteer's
+	// harness/model/effort/provider from dashboard.companion_body_tier.
+	companionPuppeteerTier atomic.Pointer[func() (CompanionPuppeteerTier, error)]
+	// companionBrainStates broadcasts companion-brain-state transitions to rail streams.
+	companionBrainStates companionBrainStateHub
 	// director is the companion agent director (companion_director.go).
 	director      companionDirector
 	agents        AgentHost
@@ -387,7 +403,7 @@ type Daemon struct {
 	credentials       credentialStore
 	accountSlots      *wscred.AccountSlotRegistry
 	accountSignIn     accountSignIn
-	slotSignIn         accountSlotSignIn
+	slotSignIn        accountSlotSignIn
 	slotAuthPreflight  func(harness, configDir string) error
 	slotLoginCmd       func(harness string, mode wscred.SlotLoginMode) (string, []string, error)
 	slotSignInTimeout  time.Duration
@@ -493,6 +509,12 @@ type Daemon struct {
 	// contentHash is the executable hash it reports; empty is unknown.
 	buildTime   int64
 	contentHash string
+	// executable is DaemonOptions.Executable, the build the cache GC pins.
+	// gcDone is closed when cacheGCLoop returns; nil when the loop is off.
+	// sessionPruneEvery overrides the hourly registration prune tick in tests.
+	executable        string
+	gcDone            chan struct{}
+	sessionPruneEvery time.Duration
 	// openSystem opens a system-open route's target (systemOpen).
 	openSystem func(target string) error
 	// hostFiles is the host the file browser's host route acts on

@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -76,22 +77,24 @@ func companionApprovalAllows(rec Record, a ApprovalRequest) bool {
 }
 
 // settleCompanionApproval answers a hidden companion session's permission
-// request by companionApprovalAllows instead of parking it. It reports
-// whether a was settled (answered, or deliberately dropped); false means the
-// process could not be answered right now (no answerer, or a request it could
-// build no answer for) and the caller must not park it either: nobody can
-// ever answer it, and a parked one only stalls the session's watchdogs.
-func (c *conv) settleCompanionApproval(a ApprovalRequest) bool {
+// request by companionApprovalAllows instead of parking it. A nil error means
+// a was answered. A non-nil error matching errNoApprovalAnswer means nothing
+// was written (no answerer, or a request it could build no answer for), so the
+// caller must fail closed via approvalFailed(errNoApprovalAnswer). Any other
+// error came from a transport write failure that sendApproval already handled
+// via approvalFailed(err), so the caller must preserve c.lastErr rather than
+// overwriting it with errNoApprovalAnswer.
+func (c *conv) settleCompanionApproval(a ApprovalRequest) error {
 	rec := c.record()
 	allow := companionApprovalAllows(rec, a)
 	answerer := controlsFor(c.proc).approval
 	if answerer == nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: companion permission request %s (%s) has no answerer; dropped\n", rec.ReplyID, a.ID, a.Tool)
-		return false
+		return errNoApprovalAnswer
 	}
 	if err := c.sendApproval(answerer, a, allow, ""); err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: companion permission answer for %s: %v\n", rec.ReplyID, a.Tool, err)
-		return false
+		return err
 	}
 	verdict := "refused"
 	if allow {
@@ -101,7 +104,7 @@ func (c *conv) settleCompanionApproval(a ApprovalRequest) bool {
 	if !allow && c.cutoverRejects(a.Tool) {
 		c.oweCutoverInstruction(a.ID)
 	}
-	return true
+	return nil
 }
 
 // settleCompanionPending answers every prompt a hidden companion session
@@ -116,7 +119,8 @@ func (c *conv) settleCompanionPending() {
 		if _, daemon := c.execAnswers[a.ID]; daemon {
 			continue
 		}
-		if c.settleCompanionApproval(a) {
+		err := c.settleCompanionApproval(a)
+		if err == nil {
 			c.dropApproval(a.ID, false)
 			continue
 		}
@@ -127,7 +131,13 @@ func (c *conv) settleCompanionPending() {
 				c.dropApproval(rem.ID, false)
 			}
 		}
-		c.approvalFailed(errNoApprovalAnswer)
+		// Preserve a transport write error sendApproval already recorded in
+		// c.lastErr; only stamp errNoApprovalAnswer when nothing was written.
+		if errors.Is(err, errNoApprovalAnswer) || c.lastErr == "" {
+			c.approvalFailed(errNoApprovalAnswer)
+		} else if c.proc != nil {
+			c.stopProcess("")
+		}
 		return
 	}
 }

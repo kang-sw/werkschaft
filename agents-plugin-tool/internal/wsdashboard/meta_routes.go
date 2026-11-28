@@ -305,6 +305,18 @@ func (d *Daemon) pruneRegistrationsInMeta(now time.Time, retention time.Duration
 	})
 }
 
+// endedAt is the later of the record's close and handoff stamps; zero when
+// neither parses. Used only after the retirement and Pi-history exemptions.
+func (r agentRecordEnd) endedAt() time.Time {
+	var last time.Time
+	for _, stamp := range []string{r.ClosedAt, r.HandedOffAt} {
+		if t, err := time.Parse(time.RFC3339, stamp); err == nil && t.After(last) {
+			last = t
+		}
+	}
+	return last
+}
+
 // removeSessionDir is a test seam for os.RemoveAll in pruneRegistrationsWith.
 var removeSessionDir = os.RemoveAll
 
@@ -336,6 +348,12 @@ func pruneRegistrationsWith(dir string, now time.Time, retention time.Duration, 
 			// A retired lead with no readable row to age it by is left to
 			// the runner.
 			continue
+		}
+		if last.IsZero() {
+			// The record's own end stamp ages the session before the
+			// directory does: a post-cutover permission.json write bumps the
+			// directory's ModTime and would otherwise restart the expiry.
+			last = record.endedAt()
 		}
 		if last.IsZero() {
 			info, err := entry.Info()

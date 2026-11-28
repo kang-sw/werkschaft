@@ -181,30 +181,45 @@
   }
 
   function createClipPlayer() {
-    let active = null;
+    let active = null, completed = null;
     function play(key, clip, opts) {
       if (!clip || !Array.isArray(clip.keyframes) || !clip.keyframes.length) return false;
+      const k = String(key || ""), token = opts?.token, restart = !!opts?.restart;
+      if (!restart) {
+        if (active && active.key === k && active.clip === clip && active.token === token) {
+          if (!active.fadingOut) return true;
+          if (active.done) return false;
+        }
+        if (completed && completed.key === k && completed.clip === clip && completed.token === token) return false;
+      }
+      completed = null;
       const loop = opts?.loop !== undefined ? !!opts.loop : !!clip.loop;
-      if (active && active.key === key && !active.fadingOut && active.clip === clip) return true;
       active = {
-        key: String(key || ""), clip, loop, isSentinel: !!opts?.isSentinel, holdLast: !!opts?.holdLast, holding: false,
+        key: k, clip, loop, isSentinel: !!opts?.isSentinel, holdLast: !!opts?.holdLast, holding: false, done: false, token,
         duration_s: Number.isFinite(opts?.duration_s) ? opts.duration_s : undefined,
         time: fin(opts?.startTime, 0), weight: opts?.immediate ? 1 : (active ? Math.min(active.weight, 0.25) : 0), fadingOut: false
       };
       return true;
     }
-    function stop(imm) { if (!active) return; if (imm) active = null; else active.fadingOut = true; }
+    function stop(imm) { completed = null; if (!active) return; if (imm) active = null; else active.fadingOut = true; }
     function step(dt) {
       if (!active) return null;
       const safeDt = Number.isFinite(dt) && dt > 0 ? Math.min(dt, 0.2) : 0.016, dW = safeDt / CROSSFADE_S;
       if (active.fadingOut) {
         active.weight = Math.max(0, active.weight - dW);
-        if (active.weight <= 0.001) { active = null; return null; }
+        if (active.weight <= 0.001) {
+          if (active.done) completed = { key: active.key, clip: active.clip, token: active.token };
+          active = null;
+          return null;
+        }
       } else active.weight = Math.min(1, active.weight + dW);
       active.time += safeDt;
       const sample = sampleClip(active.clip, active.time, { loop: active.loop, duration_s: active.duration_s });
       if (!sample) { active = null; return null; }
-      if (sample.done && !active.fadingOut) { if (active.holdLast) active.holding = true; else active.fadingOut = true; }
+      if (sample.done && !active.fadingOut) {
+        if (active.holdLast) active.holding = true;
+        else { active.done = true; active.fadingOut = true; }
+      }
       return { key: active.key, sample, weight: active.weight, isSentinel: active.isSentinel, loop: active.loop, holding: active.holding };
     }
     return {
@@ -216,7 +231,7 @@
 
   function createPackClipRuntime(pack, signal) {
     const player = createClipPlayer(), clipCache = new Map(), clipLoading = new Set(), clipFailed = new Set(), durations = Object.create(null);
-    let wantedKey = "", wantedIsSentinel = false;
+    let wantedKey = "", wantedIsSentinel = false, wantedTriggerSeq = undefined, activationId = 0;
     if (pack?.sentinels) for (const [k, e] of Object.entries(pack.sentinels)) if (Number.isFinite(e?.duration_s)) durations[k] = e.duration_s;
     function ensureClipJson(entry, onDuration) {
       if (!entry || entry.kind !== "clip" || typeof C.fetchPackClip !== "function") return null;
@@ -234,17 +249,29 @@
       }).catch(() => { if (!signal?.aborted) clipFailed.add(entry.file); }).finally(() => clipLoading.delete(entry.file));
       return null;
     }
-    function sync(actionKey, sentinelKey, onDuration) {
+    function sync(actionKey, sentinelKey, onDuration, triggerSeq) {
       const aEntry = actionKey ? resolveEntry(pack, actionKey, { isSentinel: false }) : null;
       const entry = aEntry || (sentinelKey ? resolveEntry(pack, sentinelKey, { isSentinel: true }) : null);
       const isSentinel = !!entry && entry.source === "sentinels";
-      if (!entry) { wantedKey = ""; wantedIsSentinel = false; player.stop(false); return null; }
-      wantedKey = entry.key; wantedIsSentinel = isSentinel;
+      if (!entry) {
+        if (wantedKey || wantedIsSentinel) { wantedKey = ""; wantedIsSentinel = false; activationId++; }
+        wantedTriggerSeq = triggerSeq;
+        player.stop(false);
+        return null;
+      }
+      if (entry.key !== wantedKey || isSentinel !== wantedIsSentinel || (triggerSeq !== undefined && triggerSeq !== wantedTriggerSeq)) {
+        activationId++;
+        wantedKey = entry.key;
+        wantedIsSentinel = isSentinel;
+        wantedTriggerSeq = triggerSeq;
+      }
       if (entry.kind === "vrma") { player.stop(false); return { vrmaEntry: entry, isSentinel }; }
       const clip = ensureClipJson(entry, onDuration);
       if (clip) {
         const effLoop = typeof entry.loop === "boolean" ? entry.loop : (typeof clip.loop === "boolean" ? clip.loop : !!SENTINEL_LOOP_DEFAULT[entry.key]);
-        player.play(entry.key, clip, { loop: effLoop, duration_s: entry.duration_s, isSentinel, holdLast: isSentinel && entry.key === "phone_hold" && !effLoop });
+        player.play(entry.key, clip, { loop: effLoop, duration_s: entry.duration_s, isSentinel, holdLast: isSentinel && entry.key === "phone_hold" && !effLoop, token: activationId });
+      } else {
+        player.stop(false);
       }
       return { clipEntry: entry, isSentinel };
     }
@@ -252,7 +279,7 @@
       sync, step: dt => player.step(dt), stop: imm => player.stop(imm),
       isOneShotActive: () => player.isOneShotActive(), getDurations: () => durations,
       getActiveSentinel: () => (wantedIsSentinel ? wantedKey : ""), getState: () => player.getState(),
-      dispose() { player.stop(true); clipCache.clear(); clipLoading.clear(); clipFailed.clear(); }
+      dispose() { wantedKey = ""; wantedIsSentinel = false; activationId++; player.stop(true); clipCache.clear(); clipLoading.clear(); clipFailed.clear(); }
     };
   }
 

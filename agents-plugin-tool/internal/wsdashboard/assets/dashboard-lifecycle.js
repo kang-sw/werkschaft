@@ -835,6 +835,15 @@
   function go(href) {
     var u = new URL(href, location.href);
     if (shell) { shOpen(u.href, true); return; }
+    if (typeof compact !== "undefined" && compact) {
+      if (u.origin === location.origin && u.pathname === location.pathname && u.search === location.search && u.hash) {
+        if (/^#entry=/.test(u.hash) && typeof entryJumpFromHash === "function") entryJumpFromHash(u.hash);
+        else location.hash = u.hash;
+        return;
+      }
+      window.open(u.href, "_blank", "noopener");
+      return;
+    }
     if (framed) {
       if (window.WsShell.framed(u, location.origin) || window.WsShell.settingsFrame(u, location.origin)) shPost("nav", { href: u.href });
       else window.top.location.href = u.href;
@@ -883,6 +892,9 @@
   function shBroadcastTheme(theme, except) {
     shFrames.forEach(function (ent) { if (ent !== except) shSend(ent, "theme", { theme: theme }); });
     if (shSettingsEntry) shSend(shSettingsEntry, "theme", { theme: theme });
+    if (window.WsCompanionMessenger && typeof window.WsCompanionMessenger.syncTheme === "function") {
+      window.WsCompanionMessenger.syncTheme(theme);
+    }
   }
   function shOpenSettings(url, opener) {
     if (!shSettingsDialog) return false;
@@ -1564,6 +1576,7 @@
   function shFrameInit() {
     var sent = {}, queued = null, head = null, headDirty = true, lastHandlesKey = "";
     function send(kind, m) {
+      if (typeof compact !== "undefined" && compact) return;
       var k = JSON.stringify(m);
       if (sent[kind] === k) return;
       sent[kind] = k;
@@ -1640,51 +1653,53 @@
       if (head) send("head", head);
       send("layout", layout);
     }
-    function queue() { if (!shHidden && !queued) queued = requestAnimationFrame(post); }
-    function queueHead() { headDirty = true; queue(); }
-    if (typeof ideFrameQueueHead !== "undefined") ideFrameQueueHead = queueHead;
-    doc.addEventListener("ws-overview", queue);
-    doc.addEventListener("ws-audit", queue);
-    doc.addEventListener("ws-stage-fill", queueHead);
-    var top = doc.querySelector(".dwrap > .top");
-    if (window.ResizeObserver && top) new ResizeObserver(queueHead).observe(top);
-    window.addEventListener("resize", queueHead);
-    if (window.MutationObserver) {
-      var mo = new MutationObserver(queue);
-      if (top) new MutationObserver(queueHead).observe(top, { subtree: true, childList: true, attributes: true, characterData: true });
-      mo.observe(root, { attributes: true, attributeFilter: ["style", "data-pincol"] });
-      mo.observe(doc.body, { subtree: true, attributes: true, attributeFilter: ["open", "hidden"] });
-      // A second observe() of the same node on one observer replaces its
-      // options, so the body's direct children (a popover appended already
-      // shown) need their own observer.
-      new MutationObserver(queue).observe(doc.body, { childList: true });
+    function queue() { if ((typeof compact === "undefined" || !compact) && !shHidden && !queued) queued = requestAnimationFrame(post); }
+    function queueHead() { if (typeof compact !== "undefined" && compact) return; headDirty = true; queue(); }
+    if ((typeof compact === "undefined" || !compact) && typeof ideFrameQueueHead !== "undefined") ideFrameQueueHead = queueHead;
+    if (typeof compact === "undefined" || !compact) {
+      doc.addEventListener("ws-overview", queue);
+      doc.addEventListener("ws-audit", queue);
+      doc.addEventListener("ws-stage-fill", queueHead);
+      var top = doc.querySelector(".dwrap > .top");
+      if (window.ResizeObserver && top) new ResizeObserver(queueHead).observe(top);
+      window.addEventListener("resize", queueHead);
+      if (window.MutationObserver) {
+        var mo = new MutationObserver(queue);
+        if (top) new MutationObserver(queueHead).observe(top, { subtree: true, childList: true, attributes: true, characterData: true });
+        mo.observe(root, { attributes: true, attributeFilter: ["style", "data-pincol"] });
+        mo.observe(doc.body, { subtree: true, attributes: true, attributeFilter: ["open", "hidden"] });
+        // A second observe() of the same node on one observer replaces its
+        // options, so the body's direct children (a popover appended already
+        // shown) need their own observer.
+        new MutationObserver(queue).observe(doc.body, { childList: true });
+      }
+      window.addEventListener("resize", queueHead);
+      window.addEventListener("scroll", function () { send("scroll", { y: Math.round(window.scrollY) }); });
+      // A hash route moves by hashchange or by the page's own history calls
+      // (tracker.js's store pages), which fire none: either way the shell's
+      // address takes the hash.
+      function hash() { send("hash", { hash: location.hash }); }
+      window.addEventListener("hashchange", hash);
+      window.addEventListener("popstate", hash);
+      ["pushState", "replaceState"].forEach(function (k) {
+        var orig = history[k];
+        if (typeof orig !== "function") return;
+        history[k] = function () {
+          var r = orig.apply(history, arguments);
+          hash();
+          return r;
+        };
+      });
+      // Escape and the rail hotkey reach the shell from inside the page (the
+      // rail's own handler is the shell's).
+      doc.addEventListener("keydown", function (e) {
+        if (e.code === "Backquote" && e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && !e.isComposing) { e.preventDefault(); railKey(); }
+        else if (e.key === "Escape" && !e.defaultPrevented) shPost("key", { key: "esc" });
+      });
+      // A press in the page reaches the shell, whose rail popovers and row
+      // menu close on one (capture: the page's own handlers may stop it).
+      doc.addEventListener("pointerdown", function () { shPost("press"); }, true);
     }
-    window.addEventListener("resize", queueHead);
-    window.addEventListener("scroll", function () { send("scroll", { y: Math.round(window.scrollY) }); });
-    // A hash route moves by hashchange or by the page's own history calls
-    // (tracker.js's store pages), which fire none: either way the shell's
-    // address takes the hash.
-    function hash() { send("hash", { hash: location.hash }); }
-    window.addEventListener("hashchange", hash);
-    window.addEventListener("popstate", hash);
-    ["pushState", "replaceState"].forEach(function (k) {
-      var orig = history[k];
-      if (typeof orig !== "function") return;
-      history[k] = function () {
-        var r = orig.apply(history, arguments);
-        hash();
-        return r;
-      };
-    });
-    // Escape and the rail hotkey reach the shell from inside the page (the
-    // rail's own handler is the shell's).
-    doc.addEventListener("keydown", function (e) {
-      if (e.code === "Backquote" && e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && !e.isComposing) { e.preventDefault(); railKey(); }
-      else if (e.key === "Escape" && !e.defaultPrevented) shPost("key", { key: "esc" });
-    });
-    // A press in the page reaches the shell, whose rail popovers and row
-    // menu close on one (capture: the page's own handlers may stop it).
-    doc.addEventListener("pointerdown", function () { shPost("press"); }, true);
     // Same-origin synchronous hide hook invoked by the shell before sending
     // shown:true to an incoming frame so outgoing WS closes first.
     function hideFrameNow() {
@@ -1720,6 +1735,7 @@
         if (shTrackerRev !== null) { var rev = shTrackerRev; shTrackerRev = null; trackerNudge(rev); }
         queue();
       } else if (m.wsShell === "companion-gate") {
+        if (typeof compact !== "undefined" && compact) return;
         if (m.active && !companionRelay) companionRelay = startCompanionRelay();
         else if (!m.active && companionRelay) { companionRelay.dispose(); companionRelay = null; }
       } else if (m.wsShell === "search") {
@@ -1738,14 +1754,16 @@
       else if (m.wsShell === "daemon-bridge-req") { if (typeof handleDaemonFrameBridgeReq === "function") handleDaemonFrameBridgeReq(m); }
       else if (m.wsShell === "term-list-req" || m.wsShell === "term-attach") hdFrameTermReq(m);
     });
-    queue();
-    if (typeof WsJank !== "undefined" && WsJank) {
-      WsJank.setRelay(function (stall) { shPost("jank-stall", { stall: stall }); });
-      WsJank.setMinorRelay(function (minor) { shPost("jank-minor", minor); });
+    if (typeof compact === "undefined" || !compact) {
+      queue();
+      if (typeof WsJank !== "undefined" && WsJank) {
+        WsJank.setRelay(function (stall) { shPost("jank-stall", { stall: stall }); });
+        WsJank.setMinorRelay(function (minor) { shPost("jank-minor", minor); });
+      }
+      shPost("ready", { hideAck: true });
+      shPost("title", { title: doc.title });
+      if (window.scrollY) send("scroll", { y: Math.round(window.scrollY) });
     }
-    shPost("ready", { hideAck: true });
-    shPost("title", { title: doc.title });
-    if (window.scrollY) send("scroll", { y: Math.round(window.scrollY) });
   }
   // shShellInit takes the frame the shell page loaded with: the page its
   // address names (its path and hash, which never reached the daemon; a
@@ -1832,6 +1850,12 @@
     doc.addEventListener("ws-companion-phone", function (event) {
       if (shCompanion && typeof shCompanion.phoneState === "function") shCompanion.phoneState(event.detail);
       if (window.WsCompanionMessenger && typeof window.WsCompanionMessenger.applySnapshot === "function") window.WsCompanionMessenger.applySnapshot(event.detail);
+    });
+    doc.addEventListener("ws-companion-brain-state", function (event) {
+      var detail = event.detail;
+      if (!detail || typeof detail !== "object") return;
+      window.WsCompanion?.reflex?.onBrainState?.(detail);
+      if (detail.kind === "handoff") window.WsCompanionMessenger?.onBrainChanged?.(detail);
     });
     shCompanionConfigure(window.wsCompanionConfig);
     if (window.wsCompanionPhoneState) {

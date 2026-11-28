@@ -59,7 +59,12 @@ type sessionPageData struct {
 	// it, so the page keeps both only as invisible placeholders that lay
 	// it out as before. Without it the page stands alone (the tests'
 	// renders).
-	Frame   bool
+	Frame bool
+	// Compact renders the framed session page in Messenger-density single-column
+	// layout (?frame=1&compact=1): emits data-compact="1" on <html> so
+	// dashboard-compact.css hides shell chrome, styles chat bubbles, compacts
+	// #agcompact, and disables shell header/companion relay.
+	Compact bool
 	regions regionSet
 }
 

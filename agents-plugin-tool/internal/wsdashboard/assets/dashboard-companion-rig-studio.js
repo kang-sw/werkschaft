@@ -271,6 +271,121 @@
     return payload;
   }
 
+  function rescaleClipDuration(clip, nextDur) {
+    if (!clip || typeof clip !== "object") return clip;
+    const cur = Math.max(0.1, Number(clip.duration_s) || 1.4);
+    const targetDur = Math.max(0.1, Number(nextDur) || cur);
+    const scale = targetDur / cur;
+    clip.duration_s = targetDur;
+    const kfs = Array.isArray(clip.keyframes) ? clip.keyframes : [];
+    if (!kfs.length) return clip;
+    const maxTicks = Math.floor(targetDur * 100 + 1e-9);
+    if (kfs.length - 1 <= maxTicks) {
+      const ticks = kfs.map(kf => Math.max(0, Math.min(maxTicks, Math.round((Number(kf.t) || 0) * scale * 100))));
+      for (let i = 1; i < ticks.length; i++) {
+        if (ticks[i] <= ticks[i - 1]) ticks[i] = ticks[i - 1] + 1;
+      }
+      if (ticks[ticks.length - 1] > maxTicks) ticks[ticks.length - 1] = maxTicks;
+      for (let i = ticks.length - 2; i >= 0; i--) {
+        if (ticks[i] >= ticks[i + 1]) ticks[i] = ticks[i + 1] - 1;
+      }
+      for (let i = 0; i < kfs.length; i++) kfs[i].t = Number((ticks[i] / 100).toFixed(2));
+    } else {
+      const step = targetDur / Math.max(1, kfs.length - 1);
+      for (let i = 0; i < kfs.length; i++) kfs[i].t = Number(Math.min(targetDur, i * step).toFixed(4));
+    }
+    return clip;
+  }
+
+  function buildManifestItems(manifest) {
+    const fresh = new Map();
+    const rawSentinels = manifest?.sentinels && typeof manifest.sentinels === "object" ? manifest.sentinels : {};
+    for (const key of SENTINEL_KEYS) {
+      const raw = rawSentinels[key];
+      if (raw && typeof raw === "object") {
+        fresh.set(key, {
+          key,
+          isSentinel: true,
+          saved: true,
+          kind: raw.kind === "vrma" ? "vrma" : "clip",
+          file: raw.file || ("clips/" + key + (raw.kind === "vrma" ? ".vrma" : ".clip.json")),
+          loop: typeof raw.loop === "boolean" ? raw.loop : SENTINEL_DEFAULTS[key].loop,
+          duration_s: Number.isFinite(raw.duration_s) ? raw.duration_s : undefined,
+          rawEntry: clonePreservingUnknown(raw),
+          clip: null,
+          vrmaBuffer: null,
+          dirty: false
+        });
+      }
+    }
+    const rawActions = Array.isArray(manifest?.actions) ? manifest.actions : [];
+    for (const raw of rawActions) {
+      if (!raw || typeof raw !== "object" || !CLIP_KEY_RE.test(raw.key || "")) continue;
+      if (fresh.has(raw.key) || SENTINEL_KEYS.includes(raw.key)) continue;
+      fresh.set(raw.key, {
+        key: raw.key,
+        isSentinel: false,
+        saved: true,
+        kind: raw.kind === "vrma" ? "vrma" : "clip",
+        file: raw.file || ("clips/" + raw.key + (raw.kind === "vrma" ? ".vrma" : ".clip.json")),
+        description: typeof raw.description === "string" ? raw.description : "",
+        expression: typeof raw.expression === "string" ? raw.expression : "",
+        prop: typeof raw.prop === "string" ? raw.prop : "",
+        expose_to_agent: raw.expose_to_agent === true,
+        loop: typeof raw.loop === "boolean" ? raw.loop : false,
+        duration_s: Number.isFinite(raw.duration_s) ? raw.duration_s : undefined,
+        rawEntry: clonePreservingUnknown(raw),
+        clip: null,
+        vrmaBuffer: null,
+        dirty: false
+      });
+    }
+    return fresh;
+  }
+
+  function mergeManifestIntoItems(items, manifest, opts) {
+    const fresh = buildManifestItems(manifest);
+    const preserveDirty = !!opts?.preserveDirty;
+    const replaceKey = typeof opts?.replaceKey === "string" ? opts.replaceKey : "";
+    if (!preserveDirty) {
+      items.clear();
+      for (const [k, v] of fresh.entries()) items.set(k, v);
+      return {
+        calibration: manifest?.calibration && typeof manifest.calibration === "object"
+          ? clonePreservingUnknown(manifest.calibration)
+          : { props: {} },
+        calibrationDirty: false
+      };
+    }
+    const prev = new Map(items);
+    items.clear();
+    for (const [k, v] of fresh.entries()) {
+      const existing = prev.get(k);
+      if (existing && existing.dirty && k !== replaceKey) {
+        items.set(k, existing);
+      } else {
+        items.set(k, v);
+      }
+    }
+    for (const [k, existing] of prev.entries()) {
+      if (!items.has(k) && existing.dirty && k !== replaceKey) {
+        items.set(k, existing);
+      }
+    }
+    if (opts?.calibrationDirty) {
+      return {
+        calibration: opts.calibration && typeof opts.calibration === "object" ? opts.calibration : { props: {} },
+        calibrationDirty: true
+      };
+    }
+    return {
+      calibration: manifest?.calibration && typeof manifest.calibration === "object"
+        ? clonePreservingUnknown(manifest.calibration)
+        : { props: {} },
+      calibrationDirty: false
+    };
+  }
+
   function sanitizeKeyFromFilename(name) {
     let base = String(name || "").replace(/^.*[/\\]/, "").replace(/\.vrma$/i, "").toLowerCase();
     base = base.replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
@@ -301,6 +416,8 @@
       makeDefaultKeyframe,
       makeDefaultClip,
       addKeyframeSnapshot,
+      rescaleClipDuration,
+      mergeManifestIntoItems,
       formatAttachSpaceOptions,
       buildPutPayload,
       sanitizeKeyFromFilename
@@ -370,6 +487,7 @@
   };
 
   let stage = null;
+  let selectGen = 0;
   let broadcast = null;
   try { if (typeof BroadcastChannel === "function") broadcast = new BroadcastChannel("ws-companion-packs"); } catch (_) {}
 
@@ -601,6 +719,7 @@
   }
 
   async function selectClip(key) {
+    const gen = ++selectGen;
     state.selectedKey = key;
     state.selectedKfIdx = 0;
     state.playTime = 0;
@@ -631,26 +750,31 @@
         if (res?.rev) state.rev = res.rev;
         if (res?.json) item.clip = res.json;
       } catch (err) {
-        showBanner(tr("js.companion.rig_studio.err.load_clip", item.key), { error: true });
+        if (gen === selectGen) showBanner(tr("js.companion.rig_studio.err.load_clip", item.key), { error: true });
       } finally {
         item.loading = false;
       }
+      if (gen !== selectGen) return;
     } else if (item && item.saved && item.kind === "vrma") {
       try {
         if (!item.vrmaBuffer) {
           const res = await C.fetchPackClip({ id: state.packInfo.id, rev: state.rev }, item.file);
           if (res?.rev) state.rev = res.rev;
           item.vrmaBuffer = res?.buffer || null;
+          if (gen !== selectGen) return;
         }
         if (item.vrmaBuffer && stage) {
-          const info = await stage.loadVrmaBuffer(item.vrmaBuffer, item.loop !== false);
+          const info = await stage.loadVrmaBuffer(item.vrmaBuffer, !!item.loop);
+          if (gen !== selectGen) return;
           if (info?.duration_s && !item.duration_s) item.duration_s = info.duration_s;
         }
       } catch (err) {
-        showBanner(tr("js.companion.rig_studio.err.load_clip", item.key), { error: true });
+        if (gen === selectGen) showBanner(tr("js.companion.rig_studio.err.load_clip", item.key), { error: true });
       }
+      if (gen !== selectGen) return;
     }
 
+    if (gen !== selectGen) return;
     if (item?.prop && item.prop !== "none") applyProp(item.prop);
     else if (item?.clip?.prop?.id) applyProp(item.clip.prop.id);
 
@@ -1427,7 +1551,7 @@
       ui.importScrim.hidden = true;
       state.pendingVrmaFile = null;
       notifyBroadcast(state.packInfo.id, state.rev);
-      await reloadPackCatalogOnly(key);
+      await reloadPackCatalogOnly(key, { preserveDirty: true, replaceKey: key });
       showToast(tr("js.companion.rig_studio.toast.imported", key));
     } catch (err) {
       ui.impErr.textContent = err?.message || "Import failed";
@@ -1437,60 +1561,22 @@
     }
   }
 
-  function populateItemsFromManifest(manifest) {
-    state.items.clear();
-    const rawSentinels = manifest?.sentinels && typeof manifest.sentinels === "object" ? manifest.sentinels : {};
-    for (const key of SENTINEL_KEYS) {
-      const raw = rawSentinels[key];
-      if (raw && typeof raw === "object") {
-        state.items.set(key, {
-          key,
-          isSentinel: true,
-          saved: true,
-          kind: raw.kind === "vrma" ? "vrma" : "clip",
-          file: raw.file || ("clips/" + key + (raw.kind === "vrma" ? ".vrma" : ".clip.json")),
-          loop: typeof raw.loop === "boolean" ? raw.loop : SENTINEL_DEFAULTS[key].loop,
-          duration_s: Number.isFinite(raw.duration_s) ? raw.duration_s : undefined,
-          rawEntry: clonePreservingUnknown(raw),
-          clip: null,
-          vrmaBuffer: null,
-          dirty: false
-        });
-      }
-    }
-    const rawActions = Array.isArray(manifest?.actions) ? manifest.actions : [];
-    for (const raw of rawActions) {
-      if (!raw || typeof raw !== "object" || !CLIP_KEY_RE.test(raw.key || "")) continue;
-      if (state.items.has(raw.key) || SENTINEL_KEYS.includes(raw.key)) continue;
-      state.items.set(raw.key, {
-        key: raw.key,
-        isSentinel: false,
-        saved: true,
-        kind: raw.kind === "vrma" ? "vrma" : "clip",
-        file: raw.file || ("clips/" + raw.key + (raw.kind === "vrma" ? ".vrma" : ".clip.json")),
-        description: typeof raw.description === "string" ? raw.description : "",
-        expression: typeof raw.expression === "string" ? raw.expression : "",
-        prop: typeof raw.prop === "string" ? raw.prop : "",
-        expose_to_agent: raw.expose_to_agent === true,
-        loop: typeof raw.loop === "boolean" ? raw.loop : false,
-        duration_s: Number.isFinite(raw.duration_s) ? raw.duration_s : undefined,
-        rawEntry: clonePreservingUnknown(raw),
-        clip: null,
-        vrmaBuffer: null,
-        dirty: false
-      });
-    }
-    state.calibration = manifest?.calibration && typeof manifest.calibration === "object"
-      ? clonePreservingUnknown(manifest.calibration)
-      : { props: {} };
-    state.calibrationDirty = false;
+  function populateItemsFromManifest(manifest, opts) {
+    const res = mergeManifestIntoItems(state.items, manifest, {
+      preserveDirty: !!opts?.preserveDirty,
+      replaceKey: opts?.replaceKey || "",
+      calibration: state.calibration,
+      calibrationDirty: state.calibrationDirty
+    });
+    state.calibration = res.calibration;
+    state.calibrationDirty = res.calibrationDirty;
   }
 
-  async function reloadPackCatalogOnly(focusKey) {
+  async function reloadPackCatalogOnly(focusKey, opts) {
     const resp = await fetch("/api/companion/packs/" + encodeURIComponent(state.packInfo.id) + "/pack.json?rev=" + encodeURIComponent(state.rev), { credentials: "same-origin" });
     if (!resp.ok) throw new Error("Failed to load pack.json");
     state.manifest = await resp.json();
-    populateItemsFromManifest(state.manifest);
+    populateItemsFromManifest(state.manifest, opts);
     stage?.setCalibration(state.calibration);
     await selectClip(focusKey || state.selectedKey || "idle");
   }
@@ -1585,11 +1671,19 @@
           evaluateCurrentPose();
           if (state.inspectorTab === "rig") renderInspector();
         },
-        onPlayStep: dt => {
+        onPlayStep: (dtOrTime, vrmaFinished, kind) => {
           const item = getSelectedItem();
+          if (kind === "vrma" || item?.kind === "vrma") {
+            if (!item || item.kind !== "vrma") { setPlaying(false); return; }
+            const dur = Math.max(0.1, Number(item.duration_s) || 1.4);
+            state.playTime = Math.max(0, Math.min(dur, Number(dtOrTime) || 0));
+            if (vrmaFinished) setPlaying(false);
+            updateTimelineTimeReadout(dur);
+            return;
+          }
           if (!item || item.kind !== "clip" || !item.clip) { setPlaying(false); return; }
           const dur = Math.max(0.1, Number(item.clip.duration_s) || 1.4);
-          state.playTime += dt * currentSpeed();
+          state.playTime += dtOrTime * currentSpeed();
           if (state.playTime >= dur) {
             if (item.loop) state.playTime = state.playTime % dur;
             else { state.playTime = dur; setPlaying(false); }
@@ -1656,7 +1750,10 @@
       const item = getSelectedItem();
       if (!item) return;
       const dur = Number(item.clip?.duration_s || item.duration_s || 1.4);
-      if (!state.playing && state.playTime >= dur - 0.01) state.playTime = 0;
+      if (!state.playing && state.playTime >= dur - 0.01) {
+        state.playTime = 0;
+        if (item.kind === "vrma") stage?.seekVrma(0);
+      }
       setPlaying(!state.playing);
     });
     ui.btnLoop.addEventListener("click", () => {
@@ -1664,6 +1761,7 @@
       if (!item || item.kind === "builtin") return;
       item.loop = !item.loop;
       if (item.clip) item.clip.loop = item.loop;
+      if (item.kind === "vrma") stage?.setVrmaLoop?.(item.loop);
       item.dirty = true;
       renderTimeline(); syncTopBar();
     });
@@ -1677,12 +1775,11 @@
       const cur = Number(item.clip.duration_s) || 1.4;
       const idx = DURATION_PRESETS.findIndex(d => Math.abs(d - cur) < 0.05);
       const next = DURATION_PRESETS[(idx + 1) % DURATION_PRESETS.length];
-      const scale = next / Math.max(0.1, cur);
-      item.clip.duration_s = next;
+      rescaleClipDuration(item.clip, next);
       item.duration_s = next;
-      for (const kf of item.clip.keyframes) kf.t = Number(Math.min(next, kf.t * scale).toFixed(2));
+      state.playTime = Math.min(state.playTime, next);
       item.dirty = true;
-      renderTimeline(); syncTopBar();
+      renderTimeline(); syncTopBar(); evaluateCurrentPose();
     });
     ui.pEase.addEventListener("click", () => {
       const item = getSelectedItem();
@@ -1724,7 +1821,9 @@
       scrubAt(ev.clientX);
     });
     window.addEventListener("pointermove", ev => { if (scrubbing) scrubAt(ev.clientX); });
-    window.addEventListener("pointerup", () => { scrubbing = false; });
+    const stopScrub = () => { scrubbing = false; };
+    window.addEventListener("pointerup", stopScrub);
+    window.addEventListener("pointercancel", stopScrub);
 
     for (const tabBtn of document.querySelectorAll(".rs-tab")) {
       tabBtn.addEventListener("click", () => {

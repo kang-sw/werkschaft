@@ -1,0 +1,122 @@
+/* Companion stage speech bubble (.ws-companion-quip) for Puppeteer side-comments.
+   Borderless Material tonal styling with subtle primary accent edge glow and a
+   directional speech tail pointing at the character's head, clearly distinct
+   from Messenger chat bubbles. Animations use GPU-composited opacity/translate/scale. */
+.ws-companion-quip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: var(--z-popovers, 60);
+  max-width: min(230px, calc(100vw - 24px));
+  padding: 7px 11px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--wb-card);
+  color: var(--wb-fg);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-primary, #4c8bf5) 34%, var(--wb-line, transparent)),
+    0 6px 18px rgb(0 0 0 / 0.18),
+    0 0 0 2px color-mix(in srgb, var(--wb-primary, #4c8bf5) 12%, transparent);
+  font: 500 12px/1.42 var(--wb-sans, system-ui, sans-serif);
+  letter-spacing: -0.005em;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  user-select: none;
+  will-change: transform, opacity;
+  opacity: 0;
+  translate: 0 5px;
+  scale: 0.96;
+  transition: opacity 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              translate 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              scale 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.ws-companion-quip[data-open="1"]:not([hidden]) {
+  opacity: 1;
+  translate: 0 0;
+  scale: 1;
+}
+
+@starting-style {
+  .ws-companion-quip[data-open="1"]:not([hidden]) {
+    opacity: 0;
+    translate: 0 5px;
+    scale: 0.96;
+  }
+}
+
+/* Directional speech tail pointing toward the character head (--quip-tail-x). */
+.ws-companion-quip::before,
+.ws-companion-quip::after {
+  content: "";
+  position: absolute;
+  left: var(--quip-tail-x, 50%);
+  width: 10px;
+  height: 10px;
+  pointer-events: none;
+}
+
+.ws-companion-quip::before {
+  bottom: -5px;
+  transform: translateX(-50%) rotate(45deg);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--wb-primary, #4c8bf5) 34%, var(--wb-line, transparent));
+  z-index: -1;
+}
+
+.ws-companion-quip::after {
+  bottom: -4px;
+  transform: translateX(-50%) rotate(45deg);
+  border-radius: 2px;
+  background: var(--wb-card);
+}
+
+.ws-companion-quip[data-placement="below"]::before {
+  bottom: auto;
+  top: -5px;
+}
+
+.ws-companion-quip[data-placement="below"]::after {
+  bottom: auto;
+  top: -4px;
+}
+
+/* Dark theme crisp tonal lift */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .ws-companion-quip {
+    background: color-mix(in srgb, var(--wb-card) 94%, var(--wb-primary, #7aa2ff) 6%);
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--wb-primary, #7aa2ff) 42%, var(--wb-line, transparent)),
+      0 10px 26px rgb(0 0 0 / 0.42),
+      0 0 14px color-mix(in srgb, var(--wb-primary, #7aa2ff) 16%, transparent);
+  }
+  :root:not([data-theme="light"]) .ws-companion-quip::after {
+    background: color-mix(in srgb, var(--wb-card) 94%, var(--wb-primary, #7aa2ff) 6%);
+  }
+}
+
+:root[data-theme="dark"] .ws-companion-quip {
+  background: color-mix(in srgb, var(--wb-card) 94%, var(--wb-primary, #7aa2ff) 6%);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--wb-primary, #7aa2ff) 42%, var(--wb-line, transparent)),
+    0 10px 26px rgb(0 0 0 / 0.42),
+    0 0 14px color-mix(in srgb, var(--wb-primary, #7aa2ff) 16%, transparent);
+}
+
+:root[data-theme="dark"] .ws-companion-quip::after {
+  background: color-mix(in srgb, var(--wb-card) 94%, var(--wb-primary, #7aa2ff) 6%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ws-companion-quip {
+    transition: none;
+    translate: 0 0;
+    scale: 1;
+  }
+}
+
+:root[data-extra-motion="off"] .ws-companion-quip {
+  transition: none;
+  translate: 0 0;
+  scale: 1;
+}

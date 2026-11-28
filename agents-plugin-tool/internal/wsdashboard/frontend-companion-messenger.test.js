@@ -144,7 +144,7 @@ function loadCompanionWithMessenger(globals = {}) {
   });
   // Keep globalThis aliases consistent with browser window.
   context.globalThis = context;
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-fx", "vrm-studio", "vrm-props", "vrm-pose", "vrm-colead", "vrm", "stage", "messenger"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-fx", "vrm-studio", "vrm-props", "vrm-pose", "vrm-colead", "vrm-speech", "vrm", "stage", "messenger-md", "messenger"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return { C: context.window.WsCompanion, M: context.window.WsCompanionMessenger, context };
@@ -1101,5 +1101,140 @@ test("Messenger drops a stale snapshot from the same daemon epoch and accepts a 
   assert.equal(M.getState().snapshot.messages.length, 1);
   M.applySnapshot(snapshotWith([], { epoch: 200, seq: 1 }));
   assert.equal(M.getState().snapshot.seq, 1, "a new daemon epoch restarts seq");
+  M.dispose();
+});
+
+test("Phase 2: Messenger mounts compact Brain iframe, pauses on close, syncs theme, reloads on handoff, bridges origin-checked user-send, pops out, and retries fallback", async () => {
+  const winListeners = {};
+  const openedUrls = [];
+  const reflexSends = [];
+  const postedToFrame = [];
+  let hideFrameCalls = 0;
+  let brainStep = 0;
+
+  const doc = {
+    documentElement: { getAttribute: k => (k === "data-theme" ? "dark" : null) },
+    body: null,
+    createElement(tag) {
+      const el = makeFakeElement(tag, doc);
+      if (tag === "iframe") {
+        el.contentWindow = {
+          wsHideFrame() { hideFrameCalls++; },
+          postMessage(payload, targetOrigin) { postedToFrame.push({ payload, targetOrigin }); }
+        };
+      }
+      return el;
+    },
+    createElementNS: (_ns, tag) => makeFakeElement(tag, doc),
+    createTextNode: s => ({ nodeType: 3, textContent: String(s) }),
+    addEventListener() {}
+  };
+  doc.body = makeFakeElement("body", doc);
+
+  const { M, context } = loadCompanionWithMessenger({
+    document: doc,
+    window: {
+      location: { origin: "http://127.0.0.1:41234" },
+      open(url, target, features) { openedUrls.push({ url, target, features }); },
+      addEventListener(type, fn, opts) {
+        (winListeners[type] ||= []).push(fn);
+        if (opts && opts.signal) {
+          opts.signal.addEventListener("abort", () => {
+            winListeners[type] = (winListeners[type] || []).filter(f => f !== fn);
+          });
+        }
+      }
+    }
+  });
+  context.window.WsCompanion.reflex = { onUserSend: data => reflexSends.push(data) };
+
+  M.mount({
+    document: doc,
+    getAnchorRect: () => ({ left: 12, top: 720, right: 352, bottom: 960, width: 340, height: 240 }),
+    fetch: async url => {
+      if (url === "/api/companion/brain") {
+        brainStep++;
+        if (brainStep === 1) {
+          return { ok: false, status: 503, json: async () => ({ ready: false, error: "Brain warming up" }) };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ready: true,
+            replyId: "brain-rid-1",
+            harness: "agy",
+            model: "gemini-pro",
+            personaName: "Mika"
+          })
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ seq: 1, state: "laptop_ambient", posture: "laptop", messages: [], unreadClient: 0, unreadAgent: 0, tier1Summary: [] }) };
+    }
+  });
+
+  const popup = doc.body.children.find(el => el.id === "companion-messenger");
+  const fallback = popup.all().find(el => el.className === "ws-cm-brain-fallback");
+  const retryBtn = popup.all().find(el => el.dataset?.action === "retry-brain");
+  const popoutBtn = popup.all().find(el => el.dataset?.action === "open-full-tab");
+  const brainWrap = popup.all().find(el => el.className === "ws-cm-brain-wrap");
+  const nameEl = popup.all().find(el => el.className === "ws-cm-name");
+  const subtitleEl = popup.all().find(el => el.className === "ws-cm-subtitle");
+
+  // 1. First open hits ready:false fallback banner.
+  M.open();
+  await new Promise(r => setImmediate(r));
+  assert.equal(popup.dataset.mode, "legacy");
+  assert.equal(fallback.hidden, false, "fallback status must show when brain is not ready");
+  assert.equal(brainWrap.hidden, true);
+  assert.equal(popoutBtn.hidden, true);
+
+  // 2. Clicking retry fetches /api/companion/brain again and mounts compact iframe.
+  retryBtn.dispatchEvent({ type: "click" });
+  await new Promise(r => setImmediate(r));
+  assert.equal(popup.dataset.mode, "brain");
+  assert.equal(fallback.hidden, true);
+  assert.equal(brainWrap.hidden, false);
+  assert.equal(popoutBtn.hidden, false);
+  assert.equal(nameEl.textContent, "Mika");
+  assert.equal(subtitleEl.textContent, "agy · gemini-pro");
+  const frame = brainWrap.children[0];
+  assert.ok(frame && frame.tagName === "IFRAME" && frame.className === "ws-cm-frame");
+  assert.equal(frame.getAttribute("src"), "/s/brain-rid-1?frame=1&compact=1");
+
+  // Fire iframe load -> syncs theme + shown:true.
+  postedToFrame.length = 0;
+  frame.dispatchEvent({ type: "load" });
+  assert.ok(postedToFrame.some(m => m.payload.wsShell === "theme" && m.payload.theme === "dark" && m.targetOrigin === "http://127.0.0.1:41234"));
+  assert.ok(postedToFrame.some(m => m.payload.wsShell === "shown" && m.payload.shown === true));
+
+  // 3. Theme sync pushes wsShell:theme to the compact iframe.
+  postedToFrame.length = 0;
+  M.syncTheme("light");
+  assert.deepEqual(JSON.parse(JSON.stringify(postedToFrame)), [{ payload: { wsShell: "theme", theme: "light" }, targetOrigin: "http://127.0.0.1:41234" }]);
+
+  // 4. Handoff notification updates iframe src cleanly to the new Brain replyId.
+  M.onBrainChanged({ kind: "handoff", replyId: "brain-rid-2" });
+  assert.equal(frame.getAttribute("src"), "/s/brain-rid-2?frame=1&compact=1");
+
+  // 5. Origin-checked user-send postMessage bridge: rejects foreign origin / foreign source, forwards valid frame message.
+  const dispatchMsg = ev => { for (const fn of winListeners.message || []) fn(ev); };
+  dispatchMsg({ origin: "https://evil.example", source: frame.contentWindow, data: { wsCompanionCompact: "user-send", rid: "brain-rid-2" } });
+  dispatchMsg({ origin: "http://127.0.0.1:41234", source: {}, data: { wsCompanionCompact: "user-send", rid: "brain-rid-2" } });
+  assert.equal(reflexSends.length, 0, "foreign origin or wrong source must be ignored");
+  dispatchMsg({ origin: "http://127.0.0.1:41234", source: frame.contentWindow, data: { wsCompanionCompact: "user-send", rid: "brain-rid-2" } });
+  assert.equal(reflexSends.length, 1);
+  assert.equal(reflexSends[0].rid, "brain-rid-2");
+
+  // 6. Pop-out button opens full session tab with noopener.
+  popoutBtn.dispatchEvent({ type: "click" });
+  assert.deepEqual(JSON.parse(JSON.stringify(openedUrls)), [{ url: "/s/brain-rid-2", target: "_blank", features: "noopener" }]);
+
+  // 7. Closing messenger calls wsHideFrame() and posts wsShell:shown false to pause SSE/WS.
+  postedToFrame.length = 0;
+  M.close();
+  assert.equal(hideFrameCalls, 1, "close must invoke synchronous wsHideFrame()");
+  assert.ok(postedToFrame.some(m => m.payload.wsShell === "shown" && m.payload.shown === false));
+
   M.dispose();
 });

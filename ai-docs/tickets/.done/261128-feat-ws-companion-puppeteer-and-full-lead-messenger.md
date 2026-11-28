@@ -12,6 +12,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 4103218266fba728
 sage-review-completeness-reviewed: 4103218266fba728
+completed: 2026-11-29
 ---
 
 # Companion Architecture Pivot: High-Tier Mobile Full Lead (Brain), Lightweight Cosmetic Puppeteer (Body), and 0ms Client Physical Reflex
@@ -244,6 +245,13 @@ Per `ai-docs/manuals/release-compatibility.md`, every cross-version surface touc
    - `go test -race -count=1 ./cmd/ws-mcp -run 'TestCompanion'` covering Brain Full Lead manual/tool surface (`ws/compact`, `agenda.set`, `agent.spawn`, `ws/daemon.*`, `remember_soul`/`remember_episode`/`recall_memory`, refusal of `companion.act`), `GET /api/companion/brain` auth/lazy ensure/legacy seed (0 writes, <=1 read), and cross-harness handoff (`CompanionHandoffCheckpoint` + `CreateLead` + `CloseConversation`) on `dashboard.companion_work_tier` change.
    - `go test -race -count=1 ./internal/mcp ./internal/wsagent -run 'TestCompanion'` verifying role gating (`server_inventory.go` + `companion_tools.go:505` memory-tool split), `(1796)=a` approval posture (`companionWorkApprovalGate` retained on `config.tune`/`tickets.index_init`/`whiteboard.*`/`tracker.*`/non-session `note.*`, `CompanionPause: true` retained on mutating `ws/daemon.*`, and `remember_soul`/`remember_episode`/`recall_memory` allowed without confirmation via `companionWorkAllowsWithoutApproval`), and Lead instruction/`LeadSpec.Manual` composition (note: `internal/wsagent` currently has only `TestCompanionCompactionNudgeSuppressed`; new Companion Lead instruction tests will be added in Phase 1).
 
+### Result (577fbd10b) - 2026-11-28
+
+- Promoted `companion-work` (Brain) to Mobile Full Lead (`runner_lead_start.go`, `runner_instructions.go`, `runner_create.go`): composes full Lead manual + `LeadSpec.Manual`, enables `leadStartStateMarker` and playbook command seeding, augments with Companion Persona + Soul/Episodes addendum (`BuildCompanionBrainSystemPrompt`), and keeps `Listed = false`.
+- Updated MCP role gating (`server_inventory.go`, `companion_tools.go`): moved `companion.remember_soul`, `companion.remember_episode`, and `companion.recall_memory` exclusively to `companion-work` and exempted them from confirmation in `companionWorkAllowsWithoutApproval`, while retaining `companionWorkApprovalGate` and `CompanionPause: true` on mutating `ws/daemon.*` per `(1796)=a` and excluding `companion.act`/`companion.phone_*`.
+- Implemented persistent Brain lifecycle (`EnsureBrainSession`, startup reattach, cross-harness/model/effort handoff with `CompanionHandoffCheckpoint` + `CreateLead` + `CloseConversation`, one-time read-only legacy `companion-messenger/seg-*.jsonl` seed `<= 10` messages / `<= 4 KiB`, graceful teardown of pre-upgrade `companion-body` sessions) and `GET /api/companion/brain` (`companion_brain_route.go`, 200L, `localBrowseViewer`-gated) plus `"companion-brain-state"` handoff SSE.
+- Verified with `go test -race -count=1 ./internal/wsagent ./internal/mcp ./internal/wsdashboard ./cmd/ws-mcp -run 'TestCompanion'`.
+
 ### Phase 2: Messenger Compact Frame Embed (`/s/<brainRid>?frame=1&compact=1`, `dashboard-compact.css`, Send Bridge & Markdown Split)
 
 1. **Compact session frame support (`page_routes.go`, `page_regions.go`, `dashboard.tmpl`, `pages.go`):**
@@ -264,6 +272,13 @@ Per `ai-docs/manuals/release-compatibility.md`, every cross-version surface touc
    - `go test -race -count=1 ./internal/wsdashboard -run 'TestPages|TestDevAssets|TestDashboardAssetSourceAssembly|TestCompanion'` verifying `?frame=1&compact=1` HTML attribute, CSP `frame-ancestors 'self'`, and bundle assembly (asset tests are `TestDevAssets*` in `devassets_test.go` and `TestDashboardAssetSourceAssembly` in `asset_source_test.go`; `TestAssets*` does not exist).
    - `node --test agents-plugin-tool/internal/wsdashboard/frontend-companion*.test.js` covering compact iframe mount/open/close `shown` pause, theme sync, handoff `replyId` iframe reload, compact link `window.open`, origin-checked `user-send` bridge, and pop-out button.
 
+### Result (e471d83b7) - 2026-11-29
+
+- Added `?frame=1&compact=1` compact session frame support (`page_routes.go`, `page_regions.go`, `dashboard.tmpl`, `pages.go`) emitting `data-compact="1"` with `frame-ancestors 'self'` and `dashboard-compact.css` (296L) strictly scoped under `:root[data-compact="1"]`; zero edits to `dashboard-conversation.js`.
+- Wired compact frame lifecycle (`dashboard.js`, `dashboard-lifecycle.js`, `dashboard-composer-delivery.js`): immediate render (`shStaged = framed && !compact`), parent `wsShell: "shown"`/`"theme"` handling, external link `window.open(..., "_blank", "noopener")`, suppressed main-shell companion relay, and same-origin `wsCompanionCompact: "user-send"` bridge.
+- Extracted `dashboard-companion-messenger-md.js` (510L), bringing `dashboard-companion-messenger.js` to 932L, mounted `<iframe class="ws-cm-frame" src="/s/<brainRid>?frame=1&compact=1">` with open/close stream pause, theme sync, `"companion-brain-state"` handoff reload, header "Open in full tab" button, and fallback status/retry UI.
+- Verified with `go test -race -count=1 ./internal/wsdashboard -run 'TestPages|TestDevAssets|TestDashboardAssetSourceAssembly|TestSessionCompactFrameRoute|TestCompanion'` and `node --test agents-plugin-tool/internal/wsdashboard/frontend-companion*.test.js`.
+
 ### Phase 3: Lightweight Puppeteer Event Bus (`companion_director.go` + Pure-Cosmetic `act` + Side-Comment Prompt)
 
 1. **Direct Brain event observation & shell Brain state SSE (`companion_director.go`, `companion_command.go`, `live_hosted.go`):**
@@ -282,6 +297,12 @@ Per `ai-docs/manuals/release-compatibility.md`, every cross-version surface touc
    - Add optional `CosmeticOnly bool` on `CompanionActRequest` (`companion_act.go:16-67,288-363`) for T0 backward compatibility with any external/legacy MCP `ws/companion.act` caller: when true (or when no phone lease is active), skip `ConsumeUnreadForAct`, `RenewLease`, and blocking sleep, broadcasting `CompanionCommand` immediately with monotonic `Seq` (`atomic.Int64`) and `Priority`.
 4. **Verification:**
    - `go test -race -count=1 ./internal/wsdashboard -run 'TestCompanionDirector|TestCompanionAct|TestCompanionCommand'` testing all 5 triggers on Brain `replyID` while unfocused and regardless of lease, separate `brainWatch` surviving tab `refocusLocked`, wildcard `SessionID: "*"` for Brain commands, injected Puppeteer tier callback, `companionActionCatalog` custom action key preservation in `parseCompanionReply`, `"companion-brain-state"` SSE broadcast, 250ms coalescing, high-priority preemption, hourly cap enforcement, loop-prevention drop, pure-cosmetic `act` zero-wait / zero-unread-drain, and 140-rune quip clamping.
+
+### Result (97863fe80) - 2026-11-29
+
+- Implemented the Lightweight Puppeteer Event Bus (`companion_puppeteer.go`, `companion_director.go`, `companion_command.go`, `companion_act.go`, `live_hosted.go`, `cmd/ws-mcp/dashboard.go`): dedicated `brainWatch` surviving tab refocus, direct unfocused/unleased Brain observation across all 5 triggers (`user_message`, `brain_work_start`, `subagent_event`, `brain_reply`, `brain_idle`, plus `error`), `"companion-brain-state"` rail SSE broadcast, wildcard `SessionID: "*"` for Brain-originated Puppeteer commands, 250ms coalescing with high-priority preemption and hourly-cap enforcement, and `source: "puppeteer"` loop-prevention filtering.
+- Injected `Daemon.SetCompanionPuppeteerTier` backed by `wsagent.ResolveCompanionTier` on `dashboard.companion_body_tier`, injected `d.companionActionCatalog()` custom actions into Puppeteer prompt and `companionAllowedIDs`, and added pure-cosmetic `CosmeticOnly` fast path + monotonic `Seq`/`Priority` to `CompanionAct` / `CompanionCommand`.
+- Verified with `go test -race -count=1 ./internal/wsdashboard -run 'TestCompanionDirector|TestCompanionAct|TestCompanionCommand'`.
 
 ### Phase 4: 0ms Client Physical Reflex + Stage Speech Bubble Polish + Settings UI & 11 Locales
 
@@ -305,6 +326,13 @@ Per `ai-docs/manuals/release-compatibility.md`, every cross-version surface touc
    - `node --test agents-plugin-tool/internal/wsdashboard/frontend-companion*.test.js agents-plugin-tool/internal/wsdashboard/frontend-settings*.test.js` covering 0ms reflex lease, 4s-revert suppression, Puppeteer `seq` yield, idle/work fallback, quip `textContent`-only XSS safety & clamping, and Settings companion-agent labels.
    - `go test -race -count=1 ./internal/wsi18n ./internal/wsdashboard -run 'TestOtherTables|TestPlaceholders|TestPlural|TestSettings|TestConfig|TestCompanion'` verifying 11-locale key parity (`TestOtherTablesHoldEveryEnglishKey`, `TestOtherTablesHoldOnlyEnglishKeysAndNames`, `TestPlaceholdersMatchEnglish`, `TestPluralKeysComeInPairs` in `internal/wsi18n`, which do not match `Test.*Locale`) and manifest/catalog alignment.
 
+### Result (18cbe0b4e) - 2026-11-29
+
+- Implemented 0ms Client Physical Reflex (`dashboard-companion-reflex.js`, 192L) with 1-line delegation hooks in `dashboard-companion-stage.js` and `dashboard-companion-vrm-colead.js`, plus shell rail SSE `"companion-brain-state"` wiring (`dashboard-shell.js` / `dashboard-stream.js`): instant `phone_pickup` on `user-send`, 6s reflex lease suppressing stale `buzz` and 4s `PHONE_UNCONFIRMED_GRACE` revert, monotonic `seq` yield to Puppeteer `phone_*` commands (bounded 15s cap), and automatic fallback on `brain_work_start`/`subagent_event`/`brain_idle` or timeout.
+- Extracted and polished the stage speech bubble (`dashboard-companion-quip.js` 182L, `dashboard-companion-quip.css` 122L): strict `textContent`-only rendering with 140-rune cap, head-relative anchoring with viewport + `.shell-bottom` clamping, CSS directional tail (`--quip-tail-x`), and GPU-composited `transform`/`opacity` enter/exit transitions respecting reduced-motion.
+- Updated `dashboard.companion_body_tier` (Puppeteer) and `dashboard.companion_work_tier` (Brain) descriptions in both `agents-plugin/dashboard-config-manifest.json` and `agents-plugin-wsflow/dashboard-config-manifest.json`, updated `dashboard-settings-companion-agents.js`, and synchronized all 11 locale tables (`internal/wsi18n/tables/*.json`, 4,474 keys each).
+- Verified with `node --test agents-plugin-tool/internal/wsdashboard/frontend-companion*.test.js agents-plugin-tool/internal/wsdashboard/frontend-settings*.test.js` (184/184 pass), `go test -race -count=1 ./internal/wsi18n ./internal/wspackage ./internal/wsdashboard`, `generate-package-assets.py --check`, and `python3 -m unittest discover agents-plugin-wsflow/tests`.
+
 ### Phase 5: Legacy Tool Deprecation Aliases, Dead FIFO Removal & Full Verification
 
 1. **Legacy MCP tool T0 deprecation aliases & dead FIFO cleanup (`internal/mcp/companion_tools.go`, `cmd/ws-mcp/companion_runtime.go`):**
@@ -324,3 +352,22 @@ Per `ai-docs/manuals/release-compatibility.md`, every cross-version surface touc
      - Sending a message triggers instant 0ms `phone_pickup` with zero 4s flicker, yields cleanly to Puppeteer `phone_*` + expression/quip, and falls back on work-start/idle.
      - Stage speech bubble (`.ws-companion-quip`) renders head-anchored with speech tail, crisp dark/light contrast, zero overlap with Messenger bubbles or `.shell-bottom`, and zero console/page errors across both VRM 0.x and VRM 1.0.
      - Confirm `dashboard-conversation.js` has `0` diff lines against `develop` and every new file is `< 1,000L`.
+
+### Result (2cd80ba4e) - 2026-11-29
+
+- Converted legacy 2-tier phone and FIFO delegation MCP tools (`companion.phone_pickup`, `companion.phone_read`, `companion.phone_send`, `companion.phone_putdown`, `companion.delegate_work`, `delegation.report`) in `internal/mcp/companion_tools.go` into safe T0 deprecation aliases returning structured `{ deprecated: true, tool, notice }` responses without unknown-tool errors or phone-lease blocking.
+- Removed dead single-slot delegation FIFO dispatch/queue/deadline machinery and Body-owns-Messenger wake loop from `cmd/ws-mcp/companion_runtime.go` (455L) and unused `CompanionDelegation` proxy wiring from `cmd/ws-mcp/{dashboard,proxy}.go`, preserving read-only legacy `companion-messenger/seg-*.jsonl` seed hydration.
+- Added Chromium Playwright acceptance test `TestCompanionPuppeteerCompactMessengerBrowser` (`companion_puppeteer_browser_test.go` + `testdata/companion-puppeteer.browser.cjs`) verifying compact Brain iframe, 0ms reflex, Puppeteer yield, `textContent`-only `.ws-companion-quip` with CSS directional tail, dark/light contrast, and `brain_idle` hold release across VRM 1.0 and VRM 0.x.
+- Full verification passed:
+  - `go -C agents-plugin-tool build ./...`, `go -C agents-plugin-tool vet ./...`, `GOOS=windows go -C agents-plugin-tool vet ./...`
+  - `python3 agents-plugin-tool/scripts/generate-package-assets.py --check` & `python3 -m unittest discover agents-plugin-wsflow/tests` (22 tests, 2 skipped)
+  - 11-locale key parity (`4,474` identical keys across all 11 tables in `internal/wsi18n/tables/`)
+  - `node --test agents-plugin-tool/internal/wsdashboard/frontend-companion*.test.js agents-plugin-tool/internal/wsdashboard/frontend-settings*.test.js` (184/184 pass)
+  - `-race` Go tests: `./internal/wsagent -run 'TestCompanion'`, `./internal/wsconfig`, `./internal/wsi18n`, `./internal/wspackage`, `./internal/mcp -run 'TestCompanion|TestDelegation|TestDaemon|TestServerInventory|TestFilter|TestTool'`, `./cmd/ws-mcp -run 'TestCompanion'`, `./internal/wsdashboard -run 'TestCompanion|TestSettings|TestConfig|TestManifest|TestDashboardAssetSourceAssembly|TestDevAssets|TestSessionCompactFrameRoute|TestPagesCarryTheTracker'`
+  - Real-VRM Playwright E2E (`WS_VRM0_SAMPLE` + `WS_VRM1_SAMPLE`): `TestCompanionPuppeteerCompactMessengerBrowser` (pass, 16.39s) & `TestCompanionVrmBrowser` (pass, 84.36s, `phase=2`, `vrm1`+`vrm0`, 10 switch cycles, `activeFps=25.27`, `idleFps=5.96`, `hiddenFrames=0`)
+  - Confirmed `dashboard-conversation.js` has `0` diff lines against merge-base `f356a7a8e`, and all new/refactored files are `< 1,000L`.
+
+
+## Resolution (2026-11-29)
+
+Implemented all 5 phases on `impl/develop/swell-polar-swan` (`577fbd10b`..`2cd80ba4e`): Brain Full Lead promotion with `/api/companion/brain` and `(1796)=a` approval gating, compact Brain iframe Messenger (`?frame=1&compact=1`, 0 edits to `dashboard-conversation.js`), Lightweight Puppeteer Event Bus with pure-cosmetic `CompanionAct`, 0ms Client Physical Reflex + stage speech bubble + Settings UI across 11 locales, and legacy T0 deprecation aliases + dead FIFO removal + real-VRM Playwright E2E. Verified with `go build`, `go vet`, `GOOS=windows go vet`, targeted `-race` Go tests, Node frontend tests, real-VRM Playwright Chromium E2E, 11-locale parity, and a clean `code-review-lite` pass (`agy.medium`).

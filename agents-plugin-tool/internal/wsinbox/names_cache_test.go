@@ -130,3 +130,157 @@ func TestExternalWriteIsSeenOnTheNextCheck(t *testing.T) {
 		t.Fatalf("after an external drain: Names = %v, want [%s]", got, ext)
 	}
 }
+
+func statCount() int64 { return wsstate.FileIOCounters()["file_io_stat"] }
+
+func TestNamesWithinFallbackInvalidationAndAuthoritativeFreshness(t *testing.T) {
+	now := time.Now()
+	prevNow := namesNow
+	namesNow = func() time.Time { return now }
+	t.Cleanup(func() { namesNow = prevNow })
+
+	const maxAge = 5 * time.Second
+	root := t.TempDir()
+	dirA := filepath.Join(root, "a", "inbox")
+	dirB := filepath.Join(root, "b", "inbox")
+
+	// 1. Missing directory is cached for maxAge with zero stats, while
+	// authoritative Names still stats immediately and sees external creation.
+	if got, err := NamesWithin(dirA, maxAge); err != nil || len(got) != 0 {
+		t.Fatalf("cold missing NamesWithin = %v, %v", got, err)
+	}
+	statsBefore, readsBefore := statCount(), readDirs()
+	for range 10 {
+		if got, err := NamesWithin(dirA, maxAge); err != nil || len(got) != 0 {
+			t.Fatalf("cached missing NamesWithin = %v, %v", got, err)
+		}
+	}
+	if statCount()-statsBefore != 0 || readDirs()-readsBefore != 0 {
+		t.Fatalf("cached missing dir used stats=%d readDirs=%d, want 0/0", statCount()-statsBefore, readDirs()-readsBefore)
+	}
+
+	// External writer creates dirA with an entry (without bumping namesGen).
+	if err := os.MkdirAll(dirA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ext1 := "20261128T000001.000000000Z-aaaa1111.json"
+	if err := os.WriteFile(filepath.Join(dirA, ext1), []byte(`{"schemaVersion":1,"parts":["ext1"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Still cached as missing within maxAge.
+	if got, err := NamesWithin(dirA, maxAge); err != nil || len(got) != 0 {
+		t.Fatalf("within maxAge NamesWithin = %v, %v; want cached empty", got, err)
+	}
+	// Authoritative Names and Held see external write immediately.
+	if got := mustNames(t, Names, dirA); !slices.Equal(got, []string{ext1}) {
+		t.Fatalf("authoritative Names missed external creation: %v", got)
+	}
+	if held, err := Held(dirA); err != nil || len(held) != 1 {
+		t.Fatalf("authoritative Held = %v, %v; want 1", held, err)
+	}
+
+	// 2. Populating recent (within namesTrustAge) and settled dirs via
+	// NamesWithin skips both stat and read_dir until maxAge elapses.
+	now = now.Add(maxAge)
+	if got, err := NamesWithin(dirA, maxAge); err != nil || !slices.Equal(got, []string{ext1}) {
+		t.Fatalf("after maxAge NamesWithin = %v, %v; want [%s]", got, err, ext1)
+	}
+	bEntry, _ := send(t, dirB, "b-first")
+	if got, err := NamesWithin(dirB, maxAge); err != nil || !slices.Equal(got, []string{bEntry}) {
+		t.Fatalf("cold dirB NamesWithin = %v, %v", got, err)
+	}
+	// Re-warm dirA after in-process send(dirB) bumped global namesGen.
+	if got, err := NamesWithin(dirA, maxAge); err != nil || !slices.Equal(got, []string{ext1}) {
+		t.Fatalf("rewarm dirA NamesWithin = %v, %v", got, err)
+	}
+	statsBefore, readsBefore = statCount(), readDirs()
+	for range 10 {
+		if got, err := NamesWithin(dirA, maxAge); err != nil || !slices.Equal(got, []string{ext1}) {
+			t.Fatalf("cached dirA NamesWithin = %v, %v", got, err)
+		}
+		if got, err := NamesWithin(dirB, maxAge); err != nil || !slices.Equal(got, []string{bEntry}) {
+			t.Fatalf("cached dirB NamesWithin = %v, %v", got, err)
+		}
+	}
+	if statCount()-statsBefore != 0 || readDirs()-readsBefore != 0 {
+		t.Fatalf("warm NamesWithin used stats=%d readDirs=%d, want 0/0", statCount()-statsBefore, readDirs()-readsBefore)
+	}
+
+	// 3. Dir-scoped InvalidateNames(dirA) exposes an external write on dirA
+	// immediately while keeping dirB cached at zero stats.
+	ext2 := "20261128T000002.000000000Z-bbbb2222.json"
+	if err := os.WriteFile(filepath.Join(dirA, ext2), []byte(`{"schemaVersion":1,"parts":["ext2"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	InvalidateNames(dirA)
+	if got, err := NamesWithin(dirA, maxAge); err != nil || !slices.Equal(got, []string{ext1, ext2}) {
+		t.Fatalf("after dir-scoped InvalidateNames(dirA) = %v, %v", got, err)
+	}
+	statsBefore = statCount()
+	if got, err := NamesWithin(dirB, maxAge); err != nil || !slices.Equal(got, []string{bEntry}) {
+		t.Fatalf("unrelated dirB NamesWithin = %v, %v", got, err)
+	}
+	if statCount()-statsBefore != 0 {
+		t.Fatalf("dir-scoped invalidate of dirA caused %d stats on dirB, want 0", statCount()-statsBefore)
+	}
+
+	// 4. Global InvalidateNames() expires dirB too.
+	extB := "20261128T000003.000000000Z-cccc3333.json"
+	if err := os.WriteFile(filepath.Join(dirB, extB), []byte(`{"schemaVersion":1,"parts":["extB"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	InvalidateNames()
+	if got, err := NamesWithin(dirB, maxAge); err != nil || !slices.Equal(got, []string{extB, bEntry}) {
+		t.Fatalf("after global InvalidateNames() dirB = %v, %v", got, err)
+	}
+
+	// 5. In-process writes (Send, Steer, Drain) invalidate immediately without
+	// advancing clock, including DrainedNamesWithin.
+	if got, err := DrainedNamesWithin(dirA, maxAge); err != nil || len(got) != 0 {
+		t.Fatalf("cold DrainedNamesWithin = %v, %v", got, err)
+	}
+	inProc, _ := send(t, dirA, "in-process")
+	if got, err := NamesWithin(dirA, maxAge); err != nil || !slices.Contains(got, inProc) {
+		t.Fatalf("in-process Send not immediately visible to NamesWithin: %v", got)
+	}
+	if _, err := Drain(dirA); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := NamesWithin(dirA, maxAge); err != nil || len(got) != 0 {
+		t.Fatalf("in-process Drain not immediately visible to NamesWithin: %v", got)
+	}
+	if got, err := DrainedNamesWithin(dirA, maxAge); err != nil || len(got) != 3 {
+		t.Fatalf("in-process Drain not immediately visible to DrainedNamesWithin: %v, %v", got, err)
+	}
+
+	// 6. Un-nudged external write to DrainedDir is seen immediately by
+	// authoritative DrainedNames and after maxAge by DrainedNamesWithin.
+	extDrained := "20261128T000004.000000000Z-dddd4444.json"
+	if err := os.WriteFile(filepath.Join(DrainedDir(dirA), extDrained), []byte(`{"schemaVersion":1,"parts":["extD"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := DrainedNamesWithin(dirA, maxAge); err != nil || slices.Contains(got, extDrained) {
+		t.Fatalf("un-nudged drained write leaked before maxAge: %v", got)
+	}
+	if got := mustNames(t, DrainedNames, dirA); !slices.Contains(got, extDrained) {
+		t.Fatalf("authoritative DrainedNames missed external drained write: %v", got)
+	}
+	now = now.Add(maxAge)
+	if got, err := DrainedNamesWithin(dirA, maxAge); err != nil || !slices.Contains(got, extDrained) {
+		t.Fatalf("DrainedNamesWithin after maxAge missed external drained write: %v", got)
+	}
+
+	// 7. Generation fence prevents a stale in-flight listing from overwriting an
+	// intervening InvalidateNames call.
+	gen, dirGen, _, _ := lookupNamesCache(dirA)
+	InvalidateNames(dirA)
+	storeNames(dirA, namesListing{
+		gen:       gen,
+		dirGen:    dirGen,
+		checkedAt: now,
+		names:     []string{"stale-in-flight.json"},
+	})
+	if got, err := NamesWithin(dirA, maxAge); err != nil || slices.Contains(got, "stale-in-flight.json") {
+		t.Fatalf("stale storeNames bypassed dirGen fence: %v, %v", got, err)
+	}
+}

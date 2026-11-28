@@ -310,6 +310,8 @@ func (d *Daemon) handleNudge(w http.ResponseWriter, r *http.Request) {
 	}
 	// Before the registration check: a mail sender need not be a
 	// registered session, and each woken wait rechecks its own target.
+	d.invalidateInboxNames(body.ReplyID)
+	d.invalidateSnapshot(body.ReplyID)
 	if d.mailWake != nil {
 		d.mailWake.Nudge()
 	}

@@ -99,6 +99,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-lifecycle.js",
 	"dashboard-voice-ptt.js",
 	"dashboard-voice.js",
+	"dashboard-voice-field.js",
 	"dashboard-voice-native.js",
 }
 
@@ -110,6 +111,8 @@ var companionScriptFiles = []string{
 	"dashboard-companion-compositor.js",
 	"dashboard-companion-scenarios.js",
 	"dashboard-companion-menu.js",
+	"dashboard-companion-reflex.js",
+	"dashboard-companion-quip.js",
 	"dashboard-companion-vrm-fx.js",
 	"dashboard-companion-vrm-studio.js",
 	"dashboard-companion-vrm-props.js",
@@ -117,7 +120,9 @@ var companionScriptFiles = []string{
 	"dashboard-companion-vrm-ik.js",
 	"dashboard-companion-vrm-clip.js",
 	"dashboard-companion-vrm-colead.js",
+	"dashboard-companion-vrm-speech.js",
 	"dashboard-companion-vrm.js",
+	"dashboard-companion-messenger-md.js",
 	"dashboard-companion-messenger.js",
 	"dashboard-companion-messenger-presence.js",
 	"dashboard-companion-stage.js",
@@ -125,6 +130,7 @@ var companionScriptFiles = []string{
 
 var companionStyleFiles = []string{
 	"dashboard-companion.css",
+	"dashboard-companion-quip.css",
 	"dashboard-companion-messenger.css",
 }
 
@@ -157,6 +163,7 @@ var dashboardStyleFiles = []string{
 	"dashboard-composer-ucmd-editor.css",
 	"dashboard-voice.css",
 	"dashboard-jank.css",
+	"dashboard-compact.css",
 }
 
 var trackerScriptFiles = []string{

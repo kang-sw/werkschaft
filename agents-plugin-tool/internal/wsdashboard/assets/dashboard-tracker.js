@@ -982,6 +982,7 @@
     if (window.WsInput) {
       c.input = window.WsInput.attach(c.ta, {
         keymap: function () { return inputMode === "mod" ? "mod-send" : "enter-send"; },
+        voice: true,
         features: {
           markdown: true,
           capsules: true,

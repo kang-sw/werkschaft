@@ -364,6 +364,10 @@ func TestRefreshTickDefersForeignInputsToTheSafetyLook(t *testing.T) {
 	// Liveness that follows the clock needs no renewed look.
 	f.waitSkipping(t)
 	writeSnapshot(t, f.dir, "boardsession", &wslive.Snapshot{SchemaVersion: 1, Adapter: "pi", UpdatedAt: time.Now().UnixMilli(), HeartbeatMs: 400})
+	// This direct disk write is followed only by a broker wake, which
+	// invalidates nothing (unlike /nudge, NotifySessionChange or
+	// sessionChanged), so invalidate explicitly.
+	f.d.snapshots.Invalidate(f.dir, "boardsession")
 	f.d.broker.wake("boardsession")
 	if ev, ok := nextRegion(t, board, 3*time.Second); !ok || ev.Name != regionMode || ev.HTML != modeLive {
 		t.Fatalf("after the snapshot got %+v (%v), want the live mode", ev, ok)

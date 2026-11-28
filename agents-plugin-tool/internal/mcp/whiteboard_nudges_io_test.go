@@ -3,9 +3,14 @@ package mcp
 import (
 	"fmt"
 	"os"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wsmailbox"
 	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
@@ -53,5 +58,117 @@ func TestWhiteboardPokedDiscoveryIsConstantIO(t *testing.T) {
 	}
 	if got := after["file_io_read_dir"] - before["file_io_read_dir"]; got != 0 {
 		t.Fatalf("poke enumerated keys: %d directory reads", got)
+	}
+}
+
+type countingPiAgents struct {
+	*fakePiAgents
+	gets atomic.Int64
+	// onGet, when set, runs inside every Get before it answers.
+	onGet func()
+}
+
+func (c *countingPiAgents) Get(id string) (wsagent.State, error) {
+	c.gets.Add(1)
+	if c.onGet != nil {
+		c.onGet()
+	}
+	return c.fakePiAgents.Get(id)
+}
+
+func siteDelta(before, after map[string]int64, substr string) int64 {
+	var total int64
+	for k, v := range after {
+		if strings.Contains(k, substr) {
+			total += v - before[k]
+		}
+	}
+	return total
+}
+
+func TestWhiteboardProcessBoardLazyDeliveryGateZeroIO(t *testing.T) {
+	f := newNudgeFixture(t)
+	_, fake := f.hosted(t)
+	agents := &countingPiAgents{fakePiAgents: fake}
+	f.n.agents = agents
+
+	// 1. Absent board: zero identity(), ReadRegistration, or agents.Get calls.
+	absent := nudgeTarget{key: "absent-board-lazy-gate", root: f.target.root}
+	nudgeWriteJSON(t, f.n.dirs().partPath(absent.key, partKey), f.record)
+	absentRow := f.row
+	absentRow.ReplyID = wsmailbox.ReplyID(absent.key)
+	if err := wsdashboard.WriteRegistration(f.n.dir, absentRow); err != nil {
+		t.Fatal(err)
+	}
+	before := wsstate.FileIOCounters()
+	next, presence := f.n.processBoard(absent, nudgeNow.Add(8*time.Hour))
+	after := wsstate.FileIOCounters()
+	if presence != nudgeAbsent || !next.IsZero() {
+		t.Fatalf("absent processBoard = (%v, %v), want (zero, nudgeAbsent)", next, presence)
+	}
+	if got := agents.gets.Load(); got != 0 {
+		t.Fatalf("absent board called agents.Get %d times, want 0", got)
+	}
+	if got := siteDelta(before, after, "wsdashboard/registry.go:"); got != 0 {
+		t.Fatalf("absent board triggered %d registry.go file ops, want 0", got)
+	}
+	if got := siteDelta(before, after, "mcp/whiteboard_nudges.go:"); got != 0 {
+		t.Fatalf("absent board triggered %d whiteboard_nudges.go file ops, want 0", got)
+	}
+
+	// 2. Present but not-due board: PeekNotify returns exact next deadline with
+	// zero identity(), ReadRegistration, or agents.Get I/O.
+	before = wsstate.FileIOCounters()
+	next, presence = f.n.processBoard(f.target, nudgeNow.Add(30*time.Second))
+	after = wsstate.FileIOCounters()
+	wantNext := nudgeNow.Add(time.Minute)
+	if presence != nudgePresent || !next.Equal(wantNext) {
+		t.Fatalf("not-due processBoard = (%v, %v), want (%v, nudgePresent)", next, presence, wantNext)
+	}
+	if got := agents.gets.Load(); got != 0 {
+		t.Fatalf("not-due board called agents.Get %d times, want 0", got)
+	}
+	if got := after["file_io_stat"] - before["file_io_stat"]; got != 0 {
+		t.Fatalf("not-due board used %d stats, want 0", got)
+	}
+	if got := after["file_io_read_file"] - before["file_io_read_file"]; got != 0 {
+		t.Fatalf("not-due board used %d file reads, want 0", got)
+	}
+
+	// 3. Due board: constructs deliveryGate outside the board lock and enqueues
+	// the nudge via Notify. While agents.Get runs, the board's slot lock and
+	// BoardDB.mu must both be free: a re-entrant use (which takes the slot lock
+	// and reads Revision under BoardDB.mu) must complete. It runs in its own
+	// goroutine so a held lock fails the test instead of deadlocking it.
+	var boardFreeInGet atomic.Bool
+	agents.onGet = func() {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_ = f.n.stores.use(f.target.root, f.target.key, nil, false, func(slot *whiteboardSlot) error {
+				if slot.board != nil {
+					slot.board.Revision()
+				}
+				return nil
+			})
+		}()
+		select {
+		case <-done:
+			boardFreeInGet.Store(true) // only a completion inside Get counts
+		case <-time.After(2 * time.Second):
+		}
+	}
+	_, presence = f.n.processBoard(f.target, nudgeNow.Add(2*time.Minute))
+	if !boardFreeInGet.Load() {
+		t.Fatal("board lock was held while agents.Get ran")
+	}
+	if presence != nudgePresent {
+		t.Fatalf("due board presence = %v, want nudgePresent", presence)
+	}
+	if got := agents.gets.Load(); got != 1 {
+		t.Fatalf("due board called agents.Get %d times, want 1", got)
+	}
+	if got := len(f.queue(t)); got != 1 {
+		t.Fatalf("due board enqueued %d messages, want 1", got)
 	}
 }

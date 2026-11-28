@@ -52,8 +52,48 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # GitHub's REST API hides *draft* releases from tokens that only have
+  # `contents: read`. A failed publish can leave an orphaned draft release for
+  # the tag the planner would pick next; if `plan` (read-only) cannot see it, the
+  # whole CI + build matrix runs and then collides at publish. Draft visibility
+  # needs push access, so the scan is isolated in this minimal job:
+  #   - only runs for prerelease mode on refs/heads/develop (the only ref that
+  #     can publish), so artifact/branch dispatches never get a write token;
+  #   - has NO checkout and runs NO repository code or third-party actions,
+  #     only the runner's preinstalled `gh` with a fixed, hard-coded query, so
+  #     the elevated token is never exposed to ref-controlled scripts;
+  #   - emits only tag names that match the canary/stable shape, and `plan`
+  #     (contents: read) consumes them as plain data via --release-tags.
+  # The workflow is workflow_dispatch-only (callers already need write access),
+  # and `publish` holds the same `contents: write` scope, so this adds no new
+  # privilege beyond what the pipeline already grants on develop.
+  release-scan:
+    name: Scan releases (incl. drafts)
+    if: ${{ inputs.mode == 'prerelease' && github.ref == 'refs/heads/develop' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      release_tags: ${{ steps.scan.outputs.release_tags }}
+    steps:
+      - name: List release tags including drafts
+        id: scan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tags=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq '.[].tag_name | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+(-canary\\.[0-9]+)?$"))')
+          echo "release_tags=$(printf '%s' "$tags" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+
   plan:
     name: Plan canary build
+    needs: release-scan
+    # release-scan is skipped (not failed) outside prerelease mode; in
+    # prerelease mode a missing/failed scan must fail closed rather than plan
+    # from a draft-blind release list.
+    if: ${{ !cancelled() && (needs.release-scan.result == 'success' || (needs.release-scan.result == 'skipped' && inputs.mode != 'prerelease')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -88,12 +128,16 @@ jobs:
           CANARY_REF: ${{ github.ref }}
           CANARY_REPO: ${{ github.repository }}
           RUN_CI_INPUT: ${{ inputs.run_ci }}
+          # Draft-inclusive release tags from the write-scoped release-scan job
+          # (this job's read-only token cannot see draft releases).
+          RELEASE_TAGS: ${{ needs.release-scan.outputs.release_tags }}
         run: |
           python3 agents-plugin-tool/scripts/resolve-canary-version.py resolve \
             --mode "$CANARY_MODE" \
             --ref "$CANARY_REF" \
             --signing "$CANARY_SIGNING" \
             --github-repository "$CANARY_REPO" \
+            --release-tags="$RELEASE_TAGS" \
             --github-output "$GITHUB_OUTPUT"
           if [ "$CANARY_MODE" = "prerelease" ] || [ "$RUN_CI_INPUT" = "true" ]; then
             echo "run_ci=true" >> "$GITHUB_OUTPUT"

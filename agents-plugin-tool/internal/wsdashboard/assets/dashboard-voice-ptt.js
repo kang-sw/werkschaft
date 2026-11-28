@@ -161,41 +161,99 @@
       return { start: caretStart, end: caretEnd };
     }
 
-    function positionCapsule() {
-      if (!cap) return;
-      var field = cap.parentNode;
+    // Read pass: every geometry read happens here, before renderCapsule writes
+    // anything, so showing the capsule never forces a layout flush.
+    function measureCapsule() {
       var anchor = null;
       if (ctext && ctext.wsc && typeof ctext.wsc.anchor === "function") {
         try { anchor = ctext.wsc.anchor(caretStart); } catch (e) { anchor = null; }
       }
-      var fieldRect = field && typeof field.getBoundingClientRect === "function"
-        ? field.getBoundingClientRect()
-        : { left: 0, top: 0, width: 320, height: 40 };
+      var hasAnchor = !!(anchor && typeof anchor.x === "number");
+      var view = doc.defaultView || (typeof window !== "undefined" ? window : null) || {};
+      // A floating capsule lives under <body>, so its own parent is no anchor:
+      // fall back to the field itself (its editor when WsCapsules wraps it).
+      var ref = opts.floating ? getEditor() || ctext : cap.parentNode;
+      var rect = ref && typeof ref.getBoundingClientRect === "function"
+        ? ref.getBoundingClientRect()
+        : { left: 0, top: 0, width: 320, height: 40, bottom: 40 };
+      var pos = { floating: !!opts.floating, caret: caretStart };
+      if (opts.floating) {
+        var capW = Math.min(280, (view.innerWidth || 320) - 8);
+        var maxX = Math.max(4, (view.innerWidth || 320) - capW - 4);
+        var maxY = Math.max(4, (view.innerHeight || 240) - 44);
+        var baseLeft = hasAnchor ? anchor.x : rect.left;
+        var baseTop = hasAnchor && typeof anchor.bottom === "number" ? anchor.bottom + 4
+          : (typeof rect.bottom === "number" ? rect.bottom : rect.top + rect.height) + 4;
+        pos.left = Math.max(4, Math.min(Math.round(baseLeft), maxX));
+        pos.top = Math.max(4, Math.min(Math.round(baseTop), maxY));
+        return pos;
+      }
       var left = 8;
       var top = 4;
-      if (anchor && typeof anchor.x === "number") {
-        left = Math.max(4, Math.round(anchor.x - fieldRect.left));
-        if (fieldRect.width > 80) left = Math.min(left, Math.max(4, Math.round(fieldRect.width - 140)));
-        if (typeof anchor.bottom === "number") {
-          top = Math.max(2, Math.round(anchor.bottom - fieldRect.top + 4));
-        }
+      if (hasAnchor) {
+        left = Math.max(4, Math.round(anchor.x - rect.left));
+        if (rect.width > 80) left = Math.min(left, Math.max(4, Math.round(rect.width - 140)));
+        if (typeof anchor.bottom === "number") top = Math.max(2, Math.round(anchor.bottom - rect.top + 4));
       }
-      cap.style.left = left + "px";
-      cap.style.top = top + "px";
-      cap.setAttribute("data-caret", String(caretStart));
+      pos.left = left;
+      pos.top = top;
+      return pos;
+    }
+
+    function applyCapsulePosition(pos) {
+      cap.style.left = pos.left + "px";
+      cap.style.top = pos.top + "px";
+      cap.setAttribute("data-caret", String(pos.caret));
+    }
+
+    // A visible floating capsule follows its field on viewport resize/scroll;
+    // the listeners exist only while it is visible so an idle page pays nothing.
+    var view = null, trackOn = false, raf = 0;
+    function reposition() {
+      raf = 0;
+      if (!cap || cap.hidden) return;
+      var pos = measureCapsule();
+      applyCapsulePosition(pos);
+    }
+    function onViewport() {
+      if (raf) return;
+      if (view && typeof view.requestAnimationFrame === "function") raf = view.requestAnimationFrame(reposition);
+      else reposition();
+    }
+    function trackViewport(on) {
+      if (!opts.floating || on === trackOn) return;
+      view = view || doc.defaultView || (typeof window !== "undefined" ? window : null);
+      if (!view || typeof view.addEventListener !== "function") return;
+      trackOn = on;
+      if (on) {
+        view.addEventListener("resize", onViewport);
+        view.addEventListener("scroll", onViewport, { capture: true, passive: true });
+      } else {
+        view.removeEventListener("resize", onViewport);
+        view.removeEventListener("scroll", onViewport, true);
+        if (raf && typeof view.cancelAnimationFrame === "function") view.cancelAnimationFrame(raf);
+        raf = 0;
+      }
     }
 
     function renderCapsule(state, text, err) {
       if (!cap) return;
+      var pos = state === "idle" ? null : measureCapsule();
       cap.textContent = "";
       if (state === "idle") {
         cap.hidden = true;
         cap.removeAttribute("data-state");
+        trackViewport(false);
         return;
       }
       cap.hidden = false;
       cap.setAttribute("data-state", state);
-      positionCapsule();
+      applyCapsulePosition(pos);
+      trackViewport(true);
+      if (opts.floating) {
+        cap.setAttribute("role", "status");
+        cap.setAttribute("aria-live", "polite");
+      }
       var dot = doc.createElement("span");
       dot.className = "cvox-dot";
       dot.setAttribute("aria-hidden", "true");
@@ -363,7 +421,8 @@
       commitFinal: commitFinal,
       showError: showError,
       reset: reset,
-      renderCapsule: renderCapsule
+      renderCapsule: renderCapsule,
+      destroy: function () { clearSpan(); trackViewport(false); }
     };
   }
 
@@ -616,16 +675,18 @@
     boundTargets.forEach(function (target) {
       boundHandlers.forEach(function (h) { target.addEventListener(h[0], h[1]); });
     });
-    if (doc && doc.addEventListener) {
+    if (!opts.globalEvents && doc && doc.addEventListener) {
       doc.addEventListener("keyup", onDocKeyUp);
     }
-    if (win && win.addEventListener) {
+    if (!opts.globalEvents && win && win.addEventListener) {
       win.addEventListener("blur", onWindowBlur);
     }
 
     return {
       isArmed: function () { return armed; },
       isActive: function () { return active; },
+      handleDocumentKeyUp: onDocKeyUp,
+      handleWindowBlur: onWindowBlur,
       disarm: disarm,
       beginLockBlurGuard: beginLockBlurGuard,
       endLockBlurGuard: endLockBlurGuard,
@@ -635,10 +696,10 @@
           if (typeof target.removeEventListener !== "function") return;
           boundHandlers.forEach(function (h) { target.removeEventListener(h[0], h[1]); });
         });
-        if (doc && doc.removeEventListener) {
+        if (!opts.globalEvents && doc && doc.removeEventListener) {
           doc.removeEventListener("keyup", onDocKeyUp);
         }
-        if (win && win.removeEventListener) {
+        if (!opts.globalEvents && win && win.removeEventListener) {
           win.removeEventListener("blur", onWindowBlur);
         }
       }

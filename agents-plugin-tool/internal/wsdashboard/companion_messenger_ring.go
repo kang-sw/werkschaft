@@ -481,3 +481,54 @@ func (d *Daemon) CompanionMessengerDigest(maxMessages int) string {
 	}
 	return b.String()
 }
+
+// CompanionLegacyMessengerSeed returns a bounded (<= maxMessages, <= maxBytes)
+// plain-text digest of recent legacy Messenger messages for seeding a brand-new
+// Brain session once on upgrade. It reads from the already-hydrated RAM store
+// when available, falling back to a single read-only scan of the newest valid
+// companion-messenger/seg-*.jsonl segment (zero writes).
+func (d *Daemon) CompanionLegacyMessengerSeed(maxMessages, maxBytes int) string {
+	if d == nil {
+		return ""
+	}
+	if maxMessages <= 0 {
+		maxMessages = 10
+	}
+	if maxBytes <= 0 {
+		maxBytes = 4096
+	}
+	snap := d.companionPhone.Snapshot()
+	msgs := recentPhoneMessages(snap.Messages, maxMessages)
+	if len(msgs) == 0 && d.dir != "" {
+		ringDir := filepath.Join(d.dir, companionRingDirName)
+		if segs, err := companionRingSegments(ringDir); err == nil && len(segs) > 0 {
+			for i := len(segs) - 1; i >= 0; i-- {
+				hist, ok, rerr := readCompanionRingSegment(filepath.Join(ringDir, companionRingSegmentName(segs[i])))
+				if rerr == nil && ok {
+					msgs = recentPhoneMessages(hist.Messages, maxMessages)
+					break
+				}
+			}
+		}
+	}
+	if len(msgs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, m := range msgs {
+		text := strings.Join(strings.Fields(m.Text), " ")
+		if text == "" {
+			continue
+		}
+		who := "user"
+		if m.Sender == "companion" {
+			who = "you"
+		}
+		line := fmt.Sprintf("- %s: %s\n", who, companionCut(text, 280))
+		if b.Len()+len(line) > maxBytes {
+			break
+		}
+		b.WriteString(line)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}

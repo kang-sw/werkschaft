@@ -881,3 +881,44 @@ test("draft values preserve raw @mentions across re-renders and stripMentions st
 
   inst2.destroy();
 });
+
+test("voice fields queue until the voice bundle flushes; attachVoice is idempotent and updateConfig dequeues", () => {
+  const { window, doc } = makeHarness();
+  const mk = () => { const f = doc.createElement("textarea"); doc.body.appendChild(f); return f; };
+
+  // No voice bundle yet: voice fields queue, non-voice fields never do.
+  const queuedField = mk(), droppedField = mk(), plainField = mk();
+  const queued = window.WsInput.attach(queuedField, { voice: true });
+  const dropped = window.WsInput.attach(droppedField, { voice: true });
+  window.WsInput.attach(plainField, {});
+  assert.equal(queued.voice, null);
+
+  // Disabling voice before the flush splices the instance out of the queue.
+  dropped.updateConfig({ voice: false });
+
+  const attached = [];
+  window.WsVoiceInput = {
+    attachField(el, api) {
+      const handle = { destroyed: 0, destroy() { this.destroyed++; } };
+      attached.push({ el, api, handle });
+      return handle;
+    }
+  };
+  window.WsInput.flushVoice();
+  assert.equal(attached.length, 1, "only the still-voice instance attaches");
+  assert.equal(attached[0].el, queuedField);
+  assert.equal(queued.voice, attached[0].handle);
+  assert.equal(dropped.voice, null);
+
+  // A second flush or an unrelated updateConfig must not attach twice.
+  window.WsInput.flushVoice();
+  queued.updateConfig({ features: { slash: false } });
+  assert.equal(attached.length, 1, "attachVoice guards against double attach");
+
+  // Disabling voice destroys the handle once; destroy() afterwards does not double-destroy.
+  queued.updateConfig({ voice: false });
+  assert.equal(attached[0].handle.destroyed, 1);
+  assert.equal(queued.voice, null);
+  queued.destroy();
+  assert.equal(attached[0].handle.destroyed, 1);
+});

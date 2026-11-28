@@ -196,7 +196,6 @@ func dashboardCommand(args []string) {
 	host := &proxyHost{userCmdsReady: userCmdsReady, credentials: credentials, notes: sessions.Notes, dir: dir, port: *port, lan: *lan, buildTime: *buildTime, contentHash: contentHash, logw: logw, configPath: filepath.Clean(configPath), agents: agents, ephemeralPool: ephemeralPool, boards: boards, mailLabels: labels.label}
 	companion := newCompanionRuntime(dir, "", agents, host.live.Load, logw)
 	companionRT.Store(companion)
-	host.companion = companion
 	boards.SetChanged(func(root, key string) {
 		if d := host.live.Load(); d != nil {
 			d.Index().Reread(wsmailbox.ReplyID(key))
@@ -345,10 +344,10 @@ func dashboardCommand(args []string) {
 		}
 	})
 	wsdashboard.LogDevAssets(logw, devRoot)
-	// Settled copies remain available for surviving launchers and rollback.
-	if exe != "" {
-		wsdashboard.PruneStagedExecutables(dir, exe)
-	}
+	// Old staged builds, rollback entries and proj/ artifacts are collected
+	// by the daemon's background cache GC (wsdashboard.CacheGCConfig), never
+	// on this startup path; the running build and the one recorded for
+	// restart are pinned.
 	trackerChanged.set(daemon.TrackerChanged)
 	agyActivity.set(daemon.AgyActivity)
 	quotaFn := daemon.QuotaResetAt
@@ -361,6 +360,8 @@ func dashboardCommand(args []string) {
 	daemon.SetCompanionWake(companion.OnUserWake)
 	daemon.SetCompanionMessengerClosed(companion.OnMessengerClosed)
 	daemon.SetCompanionAgents(companion.AgentsReadback)
+	daemon.SetCompanionBrain(companion.BrainEndpoint)
+	daemon.SetCompanionPuppeteerTier(companion.PuppeteerTier)
 	companion.Start()
 	execJobsChanged := func() {
 		if d := host.live.Load(); d != nil {

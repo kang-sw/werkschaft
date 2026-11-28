@@ -15,7 +15,7 @@ function loadCompanion(globals = {}) {
     ...globals
   });
   context.window = context.window || {};
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-fx", "vrm-studio", "vrm-props", "vrm-pose", "vrm-colead", "vrm", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "reflex", "quip", "vrm-fx", "vrm-studio", "vrm-props", "vrm-pose", "vrm-colead", "vrm-speech", "vrm", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return { C: context.window.WsCompanion, context };
@@ -2186,4 +2186,229 @@ test("Phase 1 stage: 4px splitter trim, 60fps breakout tier -> 30/6fps docked dr
   assert.equal(renders, idleRenders + 1, "6fps idle tier must render after ~170ms");
 
   stage.dispose();
+});
+
+test("seamless overlay: projected 3D laptop Box3 hit-zone, fallback region, dynamic --companion-slot resize lockstep, and document gaze pass-through", async () => {
+  let raf = null;
+  let nowPerf = 1000;
+  let slotW = 280;
+  const docListeners = {};
+  const winListeners = {};
+  const storage = new Map();
+  const doc = {
+    hidden: false,
+    body: null,
+    documentElement: {
+      dataset: { rid: "s1" },
+      style: { setProperty() {}, removeProperty() {} },
+      hasAttribute: () => false,
+      getAttribute: () => "s1",
+      addEventListener() {}
+    },
+    createElement: tag => makeFakeElement(tag, doc),
+    createElementNS: (_ns, tag) => makeFakeElement(tag, doc),
+    getElementById: id => id === "rail" ? railEl : (id === "rail-companion-slot" ? slotEl : null),
+    querySelector: sel => sel === "#rail" || sel === ".rail" ? railEl : (sel === "#rail-companion-slot" ? slotEl : null),
+    querySelectorAll: () => [],
+    addEventListener(name, fn) { (docListeners[name] = docListeners[name] || []).push(fn); },
+    removeEventListener() {}
+  };
+  doc.body = makeFakeElement("body", doc);
+
+  const railEl = makeFakeElement("aside", doc);
+  railEl.id = "rail";
+  railEl.className = "rail";
+  railEl.getBoundingClientRect = () => ({ left: 0, top: 36, right: slotW, bottom: 934, width: slotW, height: 898 });
+  const slotEl = makeFakeElement("div", doc);
+  slotEl.id = "rail-companion-slot";
+  slotEl.className = "rail-companion-slot";
+  slotEl.hidden = true;
+  slotEl.getBoundingClientRect = () => {
+    if (slotEl.hidden) return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+    const h = parseInt(railEl.style.getPropertyValue("--companion-slot"), 10) || 240;
+    return { left: 0, top: 934 - h, right: slotW, bottom: 934, width: slotW, height: h };
+  };
+  railEl.append(slotEl);
+  railEl.querySelector = sel => sel === "#rail-companion-slot" ? slotEl : null;
+  railEl.querySelectorAll = sel => sel.includes("#rail-companion-slot") ? [slotEl] : [];
+
+  let laptopBounds = { x: 86, y: 150, width: 108, height: 68, viewportX: 86, viewportY: 844 };
+  let laptopCb = null;
+  let lastGaze = { x: 0, y: 0 };
+  const messengerClicks = [];
+  const fakeRig = {
+    renderer: "vrm",
+    mount() {},
+    view(pose, gesture, expression) {
+      return {
+        pose, gesture, expression, props: [], handAnchor: [140, 140], articulatedDrag: false, seat: 1, bounds: [0, 0, 1, 1],
+        render() { return null; }
+      };
+    },
+    prop() { return { data: null, drawable: false, draw() {} }; },
+    setGaze(g) { lastGaze = { x: g.x, y: g.y }; },
+    setViewport() { return true; },
+    setAnchorRect() { return true; },
+    setRenderMode(m) { return m || "docked"; },
+    getRenderMode() { return "docked"; },
+    getRenderMetrics() { return { mode: "docked", overlayMode: true }; },
+    getCoLeadState() { return { breakoutActive: false, knockActive: false, swapActive: false, dizzyActive: false, phoneMode: "desk" }; },
+    getCharacterBounds() { return { x: 64, y: 18, width: 152, height: 210, viewportX: 64, viewportY: 712 }; },
+    getLaptopBounds() { return laptopBounds ? { ...laptopBounds } : null; },
+    isContextLost() { return false; },
+    debugState() { return { loaded: true, contextLost: false, laptopBounds }; },
+    pause() {},
+    resume() {},
+    dispose() {}
+  };
+
+  const win = {
+    innerWidth: 1680,
+    innerHeight: 960,
+    devicePixelRatio: 2,
+    location: { search: "" },
+    matchMedia: q => ({ matches: q.includes("1600"), addEventListener() {}, removeEventListener() {} }),
+    localStorage: {
+      getItem: k => storage.has(k) ? storage.get(k) : null,
+      setItem: (k, v) => storage.set(k, String(v)),
+      removeItem: k => storage.delete(k)
+    },
+    addEventListener(name, fn) { (winListeners[name] = winListeners[name] || []).push(fn); },
+    removeEventListener() {},
+    requestAnimationFrame(fn) { raf = fn; return 1; },
+    cancelAnimationFrame() { raf = null; },
+    ResizeObserver: class { observe() {} disconnect() {} },
+    MutationObserver: class { observe() {} disconnect() {} },
+    WsShell: { companionContext: () => ({ routeKind: "home", activity: "idle", sessionId: "s1", landmarks: {}, events: [] }) },
+    WsCompanionMessenger: { mount() {}, toggle(el) { messengerClicks.push(el); return true; }, isOpen: () => false, dispose() {} },
+    performance: { now: () => nowPerf }
+  };
+
+  const { C } = loadCompanion({
+    document: doc,
+    window: win,
+    getComputedStyle: () => ({ visibility: "visible", display: "flex" }),
+    ResizeObserver: win.ResizeObserver,
+    MutationObserver: win.MutationObserver,
+    OffscreenCanvas: class {
+      constructor(w, h) { this.width = w; this.height = h; }
+      getContext() { return { canvas: this, clearRect() {}, drawImage() {}, save() {}, restore() {}, getImageData: () => ({ data: [] }) }; }
+    },
+    wsT: k => k,
+    performance: { now: () => nowPerf },
+    requestAnimationFrame: win.requestAnimationFrame,
+    cancelAnimationFrame: win.cancelAnimationFrame,
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    fetch: async () => ({ ok: true, status: 200, json: async () => ({}) })
+  });
+  C.packLoader = onReady => ({
+    load() {
+      Promise.resolve().then(() => onReady({
+        id: "vrm-seamless-test", rev: "r1", renderer: "vrm", modelFile: "a.vrm",
+        manifest: { scenarios: [], timing: {} }, expressionMap: {}, animations: {}
+      }, null));
+    },
+    dispose() {}
+  });
+  C.makeVrmRig = (_pack, opts) => { laptopCb = opts?.onLaptopBoundsChange || null; return fakeRig; };
+
+  const stage = C.mount({ pack: "vrm-seamless-test", enabled: true }, { rail: railEl });
+  for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r));
+  const step = dtMs => {
+    const fn = raf;
+    raf = null;
+    nowPerf += dtMs;
+    if (fn) fn(nowPerf);
+  };
+  step(16);
+
+  const rootNode = doc.body.children[0];
+  const laptopBtn = rootNode.all().find(el => el.className === "ws-companion-laptop-hit");
+  const resizeGrip = rootNode.all().find(el => el.className === "ws-companion-resize");
+  assert.ok(laptopBtn, "must render .ws-companion-laptop-hit button");
+  assert.ok(resizeGrip, "must render .ws-companion-resize grip");
+  assert.equal(laptopBtn.hidden, false);
+  assert.equal(laptopBtn.dataset.source, "projected");
+  assert.equal(laptopBtn.style.left, "82px", "projected laptop x padded by 4px");
+  assert.equal(laptopBtn.style.width, "116px", "projected laptop width padded by 8px");
+
+  // Clicking the projected laptop button opens Companion Messenger.
+  laptopBtn.dispatchEvent({ type: "click", stopPropagation() {} });
+  assert.equal(messengerClicks.length, 1);
+  assert.equal(messengerClicks[0], laptopBtn);
+
+  // Hiding the 3D laptop prop transitions cleanly to lower-center desk fallback.
+  laptopBounds = null;
+  laptopCb?.(null);
+  assert.equal(laptopBtn.hidden, false);
+  assert.equal(laptopBtn.dataset.source, "fallback");
+  assert.ok(parseInt(laptopBtn.style.width, 10) >= 48);
+  assert.ok(parseInt(laptopBtn.style.height, 10) >= 32);
+
+  // Vertical resize handle drag updates --companion-slot (and therefore .rlist bottom padding) in lockstep.
+  const initialSlotPx = parseInt(railEl.style.getPropertyValue("--companion-slot"), 10);
+  assert.ok(initialSlotPx >= 152 && initialSlotPx <= 256, `initial --companion-slot=${initialSlotPx}`);
+  resizeGrip.dispatchEvent({ type: "pointerdown", button: 0, pointerId: 1, clientX: 12, clientY: 900, preventDefault() {}, stopPropagation() {} });
+  resizeGrip.dispatchEvent({ type: "pointermove", pointerId: 1, clientX: 12, clientY: 840, preventDefault() {}, stopPropagation() {} });
+  resizeGrip.dispatchEvent({ type: "pointerup", pointerId: 1, clientX: 12, clientY: 840, preventDefault() {}, stopPropagation() {} });
+  step(40);
+  const resizedSlotPx = parseInt(railEl.style.getPropertyValue("--companion-slot"), 10);
+  assert.equal(resizedSlotPx, initialSlotPx + 60, "vertical drag up by 60px must increase --companion-slot by 60px in lockstep");
+  assert.equal(stage.debugState().vrmHeight, resizedSlotPx);
+
+  // Reset restores default VRM height and clears persisted vrmHeight.
+  stage.resetSize();
+  step(40);
+  assert.equal(parseInt(railEl.style.getPropertyValue("--companion-slot"), 10), initialSlotPx);
+
+  // Document pointermove updates gaze & slot hover even when target is an .rlist row behind the pass-through overlay.
+  const fakeRow = makeFakeElement("div", doc);
+  for (const fn of docListeners.pointermove || []) {
+    fn({ target: fakeRow, clientX: 250, clientY: 780, pointerId: 2 });
+  }
+  step(40);
+  assert.equal(rootNode.dataset.hover, "1", "pointer over slot rect sets data-hover=1 even when event.target is a passed-through .rlist row");
+  assert.ok(lastGaze.x > 0, `expected positive rightward gaze from document pointermove, got ${lastGaze.x}`);
+
+  // Narrow viewport (< 1600px) hides companion and clears --companion-slot + data-companion-dock.
+  win.innerWidth = 1280;
+  for (const fn of winListeners.resize || []) fn();
+  assert.equal(railEl.style.getPropertyValue("--companion-slot"), "", "hidden companion must clear --companion-slot so .rlist has zero wasted space");
+  assert.equal(railEl.hasAttribute("data-companion-dock"), false);
+  assert.equal(laptopBtn.hidden, true);
+
+  stage.dispose();
+});
+
+test("vrm-props projectLaptopBounds projects 3D Box3 corners and returns null when hidden", async () => {
+  const { pathToFileURL } = require("node:url");
+  const rt = await import(pathToFileURL(path.join(__dirname, "assets", "companion-vrm-runtime.mjs")).href);
+  const { THREE } = rt;
+  const { C } = loadCompanion();
+  assert.equal(typeof C.vrmCoLeadProps?.createCoLeadProps, "function");
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(28, 280 / 240, 0.1, 20);
+  camera.position.set(0, 1.32, 1.55);
+  camera.lookAt(0, 1.24, 0);
+  camera.updateMatrixWorld(true);
+  camera.updateProjectionMatrix();
+
+  const props = C.vrmCoLeadProps.createCoLeadProps({ THREE, scene, camera });
+  props.buildPropIfNeeded();
+  const lap = props.getLaptopObject();
+  assert.ok(lap, "buildPropIfNeeded must construct 3D laptop group");
+  lap.position.set(0, 1.12, 0.42);
+  lap.scale.setScalar(0.32);
+  lap.visible = true;
+  scene.updateMatrixWorld(true);
+
+  const b = props.projectLaptopBounds(camera, { left: 0, top: 700, width: 280, height: 240 }, { left: 0, top: 700, width: 280, height: 240 }, true);
+  assert.ok(b && b.width > 30 && b.height > 15, `expected projected laptop box, got ${JSON.stringify(b)}`);
+  assert.equal(b.viewportX, b.x);
+  assert.equal(b.viewportY, 700 + b.y);
+  lap.visible = false;
+  assert.equal(props.projectLaptopBounds(camera, { left: 0, top: 700, width: 280, height: 240 }, { left: 0, top: 700, width: 280, height: 240 }, true), null, "hidden laptop must return null bounds");
+  props.dispose();
 });

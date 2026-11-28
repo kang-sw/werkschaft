@@ -22,7 +22,7 @@ test('the search-only drawer runs no card grid fill', () => {
 });
 
 test('lifecycle post coalesces on rAF and reads layout before lifting the frame', () => {
-  const source = section(asset('dashboard-lifecycle.js'), '    function post() {', '    doc.addEventListener("ws-overview", queue);');
+  const source = section(asset('dashboard-lifecycle.js'), '    function post() {', '    if (typeof compact === "undefined" || !compact) {');
   const frames = [], events = [], messages = [];
   const top = { offsetHeight: 42 }, head = { innerHTML: 'header' }, qs = {};
   const attrs = new Set(['data-pincol']);
@@ -33,7 +33,7 @@ test('lifecycle post coalesces on rAF and reads layout before lifting the frame'
     removeAttribute(name) { events.push('write:lifted'); attrs.delete(name); }
   };
   const context = {
-    queued: null, head: null, headDirty: true, lastHandlesKey: '', root, shHidden: false,
+    queued: null, head: null, headDirty: true, lastHandlesKey: '', root, shHidden: false, compact: false,
     doc: { querySelector() { return top; } },
     region() { return head; },
     $(id) { return id === 'qsslot' ? qs : null; },

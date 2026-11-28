@@ -231,7 +231,7 @@
       return {
         offset: vec3(raw?.offset, -2, 2),
         rotation_deg: vec3(raw?.rotation_deg, -180, 180),
-        scale: Number.isFinite(raw?.scale) ? clamp(raw.scale, 0.25, 3.0) : 1
+        scale: Number.isFinite(raw?.scale) ? clamp(raw.scale, 0.25, 4.0) : 1
       };
     }
 
@@ -855,6 +855,53 @@
       }
     }
 
+    function getLaptopObject() { return laptopGroup; }
+
+    function projectLaptopBounds(camOverride, scissorRect, anchorRect, overlayMode, scratchBox, scratchVec) {
+      const cam = camOverride || camera;
+      if (!laptopGroup || laptopGroup.visible === false || !cam) return null;
+      const R = scissorRect || anchorRect;
+      const w = Math.max(0, Math.round(R?.width || 0)), h = Math.max(0, Math.round(R?.height || 0));
+      if (w <= 0 || h <= 0) return null;
+      const box = scratchBox || (THREE && typeof THREE.Box3 === "function" ? new THREE.Box3() : null);
+      const vec = scratchVec || (THREE && typeof THREE.Vector3 === "function" ? new THREE.Vector3() : null);
+      if (!box || !vec || typeof vec.project !== "function") return null;
+      laptopGroup.updateMatrixWorld?.(true);
+      cam.updateMatrixWorld?.();
+      let hasBox = false;
+      if (typeof box.setFromObject === "function") {
+        box.setFromObject(laptopGroup);
+        hasBox = typeof box.isEmpty === "function" ? !box.isEmpty() : true;
+      } else if (lidMesh?.geometry && typeof box.copy === "function" && typeof box.applyMatrix4 === "function") {
+        if (!lidMesh.geometry.boundingBox && typeof lidMesh.geometry.computeBoundingBox === "function") lidMesh.geometry.computeBoundingBox();
+        if (lidMesh.geometry.boundingBox && !lidMesh.geometry.boundingBox.isEmpty?.()) {
+          box.copy(lidMesh.geometry.boundingBox).applyMatrix4(lidMesh.matrixWorld);
+          hasBox = true;
+        }
+      }
+      if (!hasBox || !box.min || !box.max) return null;
+      const min = box.min, max = box.max;
+      if (!Number.isFinite(min.x) || !Number.isFinite(min.y) || !Number.isFinite(min.z) ||
+          !Number.isFinite(max.x) || !Number.isFinite(max.y) || !Number.isFinite(max.z)) return null;
+      let uMinX = Infinity, uMinY = Infinity, uMaxX = -Infinity, uMaxY = -Infinity, count = 0;
+      for (let i = 0; i < 8; i++) {
+        vec.set((i & 1) ? max.x : min.x, (i & 2) ? max.y : min.y, (i & 4) ? max.z : min.z).project(cam);
+        if (!Number.isFinite(vec.x) || !Number.isFinite(vec.y) || !Number.isFinite(vec.z) || vec.z < -1 || vec.z > 1) continue;
+        const sx = (vec.x * 0.5 + 0.5) * w, sy = (-vec.y * 0.5 + 0.5) * h;
+        if (sx < uMinX) uMinX = sx;
+        if (sx > uMaxX) uMaxX = sx;
+        if (sy < uMinY) uMinY = sy;
+        if (sy > uMaxY) uMaxY = sy;
+        count++;
+      }
+      if (!count || uMaxX <= 0 || uMinX >= w || uMaxY <= 0 || uMinY >= h) return null;
+      const x1 = clamp(Math.floor(uMinX), 0, w), y1 = clamp(Math.floor(uMinY), 0, h);
+      const x2 = clamp(Math.ceil(uMaxX), 0, w), y2 = clamp(Math.ceil(uMaxY), 0, h);
+      if (x2 - x1 < 8 || y2 - y1 < 8) return null;
+      const vpX = (R.left || 0) + x1, vpY = (R.top || 0) + y1;
+      return { x: overlayMode ? Math.round(vpX - (anchorRect?.left || 0)) : x1, y: overlayMode ? Math.round(vpY - (anchorRect?.top || 0)) : y1, width: x2 - x1, height: y2 - y1, viewportX: vpX, viewportY: vpY };
+    }
+
     function getPropObjects() {
       const out = [];
       if (laptopGroup) out.push(laptopGroup);
@@ -913,6 +960,8 @@
       layoutProp,
       syncPhoneToHand,
       updateVisuals,
+      getLaptopObject,
+      projectLaptopBounds,
       getPropObjects,
       getMetrics,
       dispose

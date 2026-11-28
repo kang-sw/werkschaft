@@ -643,3 +643,66 @@ func TestBoardDBNotifyWakeFaultAndReceipt(t *testing.T) {
 		t.Fatalf("receipt did not suppress retry: %v %v", events, err)
 	}
 }
+
+type stubTicketResolver map[string]string
+
+func (r stubTicketResolver) TicketStatus(stem string) (string, bool) {
+	st, ok := r[stem]
+	return st, ok
+}
+
+func TestBoardDBPeekNotifyReadOnlyAndDue(t *testing.T) {
+	s := &State{}
+	noticeTopic(t, s, "A", StateImplementing, 5, stateNow)
+	b, err := CreateBoardDB(t.TempDir(), s, BoardDBOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+
+	before, rev := b.Snapshot()
+
+	// Not due yet: returns exact next deadline, due=false, and does not mutate state.
+	next, due, err := b.PeekNotify("lead", stateNow.Add(time.Minute))
+	if err != nil || due || !next.Equal(stateNow.Add(5*time.Minute)) {
+		t.Fatalf("not-due PeekNotify = (%v, %v, %v), want (%v, false, nil)", next, due, err, stateNow.Add(5*time.Minute))
+	}
+	if b.Revision() != rev || !reflect.DeepEqual(b.State(), before) {
+		t.Fatal("not-due PeekNotify mutated board state")
+	}
+
+	// Overdue notice: returns due=true without mutating state or writing a receipt.
+	_, due, err = b.PeekNotify("lead", stateNow.Add(6*time.Minute))
+	if err != nil || !due {
+		t.Fatalf("overdue PeekNotify = (due=%v, err=%v), want (true, nil)", due, err)
+	}
+	if b.Revision() != rev || !reflect.DeepEqual(b.State(), before) {
+		t.Fatal("overdue PeekNotify mutated board state")
+	}
+
+	// Unblocked waiting topic: due=false while ticket is open, due=true once resolved.
+	s2 := &State{}
+	stateApply(t, s2, `<wb:topic name="Wait"><wb:log>waiting</wb:log><wb:state value="waiting" on="ticket:261128-feat-example"/></wb:topic>`, stateNow)
+	b2, err := CreateBoardDB(t.TempDir(), s2, BoardDBOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b2.Close()
+
+	_, due, err = b2.PeekNotify("lead", stateNow.Add(time.Minute), stubTicketResolver{"261128-feat-example": "ready"})
+	if err != nil || due {
+		t.Fatalf("blocked PeekNotify = (due=%v, err=%v), want (false, nil)", due, err)
+	}
+	_, due, err = b2.PeekNotify("lead", stateNow.Add(time.Minute), stubTicketResolver{"261128-feat-example": "done"})
+	if err != nil || !due {
+		t.Fatalf("unblocked PeekNotify = (due=%v, err=%v), want (true, nil)", due, err)
+	}
+
+	// Closed BoardDB returns an error.
+	if err := b2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b2.PeekNotify("lead", stateNow.Add(time.Minute)); err == nil {
+		t.Fatal("closed PeekNotify returned nil error")
+	}
+}

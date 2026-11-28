@@ -16,6 +16,10 @@ import (
 // entry files, and snapshot, and the source's caches of it
 // (SessionForgetter), once it left the index.
 func (d *Daemon) sessionChanged(replyID string) {
+	// Expire the snapshot's file validation window first: the 5 s FileCache
+	// interval would otherwise serve the pre-change snapshot to the plan-usage
+	// push below and to the stream woken at the end. Pure in-memory.
+	d.invalidateSnapshot(replyID)
 	if d.index != nil {
 		if session, ok := d.index.Session(replyID); ok {
 			d.auditSessionSeen(session.Registration)
@@ -44,6 +48,17 @@ func (d *Daemon) sessionChanged(replyID string) {
 	d.pokeHires()
 }
 
+// invalidateSnapshot expires the daemon's snapshot cache validation for
+// replyID after a change signal (nudge, in-process notification, index change
+// hook, agent write), so the next read re-stats snapshot.json instead of
+// waiting out the FileCache validation interval. In-memory only: no file I/O.
+func (d *Daemon) invalidateSnapshot(replyID string) {
+	if d == nil || d.snapshots == nil || d.dir == "" || !ValidReplyID(replyID) {
+		return
+	}
+	d.snapshots.Invalidate(d.dir, replyID)
+}
+
 // agentChanged is the agent runner's write hook, called from the
 // conversation's loop for every write: it schedules a re-read of the one
 // conversation, as a ws-mcp's nudge does for a lead session, and returns
@@ -56,6 +71,7 @@ func (d *Daemon) agentChanged(replyID, _ string) {
 		// Index.Refresh; skip per-conversation RereadLive storms here.
 		return
 	}
+	d.invalidateSnapshot(replyID)
 	if d.index != nil {
 		// The runner changes live stores, not ws-mcp's record/board/mailbox.
 		d.index.RereadLive(replyID)
@@ -154,6 +170,14 @@ func (d *Daemon) poll(interval time.Duration) {
 	defer ticker.Stop()
 	clock := time.NewTicker(min(indexClockInterval, interval))
 	defer clock.Stop()
+	// A long-running daemon expires old sessions itself instead of waiting
+	// for the next ws-mcp start to ask (registration pruning).
+	pruneEvery := d.sessionPruneEvery
+	if pruneEvery <= 0 {
+		pruneEvery = sessionPruneEveryDefault
+	}
+	prune := time.NewTicker(pruneEvery)
+	defer prune.Stop()
 	for {
 		select {
 		case <-d.stop:
@@ -163,6 +187,8 @@ func (d *Daemon) poll(interval time.Duration) {
 			d.pokeHires()
 		case <-clock.C:
 			d.index.RefreshClock()
+		case <-prune.C:
+			d.pruneSessionsTick(time.Now())
 		}
 	}
 }
@@ -209,6 +235,9 @@ func (d *Daemon) Close() {
 		}
 		if d.pollDone != nil {
 			<-d.pollDone
+		}
+		if d.gcDone != nil {
+			<-d.gcDone
 		}
 		if d.leadNudges != nil {
 			d.leadNudges.Close()

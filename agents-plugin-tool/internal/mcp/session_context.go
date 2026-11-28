@@ -136,7 +136,10 @@ func (s *Server) resolveSession(in sessionAccess) (sessionContext, error) {
 		in.key = key
 	}
 	out := sessionContext{key: in.key, hosted: hosted != "" && in.key == hosted}
-	if entry, ok := s.sessions.lookup(in.key); ok {
+	// Keep the preliminary identity read separate from the serialized state
+	// read below. The latter owns the activity touch, so a writer that changes
+	// key.json between the two reads cannot be hidden by the touch throttle.
+	if entry, ok, _ := s.sessions.inspect(in.key); ok {
 		out.found = true
 		out.root, out.scope, out.parent, out.companionRole = entry.root, entry.scope, entry.parent, entry.companionRole
 		// Retain the adoption path's second, mutex-serialized read and activity
