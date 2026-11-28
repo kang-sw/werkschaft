@@ -4,6 +4,8 @@ related:
   261111-bug-ws-dashboard-daemon-idle-cpu-windows: "parent CPU investigation; its Phase 1 showed that adding stat/SameFile regressed live Windows CPU despite faster Linux wall time"
   261117-research-ws-daemon-file-touch-map: "file-touch map this item derives from; this ticket does not re-map stores, it changes one revalidation mechanism"
   261116-research-ws-polling-minimization-event-ledger: "separate design study for polling minimization; no event-ledger mechanism is selected here, only in-process generation/wake invalidation of existing caches"
+sage-review-design: required
+sage-review-completeness: required
 ---
 
 # Wake/generation-driven invalidation for the daemon's per-second `stat` polling
@@ -108,6 +110,10 @@ gate lazy, not to change its source of truth.
   choose an event-ledger design (`261116-research-ws-polling-minimization-event-ledger`),
   and does not change what is persisted. Other idle-CPU findings stay in
   `261111-bug-ws-dashboard-daemon-idle-cpu-windows`.
+- Convention: ai-docs/manuals/shipped-surface-boundary.md (declared for agents-plugin-tool/)
+- Convention: ai-docs/manuals/ws-mcp.md (declared for agents-plugin-tool/internal/mcp/)
+- Convention: ai-docs/manuals/release-compatibility.md (declared for agents-plugin-tool/internal/)
+- Convention: ai-docs/manuals/performance.md (declared for agents-plugin-tool/)
 
 ## Decisions
 
@@ -116,7 +122,18 @@ gate lazy, not to change its source of truth.
   `wsinbox.Names` revalidate by `stat` at most every 5 s instead of every 1 s,
   with in-process writers invalidating immediately through the existing
   wake/generation signals. The `agent_delivery.go:275-280` expiry-commit path
-  is excluded and keeps its real stat. Rejected: 10 s (longer external-writer
+  is excluded and keeps its real stat. Clarification: `wsinbox.Names` has no
+  1 s timer today; it stats on every call (`wsinbox/inbox_list.go#L56-L66`).
+  Only `FileCache` has the 1 s `fileCacheValidationInterval`
+  (`wsdashboard/file_cache.go#L72`). In daemon opt-in mode `Names` moves to a
+  stat at most every 5 s, while standalone `ws-mcp` keeps stat on every call
+  and `agent_delivery.go:275-280` keeps its fresh stat. Relative to the
+  `cae01a2c` revalidation rule ("every cache a cross-process writer can change
+  is checked by a stat on every use; nothing is served on a timer"):
+  `wsstate.ReadFileCached` remains stat-on-every-use and is untouched;
+  `FileCache` already uses a 1 s timer backed by `/nudge` invalidation; and
+  the `wsinbox.Names` 5 s fallback is opt-in daemon-mode only, ratified by the
+  owner's `(1669)=a` direction. Rejected: 10 s (longer external-writer
   blind window without a measured need) and removing the timer entirely
   (revalidate only on external signal), because `/nudge` is fire-and-forget and
   older same-minor clients may not send it (`index.go:15-17`), so a dropped or
@@ -135,6 +152,33 @@ gate lazy, not to change its source of truth.
 - **Compatibility tier: T0 transparent.** Daemon-internal revalidation and
   caching only; no wire, protocol, on-disk or shipped-surface change.
   External and older writers stay observable within the 5 s fallback.
+
+## Prior Decisions
+
+- 261110-bug-ws-dashboard-daemon-read-amplification (2026-11-10, commit 89eb4b89): "FileCache is exported and generic because the mcp dashboard source caches the session record parts, reply registry, and scope stores with the same rules; one copy of the stat-before-read / equality / never-cache-failures rules" — bearing: constrains
+- cae01a2c (2026-11-17, commit): "Revalidation rule: a stale cache is worse than none, so every cache that a cross-process writer can change (key.json, config edited by hand, endpoint.json, the .git entry) is checked by a stat on every use; nothing is served on a timer." — bearing: contradiction-candidate (ratified: `wsstate.ReadFileCached` stays stat-on-every-use; `FileCache` already uses a 1 s timer + `/nudge` invalidation, and `wsinbox.Names` 5 s fallback is opt-in daemon-mode only)
+- 261115-refactor-ws-dashboard-stream-whiteboard-reread (2026-11-15, Decisions): "Reject generation-only or Notify-only invalidation: these would hide direct topic edits or miss external/crashed writers. Full-file metadata validation preserves existin..." — bearing: constrains
+- fc1967ea (2026-11-17, commit): "FileCache's map mutex no longer spans stat/loader IO; per-path singleflight plus generation fences preserve invalidation." — bearing: constrains
+- faa34102 (2026-11-28, commit): "#5 (794512e4e): add stat-validated parse cache to wsdashboard ReadRegistration with 2s mtime freshness guard, write/remove/prune invalidation, and FileIOCounters verification." — bearing: constrains
+- 261119-refactor-ws-whiteboard-sqlite-board-store (2026-11-19, Decisions): "In-process change notification replaces stat watches, (1814): It replaces the dashboard watch, nudge stats, FolderCache root stamps, and the topic memo, starting from whiteboardChanged" — bearing: supports
+- 261121-refactor-ws-daemon-metadata-sqlite (2026-11-21, Decisions): "(1996) Rail storage: Use workspace-scoped layout changes and an in-memory generation; preserve ordering, legacy extra fields and consumer wake. Rejected: a monolithic layout rewrite or DB-file polling." — bearing: supports
+- 9da24fcb (2026-11-16, commit): "Deadline-driven mailbox/wake/session-hire maintenance with a five-minute safety recovery; heartbeat policies unchanged." — bearing: supports
+
+## Route Facts
+
+| fact | value | evidence |
+|---|---|---|
+| scope.span | multi-file | wsdashboard/file_cache.go, wsdashboard/snapshot_cache.go, wsinbox/inbox_list.go, mcp/whiteboard_nudges.go, mcp/session_layout.go, mcp/session_auth.go, wsagent/agent_delivery.go |
+| scope.surface | cross-module | the opt-in trust-the-signal mode lives in wsinbox but is enabled by the daemon (wsdashboard), and FileCache is an exported generic type (wsdashboard/file_cache.go) used by mcp |
+| scope.new_public_symbol | unknown | the opt-in per-process switch for wsinbox.Names is cross-package (wsinbox vs the daemon), so it is likely exported, but the ticket names no symbol |
+| scope.new_type_contract | unknown | the ticket names no type or signature for the generation or opt-in mechanism; FileCache may gain a field or option |
+| scope.test_surface | existing | wsdashboard/file_cache_test.go, wsinbox/names_cache_test.go, mcp/whiteboard_nudges_io_test.go, mcp/session_layout_test.go; FileIOCounters in wsstate/file_io_counts.go |
+| complexity.reuse_points | confirmed | namesGen (wsinbox/inbox_list.go#L85-L90), FileCache.InvalidateUnder (wsdashboard/file_cache.go#L196-L200), SnapshotCache live map (wsdashboard/snapshot_cache.go#L84-L93), intakeEntry.markAt (mcp/session_auth.go#L389-L461), FileIOCounters |
+| complexity.side_effect_risk | high | a missed in-process invalidation serves stale inbox, snapshot, or registration data to delivery and gate decisions for up to 5 s |
+| risk.correctness | high | trust-the-signal caches are only as correct as every in-process writer's signal; the agent_delivery.go expiry-commit path must keep a fresh read |
+| risk.fit | moderate | extends existing generation and wake mechanisms; wsinbox.Names has no timer today, so it needs a new opt-in mode |
+| risk.test | moderate | FileCache has a clock seam; Names has none, and the Windows after-capture is manual |
+| risk.security_or_contract | moderate | T0 declared, but external and older writers must stay observable within 5 s, and deliveryGate PID/EndedAt safety must keep its re-read under the board lock |
 
 ## Phases
 

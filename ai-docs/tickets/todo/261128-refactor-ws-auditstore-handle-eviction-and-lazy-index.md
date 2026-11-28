@@ -1,5 +1,5 @@
 ---
-title: "wsauditstore 유휴 세그먼트 핸들 정리·지연 인덱싱 및 쓰기 병합"
+title: "wsauditstore 유휴 세그먼트 핸들 정리 및 지연 로드"
 related:
   261111-bug-ws-dashboard-daemon-idle-cpu-windows: "parent CPU investigation; open handles and write counts feed the Windows scanner cost"
   261117-research-ws-daemon-file-touch-map: "file-touch map; this ticket covers the audit store's handle retention and index memory"
@@ -38,7 +38,8 @@ two writes. Source reading shows otherwise:
 - **The actual cause is `Daemon.sessionChanged` -> `auditSessionSeen`
   (`daemon_runtime.go:21`) -> `store.Preload` (`audit.go:103-115`).** It eagerly
   preloads EVERY registered session returned by `Index.Refresh`
-  (`index.go:239-258`), including about 950 ended or historical sessions, and
+  (`wsdashboard/index.go:239-258`, distinct from `wsauditstore/index.go:150`
+  and `:168`), including about 950 ended or historical sessions, and
   each loaded ring keeps its newest-segment `*os.File` and its full
   `r.events` / `r.ids` resident forever. No idle close or unload exists. This
   is what produces the 929-955 handles and the 299-315 MB `ring.index` plus
@@ -47,7 +48,9 @@ two writes. Source reading shows otherwise:
 - **`View` queries already have a cold path** (`store_view.go:63-104`,
   `replayCold`, four cached cold views). Active capture (`Recover`,
   `Retained`, `AppendSourced`) and `RecoverCompactionBaseline` already load
-  rings on demand (`store.go:372-385`, `store_writer.go:217`).
+  rings on demand (`store.go:372-385` and `ledgerOf` at `store.go:395-`,
+  `Store.info` ring recovery at `store_writer.go:134-166`, and `Store.loaded`
+  at `store_view.go:329-346` for `RecoverCompactionBaseline`).
 - **Steady-state record writes are already one write syscall.**
   `store_writer.go:232` coalesces pending loss/boundary lines, and a segment
   header is written only on 16 MiB segment rotation (`ring_write.go:192-226`,
@@ -83,6 +86,9 @@ segment handles and resident ring indexes to recently active rings.
 - Scope boundary: this ticket covers preload policy, handle lifetime and index
   residency in `wsauditstore`. It does not change audit event content,
   retention limits or the audit API, and does not cover other stores' handles.
+- Convention: ai-docs/manuals/shipped-surface-boundary.md (declared for agents-plugin-tool/)
+- Convention: ai-docs/manuals/release-compatibility.md (declared for agents-plugin-tool/internal/)
+- Convention: ai-docs/manuals/performance.md (declared for agents-plugin-tool/)
 
 ### Design traps the implementation must handle
 
@@ -105,13 +111,23 @@ segment handles and resident ring indexes to recently active rings.
 ## Decisions
 
 - **Preload and idle unload policy (settled from former 1666).**
-  (1) Stop calling `store.Preload` for sessions with no attached capture
-  (`audit.go:103-115`), so ended or inactive sessions never preload handles or
-  `r.events` at startup. (2) Add a unified idle ring unload: a **15-minute idle
-  TTL** plus a **64-ring LRU ceiling**, excluding rings with an active capture
-  attached. Unload closes the newest-segment `*os.File` and releases
-  `r.events` / `r.ids` cleanly through `info.changing()`; the ring reopens via
-  `openAppend`, without spurious rotation, when it becomes active again.
+  (1) Remove `store.Preload` from `auditSessionSeen` (`audit.go:103-115`)
+  completely, so `Index.Refresh` of historical or ended sessions never
+  triggers a ring load and they never preload handles or `r.events` at
+  startup. Instead, call `store.Preload` only at the live capture-attachment
+  path, when a capture actually attaches to a session. `Recover` stays
+  nonblocking on the capture goroutine per `1cb0b290`, and the cold fallback
+  at `store.go:367-371` stays intact if a load is still in flight.
+  (2) Add a unified idle ring unload: a **15-minute idle TTL** plus a
+  **64-ring LRU ceiling**. Unload closes the newest-segment `*os.File` and
+  releases `r.events` / `r.ids` cleanly through `info.changing()`; the ring
+  reopens via `openAppend`, without spurious rotation, when it becomes active
+  again.
+  (3) Capture-attached rings are excluded from eviction through an explicit
+  lightweight refcounted pin/unpin (an active-capture pin handle or
+  `SetCaptureActive` on `wsauditstore.Store`) invoked by the capture lifecycle
+  on attach and detach. Idle TTL and LRU eviction skip pinned rings, and recent
+  `AppendSourced` / `Recover` / `Retained` use within the TTL counts as active.
   Rejected: LRU-only (can thrash with many active sessions yet the TTL is
   needed to release idle ones) and TTL-only (does not bound the worst case);
   both together bound memory and handles.
@@ -131,27 +147,58 @@ segment handles and resident ring indexes to recently active rings.
   on-disk `seg-*.jsonl` layout are unchanged; old binaries read all segments
   identically.
 
+## Prior Decisions
+
+- 261119-feat-ws-audit-ring-store (2026-11-22, Result 12ce5478f): "Recover and Retained answer from a per-ring in-memory ledger and never wait on disk. An unloaded ring answers zero and queues a load. The daemon calls Preload when it first sees a session." — bearing: constrains
+- 1cb0b290 (2026-11-24, commit): "Recover on the audit capture goroutine because a cold ring may need its existing preload and the holder reader must stay nonblocking." — bearing: constrains
+- 261119-feat-ws-audit-ring-store (2026-11-19, Decisions): "Memory-first ring discipline ((1960)=a). Recover the index from retained segments, keep the current append handle open across writes, and serve reads from memory." — bearing: constrains
+- 5b62ee3e (2026-11-22, commit): "Audit ring store and query API Phase 1 after three codex re-review rounds (cold-read generation, seam auxiliaries, eviction coherence); race run -count=3 on wsauditstore passed." — bearing: constrains
+- 12ce5478 (2026-11-22, commit): "Left as minors: an unloaded ring evicted by the total cap loses its boundaries (loading it to keep them would read the whole ring)" — bearing: constrains
+- 3a5ed2e7 (2026-11-21, commit): "Owner decisions (1960)=a and (1970)=a put audit on a Type 1 segment ring with a per-session cap, a store-wide LRU cap, and time retention." — bearing: supports
+- 261119-epic-ws-conversation-audit (2026-11-19, Cross-Child Decisions): "Each session has its own append-only segment ring with an in-memory index. Session deletion removes its ring." — bearing: supports
+
+## Route Facts
+
+| fact | value | evidence |
+|---|---|---|
+| scope.span | multi-file | wsdashboard/audit.go, wsauditstore/store.go, store_writer.go, store_evict.go, ring_write.go, ring_recover.go |
+| scope.surface | cross-module | call-site change in package wsdashboard (audit.go:103-115) plus lifecycle change in package wsauditstore; both under internal/, no external API change |
+| scope.new_public_symbol | yes | lightweight pin/unpin (capture-active) signal on wsauditstore.Store plus Options fields for idle TTL and LRU ceiling (Options.Now already exists, store.go:204) |
+| scope.new_type_contract | no | no existing type or signature change; RingSchemaVersion stays 1 (ring.go:19) |
+| scope.test_surface | existing | wsauditstore/store_test.go, retention_test.go, view_test.go; wsdashboard/audit_test.go; Preload also used in wsagent/audit_store_test.go:249 |
+| complexity.reuse_points | confirmed | info.changing() store.go:152-159; unloaded-ring transition store_evict.go:296-300; openAppend ring_recover.go:219; jobLoad and Store.loaded store_view.go:329-346 |
+| complexity.side_effect_risk | high | closes live segment handles and drops the ring index and ledger.retained, racing the writer goroutine, cold View and Recover |
+| risk.correctness | high | full-reload requirement for ledger.retained, no spurious rotation at ring_write.go:192, and unload versus concurrent View |
+| risk.fit | moderate | reuses the existing unloaded state, adds idle timer/LRU tracker and explicit capture pin on Store |
+| risk.test | high | needs deterministic race tests, a clock seam, and live-only macOS lsof and heap checks and a Windows capture |
+| risk.security_or_contract | low | on-disk format and audit API unchanged, tier T0 per the ticket; no auth or trust change |
+
 ## Phases
 
 ### Phase 1: Remove eager non-capturing `store.Preload`; add idle TTL + LRU ring unload
 
 Intended behavior:
 
-1. Remove the eager `store.Preload` of sessions without an attached capture in
-   `audit.go:103-115` (reached from `Daemon.sessionChanged` /
-   `auditSessionSeen`, `daemon_runtime.go:21`). Ended and historical sessions
-   hold no handle and no `r.events` / `r.ids` after startup.
+1. Remove `store.Preload` from `auditSessionSeen` in `audit.go:103-115`
+   (reached from `Daemon.sessionChanged`, `daemon_runtime.go:21`) completely.
+   Call `store.Preload` only at the live capture-attachment path, keeping
+   `Recover` nonblocking on the capture goroutine (`1cb0b290`, cold fallback at
+   `store.go:367-371`). Ended and historical sessions hold no handle and no
+   `r.events` / `r.ids` after startup.
 2. Add idle ring unload in `wsauditstore`: 15-minute idle TTL and 64-ring LRU
-   ceiling, excluding rings with active capture attached. Unload closes the
-   newest-segment `*os.File` and releases `r.events` / `r.ids`, coordinated via
-   `info.changing()` and kept distinct from total-cap eviction tombstones.
+   ceiling. Add a refcounted active-capture pin/unpin on `wsauditstore.Store`,
+   invoked by the capture lifecycle on attach/detach; eviction skips pinned
+   rings and treats recent `AppendSourced` / `Recover` / `Retained` use within
+   the TTL as active. Unload closes the newest-segment `*os.File` and releases
+   `r.events` / `r.ids`, coordinated via `info.changing()` and kept distinct
+   from total-cap eviction tombstones (`store_evict.go:23-83`).
 3. A subsequent active use (capture, `AppendSourced`, `Recover`, `Retained`,
    `RecoverCompactionBaseline`) fully reloads the ring and reopens the newest
    segment via `openAppend` without spurious rotation, preserving
    `ledger.retained` accuracy. `View` stays on `replayCold`.
 
 Deferred scope: audit retention knobs, audit API changes, other stores' handle
-retention, and index-file writes at `index.go:150` / `index.go:168`. Write
+retention, and index-file writes at `wsauditstore/index.go:150` / `:168`. Write
 coalescing is dropped (see Background); it is not part of this phase.
 
 Verification boundary:
