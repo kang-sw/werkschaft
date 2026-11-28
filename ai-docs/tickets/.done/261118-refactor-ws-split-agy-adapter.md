@@ -9,6 +9,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 09ad285ea008a2d4
 sage-review-completeness-reviewed: 09ad285ea008a2d4
+completed: 2026-11-28
 ---
 
 # Split the agy adapter file below the size guard and extract shared ACP core
@@ -243,6 +244,34 @@ separate follow-up ticket. The related prerequisite
   - `wc -l internal/wsagent/acp_*.go internal/wsagent/agy.go internal/wsagent/agy_dialect.go internal/wsagent/agy_state_dir.go` shows every file <700 lines.
   - `git diff --stat -- 'internal/wsagent/*_test.go'` shows only `agy_compat_test.go` added and zero edits to existing test files.
 
+### Result (b3cac2a62) - 2026-11-28
+
+Landed in 804cee1a7 (the `gofmt`-only pass on `agy.go`) and b3cac2a62 (the
+split).
+
+- **Layout**: `acp_dialect.go` 92, `acp_wire.go` 145, `acp_process.go` 429,
+  `acp_mapper.go` 551, `acp_mapper_session.go` 195, `acp_mapper_turn.go` 333,
+  `agy.go` 348, `agy_dialect.go` 295, `agy_state_dir.go` 86 lines.
+- **Hooks**: `acpDialect` has `label`, `timing` (returns `acpTiming` and is
+  read at each point of use), `instructions`, `openMeta`, `effortOption`,
+  `modelVariant`, `baseModel`, `permissionModes`, `cutoverMode`, `classifyTool`
+  (returns `acpToolClass{command, daemon, ran, subagent, label}`, with
+  `agyCommandRan` folded in as `ran`), `mcpToolMatches`, `replyFailure`,
+  `usageLimit`, `publishChoices`, and `newAudit`. `newAudit` is an
+  `agyDialect` method in `audit_agy.go`.
+- **stream.go**: `feed` goes through a `seqLineMapper` interface, and
+  `mapAgyLine` is now `mapLineSeq`. `prepareAudit` skips a nil adapter.
+- **Deviation**: `tool_bytes_test.go` does reference `agyAuditBody`, so
+  `agy_compat_test.go` adds a test-only alias for it next to the type
+  aliases. No existing test file was edited.
+- **Deviation**: `gofmt -l internal/wsagent` is not empty. The unformatted
+  files predate this work, and one of them, `startup_publication_test.go`,
+  must stay byte-identical. Every file this ticket touched is `gofmt`-clean.
+- **Verification**: `go build ./...`, `go vet ./internal/wsagent/...`,
+  `GOOS=windows go vet ./...`, and the full `go test ./internal/wsagent`
+  (140 s) pass. `TestCommonCodeHasNoHarnessNameBranch` needed no allowlist
+  edits.
+
 ### Phase 2: Promote output-rate tracker and enforce harness-neutral AST guard
 
 - Rename `agy_output_rate.go` -> `acp_output_rate.go` (`git mv`) and generalize
@@ -261,3 +290,32 @@ separate follow-up ticket. The related prerequisite
   - `wc -l internal/wsagent/acp_*.go internal/wsagent/agy.go internal/wsagent/agy_dialect.go internal/wsagent/agy_state_dir.go` shows every file <700 lines (the glob now also lists the small `acp_guard_test.go`; the bound applies to the non-test files).
   - `rg -n -i 'agy|antigravity|gemini|copilot' -g 'acp_*.go' -g '!*_test.go' internal/wsagent` returns zero matches, comments included (`acp_guard_test.go` is excluded because it carries the regex literal).
   - Existing `internal/wsagent/*_test.go` files remain unmodified (`git diff --stat -- 'internal/wsagent/*_test.go'` shows only new files `agy_compat_test.go` and `acp_guard_test.go`).
+
+### Result (672b677b5) - 2026-11-28
+
+Landed in 672b677b5.
+
+- **acp_output_rate.go** (renamed with `git mv`): the tracker types, the
+  window and minimum constants, and the visible-tokens parser are now
+  `acp*` (`acpOutputRateTracker`, `acpRateSample`, `acpPromptSpan`,
+  `acpOutputRateWindow`, `acpOutputRateMinSpanMs`, `acpOutputRateMinTokens`,
+  `acpVisibleOutputTokens`). `agy_output_rate_test.go` is unchanged.
+- **nativeRowPrefix**: the new `acpDialect.nativeRowPrefix()` hook (the agy
+  dialect returns `wslive.NativeAgyPrefix`) replaces four sites. Three are in
+  `acp_mapper_turn.go`: the failed launch in `toolStatus`, and the running and
+  failed rows in `nativeStart`. The fourth is `forgetNativeLaunches` in
+  `acp_process.go`.
+- **acpPartialEvery**: a constant set to 100 ms in `acp_mapper_turn.go`
+  replaces the `claudePartialEvery` reference. The value is the same.
+- **acp_guard_test.go**: `TestACPCoreHasNoHarnessIdentifiers` parses each
+  non-test `acp_*.go` file and rejects any `*ast.Ident` matching
+  `(?i)agy|antigravity|gemini|copilot`. It fails if no files were scanned.
+- **Verification**: build, vet, `GOOS=windows` vet, and the full
+  `go test ./internal/wsagent` (139 s) pass, including both guards. The `rg`
+  check returns zero matches, every non-test file is under 700 lines, and the
+  only test-file changes are the two new files.
+
+
+## Resolution (2026-11-28)
+
+Both phases landed: 804cee1a7 (gofmt prep), b3cac2a62 (Phase 1 split into acp_* core plus the agy dialect), and 672b677b5 (Phase 2: output-rate tracker promoted, nativeRowPrefix, acpPartialEvery, the AST guard). The lite review (claude.medium) found no Critical or Important issues and confirmed no behavior, string, or lock-order drift against 804cee1a7. Three Minor findings remain, none fixed. (1) timing() snapshots all six agy timing globals per call, where the original read one per site, which adds a theoretical -race flake surface if a leaked goroutine overlaps a test mutating a global. (2) The nil-adapter branch in stream.go prepareAudit and the unreachable m.d==nil branch in acpMapper.newAudit have no test. (3) The agyAuditBody test alias contradicts the ticket's premise; this is recorded in the Phase 1 Result.
