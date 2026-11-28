@@ -175,6 +175,21 @@
       "description": "Companion pack sources the companion settings list for install: a whitespace-separated list of at most 16 https URLs, each a git repository (with an optional #ref) or a zip file holding a marketplace.json. A source is fetched only when the user asks to list, install, or update its packs. An invalid entry is shown as an error and skipped. Only the global value applies."
     },
     {
+      "key": "dashboard.companion_soul",
+      "type": "string",
+      "pattern": "^([a-z0-9][a-z0-9_-]{0,63})?$",
+      "default": "",
+      "default_scope": "global",
+      "description": "Selects the active companion Portable Soul ID. Empty resolves to default, auto-created from the active pack's starter persona on first use without overwriting an existing Soul. Only the global value applies."
+    },
+    {
+      "key": "dashboard.companion_soul_dir",
+      "type": "string",
+      "default": "",
+      "default_scope": "global",
+      "description": "Overrides the root directory storing companion Portable Soul folders (for example a Git-synced path). Empty uses ~/.ws/companion-soul. Only the global value applies."
+    },
+    {
       "key": "dashboard.voice_backend",
       "type": "string",
       "pattern": "^([a-z0-9][a-z0-9_/-]{0,79})?$",

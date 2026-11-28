@@ -286,6 +286,7 @@ type Daemon struct {
 	auditRead auditViewer
 
 	dir       string
+	home      string
 	lock      *flock.Flock
 	server    *http.Server
 	listener  net.Listener
@@ -324,6 +325,20 @@ type Daemon struct {
 	convBackfillWG          sync.WaitGroup
 	// companionPhone holds the in-memory 4-state embodiment & phone messenger store.
 	companionPhone CompanionPhoneStore
+	// companionAct fans out user messages and glass-knock events into blocked
+	// ws/companion.act waiters strictly in memory.
+	companionActOnce sync.Once
+	companionAct     companionActHub
+	// companionBurst tracks per-turn Tier-1 burst call counts strictly in memory (D11).
+	companionBurst companionBurstHub
+	// companionMem coordinates Portable Soul RAM cache + lazy Local Episodes SQLite FTS5.
+	companionMemMu sync.Mutex
+	companionMem   *CompanionMemory
+	// companionMood holds Tier-1's in-memory dynamic mood state machine (zero disk writes).
+	companionMood CompanionMoodTracker
+	// companionRecall optionally overrides the per-wake <<<RECALL>>> snippet provider.
+	companionRecallMu sync.RWMutex
+	companionRecall   CompanionRecallProvider
 	// companionWake, when bound by cmd/ws-mcp, wakes the Tier-1 companion burst
 	// session on incoming user messages or release with unread inbox.
 	companionWake atomic.Pointer[func(reason string)]

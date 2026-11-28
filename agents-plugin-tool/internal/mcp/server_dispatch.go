@@ -250,6 +250,12 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	if refusal, ok := s.precheckToolArguments(params.Name, params.Arguments); !ok {
 		return toolErrorTextResponse(req.ID, refusal)
 	}
+	// Tier-1 burst limit (D11): checked only for real companion-body tool
+	// execution after posture and argument validation so refused/discovery
+	// calls never consume burst budget.
+	if refusal := s.companionBurstRefusal(params.Name, callerKey, caller, callerFound); refusal != "" {
+		return toolErrorTextResponse(req.ID, refusal)
+	}
 
 	// Successful board and panel writes wake the served page.
 	if dashboardNudgingTool(params.Name) {
@@ -1714,8 +1720,9 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		return s.handleAgentTool(ctx, req.ID, params.Name, params.Arguments)
 	case companionSpeakTool, companionFaceTool, companionMotionTool,
 		companionPhonePickupTool, companionPhoneReadTool, companionPhoneSendTool, companionPhonePutdownTool,
-		companionDelegateWorkTool:
-		return s.handleCompanionTool(req.ID, params.Name, params.Arguments, callerKey, caller, callerFound)
+		companionDelegateWorkTool,
+		companionActTool, companionRememberSoulTool, companionRememberEpisodeTool, companionRecallMemoryTool:
+		return s.handleCompanionTool(ctx, req.ID, params.Name, params.Arguments, callerKey, caller, callerFound)
 	case delegationReportTool:
 		return s.handleDelegationReport(req.ID, params.Arguments, callerKey, caller, callerFound)
 	case daemonCurlTool, daemonTabsTool, daemonDOMTool, daemonUITool, daemonScreenshotTool:

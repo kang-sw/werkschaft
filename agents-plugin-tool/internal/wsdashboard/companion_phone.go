@@ -131,6 +131,7 @@ type CompanionPhoneStore struct {
 	mu                 sync.Mutex
 	now                func() time.Time
 	holderAlive        func(holder string) bool
+	onUserMessage      func(CompanionPhoneMessage)
 	seq                uint64
 	msgSeq             uint64
 	state              string
@@ -227,6 +228,14 @@ func (s *CompanionPhoneStore) holderIsLiveLocked() bool {
 func (s *CompanionPhoneStore) SetHolderAlive(fn func(holder string) bool) {
 	s.mu.Lock()
 	s.holderAlive = fn
+	s.mu.Unlock()
+}
+
+// SetOnUserMessage installs an optional in-memory hook invoked (after releasing
+// s.mu) whenever a user messenger message is enqueued.
+func (s *CompanionPhoneStore) SetOnUserMessage(fn func(CompanionPhoneMessage)) {
+	s.mu.Lock()
+	s.onUserMessage = fn
 	s.mu.Unlock()
 }
 
@@ -327,6 +336,17 @@ func (s *CompanionPhoneStore) OldestUnreadID() string {
 	return s.unreadAgent[0].ID
 }
 
+// LatestUnreadHint returns a compact one-line preview of the newest unread user
+// message for recall-provider queries (never echoed verbatim before phone_pickup).
+func (s *CompanionPhoneStore) LatestUnreadHint() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.unreadAgent) == 0 {
+		return ""
+	}
+	return companionCut(s.unreadAgent[len(s.unreadAgent)-1].Text, 160)
+}
+
 func boundCompanionPhoneText(text string) string {
 	text = strings.TrimSpace(text)
 	if utf8.RuneCountInString(text) <= companionPhoneMaxTextRunes {
@@ -364,7 +384,6 @@ func (s *CompanionPhoneStore) EnqueueUserMessage(text string) (CompanionPhoneMes
 		return CompanionPhoneMessage{}, CompanionPhoneSnapshot{}, errors.New("message text is required")
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.initLocked()
 	s.msgSeq++
 	msg := CompanionPhoneMessage{
@@ -384,7 +403,32 @@ func (s *CompanionPhoneStore) EnqueueUserMessage(text string) (CompanionPhoneMes
 	s.wakeFailures = 0
 	s.unavailable = false
 	snap := s.publishLocked()
+	cb := s.onUserMessage
+	s.mu.Unlock()
+	if cb != nil {
+		cb(msg)
+	}
 	return msg, snap, nil
+}
+
+// ConsumeUnreadForAct drains and returns all currently unread user messages for
+// an interrupting ws/companion.act wake, publishing the updated snapshot
+// (UnreadAgent=0) so content-free wake nudges and turn-end release checks see
+// an empty inbox and never re-wake Tier-1 for messages already delivered (D7, D11).
+func (s *CompanionPhoneStore) ConsumeUnreadForAct() []CompanionPhoneMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLocked()
+	if len(s.unreadAgent) == 0 {
+		return nil
+	}
+	unread := make([]CompanionPhoneMessage, len(s.unreadAgent))
+	copy(unread, s.unreadAgent)
+	s.unreadAgent = nil
+	s.wakeFailures = 0
+	s.unavailable = false
+	s.publishLocked()
+	return unread
 }
 
 // AcquireOnWake acquires the Embodiment Lease in laptop posture for a Tier-1
@@ -1084,6 +1128,7 @@ func (d *Daemon) CompanionReleaseOnTurnEnd(owner string) bool {
 // when messages are still waiting and the messenger is not unavailable ((1739),
 // (1743), (1749)).
 func (d *Daemon) CompanionForceRelease(holder string) bool {
+	d.CompanionResetBurst(holder)
 	snap, changed, wasPhone, hasUnread := d.companionPhone.forceRelease(holder)
 	if changed && wasPhone {
 		d.PublishCompanionCommand(CompanionCommand{
@@ -1259,6 +1304,7 @@ func (d *Daemon) handleCompanionPhoneSend(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	d.ObserveCompanionMood(CompanionMoodEventUserMessage)
 	d.PublishCompanionCommand(CompanionCommand{
 		SessionID: companionPhoneBroadcastSession,
 		Gesture:   "phone_buzz",

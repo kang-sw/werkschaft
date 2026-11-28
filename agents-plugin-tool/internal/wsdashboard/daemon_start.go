@@ -153,6 +153,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	stats := &streamStats{}
 	d := &Daemon{
 		dir:             opts.Dir,
+		home:            opts.Home,
 		lock:            lock,
 		endLog:          endLog,
 		listener:        listener,

@@ -151,7 +151,8 @@ test("settings panel includes all active companion keys and skips deprecated row
     "dashboard.companion_attachments", "dashboard.companion_director",
     "dashboard.companion_enabled", "dashboard.companion_eyes", "dashboard.companion_hair",
     "dashboard.companion_outfit", "dashboard.companion_pack", "dashboard.companion_palette",
-    "dashboard.companion_preset", "dashboard.companion_sources"
+    "dashboard.companion_preset", "dashboard.companion_soul", "dashboard.companion_soul_dir",
+    "dashboard.companion_sources"
   ]);
   const legacyModal = catalog.filter(spec => spec.surface === "companion-modal");
   assert.deepEqual(legacyModal, [], "retired companion-modal surface has no remaining rows");
@@ -1607,4 +1608,252 @@ test("tier routing frame avoids vertical scroll and drawEdges resets svg height 
   while (rafQueue.length) rafQueue.shift()();
   assert.equal(svg.getAttribute("height"), "210", "drawEdges must reset old SVG height before measuring");
   assert.equal(frame.scrollHeight, 210, "stale SVG height must not keep frame vertically scrollable");
+});
+
+test("companion settings Memory / Soul drawer supports persona/profile edits, scrubber approval queue, episodes FTS5 search & prune, and ZIP sync", async () => {
+  const catalog = JSON.parse(read("dashboard-settings-catalog.json"));
+  const settingsSource = read("dashboard-settings.js");
+  const companionSource = read("dashboard-settings-companion.js");
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+
+  const { doc, win, FakeEvent } = createFakeDOM();
+  doc.createElementNS = (_ns, tag) => doc.createElement(tag);
+  const origCreate = doc.createElement.bind(doc);
+  doc.createElement = tag => {
+    const el = origCreate(tag);
+    if (tag === "select") {
+      el.add = opt => el.appendChild(opt);
+    }
+    return el;
+  };
+  class Option {
+    constructor(text, value, _defaultSelected, selected) {
+      const opt = origCreate("option");
+      opt.textContent = text;
+      opt.value = value;
+      opt.selected = !!selected;
+      return opt;
+    }
+  }
+
+  const view = doc.createElement("main");
+  view.setAttribute("data-settings-view", "1");
+  const search = doc.createElement("input");
+  search.setAttribute("data-settings-search", "1");
+  const count = doc.createElement("span");
+  count.setAttribute("data-settings-count", "1");
+  const targetDisplay = doc.createElement("div");
+  targetDisplay.setAttribute("data-settings-target-display", "1");
+  targetDisplay.append(doc.createElement("span"), doc.createElement("code"));
+  const precedence = doc.createElement("div");
+  precedence.setAttribute("data-settings-precedence", "1");
+  const sectionsNav = doc.createElement("nav");
+  sectionsNav.setAttribute("data-settings-sections", "1");
+  const filtersBar = doc.createElement("div");
+  filtersBar.setAttribute("data-settings-filters", "1");
+  const content = doc.createElement("div");
+  content.setAttribute("data-settings-content", "1");
+  view.append(search, count, targetDisplay, precedence, sectionsNav, filtersBar, content);
+  doc.body.appendChild(view);
+
+  const values = {
+    "dashboard.companion_enabled": true,
+    "dashboard.companion_director": "rules",
+    "dashboard.companion_pack": "default",
+    "dashboard.companion_preset": "werkschaft-d1",
+    "dashboard.companion_soul": "default",
+    "dashboard.companion_soul_dir": ""
+  };
+  const makeEntry = key => {
+    const spec = catalog.find(s => s.key === key);
+    const val = values[key];
+    return {
+      key,
+      value: val,
+      default: key === "dashboard.companion_enabled" ? false : "",
+      type: spec?.control === "toggle" ? "boolean" : "string",
+      enum: key === "dashboard.companion_director" ? ["rules", "agent"] : undefined,
+      editable: true,
+      selectors: {},
+      layers: [{ scope: "builtin", value: "" }, { scope: "global", value: val, selected: val }]
+    };
+  };
+
+  let soulState = {
+    soulId: "default",
+    soulDir: "/home/dev/.ws/companion-soul",
+    defaultSoulDir: "/home/dev/.ws/companion-soul",
+    machineId: "m-local1234",
+    souls: ["default"],
+    persona: "# Mina\n\nWarm and concise.\n",
+    profile: "Prefers brief status notes.\n",
+    recentEntries: [
+      { id: "se-1", ts: "2026-11-28T12:00:00Z", machine_id: "m-local1234", kind: "rapport", content: "Likes dark themes." }
+    ],
+    totalEntries: 1,
+    shardCount: 1,
+    pendingCount: 1,
+    episodeCount: 2
+  };
+  let pendingItems = [
+    {
+      id: 7,
+      soulId: "default",
+      target: "shard",
+      category: "rapport",
+      content: "Send weekly recap to dev@corp.example",
+      findings: [{ category: "email", rule: "email_address", sample: "dev@corp.example" }],
+      createdAt: "2026-11-28T12:05:00Z"
+    }
+  ];
+  let episodes = [
+    { id: 11, projectKey: "devenv", createdAt: "2026-11-28T11:00:00Z", summary: "SQLite FTS5 indexing", tags: ["sqlite"] },
+    { id: 12, projectKey: "webapp", createdAt: "2026-11-28T10:00:00Z", summary: "Theme polish", tags: ["ui"] }
+  ];
+  const calls = [];
+
+  win.window = win;
+  win.wsT = (key, ...args) => args.length ? `${key}:${args.join(",")}` : key;
+  win.localStorage = { removeItem() {}, getItem: () => null, setItem() {} };
+  win.parent = { location: { hash: "" }, document: { querySelectorAll: () => [] }, postMessage() {} };
+  win.WsShell = shell;
+  win.WsSettingsCatalog = catalog;
+  win.WsSettingsExtension = {};
+
+  const ctx = vm.createContext({
+    window: win,
+    document: doc,
+    location: new URL("http://localhost:19544/settings?scope=global&section=companion&frame=1"),
+    URL, URLSearchParams, Map, Set, Option, Event: FakeEvent, setTimeout,
+    fetch: async (reqUrl, opts = {}) => {
+      const url = String(reqUrl);
+      calls.push({ url, method: opts.method || "GET", body: opts.body });
+      if (url.startsWith("/api/config/snapshot")) {
+        return { ok: true, status: 200, json: async () => ({ scope: "global", target: "", context: { worktree: "", session: "" }, entries: Object.keys(values).map(makeEntry) }) };
+      }
+      if (url === "/api/companion/packs") {
+        return { ok: true, status: 200, json: async () => ({ resolvedAuto: { packId: "default" }, packs: [{ id: "default", name: "Default", renderer: "2d", builtin: true }] }) };
+      }
+      if (url.includes("/pack.json")) {
+        return { ok: true, status: 200, json: async () => ({ id: "default" }) };
+      }
+      if (url === "/api/companion/soul" && (!opts.method || opts.method === "GET")) {
+        return { ok: true, status: 200, json: async () => ({ ...soulState, pendingCount: pendingItems.length, episodeCount: episodes.length }) };
+      }
+      if (url === "/api/companion/soul" && opts.method === "POST") {
+        const body = JSON.parse(opts.body);
+        if (body.content.includes("@")) {
+          pendingItems.push({ id: 8, soulId: "default", target: body.target, content: body.content, findings: [{ category: "email", rule: "email_address", sample: "a@b.test" }], createdAt: "2026-11-28T12:10:00Z" });
+          return { ok: true, status: 202, json: async () => ({ status: "held_pending", pending: pendingItems[pendingItems.length - 1] }) };
+        }
+        if (body.target === "persona.md") soulState.persona = body.content;
+        else soulState.profile = body.content;
+        return { ok: true, status: 200, json: async () => ({ status: "saved" }) };
+      }
+      if (url === "/api/companion/memory/pending" || url.startsWith("/api/companion/memory/pending?")) {
+        const parsed = new URL(url, origin);
+        const soulFilter = parsed.searchParams.get("soul") || "";
+        const filtered = soulFilter ? pendingItems.filter(p => p.soulId === soulFilter) : pendingItems;
+        return { ok: true, status: 200, json: async () => ({ items: filtered }) };
+      }
+      if (url.endsWith("/approve")) {
+        const id = Number(url.split("/")[5]);
+        const body = JSON.parse(opts.body);
+        pendingItems = pendingItems.filter(p => p.id !== id);
+        soulState.recentEntries.unshift({ id: "se-approved", ts: "2026-11-28T12:15:00Z", machine_id: "m-local1234", kind: "rapport", content: body.content });
+        soulState.totalEntries = soulState.recentEntries.length;
+        return { ok: true, status: 200, json: async () => ({ approved: { id, content: body.content } }) };
+      }
+      if (url.endsWith("/discard")) {
+        const id = Number(url.split("/")[5]);
+        pendingItems = pendingItems.filter(p => p.id !== id);
+        return { ok: true, status: 200, json: async () => ({ discarded: id }) };
+      }
+      if (url.startsWith("/api/companion/memory/episodes") && (!opts.method || opts.method === "GET")) {
+        const parsed = new URL(url, origin);
+        const q = (parsed.searchParams.get("q") || "").toLowerCase();
+        const proj = parsed.searchParams.get("project") || "";
+        const filtered = episodes.filter(ep =>
+          (!proj || ep.projectKey === proj) &&
+          (!q || ep.summary.toLowerCase().includes(q))
+        );
+        return { ok: true, status: 200, json: async () => ({ episodes: filtered, projects: ["devenv", "webapp"], total: episodes.length }) };
+      }
+      if (url === "/api/companion/memory/episodes/prune") {
+        const body = JSON.parse(opts.body);
+        const before = episodes.length;
+        if (body.id) episodes = episodes.filter(e => e.id !== body.id);
+        else if (body.project) episodes = episodes.filter(e => e.projectKey !== body.project);
+        else if (body.all) episodes = [];
+        return { ok: true, status: 200, json: async () => ({ deleted: before - episodes.length }) };
+      }
+      throw new Error("unexpected fetch " + url);
+    }
+  });
+  vm.runInContext(companionSource, ctx);
+  vm.runInContext(settingsSource, ctx);
+  await flush();
+  await flush();
+  await flush();
+
+  // 1. Memory group renders Soul tab with persona.md, profile.md, recent shards, and pending badge.
+  assert.ok(content.querySelector('[data-companion-group="memory"]'), "Memory / Soul group renders");
+  assert.equal(content.querySelector('[data-companion-memory-pending-badge]')?.dataset.companionMemoryPendingBadge, "1");
+  const personaEditor = content.querySelector('[data-companion-soul-editor="persona.md"]');
+  const profileEditor = content.querySelector('[data-companion-soul-editor="profile.md"]');
+  assert.ok(personaEditor && personaEditor.value.includes("# Mina"));
+  assert.ok(profileEditor && profileEditor.value.includes("Prefers brief status notes."));
+  assert.ok(content.querySelector("[data-companion-soul-shards]"), "recent Soul shards list renders");
+
+  // 2. Saving profile.md with suspicious email triggers scrubber hold_pending notice.
+  profileEditor.value = "Mail a@b.test";
+  profileEditor.dispatchEvent(new FakeEvent("input"));
+  content.querySelector('[data-companion-soul-save="profile.md"]').click();
+  await flush();
+  await flush();
+  assert.equal(content.querySelector("[data-companion-memory-feedback]")?.dataset.companionMemoryFeedback, "warn");
+
+  // 3. Switch to Approvals tab: edit & approve item 7, discard item 8.
+  content.querySelector('[data-companion-memory-tab="approvals"]').click();
+  await flush();
+  await flush();
+  assert.ok(content.querySelector('[data-companion-pending-id="7"]'));
+  assert.ok(content.querySelector('[data-companion-pending-id="8"]'));
+  const pendingEditor = content.querySelector('[data-companion-pending-editor="7"]');
+  pendingEditor.value = "Prefers concise weekly recaps.";
+  pendingEditor.dispatchEvent(new FakeEvent("input"));
+  content.querySelector('[data-companion-pending-approve="7"]').click();
+  await flush();
+  await flush();
+  assert.ok(calls.some(c => c.url === "/api/companion/memory/pending/7/approve" && c.body.includes("Prefers concise weekly recaps.")));
+  content.querySelector('[data-companion-pending-discard="8"]').click();
+  await flush();
+  await flush();
+  assert.ok(calls.some(c => c.url === "/api/companion/memory/pending/8/discard"));
+  assert.equal(content.querySelector("[data-companion-pending-list]"), null, "approval queue empties after approve & discard");
+
+  // 4. Switch to Local Episodes tab: search FTS5 and prune.
+  content.querySelector('[data-companion-memory-tab="episodes"]').click();
+  await flush();
+  await flush();
+  assert.ok(content.querySelector('[data-companion-episode-id="11"]'));
+  assert.ok(content.querySelector('[data-companion-episode-id="12"]'));
+  const epSearch = content.querySelector("[data-companion-episodes-search]");
+  epSearch.value = "SQLite";
+  epSearch.dispatchEvent(new FakeEvent("input"));
+  epSearch.parentNode.dispatchEvent(new FakeEvent("submit"));
+  await flush();
+  await flush();
+  assert.ok(content.querySelector('[data-companion-episode-id="11"]'));
+  assert.equal(content.querySelector('[data-companion-episode-id="12"]'), null, "FTS5 query filters episodes");
+  content.querySelector('[data-companion-episode-delete="11"]').click();
+  await flush();
+  await flush();
+  assert.ok(calls.some(c => c.url === "/api/companion/memory/episodes/prune" && c.body.includes('"id":11')));
+
+  // 5. Switch to Sync & Backup tab: export & import controls render.
+  content.querySelector('[data-companion-memory-tab="sync"]').click();
+  await flush();
+  assert.ok(content.querySelector("[data-companion-soul-export]"));
+  assert.ok(content.querySelector("[data-companion-soul-import]"));
 });
