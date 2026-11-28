@@ -335,10 +335,6 @@ func dashboardAdapterReadLimits(key string) (noRepo, noSession bool) {
 		return false, true
 	case DashboardPortKey:
 		return true, true
-	case wsdashboard.CompanionBodyTierKey, wsdashboard.CompanionWorkTierKey:
-		// The companion runtime launches outside any repository or session,
-		// so only the project and global values apply.
-		return true, true
 	}
 	if strings.HasPrefix(key, "claude.") {
 		return true, true

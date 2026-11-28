@@ -283,6 +283,12 @@ func (c *conv) allowAgyBypassPending() {
 	if c.replaying {
 		return
 	}
+	// A hidden companion session's prompts are the daemon's to settle, by the
+	// companion policy and never by the user's mode.
+	if rec.CompanionRole != "" {
+		c.settleCompanionPending()
+		return
+	}
 	bypass := rec.agyBypass()
 	workerAuto := !rec.Lead && c.r.opts.Backends[rec.Backend].WorkerAutoApprove
 	cutoverAuto := c.cutoverSupport() != nil && c.cutoverSupport().AutoApprove != nil

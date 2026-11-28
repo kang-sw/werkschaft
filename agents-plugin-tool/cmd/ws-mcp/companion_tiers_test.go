@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -174,14 +175,34 @@ func TestCompanionTierUnavailableValuesFallBackToAuto(t *testing.T) {
 	}
 }
 
-// The project value wins over the global one; resetting it restores global.
-func TestCompanionTierProjectScopeOverridesGlobal(t *testing.T) {
+// The tier keys are global-only ((1792)=a): a project write is refused, and a
+// project-layer entry an older or hand-edited file holds never shadows the
+// global value (or auto) for either role.
+func TestCompanionTierProjectLayerIsIgnored(t *testing.T) {
 	rt, cfg := companionTierRuntime(t, "claude", "codex", "agy")
+	for _, key := range []string{wsdashboard.CompanionBodyTierKey, wsdashboard.CompanionWorkTierKey} {
+		resolver := wsconfig.NewResolver(cfg, map[string]string{key: ""}, nil, nil)
+		if err := resolver.Set(key, "agy.small", wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeProject}); err == nil {
+			t.Fatalf("a project-scope write of %s was accepted, want a global-only refusal", key)
+		}
+	}
+	projectFile, err := wsconfig.Path(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(projectFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := `{"schema_version": 1, "overrides": {"` + wsdashboard.CompanionBodyTierKey + `": "agy.small", "` + wsdashboard.CompanionWorkTierKey + `": "agy.small"}}`
+	if err := os.WriteFile(projectFile, []byte(stale), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Only the project layer holds a value: both roles stay on auto.
+	checkCompanionTier(t, "body auto", rt.resolveRole(mcp.CompanionRoleBody), tierWant{"claude", "small", "claude-small", "small-effort", ""})
+	checkCompanionTier(t, "work auto", rt.resolveRole(mcp.CompanionRoleWork), tierWant{"claude", "medium", "claude-medium", "medium-effort", ""})
+	// A global value wins over the stale project one.
 	setCompanionTier(t, cfg, wsconfig.ScopeGlobal, wsdashboard.CompanionBodyTierKey, "codex.medium")
-	setCompanionTier(t, cfg, wsconfig.ScopeProject, wsdashboard.CompanionBodyTierKey, "agy.small")
-	checkCompanionTier(t, "project", rt.resolveRole(mcp.CompanionRoleBody), tierWant{"agy", "small", "agy-small", "small-effort", ""})
-	setCompanionTier(t, cfg, wsconfig.ScopeProject, wsdashboard.CompanionBodyTierKey, "")
-	checkCompanionTier(t, "global", rt.resolveRole(mcp.CompanionRoleBody), tierWant{"codex", "medium", "codex-medium", "medium-effort", ""})
+	checkCompanionTier(t, "global body", rt.resolveRole(mcp.CompanionRoleBody), tierWant{"codex", "medium", "codex-medium", "medium-effort", ""})
 	checkCompanionTier(t, "work untouched", rt.resolveRole(mcp.CompanionRoleWork), tierWant{"claude", "medium", "claude-medium", "medium-effort", ""})
 }
 

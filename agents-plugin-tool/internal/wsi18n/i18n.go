@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -332,6 +333,16 @@ func SubsetScript(lang, prefix string) template.JS {
 	subsetScripts.order[subsetScripts.next] = key
 	subsetScripts.next = (subsetScripts.next + 1) % subsetCacheLimit
 	return result
+}
+
+// SubsetScriptKeys is SubsetScript that also keeps the exact client keys in
+// keys, for a static page whose renderer shows a few strings that belong to
+// another script's namespace (the Settings page's Companion card shows the
+// lead modal's js.lead.agy.terms). A key with no table entry adds nothing.
+func SubsetScriptKeys(lang, prefix string, keys ...string) template.JS {
+	return filteredScript(lang, func(k string) bool {
+		return strings.HasPrefix(k, prefix) || slices.Contains(keys, k)
+	})
 }
 
 // ScriptExcept is Script without the client keys that start with any prefix,

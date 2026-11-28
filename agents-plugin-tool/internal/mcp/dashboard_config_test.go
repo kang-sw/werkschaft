@@ -117,6 +117,14 @@ func TestShippedDashboardManifestsLoadBesideEachPackageManifest(t *testing.T) {
 					}
 				}
 			}
+			// The companion tiers are global-only ((1792)=a): registered with
+			// wsconfig, and their description says so.
+			for _, tierKey := range []string{wsdashboard.CompanionBodyTierKey, wsdashboard.CompanionWorkTierKey} {
+				tier, _ := declared.lookup(tierKey)
+				if !wsconfig.GlobalOnly(tierKey) || !strings.Contains(tier.Description, "Only the global value applies") || strings.Contains(strings.ToLower(tier.Description), "project") {
+					t.Errorf("%s must be global-only and say so: %q", tierKey, tier.Description)
+				}
+			}
 			enabled, ok := declared.lookup(DashboardEnabledKey)
 			if !ok || enabled.DefaultValue != pkg.enabled {
 				t.Fatalf("%s = %+v (declared %v), want default %v", DashboardEnabledKey, enabled.DefaultValue, ok, pkg.enabled)

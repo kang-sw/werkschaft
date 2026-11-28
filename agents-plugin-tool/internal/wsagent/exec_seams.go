@@ -203,6 +203,14 @@ func (r *Runner) ApproveExec(ctx context.Context, id string, call ExecApproval) 
 			answer <- execAnswer{posture: true}
 			return
 		}
+		if c.rec.CompanionRole != "" {
+			// A hidden companion has no page to answer the prompt: refuse at
+			// once rather than park it forever. (A call its posture runs without
+			// a prompt, execImmediate above, is the ws server's own gate:
+			// companionBodyBaseAllows keeps exec.* from the body.)
+			refusal = &execDenial{message: "companion sessions run no shell commands; delegate command work to an engineering agent with agent.spawn"}
+			return
+		}
 		c.addExecApproval(ApprovalRequest{
 			ID:          reqID,
 			Tool:        call.Tool,

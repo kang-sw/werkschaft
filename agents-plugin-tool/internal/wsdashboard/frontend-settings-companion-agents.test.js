@@ -130,20 +130,20 @@ test("choosing a value saves it at once and refreshes the readback", async () =>
   assert.deepEqual(h.writes[1], { key: BODY, action: "reset", value: "" }, "auto at global scope resets");
 });
 
-test("auto under a project scope pins auto only over an explicit global value", async () => {
+test("both tier keys are global-only: a project scope is read-only and never writes or pins auto", async () => {
   const globalLayer = [{ scope: "global", present: true, value: "codex.medium" }];
-  const h = setup({ scope: "project", layers: { [BODY]: globalLayer, [WORK]: [{ scope: "global", present: true, value: "auto" }] } });
+  // The settings snapshot marks a global-only key not editable outside the
+  // global scope (disabled_reason global_only); the selectors follow it.
+  const h = setup({ scope: "project", editable: false, layers: { [BODY]: globalLayer, [WORK]: globalLayer } });
   await tick();
   for (const role of ["body", "work"]) {
     const select = selectFor(h.root, role);
+    assert.ok(select.disabled, role + " selector is disabled at project scope");
     select.value = "";
     select.listeners.change[0]();
     await tick();
   }
-  assert.deepEqual(h.writes, [
-    { key: BODY, action: "set", value: "auto" },
-    { key: WORK, action: "reset", value: "" }
-  ]);
+  assert.deepEqual(h.writes, []);
 });
 
 test("a failed readback says so, and a read-only scope disables the selectors", async () => {
@@ -199,6 +199,47 @@ test("a rejected save still refreshes the readback", async () => {
   await tick();
   await tick();
   assert.equal(h.fetches.length, 2);
+});
+
+test("the card header stacks its subtitle and the readback pill wraps instead of clipping", () => {
+  const css = fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-companion.css"), "utf8");
+  const rule = selector => {
+    const m = css.match(new RegExp("(?:^|\\n)" + selector.replace(/[.]/g, "\\.") + "\\s*\\{([^}]*)\\}"));
+    assert.ok(m, selector + " rule exists");
+    return m[1];
+  };
+  const head = rule(".cs-agents-head");
+  assert.match(head, /flex-direction:\s*column/, "title stacks over its subtitle");
+  assert.doesNotMatch(head, /flex-wrap|baseline/, "no side-by-side wrapping header");
+  const pill = rule(".cs-agent-readback");
+  assert.match(pill, /white-space:\s*normal/, "a long resolved string wraps");
+  assert.match(pill, /overflow-wrap:\s*anywhere/);
+  assert.match(pill, /max-width:\s*100%/, "never wider than the card");
+  assert.match(rule(".cs-agent-head"), /flex-wrap:\s*wrap/, "row head wraps on narrow widths");
+});
+
+test("the agy terms notice renders the localized text in every locale, never the raw key", async () => {
+  const dir = path.join(__dirname, "..", "wsi18n", "tables");
+  const langs = fs.readdirSync(dir).filter(f => f.endsWith(".json")).map(f => f.slice(0, -5));
+  assert.equal(langs.length, 11, "all locales are covered: " + langs.join(","));
+  const agyOptions = readback().options.concat([
+    { value: "agy.small", kind: "harness", harness: "agy", tier: "small", model: "agy-small", effort: "" }
+  ]);
+  const respond = () => ({ ok: true, status: 200, json: async () => ({ resolved_agents: readback({ options: agyOptions }) }) });
+  for (const lang of langs) {
+    const table = JSON.parse(fs.readFileSync(path.join(dir, lang + ".json"), "utf8"));
+    const text = table["js.lead.agy.terms"];
+    assert.ok(text && text.includes("Antigravity"), lang + " carries the agy terms notice");
+    const h = setup({ values: { [BODY]: "agy.small" }, respond });
+    // wsT's behavior: a key missing from the page table renders as itself.
+    h.ctx.tr = (k, ...a) => Object.hasOwn(table, k) ? table[k] : k;
+    await tick();
+    h.ctx.rerender();
+    const [note] = byData(h.root, "companionAgentTerms");
+    assert.ok(note, lang + " shows the notice");
+    assert.notEqual(note.textContent, "js.lead.agy.terms", lang + " renders the raw key");
+    assert.equal(note.textContent, text, lang + " renders its localized text");
+  }
 });
 
 test("the agy consumer-terms notice shows once while either role launches on agy", async () => {

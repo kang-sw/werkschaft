@@ -572,6 +572,19 @@ func (c *conv) addApproval(a ApprovalRequest, quiet bool) {
 		}
 		return
 	}
+	if !quiet && !c.replaying && c.record().CompanionRole != "" {
+		// A hidden companion session has no page to answer a prompt: the
+		// daemon allows or refuses it now, and it is never parked (see
+		// companion_permission.go). A replay or a quiet event parks it for
+		// the rejoin's end (settleCompanionPending).
+		if !c.settleCompanionApproval(a) {
+			// The process still waits on a request nobody can answer and
+			// nothing is parked for the watchdogs: stop it so the companion
+			// restarts instead of waiting forever.
+			c.approvalFailed(errNoApprovalAnswer)
+		}
+		return
+	}
 	if !quiet && !c.replaying && c.rejectCutoverRequest(a) {
 		// Refused before it is published, ahead of bypass and worker
 		// auto-approval: nobody decides it.
@@ -776,7 +789,7 @@ func (c *conv) sendApproval(answerer approvalAnswerer, req ApprovalRequest, allo
 			rec.Answered = append(rec.Answered, req.ID)
 		}
 	}
-	if rec := c.record(); rec.agyBypass() || c.cutoverAutoApproves(rec, req) {
+	if rec := c.record(); rec.agyBypass() || rec.CompanionRole != "" || c.cutoverAutoApproves(rec, req) {
 		c.setStatus(func() { track(&c.rec) })
 	} else {
 		c.update(track)

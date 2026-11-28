@@ -27,8 +27,10 @@ func companionRoleTier(role string) (key, autoSize string) {
 	return wsdashboard.CompanionWorkTierKey, companionTierWork
 }
 
-// companionTierSetting reads key with no repository or session: the project
-// value over the global one, "" when neither is set or the read fails.
+// companionTierSetting reads key with no repository or session: the global
+// value, "" when it is unset or the read fails. The tier keys are global-only
+// (internal/mcp registers them), so the resolver skips a project-layer entry
+// an older or hand-edited file may still hold.
 func companionTierSetting(opts wsconfig.Options, key string) string {
 	resolver := wsconfig.NewResolver(opts, map[string]string{key: ""}, nil, nil)
 	value, err := resolver.Get("", key)

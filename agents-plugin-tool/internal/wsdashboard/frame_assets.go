@@ -5,9 +5,40 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"html/template"
+	"regexp"
+	"sort"
+	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsi18n"
 )
+
+// settingsKeyLiteral matches a client string key written as a literal in a
+// script.
+var settingsKeyLiteral = regexp.MustCompile(`["'](js\.[a-z0-9_]+(?:\.[a-z0-9_-]+)+)["']`)
+
+// settingsSharedI18nKeys are the client strings outside the js.settings.*
+// namespace that the Settings page's own scripts name. The page loads only its
+// js.settings.* subset (the frame table is not loaded there), so a key it shows
+// from another namespace (the companion agents card reuses a lead modal
+// notice) would render as the raw key unless the page's table carries it. The
+// set is read from the scripts themselves, so a card that shows another
+// namespace's string needs no second list; a literal that is no table key
+// (an id, a dotted data value) adds nothing.
+func settingsSharedI18nKeys(scripts ...string) []string {
+	seen := map[string]bool{}
+	var keys []string
+	for _, script := range scripts {
+		for _, m := range settingsKeyLiteral.FindAllStringSubmatch(script, -1) {
+			key := m[1]
+			if !strings.HasPrefix(key, "js.settings.") && !seen[key] {
+				seen[key] = true
+				keys = append(keys, key)
+			}
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
 
 // buildFrameFiles keeps the frame's immutable resources beside the existing
 // main script. These URLs deliberately retain the session page's access gate;
@@ -90,8 +121,9 @@ func (a *dashboardAssets) buildFrameFiles() {
 	d.SettingsScriptFile = add(string(d.ShellScript)+"\n;\nwindow.WsSettingsCatalog = "+string(d.SettingsCatalog)+";\n"+string(d.SettingsScript), "js")
 	d.FrameI18nFiles = map[string]string{}
 	d.SettingsI18nFiles = map[string]string{}
+	shared := settingsSharedI18nKeys(string(d.ShellScript), string(d.SettingsScript))
 	for _, lang := range wsi18n.Languages() {
 		d.FrameI18nFiles[lang.Code] = add(string(wsi18n.ScriptExcept(lang.Code, "js.settings.")), "js")
-		d.SettingsI18nFiles[lang.Code] = add(string(wsi18n.SubsetScript(lang.Code, "js.settings.")), "js")
+		d.SettingsI18nFiles[lang.Code] = add(string(wsi18n.SubsetScriptKeys(lang.Code, "js.settings.", shared...)), "js")
 	}
 }

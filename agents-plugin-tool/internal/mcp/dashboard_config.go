@@ -85,6 +85,9 @@ var manifestGlobalOnlyKeys = map[string]struct{}{
 	wsauditstore.KeyBodyCapKiB: {}, wsauditstore.KeyRetentionDays: {},
 	wsdashboard.CompanionAgentCooldownKey: {}, wsdashboard.CompanionAgentHourlyCapKey: {},
 	wsdashboard.CompanionSourcesKey: {},
+	// The companion tiers are launch settings of a daemon-wide session that
+	// starts outside any repository or session ((1792)=a).
+	wsdashboard.CompanionBodyTierKey: {}, wsdashboard.CompanionWorkTierKey: {},
 }
 
 func init() {
