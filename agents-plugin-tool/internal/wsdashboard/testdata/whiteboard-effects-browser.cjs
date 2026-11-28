@@ -97,6 +97,18 @@ async function until(check, message) {
         for (const topic of await card.locator('.wbupdate-topic').all()) {
           assert(await topic.locator('.wbupdate-items').count() <= 1, 'one chip group per topic');
           assert.equal(await topic.locator('.wbupdate-row .wbupdate-item-id, .wbupdate-class, .wbupdate-options').count(), 0, 'no redundant item rows');
+          if (await topic.locator('.wbupdate-items').count() === 1) {
+            const order = await topic.evaluate(t => {
+              const items = t.querySelector('.wbupdate-items');
+              const ib = items.getBoundingClientRect();
+              const others = [...t.querySelectorAll('.wbupdate-rows > .wbupdate-row, .wbupdate-rows > .wbupdate-panel-wrap')];
+              return others.map(o => ({
+                dom: !!(o.compareDocumentPosition(items) & Node.DOCUMENT_POSITION_FOLLOWING),
+                visual: o.getBoundingClientRect().bottom <= ib.top + 0.5,
+              }));
+            });
+            assert(order.every(o => o.dom && o.visual), 'question chips render below panels and logs (DOM and visual order)');
+          }
           for (const chip of await topic.locator('.wbupdate-items > a.wbupdate-item-id').all()) {
             const target = await chip.getAttribute('data-wb-jump');
             assert(/^item-[1-9]\d{0,5}$/.test(target), 'chips keep validated item targets');
@@ -166,6 +178,50 @@ async function until(check, message) {
         assert.equal(await fallback().locator('img, script, iframe, .wbeffect-values').count(), 0, 'unsupported envelope is escaped fallback, not invented effects');
         await shot('saved-escaped-and-fallback');
 
+        async function verifyPreviewBodyJump(entryKey, label) {
+          const card = page.locator(`.wbeffects[data-entry="${entryKey}"]`);
+          const preview = card.locator('.wbupdate-panel-body');
+          await preview.waitFor({ state: 'attached' });
+          assert.equal(await preview.evaluate(el => getComputedStyle(el).cursor), 'pointer', `${label}: preview body has pointer cursor`);
+          assert.equal(await preview.locator('a, button').count(), 1, `${label}: preview contains only its markdown link (no nested button/anchor wrapper)`);
+          assert.equal(await preview.evaluate(el => !el.closest('a, button')), true, `${label}: preview body is not wrapped inside an anchor or button`);
+
+          // Non-collapsed selection inside preview body must not trigger jump.
+          await preview.evaluate(el => {
+            const p = el.querySelector('p');
+            const range = document.createRange();
+            range.selectNodeContents(p.firstChild);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+            p.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+            sel.removeAllRanges();
+          });
+          assert.notEqual(await page.evaluate(() => document.activeElement && document.activeElement.id), 'p1', `${label}: selection drag does not hijack click to jump`);
+
+          // Interactive link inside preview body is not hijacked by panel jump.
+          const linkHijacked = await preview.evaluate(el => {
+            const a = el.querySelector('a[href^="https://"]');
+            let preventedByJump = null;
+            const guard = ev => { preventedByJump = ev.defaultPrevented; ev.preventDefault(); };
+            document.addEventListener('click', guard, { once: true });
+            a.click();
+            return preventedByJump;
+          });
+          assert.equal(linkHijacked, false, `${label}: markdown link inside preview body is not hijacked`);
+          assert.notEqual(await page.evaluate(() => document.activeElement && document.activeElement.id), 'p1', `${label}: markdown link click does not jump board`);
+
+          // Clicking preview body text jumps to #p1 (not the outer topic).
+          await preview.locator('p').evaluate(p => p.firstChild && p.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 })));
+          await until(async () => await page.evaluate(() => {
+            const ae = document.activeElement;
+            return !!ae && ae.id === 'p1';
+          }), `${label}: clicking panel preview body focuses #p1 instead of outer topic`);
+          await page.evaluate(() => { if (document.activeElement) document.activeElement.blur(); });
+          await showTab('convo');
+        }
+        await verifyPreviewBodyJump(keys.navFocus, 'history-replayed');
+
         const savedKeys = await effectsKeys();
         const refresh = await action('append');
         await page.getByText(refresh.marker, { exact: true }).waitFor({ state: 'attached' });
@@ -189,6 +245,9 @@ async function until(check, message) {
         const draft = `Preserve the effects draft at ${width}px`;
         await page.locator('#ctext + .wsc-editor').fill(draft);
         await waitStored(draft);
+        const liveNav = await action('append_nav');
+        await page.getByText('Jump target ' + liveNav.marker, { exact: true }).waitFor({ state: 'attached' });
+        await verifyPreviewBodyJump(liveNav.key, 'live-streamed');
         const liveKeys = await effectsKeys();
         const liveRefresh = await action('append');
         await page.getByText(liveRefresh.marker, { exact: true }).waitFor({ state: 'attached' });
@@ -347,7 +406,7 @@ async function until(check, message) {
         // attachment. Held synthetic responses make busy/generation observable.
         const initialRequests = (await action('requests')).count;
         let modal = await openModal();
-        const start = modal.getByRole('button', { name: 'Start', exact: true });
+        const start = modal.locator('.ns-cta.go');
         await start.click();
         await until(async () => (await action('requests')).count === initialRequests + 1, 'one creation request reaches synthetic host');
         assert.equal(await start.isDisabled(), true, 'Start is disabled while the creation request is held');
@@ -364,16 +423,16 @@ async function until(check, message) {
         await draftRestored();
         assert.equal(await page.locator('#ctext').inputValue(), draft, 'modal completion saves the originating session draft');
         modal = await openModal();
-        await modal.getByRole('button', { name: 'Start', exact: true }).click();
+        await modal.locator('.ns-cta.go').click();
         await until(async () => (await action('requests')).count === initialRequests + 2, 'second held creation request arrives');
-        await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
+        await modal.getByRole('button', { name: 'Close', exact: true }).click();
         modal = await openModal();
         await action('complete');
         await tab.waitForURL(base + '/s/createdsession');
         await active('board');
         assert.equal(await modal.isVisible(), true, 'late prior-generation success never closes a newer modal');
-        assert.equal(await modal.getByRole('button', { name: 'Start', exact: true }).isDisabled(), false, 'the newer modal stays startable');
-        await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
+        assert.equal(await modal.locator('.ns-cta.go').isDisabled(), false, 'the newer modal stays startable');
+        await modal.getByRole('button', { name: 'Close', exact: true }).click();
         await shot('modal-generation-completed');
         assert.deepEqual(serviceWorkerAttempts, [], 'no service worker registration attempts');
         assert.deepEqual(serviceWorkerEvents, [], 'no service worker creations');

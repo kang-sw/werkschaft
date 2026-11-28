@@ -398,12 +398,33 @@
     rp.btn = found;
     return found;
   }
+  var nsScrim = null;
+  function railPopScrim(show) {
+    if (show) {
+      if (!nsScrim) {
+        nsScrim = mk("div", "ns-scrim");
+        nsScrim.hidden = true;
+      }
+      if (!nsScrim.parentNode) doc.body.appendChild(nsScrim);
+      nsScrim.hidden = false;
+    } else if (nsScrim) {
+      nsScrim.hidden = true;
+    }
+  }
   // A row menu stands at the place in its row it opened at (the pointer),
-  // following the row, else under the whole row.
+  // following the row, else under the whole row. The new-session modal centers
+  // in the viewport with a backdrop scrim.
   function railPopPlace() {
     var b = railPopBtn();
     if (!b) return;
-    var el = rp.P.el, a = b.getBoundingClientRect();
+    var el = rp.P.el;
+    if (rp.kind === "lead") {
+      var vw = root.clientWidth || window.innerWidth, vh = root.clientHeight || window.innerHeight;
+      el.style.left = Math.max(8, Math.round((vw - el.offsetWidth) / 2)) + "px";
+      el.style.top = Math.max(8, Math.round((vh - el.offsetHeight) / 2)) + "px";
+      return;
+    }
+    var a = b.getBoundingClientRect();
     if (rp.kind === "row") {
       var rr = b.closest(".rs").getBoundingClientRect(), o = rp.at;
       a = o ? { top: rr.top + o.dy, bottom: rr.top + o.dy, left: rr.left + o.dx, right: rr.left + o.dx + el.offsetWidth } : rr;
@@ -430,6 +451,7 @@
     if (!rp.P) return;
     if (window.WsHoldConfirm) window.WsHoldConfirm.cancelAll();
     var P = rp.P, b = railPopBtn(), row = rp.kind === "row" || rp.kind === "confirm";
+    railPopScrim(false);
     P.close();
     P.el.hidden = true;
     rp = { P: null, kind: "", ws: "", btn: null };
@@ -500,6 +522,7 @@
       close: function () { root.removeAttribute("data-settings-open"); },
       focus: function () { gmenu.focus(); }
     } : kind === "usage" ? rpUsage || (rpUsage = usageGutter.makePopover(railPopPlace, function () { railPopClose(true); })) : kind === "wt" ? rpWt || (rpWt = rpWtMake()) : kind === "lead" ? rpLead || (rpLead = rpLeadMake()) : kind === "sess" ? rpSess || (rpSess = rpSessMake()) : rpWs || (rpWs = rpWsMake());
+    if (kind === "lead") railPopScrim(true);
     if (!P.el.parentNode) doc.body.appendChild(P.el);
     rp = { P: P, kind: kind, ws: ws, btn: btn };
     btn.setAttribute("aria-expanded", "true");

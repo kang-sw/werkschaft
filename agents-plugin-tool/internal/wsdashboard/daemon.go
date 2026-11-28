@@ -299,6 +299,8 @@ type Daemon struct {
 	boardExportMaxBytes int64
 	// companionCommands broadcasts agent-director commands to rail streams.
 	companionCommands companionCommandHub
+	// companionPhone holds the in-memory 4-state embodiment & phone messenger store.
+	companionPhone CompanionPhoneStore
 	// director is the companion agent director (companion_director.go).
 	director      companionDirector
 	agents        AgentHost

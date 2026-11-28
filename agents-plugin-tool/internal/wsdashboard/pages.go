@@ -99,7 +99,13 @@ var companionScriptFiles = []string{
 	"dashboard-companion-menu.js",
 	"dashboard-companion-vrm-colead.js",
 	"dashboard-companion-vrm.js",
+	"dashboard-companion-messenger.js",
 	"dashboard-companion-stage.js",
+}
+
+var companionStyleFiles = []string{
+	"dashboard-companion.css",
+	"dashboard-companion-messenger.css",
 }
 
 var dashboardStyleFiles = []string{
@@ -113,6 +119,7 @@ var dashboardStyleFiles = []string{
 	"dashboard-ticketmap.css",
 	"dashboard-menus.css",
 	"dashboard-rail.css",
+	"dashboard-new-session.css",
 	"dashboard-shell.css",
 	"dashboard-account-consent.css",
 	"dashboard-audit.css",
@@ -153,6 +160,8 @@ func readDashboardSource(read func(string) ([]byte, error), name string) ([]byte
 		files = trackerScriptFiles
 	case "dashboard-companion.js":
 		files = companionScriptFiles
+	case "dashboard-companion.css":
+		files = companionStyleFiles
 	default:
 		return read(name)
 	}

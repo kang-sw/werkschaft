@@ -638,11 +638,11 @@ func TestCompanionPackForRendererAndPersona(t *testing.T) {
 		t.Fatalf("vrm persona = %+v", pvrm.persona)
 	}
 	allowedVRM := companionAllowedIDs(pvrm)
-	wantVRMExpr := []string{"cry", "focused", "half_lid", "happy", "idle", "idle_doze", "oo"}
+	wantVRMExpr := []string{"annoyed", "cry", "focused", "half_lid", "happy", "idle", "idle_doze", "merong", "oo", "startled", "wink"}
 	if !slices.Equal(allowedVRM["expression"], wantVRMExpr) {
 		t.Fatalf("vrm allowed expressions = %v, want %v", allowedVRM["expression"], wantVRMExpr)
 	}
-	wantVRMGestures := []string{"coffee", "cup_hands", "dangle", "headrub", "perched", "point", "wave"}
+	wantVRMGestures := []string{"annoyed_tap", "coffee", "cup_hands", "dangle", "headrub", "knock_startle", "perched", "phone_buzz", "phone_merong_facedown", "phone_pickup", "phone_putdown", "phone_typing", "point", "wakeup_jolt", "wave"}
 	if !slices.Equal(allowedVRM["gesture"], wantVRMGestures) {
 		t.Fatalf("vrm allowed gestures = %v, want %v", allowedVRM["gesture"], wantVRMGestures)
 	}

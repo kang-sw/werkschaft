@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>컴패니언 메신저 팝업 · Glass-Wall Co-Lead — Werkschaft Mockup</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <!-- Self-contained inline SVG icon sprite (zero external requests) -->
+  <svg xmlns="http://www.w3.org/2000/svg" hidden aria-hidden="true">
+    <symbol id="i-branch" viewBox="0 0 24 24">
+      <circle cx="6" cy="6" r="2.5"/>
+      <circle cx="18" cy="8" r="2.5"/>
+      <circle cx="6" cy="18" r="2.5"/>
+      <path d="M6 8.5v7"/>
+      <path d="M18 10.5c0 4-3 5.5-12 5.5"/>
+    </symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24">
+      <path d="M3 7a2 2 0 0 1 2-2h4.2l2 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+    </symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24">
+      <path d="M21 12a9 9 0 0 0-15.5-6.3L3 8"/>
+      <path d="M3 3v5h5"/>
+      <path d="M3 12a9 9 0 0 0 15.5 6.3L21 16"/>
+      <path d="M16 16h5v5"/>
+    </symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24">
+      <path d="M12 5v14M5 12h14"/>
+    </symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24">
+      <path d="M12 17v5"/>
+      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v1a1 1 0 0 0 1 1 1 1 0 0 1 1 1z"/>
+    </symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24">
+      <path d="m12 3 9 4.5-9 4.5-9-4.5z"/>
+      <path d="m3 12 9 4.5 9-4.5"/>
+      <path d="m3 16.5 9 4.5 9-4.5"/>
+    </symbol>
+    <symbol id="i-close" viewBox="0 0 24 24">
+      <path d="M6 6l12 12M18 6 6 18"/>
+    </symbol>
+    <symbol id="i-send" viewBox="0 0 24 24">
+      <path d="M12 19V5"/>
+      <path d="m6 11 6-6 6 6"/>
+    </symbol>
+    <symbol id="i-smile" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9"/>
+      <path d="M8.5 14.5c1 1.5 2.2 2.2 3.5 2.2s2.5-.7 3.5-2.2"/>
+      <circle cx="9" cy="10" r=".9" fill="currentColor" stroke="none"/>
+      <circle cx="15" cy="10" r=".9" fill="currentColor" stroke="none"/>
+    </symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24">
+      <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+      <circle cx="9.2" cy="11.5" r="1" fill="currentColor" stroke="none"/>
+      <circle cx="12.5" cy="11.5" r="1" fill="currentColor" stroke="none"/>
+      <circle cx="15.8" cy="11.5" r="1" fill="currentColor" stroke="none"/>
+    </symbol>
+    <symbol id="i-chev-r" viewBox="0 0 24 24">
+      <path d="m9 6 6 6-6 6"/>
+    </symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="4"/>
+      <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>
+    </symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24">
+      <path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>
+    </symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24">
+      <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"/>
+      <circle cx="12" cy="12" r="2.6"/>
+    </symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24">
+      <path d="M12 3 5 6v6c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6z"/>
+      <path d="M12 9v4"/>
+      <circle cx="12" cy="16" r=".8" fill="currentColor" stroke="none"/>
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 24 24">
+      <path d="M5 13l4 4L19 7"/>
+    </symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24">
+      <path d="m5 8 5 4-5 4"/>
+      <path d="M12 16h7"/>
+    </symbol>
+  </svg>
+
+  <div class="app-shell">
+    <!-- Compact Interactive Preview Control Bar -->
+    <header class="preview-bar" role="region" aria-label="목업 프리뷰 제어">
+      <div class="preview-brand">
+        <span class="preview-pill">STEP 4 · INTERACTIVE MOCKUP</span>
+        <strong class="preview-title">Glass-Wall Co-Lead · Bottom-Left &amp; 스마트폰 알림 안무</strong>
+      </div>
+      <div class="preview-actions">
+        <div class="seg" role="group" aria-label="시나리오 프리셋" data-preview-presets>
+          <button type="button" data-preset="default" aria-pressed="true">기본(노트북)</button>
+          <button type="button" data-preset="sleepy" aria-pressed="false">졸림(깨우기 테스트)</button>
+          <button type="button" data-preset="open" aria-pressed="false">메신저 열기</button>
+          <button type="button" data-preset="merong" aria-pressed="false">시답잖은 잡담(메-롱)</button>
+          <button type="button" data-preset="confirm" aria-pressed="false">1-Click 승인</button>
+          <button type="button" data-preset="dizzy" aria-pressed="false">어지럼 FX</button>
+        </div>
+        <div class="seg" role="group" aria-label="테마 전환" data-preview-theme>
+          <button type="button" data-theme-btn="dark" aria-pressed="true">
+            <svg class="i" aria-hidden="true"><use href="#i-moon"/></svg>
+            <span>다크</span>
+          </button>
+          <button type="button" data-theme-btn="light" aria-pressed="false">
+            <svg class="i" aria-hidden="true"><use href="#i-sun"/></svg>
+            <span>라이트</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Realistic Werkschaft >=1600px Layout (340px Left Column + Workspace Stage) -->
+    <div class="dash-frame">
+      <!-- Left Column: Shortened Upper Session Rail Card + Dedicated Bottom-Left Companion Territory (0px jitter!) -->
+      <aside class="rail" id="rail" data-companion-dock="bottom-left" aria-label="세션 레일 및 컴패니언">
+        <!-- Upper Self-Contained Session Rail Card -->
+        <div class="rail-upper" id="rail-upper">
+          <div class="rhd">
+            <span>Sessions</span>
+            <span class="rhd-chip" data-live-count>4 live</span>
+            <span class="rsp"></span>
+            <button type="button" class="rref" data-action="rail-refresh" title="세션 목록 새로고침" aria-label="세션 목록 새로고침">
+              <svg class="i" aria-hidden="true"><use href="#i-refresh"/></svg>
+            </button>
+            <button type="button" class="rref" data-action="rail-add" title="새 세션" aria-label="새 세션">
+              <svg class="i" aria-hidden="true"><use href="#i-plus"/></svg>
+            </button>
+          </div>
+
+          <div class="rlist" id="rlist" data-rail-list>
+            <!-- Populated dynamically by app.js from mock-api.js -->
+          </div>
+
+          <!-- Unregistered workspaces collapsible accordion INSIDE upper rail card -> 0px shift on companion below! -->
+          <details class="rws-unreg" id="rws-unreg">
+            <summary class="unreg-sum">
+              <svg class="i unreg-chev" aria-hidden="true"><use href="#i-chev-r"/></svg>
+              <span class="unreg-dot" aria-hidden="true"></span>
+              <span class="unreg-lbl">Unregistered workspaces</span>
+              <span class="unreg-count" data-unreg-count>3</span>
+            </summary>
+            <div class="unreg-body" data-unreg-body></div>
+          </details>
+
+          <!-- Pinned cleanly to the bottom of the upper session rail card -->
+          <div class="rfoot">
+            <button type="button" class="rfoot-btn" data-action="open-settings">
+              <svg class="i" aria-hidden="true"><use href="#i-gear"/></svg>
+              <span>전역 설정 · Workflow settings</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Dedicated Bottom-Left Companion Territory (flush bottom-left, fixed 228px, ZERO buttons below!) -->
+        <section class="rail-companion-slot" id="rail-companion-slot" aria-label="컴패니언 스테이지">
+          <div class="glass-stage-bg" aria-hidden="true"></div>
+          <div class="glass-reflection" aria-hidden="true"></div>
+
+          <!-- Top-left live pose pill & Top-right dedicated speech-bubble messenger button -->
+          <div class="stage-hud-top">
+            <span class="stage-mode-pill" data-stage-mode-pill>
+              <span class="stage-mode-dot" aria-hidden="true"></span>
+              <span data-stage-mode-label>노트북 작업 중</span>
+            </span>
+            <button
+              type="button"
+              class="stage-chat-btn"
+              id="companion-chat-btn"
+              data-action="toggle-messenger"
+              aria-expanded="false"
+              aria-pressed="false"
+              aria-controls="companion-messenger"
+              title="컴패니언 메신저 열기 / 닫기"
+              aria-label="컴패니언 메신저 열기"
+            >
+              <svg class="i" aria-hidden="true"><use href="#i-chat"/></svg>
+              <span class="stage-unread-badge" data-stage-unread hidden aria-live="polite">1</span>
+            </button>
+          </div>
+
+          <!-- Direct click on companion = PURE COSMETIC Glass Knock (NEVER opens messenger!) -->
+          <button
+            type="button"
+            class="companion-hit"
+            id="companion-hit"
+            data-companion-hit
+            aria-label="유리창을 톡톡 두드려 컴패니언 반응 보기"
+          >
+            <div class="companion-bust-wrap" data-companion-bust></div>
+            <div class="ws-dissolve-grid" aria-hidden="true"></div>
+          </button>
+
+          <!-- Floating reaction quip (positioned over lower laptop bezel so face & phone stay unobstructed) -->
+          <div class="stage-quip" data-stage-quip hidden role="status" aria-live="polite"></div>
+
+          <!-- Pointer-origin glass knock ripple layer -->
+          <div class="knock-fx-layer" data-knock-fx-layer aria-hidden="true"></div>
+
+          <!-- Bottom hover/tap whisper hint -->
+          <div class="stage-hint" data-stage-hint>유리 톡톡 = 반응 · 우상단 💬 = 메신저</div>
+        </section>
+      </aside>
+
+      <!-- Main Workspace Stage (Conversation + Whiteboard / Companion Settings) -->
+      <main class="workspace-stage" id="workspace-stage" data-workspace-stage aria-label="워크스페이스 스테이지">
+        <!-- Translucent Tier-2 DOM/Screenshot scan sweep overlay -->
+        <div class="dom-scan-overlay" data-dom-scan hidden aria-hidden="true">
+          <div class="dom-scan-beam"></div>
+          <span class="dom-scan-tag">
+            <svg class="i" aria-hidden="true"><use href="#i-eye"/></svg>
+            <span>ws/daemon.dom · ws/daemon.screenshot 읽는 중</span>
+          </span>
+        </div>
+
+        <div class="ws-view" data-workspace-content>
+          <!-- Rendered by app.js (Active Session + Whiteboard OR Companion Settings view) -->
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- ========================================================================
+       Floating KakaoTalk-Style Companion Messenger Popup
+       Mounted directly in document.body so rail overflow NEVER clips it!
+       Anchored cleanly beside bottom-left #rail-companion-slot.
+       ======================================================================== -->
+  <section
+    class="cm-popup is-closed"
+    id="companion-messenger"
+    data-messenger-popup
+    role="dialog"
+    aria-label="컴패니언 메신저"
+    aria-modal="false"
+    aria-hidden="true"
+  >
+    <div class="cm-caret" data-messenger-caret aria-hidden="true"></div>
+
+    <!-- Header -->
+    <header class="cm-header">
+      <div class="cm-avatar-wrap" data-messenger-avatar>
+        <!-- Synced expressive mini portrait -->
+      </div>
+      <div class="cm-head-meta">
+        <div class="cm-name-row">
+          <strong class="cm-name">컴패니언</strong>
+          <span class="cm-role-pill">Co-Lead</span>
+          <span class="cm-tier-pill" title="Tier-2 Coordinator Agent (사용자 동급 제어 + 고영향 1-Click 승인)">Tier-2</span>
+        </div>
+        <div class="cm-subtitle" data-messenger-subtitle>노트북 작업 중 · 메시지 보내면 스마트폰 확인</div>
+      </div>
+      <div class="cm-head-actions">
+        <button
+          type="button"
+          class="cm-ibtn"
+          data-action="toggle-tier1"
+          aria-pressed="false"
+          aria-expanded="false"
+          title="Tier-1 라이브 리액션 공유 요약 보기"
+          aria-label="Tier-1 요약 보기"
+        >
+          <svg class="i" aria-hidden="true"><use href="#i-layers"/></svg>
+          <span class="cm-ibtn-dot" data-tier1-fresh-dot aria-hidden="true"></span>
+        </button>
+        <button
+          type="button"
+          class="cm-ibtn"
+          data-action="toggle-pin"
+          aria-pressed="false"
+          title="팝업 고정 (바깥 클릭 시 닫히지 않음)"
+          aria-label="팝업 고정"
+        >
+          <svg class="i" aria-hidden="true"><use href="#i-pin"/></svg>
+        </button>
+        <button
+          type="button"
+          class="cm-ibtn"
+          data-action="open-settings"
+          title="컴패니언 설정 열기"
+          aria-label="컴패니언 설정"
+        >
+          <svg class="i" aria-hidden="true"><use href="#i-gear"/></svg>
+        </button>
+        <button
+          type="button"
+          class="cm-ibtn cm-close"
+          data-action="close-messenger"
+          title="메신저 닫기 (Esc)"
+          aria-label="닫기"
+        >
+          <svg class="i" aria-hidden="true"><use href="#i-close"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Expandable Tier-1 / Tier-2 Shared Summary Peek Strip -->
+    <div class="cm-tier1-strip" data-tier1-strip hidden>
+      <div class="cm-tier1-head">
+        <span class="cm-tier1-badge">Tier-1 · BoundedRotation</span>
+        <span class="cm-tier1-metrics" data-tier1-metrics>턴 3/12 · 1.2k/4k tok · TTL 4m 18s</span>
+        <button type="button" class="cm-tier1-reset" data-action="reset-tier1" title="Tier-1 회전 컨텍스트 리셋">로테이션 리셋</button>
+      </div>
+      <p class="cm-tier1-summary" data-tier1-summary></p>
+    </div>
+
+    <!-- Scrollable Chat Thread -->
+    <div class="cm-thread" id="cm-thread" data-messenger-thread role="log" aria-live="polite" aria-label="컴패니언 대화 내역">
+      <!-- Messages & 1-Click Confirmation Cards rendered here -->
+    </div>
+
+    <!-- Typing / Phone Choreography Status Indicator -->
+    <div class="cm-typing" data-messenger-typing hidden>
+      <span class="cm-typing-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span data-typing-label>스마트폰 알림 확인 중…</span>
+    </div>
+
+    <!-- Quick Scenario Chips (One-click interactive flows) -->
+    <div class="cm-chips-bar" role="region" aria-label="빠른 시나리오">
+      <div class="cm-chips" data-scenario-chips>
+        <button type="button" class="cm-chip cm-chip-fun" data-prompt="뭐해 ㅋㅋ 심심한데 딴짓하지마~">😜 시답잖은 잡담 (메-롱)</button>
+        <button type="button" class="cm-chip" data-prompt="지금 화면에 뭐가 떠 있어?">👀 현재 화면 확인</button>
+        <button type="button" class="cm-chip" data-prompt="컴패니언 설정 열어줘">⚙️ 설정 열기</button>
+        <button type="button" class="cm-chip cm-chip-gate" data-prompt="활성 워커 전부 모델 opus-4.6으로 바꿔줘">⚡ 워커 모델 일괄 변경</button>
+        <button type="button" class="cm-chip cm-chip-gate" data-prompt="전역 컴패니언 쿨다운을 15초로 바꿔줘">🛠️ 전역 설정 변경</button>
+        <button type="button" class="cm-chip" data-prompt="오늘 작업 너무 잘 도와줘서 고마워! 최고야 ㅎㅎ">😄 칭찬하기</button>
+        <button type="button" class="cm-chip" data-prompt="유리창 톡톡톡! 빨리 일 안 하고 딴짓 중이지?">😤 잔소리 놀리기</button>
+      </div>
+    </div>
+
+    <!-- Composer Footer -->
+    <footer class="cm-composer">
+      <div class="cm-emoji-pop" data-emoji-pop hidden role="menu" aria-label="빠른 리액션 보내기">
+        <button type="button" data-quick-send="배고파~ 뭐해 ㅋㅋ">😜 시답잖은 잡담</button>
+        <button type="button" data-quick-send="👏 방금 진짜 깔끔했어! 최고야">👏 칭찬</button>
+        <button type="button" data-quick-send="👀 지금 화면 상태 요약해줘">👀 화면 요약</button>
+        <button type="button" data-quick-send="☕ 잠깐 숨 돌리고 커피 한 잔 하자">☕ 커피</button>
+      </div>
+
+      <div class="cm-input-well">
+        <button
+          type="button"
+          class="cm-well-btn"
+          data-action="toggle-emoji"
+          aria-expanded="false"
+          title="빠른 리액션 / 이모지"
+          aria-label="빠른 리액션"
+        >
+          <svg class="i" aria-hidden="true"><use href="#i-smile"/></svg>
+        </button>
+        <textarea
+          class="cm-input"
+          id="cm-input"
+          data-messenger-input
+          rows="1"
+          placeholder="메시지 입력… (Enter로 스마트폰 알림)"
+          aria-label="메시지 입력"
+        ></textarea>
+        <button
+          type="button"
+          class="cm-send-btn"
+          data-action="send-message"
+          disabled
+          title="메시지 전송"
+          aria-label="전송"
+        >
+          <svg class="i" aria-hidden="true"><use href="#i-send"/></svg>
+        </button>
+      </div>
+    </footer>
+  </section>
+
+  <!-- Non-blocking toast region -->
+  <div class="toast-region" data-toast-region aria-live="polite" aria-atomic="true"></div>
+
+  <script src="./mock-api.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

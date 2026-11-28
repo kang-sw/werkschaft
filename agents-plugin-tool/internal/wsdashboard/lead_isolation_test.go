@@ -45,13 +45,13 @@ func TestLeadPopoverIsolationWiring(t *testing.T) {
 		return m
 	}
 	lead := body("rpLeadMake")
-	for _, want := range []string{`iseg.addEventListener("click"`, `P.iso = b.getAttribute("data-iso")`, `isolation: P.iso`, `P.iso = "default"`} {
+	for _, want := range []string{`isoSw.addEventListener("click"`, `data-iso-switch`, `isolation: P.iso`, `P.iso = "default"`} {
 		if !strings.Contains(lead, want) {
 			t.Errorf("rpLeadMake lacks %q", want)
 		}
 	}
 	for _, name := range []string{"rpWtMake", "rpWsMake", "rpSessMake"} {
-		if b := body(name); strings.Contains(b, "iseg") || strings.Contains(b, "data-iso") {
+		if b := body(name); strings.Contains(b, "isoSw") || strings.Contains(b, "data-iso") {
 			t.Errorf("%s names the lead popover's isolation control", name)
 		}
 	}

@@ -170,6 +170,38 @@
     return svg;
   }
 
+  function chatIcon(doc) {
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = doc.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    const bubble = doc.createElementNS(ns, "path");
+    bubble.setAttribute("d", "M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z");
+    bubble.setAttribute("fill", "none");
+    bubble.setAttribute("stroke", "currentColor");
+    bubble.setAttribute("stroke-width", "2");
+    bubble.setAttribute("stroke-linecap", "round");
+    bubble.setAttribute("stroke-linejoin", "round");
+    svg.append(bubble);
+    for (const cx of ["9.2", "12.5", "15.8"]) {
+      const dot = doc.createElementNS(ns, "circle");
+      dot.setAttribute("cx", cx);
+      dot.setAttribute("cy", "11.5");
+      dot.setAttribute("r", "1.05");
+      dot.setAttribute("fill", "currentColor");
+      svg.append(dot);
+    }
+    return svg;
+  }
+
+  function tOr(key, fallback) {
+    if (typeof window.wsT === "function") {
+      const val = window.wsT(key);
+      if (val && val !== key) return val;
+    }
+    return fallback;
+  }
+
   function mount(config, mute, openSettings) {
     const doc = document, root = doc.documentElement, rail = doc.getElementById("rail");
     const cancel = new AbortController(), options = { signal: cancel.signal };
@@ -211,7 +243,30 @@
     } else {
       gear.hidden = true;
     }
-    hit.append(character, grip, gear);
+    const chatBtn = doc.createElement("button");
+    chatBtn.type = "button";
+    chatBtn.id = "companion-chat-btn";
+    chatBtn.className = "ws-companion-chat-btn";
+    chatBtn.title = tOr("js.companion.messenger.open", "Open companion messenger");
+    chatBtn.setAttribute("aria-label", chatBtn.title);
+    chatBtn.setAttribute("aria-expanded", "false");
+    chatBtn.setAttribute("aria-pressed", "false");
+    chatBtn.setAttribute("aria-controls", "companion-messenger");
+    chatBtn.append(chatIcon(doc));
+    const unreadBadge = doc.createElement("span");
+    unreadBadge.className = "ws-companion-unread";
+    unreadBadge.hidden = true;
+    unreadBadge.setAttribute("aria-live", "polite");
+    chatBtn.append(unreadBadge);
+    chatBtn.addEventListener("click", event => {
+      event.stopPropagation();
+      controls.close();
+      window.WsCompanionMessenger?.toggle?.(chatBtn);
+    }, options);
+    const knockFxLayer = doc.createElement("div");
+    knockFxLayer.className = "ws-companion-knock-fx";
+    knockFxLayer.setAttribute("aria-hidden", "true");
+    hit.append(character, knockFxLayer, grip, chatBtn, gear);
     hit.hidden = true;
     const ctx = canvas.getContext("2d");
     const menu = doc.createElement("div");
@@ -326,8 +381,21 @@
       schedule();
     }, () => notice("pack_failed"));
 
+    function placeMenu() {
+      if (menu.hidden) return;
+      controls.measure();
+      const charH = isVrm() ? vrmHeight : size;
+      const rightEdge = position.x + (bodyBox.width || size) / 2 + 6;
+      const bottomEdge = (Number.isFinite(bodyBox.y) ? bodyBox.y : position.y - charH) + (bodyBox.height || charH);
+      controls.place(rightEdge, bottomEdge, vw, vh);
+    }
+
     const controls = C.quickMenu(node, character, menu, options, {
       returnHome, resetSize, mute, applyPreset, notice, openSettings,
+      onOpen() {
+        placeMenu();
+        if (isVrm() && vrmRailVisible) { markVrmActivity(); schedule(); }
+      },
       presets: () => ({ available: Object.keys(model?.manifest.presets || {}), preset }),
       async reloadPack() {
         await loader.reload(cancel.signal);
@@ -350,13 +418,77 @@
       requestPack();
     }
 
+    let latestPhoneSnap = null;
+    const knockTimers = new Set();
+
+    function spawnKnockFx(clientX, clientY, label) {
+      if (!knockFxLayer) return;
+      const rect = typeof hit.getBoundingClientRect === "function" ? hit.getBoundingClientRect() : null;
+      const relX = rect && Number.isFinite(clientX) && (clientX !== 0 || clientY !== 0)
+        ? clamp(clientX - rect.left, 18, Math.max(18, (rect.width || size) - 18))
+        : Math.round((rect?.width || size) * 0.5);
+      const relY = rect && Number.isFinite(clientY) && (clientX !== 0 || clientY !== 0)
+        ? clamp(clientY - rect.top, 22, Math.max(22, (rect.height || vrmHeight) - 22))
+        : Math.round((rect?.height || vrmHeight) * 0.42);
+      const r1 = doc.createElement("span");
+      r1.className = "ws-knock-ring";
+      r1.style.left = relX + "px";
+      r1.style.top = relY + "px";
+      const r2 = doc.createElement("span");
+      r2.className = "ws-knock-ring ring-2";
+      r2.style.left = relX + "px";
+      r2.style.top = relY + "px";
+      const word = doc.createElement("span");
+      word.className = "ws-knock-word";
+      word.textContent = label || tOr("js.companion.knock.cue", "톡톡");
+      word.style.left = relX + "px";
+      word.style.top = Math.max(18, relY - 8) + "px";
+      knockFxLayer.append(r1, r2, word);
+      const tid = setTimeout(() => {
+        knockTimers.delete(tid);
+        r1.remove?.();
+        r2.remove?.();
+        word.remove?.();
+      }, 840);
+      knockTimers.add(tid);
+    }
+
+    function updateUnreadBadge(count) {
+      const n = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+      unreadBadge.hidden = n <= 0;
+      unreadBadge.textContent = n > 9 ? "9+" : (n > 0 ? String(n) : "");
+      chatBtn.dataset.unread = n > 0 ? "1" : "0";
+    }
+
+    function phoneState(snap) {
+      if (!C.record(snap)) return;
+      latestPhoneSnap = snap;
+      updateUnreadBadge(snap.unreadClient || 0);
+      rig?.setPhoneState?.(snap);
+      if (isVrm() && vrmRailVisible && (snap.state === "phone_active" || (snap.unreadAgent || 0) > 0 || snap.phoneFaceDown)) {
+        markVrmActivity();
+        schedule();
+      }
+    }
+
     // command plays an agent-director command for the shown session over the
-    // rules engine until its TTL ends. Commands for other sessions, and
-    // fields naming IDs the active pack does not know, are dropped.
+    // rules engine until its TTL ends. Wildcard "*" targets the active shell
+    // companion regardless of focused session tab (used by phone/MCP tools).
     function command(payload) {
-      if (!rig || !activeRid || !C.record(payload) || payload.sessionId !== activeRid) return false;
+      if (!rig || !C.record(payload)) return false;
+      if (payload.sessionId !== "*" && (!activeRid || payload.sessionId !== activeRid)) return false;
       const directed = C.directedCommand(payload, model, sharedPack, runner);
-      if (!directed) return false;
+      if (isVrm() && typeof payload.gesture === "string" && payload.gesture) {
+        rig.triggerGesture?.(payload.gesture);
+      }
+      if (!directed) {
+        if (isVrm() && typeof payload.gesture === "string" && payload.gesture) {
+          markVrmActivity();
+          schedule();
+          return true;
+        }
+        return false;
+      }
       runner.direct(directed.beats, now, directed.ttl, directed.id);
       viewBeat = null;
       if (isVrm()) markVrmActivity();
@@ -514,12 +646,8 @@
     }
 
     function computeRailVrmHeight(railRect) {
-      const unregOpen = !!rail?.querySelector("details.rws-unreg[open]");
       const railH = Math.max(0, railRect?.height || vh);
       let targetH = clamp(Math.round(vh * 0.255), 184, 256);
-      if (unregOpen && railH > 0) {
-        targetH = Math.min(targetH, Math.max(164, Math.round(railH * 0.24)));
-      }
       if (railH > 0) {
         targetH = Math.min(targetH, Math.max(152, Math.round(railH * 0.34)));
       }
@@ -557,9 +685,12 @@
         setBeforeUnreg(null);
         if (slotEl.hidden) slotEl.hidden = false;
         const slotRect = slotEl.getBoundingClientRect();
-        const nextW = Math.max(160, Math.round(slotRect.width || Math.min(railRect.width, 340)));
+        const nextW = Math.max(160, Math.round(slotRect.width || railRect.width));
         const nextH = Math.max(140, Math.round(slotRect.height || targetH));
         const nextDpr = Math.min(dpr, 2);
+        const prevHomeX = home.x;
+        const prevHomeY = home.y;
+        let slotChanged = false;
         size = nextW;
         vrmHeight = nextH;
         if (nextW !== lastVrmW || nextH !== lastVrmH || nextDpr !== lastVrmDpr) {
@@ -567,15 +698,21 @@
           lastVrmH = nextH;
           lastVrmDpr = nextDpr;
           rig?.resize?.(size, vrmHeight, nextDpr);
+          slotChanged = true;
         }
         const anchorLeft = Number.isFinite(slotRect.left) && slotRect.width > 0 ? slotRect.left : railRect.left;
         const anchorBottom = Number.isFinite(slotRect.bottom) && slotRect.height > 0 ? slotRect.bottom : railRect.bottom;
         home = { x: anchorLeft + size / 2, y: anchorBottom, vrm: true, rail: true, hidden: false, avoiding: false };
+        if (Math.abs(home.x - prevHomeX) > 0.5 || Math.abs(home.y - prevHomeY) > 0.5) slotChanged = true;
         position.x = home.x;
         position.y = home.y;
         arrived = true;
         node.dataset.dock = "rail-slot";
         node.dataset.avoiding = "0";
+        if (slotChanged && wasVisible && !doc.hidden) {
+          markVrmActivity();
+          lastVrmRenderAt = -Infinity;
+        }
         if (!wasVisible) {
           hit.hidden = false;
           if (!doc.hidden) {
@@ -583,6 +720,8 @@
             markVrmActivity();
           }
         }
+        if (latestPhoneSnap) rig?.setPhoneState?.(latestPhoneSnap);
+        window.WsCompanionMessenger?.reposition?.();
         return;
       }
       node.dataset.avoiding = "0";
@@ -628,7 +767,21 @@
       dirty = true;
       if (isVrm() && !doc.hidden && !cancel.signal.aborted) {
         const wideNow = window.innerWidth >= RAIL_MIN_WIDTH && (!wideMq || wideMq.matches);
-        if (wideNow !== vrmRailVisible) layout();
+        if (wideNow !== vrmRailVisible) {
+          layout();
+        } else if (vrmRailVisible) {
+          const slotEl = rail?.querySelector("#rail-companion-slot");
+          const r = slotEl && !slotEl.hidden ? slotEl.getBoundingClientRect() : null;
+          if (r && r.width > 0 && r.height > 0) {
+            const w = Math.max(160, Math.round(r.width));
+            const h = Math.max(140, Math.round(r.height));
+            if (w !== lastVrmW || h !== lastVrmH ||
+                Math.abs(r.left + w / 2 - home.x) > 0.5 || Math.abs(r.bottom - home.y) > 0.5) {
+              markVrmActivity();
+              lastVrmRenderAt = -Infinity;
+            }
+          }
+        }
       }
       schedule();
     }
@@ -940,7 +1093,9 @@
       if (dirty) layout();
       if (isVrm() && !vrmRailVisible) return;
       if (isVrm()) {
-        const activeNow = !!viewPlaying || !!drag?.moving || posture.activity !== "idle" ||
+        const co = rig?.getCoLeadState?.();
+        const coActive = !!(co && (co.knockActive || co.swapActive || co.dizzyActive || (co.phoneMode && co.phoneMode !== "desk")));
+        const activeNow = !!viewPlaying || !!drag?.moving || posture.activity !== "idle" || coActive ||
           Math.abs(position.x - target().x) > 0.5 || Math.abs(position.y - target().y) > 0.5;
         if (activeNow) markVrmActivity();
         const idleElapsed = performance.now() - lastVrmActivityAt;
@@ -1157,21 +1312,61 @@
       invalidated();
     }
     for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) character.addEventListener(name, drop, options);
-    character.addEventListener("contextmenu", () => {
-      if (!menu.hidden) {
-        controls.measure();
-        controls.place(position.x + (bodyBox.width || size) / 2 + 6, (bodyBox.y || position.y - vrmHeight) + (bodyBox.height || vrmHeight), vw, vh);
+    character.addEventListener("click", event => {
+      if (!suppressClick) {
+        markVrmActivity();
+        if (isVrm() && home.rail) {
+          // Pure cosmetic glass knock: NEVER opens the messenger popup or menu.
+          const co = rig?.getCoLeadState?.();
+          const isSleepy = beat?.expression === "idle_doze" || co?.mode === "sleepy" || co?.sleepyWeight > 0.35 ||
+            latestPhoneSnap?.state === "laptop_sleepy";
+          const res = rig?.triggerKnock?.({ sleepy: isSleepy });
+          const label = res?.wokeFromSleepy
+            ? tOr("js.companion.knock.wakeup", "화들짝!")
+            : res?.kind === "annoyed_tap"
+              ? tOr("js.companion.knock.annoyed", "콕!")
+              : tOr("js.companion.knock.cue", "톡톡");
+          spawnKnockFx(event?.clientX, event?.clientY, label);
+          schedule();
+        } else {
+          fire("user.poke");
+        }
       }
-      if (isVrm() && vrmRailVisible) { markVrmActivity(); schedule(); }
+      suppressClick = false;
     }, options);
-    character.addEventListener("click", () => { if (!suppressClick) { markVrmActivity(); fire("user.poke"); } suppressClick = false; }, options);
     character.addEventListener("dblclick", () => { markVrmActivity(); returnHome(); }, options);
+
+    if (window.WsCompanionMessenger && typeof window.WsCompanionMessenger.mount === "function") {
+      window.WsCompanionMessenger.mount({
+        getAnchorRect() {
+          const slotEl = rail?.querySelector("#rail-companion-slot");
+          if (slotEl && !slotEl.hidden && typeof slotEl.getBoundingClientRect === "function") {
+            const r = slotEl.getBoundingClientRect();
+            if (r && r.width > 0 && r.height > 0) return r;
+          }
+          return typeof hit.getBoundingClientRect === "function" ? hit.getBoundingClientRect() : null;
+        },
+        getChatButton() { return chatBtn; },
+        openSettings: openSettings || null,
+        onOpenChange(isOpen) {
+          chatBtn.setAttribute("aria-expanded", isOpen ? "true" : "false");
+          chatBtn.setAttribute("aria-pressed", isOpen ? "true" : "false");
+          if (isVrm() && vrmRailVisible) {
+            markVrmActivity();
+            schedule();
+          }
+        },
+        onSnapshot(snap) {
+          phoneState(snap);
+        }
+      });
+    }
 
     mountedRailObserver = observeRail;
     if (rail) observeRail(rail, activeRid, true);
     requestPack();
     const api = {
-      apply, reset, context, trackFrame, command, closeMenu: controls.close,
+      apply, reset, context, trackFrame, command, phoneState, closeMenu: controls.close,
       packsChanged, resetSize, returnHome,
       debugState() {
         const slotEl = rail?.querySelector("#rail-companion-slot");
@@ -1190,6 +1385,8 @@
           avoiding: false,
           companionHover,
           vrmIdleMode,
+          unreadClient: latestPhoneSnap?.unreadClient || 0,
+          messengerOpen: !!window.WsCompanionMessenger?.isOpen?.(),
           vrm: rig?.debugState?.() || null,
           projectedBounds: null
         };
@@ -1197,6 +1394,9 @@
       dispose() {
         if (mountedRailObserver === observeRail) mountedRailObserver = null;
         if (mountedStage === api) mountedStage = null;
+        for (const tid of knockTimers) clearTimeout(tid);
+        knockTimers.clear();
+        window.WsCompanionMessenger?.dispose?.();
         cancel.abort();
         frameInput?.abort();
         cancelAnimationFrame(frame);
@@ -1217,6 +1417,10 @@
 
   Object.assign(C, { mount, railSignals, signalPairs, resizeControl,
     debugStage() { return mountedStage?.debugState?.() || null; },
+    phoneState(snap) { mountedStage?.phoneState?.(snap); },
+    toggleMessenger() { return window.WsCompanionMessenger?.toggle?.() ?? false; },
+    openMessenger() { return window.WsCompanionMessenger?.open?.() ?? false; },
+    closeMessenger() { return window.WsCompanionMessenger?.close?.() ?? false; },
     hasRailObserver() { return !!mountedRailObserver; },
     observeRail(fragment, activeRid, baseline) { mountedRailObserver?.(fragment, activeRid, baseline); } });
 })(window.WsCompanion);

@@ -454,6 +454,8 @@ func (d *Daemon) directorFire(sessionID, kind string) {
 	focus := c.focusLocked()
 	reason := ""
 	switch {
+	case d.companionPhone.EmbodimentLeaseActive():
+		reason = "embodiment-lease"
 	case focus.sessionID != sessionID:
 		reason = "unfocused"
 	case harness == "":
@@ -630,8 +632,8 @@ func (d *Daemon) companionRing(sessionID string) []wslive.RingRecord {
 // Built-in VRM director vocabulary: IDs the pure-VRM adapter renders directly
 // without 2D pack.json raster dictionaries.
 var (
-	companionVrmExpressions = []string{"idle", "idle_doze", "focused", "half_lid", "oo", "cry", "happy"}
-	companionVrmGestures    = []string{"wave", "point", "headrub", "cup_hands", "coffee", "perched", "dangle"}
+	companionVrmExpressions = []string{"idle", "idle_doze", "focused", "half_lid", "oo", "cry", "happy", "wink", "merong", "startled", "annoyed"}
+	companionVrmGestures    = []string{"wave", "point", "headrub", "cup_hands", "coffee", "perched", "dangle", "knock_startle", "annoyed_tap", "wakeup_jolt", "phone_buzz", "phone_pickup", "phone_typing", "phone_putdown", "phone_merong_facedown"}
 	companionVrmProps       = []string{"smartphone", "drone", "coffee", "mail"}
 )
 

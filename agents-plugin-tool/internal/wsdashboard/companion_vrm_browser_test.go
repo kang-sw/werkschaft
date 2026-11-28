@@ -123,13 +123,15 @@ func TestCompanionVrmBrowser(t *testing.T) {
 	}
 }
 
-// TestCompanionVrmRailDockBrowser verifies the left-rail bottom VRM dock
+// TestCompanionVrmRailDockBrowser verifies the bottom-left dedicated VRM dock
 // layout with a long scrollable session list and pending unregistered
-// workspaces: zero dead-zone occlusion at the bottom of #rlist, clean layout
-// when details.rws-unreg opens below #rail-companion-slot, complete hide+pause
-// below 1600px (1440px 2-col and 720px 1-col), and unclipped FX badges and
-// context menu in document.body. Optional WS_COMPANION_RAIL_QA_SHOTS (absolute
-// dir) writes the 4 visual QA PNGs.
+// workspaces: .rail-session-panel terminates cleanly above #rail-companion-slot,
+// #rail-companion-slot sits flush at the bottom-left viewport edge with 0px
+// vertical shift when details.rws-unreg opens/closes, dark and light tonal
+// separation stays borderless, complete hide+pause below 1600px (1440px 2-col
+// and 720px 1-col), responsive slot width resizing (220px-360px), and unclipped
+// FX badges, hover gear control, and quick menu in document.body. Optional
+// WS_COMPANION_RAIL_QA_SHOTS (absolute dir) writes the 4 visual QA PNGs.
 func TestCompanionVrmRailDockBrowser(t *testing.T) {
 	if os.Getenv("WS_PLAYWRIGHT_MODULE") == "" {
 		t.Skip("set WS_PLAYWRIGHT_MODULE to use cached Chromium")
@@ -570,6 +572,150 @@ func TestCompanionVrmSwapDizzyBrowser(t *testing.T) {
 	t.Log(string(out))
 	if err != nil {
 		t.Fatalf("Chromium VRM Step 3 swap+dizzy verification: %v", err)
+	}
+}
+
+// TestCompanionVrmStep4Phase1Browser verifies Step 4 Phase 1 end-to-end in
+// headless Chromium on BOTH VRM 1.0 and VRM 0.x: pure cosmetic glass knock
+// (startle, 3-knock annoyed tap, sleepy wake-up jolt; NEVER opens messenger),
+// 3D desk smartphone prop & choreography (phone_buzz, phone_pickup, phone_typing,
+// normal putdown, facedown_merong flip), #companion-chat-btn with unread badge,
+// and the borderless Material KakaoTalk-style messenger popup mounted under
+// document.body in Dark & Light themes. Optional WS_COMPANION_QA_SHOTS
+// (absolute dir) writes the 4 high-DPI visual QA contact sheets.
+func TestCompanionVrmStep4Phase1Browser(t *testing.T) {
+	if os.Getenv("WS_PLAYWRIGHT_MODULE") == "" {
+		t.Skip("set WS_PLAYWRIGHT_MODULE to use cached Chromium")
+	}
+	shots := os.Getenv("WS_COMPANION_QA_SHOTS")
+	if shots != "" && !filepath.IsAbs(shots) {
+		t.Fatal("WS_COMPANION_QA_SHOTS must be absolute")
+	}
+	if os.Getenv("PLAYWRIGHT_BROWSERS_PATH") == "" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			t.Setenv("PLAYWRIGHT_BROWSERS_PATH", filepath.Join(home, "Library", "Caches", "ms-playwright"))
+		}
+	}
+	home := t.TempDir()
+	cfgHome := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	t.Setenv("WS_CACHE_HOME", t.TempDir())
+	t.Setenv("WS_CONFIG_HOME", cfgHome)
+	SetDevAssets(nil)
+
+	backend := companionSettingsBackend(t, CompanionConfig{
+		Enabled:              false,
+		Director:             "rules",
+		Pack:                 "default",
+		Preset:               "werkschaft-d1",
+		AgentCooldownSeconds: 30,
+		AgentHourlyCap:       20,
+	})
+
+	paths, err := companionPaths(backend.Options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stageVrmPack := func(id, name, srcPath, wantVer string, fallback []byte) string {
+		var raw []byte
+		if srcPath != "" {
+			var err error
+			raw, err = os.ReadFile(srcPath)
+			if err != nil {
+				t.Fatalf("read VRM fixture %q: %v", srcPath, err)
+			}
+		} else {
+			raw = fallback
+		}
+		if ver, err := inspectCompanionVRM(raw); err != nil || ver != wantVer {
+			t.Fatalf("VRM fixture %q failed inspector: ver=%q want=%q err=%v", id, ver, wantVer, err)
+		}
+		dir := filepath.Join(paths.packs, id)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "model.vrm"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		manifest, err := json.Marshal(map[string]any{
+			"schema": "ws-companion-vrm/v1",
+			"id":     id,
+			"name":   name,
+			"model":  "model.vrm",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "pack.json"), manifest, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+
+	vrm0ID := stageVrmPack("vrm0-step4", "VRM 0 Fixture", os.Getenv("WS_VRM0_SAMPLE"), "0.x", buildRenderableSyntheticVRM(false))
+	vrm1ID := stageVrmPack("vrm1-step4", "VRM 1 Fixture", os.Getenv("WS_VRM1_SAMPLE"), "1.0", buildRenderableSyntheticVRM(true))
+
+	wsRoot := t.TempDir()
+	wsAlpha := mkDir(t, filepath.Join(wsRoot, "alpha-app"))
+	wsFile := filepath.Join(cfgHome, "dashboard", "workspaces.json")
+	if err := os.MkdirAll(filepath.Dir(wsFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wsDoc, err := json.Marshal(workspacesDoc{
+		Version:    workspacesSchemaVersion,
+		Workspaces: []workspaceRecord{{Path: wsAlpha}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(wsFile, wsDoc, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f := startPageFixture(t, func(o *DaemonOptions) {
+		o.Port = 0
+		o.LAN = false
+		o.bindHost = "127.0.0.1"
+		o.Config = backend
+		o.WorkspacesFile = wsFile
+	})
+
+	now := time.Now()
+	for i := 1; i <= 5; i++ {
+		rid := fmt.Sprintf("alpha%02d", i)
+		reg := Registration{
+			ReplyID:      rid,
+			Project:      wsAlpha,
+			Harness:      "claude",
+			RegisteredAt: stampFor(now.Add(-time.Duration(20-i) * time.Minute)),
+			HeartbeatAt:  stampFor(now),
+		}
+		if err := WriteRegistration(f.dir, reg); err != nil {
+			t.Fatal(err)
+		}
+		writeSnapshot(t, f.dir, rid, &wslive.Snapshot{
+			SchemaVersion: 1,
+			Adapter:       "claude",
+			UpdatedAt:     now.UnixMilli(),
+			HeartbeatMs:   30000,
+			Lead:          wslive.Lead{Activity: wslive.Activity{Phase: wslive.PhaseIdle}},
+		})
+		f.src.setPage(rid, PageContent{HasBoard: true, Seq: 1, Board: boardRegions(t, fmt.Sprintf("session %s board", rid))})
+	}
+	f.d.Index().Refresh()
+	waitFor(t, "step4 sessions indexed", func() bool {
+		_, ok := f.d.Index().Session("alpha05")
+		return ok
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "node", "testdata/companion-vrm-step4-phase1.browser.cjs", f.base, shots, vrm0ID, vrm1ID).CombinedOutput()
+	t.Log(string(out))
+	if err != nil {
+		t.Fatalf("Chromium VRM Step 4 Phase 1 verification: %v", err)
 	}
 }
 

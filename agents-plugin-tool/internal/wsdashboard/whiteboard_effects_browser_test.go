@@ -192,11 +192,15 @@ func TestWhiteboardEffectsBrowser(t *testing.T) {
 				{Kind: "panel", Topic: "effects", EntryID: "e1", PanelID: "p1", Field: "recap", After: "Panel recap only"},
 				{Kind: "log", Topic: "effects", EntryID: "e2", Field: "text", After: `<img src=x onerror="window.effectsAttack=1"><script>window.effectsAttack=1</script> hostile-effect-marker **plain text**`},
 			})
+			navValid, _ := wslive.NewWhiteboardEffects([]wswhiteboard.Effect{
+				{Kind: "panel", Topic: "navigation", EntryID: "e1", PanelID: "p1", Field: "payload", After: "History preview body with [Ext](https://example.com) link."},
+				{Kind: "panel", Topic: "navigation", EntryID: "e1", PanelID: "p1", Field: "recap", After: "Jump target"},
+			})
 			entries := []wslive.RingEntry{{Kind: wslive.RingUser, Text: "old-history-marker"}}
 			for i := 0; i < 64; i++ {
 				entries = append(entries, wslive.RingEntry{Kind: wslive.RingReply, Text: strings.Repeat(fmt.Sprintf("History %02d has enough text to create real scroll height. ", i), 8)})
 			}
-			entries = append(entries, valid, wslive.RingEntry{Kind: wslive.RingWhiteboardEffects, Caption: "Unsupported", Text: `{"v":99,"effects":[{"kind":"panel","topic":"effects","entryId":"e2","panelId":"p2","field":"payload","after":"<img src=x onerror=attack()> unsupported-effect-marker"}]}`})
+			entries = append(entries, valid, wslive.RingEntry{Kind: wslive.RingWhiteboardEffects, Caption: "Unsupported", Text: `{"v":99,"effects":[{"kind":"panel","topic":"effects","entryId":"e2","panelId":"p2","field":"payload","after":"<img src=x onerror=attack()> unsupported-effect-marker"}]}`}, navValid)
 			for i := 0; i < 8; i++ {
 				entries = append(entries, wslive.RingEntry{Kind: wslive.RingReply, Text: fmt.Sprintf("Tail %d", i)})
 			}
@@ -207,20 +211,28 @@ func TestWhiteboardEffectsBrowser(t *testing.T) {
 				var names []string
 				names, err = wslive.RingNames(ringDir)
 				if err == nil {
-					result["focus"], result["fallback"] = names[65], names[66]
+					result["focus"], result["fallback"], result["navFocus"] = names[65], names[66], names[67]
 				}
 			}
-		case "append":
+		case "append", "append_nav":
 			marker := fmt.Sprintf("refresh-marker-%d", seq)
 			payload := `<img src=x onerror="window.effectsAttack=1"><script>window.effectsAttack=1</script> ` + marker + ` **plain text**`
 			entryID := fmt.Sprintf("e%d", seq+1)
 			// Model a newly projected post-commit carrier through the real
 			// builder and ring writer; this does not simulate an MCP commit.
-			entry, _ := wslive.NewWhiteboardEffects([]wswhiteboard.Effect{
-				{Kind: "panel", Topic: "effects", EntryID: entryID, PanelID: "p1", Field: "payload", After: "PANEL-PAYLOAD-ONLY " + payload},
-				{Kind: "panel", Topic: "effects", EntryID: entryID, PanelID: "p1", Field: "recap", After: marker},
-				{Kind: "log", Topic: "effects", EntryID: fmt.Sprintf("e%d", seq+1000), Field: "text", After: payload},
-			})
+			var entry wslive.RingEntry
+			if r.URL.Query().Get("action") == "append_nav" {
+				entry, _ = wslive.NewWhiteboardEffects([]wswhiteboard.Effect{
+					{Kind: "panel", Topic: "navigation", EntryID: entryID, PanelID: "p1", Field: "payload", After: "Live preview " + marker + " with [Ext](https://example.com) link."},
+					{Kind: "panel", Topic: "navigation", EntryID: entryID, PanelID: "p1", Field: "recap", After: "Jump target " + marker},
+				})
+			} else {
+				entry, _ = wslive.NewWhiteboardEffects([]wswhiteboard.Effect{
+					{Kind: "panel", Topic: "effects", EntryID: entryID, PanelID: "p1", Field: "payload", After: "PANEL-PAYLOAD-ONLY " + payload},
+					{Kind: "panel", Topic: "effects", EntryID: entryID, PanelID: "p1", Field: "recap", After: marker},
+					{Kind: "log", Topic: "effects", EntryID: fmt.Sprintf("e%d", seq+1000), Field: "text", After: payload},
+				})
+			}
 			err = wslive.AppendRing(ringDir, []wslive.RingEntry{entry})
 			if err == nil {
 				var names []string

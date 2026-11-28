@@ -47,11 +47,30 @@
     half_lid: {},
     oo: {},
     cry: {},
-    happy: {}
+    happy: {},
+    wink: {},
+    merong: {},
+    startled: {},
+    annoyed: {}
+  });
+
+  // Built-in Co-Lead procedural gestures & props (mirrored in companion_director.go).
+  const BUILTIN_VRM_GESTURES = Object.freeze({
+    knock_startle: {},
+    annoyed_tap: {},
+    wakeup_jolt: {},
+    phone_buzz: {},
+    phone_pickup: {},
+    phone_typing: {},
+    phone_putdown: {},
+    phone_merong_facedown: {}
+  });
+  const BUILTIN_VRM_PROPS = Object.freeze({
+    smartphone: {}
   });
 
   // Closed-eye and expressive states where automatic blinking is suppressed.
-  const BLINK_SUPPRESSED = new Set(["idle_doze", "half_lid", "cry", "happy", "oo", "focused"]);
+  const BLINK_SUPPRESSED = new Set(["idle_doze", "half_lid", "cry", "happy", "oo", "focused", "wink", "merong", "startled", "annoyed"]);
 
   // Clean gesture extension registry: starts empty at ground-zero so future
   // cycles can register VRM gestures one by one cleanly alongside .vrma clips.
@@ -70,6 +89,7 @@
 
   function vrmVocabulary(pack) {
     const gestures = Object.create(null);
+    for (const key of Object.keys(BUILTIN_VRM_GESTURES)) gestures[key] = {};
     for (const key of vrmGestures.keys()) gestures[key] = {};
     if (pack?.animations && typeof pack.animations === "object") {
       for (const key of Object.keys(pack.animations)) gestures[key] = {};
@@ -77,7 +97,7 @@
     return {
       expressions: VRM_EXPRESSIONS,
       gestures,
-      props: {}
+      props: BUILTIN_VRM_PROPS
     };
   }
 
@@ -173,7 +193,9 @@
       const overlay = this.coLeadOverlay;
       const sleepyOverride = overlay?.mode === "sleepy";
       const dizzyOverride = overlay?.mode === "dizzy" || overlay?.mode === "dizzy-shake" || overlay?.mode === "dizzy-recover";
-      const explicitBlink = sleepyOverride || overlay?.mode === "dizzy" || overlay?.mode === "dizzy-shake";
+      const actionOverride = overlay?.mode === "knock-startle" || overlay?.mode === "wakeup-jolt" ||
+        overlay?.mode === "annoyed-tap" || overlay?.mode === "phone-buzz" || overlay?.mode === "phone-facedown-merong";
+      const explicitBlink = sleepyOverride || actionOverride || overlay?.mode === "dizzy" || overlay?.mode === "dizzy-shake";
       const allowBlink = !explicitBlink && (!BLINK_SUPPRESSED.has(this.currentState) || !!overlay?.allowBlink);
       let autoBlink = 0;
       if (allowBlink) {
@@ -203,12 +225,16 @@
 
       const kNeutral = this.resolveAlias("neutral");
       const kBlink = this.resolveAlias("blink");
+      const kBlinkLeft = this.resolveAlias("blinkLeft", "Blink_L", "Fcl_EYE_Close_L", "blink_l");
+      const kBlinkRight = this.resolveAlias("blinkRight", "Blink_R", "Fcl_EYE_Close_R", "blink_r");
       const kRelaxed = this.resolveAlias("relaxed", "fun");
       const kAngry = this.resolveAlias("angry");
       const kSad = this.resolveAlias("sad", "sorrow");
       const kHappy = this.resolveAlias("happy", "joy");
       const kSurprised = this.resolveAlias("surprised", "Surprised", "Fcl_ALL_Surprised");
       const kOh = this.resolveAlias("oh", "o");
+      const kAa = this.resolveAlias("aa", "a");
+      const kEe = this.resolveAlias("ee", "e");
 
       const override = C.own(this.expressionMap, this.currentState);
       const overridePresetAliases = {
@@ -237,6 +263,40 @@
       if (sleepyOverride) {
         setTarget(kBlink, overlay.blink ?? 0.92);
         setTarget(kRelaxed, overlay.relaxed ?? 0.44);
+      } else if (actionOverride) {
+        if (overlay.mode === "knock-startle" || overlay.mode === "wakeup-jolt") {
+          const surp = overlay.surprised ?? 0.90;
+          if (kSurprised) setTarget(kSurprised, surp);
+          else if (kOh) setTarget(kOh, Math.min(0.75, surp * 0.72));
+          setTarget(kBlink, 0);
+          setTarget(kNeutral, Math.max(0.15, 1.0 - surp * 0.75));
+        } else if (overlay.mode === "annoyed-tap") {
+          const ang = overlay.angry ?? 0.65;
+          setTarget(kAngry, ang);
+          setTarget(kBlink, overlay.blink ?? 0.12);
+          setTarget(kNeutral, Math.max(0.32, 1.0 - ang * 0.65));
+        } else if (overlay.mode === "phone-buzz") {
+          const surp = overlay.surprised ?? 0.36;
+          if (kSurprised) setTarget(kSurprised, surp);
+          else if (kOh) setTarget(kOh, 0.24);
+          if ((overlay.happy ?? 0) > 0.005) setTarget(kHappy, overlay.happy);
+          setTarget(kBlink, 0);
+          setTarget(kNeutral, 0.56);
+        } else if (overlay.mode === "phone-facedown-merong") {
+          // Cheeky anime wink + playful smile/merong cue; falls back cleanly
+          // to bright cheeky grin on models without single-eye wink morphs.
+          const winkKey = kBlinkLeft || kBlinkRight;
+          if (winkKey) {
+            setTarget(winkKey, overlay.wink ?? 0.96);
+            setTarget(kHappy, overlay.happy ?? 0.64);
+          } else {
+            setTarget(kHappy, Math.max(0.84, overlay.happy ?? 0.84));
+            setTarget(kRelaxed, 0.32);
+          }
+          const mouthKey = kEe || kAa || kOh;
+          if (mouthKey) setTarget(mouthKey, 0.32);
+          setTarget(kBlink, 0);
+        }
       } else if (dizzyOverride) {
         if (overlay.mode === "dizzy") {
           const surp = overlay.surprised ?? 0.36;
@@ -316,6 +376,32 @@
             break;
           case "happy":
             setTarget(kHappy, 0.92);
+            break;
+          case "wink": {
+            const winkKey = kBlinkLeft || kBlinkRight;
+            if (winkKey) setTarget(winkKey, 0.95);
+            setTarget(kHappy, winkKey ? 0.62 : 0.86);
+            setTarget(kBlink, 0);
+            break;
+          }
+          case "merong": {
+            const winkKey = kBlinkLeft || kBlinkRight;
+            if (winkKey) setTarget(winkKey, 0.96);
+            setTarget(kHappy, winkKey ? 0.72 : 0.88);
+            const mouthKey = kEe || kAa || kOh;
+            if (mouthKey) setTarget(mouthKey, 0.32);
+            setTarget(kBlink, 0);
+            break;
+          }
+          case "startled":
+            if (kSurprised) setTarget(kSurprised, 0.95);
+            else setTarget(kOh, 0.65);
+            setTarget(kBlink, 0.0);
+            break;
+          case "annoyed":
+            setTarget(kAngry, 0.74);
+            setTarget(kBlink, 0.12);
+            setTarget(kNeutral, 0.38);
             break;
           default:
             setTarget(kNeutral, 1.0);
@@ -411,7 +497,7 @@
     let mounted = false, disposed = false, paused = false, contextLost = false;
     let container = null, canvasWrap = null, canvas = null, dissolveGrid = null, fxCanvas = null, fxCtx = null, overlay = null;
     let runtime = null, renderer = null, scene = null, camera = null, vrm = null, coLead = null;
-    let isVrm0 = false, lookTarget = null, headPosVec = null, projHeadVec = null, mixer = null, activeVrmaAction = null, activeVrmaKey = "";
+    let isVrm0 = false, lookTarget = null, headPosVec = null, projHeadVec = null, handPosVec = null, handMidVec = null, mixer = null, activeVrmaAction = null, activeVrmaKey = "";
     let vrmaClips = new Map(), vrmaLoading = new Set(), vrmaFailed = new Set();
     let width = LOGICAL_W, height = LOGICAL_H, dpr = 1;
     let cachedModel = null; // { key, buffer } retained across WebGL context loss
@@ -421,7 +507,7 @@
     let activePose = "stand", activeGesture = null, activeExpression = "idle";
     let rawPose = "stand", rawGesture = null;
     let activeBeatMeta = null;
-    let pendingAccent = null, pendingCoLeadBeat = null, pendingHover = null;
+    let pendingAccent = null, pendingCoLeadBeat = null, pendingHover = null, pendingPhoneState = null, pendingGesture = "";
     let pendingInitialRid = "", pendingSessionSwitch = null;
     let ridObserver = null;
     let gaze = { x: 0, y: 0 }, smoothedLook = { yaw: 0, pitch: 0 }, smoothedHead = { yaw: 0, pitch: 0 };
@@ -481,6 +567,8 @@
       lookTarget = null;
       headPosVec = null;
       projHeadVec = null;
+      handPosVec = null;
+      handMidVec = null;
     }
 
     function initSceneAndRenderer(rt) {
@@ -491,6 +579,8 @@
       lookTarget = new THREE.Object3D();
       headPosVec = new THREE.Vector3();
       projHeadVec = new THREE.Vector3();
+      handPosVec = new THREE.Vector3();
+      handMidVec = new THREE.Vector3();
       scene.add(lookTarget);
 
       renderer = new THREE.WebGLRenderer({
@@ -523,6 +613,8 @@
         if (pendingAccent !== null) coLead.setLaptopAccent(pendingAccent);
         if (pendingCoLeadBeat !== null) coLead.setCoLeadBeat(pendingCoLeadBeat);
         if (pendingHover !== null) coLead.setHover(pendingHover);
+        if (pendingPhoneState !== null) coLead.setPhoneState(pendingPhoneState);
+        if (pendingGesture) { coLead.triggerGesture(pendingGesture); pendingGesture = ""; }
       }
 
       applyResize();
@@ -817,8 +909,12 @@
 
     function renderDizzyFxOverlay(coState) {
       if (!fxCanvas || !fxCtx || !C.vrmDizzyFx) return;
-      const alpha = coState && Number.isFinite(coState.dizzyFxAlpha) ? coState.dizzyFxAlpha : 0;
-      if (alpha <= 0.002) {
+      const dizzyAlpha = coState && Number.isFinite(coState.dizzyFxAlpha) ? coState.dizzyFxAlpha : 0;
+      const actionAlpha = coState && Number.isFinite(coState.actionFxAlpha) ? coState.actionFxAlpha : 0;
+      const actionKind = coState && typeof coState.actionFxKind === "string" ? coState.actionFxKind : "";
+      const hasDizzy = dizzyAlpha > 0.002;
+      const hasAction = actionAlpha > 0.002 && !!actionKind && typeof C.vrmDizzyFx.drawActionFx === "function";
+      if (!hasDizzy && !hasAction) {
         if (!fxCanvas.hidden) {
           fxCtx.setTransform?.(1, 0, 0, 1, 0, 0);
           fxCtx.clearRect?.(0, 0, fxCanvas.width || width, fxCanvas.height || height);
@@ -841,7 +937,7 @@
         const headNode = vrm.humanoid?.getNormalizedBoneNode("head");
         const bustSpan = Math.max(0.18, cameraFraming.bustSpan || 0.27);
         projHeadVec.set(cameraFraming.centerX || 0, cameraFraming.headY || 1.45, cameraFraming.headZ || 0);
-        if (headNode) headNode.getWorldPosition(projHeadVec);
+        if (headNode) headNode.getWorldPosition(headPosVec ? (headPosVec.copy(projHeadVec), projHeadVec) : projHeadVec);
         // Aim near upper face / temple level (slightly above neck-to-head pivot).
         projHeadVec.y += bustSpan * 0.24;
         const worldY = projHeadVec.y;
@@ -868,16 +964,32 @@
       }
 
       fxCtx.setTransform?.(clampedDpr, 0, 0, clampedDpr, 0, 0);
-      C.vrmDizzyFx.drawDizzyFx(fxCtx, {
-        width: w,
-        height: h,
-        headX,
-        headY,
-        headRadius,
-        crownY,
-        alpha,
-        time: Number.isFinite(coState.dizzyTime) ? coState.dizzyTime : elapsed
-      });
+      fxCtx.clearRect?.(0, 0, w, h);
+      if (hasDizzy) {
+        C.vrmDizzyFx.drawDizzyFx(fxCtx, {
+          width: w,
+          height: h,
+          headX,
+          headY,
+          headRadius,
+          crownY,
+          alpha: dizzyAlpha,
+          time: Number.isFinite(coState.dizzyTime) ? coState.dizzyTime : elapsed
+        });
+      }
+      if (hasAction) {
+        C.vrmDizzyFx.drawActionFx(fxCtx, {
+          width: w,
+          height: h,
+          headX,
+          headY,
+          headRadius,
+          crownY,
+          kind: actionKind,
+          alpha: actionAlpha,
+          time: elapsed
+        });
+      }
     }
 
     function readDocRid() {
@@ -1034,6 +1146,18 @@
       const coState = updatePoseAndLook(clampedDt, currentGaze, physics, extra);
       exprCtrl.update(clampedDt);
       vrm.update(clampedDt);
+      if (coLead && typeof coLead.syncPhoneToHand === "function" && vrm.humanoid && handPosVec) {
+        const handNode = vrm.humanoid.getNormalizedBoneNode("leftHand") || vrm.humanoid.getRawBoneNode?.("leftHand");
+        if (handNode && typeof handNode.getWorldPosition === "function") {
+          handNode.getWorldPosition(handPosVec);
+          const midNode = vrm.humanoid.getNormalizedBoneNode("leftMiddleProximal") || vrm.humanoid.getNormalizedBoneNode("leftIndexProximal");
+          if (midNode && handMidVec && typeof midNode.getWorldPosition === "function") {
+            midNode.getWorldPosition(handMidVec);
+            handPosVec.lerp(handMidVec, 0.45);
+          }
+          coLead.syncPhoneToHand(handPosVec);
+        }
+      }
       renderer.render(scene, camera);
       renderDizzyFxOverlay(coState);
       framesRendered++;
@@ -1186,6 +1310,7 @@
         return mount(targetContainer, mountOptions);
       },
       view(pose, gesture, expression, props) {
+        const prevGesture = rawGesture;
         rawPose = typeof pose === "string" && pose ? pose : "stand";
         rawGesture = typeof gesture === "string" && gesture ? gesture : null;
         const resolved = resolveScenario("", { pose, gesture, expression, prop: Array.isArray(props) ? props[0] : null }, pack);
@@ -1193,6 +1318,10 @@
         activeGesture = resolved.gesture;
         activeExpression = resolved.expression;
         exprCtrl.setState(activeExpression);
+        if (rawGesture && rawGesture !== prevGesture && Object.hasOwn(BUILTIN_VRM_GESTURES, rawGesture)) {
+          if (coLead) coLead.triggerGesture(rawGesture);
+          else pendingGesture = rawGesture;
+        }
         viewObj.pose = activePose;
         viewObj.gesture = activeGesture;
         viewObj.expression = activeExpression;
@@ -1235,6 +1364,19 @@
       setHover(flag) {
         pendingHover = flag;
         coLead?.setHover(flag);
+      },
+      triggerKnock(opts) {
+        return coLead ? coLead.triggerKnock(opts) : null;
+      },
+      triggerGesture(name) {
+        if (!name) return false;
+        if (coLead) return coLead.triggerGesture(name);
+        pendingGesture = String(name);
+        return true;
+      },
+      setPhoneState(snap) {
+        pendingPhoneState = snap || null;
+        return coLead ? coLead.setPhoneState(snap) : null;
       },
       resize(w, h, nextDpr) {
         const prevAspect = width / Math.max(1, height);
@@ -1305,6 +1447,9 @@
     getCoLeadState() { return activeVrmRig?.getCoLeadState?.() ?? null; },
     setCoLeadBeat(beat) { return activeVrmRig?.setCoLeadBeat?.(beat) ?? null; },
     setVrmHover(flag) { activeVrmRig?.setHover?.(flag); },
+    triggerKnock(opts) { return activeVrmRig?.triggerKnock?.(opts) ?? null; },
+    triggerGesture(name) { return activeVrmRig?.triggerGesture?.(name) ?? false; },
+    setPhoneState(snap) { return activeVrmRig?.setPhoneState?.(snap) ?? null; },
     VrmExpressionController,
     resolveVrmScenario: resolveScenario,
     vrmMath: { conjugateVrm0Euler, conjugateVrm0Quat }
