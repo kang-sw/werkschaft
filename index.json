@@ -471,21 +471,15 @@
     "261127-refactor-split-oversized-multi-responsibility-files": {
       "registered_at": "2026-11-27T01:26:05Z"
     },
-    "261128-feat-ws-companion-control-rig-studio-and-action-catalog": {
-      "registered_at": "2026-11-28T10:07:48Z",
+    "261128-feat-ws-companion-puppeteer-and-full-lead-messenger": {
+      "registered_at": "2026-11-28T13:32:59Z",
       "lease": {
         "email": "ki6080@gmail.com",
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-28T10:42:44Z",
-        "impl": {
-          "branch": "impl/develop/companion-control-rig-studio"
-        }
+        "phase": "active",
+        "touched_at": "2026-11-28T14:29:37Z"
       }
-    },
-    "261128-feat-ws-companion-puppeteer-and-full-lead-messenger": {
-      "registered_at": "2026-11-28T13:32:59Z"
     },
     "261128-feat-ws-companion-visual-polish-and-metafiction-overlay": {
       "registered_at": "2026-11-28T06:52:51Z"
