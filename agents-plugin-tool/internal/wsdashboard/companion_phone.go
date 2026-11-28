@@ -109,7 +109,12 @@ type CompanionPendingApproval struct {
 // CompanionPhoneSnapshot is the wire shape returned by GET /api/companion/phone/thread
 // and broadcast over the rail SSE stream as event: companion-phone.
 type CompanionPhoneSnapshot struct {
-	Seq                uint64                     `json:"seq"`
+	Seq uint64 `json:"seq"`
+	// Epoch identifies this store instance (its first-use time in Unix ms):
+	// Seq restarts with a new daemon, so a client accepts any snapshot whose
+	// epoch differs and otherwise drops one whose seq went backwards.
+	Epoch              int64                      `json:"epoch,omitempty"`
+	MessengerOpen      bool                       `json:"messengerOpen,omitempty"`
 	State              string                     `json:"state"`
 	Posture            string                     `json:"posture"`
 	LeaseOwner         string                     `json:"leaseOwner,omitempty"`
@@ -163,9 +168,20 @@ type CompanionPhoneStore struct {
 	turns              int
 	payload            []byte
 	wake               chan struct{}
+	epoch              int64
+	// presence maps a Messenger client id to its last open/heartbeat time
+	// (companion_phone_presence.go); messengerOpen caches len(presence) > 0.
+	presence      map[string]time.Time
+	messengerOpen bool
+	// persist receives each history delta under s.mu; it must never block
+	// (companion_messenger_ring.go queues to its own writer goroutine).
+	persist func(companionMessengerRecord)
 }
 
 func (s *CompanionPhoneStore) initLocked() {
+	if s.epoch == 0 {
+		s.epoch = time.Now().UnixMilli()
+	}
 	if s.state == "" {
 		s.state = CompanionStateLaptopAmbient
 	}
@@ -197,6 +213,8 @@ func (s *CompanionPhoneStore) snapshotLocked() CompanionPhoneSnapshot {
 	}
 	return CompanionPhoneSnapshot{
 		Seq:                s.seq,
+		Epoch:              s.epoch,
+		MessengerOpen:      s.messengerOpen,
 		State:              s.state,
 		Posture:            s.posture,
 		LeaseOwner:         s.leaseOwner,
@@ -411,6 +429,7 @@ func (s *CompanionPhoneStore) EnqueueUserMessage(text string) (CompanionPhoneMes
 		CreatedAt: s.clock().UnixMilli(),
 	}
 	s.messages = appendBoundedMessage(s.messages, msg, companionPhoneMaxMessages)
+	s.persistMessageLocked(msg)
 	s.unreadAgent = appendBoundedMessage(s.unreadAgent, msg, companionPhoneMaxMessages)
 	// A buzzing notification wakes a sleepy companion, clears unavailable/retry
 	// state ((1749)), and turns attention back to the phone screen.
@@ -756,6 +775,7 @@ func (s *CompanionPhoneStore) PhoneSend(owner, text, tone string, confirmCard *C
 	s.messages = appendBoundedMessage(s.messages, msg, companionPhoneMaxMessages)
 	s.unreadClient++
 	s.turns++
+	s.persistMessageLocked(msg)
 	s.wakeFailures = 0
 	s.unavailable = false
 	s.renewDeadlineLocked()
@@ -828,9 +848,7 @@ func (s *CompanionPhoneStore) PhonePutdown(owner, style, next string) (Companion
 	s.wakeAcquire = false
 	s.typing = false
 	if next == CompanionPutdownNextAmbient {
-		if line := summarizeLatestPhoneExchange(s.messages, style); line != "" {
-			s.tier1Summary = appendBoundedSummary(s.tier1Summary, line, companionPhoneMaxSummaries)
-		}
+		s.appendSummaryLocked(summarizeLatestPhoneExchange(s.messages, style))
 	}
 	if next == CompanionPutdownNextWork || s.delegationInFlight {
 		if owner != "" {
@@ -872,9 +890,7 @@ func (s *CompanionPhoneStore) forceRelease(holder string) (CompanionPhoneSnapsho
 	if wasPhone {
 		s.posture = CompanionPostureLaptop
 		s.phoneFaceDown = false
-		if line := summarizeLatestPhoneExchange(s.messages, CompanionPutdownNormal); line != "" {
-			s.tier1Summary = appendBoundedSummary(s.tier1Summary, line, companionPhoneMaxSummaries)
-		}
+		s.appendSummaryLocked(summarizeLatestPhoneExchange(s.messages, CompanionPutdownNormal))
 	}
 	s.leaseOwner = ""
 	s.wakeAcquire = false
@@ -907,31 +923,44 @@ func (s *CompanionPhoneStore) ReleaseOnTurnEnd(owner string) (CompanionPhoneSnap
 // is true, the deadline is renewed instead of expiring ((1748)). Returns
 // (snap, leaseExpired, delegationExpired, hasUnread).
 func (s *CompanionPhoneStore) ExpireIfPastDeadline(now time.Time, hasLiveTier2Children bool) (CompanionPhoneSnapshot, bool, bool, bool) {
+	snap, leaseExpired, delegationExpired, _, hasUnread := s.expireIfPastDeadline(now, hasLiveTier2Children)
+	return snap, leaseExpired, delegationExpired, hasUnread
+}
+
+// expireIfPastDeadline is ExpireIfPastDeadline that also reports whether the
+// expired lease held the phone, so the daemon can broadcast phone_putdown.
+// While the Messenger is open and a live holder keeps the phone in hand, the
+// idle deadline slides instead of expiring: the companion stays on the phone
+// as long as the user is looking at the conversation.
+func (s *CompanionPhoneStore) expireIfPastDeadline(now time.Time, hasLiveTier2Children bool) (snap CompanionPhoneSnapshot, leaseExpired, delegationExpired, wasPhone, hasUnread bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.initLocked()
 	if s.deadline.IsZero() || now.Before(s.deadline) {
-		return s.snapshotLocked(), false, false, false
+		return s.snapshotLocked(), false, false, false, false
 	}
+	wasPhone = s.posture == CompanionPosturePhone || s.state == CompanionStatePhoneActive
 	if s.delegationInFlight {
 		if hasLiveTier2Children {
 			s.deadline = now.Add(CompanionLeaseDelegationTimeout)
-			return s.snapshotLocked(), false, false, false
+			return s.snapshotLocked(), false, false, false, false
 		}
 		s.delegationInFlight = false
 		s.leaseOwner = ""
 		s.wakeAcquire = false
 		s.typing = false
 		s.posture = CompanionPostureLaptop
+		s.phoneFaceDown = false
 		s.state = CompanionStateLaptopAmbient
 		s.deadline = time.Time{}
-		return s.publishLocked(), true, true, len(s.unreadAgent) > 0
+		return s.publishLocked(), true, true, wasPhone, len(s.unreadAgent) > 0
 	}
-	wasPhone := s.posture == CompanionPosturePhone || s.state == CompanionStatePhoneActive
+	if wasPhone && s.messengerOpenLocked(now) && s.holderIsLiveLocked() {
+		s.deadline = now.Add(CompanionLeaseIdleTimeout)
+		return s.snapshotLocked(), false, false, false, false
+	}
 	if wasPhone {
-		if line := summarizeLatestPhoneExchange(s.messages, CompanionPutdownNormal); line != "" {
-			s.tier1Summary = appendBoundedSummary(s.tier1Summary, line, companionPhoneMaxSummaries)
-		}
+		s.appendSummaryLocked(summarizeLatestPhoneExchange(s.messages, CompanionPutdownNormal))
 	}
 	s.leaseOwner = ""
 	s.wakeAcquire = false
@@ -940,7 +969,96 @@ func (s *CompanionPhoneStore) ExpireIfPastDeadline(now time.Time, hasLiveTier2Ch
 	s.phoneFaceDown = false
 	s.state = CompanionStateLaptopAmbient
 	s.deadline = time.Time{}
-	return s.publishLocked(), true, false, len(s.unreadAgent) > 0
+	return s.publishLocked(), true, false, wasPhone, len(s.unreadAgent) > 0
+}
+
+// HoldForAct puts the phone in owner's hand for a ws/companion.act
+// phone_pickup/phone_typing gesture, so the visual never shows a phone the
+// lease does not hold. Unlike PhonePickup it leaves the unread inbox alone
+// (the act carries no read). Reports false when another live session holds
+// the lease; the caller then drops the gesture.
+func (s *CompanionPhoneStore) HoldForAct(owner string) bool {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLocked()
+	if s.leaseOwner != "" && s.leaseOwner != owner && s.holderIsLiveLocked() {
+		return false
+	}
+	changed := s.posture != CompanionPosturePhone || s.state != CompanionStatePhoneActive || s.leaseOwner != owner || s.phoneFaceDown
+	s.posture = CompanionPosturePhone
+	s.state = CompanionStatePhoneActive
+	s.leaseOwner = owner
+	s.wakeAcquire = false
+	s.phoneFaceDown = false
+	s.renewDeadlineLocked()
+	if changed {
+		s.publishLocked()
+	}
+	return true
+}
+
+// MigrateLease moves an Embodiment Lease held by from to to, keeping posture,
+// state, and deadline: a companion-body handoff swaps sessions without the
+// phone visibly leaving the companion's hand. Reports whether it moved.
+func (s *CompanionPhoneStore) MigrateLease(from, to string) bool {
+	from, to = strings.TrimSpace(from), strings.TrimSpace(to)
+	if from == "" || to == "" || from == to {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLocked()
+	if s.leaseOwner != from {
+		return false
+	}
+	s.leaseOwner = to
+	s.publishLocked()
+	return true
+}
+
+// RetainHoldOnTurnEnd keeps owner's phone in hand across a turn end while the
+// Messenger is open: it renews the idle deadline and reports true when owner
+// holds the phone and at least one Messenger client is open. The caller then
+// skips the turn-end release.
+func (s *CompanionPhoneStore) RetainHoldOnTurnEnd(owner string) bool {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLocked()
+	if s.posture != CompanionPosturePhone || s.leaseOwner != owner || !s.messengerOpenLocked(s.clock()) {
+		return false
+	}
+	s.typing = false
+	s.renewDeadlineLocked()
+	s.publishLocked()
+	return true
+}
+
+// appendSummaryLocked appends one exchange line to the Tier-1 summary ring
+// and records it to the history log.
+func (s *CompanionPhoneStore) appendSummaryLocked(line string) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
+	}
+	s.tier1Summary = appendBoundedSummary(s.tier1Summary, line, companionPhoneMaxSummaries)
+	if s.persist != nil {
+		s.persist(companionMessengerRecord{Type: companionRingSummary, Summary: line, MsgSeq: s.msgSeq, Turns: s.turns})
+	}
+}
+
+func (s *CompanionPhoneStore) persistMessageLocked(msg CompanionPhoneMessage) {
+	if s.persist != nil {
+		m := msg
+		s.persist(companionMessengerRecord{Type: companionRingMessage, Message: &m, MsgSeq: s.msgSeq, Turns: s.turns})
+	}
 }
 
 // SetSleepy toggles between laptop_ambient and laptop_sleepy when the
@@ -992,6 +1110,9 @@ func (s *CompanionPhoneStore) ResetSummary() CompanionPhoneSnapshot {
 	s.initLocked()
 	s.tier1Summary = nil
 	s.turns = 0
+	if s.persist != nil {
+		s.persist(companionMessengerRecord{Type: companionRingResetSummary, MsgSeq: s.msgSeq})
+	}
 	return s.publishLocked()
 }
 
@@ -1108,6 +1229,7 @@ func (d *Daemon) CompanionMotion(sessionID, gesture, prop string, ttlMS int) boo
 	if ttlMS <= 0 {
 		ttlMS = companionDefaultTTL
 	}
+	gesture = d.alignCompanionPhoneGesture("", gesture)
 	return d.PublishCompanionCommand(CompanionCommand{
 		SessionID: sessionID,
 		Gesture:   strings.TrimSpace(gesture),
@@ -1167,30 +1289,105 @@ func (d *Daemon) CompanionPhonePutdown(owner, style, next string) (CompanionPhon
 	if err != nil {
 		return CompanionPhoneSnapshot{}, err
 	}
-	if changed {
-		gesture := "phone_putdown"
-		expr := "idle"
-		if style == CompanionPutdownFacedownMerong {
-			gesture = "phone_merong_facedown"
-			expr = "merong"
-		}
-		d.PublishCompanionCommand(CompanionCommand{
-			SessionID:  companionPhoneBroadcastSession,
-			Gesture:    gesture,
-			Expression: expr,
-			Prop:       "smartphone",
-			TTLms:      4500,
-		})
-		if snap.UnreadAgent > 0 && !snap.Unavailable && snap.Posture == CompanionPostureLaptop && snap.LeaseOwner == "" {
-			d.notifyCompanionWake("release-unread")
-		}
+	// The putdown gesture goes out even when the store had nothing to clear:
+	// a stage whose pose drifted from the lease (a lost snapshot or command)
+	// re-converges, and the stage treats a putdown on a resting phone as a
+	// no-op.
+	gesture := "phone_putdown"
+	expr := "idle"
+	if style == CompanionPutdownFacedownMerong {
+		gesture = "phone_merong_facedown"
+		expr = "merong"
+	}
+	d.PublishCompanionCommand(CompanionCommand{
+		SessionID:  companionPhoneBroadcastSession,
+		Gesture:    gesture,
+		Expression: expr,
+		Prop:       "smartphone",
+		TTLms:      4500,
+	})
+	if changed && snap.UnreadAgent > 0 && !snap.Unavailable && snap.Posture == CompanionPostureLaptop && snap.LeaseOwner == "" {
+		d.notifyCompanionWake("release-unread")
 	}
 	return snap, nil
 }
 
-// CompanionReleaseOnTurnEnd releases any held Embodiment Lease at turn end.
+// CompanionReleaseOnTurnEnd releases any held Embodiment Lease at turn end,
+// except that while the Messenger is open a phone held by owner stays in
+// hand (deadline renewed) so the conversation does not bounce the phone to
+// the desk after every reply. Close, crash, failed-turn, and zero-progress
+// paths use CompanionForceRelease, which always releases.
 func (d *Daemon) CompanionReleaseOnTurnEnd(owner string) bool {
+	if d.companionPhone.RetainHoldOnTurnEnd(owner) {
+		d.CompanionResetBurst(owner)
+		return false
+	}
 	return d.CompanionForceRelease(owner)
+}
+
+// CompanionExpireIfPastDeadline runs the sliding-deadline check, first
+// expiring stale Messenger presence (a tab that vanished without a close
+// beacon), and broadcasts phone_putdown when the expired lease held the
+// phone so the stage never keeps a phone the server already put down.
+// Returns (leaseExpired, delegationExpired, hasUnread).
+func (d *Daemon) CompanionExpireIfPastDeadline(now time.Time, hasLiveTier2Children bool) (bool, bool, bool) {
+	d.pruneCompanionMessengerPresence(now)
+	_, leaseExpired, delegationExpired, wasPhone, hasUnread := d.companionPhone.expireIfPastDeadline(now, hasLiveTier2Children)
+	if leaseExpired && wasPhone {
+		d.PublishCompanionCommand(CompanionCommand{
+			SessionID: companionPhoneBroadcastSession,
+			Gesture:   "phone_putdown",
+			Prop:      "smartphone",
+			TTLms:     3000,
+		})
+	}
+	return leaseExpired, delegationExpired, hasUnread
+}
+
+// alignCompanionPhoneGesture reconciles a phone gesture an agent asked for
+// (ws/companion.act or ws/companion.motion) with the Embodiment Lease, so the
+// stage pose and the server lease cannot disagree: pickup/typing take the
+// phone into owner's hand (or are dropped when another live session holds
+// it), and putdown/merong release it. Non-phone gestures pass through.
+//
+// An ownerless caller (ws/companion.motion) cannot move the lease, so its
+// phone gesture passes only when it agrees with the current posture.
+func (d *Daemon) alignCompanionPhoneGesture(owner, gesture string) string {
+	g := strings.ToLower(strings.TrimSpace(gesture))
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		held := d.companionPhone.PostureFor("") == CompanionPosturePhone
+		switch g {
+		case "phone_pickup", "phone_typing":
+			if !held {
+				return ""
+			}
+		case "phone_putdown", "phone_merong_facedown":
+			if held {
+				return ""
+			}
+		}
+		return gesture
+	}
+	switch g {
+	case "phone_pickup", "phone_typing":
+		if !d.companionPhone.HoldForAct(owner) {
+			return ""
+		}
+	case "phone_putdown", "phone_merong_facedown":
+		style := CompanionPutdownNormal
+		if g == "phone_merong_facedown" {
+			style = CompanionPutdownFacedownMerong
+		}
+		snap, changed, err := d.companionPhone.PhonePutdown(owner, style, CompanionPutdownNextAmbient)
+		if err != nil {
+			return ""
+		}
+		if changed && snap.UnreadAgent > 0 && !snap.Unavailable && snap.Posture == CompanionPostureLaptop && snap.LeaseOwner == "" {
+			d.notifyCompanionWake("release-unread")
+		}
+	}
+	return gesture
 }
 
 // CompanionForceRelease releases holder's Embodiment Lease (turn end, close, or
@@ -1329,6 +1526,7 @@ func (d *Daemon) registerCompanionPhoneRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(companionPhoneSendRoute, d.handleCompanionPhoneSend)
 	mux.HandleFunc(companionPhoneMarkReadRoute, d.handleCompanionPhoneMarkRead)
 	mux.HandleFunc(companionPhoneResetSummaryRoute, d.handleCompanionPhoneResetSummary)
+	mux.HandleFunc(companionMessengerPresenceRoute, d.handleCompanionMessengerPresence)
 }
 
 func (d *Daemon) handleCompanionPhoneThread(w http.ResponseWriter, r *http.Request) {

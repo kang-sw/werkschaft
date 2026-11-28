@@ -302,6 +302,7 @@ func newCompanionFixtureWithConfig(t *testing.T, cfg wsdashboard.CompanionConfig
 	agents.SetEndpoint(fmt.Sprintf("http://127.0.0.1:%d", ep.Port))
 	daemon.SetCompanionHolderAlive(rt.IsHolderAlive)
 	daemon.SetCompanionWake(rt.OnUserWake)
+	daemon.SetCompanionMessengerClosed(rt.OnMessengerClosed)
 
 	// Mint the dashboard localhost session cookie via the documented machine auth route.
 	cookieReq, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/auth/cookie", ep.Port), nil)

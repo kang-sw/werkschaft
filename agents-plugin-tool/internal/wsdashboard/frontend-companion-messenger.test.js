@@ -610,6 +610,284 @@ test("Step 4 Phase 1: messenger popup anchoring, Variant D rail widths, viewport
   M.dispose();
 });
 
+// ---------------------------------------------------------------------------
+// Composer (WsInput) + bubble Markdown rendering
+// ---------------------------------------------------------------------------
+
+function textOf(node) {
+  if (!node) return "";
+  if (node.nodeType === 3) return node.textContent;
+  const own = node.children && node.children.length ? "" : (node.textContent || "");
+  return own + (node.children || []).map(textOf).join("");
+}
+
+function makeMessengerHarness({ globals = {}, window: winExtra = {}, fetchImpl, realWsInput = false } = {}) {
+  const counts = {};
+  const docListeners = {};
+  const doc = {
+    body: null,
+    createElement: tag => {
+      counts[tag] = (counts[tag] || 0) + 1;
+      const el = makeFakeElement(tag, doc);
+      // Bubbles must never reach innerHTML.
+      Object.defineProperty(el, "innerHTML", { set() { throw new Error("innerHTML is forbidden in messenger rendering"); }, get() { return ""; } });
+      return el;
+    },
+    createElementNS: (_ns, tag) => makeFakeElement(tag, doc),
+    createTextNode: s => ({ nodeType: 3, textContent: String(s) }),
+    addEventListener(type, fn) { (docListeners[type] ||= []).push(fn); }
+  };
+  doc.body = makeFakeElement("body", doc);
+  const { M, context } = loadCompanionWithMessenger({
+    document: doc,
+    Event: class { constructor(type, init) { this.type = type; Object.assign(this, init); } },
+    ...globals,
+    window: winExtra
+  });
+  if (realWsInput) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", "ws-input.js"), "utf8"), context, { filename: "ws-input.js" });
+  }
+  const fetchLog = [];
+  const baseFetch = fetchImpl || (async () => ({ ok: true, json: async () => ({}) }));
+  M.mount({
+    document: doc,
+    getAnchorRect: () => ({ left: 12, top: 720, right: 352, bottom: 960, width: 340, height: 240 }),
+    fetch: async (url, init) => { fetchLog.push({ url, init }); return baseFetch(url, init); }
+  });
+  const popup = doc.body.children.find(el => el.id === "companion-messenger");
+  return { M, context, doc, popup, counts, fetchLog, win: context.window };
+}
+
+function snapshotWith(messages, extra = {}) {
+  return { seq: 1, state: "laptop_ambient", posture: "laptop", messages, unreadClient: 0, unreadAgent: 0, tier1Summary: [], ...extra };
+}
+
+test("Messenger bubbles render Markdown + badges XSS-safely (DOM only, never innerHTML)", () => {
+  const { M, popup } = makeMessengerHarness({ window: {} });
+  const hostile = [
+    "<img src=x onerror=alert(1)> and <script>alert(2)</script>",
+    "**bold** *it* ~~gone~~ `inline <b>code</b>`",
+    "[evil](javascript:alert(3)) [good](https://example.com/a?b=1) https://example.org/x.",
+    "ping @alice and mail@example.com then <mailbox id=\"id:abcdef123456\" dir=\"/tmp/proj\" label=\"Lead\"/>",
+    "# Title\n\n- one\n- [x] two\n\n> quoted\n\n```js\n<b>raw</b>\n```"
+  ];
+  M.applySnapshot(snapshotWith(hostile.map((text, i) => ({ id: "h" + i, sender: i % 2 ? "companion" : "user", text, createdAt: 1 }))));
+  const all = popup.all();
+  const tags = all.map(el => el.tagName);
+  assert.ok(!tags.includes("IMG"), "<img> text must stay inert");
+  assert.ok(!tags.includes("SCRIPT"), "<script> text must stay inert");
+  assert.ok(!tags.includes("B"), "<b> inside code/fence must stay literal");
+  const bubbles = all.filter(el => el.className === "ws-cm-bubble ws-cm-md");
+  assert.equal(bubbles.length, 5);
+  assert.ok(textOf(bubbles[0]).includes("<img src=x onerror=alert(1)>"), "raw <img> text preserved literally");
+  assert.ok(textOf(bubbles[0]).includes("<script>alert(2)</script>"), "raw <script> text preserved literally");
+
+  const b1 = bubbles[1];
+  assert.equal(b1.all().find(el => el.tagName === "STRONG")?.children.map(textOf).join(""), "bold");
+  assert.ok(b1.all().some(el => el.tagName === "EM"));
+  assert.ok(b1.all().some(el => el.tagName === "DEL"));
+  assert.equal(b1.all().find(el => el.className === "ws-cm-md-code")?.textContent, "inline <b>code</b>");
+
+  const links = bubbles[2].all().filter(el => el.tagName === "A");
+  assert.deepEqual(links.map(a => a.getAttribute("href")), ["https://example.com/a?b=1", "https://example.org/x"]);
+  assert.ok(links.every(a => a.getAttribute("rel") === "noopener noreferrer" && a.getAttribute("target") === "_blank"));
+  assert.ok(textOf(bubbles[2]).includes("evil"), "javascript: link keeps only its label text");
+  assert.ok(!bubbles[2].all().some(el => String(el.getAttribute?.("href") || "").startsWith("javascript")));
+
+  const badges = bubbles[3].all().filter(el => (el.className || "").startsWith("ws-cm-badge"));
+  const mention = badges.find(el => el.className.includes("mention"));
+  const mailbox = badges.find(el => el.className.includes("mailbox"));
+  assert.equal(mention?.textContent, "@alice", "@mention renders a badge");
+  assert.equal(badges.filter(el => el.className.includes("mention")).length, 1, "email address is not a mention");
+  assert.equal(mailbox?.textContent, "Lead", "<mailbox/> tag renders a labelled badge");
+  assert.ok(mailbox.title.includes("id:abcdef123456"));
+
+  const b4 = bubbles[4];
+  assert.ok(b4.all().some(el => el.className?.startsWith("ws-cm-md-h")));
+  assert.equal(b4.all().filter(el => el.tagName === "LI").length, 2);
+  assert.ok(b4.all().some(el => el.tagName === "BLOCKQUOTE"));
+  assert.equal(b4.all().find(el => el.tagName === "PRE")?.children[0].textContent, "<b>raw</b>");
+  M.dispose();
+});
+
+test("Messenger bubble badges use WsCapsules mailbox label/tooltip when available", () => {
+  const { M, popup } = makeMessengerHarness({
+    window: {
+      WsCapsules: {
+        parseMailboxTag: (s, at) => /^<mailbox /.test(s.slice(at)) ? { end: s.indexOf("/>", at) + 2, tag: { id: "id:zz", label: "L" } } : null,
+        formatMailboxLabel: tag => "fmt:" + tag.label,
+        formatMailboxTooltip: tag => "tip:" + tag.id
+      }
+    }
+  });
+  M.applySnapshot(snapshotWith([{ id: "a", sender: "companion", text: "see <mailbox id=\"id:zz\" label=\"L\"/> ok", createdAt: 1 }]));
+  const badge = popup.all().find(el => (el.className || "").includes("ws-cm-badge mailbox"));
+  assert.equal(badge.textContent, "fmt:L");
+  assert.equal(badge.title, "tip:id:zz");
+  M.dispose();
+});
+
+test("Messenger thread patches by key: state-only snapshots re-use bubble nodes and never re-parse Markdown", () => {
+  const { M, popup, counts } = makeMessengerHarness();
+  const msgs = Array.from({ length: 50 }, (_, i) => ({ id: "m" + i, sender: i % 3 ? "companion" : "user", text: "msg **" + i + "**", createdAt: 1000 + i }));
+  M.applySnapshot(snapshotWith(msgs));
+  const thread = popup.all().find(el => el.className === "ws-cm-thread");
+  const rowsBefore = [...thread.children];
+  assert.equal(rowsBefore.length, 50);
+  const strongBefore = counts.strong || 0;
+  const timeBefore = counts.time || 0;
+  assert.ok(strongBefore >= 50, "each message parsed its Markdown once (plus the header name)");
+
+  // Typing/state-only snapshot: same messages, different state.
+  M.applySnapshot(snapshotWith(msgs, { seq: 2, state: "phone_active" }));
+  assert.deepEqual(thread.children, rowsBefore, "unchanged rows must be the very same nodes");
+  assert.equal((counts.strong || 0) - strongBefore, 0, "no Markdown is re-parsed");
+  assert.equal((counts.time || 0) - timeBefore, 0, "no row is re-created");
+
+  // One appended message builds exactly one new row; one edited message rebuilds only itself.
+  const grown = [...msgs, { id: "m50", sender: "user", text: "new", createdAt: 2000 }];
+  M.applySnapshot(snapshotWith(grown, { seq: 3 }));
+  assert.equal(thread.children.length, 51);
+  assert.deepEqual(thread.children.slice(0, 50), rowsBefore);
+  const edited = grown.map(m => (m.id === "m10" ? { ...m, text: "edited" } : m));
+  M.applySnapshot(snapshotWith(edited, { seq: 4 }));
+  assert.notEqual(thread.children[10], rowsBefore[10]);
+  assert.equal(thread.children.filter((row, i) => i !== 10 && row === (i < 50 ? rowsBefore[i] : row)).length, 50);
+  M.dispose();
+});
+
+test("Messenger send applies server {message, thread}, falls back to snapshot, Enter sends and Shift+Enter does not (plain textarea fallback)", async () => {
+  const thread = snapshotWith([{ id: "s1", sender: "user", text: "hello **there**", createdAt: 5 }], { seq: 9 });
+  let reply = { message: { id: "s1" }, thread };
+  const { M, popup, fetchLog } = makeMessengerHarness({
+    fetchImpl: async url => (url === "/api/companion/phone/send" ? { ok: true, json: async () => reply } : { ok: true, json: async () => ({}) })
+  });
+  const input = popup.all().find(el => el.className === "ws-cm-input");
+  const sendBtn = popup.all().find(el => el.className === "ws-cm-send-btn");
+  const sends = () => fetchLog.filter(f => f.url === "/api/companion/phone/send");
+  assert.equal(sendBtn.disabled, true);
+
+  input.value = "hello **there**";
+  input.dispatchEvent({ type: "input" });
+  assert.equal(sendBtn.disabled, false);
+  let prevented = false;
+  input.dispatchEvent({ type: "keydown", key: "Enter", shiftKey: true, isComposing: false, preventDefault() { prevented = true; } });
+  await new Promise(r => setImmediate(r));
+  assert.equal(sends().length, 0, "Shift+Enter must not send");
+  assert.equal(prevented, false);
+  input.dispatchEvent({ type: "keydown", key: "Enter", shiftKey: false, isComposing: true, preventDefault() {} });
+  await new Promise(r => setImmediate(r));
+  assert.equal(sends().length, 0, "IME composition Enter must not send");
+  input.dispatchEvent({ type: "keydown", key: "Enter", shiftKey: false, isComposing: false, preventDefault() {} });
+  await new Promise(r => setImmediate(r));
+  assert.equal(sends().length, 1);
+  assert.equal(input.value, "", "composer clears after send");
+  assert.equal(input.focused, true, "composer re-focused after send");
+  assert.equal(M.getState().snapshot.seq, 9, "data.thread must be applied");
+  assert.ok(popup.all().some(el => el.tagName === "STRONG" && textOf(el) === "there"), "thread rendered with Markdown");
+
+  // Legacy shape: {message, snapshot}.
+  reply = { message: { id: "s2" }, snapshot: snapshotWith([], { seq: 12 }) };
+  input.value = "again";
+  input.dispatchEvent({ type: "input" });
+  input.dispatchEvent({ type: "keydown", key: "Enter", shiftKey: false, isComposing: false, preventDefault() {} });
+  await new Promise(r => setImmediate(r));
+  assert.equal(M.getState().snapshot.seq, 12, "data.snapshot fallback must still apply");
+  M.dispose();
+});
+
+test("Messenger composer attaches WsInput (markdown/capsules/list continuation/auto-grow) and follows its keymap + submit contract", async () => {
+  const attached = [];
+  let destroyed = 0;
+  const WsInput = {
+    attach(target, o) {
+      const api = { field: target, setValues: [], setValue(v) { target.value = v; api.setValues.push(v); }, destroy() { destroyed++; } };
+      attached.push({ target, o, api });
+      return api;
+    }
+  };
+  const { M, popup, fetchLog } = makeMessengerHarness({
+    window: { WsInput },
+    fetchImpl: async () => ({ ok: true, json: async () => ({ thread: snapshotWith([], { seq: 2 }) }) })
+  });
+  assert.equal(attached.length, 1);
+  const { target, o, api } = attached[0];
+  assert.equal(target.className, "ws-cm-input", "WsInput attaches to the composer textarea");
+  assert.equal(target.tagName, "TEXTAREA");
+  assert.deepEqual(
+    { markdown: o.features.markdown, capsules: o.features.capsules, listContinuation: o.features.listContinuation, autoGrow: o.features.autoGrow },
+    { markdown: true, capsules: true, listContinuation: true, autoGrow: true }
+  );
+  assert.equal(o.features.mentions || o.features.topics || o.features.slash, false, "no file/topic/slash popups without providers");
+  assert.equal(target.listeners.keydown, undefined, "WsInput owns keydown; messenger adds no competing handler");
+
+  const sendBtn = popup.all().find(el => el.className === "ws-cm-send-btn");
+  assert.equal(o.keymap(), "enter-send");
+  assert.equal(sendBtn.title, "Send message");
+
+  // A multiline draft keeps Enter-send (Shift+Enter is the newline key).
+  target.value = "line one\nline two";
+  o.onChange("line one\nline two", api);
+  assert.equal(o.keymap(), "enter-send");
+  assert.equal(sendBtn.title, "Send message");
+  assert.equal(sendBtn.disabled, false);
+
+  o.onSubmit(api, {});
+  await new Promise(r => setImmediate(r));
+  assert.equal(fetchLog.filter(f => f.url === "/api/companion/phone/send").length, 1);
+  assert.deepEqual(JSON.parse(fetchLog.find(f => f.url === "/api/companion/phone/send").init.body), { text: "line one\nline two" });
+  assert.deepEqual(api.setValues, [""], "composer cleared through WsInput.setValue");
+  assert.equal(o.keymap(), "enter-send");
+
+  M.dispose();
+  assert.equal(destroyed, 1, "dispose destroys the WsInput instance");
+});
+
+test("Messenger composer with the real WsInput: Enter/Shift+Enter/IME, list continuation, and WsMdEditor wired to the capsule editor", async () => {
+  const mdAttach = [];
+  const editorEl = makeFakeElement("div", null);
+  const WsCapsules = { attach() { return { editor: editorEl }; } };
+  const WsMdEditor = {
+    attach(el, o) { mdAttach.push({ el, o }); return { schedule() {}, reconcile() {}, clear() {}, detach() {} }; }
+  };
+  const { M: M2, popup: popup2, fetchLog: sent } = makeMessengerHarness({
+    realWsInput: true,
+    window: { WsCapsules, WsMdEditor },
+    fetchImpl: async () => ({ ok: true, json: async () => ({ thread: snapshotWith([], { seq: 4 }) }) })
+  });
+  const input = popup2.all().find(el => el.className === "ws-cm-input");
+  assert.ok(input.wsInput, "real WsInput instance is attached to the composer textarea");
+  assert.equal(mdAttach.length, 1, "WsMdEditor is attached once");
+  assert.equal(mdAttach[0].el, editorEl, "WsMdEditor binds to the capsule editor");
+  assert.equal(mdAttach[0].o.isComposing(), false);
+  assert.equal(mdAttach[0].o.getMentions().length, 0);
+
+  const key = (k, extra = {}) => {
+    let prevented = false;
+    input.dispatchEvent({ type: "keydown", key: k, code: k, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false, isComposing: false, keyCode: 13, preventDefault() { prevented = true; this.defaultPrevented = true; }, ...extra });
+    return prevented;
+  };
+  const setValue = v => { input.value = v; input.selectionStart = input.selectionEnd = v.length; input.dispatchEvent({ type: "input" }); };
+
+  setValue("hi there");
+  assert.equal(key("Enter", { shiftKey: true }), false, "Shift+Enter leaves the newline to the editor");
+  await new Promise(r => setImmediate(r));
+  assert.equal(sent.filter(f => f.url === "/api/companion/phone/send").length, 0, "Shift+Enter does not send");
+  assert.equal(key("Enter", { isComposing: true, keyCode: 229 }), false);
+  await new Promise(r => setImmediate(r));
+  assert.equal(sent.filter(f => f.url === "/api/companion/phone/send").length, 0, "IME composition Enter does not send");
+  assert.equal(key("Enter"), true, "plain Enter submits");
+  await new Promise(r => setImmediate(r));
+  assert.equal(sent.filter(f => f.url === "/api/companion/phone/send").length, 1);
+  assert.equal(input.value, "");
+
+  // listContinuation on Shift+Enter inside a markdown list.
+  setValue("- item");
+  assert.equal(key("Enter", { shiftKey: true }), true, "list continuation takes over Shift+Enter");
+  assert.equal(input.value, "- item\n- ");
+  M2.dispose();
+});
+
 test("Stage VRM slot expanded messenger toggle: outside bbox toggles once, inside knocks only, drag >6px ignored, null bounds toggles, pointermove updates data-area without layout reads", async () => {
   let now = 0, raf = null, rafId = 0;
   const docListeners = {};
@@ -810,4 +1088,16 @@ test("Stage VRM slot expanded messenger toggle: outside bbox toggles once, insid
   assert.equal(rectReads, 0, "pointermove hit-test must use cached bodyBox without DOM getBoundingClientRect reads");
 
   stage.dispose();
+});
+
+test("Messenger drops a stale snapshot from the same daemon epoch and accepts a restarted daemon's", () => {
+  const { M } = makeMessengerHarness({ window: {} });
+  const msg = { id: "cm-1", sender: "user", text: "hi", createdAt: 1 };
+  M.applySnapshot(snapshotWith([msg], { epoch: 100, seq: 5 }));
+  M.applySnapshot(snapshotWith([], { epoch: 100, seq: 3 }));
+  assert.equal(M.getState().snapshot.seq, 5, "an older seq in the same epoch must be dropped");
+  assert.equal(M.getState().snapshot.messages.length, 1);
+  M.applySnapshot(snapshotWith([], { epoch: 200, seq: 1 }));
+  assert.equal(M.getState().snapshot.seq, 1, "a new daemon epoch restarts seq");
+  M.dispose();
 });

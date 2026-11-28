@@ -1747,3 +1747,28 @@ func TestCompactionWorkerAutoHardReportsBeforeCompactionAndArmsRestore(t *testin
 		}
 	})
 }
+
+func TestCompanionCompactionNudgeSuppressed(t *testing.T) {
+	root := t.TempDir()
+	cfg := wsconfig.Options{CacheHome: t.TempDir(), ConfigHome: t.TempDir(), RepoRoot: root}
+	resolver := wsconfig.NewResolver(cfg, nil, nil, nil)
+	if err := resolver.Set("compaction.lead_advisory", "110k", wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRunner(Options{
+		Config:   cfg,
+		Keys:     compactionRootKeys{root: root},
+		Backends: map[string]BackendRegistration{BackendClaude: {Catalog: ClaudeCatalog()}},
+	})
+	c := &conv{r: r, rec: Record{Root: root, WSKey: "key", Backend: BackendClaude, Lead: true, CompanionRole: "companion-body"}}
+	c.loadCompaction()
+	v := int64(150_000)
+	c.observeCompaction(wslive.Event{Kind: wslive.KindStatus, Context: &wslive.UsageContext{Tokens: &v, Window: 1_000_000}})
+	c.compactIdle()
+	if c.compactNudge.text != "" {
+		t.Fatalf("companion session got a ws/compact advisory: %q", c.compactNudge.text)
+	}
+	if got := c.compactionStateInstruction(); got != "" {
+		t.Fatalf("companion state instruction = %q, want empty", got)
+	}
+}
