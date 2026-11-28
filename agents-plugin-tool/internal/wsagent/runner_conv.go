@@ -218,6 +218,9 @@ type conv struct {
 	accountSlotBoundaryPending bool
 	slot2aVerifyPending        bool
 	slot2aFallbackRetried      bool
+	// deferRecordPersist suppresses disk record writes under wmu while an
+	// in-place harness switch launches the target process before atomic commit.
+	deferRecordPersist bool
 
 	// Agy model-wait watchdog state (loop-owned, in-memory only).
 	modelWaitTimeout            time.Duration
@@ -1279,12 +1282,19 @@ func (c *conv) update(fn func(rec *Record)) error {
 	fn(&c.rec)
 	c.syncStateLocked()
 	c.mu.Unlock()
+	if c.deferRecordPersist {
+		return nil
+	}
 	return c.persistRecord()
 }
 
 // persistRecord requires wmu, so an immediate write also flushes deferred sends
 // without letting an older copy overwrite a newer change.
 func (c *conv) persistRecord() error {
+	if c.deferRecordPersist {
+		c.recordDirty = true
+		return nil
+	}
 	rec := c.record()
 	err := c.r.persistAgentRecord(c.dir, rec)
 	c.recordDirty = err != nil

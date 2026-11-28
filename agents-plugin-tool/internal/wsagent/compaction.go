@@ -191,6 +191,7 @@ type compactRequest struct {
 	triggerPath string
 	err         error
 	lead        *wscompact.LeadSummary
+	target      *harnessTarget
 }
 
 // recordWorkerInstruction persists a worker's bounded original prompt and
@@ -1189,9 +1190,17 @@ func stage1CompactionPrompt() string {
 // records the explicit audit cut before sending any input to the replacement.
 func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool, error) {
 	rec := c.record()
-	rp, err := c.r.resolve(rec.Profile, rec.Root)
-	if err != nil {
-		return false, fmt.Errorf("resolve profile: %w", err)
+	var (
+		rp  ResolvedProfile
+		err error
+	)
+	if req.target != nil {
+		rp = req.target.resolved
+	} else {
+		rp, err = c.r.resolve(rec.Profile, rec.Root)
+		if err != nil {
+			return false, fmt.Errorf("resolve profile: %w", err)
+		}
 	}
 	var records []wslive.RingRecord
 	if c.dir != "" {
@@ -1261,6 +1270,10 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 	if req.triggerPath != "" {
 		cutMeta["trigger_path"] = req.triggerPath
 	}
+	if req.target != nil {
+		cutMeta["from_backend"] = rec.Backend
+		cutMeta["to_backend"] = req.target.backend
+	}
 	if trigger == wslive.TriggerAuto {
 		cutMeta["turn_rotations"] = c.compactTurnRotations + 1
 	}
@@ -1276,22 +1289,31 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 			return fmt.Errorf("retire session holder: %w", err)
 		}
 
+		noteBefore := c.compactNote
+		var switchState *harnessSwitchState
+		if req.target != nil {
+			switchState = c.beginHarnessSwitch(req.target)
+		}
+
 		// Launch with an empty native binding and keep the prior on-disk
 		// SessionID/SessionFile intact until both startLead and
 		// commitAuditCheckpoint succeed, so a failed rotation rolls back cleanly.
 		fresh := c.record()
 		fresh.SessionID, fresh.SessionFile = "", ""
-		pendingSlot := c.pendingAccountSlot()
-		if pendingSlot != "" {
-			fresh.AccountSlotID = storedAccountSlotID(pendingSlot)
-			fresh.PendingAccountSlotID = ""
+		pendingSlot := ""
+		if req.target == nil {
+			pendingSlot = c.pendingAccountSlot()
+			if pendingSlot != "" {
+				fresh.AccountSlotID = storedAccountSlotID(pendingSlot)
+				fresh.PendingAccountSlotID = ""
+			}
 		}
-		noteBefore := c.compactNote
 		start := c.startLead
 		if !rec.Lead {
 			start = c.startWorker
 		}
 		if err := start(fresh, rp.Definition, false); err != nil {
+			c.rollbackHarnessSwitch(switchState, noteBefore)
 			return fmt.Errorf("start fresh session: %w", err)
 		}
 
@@ -1299,7 +1321,9 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 			id := wsaudit.SourceID{Source: "ws-compact-" + newReportID(), Seq: 1}
 			if err := committer.commitAuditCheckpoint(context.Background(), id, cut); err != nil {
 				c.compactNote = noteBefore
-				return errors.Join(fmt.Errorf("commit compaction audit checkpoint: %w", err), c.retireCompactionProcess())
+				retireErr := c.retireCompactionProcess()
+				c.rollbackHarnessSwitch(switchState, noteBefore)
+				return errors.Join(fmt.Errorf("commit compaction audit checkpoint: %w", err), retireErr)
 			}
 		}
 
@@ -1312,9 +1336,11 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd, Trigger: trigger})
 		// The replacement session starts with a clean immediate hard-cap slate;
 		// if its first fresh usage sample is still >= hard, observeCompaction
-		// restores the no-shrink count from compactPostRotationNoShrink.
+		// restores the no-shrink count from compactPostRotationNoShrink. A
+		// cross-harness switch moves to a different harness/window, so it never
+		// carries the source harness's hard-cap/no-shrink state forward.
 		c.resetHardOverflow()
-		if wasHard {
+		if wasHard && req.target == nil {
 			c.compactPostRotationCheck = true
 			c.compactPostRotationNoShrink = prevPostRotationNoShrink + 1
 		}
@@ -1331,26 +1357,34 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 		pending := pendingCompactionFromState(c.compactNote, c.compactResume, c.compactResumeInternal, trigger)
 		c.accountSlotBoundaryPending = false
 		c.slot2aVerifyPending = false
-		c.update(func(rec *Record) {
-			sends := rec.Sends
-			saved := clonePendingCompaction(pending)
-			saved.RotatedAfterSends = &sends
-			rec.SessionID, rec.SessionFile = "", ""
-			if pendingSlot != "" {
-				rec.AccountSlotID = storedAccountSlotID(pendingSlot)
-				rec.PendingAccountSlotID = ""
+		if switchState != nil {
+			if err := c.commitHarnessSwitch(switchState, req.target, pending); err != nil {
+				retireErr := c.retireCompactionProcess()
+				c.rollbackHarnessSwitch(switchState, noteBefore)
+				return errors.Join(fmt.Errorf("persist switched record: %w", err), retireErr)
 			}
-			rec.PendingCompaction = saved
-			if !rec.Lead && rec.InitialPrompt == "" && initialPrompt != "" {
-				rec.InitialPrompt = initialPrompt
-				if rec.LatestInstruction == "" && latestInstruction != "" && latestInstruction != initialPrompt {
-					rec.LatestInstruction = latestInstruction
+		} else {
+			c.update(func(rec *Record) {
+				sends := rec.Sends
+				saved := clonePendingCompaction(pending)
+				saved.RotatedAfterSends = &sends
+				rec.SessionID, rec.SessionFile = "", ""
+				if pendingSlot != "" {
+					rec.AccountSlotID = storedAccountSlotID(pendingSlot)
+					rec.PendingAccountSlotID = ""
 				}
+				rec.PendingCompaction = saved
+				if !rec.Lead && rec.InitialPrompt == "" && initialPrompt != "" {
+					rec.InitialPrompt = initialPrompt
+					if rec.LatestInstruction == "" && latestInstruction != "" && latestInstruction != initialPrompt {
+						rec.LatestInstruction = latestInstruction
+					}
+				}
+			})
+			if pendingSlot != "" {
+				c.changed(false)
+				c.watched()
 			}
-		})
-		if pendingSlot != "" {
-			c.changed(false)
-			c.watched()
 		}
 		return nil
 	})

@@ -87,6 +87,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-rail-popovers.js",
 	"dashboard-holders.js",
 	"dashboard-leads.js",
+	"dashboard-harness-switch.js",
 	"dashboard-new-session.js",
 	"dashboard-tier-picker.js",
 	"dashboard-session-view.js",
