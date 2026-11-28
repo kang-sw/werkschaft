@@ -107,6 +107,11 @@ func TestWakeRendersOnlyThePagesThatShowTheSession(t *testing.T) {
 	// delegatesess as a delegate.
 	writeSnapshot(t, f.dir, "livesession", &wslive.Snapshot{SchemaVersion: 1, Adapter: "pi", UpdatedAt: time.Now().UnixMilli(), HeartbeatMs: 30000,
 		Agents: []wslive.Agent{{ID: "a1", Label: "worker", ReplyID: "delegatesess", Status: wslive.StatusRunning}}})
+	// writeSnapshot writes snapshot.json straight to disk and signals nothing
+	// (no /nudge, NotifySessionChange or sessionChanged), so no production
+	// signal path has invalidated d.snapshots' validation window; do it here.
+	// The signalled path is pinned by TestNudgeInvalidatesSnapshotWithinValidationWindow.
+	f.d.snapshots.Invalidate(f.dir, "livesession")
 
 	live := openStream(t, f.base+"/s/livesession/events")
 	loner := openStream(t, f.base+"/s/lonersession/events")
@@ -332,6 +337,10 @@ func TestRefreshTickSkipsUntilAKeyPartChanges(t *testing.T) {
 	// page back to board-first with no write and no wake.
 	f.waitSkipping(t)
 	writeSnapshot(t, f.dir, "boardsession", &wslive.Snapshot{SchemaVersion: 1, Adapter: "pi", UpdatedAt: time.Now().UnixMilli(), HeartbeatMs: 400})
+	// This direct disk write is followed only by a broker wake, which is a
+	// presentation notification and invalidates nothing (unlike /nudge,
+	// NotifySessionChange or sessionChanged), so invalidate explicitly.
+	f.d.snapshots.Invalidate(f.dir, "boardsession")
 	f.d.broker.wake("boardsession")
 	if ev, ok := nextRegion(t, events, 3*time.Second); !ok || ev.Name != regionMode || ev.HTML != modeLive {
 		t.Fatalf("after the snapshot got %+v (%v), want the live mode", ev, ok)

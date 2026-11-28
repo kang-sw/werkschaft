@@ -240,8 +240,8 @@ func TestWhiteboardAgendaPanelTree(t *testing.T) {
 	if resp := f.call(t, "agenda.clear", map[string]any{"key": "round2"}); isToolError(resp) {
 		t.Fatalf("agenda.clear: %s", resp)
 	}
-	// This isolated source has no daemon signal; allow its validation interval.
-	waitForDashboardValidation(t)
+	// This isolated source has no daemon signal; allow its FileCache validation interval.
+	waitForFileCacheValidation(t)
 	for name, page := range map[string]string{"served": served()} {
 		if strings.Contains(page, "round2") || !strings.Contains(page, "agenda/overnight") || !strings.Contains(page, `<span class="chip">1</span>`) {
 			t.Errorf("%s agenda panel after clearing round2:\n%s", name, page)
@@ -250,7 +250,7 @@ func TestWhiteboardAgendaPanelTree(t *testing.T) {
 	if resp := f.call(t, "agenda.clear", map[string]any{"all": true}); isToolError(resp) {
 		t.Fatalf("agenda.clear all: %s", resp)
 	}
-	waitForDashboardValidation(t)
+	waitForFileCacheValidation(t)
 	for name, page := range map[string]string{"served": served()} {
 		if strings.Contains(page, `id="p-agenda"`) {
 			t.Errorf("%s page keeps an agenda panel with no agenda", name)

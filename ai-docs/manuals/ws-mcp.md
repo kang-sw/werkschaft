@@ -585,7 +585,10 @@ name for the window the page shows; mailbox
 history, contacts, and unread counts come from the memory store (Mailbox
 store below) with no file read. The small files every read and render
 re-reads (session snapshots, the session record's part files) share parsed
-values and stat validation for up to one second per path. Recent files are reread at validation until
+values and stat validation for up to five seconds per path, and daemon
+live-store inbox polling (`HashLiveStores`) reuses `wsinbox` directory listings
+for the same five-second fallback window while `/nudge` invalidates them before
+waking readers. Recent files are reread at validation until
 outside the two-second timestamp ambiguity window. Explicit session change
 signals expire the targeted source and snapshot validation before the index
 reads, and write admission/capability checks read current evidence rather than

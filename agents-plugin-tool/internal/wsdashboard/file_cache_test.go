@@ -1,8 +1,11 @@
 package wsdashboard
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wsstate"
 	"github.com/kang-sw/devenv/internal/wswake"
 )
 
@@ -531,5 +536,143 @@ func TestSessionStampFoldsTheMailPrint(t *testing.T) {
 	f.d.foreign.mu.Unlock()
 	if next, _ := r.sessionStamp("boardsession", in); next == third {
 		t.Fatal("the foreign look kept the stamp")
+	}
+}
+
+func TestFileCacheFiveSecondFallbackAndNudgeInvalidation(t *testing.T) {
+	if fileCacheValidationInterval != 5*time.Second {
+		t.Fatalf("fileCacheValidationInterval = %v, want 5s", fileCacheValidationInterval)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snap.json")
+	if err := os.WriteFile(path, []byte("v1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ageFile(t, path, time.Hour)
+
+	clock := time.Now()
+	cache := FileCache[string]{now: func() time.Time { return clock }}
+	load := func(p string) (string, error) {
+		raw, err := os.ReadFile(p)
+		return string(raw), err
+	}
+	if got, err := cache.Load(path, load); err != nil || got != "v1" {
+		t.Fatalf("cold Load = %q, %v", got, err)
+	}
+
+	// Within the 5s window, repeated Loads perform zero stat operations.
+	before := wsstate.FileIOCounters()["file_io_stat"]
+	clock = clock.Add(4 * time.Second)
+	for range 10 {
+		if got, err := cache.Load(path, load); err != nil || got != "v1" {
+			t.Fatalf("warm Load = %q, %v", got, err)
+		}
+	}
+	if got := wsstate.FileIOCounters()["file_io_stat"] - before; got != 0 {
+		t.Fatalf("Load within 5s window used %d stats, want 0", got)
+	}
+
+	// Explicit InvalidateUnder (used by /nudge and store-change signals)
+	// exposes writes immediately without waiting for the 5s fallback.
+	if err := os.WriteFile(path, []byte("v2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ageFile(t, path, 30*time.Minute)
+	cache.InvalidateUnder(dir)
+	if got, err := cache.Load(path, load); err != nil || got != "v2" {
+		t.Fatalf("post-InvalidateUnder Load = %q, %v; want v2", got, err)
+	}
+
+	// Un-nudged external write stays cached within 5s and is observed at 5s.
+	if err := os.WriteFile(path, []byte("v3"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ageFile(t, path, 10*time.Minute)
+	clock = clock.Add(4 * time.Second)
+	if got, err := cache.Load(path, load); err != nil || got != "v2" {
+		t.Fatalf("before 5s fallback Load = %q, %v; want v2", got, err)
+	}
+	clock = clock.Add(time.Second)
+	if got, err := cache.Load(path, load); err != nil || got != "v3" {
+		t.Fatalf("at 5s fallback Load = %q, %v; want v3", got, err)
+	}
+}
+
+func TestHashLiveStoresInboxCachingAndNudgeInvalidation(t *testing.T) {
+	f := startPageFixture(t)
+	id := "livesession"
+	sessionDir := SessionDir(f.dir, id)
+	inboxDir := wsinbox.Dir(sessionDir)
+	drainedDir := wsinbox.DrainedDir(inboxDir)
+	if err := os.MkdirAll(drainedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wsinbox.InvalidateNames()
+
+	hash := func() string {
+		var buf bytes.Buffer
+		f.d.snapshots.HashLiveStores(&buf, f.dir, id, time.Now())
+		return buf.String()
+	}
+	first := hash()
+
+	inboxStats := func(m map[string]int64) int64 {
+		var n int64
+		for k, v := range m {
+			if strings.Contains(k, "wsinbox/inbox_list.go:") && strings.HasSuffix(k, ":stat") {
+				n += v
+			}
+		}
+		return n
+	}
+
+	// Repeated HashLiveStores within the 5s window incur zero wsinbox stats.
+	before := inboxStats(wsstate.FileIOCounters())
+	for range 10 {
+		if got := hash(); got != first {
+			t.Fatal("unchanged inbox hashed differently within 5s window")
+		}
+	}
+	if got := inboxStats(wsstate.FileIOCounters()) - before; got != 0 {
+		t.Fatalf("warm HashLiveStores triggered %d wsinbox stats, want 0", got)
+	}
+
+	// An un-nudged external inbox write stays cached within the 5s window,
+	// then HTTP POST /nudge invalidates wsinbox before waking readers so the
+	// next HashLiveStores observes it immediately.
+	extFile := "20261128T000010.000000000Z-eeee5555.json"
+	if err := os.WriteFile(filepath.Join(inboxDir, extFile), []byte(`{"schemaVersion":1,"parts":["external"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := hash(); got != first {
+		t.Fatal("un-nudged external inbox write bypassed 5s cache unexpectedly")
+	}
+
+	nudgePayload, err := json.Marshal(NudgeBody{ReplyID: id, Project: f.project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(f.base+"/nudge", "application/json", bytes.NewReader(nudgePayload))
+	if err != nil {
+		t.Fatalf("POST /nudge: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("POST /nudge status = %d, want 204", resp.StatusCode)
+	}
+	if got := hash(); got == first || !strings.Contains(got, extFile) {
+		t.Fatalf("HashLiveStores after /nudge did not observe external inbox file %s", extFile)
+	}
+
+	// Authoritative entryFiles.readDrained stays on fresh wsinbox.DrainedNames
+	// and observes an un-nudged external drained file immediately.
+	extDrained := "20261128T000011.000000000Z-ffff6666.json"
+	if err := os.WriteFile(filepath.Join(drainedDir, extDrained), []byte(`{"schemaVersion":1,"kind":"message","parts":["drained"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ef := newEntryFiles()
+	recs, err := ef.readDrained(id, inboxDir)
+	if err != nil || len(recs) != 1 {
+		t.Fatalf("readDrained on un-nudged external file = %+v, %v; want 1 record", recs, err)
 	}
 }

@@ -215,6 +215,11 @@ type sessionStore struct {
 	// policyParent memoizes each key's policy-parent marker read (key ->
 	// policyParentEntry); see policyParentOf.
 	policyParent sync.Map
+
+	// touchMu guards lastTouched independently of s.mu because touch() is
+	// called both with and without s.mu held.
+	touchMu     sync.Mutex
+	lastTouched map[string]time.Time
 }
 
 // knownCompanionReplyIDs caches reply-ids known to belong to companion-body or

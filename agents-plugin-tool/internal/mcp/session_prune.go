@@ -37,6 +37,9 @@ import (
 // requirement entirely rather than adding error-handling around it. Legacy
 // record files age out here too; there is no bulk migration.
 func (s *sessionStore) maybePrune() {
+	now := s.clock()
+	s.sweepLastTouched(now)
+
 	d, err := s.dirs()
 	if err != nil {
 		return
@@ -44,7 +47,7 @@ func (s *sessionStore) maybePrune() {
 
 	markerPath := filepath.Join(d.sessions, pruneMarkerName)
 	if info, err := os.Stat(markerPath); err == nil {
-		if time.Since(info.ModTime()) < pruneScanCadence {
+		if now.Sub(info.ModTime()) < pruneScanCadence {
 			return
 		}
 	}
@@ -62,7 +65,6 @@ func (s *sessionStore) maybePrune() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := time.Now()
 	pruneSessionDirs(d.sessions, now)
 	pruneLegacyRecords(d.legacy, now)
 	pruneMailboxHistory(s.cacheHome, now)

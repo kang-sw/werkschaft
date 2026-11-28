@@ -221,13 +221,15 @@ func (s *State) planNotice(reply string, dirs map[string]string, now time.Time) 
 	for _, topic := range overdue {
 		run := views[topic].State.Run
 		fmt.Fprintf(&b, "- %s; owner %s; initial/current ETA %d/%d minutes; elapsed %d ms; extensions %d\n", s.TopicLabel(topic), run.Owner, run.InitialETAMinutes, run.ETAMinutes, runElapsed(run, now), run.ExtensionCount)
-		for _, e := range s.topicDoc(topic).Entries {
-			if e.Kind != EntrySystem || e.Imported || e.ItemID != 0 || len(e.TopicState) == 0 {
-				continue
-			}
-			r, code := parseTopicState(e)
-			if code == "" && r.Op == "extend" && r.Run.ID == run.ID {
-				fmt.Fprintf(&b, "  - extension to %d minutes: %s\n", r.Run.ETAMinutes, r.Reason)
+		if idx := s.topicDocIndex(topic); idx >= 0 {
+			for _, e := range s.Topics[idx].Entries {
+				if e.Kind != EntrySystem || e.Imported || e.ItemID != 0 || len(e.TopicState) == 0 {
+					continue
+				}
+				r, code := parseTopicState(e)
+				if code == "" && r.Op == "extend" && r.Run.ID == run.ID {
+					fmt.Fprintf(&b, "  - extension to %d minutes: %s\n", r.Run.ETAMinutes, r.Reason)
+				}
 			}
 		}
 	}
@@ -285,6 +287,32 @@ func (f FolderStore) Notify(reply string, now time.Time, eligible func() bool, e
 		return nil
 	})
 	return next, err
+}
+
+// PeekNotify reports the next scheduled deadline and whether reply currently
+// has a due lead notice or unblocked item at now, without mutating board state
+// or invoking delivery callbacks. Callers can skip preparing delivery gates
+// while due is false, then construct them outside the board lock and call
+// Notify when due is true.
+func (b *BoardDB) PeekNotify(reply string, now time.Time, tickets ...TicketResolver) (next time.Time, due bool, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return time.Time{}, false, fmt.Errorf("whiteboard board DB is closed")
+	}
+	p := b.state.planNotice(reply, b.topicDirs, now)
+	next = p.next
+	if p.message != "" {
+		return next, true, nil
+	}
+	var resolver TicketResolver
+	if len(tickets) > 0 {
+		resolver = tickets[0]
+	}
+	if len(b.state.planUnblocked(reply, b.topicDirs, resolver)) > 0 {
+		return next, true, nil
+	}
+	return next, false, nil
 }
 
 func (b *BoardDB) Notify(reply string, now time.Time, eligible func() bool, enqueue func(string) error, wake func(), tickets ...TicketResolver) (next time.Time, err error) {
