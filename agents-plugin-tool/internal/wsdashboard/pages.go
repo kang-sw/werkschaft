@@ -118,6 +118,7 @@ var companionScriptFiles = []string{
 	"dashboard-companion-vrm-clip.js",
 	"dashboard-companion-vrm-colead.js",
 	"dashboard-companion-vrm.js",
+	"dashboard-companion-messenger-md.js",
 	"dashboard-companion-messenger.js",
 	"dashboard-companion-messenger-presence.js",
 	"dashboard-companion-stage.js",
@@ -157,6 +158,7 @@ var dashboardStyleFiles = []string{
 	"dashboard-composer-ucmd-editor.css",
 	"dashboard-voice.css",
 	"dashboard-jank.css",
+	"dashboard-compact.css",
 }
 
 var trackerScriptFiles = []string{

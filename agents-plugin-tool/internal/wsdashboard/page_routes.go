@@ -276,7 +276,8 @@ func (d *Daemon) handleSessionPage(w http.ResponseWriter, r *http.Request, reply
 	err := errors.New("session regions failed to render")
 	if regions != nil {
 		var html string
-		page := sessionPageData{SessionView: view, SysOpen: localViewer(r), Frame: true, regions: regions}
+		compact := frame && r.URL.Query().Get("compact") == "1"
+		page := sessionPageData{SessionView: view, SysOpen: localViewer(r), Frame: true, Compact: compact, regions: regions}
 		if d.offersTerminals(r) {
 			page.Terminal, _ = XtermAsset()
 		}

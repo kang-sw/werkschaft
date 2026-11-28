@@ -59,15 +59,15 @@
   // standing alone. A framed page opened outside a frame goes to its shell.
   // shHidden is a framed page the shell hides: like a hidden tab, it holds
   // its region updates and skips the clock until it shows.
-  var shell = root.hasAttribute("data-shell"), framed = root.hasAttribute("data-frame") && !!window.WsShell, shHidden = false;
+  var shell = root.hasAttribute("data-shell"), framed = root.hasAttribute("data-frame") && !!window.WsShell, compact = root.hasAttribute("data-compact"), shHidden = false;
   if (framed && window.parent === window) { location.replace(location.pathname + location.hash); return; }
   // A framed page is loaded by the shell before it is shown (a cold switch
   // loads it hidden, a preload stays hidden), so it is staged until its first
   // show: shStage holds the loads nobody sees before then (the tracker's
   // per-store views, the chat tabs' terminal replay) and the first show runs
   // them at once (shUnstage). What the first show paints stays immediate. A
-  // page that is not framed is never staged.
-  var shStaged = framed, shStageList = [];
+  // page that is not framed (or is a compact Messenger embed) is never staged.
+  var shStaged = framed && !compact, shStageList = [];
   function shHolding() { return shStaged; }
   function shStage(fn) { if (shStaged) shStageList.push(fn); else fn(); }
   function shUnstage() {

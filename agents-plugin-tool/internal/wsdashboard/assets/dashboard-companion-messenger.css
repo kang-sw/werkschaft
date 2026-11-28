@@ -900,6 +900,62 @@
   filter: brightness(1.08);
 }
 
+/* Compact Brain Session Frame Embed (/s/<brainRid>?frame=1&compact=1) */
+.ws-cm-brain-wrap {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--ws-cm-bg);
+  overflow: hidden;
+}
+
+.ws-cm-frame {
+  flex: 1 1 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  display: block;
+  background: var(--ws-cm-bg);
+}
+
+.ws-cm-brain-fallback {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--wb-warn) 14%, var(--ws-cm-header));
+  box-shadow: 0 1px 0 var(--wb-wash);
+  font-size: 11.5px;
+  color: var(--wb-fg);
+}
+
+.ws-cm-brain-fallback-msg {
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.ws-cm-brain-retry {
+  flex: none;
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--wb-primary);
+  color: var(--wb-primary-fg);
+  font: 700 11px/1 var(--wb-sans, system-ui, sans-serif);
+  cursor: pointer;
+}
+
+.ws-cm-brain-retry:focus-visible {
+  outline: 2px solid var(--wb-primary);
+  outline-offset: 2px;
+}
+
 @keyframes ws-cm-pulse {
   0%, 100% { transform: scale(1); opacity: 1; }
   50% { transform: scale(1.24); opacity: .7; }

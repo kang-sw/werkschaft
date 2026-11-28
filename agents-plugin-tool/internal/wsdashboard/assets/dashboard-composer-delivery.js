@@ -123,6 +123,9 @@
       body: body, pics: pics, own: ownTopics, user: lastUserEntry(),
       back: { text: t, chips: list, topics: body.topics, mentions: said, closeRequests: body.closeRequests, picks: wp, consoles: wc, inline: inlineBack, sentAt: Date.now() }
     });
+    if (typeof compact !== "undefined" && compact && window.parent && window.parent !== window) {
+      try { window.parent.postMessage({ wsCompanionCompact: "user-send", rid: rid || "" }, location.origin); } catch (x) { /* parent gone */ }
+    }
   }
   // --- outbox -------------------------------------------------------------------
   // Only an acknowledged POST gets a held bubble. Restored deliveries stay
