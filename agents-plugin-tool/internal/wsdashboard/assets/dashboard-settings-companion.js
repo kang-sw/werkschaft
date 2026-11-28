@@ -124,6 +124,19 @@
     return !!(pack && (pack.builtin === true || pack.source === "builtin" || pack.source === "embedded"));
   }
 
+  function studioEligibility(pack) {
+    if (!pack || isBuiltinPack(pack) || pack.id === "default") {
+      return { ok: false, reasonKey: "js.settings.companion.open_studio_disabled_builtin" };
+    }
+    if (pack.renderer !== "vrm") {
+      return { ok: false, reasonKey: "js.settings.companion.open_studio_disabled_2d" };
+    }
+    if (pack.origin && pack.origin.kind && pack.origin.kind !== "local") {
+      return { ok: false, reasonKey: "js.settings.companion.open_studio_disabled_remote" };
+    }
+    return { ok: true, reasonKey: "" };
+  }
+
   function packVersion(pack) {
     if (!pack) return "";
     return pack.version || (pack.origin && pack.origin.version) || "";
@@ -473,7 +486,8 @@
     if (!groupMatchesFilter(ctx, ["dashboard.companion_pack"], [
       ctx.tr("js.settings.companion.group.avatar.title"),
       ctx.tr("js.settings.companion.vrm.drop_title"),
-      "vrm", "avatar", "pack", "3d"
+      ctx.tr("js.settings.companion.open_studio"),
+      "vrm", "avatar", "pack", "3d", "studio", "rig"
     ])) return null;
 
     var canManagePacks = ctx.scope === "global" && canEditKey(ctx, "dashboard.companion_pack");
@@ -531,6 +545,21 @@
     }
 
     var heroRight = ctx.el("div", "cs-avatar-hero-right");
+    var studioElig = studioEligibility(active);
+    var studioBtn = ctx.button(
+      "cs-btn sm " + (studioElig.ok ? "soft-pri" : "ghost"),
+      ctx.tr("js.settings.companion.open_studio"),
+      function () {
+        if (!studioElig.ok) return;
+        window.open("/companion/studio?pack=" + encodeURIComponent(active.id), "_blank", "noopener");
+      }
+    );
+    studioBtn.prepend(ctx.svgIcon("l-external-link"));
+    studioBtn.disabled = !studioElig.ok;
+    studioBtn.title = ctx.tr(studioElig.ok ? "js.settings.companion.open_studio_tip" : studioElig.reasonKey);
+    studioBtn.dataset.companionOpenStudio = active.id || "";
+    heroRight.append(studioBtn);
+
     if (!resolved.isAuto && canWritePackKey && packEntry) {
       var autoBtn = ctx.button("cs-btn sm soft-pri", ctx.tr("js.settings.companion.hero.use_auto"), function () {
         ctx.submitConfig(packEntry, "set", "auto").then(function () {

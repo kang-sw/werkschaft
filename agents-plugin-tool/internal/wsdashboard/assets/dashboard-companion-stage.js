@@ -1280,7 +1280,8 @@
         const mode = activeVrmRenderMode();
         const breakoutActive = !!(co?.breakoutActive || (mode && mode !== "docked"));
         const coActive = !!(breakoutActive || (co && (co.knockActive || co.swapActive || co.dizzyActive || (co.phoneMode && co.phoneMode !== "desk"))));
-        const activeNow = !!viewPlaying || !!drag?.moving || posture.activity !== "idle" || coActive ||
+        const clipOneShot = !!rig?.isClipOneShotActive?.();
+        const activeNow = !!viewPlaying || !!drag?.moving || posture.activity !== "idle" || coActive || clipOneShot ||
           Math.abs(position.x - target().x) > 0.5 || Math.abs(position.y - target().y) > 0.5;
         if (activeNow) markVrmActivity();
         const idleElapsed = performance.now() - lastVrmActivityAt;
@@ -1625,6 +1626,15 @@
 
     mountedRailObserver = observeRail;
     if (rail) observeRail(rail, activeRid, true);
+    let packChannel = null;
+    if (typeof BroadcastChannel === "function") {
+      try {
+        packChannel = new BroadcastChannel("ws-companion-packs");
+        packChannel.addEventListener("message", ev => {
+          if (ev?.data?.type === "companion-packs-changed") packsChanged();
+        });
+      } catch (_) { packChannel = null; }
+    }
     requestPack();
     const api = {
       apply, reset, context, trackFrame, command, phoneState, closeMenu: controls.close,
@@ -1671,6 +1681,8 @@
         knockTimers.clear();
         window.WsCompanionMessenger?.dispose?.();
         C.messengerPresence?.set?.(false);
+        try { packChannel?.close?.(); } catch (_) { /* ignore */ }
+        packChannel = null;
         cancel.abort();
         frameInput?.abort();
         cancelAnimationFrame(frame);

@@ -139,6 +139,7 @@
     // Metafiction breakout state hook (driven by VRM rig render mode & Phase 3 choreography).
     let breakoutActive = false;
     let breakoutMode = "docked"; // 'docked' | 'bleed' | 'roam'
+    const sentinelDurations = Object.create(null);
 
     // Smoothly damped blending weights (frame-rate independent).
     let typingWeight = 1.0;
@@ -317,7 +318,7 @@
           if (phoneMode === "pickup" && phoneAnimElapsed >= 0.45) {
             phoneMode = "typing";
             phoneAnimElapsed = 0;
-          } else if (phoneMode === "putdown" && phoneAnimElapsed >= PHONE_PUTDOWN_DURATION) {
+          } else if (phoneMode === "putdown" && phoneAnimElapsed >= (sentinelDurations.phone_putdown || PHONE_PUTDOWN_DURATION)) {
             phoneMode = phoneUnreadAgent > 0 ? "buzz" : "desk";
             phoneAnimElapsed = 0;
           } else if (phoneMode === "facedown-merong" && phoneAnimElapsed >= PHONE_MERONG_DURATION) {
@@ -657,10 +658,19 @@
                         : wantWorking ? (wantTyping ? "working" : "working-read")
                           : (wantTyping ? "typing" : "reading");
 
+      const activeSentinel = activeKnockKind === "knock-startle" ? "knock_startle"
+        : activeKnockKind === "wakeup-jolt" ? "wakeup_jolt"
+          : activePhoneStage === "typing" ? "phone_typing"
+            : activePhoneStage === "putdown" ? "phone_putdown"
+              : activePhoneStage === "pickup" ? "phone_hold"
+                : (!inAnyDizzy && !inAnyKnock && !inPhoneAction && !inSwap && wantWorking) ? "laptop_work"
+                  : (!inAnyDizzy && !inAnyKnock && !inPhoneAction && !inSwap && !wantSleepy && !wantReaction) ? "idle" : "";
+
       const updatedMetrics = props.getMetrics();
       return {
         beat: activeMode,
         mode: activeMode,
+        activeSentinel,
         activity,
         boneTargets,
         eyeYaw,
@@ -823,7 +833,7 @@
         sleepyWeight = 0;
         knockKind = "wakeup-jolt";
         knockElapsed = 0;
-        knockDuration = KNOCK_WAKEUP_DURATION;
+        knockDuration = sentinelDurations.wakeup_jolt || KNOCK_WAKEUP_DURATION;
         return { kind: "wakeup_jolt", count: 1, wokeFromSleepy: true };
       }
       if (knockTimestamps.length >= KNOCK_ANNOYED_COUNT) {
@@ -835,8 +845,16 @@
       }
       knockKind = "knock-startle";
       knockElapsed = 0;
-      knockDuration = KNOCK_STARTLE_DURATION;
+      knockDuration = sentinelDurations.knock_startle || KNOCK_STARTLE_DURATION;
       return { kind: "knock_startle", count: knockCount, wokeFromSleepy: false };
+    }
+
+    function setSentinelDurations(map) {
+      for (const k of Object.keys(sentinelDurations)) delete sentinelDurations[k];
+      if (!map || typeof map !== "object") return;
+      for (const [k, v] of Object.entries(map)) {
+        if (Number.isFinite(v) && v >= 0.1 && v <= 30) sentinelDurations[k] = v;
+      }
     }
 
     function triggerGesture(gestureName) {
@@ -852,8 +870,8 @@
         phoneFaceDown = false; phoneMode = "putdown"; phoneAnimElapsed = 0; return true;
       }
       if (g === "phone_merong_facedown") { phoneFaceDown = true; phoneMode = "facedown-merong"; phoneAnimElapsed = 0; return true; }
-      if (g === "knock_startle") { knockKind = "knock-startle"; knockElapsed = 0; knockDuration = KNOCK_STARTLE_DURATION; return true; }
-      if (g === "wakeup_jolt") { knockKind = "wakeup-jolt"; knockElapsed = 0; knockDuration = KNOCK_WAKEUP_DURATION; return true; }
+      if (g === "knock_startle") { knockKind = "knock-startle"; knockElapsed = 0; knockDuration = sentinelDurations.knock_startle || KNOCK_STARTLE_DURATION; return true; }
+      if (g === "wakeup_jolt") { knockKind = "wakeup-jolt"; knockElapsed = 0; knockDuration = sentinelDurations.wakeup_jolt || KNOCK_WAKEUP_DURATION; return true; }
       if (g === "annoyed_tap") { knockKind = "annoyed-tap"; knockElapsed = 0; knockDuration = KNOCK_ANNOYED_DURATION; return true; }
       return false;
     }
@@ -986,6 +1004,9 @@
       triggerKnock,
       triggerGesture,
       setPhoneState,
+      setSentinelDurations,
+      setCalibration: props.setCalibration,
+      getPropAnchorWorld: props.getPropAnchorWorld,
       getPropObjects: props.getPropObjects,
       getCoLeadState,
       debugState: getCoLeadState,
