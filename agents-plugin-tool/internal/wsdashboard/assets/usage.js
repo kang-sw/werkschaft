@@ -233,7 +233,8 @@
     var mode = "progress", focusKey = null, focusLocked = false, previewState = null;
     var banners = {}, bannerTimer = null, rowBannerTimers = {}, swapHarness = null, swapTimer = null;
     var confirmConv = null, sessOpen = false, legendOpen = false, refreshing = false, loadError = false;
-    var measureCtx = null;
+    var measureCtx = null, lastFooterBtn = null, lastFooterSig = "";
+    var lastChartW = 0, hasResizeObserver = typeof window.ResizeObserver === "function";
 
     function el(tag, cls, text) {
       var n = doc.createElement(tag); n.className = cls || "";
@@ -376,11 +377,44 @@
         if (!doc.hidden) refresh(false);
       }, nearest - now + 100);
     }
+    function footerSig(items, now) {
+      var agyCount = items.filter(function (item) { return item.entry.harness === "agy"; }).length;
+      var parts = [locale(), String(items.length), String(agyCount)];
+      items.forEach(function (item) {
+        var entry = item.entry, enabled = item.enabled;
+        parts.push(entry.harness || "", entry.group || "", entry.label || "", entry.status || "");
+        if (entry.harness === "openrouter" && entry.openrouter) {
+          var or = entry.openrouter;
+          parts.push("or", or.balance, or.usageDaily, or.limitRemaining, or.totalCostUsd, or.totalInputTokens, or.totalOutputTokens);
+        } else if (entry.harness === "werk_openai" && !enabled.length && entry.werk) {
+          var wk = entry.werk;
+          parts.push("wk", wk.totalInputTokens, wk.totalOutputTokens, wk.planPaused ? 1 : 0);
+        } else {
+          ["five_hour", "seven_day"].forEach(function (kind) {
+            var w = enabled.filter(function (v) { return v.kind === kind; })[0];
+            if (!w) { parts.push(kind, "-"); return; }
+            var at = observation(w, entry), old = stale(at, now), noRecent = unreported(at, now);
+            var ageMin = at ? Math.max(0, Math.floor((now - at) / 60000)) : -1;
+            var delta = noRecent ? "" : pace(w, now);
+            parts.push(
+              kind,
+              (noRecent && !at) ? "—" : Math.round(w.percent),
+              old ? 1 : 0,
+              noRecent ? 1 : 0,
+              delta === null ? "n" : delta,
+              ageMin,
+              at,
+              w.resetsAt || 0
+            );
+          });
+          if (entry.harness === "werk_openai" && entry.werk) parts.push("wkl");
+        }
+      });
+      return parts.map(function (v) { return v === undefined || v === null ? "" : String(v); }).join("\x1f");
+    }
     function drawFooter() {
-      var button = host.querySelector(".usage-toggle"); if (!button) return;
+      var button = host.querySelector(".usage-toggle"); if (!button) return false;
       var now = Date.now(), rendered = 0;
-      button.textContent = "";
-      button.appendChild(mini());
       var items = [];
       sorted(data.entries).forEach(function (entry) {
         if (entry.pending) return;
@@ -388,6 +422,12 @@
         if (windows.length && !enabled.length) return;
         items.push({ entry: entry, enabled: enabled });
       });
+      var sig = footerSig(items, now);
+      if (button === lastFooterBtn && button.children.length > 0 && sig === lastFooterSig) return false;
+      lastFooterBtn = button;
+      lastFooterSig = sig;
+      button.textContent = "";
+      button.appendChild(mini());
       var agyCount = items.filter(function (item) { return item.entry.harness === "agy"; }).length;
       items.forEach(function (item) {
         var entry = item.entry, enabled = item.enabled;
@@ -485,4 +525,5 @@
       });
       if (!rendered) button.appendChild(el("span", "usage-empty", "Plan usage"));
       armReset();
+      return true;
     }

@@ -549,7 +549,7 @@
 .d-tm-zb.d-tm-zs { font-size: 11.5px; }
 .d-tm-zb:hover { background: var(--wb-muted); }
 #tmzrd { font: 600 11px var(--wb-mono); color: var(--wb-muted-fg); min-width: 44px; text-align: center; }
-.d-tm-ctip { position: absolute; left: 0; top: 0; z-index: calc(var(--z-modal) + 2); pointer-events: none; box-sizing: border-box; max-width: 340px; padding: 8px 10px; border-radius: 9px; background: var(--d-tm-pill); border: 1px solid var(--wb-line); box-shadow: var(--wb-shadow-hi); font-size: 12px; display: none; backdrop-filter: blur(6px); }
+.d-tm-ctip { position: absolute; left: 0; top: 0; z-index: calc(var(--z-modal) + 2); pointer-events: none; box-sizing: border-box; max-width: 340px; padding: 8px 10px; border-radius: 9px; background: var(--wb-card); border: 1px solid var(--wb-line); box-shadow: var(--wb-shadow-hi); font-size: 12px; display: none; }
 .d-tm-ctip.on { display: block; }
 .d-tm-ttt { font-weight: 620; line-height: 1.35; overflow-wrap: anywhere; }
 .d-tm-tts { font: 10.5px var(--wb-mono); color: var(--wb-muted-fg); margin-top: 2px; overflow-wrap: anywhere; }

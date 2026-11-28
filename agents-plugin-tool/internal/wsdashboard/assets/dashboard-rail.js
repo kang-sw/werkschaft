@@ -167,7 +167,7 @@
         b.replaceChildren(gIcon("stop"));
       }
     });
-    if (usageGutter) usageGutter.sync();
+    if (usageGutter && usageGutter.sync() && rp.P && rp.kind === "usage") rp.placeClean = false;
     admissionSync();
     railPopSync();
     railRenameNew();

@@ -334,6 +334,11 @@ html[data-can-control] .tph.child-close:disabled { opacity: .5; cursor: default;
 /* animation-play-state is not inherited: the pseudo-element spinners and pulses pause on their own. */
 :root[data-animation-paused] :is(.hb .hbr, .hud-node[data-state] .hud-ring)::before,
 :root[data-animation-paused] .hud-node[data-state] .hud-ring::after { animation-play-state: paused; }
+html.rpop-open :is(.spin, .pulse, .caret, .ibadge.busy .istop, .rail .drkwork, .hb .hbr, .rail .hb.perm, .rail .sbn, .dskel i, .tk .tk-qspin, .oq-pill.board-updated) { animation-play-state: paused; }
+html.rpop-open .hud-node[data-state] .hud-ring { animation-play-state: paused; }
+html.rpop-open :is(.hb .hbr, .hud-node[data-state] .hud-ring)::before,
+html.rpop-open .hud-node[data-state] .hud-ring::after { animation-play-state: paused; }
+html.rpop-open:not([data-animation-paused]) .rpop :is(.spin, .pulse) { animation-play-state: running; }
 @media (prefers-reduced-motion: reduce) { .hud-node[data-state] .hud-ring { animation: none; } }
 @media (prefers-reduced-motion: reduce) { .hud-node[data-state] .hud-ring::before, .hud-node[data-state] .hud-ring::after { animation: none; } }
 .args { font-family: var(--wb-mono); font-size: 12px; color: var(--wb-muted-fg); }
