@@ -380,6 +380,7 @@ func (c *conv) beginTurn(quiet bool) {
 	})
 	c.apply(wslive.Event{Kind: wslive.KindTurnStart}, quiet)
 	c.reply, c.replayTurnError = "", ""
+	c.snapshotBoardRevision()
 	if !quiet {
 		// There is no newly drained input, so the turn keeps the last mark.
 		if !c.compactCommand && !c.compactInternalTurn {
@@ -499,6 +500,8 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 	if turnErr != "" {
 		c.setStatus(func() { c.lastErr = turnErr })
 	}
+	// settleTurn clears the reply; the whiteboard nudge judges it afterwards.
+	turnReply := c.reply
 	if c.compactInternalTurn {
 		c.compactInternalTurn = false
 		c.reply = ""
@@ -516,6 +519,9 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 			c.r.notify(c.rec.ReplyID, c.rec.Root)
 			c.retryDurableTurn()
 			return
+		}
+		if !wasCompacting {
+			c.stageWhiteboardNudge(turnErr, turnReply)
 		}
 		if c.r.lifecycle(c.rec.Backend).TurnActivity && c.r.opts.AgyActivity != nil {
 			c.r.opts.AgyActivity()

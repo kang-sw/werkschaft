@@ -41,19 +41,59 @@ type passiveItem struct {
 }
 
 // passiveTake names the receipts a send took, for its acknowledgement.
+// advisory marks the one-shot advisory (putAdvisory), whose ver is its own
+// write number; execID is empty for it.
 type passiveTake struct {
-	execID string
-	ver    uint64
+	execID   string
+	ver      uint64
+	advisory bool
 }
 
 // passiveInput is a conversation's pending receipts under one open
 // generation. Guarded by mu: arrivals come from the dashboard's goroutines,
 // the drain from the conversation's loop.
+//
+// Besides the receipts it holds at most one advisory: a runner-authored,
+// one-shot corrective note (the whiteboard-only nudge). It rides the next
+// accepted send like a receipt but is a single slot, so repeated stagings keep
+// one, and it is never an exec receipt.
 type passiveInput struct {
 	mu    sync.Mutex
 	gen   uint64
 	items []passiveItem
 	ver   uint64
+
+	advisory    string
+	advisoryVer uint64
+}
+
+// passiveAdvisoryBlockName frames the advisory in a turn's input.
+const passiveAdvisoryBlockName = "ws-advisory"
+
+// putAdvisory stages text as the one pending advisory under generation gen,
+// replacing any earlier one. An empty text clears it.
+func (p *passiveInput) putAdvisory(gen uint64, text string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.gen != gen {
+		p.gen, p.items = gen, nil
+	}
+	p.ver++
+	p.advisory, p.advisoryVer = strings.TrimSpace(text), p.ver
+}
+
+// clearAdvisory drops the pending advisory, if any.
+func (p *passiveInput) clearAdvisory() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.advisory = ""
+}
+
+// advisoryPending reports whether an advisory waits (tests, diagnostics).
+func (p *passiveInput) advisoryPending() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.advisory != ""
 }
 
 func collapsedReceipt(execID string) string { return "job " + execID + ": see exec.list" }
@@ -65,7 +105,7 @@ func (p *passiveInput) put(gen uint64, execID, text string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.gen != gen {
-		p.gen, p.items = gen, nil
+		p.gen, p.items, p.advisory = gen, nil, ""
 	}
 	p.ver++
 	text = passiveFit(strings.TrimSpace(text))
@@ -160,20 +200,29 @@ func (p *passiveInput) render(gen uint64) (string, []passiveTake) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.gen != gen {
-		p.gen, p.items = gen, nil
+		p.gen, p.items, p.advisory = gen, nil, ""
 	}
-	if len(p.items) == 0 {
+	if len(p.items) == 0 && p.advisory == "" {
 		return "", nil
 	}
 	var b strings.Builder
-	b.WriteString(passiveHeader)
-	takes := make([]passiveTake, 0, len(p.items))
-	for _, it := range p.items {
-		// Output cannot close the frame early.
-		b.WriteString("\n" + passiveEscape(it.text) + "\n")
-		takes = append(takes, passiveTake{execID: it.execID, ver: it.ver})
+	takes := make([]passiveTake, 0, len(p.items)+1)
+	if len(p.items) > 0 {
+		b.WriteString(passiveHeader)
+		for _, it := range p.items {
+			// Output cannot close the frame early.
+			b.WriteString("\n" + passiveEscape(it.text) + "\n")
+			takes = append(takes, passiveTake{execID: it.execID, ver: it.ver})
+		}
+		b.WriteString(passiveFooter)
 	}
-	b.WriteString(passiveFooter)
+	if p.advisory != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		fmt.Fprintf(&b, "<%s>\n%s\n</%s>", passiveAdvisoryBlockName, strings.ReplaceAll(p.advisory, "</"+passiveAdvisoryBlockName, "<\\/"+passiveAdvisoryBlockName), passiveAdvisoryBlockName)
+		takes = append(takes, passiveTake{ver: p.advisoryVer, advisory: true})
+	}
 	return b.String(), takes
 }
 
@@ -187,6 +236,12 @@ func (p *passiveInput) ack(takes []passiveTake) {
 	defer p.mu.Unlock()
 	taken := make(map[string]uint64, len(takes))
 	for _, t := range takes {
+		if t.advisory {
+			if p.advisory != "" && p.advisoryVer == t.ver {
+				p.advisory = ""
+			}
+			continue
+		}
 		taken[t.execID] = t.ver
 	}
 	kept := p.items[:0]

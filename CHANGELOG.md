@@ -65,6 +65,15 @@
   proxy opens the connection.
 
 ### Changed
+- **The composer's whiteboard-only toggle now sticks to the session, and a
+  missed turn gets a one-shot reminder.** A hosted lead keeps the
+  whiteboard-only directive on every turn after a message sent with the
+  toggle, including turns woken by a child's report, peer mail, an exec
+  notice or a restore; only your next message sent without the toggle ends
+  it. When such a turn changes nothing on the board yet answers at length in
+  plain text, the next turn's input carries one short reminder to use the
+  board. It starts no turn of its own. Compatibility: T0; the state is one
+  optional member of the session record, which an older daemon keeps unread.
 - **Claude tier defaults in ws and wsflow target cheaper plans.** Small stays
   Haiku with high effort; medium uses Sonnet with medium effort; large uses
   Sonnet with high effort; xlarge uses Opus with high effort. User and project

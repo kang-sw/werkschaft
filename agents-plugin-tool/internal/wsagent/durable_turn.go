@@ -147,6 +147,7 @@ func (c *conv) submitDurableTurn(input *durableTurnInput) error {
 	c.stopIdle()
 	c.stopBgGrace()
 	c.turnMark, c.reply = c.rec.TurnMark, ""
+	c.snapshotBoardRevision()
 	c.setStatus(func() { c.turn, c.lastErr = true, "" })
 	c.syncAwake()
 	if err := p.submitTurn(input.ID, input.Text, c.rec.DurableSteers, input.Operator); err != nil {
