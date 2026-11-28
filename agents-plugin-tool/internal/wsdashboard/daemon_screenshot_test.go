@@ -245,6 +245,13 @@ func TestDaemonScreenshotTierBCredentialScopingIsolationAndRevocation(t *testing
 	}
 	f.d.lan = false
 
+	// Webcard reverse proxy must also strip the screenshot render cookie.
+	proxyHeaders := http.Header{"Cookie": []string{"app=1; " + daemonScreenshotCookieName + "=" + tok + "; other=2"}}
+	stripDashboardCookies(proxyHeaders)
+	if got := proxyHeaders.Get("Cookie"); got != "app=1; other=2" {
+		t.Fatalf("stripDashboardCookies left %q, want %q", got, "app=1; other=2")
+	}
+
 	// Expiry invalidates the token automatically.
 	now = now.Add(31 * time.Second)
 	if f.d.screenshotRenderAuthenticated(makeReq(http.MethodGet, "/", "127.0.0.1:1234", localhost, false)) {
