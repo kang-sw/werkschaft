@@ -24,9 +24,14 @@ const (
 	voicePrefix = "/api/voice/"
 
 	// Global settings keys declared in dashboard-config-manifest.json.
-	VoiceBackendKey  = "dashboard.voice_backend"
-	VoiceModelKey    = "dashboard.voice_model"
-	VoiceLanguageKey = "dashboard.voice_language"
+	VoiceBackendKey             = "dashboard.voice_backend"
+	VoiceBackendOrderKey        = "dashboard.voice_backend_order"
+	VoiceOpenRouterSharedKeyKey = "dashboard.voice_openrouter_shared_key"
+	VoiceModelKey               = "dashboard.voice_model"
+	VoiceLanguageKey            = "dashboard.voice_language"
+
+	// VoiceBackendNative is the backend ID for OS-native desktop STT.
+	VoiceBackendNative = "native"
 
 	// Provider upload limits: 25 MiB audio payload cap plus modest multipart
 	// framing overhead; everything stays in memory (zero audio disk writes).
@@ -65,15 +70,55 @@ type VoiceSelection struct {
 }
 
 type voiceCapabilitiesResponse struct {
-	Backends []VoiceBackendCapability `json:"backends"`
-	Selected *VoiceSelection          `json:"selected"`
-	Error    string                   `json:"error,omitempty"`
+	Backends            []VoiceBackendCapability `json:"backends"`
+	Order               []string                 `json:"order"`
+	Selected            *VoiceSelection          `json:"selected"`
+	OpenRouterSharedKey bool                     `json:"openrouter_shared_key"`
+	Language            string                   `json:"language,omitempty"`
+	LegacyBackend       string                   `json:"legacy_backend,omitempty"`
+	LegacyModel         string                   `json:"legacy_model,omitempty"`
+	Error               string                   `json:"error,omitempty"`
 }
 
 type voiceSettings struct {
-	Backend  string
-	Model    string
-	Language string
+	Backend             string
+	BackendOrder        string
+	Model               string
+	Language            string
+	OpenRouterSharedKey bool
+	OpenRouterSharedSet bool
+}
+
+func (s voiceSettings) effectiveOrder() []string {
+	if fields := strings.Fields(s.BackendOrder); len(fields) > 0 {
+		seen := make(map[string]bool, len(fields))
+		out := make([]string, 0, len(fields))
+		for _, f := range fields {
+			if !seen[f] {
+				seen[f] = true
+				out = append(out, f)
+			}
+		}
+		return out
+	}
+	if b := strings.TrimSpace(s.Backend); b != "" {
+		return []string{b}
+	}
+	return []string{VoiceBackendNative}
+}
+
+// effectiveOpenRouterSharedKey reports whether OpenRouter voice transcription
+// may reuse the top-level OpenRouter LLM key. An explicit global setting
+// (including false) always wins; when unset, legacy installs with no order key
+// and voice_backend == "openrouter" keep working (T0 migration).
+func (s voiceSettings) effectiveOpenRouterSharedKey() bool {
+	if s.OpenRouterSharedSet {
+		return s.OpenRouterSharedKey
+	}
+	if s.OpenRouterSharedKey {
+		return true
+	}
+	return strings.TrimSpace(s.BackendOrder) == "" && strings.TrimSpace(s.Backend) == string(wscred.ProviderOpenRouter)
 }
 
 type voiceProviderSpec struct {
@@ -130,6 +175,7 @@ func voiceError(w http.ResponseWriter, status int, code string) {
 func voiceEmptyCapabilities(w http.ResponseWriter, status int, code string) {
 	writeJSON(w, status, voiceCapabilitiesResponse{
 		Backends: []VoiceBackendCapability{},
+		Order:    []string{},
 		Selected: nil,
 		Error:    code,
 	})
@@ -198,10 +244,14 @@ func (d *Daemon) readVoiceSettings() voiceSettings {
 		return voiceSettings{}
 	}
 	global := layers[wsconfig.ScopeGlobal].Overrides
+	rawShared, sharedSet := global[VoiceOpenRouterSharedKeyKey]
 	return voiceSettings{
-		Backend:  strings.TrimSpace(global[VoiceBackendKey]),
-		Model:    strings.TrimSpace(global[VoiceModelKey]),
-		Language: strings.TrimSpace(global[VoiceLanguageKey]),
+		Backend:             strings.TrimSpace(global[VoiceBackendKey]),
+		BackendOrder:        strings.TrimSpace(global[VoiceBackendOrderKey]),
+		Model:               strings.TrimSpace(global[VoiceModelKey]),
+		Language:            strings.TrimSpace(global[VoiceLanguageKey]),
+		OpenRouterSharedKey: strings.EqualFold(strings.TrimSpace(rawShared), "true"),
+		OpenRouterSharedSet: sharedSet,
 	}
 }
 
@@ -224,9 +274,27 @@ func (d *Daemon) handleVoiceCapabilities(w http.ResponseWriter, _ *http.Request)
 		}
 	}
 	settings := d.readVoiceSettings()
-	backends := make([]VoiceBackendCapability, 0, len(voiceExternalSpecs))
+	sharedEffective := settings.effectiveOpenRouterSharedKey()
+	order := settings.effectiveOrder()
+
+	backends := make([]VoiceBackendCapability, 0, len(voiceExternalSpecs)+1)
+	// Daemon cannot observe the desktop shell bridge, so native availability is
+	// decided client-side from the bridge handshake.
+	backends = append(backends, VoiceBackendCapability{
+		ID:        VoiceBackendNative,
+		Label:     "OS Native STT (Desktop)",
+		Kind:      "native",
+		Available: false,
+		Reason:    "desktop_only",
+		Models:    []VoiceModelCapability{},
+	})
 	for _, spec := range voiceExternalSpecs {
-		avail := configured[spec.Provider]
+		var avail bool
+		if spec.Provider == wscred.ProviderOpenRouter {
+			avail = configured[wscred.ProviderOpenRouterVoice] || (sharedEffective && configured[wscred.ProviderOpenRouter])
+		} else {
+			avail = configured[spec.Provider]
+		}
 		reason := ""
 		if !avail {
 			reason = "api_key_missing"
@@ -252,26 +320,38 @@ func (d *Daemon) handleVoiceCapabilities(w http.ResponseWriter, _ *http.Request)
 		})
 	}
 
+	byID := make(map[string]VoiceBackendCapability, len(backends))
+	for _, b := range backends {
+		byID[b.ID] = b
+	}
 	var selected *VoiceSelection
-	if settings.Backend != "" {
-		for _, b := range backends {
-			if b.ID == settings.Backend && b.Available {
-				model := settings.Model
-				if model == "" && len(b.Models) > 0 {
-					model = b.Models[0].ID
-				}
-				selected = &VoiceSelection{
-					Backend:  b.ID,
-					Model:    model,
-					Language: settings.Language,
-				}
-				break
-			}
+	for _, id := range order {
+		b, ok := byID[id]
+		if !ok || !b.Available {
+			continue
 		}
+		model := ""
+		if b.ID == settings.Backend {
+			model = settings.Model
+		}
+		if model == "" && len(b.Models) > 0 {
+			model = b.Models[0].ID
+		}
+		selected = &VoiceSelection{
+			Backend:  b.ID,
+			Model:    model,
+			Language: settings.Language,
+		}
+		break
 	}
 	writeJSON(w, http.StatusOK, voiceCapabilitiesResponse{
-		Backends: backends,
-		Selected: selected,
+		Backends:            backends,
+		Order:               order,
+		Selected:            selected,
+		OpenRouterSharedKey: sharedEffective,
+		Language:            settings.Language,
+		LegacyBackend:       settings.Backend,
+		LegacyModel:         settings.Model,
 	})
 }
 
@@ -428,10 +508,31 @@ type resolvedVoiceTarget struct {
 	languageField string
 }
 
+func (d *Daemon) resolveOpenRouterVoiceCredential(ctx context.Context, sharedEffective bool) (wscred.Credential, error) {
+	if sharedEffective {
+		cred, err := d.credentials.Credential(ctx, wscred.Request{Provider: wscred.ProviderOpenRouter})
+		if err == nil {
+			return cred, nil
+		}
+		if !errors.Is(err, wscred.ErrNotConfigured) {
+			return wscred.Credential{}, err
+		}
+	}
+	return d.credentials.Credential(ctx, wscred.Request{Provider: wscred.ProviderOpenRouterVoice})
+}
+
 func (d *Daemon) resolveVoiceTarget(ctx context.Context, backend, model string) (resolvedVoiceTarget, int, string) {
 	settings := d.readVoiceSettings()
 	if backend == "" {
 		backend = settings.Backend
+	}
+	if backend == "" && strings.TrimSpace(settings.BackendOrder) != "" {
+		for _, candidate := range settings.effectiveOrder() {
+			if candidate != VoiceBackendNative {
+				backend = candidate
+				break
+			}
+		}
 	}
 	if backend == "" {
 		return resolvedVoiceTarget{}, http.StatusBadRequest, "backend_required"
@@ -447,7 +548,15 @@ func (d *Daemon) resolveVoiceTarget(ctx context.Context, backend, model string) 
 		if d.credentials == nil {
 			return resolvedVoiceTarget{}, http.StatusServiceUnavailable, "credential_unavailable"
 		}
-		cred, err := d.credentials.Credential(ctx, wscred.Request{Provider: pid})
+		var (
+			cred wscred.Credential
+			err  error
+		)
+		if pid == wscred.ProviderOpenRouter {
+			cred, err = d.resolveOpenRouterVoiceCredential(ctx, settings.effectiveOpenRouterSharedKey())
+		} else {
+			cred, err = d.credentials.Credential(ctx, wscred.Request{Provider: pid})
+		}
 		if err != nil {
 			if errors.Is(err, wscred.ErrNotConfigured) {
 				return resolvedVoiceTarget{}, http.StatusUnprocessableEntity, "backend_unconfigured"

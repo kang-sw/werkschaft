@@ -1,4 +1,5 @@
 mod escape_guard;
+pub(crate) mod speech;
 mod tray_hide;
 mod webview_delegate;
 
@@ -14,7 +15,7 @@ use objc2_foundation::{ns_string, MainThreadMarker};
 use objc2_web_kit::{WKNavigationDelegate, WKUIDelegate, WKWebView};
 use tauri::{Manager, WebviewWindow};
 
-use crate::{close, notify, shell::Connection, updates, webview_setup_failed};
+use crate::{close, notify, shell::Connection, speech as native_speech, updates, webview_setup_failed};
 use escape_guard::guard_escape;
 use webview_delegate::{
     Bridge, BridgeMessages, BridgeState, NavigationDelegate, NavigationState, UIDelegate, UIState,
@@ -115,7 +116,15 @@ pub fn install(
                     ns_string!("werkschaftNotify"),
                     target.try_state::<Arc<notify::Notifier>>().is_some(),
                 ),
+                (
+                    Bridge::Speech,
+                    ns_string!("werkschaftSpeech"),
+                    target.try_state::<Arc<native_speech::Controller>>().is_some(),
+                ),
             ];
+            if main {
+                speech::install_lifecycle_observers(target.app_handle().clone());
+            }
             for (bridge, name, managed) in bridges {
                 if !main || !managed {
                     continue;

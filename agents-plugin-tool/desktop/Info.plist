@@ -4,5 +4,7 @@
 <dict>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Werkschaft uses the microphone for push-to-talk voice typing in the dashboard composer.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Werkschaft uses macOS Speech Recognition for native voice typing in the dashboard composer.</string>
 </dict>
 </plist>

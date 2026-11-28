@@ -311,7 +311,7 @@
     new MutationObserver(attrs).observe(field, { attributes: true });
     // Reading the editable DOM emits canonical text, never the displayed label.
     // Block boundaries also handle native IME/undo mutations without rewriting them.
-    function isMeaningful(node) { return node.nodeType === 1 || (node.nodeType === 3 && node.nodeValue.length > 0); }
+    function isMeaningful(node) { return (node.nodeType === 1 && !node.hasAttribute("data-voice-span")) || (node.nodeType === 3 && node.nodeValue.length > 0); }
     function prevMeaningful(node) { for (var s = node.previousSibling; s; s = s.previousSibling) if (isMeaningful(s)) return s; return null; }
     function nextMeaningful(node) { for (var s = node.nextSibling; s; s = s.nextSibling) if (isMeaningful(s)) return s; return null; }
     function read(root, endpoint) {
@@ -324,6 +324,10 @@
           units.push({ node: n, start: start, end: out.length }); return;
         }
         if (n.nodeType !== 1 && n !== root) return;
+        if (n.nodeType === 1 && n.hasAttribute("data-voice-span")) {
+          if (endpoint && n.contains(endpoint.node)) position = start;
+          return;
+        }
         if (n.nodeType === 1 && n.hasAttribute("data-wsc-kind")) {
           var kind = n.getAttribute("data-wsc-kind"), id = n.getAttribute("data-wsc-id"), label = n.getAttribute("data-wsc-label");
           var mark = { start: start, kind: kind, id: id, label: label };
@@ -648,6 +652,8 @@
       rawPaste: function () { return rawPasteActive || rawPasteArmed; },
       rememberCaret: offsets,
       revealCaret: revealCaret,
+      point: point,
+      readDom: function () { return read(editor); },
       ordered: function () { return valid(text, ranges); },
       restore: function (saved) { var before = valid(text, ranges); ranges = valid(text, saved); render(); changed(before, "restore"); },
       applyState: function (nextText, nextRanges, nextSel, action) {

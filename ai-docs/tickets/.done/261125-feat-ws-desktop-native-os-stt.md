@@ -11,6 +11,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 20d3c4ad313d3cbb
 sage-review-completeness-reviewed: 20d3c4ad313d3cbb
+completed: 2026-11-28
 ---
 
 # Desktop OS Native STT Backend and Composer Voice Input UX (macOS SFSpeechRecognizer and Windows WinRT)
@@ -90,7 +91,7 @@ On 2026-11-28 the owner confirmed `(17)=a` to promote and implement this ticket 
 
 ## Visual Reference
 
-Not yet approved. Per the mockup-first gate in `## Constraints`, the lead produces the interactive mockup under `ai-docs/assets/mockups/YYMMDD/<topic>/index.html` and the owner approves it on the whiteboard; the approved path is recorded here before Phase 4 starts.
+Approved by owner (`(1818)=ok`, 2026-11-28): `ai-docs/assets/mockups/261128/voice-provider-ui/index.html` (interactive mockup with `styles.css`, `app.js`, and `mock-api.js`). Owner refinement on Spacebar 0.5 s hold PTT: when PTT activates, collapse consecutive horizontal spaces immediately preceding the caret down to 1 space when preceded by non-space text on the line, or to empty (`""`) at the start of an empty composer/line.
 
 ## Phases
 
@@ -111,6 +112,10 @@ Not yet approved. Per the mockup-first gate in `## Constraints`, the lead produc
 
 **Done when:** both bridges and the teardown hooks exist, the pure Rust decision/state-machine tests pass, and the macOS bundle carries `NSSpeechRecognitionUsageDescription`.
 
+### Result (f1993022) - 2026-11-28
+
+Implemented native macOS (`objc2-speech`/`objc2-av-foundation` against `objc2 =0.6.5`) and Windows (WinRT `Media_SpeechRecognition` + `Globalization` on `windows =0.62.2`) STT bridges under pinned-origin isolation (`werkschaftSpeech` handler, `ws-native-speech` CustomEvent with `ready`/`partial`/`final`/`error`/`hidden`), Rust-side single-owner session state machine (`busy` on concurrent start), immediate teardown on close-to-tray/hide/minimize/navigation/suspend (`speech_teardown`), and `NSSpeechRecognitionUsageDescription` in `Info.plist` + `package.cjs`/`test-package.cjs`. Verified with `cargo test` in `agents-plugin-tool/desktop/` and `node agents-plugin-tool/desktop/scripts/test-package.cjs`. Packaged macOS/Windows native audio smoke checks remain manual.
+
 ### Phase 2: Daemon and config foundation: voice OpenRouter key, shared-key toggle, priority order (no UI; independent of Phase 1)
 
 1. **`wscred` (`internal/wscred/provider.go` and callers):** Add the voice-only `openrouter_voice` registry entry per Decisions; confirm each `VoiceOnly` refusal (token route, `werkProvider`, credential CLI listing, `/api/account/status` voice group) covers it, and that `account_routes.go` key CRUD accepts it with masked, never-echoed responses.
@@ -119,6 +124,10 @@ Not yet approved. Per the mockup-first gate in `## Constraints`, the lead produc
 4. **Verification:** Go tests (`go test ./internal/wscred/... ./internal/wsdashboard/... ./internal/mcp/... ./internal/wsi18n/... ./internal/wsagent/... ./cmd/ws-mcp/...`) covering: top key alone does not make `openrouter` available; shared toggle on plus top key does; dedicated `openrouter_voice` key does; legacy `voice_backend=openrouter` with unset order and unset toggle keeps working; effective-order fallbacks; `openrouter_voice` refused by every `VoiceOnly` surface; masked responses; unchanged non-loopback rejection; manifest and wsflow mirror parity checks (`python3 agents-plugin-tool/scripts/generate-package-assets.py --check`, wsflow tests). Mock providers only.
 
 **Done when:** the registry entry, both keys with mirror/catalog/i18n, the capability `order` and `native` entry, and the credential resolution all exist together and the item 4 tests pass.
+
+### Result (49f78a4b) - 2026-11-28
+
+Added `openrouter_voice` (`VoiceOnly: true`, `KeyPrefix: "sk-or-"`) to `internal/wscred/provider.go` with fail-closed refusals across `ServeToken`, `werkProvider`, and credential CLI; added `dashboard.voice_backend_order` and `dashboard.voice_openrouter_shared_key` to `agents-plugin/` and `agents-plugin-wsflow/` manifests, `dashboard-settings-catalog.json`, all 11 `wsi18n` locale tables, and regenerated `settings-description-digests.json`; updated `voice_routes.go` for additive `order`, `native` descriptor, and shared-key vs dedicated-key resolution (with T0 legacy `voice_backend == "openrouter"` migration). Verified with `generate-package-assets.py --check`, `agents-plugin-wsflow/tests`, Go tests (`wscred`, `wsi18n`, `wspackage`, `cmd/ws-mcp`, `mcp`, `wsdashboard`, `wsagent`), and `GOOS=windows go vet ./...`.
 
 ### Phase 3: Frontend logic: native adapter, order resolver, inline span mechanics, hold-to-talk (no visual styling; depends on Phases 1 and 2)
 
@@ -131,6 +140,10 @@ Not yet approved. Per the mockup-first gate in `## Constraints`, the lead produc
 
 **Done when:** the native backend, resolver, span mechanics and hold-to-talk run through `WsVoiceInput` with no provider-specific branch in the composer, and the Node and Go asset tests pass.
 
+### Result (93a55157) - 2026-11-28
+
+Added sibling modules `dashboard-voice-native.js` (top-frame `werkschaftSpeech` adapter + same-origin `postMessage` relay, single-owner lock, `MutationObserver` iframe-detach cancel, `hidden` broadcast) and `dashboard-voice-ptt.js` (`[data-voice-span]` inline lifecycle, `#cvox-cap` fallback, composer lock/button helpers, and Spacebar 0.5 s PTT with owner single-space trim rule, repeat suppression, IME/modifier/menu/unconfigured guards, and lock-blur guard); shrunk `dashboard-voice.js` from 1,019 to 1,013 lines while adding `resolveOrder`, eligibility vs usability separation, and the `postProcess` hook; excluded `[data-voice-span]` in `capsules.js` `read()` and `md-editor.js` `readEditorDom()` with reconcile skipped while live and run once after commit; bundled scripts in `pages.go` and added `js.voice.listening`/`refining`/`err.unavailable` across all 11 `wsi18n` tables. Tracked approved mockup under `ai-docs/assets/mockups/261128/voice-provider-ui/`. Verified with `frontend-voice.test.js`, `frontend-voice-phase3.test.js` (15/15), `capsules.test.cjs`, `composer-md-render.test.cjs`, `composer-md-ime-undo.test.cjs`, `ws-input.test.cjs`, Go `wsi18n` & `wsdashboard` asset/voice tests, and zero `:has(`.
+
 ### Phase 4: Voice Providers settings UI (gated by the approved mockup; depends on Phases 2 and 3)
 
 **Precondition:** an owner-approved mockup is linked under `## Visual Reference`; otherwise stop and report.
@@ -142,6 +155,10 @@ Not yet approved. Per the mockup-first gate in `## Constraints`, the lead produc
 
 **Done when:** the section, modal, and priority bar work against the Phase 2 keys and match the approved mockup.
 
+### Result (839483b2) - 2026-11-28
+
+Implemented the Voice Providers settings section (`dashboard-settings-voice.js` + `dashboard-settings-voice.css`) matching the approved `ai-docs/assets/mockups/261128/voice-provider-ui/` mockup: Powerline horizontal priority bar with drag-and-drop, keyboard `ArrowLeft`/`ArrowRight`, and boundary move buttons persisting `dashboard.voice_backend_order`; provider rows (`native` dimmed "Desktop only" in browser and surfacing `permission_denied`/`privacy_disabled`/`offline_pack_missing`/`language_unavailable` hints on desktop, `openrouter`, `openai_api`, `groq`, and `local/*`); OpenRouter (Voice) modal showing the "Use top OpenRouter key" switch only when the top key is configured, disabling the dedicated input when ON, and always materializing `dashboard.voice_openrouter_shared_key` on save; saving any provider key appends it to `dashboard.voice_backend_order`. Moved legacy grouped voice-key rows out of `dashboard-settings-account.js` (1,446 -> 1,306 lines), added `account.focus("voice")`, wired `SettingsCSS`/`SettingsScript` (including `dashboard-voice-native.js`) in `pages.go`, and added 63 `js.settings.voice.*` keys across all 11 `wsi18n` locale tables. Verified with `frontend-settings-voice.test.js` (8/8), `frontend-settings.test.js` (26/26), Go `wsi18n` & `wsdashboard` tests, and zero `:has(`. Capture method: `needs-capture` (`WS_PLAYWRIGHT_MODULE` is not set in this worker environment).
+
 ### Phase 5: Composer voice UI: bottom-left mic button, click routing, span styling (gated by the approved mockup; depends on Phase 3 and Phase 4)
 
 **Precondition:** an owner-approved mockup is linked under `## Visual Reference`; otherwise stop and report.
@@ -152,3 +169,12 @@ Not yet approved. Per the mockup-first gate in `## Constraints`, the lead produc
 4. **Verification:** Node/Go asset tests for placement, eligible-but-unconfigured routing to the Voice Providers deep link (top-level and framed), span styling tokens and no `:has()`; `frontend-idle.test.js` stays green; result capture compared side by side against the approved mockup.
 
 **Done when:** the composer shows the bottom-left mic, the unconfigured click lands on the Voice Providers section, the live span renders per the mockup, and the tests pass.
+
+### Result (cc9ed4da) - 2026-11-28
+
+Moved `#cvox` out of `#csend-wrap` to a self-contained bottom-left composer slot (`.cfoot-left`) in `dashboard.tmpl` and `dashboard-voice.css`; kept `#cvox` visible whenever eligible (capabilities HTTP 200) and routed unconfigured clicks to `/settings?section=account&provider=voice` via `shOpenSettings` (including same-origin framed relay through `dashboard-lifecycle.js`); styled inline `[data-voice-span]` with `dashboard-style.md` tonal tokens, compositor-only pulse, dark-mode recording hover ink contrast, `prefers-reduced-motion`, and multi-line `#cvox-cap` fallback; verified the owner `(1818)=ok` Spacebar 0.5 s PTT single-space trim refinement (collapse consecutive horizontal spaces before caret to 1 space after non-space text, or empty at start of empty line/composer); added `js.voice.configure` across all 11 `wsi18n` locale tables and `frontend-voice-phase5.test.js`; updated MCP dashboard key-count assertions (`24 -> 26`) in `dashboard_config_test.go` and `dashboard_settings_config_test.go`. Verified with Node tests (`54/54` across voice/settings/capsules/composer-md/ws-input), Go `-race` tests (`wsdashboard` voice/asset/account/pages, `wscred`, `wsi18n`, `cmd/ws-mcp`, targeted `mcp`, `wsagent` werk/voice), `GOOS=windows go vet ./...`, Rust `cargo test` (`136/136`) + `node desktop/scripts/test-package.cjs` (`5/5`), `generate-package-assets.py --check`, `agents-plugin-wsflow/tests` (`22 OK, 2 skipped`), and zero `:has(` in voice/settings CSS. Capture method: `needs-capture` (`WS_PLAYWRIGHT_MODULE` is not set in this worker environment; pre-existing failures outside our diff noted: `frontend-idle.test.js` `:has()`/`railPopScrim` in `dashboard-conversation.css`, `TestGalleryNoReservedColumnWithoutAPage` in `dashboard.css`, and `TestServeStdioConfigShow` macOS `/var` vs `/private/var` TMPDIR).
+
+
+## Resolution (2026-11-28)
+
+Completed Phases 1–5 on `impl/develop/wager-uncle-juicy` (`f1993022` Phase 1 native macOS/Windows STT bridges & teardown, `49f78a4b` Phase 2 `openrouter_voice` + shared-key toggle + backend priority order, `93a55157` Phase 3 native adapter + inline `[data-voice-span]` + Spacebar 0.5 s PTT, `839483b2` Phase 4 Voice Providers settings UI & Powerline priority bar, `cc9ed4da` Phase 5 bottom-left mic + unconfigured click routing + span styling, `28744fa9` ticket Results, `49510ed0` `code-review-lite` hardening fixes). Verified with Rust `cargo test` (136/136), `node desktop/scripts/test-package.cjs` (5/5), Node frontend tests (54/54), Go `-race` tests, `GOOS=windows go vet ./...`, `generate-package-assets.py --check`, and `agents-plugin-wsflow/tests`. Visual capture method: `needs-capture` (`WS_PLAYWRIGHT_MODULE` unavailable in this worker environment); packaged macOS/Windows native audio smoke checks remain manual.
