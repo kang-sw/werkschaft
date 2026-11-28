@@ -72,6 +72,7 @@ func (d *Daemon) Handler() http.Handler {
 	mux.HandleFunc("/s/", d.handleSessionRoutes)
 	mux.HandleFunc("/w/", d.handleWorktreePage)
 	mux.HandleFunc("/settings", d.handleSettings)
+	mux.HandleFunc(companionRigStudioRoute, d.handleCompanionRigStudio)
 	mux.HandleFunc("/api/config/snapshot", d.handleConfigSnapshot)
 	mux.HandleFunc("/api/config/set", d.handleConfigMutation)
 	mux.HandleFunc("/api/config/reset", d.handleConfigMutation)

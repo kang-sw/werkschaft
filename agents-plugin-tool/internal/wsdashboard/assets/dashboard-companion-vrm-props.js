@@ -175,6 +175,10 @@
     let hingeAccentMesh = null;
     let phoneShadowMesh = null;
     let shadowTexture = null;
+    const calibration = {
+      laptop: { offset: [0, 0, 0], rotation_deg: [0, 0, 0], scale: 1 },
+      smartphone: { offset: [0, 0, 0], rotation_deg: [0, 0, 0], scale: 1 }
+    };
     const scratchVec = THREE && typeof THREE.Vector3 === "function" ? new THREE.Vector3() : null;
     // Preallocated palm-grip scratch (zero allocation per frame).
     const hasQuat = !!(THREE && typeof THREE.Quaternion === "function" && typeof THREE.Matrix4 === "function" && typeof THREE.Vector3 === "function");
@@ -220,25 +224,87 @@
       }
     }
 
+    function normalizeCalEntry(raw) {
+      const vec3 = (arr, lo, hi) => Array.isArray(arr) && arr.length >= 3
+        ? [clamp(Number(arr[0]) || 0, lo, hi), clamp(Number(arr[1]) || 0, lo, hi), clamp(Number(arr[2]) || 0, lo, hi)]
+        : [0, 0, 0];
+      return {
+        offset: vec3(raw?.offset, -2, 2),
+        rotation_deg: vec3(raw?.rotation_deg, -180, 180),
+        scale: Number.isFinite(raw?.scale) ? clamp(raw.scale, 0.25, 3.0) : 1
+      };
+    }
+
+    function setCalibration(cal) {
+      const propsCal = cal?.props && typeof cal.props === "object" ? cal.props : (cal || {});
+      calibration.laptop = normalizeCalEntry(propsCal.laptop);
+      calibration.smartphone = normalizeCalEntry(propsCal.smartphone);
+      if (laptopGroup) {
+        const ls = baseScale * calibration.laptop.scale;
+        laptopGroup.scale.set(ls, ls, ls);
+        applyLaptopTransform();
+      }
+      if (phoneGroup) {
+        const ps = baseScale * calibration.smartphone.scale;
+        phoneGroup.scale.set(ps, ps, ps);
+        applyPhoneTransform();
+      }
+    }
+
+    function getPropCalibration() {
+      return {
+        laptop: { offset: calibration.laptop.offset.slice(), rotation_deg: calibration.laptop.rotation_deg.slice(), scale: calibration.laptop.scale },
+        smartphone: { offset: calibration.smartphone.offset.slice(), rotation_deg: calibration.smartphone.rotation_deg.slice(), scale: calibration.smartphone.scale }
+      };
+    }
+
+    function getPropAnchorWorld(threeArg, propId, anchor, outVec) {
+      const T = threeArg || THREE;
+      const group = propId === "laptop" ? laptopGroup : (propId === "smartphone" ? phoneGroup : null);
+      if (!group || !T || typeof T.Vector3 !== "function") return null;
+      const v = outVec || new T.Vector3();
+      if (propId === "smartphone") {
+        if (anchor === "screen") v.set(0, 0, 0.016);
+        else v.set(0, 0, 0);
+      } else {
+        if (anchor === "keyboard") v.set(0, -0.32, -0.22);
+        else v.set(0, 0, -0.02);
+      }
+      group.updateMatrixWorld?.(true);
+      if (typeof group.localToWorld === "function") return group.localToWorld(v);
+      return v.set(group.position.x + v.x * baseScale, group.position.y + v.y * baseScale, group.position.z + v.z * baseScale);
+    }
+
     function applyLaptopTransform() {
       if (!laptopGroup) return;
+      const cal = calibration.laptop;
       laptopGroup.position.set(
-        basePos.x + liveLaptopOffset.dx,
-        basePos.y + liveLaptopOffset.dy,
-        basePos.z + liveLaptopOffset.dz
+        basePos.x + liveLaptopOffset.dx + cal.offset[0],
+        basePos.y + liveLaptopOffset.dy + cal.offset[1],
+        basePos.z + liveLaptopOffset.dz + cal.offset[2]
       );
       laptopGroup.rotation.set(
-        LID_TILT_RAD + liveLaptopOffset.rx,
-        liveLaptopOffset.ry,
-        liveLaptopOffset.rz,
+        LID_TILT_RAD + liveLaptopOffset.rx + cal.rotation_deg[0] * DEG,
+        liveLaptopOffset.ry + cal.rotation_deg[1] * DEG,
+        liveLaptopOffset.rz + cal.rotation_deg[2] * DEG,
         "XYZ"
       );
     }
 
     function applyPhoneTransform() {
       if (!phoneGroup) return;
-      phoneGroup.position.set(livePhonePose.x, livePhonePose.y, livePhonePose.z);
-      phoneGroup.rotation.set(livePhonePose.rx, livePhonePose.ry, livePhonePose.rz, "XYZ");
+      const cal = calibration.smartphone;
+      phoneGroup.position.set(
+        livePhonePose.x + cal.offset[0],
+        livePhonePose.y + cal.offset[1],
+        livePhonePose.z + cal.offset[2]
+      );
+      phoneGroup.rotation.set(
+        livePhonePose.rx + cal.rotation_deg[0] * DEG,
+        livePhonePose.ry + cal.rotation_deg[1] * DEG,
+        livePhonePose.rz + cal.rotation_deg[2] * DEG,
+        "XYZ"
+      );
     }
 
     function buildPropIfNeeded(accentHex) {
@@ -680,11 +746,13 @@
       phoneBasePos = { x: phoneDeskX, y: phoneDeskY, z: phoneDeskZ };
 
       if (laptopGroup) {
-        laptopGroup.scale.set(lidScale, lidScale, lidScale);
+        const ls = lidScale * calibration.laptop.scale;
+        laptopGroup.scale.set(ls, ls, ls);
         applyLaptopTransform();
       }
       if (phoneGroup) {
-        phoneGroup.scale.set(lidScale, lidScale, lidScale);
+        const ps = lidScale * calibration.smartphone.scale;
+        phoneGroup.scale.set(ps, ps, ps);
         if (!phonePoseInitialized) {
           livePhonePose = {
             x: phoneBasePos.x,
@@ -837,6 +905,9 @@
     return {
       buildPropIfNeeded,
       applyAccentVisuals,
+      setCalibration,
+      getPropCalibration,
+      getPropAnchorWorld,
       applyLaptopTransform,
       applyPhoneTransform,
       layoutProp,

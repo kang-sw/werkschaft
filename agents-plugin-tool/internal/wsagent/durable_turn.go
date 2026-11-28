@@ -109,6 +109,9 @@ func (c *conv) compactDurableContinue() bool {
 		return false
 	}
 	text := strings.TrimSpace(c.renderPendingNote(c.compactNote)) + "\n\nContinue the work that was pending."
+	if c.rec.Lead {
+		text = c.appendAmbient(text, c.rec.WhiteboardOnly)
+	}
 	start := c.r.opts.Now()
 	var committed bool
 	err := c.sendStandalonePrompt(true, func() error {
@@ -147,6 +150,7 @@ func (c *conv) submitDurableTurn(input *durableTurnInput) error {
 	c.stopIdle()
 	c.stopBgGrace()
 	c.turnMark, c.reply = c.rec.TurnMark, ""
+	c.snapshotBoardRevision()
 	c.setStatus(func() { c.turn, c.lastErr = true, "" })
 	c.syncAwake()
 	if err := p.submitTurn(input.ID, input.Text, c.rec.DurableSteers, input.Operator); err != nil {

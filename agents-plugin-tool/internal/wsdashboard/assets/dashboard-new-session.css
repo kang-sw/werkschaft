@@ -7,7 +7,6 @@
   inset: 0;
   z-index: calc(var(--z-modal, 70) - 1);
   background: color-mix(in srgb, #000 42%, transparent);
-  backdrop-filter: blur(2px);
 }
 .ns-scrim[hidden] { display: none; }
 

@@ -97,6 +97,9 @@
     if (pack?.animations && typeof pack.animations === "object") {
       for (const key of Object.keys(pack.animations)) gestures[key] = {};
     }
+    if (pack?.actionMap && typeof pack.actionMap === "object") {
+      for (const key of Object.keys(pack.actionMap)) gestures[key] = {};
+    }
     return {
       expressions: VRM_EXPRESSIONS,
       gestures,
@@ -142,6 +145,7 @@
       this.weights = new Map();
       this.currentState = "idle";
       this.coLeadOverlay = null;
+      this.clipTargets = null;
       this.surprisedStrategy = "none";
       this.blinkTimer = 2.6;
       this.blinkProgress = -1;
@@ -150,6 +154,10 @@
 
     setCoLeadOverlay(overlay) {
       this.coLeadOverlay = overlay && typeof overlay === "object" ? overlay : null;
+    }
+
+    setClipTargets(map) {
+      this.clipTargets = map && typeof map === "object" ? map : null;
     }
 
     attach(vrm) {
@@ -411,6 +419,14 @@
         }
       }
 
+      if (this.clipTargets) {
+        for (const [k, val] of Object.entries(this.clipTargets)) {
+          const candidates = C.own(overridePresetAliases, k) || [k];
+          const resolved = this.has(k) ? k : this.resolveAlias(...candidates);
+          if (resolved && Number.isFinite(val)) setTarget(resolved, val);
+        }
+      }
+
       const mgr = this.vrm.expressionManager;
       const lerpRate = Math.min(1, Math.max(dt, 0.016) * 11);
       for (const name of this.available) {
@@ -508,6 +524,9 @@
     const cachedCharBounds = { x: 0, y: 0, width: 0, height: 0, viewportX: 0, viewportY: 0 };
     let hasCachedCharBounds = false, charBoundsDirty = true, lastCharBoundsAt = -Infinity;
     let vrmaClips = new Map(), vrmaLoading = new Set(), vrmaFailed = new Set();
+    const loadCancel = new AbortController();
+    const clipRt = typeof C.vrmClip?.createPackClipRuntime === "function" ? C.vrmClip.createPackClipRuntime(pack, loadCancel.signal) : null;
+    let armChains = null, activeSentinelKey = "", activeVrmaIsSentinel = false;
     let width = LOGICAL_W, height = LOGICAL_H, dpr = 1;
     let overlayMode = false;
     let viewport = { width: LOGICAL_W, height: LOGICAL_H, dpr: 1 };
@@ -535,7 +554,6 @@
     let gaze = { x: 0, y: 0 }, smoothedLook = { yaw: 0, pitch: 0 }, smoothedHead = { yaw: 0, pitch: 0 };
     const boneRotations = new Map();
     const exprCtrl = new VrmExpressionController(pack?.expressionMap);
-    const loadCancel = new AbortController();
     let listenersCancel = null;
     let cameraFraming = {
       headY: 1.45, chestY: 1.18, waistY: 0.98, topY: 1.72,
@@ -747,6 +765,8 @@
 
       if (typeof C.createVrmCoLead === "function") {
         coLead = C.createVrmCoLead({ THREE, scene, camera });
+        if (pack?.calibration) coLead.setCalibration?.(pack.calibration);
+        if (clipRt) coLead.setSentinelDurations?.(clipRt.getDurations());
         coLead.setBreakoutState?.(renderMode);
         if (pendingInitialRid) coLead.syncInitialSession(pendingInitialRid);
         if (pendingSessionSwitch) {
@@ -981,6 +1001,7 @@
       // Apply the relaxed standing bust pose and update skeleton matrices BEFORE
       // computing THREE.Box3 skinned bounds so autoFrameBust measures the posed avatar.
       applyImmediateStandPose(loaded, isVrm0);
+      if (C.vrmIk) armChains = { left: C.vrmIk.measureArmChain(loaded, "left", THREE), right: C.vrmIk.measureArmChain(loaded, "right", THREE) };
       autoFrameBust(loaded);
       charBoundsDirty = true;
       lastCharBoundsAt = -Infinity;
@@ -990,14 +1011,17 @@
       options.onReady?.();
     }
 
-    async function ensureVrmaClip(key) {
-      if (!vrm || !runtime || !pack?.animations || !Object.hasOwn(pack.animations, key)) return null;
-      if (vrmaClips.has(key)) return vrmaClips.get(key);
-      if (vrmaLoading.has(key) || vrmaFailed.has(key)) return null;
-      vrmaLoading.add(key);
+    async function ensureVrmaClip(key, clipFile) {
+      const fromClip = !!clipFile;
+      const cacheKey = fromClip ? ("clip:" + clipFile) : key;
+      if (!vrm || !runtime || (!fromClip && (!pack?.animations || !Object.hasOwn(pack.animations, key)))) return null;
+      if (vrmaClips.has(cacheKey)) return vrmaClips.get(cacheKey);
+      if (vrmaLoading.has(cacheKey) || vrmaFailed.has(cacheKey)) return null;
+      vrmaLoading.add(cacheKey);
       try {
-        const file = pack.animations[key];
-        const fetched = await C.fetchPackAsset(pack, file, loadCancel.signal);
+        const fetched = fromClip
+          ? await C.fetchPackClip(pack, clipFile, loadCancel.signal)
+          : await C.fetchPackAsset(pack, pack.animations[key], loadCancel.signal);
         if (disposed || !vrm || !runtime) return null;
         const { GLTFLoader, VRMAnimationLoaderPlugin, createVRMAnimationClip } = runtime;
         const loader = new GLTFLoader();
@@ -1007,15 +1031,14 @@
         const anims = gltf.userData?.vrmAnimations;
         if (anims && anims.length) {
           const clip = createVRMAnimationClip(anims[0], vrm);
-          vrmaClips.set(key, clip);
+          vrmaClips.set(cacheKey, clip);
           return clip;
         }
-        vrmaFailed.add(key);
+        vrmaFailed.add(cacheKey);
       } catch (_) {
-        // Optional .vrma failure degrades once to procedural stand without refetch storms.
-        if (!disposed && !loadCancel.signal.aborted) vrmaFailed.add(key);
+        if (!disposed && !loadCancel.signal.aborted) vrmaFailed.add(cacheKey);
       } finally {
-        vrmaLoading.delete(key);
+        vrmaLoading.delete(cacheKey);
       }
       return null;
     }
@@ -1028,9 +1051,11 @@
       }
     }
 
-    function syncVrma(key) {
+    function syncVrma(key, clipEntry, isSentinel) {
       if (!mixer || !vrm) return;
-      const wanted = key && pack?.animations && Object.hasOwn(pack.animations, key) && !vrmaFailed.has(key) ? key : "";
+      const clipFile = clipEntry && clipEntry.source !== "animations" ? (clipEntry.file || "") : "";
+      const cacheKey = clipFile ? ("clip:" + clipFile) : key;
+      const wanted = key && !vrmaFailed.has(cacheKey) && (clipFile || (pack?.animations && Object.hasOwn(pack.animations, key))) ? key : "";
       if (!wanted) {
         if (activeVrmaAction) {
           syncBoneCacheFromRig();
@@ -1038,22 +1063,25 @@
           activeVrmaAction.stop();
           activeVrmaAction = null;
           activeVrmaKey = "";
+          activeVrmaIsSentinel = false;
           resetExtraVrmaBones();
         }
         return;
       }
       if (wanted === activeVrmaKey && activeVrmaAction) return;
-      const clip = vrmaClips.get(wanted);
+      const clip = vrmaClips.get(cacheKey);
       if (!clip) {
-        ensureVrmaClip(wanted).then(loaded => {
-          if (loaded && !disposed && (activeGesture === wanted || activePose === wanted)) {
-            syncVrma(wanted);
-          }
+        ensureVrmaClip(wanted, clipFile).then(loaded => {
+          if (loaded && !disposed) syncVrma(wanted, clipEntry, isSentinel);
         });
         return;
       }
       const nextAction = mixer.clipAction(clip);
       nextAction.reset();
+      if (clipEntry && clipEntry.loop === false && runtime?.THREE?.LoopOnce !== undefined) {
+        nextAction.setLoop(runtime.THREE.LoopOnce, 1);
+        nextAction.clampWhenFinished = true;
+      }
       nextAction.fadeIn(0.18);
       nextAction.play();
       if (activeVrmaAction && activeVrmaAction !== nextAction) {
@@ -1061,6 +1089,7 @@
       }
       activeVrmaAction = nextAction;
       activeVrmaKey = wanted;
+      activeVrmaIsSentinel = !!isSentinel;
     }
 
     function syncBoneCacheFromRig() {
@@ -1204,59 +1233,63 @@
       const gx = C.clamp(Number.isFinite(currentGaze?.x) ? currentGaze.x : gaze.x, -1, 1);
       const gy = C.clamp(Number.isFinite(currentGaze?.y) ? currentGaze.y : gaze.y, -1, 1);
 
-      const vrmaKey = (activeGesture && pack?.animations && Object.hasOwn(pack.animations, activeGesture))
-        ? activeGesture
-        : (activePose && pack?.animations && Object.hasOwn(pack.animations, activePose))
-          ? activePose : "";
-      if (vrmaKey || activeVrmaAction) syncVrma(vrmaKey);
-
       let coState = null;
+      let clipEyeOverride = null;
+      let headPitchCue = 0;
+      if (activeExpression === "idle_doze") headPitchCue = 0.12 + Math.sin(elapsed * 0.85) * 0.04;
+      else if (activeExpression === "cry") headPitchCue = 0.11;
+      else if (activeExpression === "half_lid" || activeExpression === "oo") headPitchCue = -0.03;
+      else if (activeExpression === "focused") headPitchCue = 0.02;
+
+      if (coLead) {
+        const domHover = !!(container?.closest?.(".ws-companion")?.dataset?.hover === "1");
+        coState = coLead.step({
+          dt, elapsed, expression: activeExpression, rawPose, rawGesture,
+          scenarioId: extra?.playing?.entry?.id || "", beat: extra?.beat || null,
+          gazeX: gx, gazeY: gy, headPitchCue, hover: domHover
+        });
+      }
+      activeSentinelKey = coState?.activeSentinel || "";
+      const clipSync = clipRt ? clipRt.sync(activeGesture, activeSentinelKey, durs => coLead?.setSentinelDurations?.(durs)) : null;
+      const legacyVrmaKey = !clipSync?.vrmaEntry && !clipSync?.clipEntry
+        ? ((activeGesture && pack?.animations && Object.hasOwn(pack.animations, activeGesture))
+            ? activeGesture
+            : (activePose && pack?.animations && Object.hasOwn(pack.animations, activePose)) ? activePose : "")
+        : "";
+      if (clipSync?.vrmaEntry) syncVrma(clipSync.vrmaEntry.key, clipSync.vrmaEntry, clipSync.isSentinel);
+      else if (legacyVrmaKey || activeVrmaAction) syncVrma(legacyVrmaKey, null, false);
+
       if (activeVrmaAction && mixer) {
         exprCtrl.setCoLeadOverlay(null);
+        exprCtrl.setClipTargets(null);
         mixer.update(dt);
         syncBoneCacheFromRig();
       } else {
-        let headPitchCue = 0;
-        if (activeExpression === "idle_doze") headPitchCue = 0.12 + Math.sin(elapsed * 0.85) * 0.04;
-        else if (activeExpression === "cry") headPitchCue = 0.11;
-        else if (activeExpression === "half_lid") headPitchCue = -0.03;
-        else if (activeExpression === "oo") headPitchCue = -0.03;
-        else if (activeExpression === "focused") headPitchCue = 0.02;
-
         let targets;
-        if (coLead) {
-          const domHover = !!(container?.closest?.(".ws-companion")?.dataset?.hover === "1");
-          coState = coLead.step({
-            dt,
-            elapsed,
-            expression: activeExpression,
-            rawPose,
-            rawGesture,
-            scenarioId: extra?.playing?.entry?.id || "",
-            beat: extra?.beat || null,
-            gazeX: gx,
-            gazeY: gy,
-            headPitchCue,
-            hover: domHover
-          });
+        if (coState) {
           exprCtrl.setCoLeadOverlay(coState.exprOverlay);
           targets = coState.boneTargets;
         } else {
           exprCtrl.setCoLeadOverlay(null);
-          // Gentle damped head/neck follow-through toward gaze (suppressed during doze).
           const gazeScale = activeExpression === "idle_doze" ? 0.15 : 1.0;
           const headFollowAlpha = 1 - Math.exp(-5.2 * dt);
-          const wantHeadYaw = gx * 12 * DEG * gazeScale;
-          const wantHeadPitch = gy * 8 * DEG * gazeScale;
-          smoothedHead.yaw += (wantHeadYaw - smoothedHead.yaw) * headFollowAlpha;
-          smoothedHead.pitch += (wantHeadPitch - smoothedHead.pitch) * headFollowAlpha;
-          targets = computeStandTargets(
-            elapsed,
-            headPitchCue,
-            smoothedHead.yaw,
-            smoothedHead.pitch,
-            activeExpression === "focused" ? 0.45 : 1
-          );
+          smoothedHead.yaw += (gx * 12 * DEG * gazeScale - smoothedHead.yaw) * headFollowAlpha;
+          smoothedHead.pitch += (gy * 8 * DEG * gazeScale - smoothedHead.pitch) * headFollowAlpha;
+          targets = computeStandTargets(elapsed, headPitchCue, smoothedHead.yaw, smoothedHead.pitch, activeExpression === "focused" ? 0.45 : 1);
+        }
+        const steppedClip = clipRt ? clipRt.step(dt) : null;
+        if (steppedClip && C.vrmClip?.applySampleToTargets) {
+          const headNode = vrm.humanoid?.getNormalizedBoneNode("head");
+          const hp = headPosVec || (headPosVec = new THREE.Vector3(0, cameraFraming.headY, 0));
+          if (headNode) headNode.getWorldPosition(hp); else hp.set(0, cameraFraming.headY, 0);
+          const applied = C.vrmClip.applySampleToTargets(steppedClip.sample, targets, steppedClip.weight, {
+            vrm, THREE, camera, chains: armChains, headPos: [hp.x, hp.y, hp.z],
+            getPropAnchorWorld: (pid, anc) => coLead?.getPropAnchorWorld?.(THREE, pid, anc)
+          });
+          exprCtrl.setClipTargets(applied?.expressionTargets || null);
+          if (applied && (applied.eyeYaw !== null || applied.eyePitch !== null)) clipEyeOverride = applied;
+        } else {
+          exprCtrl.setClipTargets(null);
         }
 
         const lerpAlpha = 1 - Math.exp(-8.5 * dt);
@@ -1307,8 +1340,8 @@
         const headPos = headPosVec || (headPosVec = new THREE.Vector3());
         headPos.set(0, cameraFraming.headY, 0);
         if (headNode) headNode.getWorldPosition(headPos);
-        const targetYaw = coState ? coState.eyeYaw : gx * 26 * DEG;
-        const targetPitch = coState ? coState.eyePitch : -gy * 16 * DEG;
+        const targetYaw = clipEyeOverride?.eyeYaw ?? (coState ? coState.eyeYaw : gx * 26 * DEG);
+        const targetPitch = clipEyeOverride?.eyePitch ?? (coState ? coState.eyePitch : -gy * 16 * DEG);
         const la = 1 - Math.exp(-9.0 * dt);
         smoothedLook.yaw += (targetYaw - smoothedLook.yaw) * la;
         smoothedLook.pitch += (targetPitch - smoothedLook.pitch) * la;
@@ -1882,6 +1915,7 @@
       pause() { paused = true; },
       resume() { paused = false; },
       isContextLost() { return contextLost; },
+      isClipOneShotActive() { return !!(clipRt?.isOneShotActive?.() || (activeVrmaAction && !activeVrmaIsSentinel)); },
       setPreset() {},
       setWardrobe() {},
       wardrobe() { return null; },
@@ -1896,6 +1930,8 @@
           expression: activeExpression,
           prop: null,
           activeVrmaKey,
+          activeClip: clipRt ? clipRt.getState() : null,
+          activeSentinel: activeSentinelKey,
           surprisedStrategy: exprCtrl.surprisedStrategy,
           framing: { ...cameraFraming },
           projectedBounds: getCharacterBounds(),
@@ -1924,6 +1960,7 @@
         listenersCancel = null;
         ridObserver?.disconnect();
         ridObserver = null;
+        clipRt?.dispose?.();
         disposeRendererOnly(true);
         cachedModel = null;
         modelFetchPromise = null;

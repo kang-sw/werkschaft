@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wswhiteboard"
@@ -31,6 +32,10 @@ type WhiteboardStores struct {
 type whiteboardSlot struct {
 	mu    sync.Mutex
 	board *wswhiteboard.BoardDB
+	// rev mirrors board's revision (0 while no board is held), republished at
+	// the end of every admitted use so Revision reads it without slot.mu or
+	// any I/O.
+	rev atomic.Uint64
 
 	// Guarded by WhiteboardStores.mu, including while a caller waits on mu.
 	users int
@@ -149,9 +154,31 @@ func (s *WhiteboardStores) useDirectory(dir, root, key string, legacy legacyBoar
 	if slot.board != nil {
 		revision = slot.board.Revision()
 	}
+	slot.rev.Store(revision)
 	err := fn(slot)
-	changed = changed || slot.board != nil && slot.board.Revision() != revision
+	var after uint64
+	if slot.board != nil {
+		after = slot.board.Revision()
+	}
+	slot.rev.Store(after)
+	changed = changed || slot.board != nil && after != revision
 	return err
+}
+
+// Revision is the revision of the board root/key already holds in memory, 0
+// when none is held. It never opens, imports or creates a board, takes no
+// board lock and does no I/O: it reads the mirror republished after each
+// admitted use. A caller compares two reads to learn whether the board changed
+// in between; a board opened in between also reads as changed.
+func (s *WhiteboardStores) Revision(root, key string) uint64 {
+	dir := whiteboardBoardDir(root, key)
+	s.mu.Lock()
+	slot := s.slots[dir]
+	s.mu.Unlock()
+	if slot == nil {
+		return 0
+	}
+	return slot.rev.Load()
 }
 
 var (
@@ -222,6 +249,7 @@ func (s *whiteboardSlot) close() error {
 	}
 	err := s.board.Close()
 	s.board = nil
+	s.rev.Store(0)
 	return err
 }
 

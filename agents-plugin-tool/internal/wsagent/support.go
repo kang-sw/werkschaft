@@ -341,6 +341,9 @@ type SupportHarness struct {
 	// DashboardControl advertises support for per-session dashboard_control_access
 	// opt-in on hosted leads (POST /agents/leads*, /agents/<id>/settings/dashboard-control).
 	DashboardControl bool `json:"dashboard_control,omitempty"`
+	// HarnessSwitch advertises whether this harness can participate in
+	// cross-harness session switching (non-durable lead backend). Additive T0.
+	HarnessSwitch bool `json:"harness_switch,omitempty"`
 }
 
 // harnesses resolves the support profiles into the harness list, in
@@ -364,6 +367,7 @@ func (s *Support) harnesses() []SupportHarness {
 		reg := s.opts.Runner.opts.Backends[h.Harness]
 		h.Lead = reg.LeadProfile != ""
 		h.DashboardControl = h.Lead
+		h.HarnessSwitch = h.Lead && !s.opts.Runner.durableProcess(h.Harness)
 		h.PermissionModes = append([]string(nil), reg.PermissionModes...)
 		h.PermissionLevels = s.leadPermissionLevels(h.Harness)
 		if err != nil {
@@ -684,7 +688,7 @@ func (s *Support) Choices(ctx context.Context) ChoicesAnswer {
 	sort.Strings(names)
 	for _, name := range names {
 		reg := s.opts.Runner.opts.Backends[name]
-		h := SupportHarness{Harness: name, Lead: true, DashboardControl: true, PermissionModes: append([]string(nil), reg.PermissionModes...), Models: []ModelChoice{}, Efforts: []string{}}
+		h := SupportHarness{Harness: name, Lead: true, DashboardControl: true, HarnessSwitch: !s.opts.Runner.durableProcess(name), PermissionModes: append([]string(nil), reg.PermissionModes...), Models: []ModelChoice{}, Efforts: []string{}}
 		h.PermissionLevels = s.leadPermissionLevels(name)
 		h.Available, h.Error = supportBackendAvailability(name, reg.Backend)
 		hs = append(hs, h)

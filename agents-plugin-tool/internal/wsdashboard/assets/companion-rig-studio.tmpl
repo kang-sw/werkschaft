@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="{{.Lang}}" data-mode="rig-studio" data-lang="{{.Lang}}"{{with .Theme}} data-theme="{{.}}"{{end}}>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · Werkschaft</title>
+<style nonce="{{.Nonce}}">{{.CSS}}</style>
+</head>
+<body>
+<div class="rs-app" id="studioApp">
+  <header class="rs-topbar">
+    <div class="rs-brand">
+      <span class="rs-logo" aria-hidden="true">◈</span>
+      <b>{{t "js.companion.rig_studio.brand"}}</b>
+    </div>
+    <div class="rs-pack-wrap">
+      <button type="button" class="rs-pill rs-pack-pill" id="packPill" aria-haspopup="menu" aria-expanded="false">
+        <span class="rs-vdot" id="packDot"></span>
+        <span class="rs-pn" id="packName">{{t "js.companion.rig_studio.loading"}}</span>
+        <span class="rs-sw" aria-hidden="true">⇄</span>
+      </button>
+      <div class="rs-pack-menu" id="packMenu" role="menu" hidden></div>
+    </div>
+    <span class="rs-kitchip" id="kitChip" hidden></span>
+    <span class="rs-sumbadge" id="sumBadge" hidden></span>
+    <span class="rs-grow"></span>
+    <input type="file" id="vrmaFileInput" class="rs-sr-only" accept=".vrma" tabindex="-1">
+    <button type="button" class="rs-tbtn" id="btnImport" disabled>↥ {{t "js.companion.rig_studio.import_vrma"}}</button>
+    <button type="button" class="rs-tbtn" id="btnExport" disabled>↧ {{t "js.companion.rig_studio.export_json"}}</button>
+    <button type="button" class="rs-tbtn primary" id="btnSave" disabled>
+      <span id="saveLbl">{{t "js.companion.rig_studio.save_pack"}}</span>
+      <span class="rs-cnt rs-num" id="saveCnt" hidden>0</span>
+    </button>
+  </header>
+
+  <div class="rs-banner" id="studioBanner" role="status" hidden>
+    <span class="rs-banner-msg" id="studioBannerMsg"></span>
+    <button type="button" class="rs-tbtn rs-banner-act" id="studioBannerReload" hidden>{{t "js.companion.rig_studio.reload_pack"}}</button>
+    <button type="button" class="rs-tbtn rs-banner-act" id="studioBannerDismiss">{{t "js.companion.rig_studio.dismiss"}}</button>
+  </div>
+
+  <section class="rs-error-state" id="studioError" hidden>
+    <div class="rs-error-card">
+      <h1 id="studioErrorTitle">{{t "js.companion.rig_studio.error_title"}}</h1>
+      <p id="studioErrorBody"></p>
+      <div class="rs-error-packs" id="studioErrorPacks"></div>
+      <div class="rs-error-actions">
+        <a class="rs-tbtn primary" href="/settings">{{t "js.companion.rig_studio.open_settings"}}</a>
+      </div>
+    </div>
+  </section>
+
+  <main class="rs-work" id="studioWork">
+    <aside class="rs-card rs-rail">
+      <div class="rs-rail-scroll" id="railScroll"></div>
+      <div class="rs-rail-foot">
+        <span id="railFootL"></span>
+        <span class="rs-mono" id="railFootR"></span>
+      </div>
+    </aside>
+
+    <section class="rs-stage">
+      <div class="rs-viewport" id="vp" data-theme="dark" data-slot="280">
+        <canvas class="rs-canvas" id="studioCanvas"></canvas>
+        <svg class="rs-overlay" id="studioOverlay" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"></svg>
+
+        <div class="rs-float rs-f-tl">
+          <div class="rs-seg rs-modes" id="segModes" role="group" aria-label="{{t "js.companion.rig_studio.gizmo_modes"}}">
+            <button type="button" data-mode="ik" class="on"><span class="rs-sw-chip rs-sw-ik"></span>{{t "js.companion.rig_studio.mode.ik"}}</button>
+            <button type="button" data-mode="pole"><span class="rs-sw-chip rs-sw-pole"></span>{{t "js.companion.rig_studio.mode.pole"}}</button>
+            <button type="button" data-mode="look"><span class="rs-sw-chip rs-sw-look"></span>{{t "js.companion.rig_studio.mode.look"}}</button>
+            <button type="button" data-mode="prop"><span class="rs-sw-chip rs-sw-prop"></span>{{t "js.companion.rig_studio.mode.prop"}}</button>
+          </div>
+        </div>
+
+        <div class="rs-float rs-f-tr">
+          <div class="rs-seg" id="segSlot" role="group" aria-label="{{t "js.companion.rig_studio.slot_framing"}}">
+            <span class="rs-seg-lbl">{{t "js.companion.rig_studio.slot_label"}}</span>
+            <button type="button" data-slot="220">220px</button>
+            <button type="button" data-slot="280" class="on">280px</button>
+            <button type="button" data-slot="360">360px</button>
+          </div>
+          <button type="button" class="rs-seg-btn" id="btnCamReset" title="{{t "js.companion.rig_studio.reset_camera"}}">↺</button>
+        </div>
+
+        <div class="rs-float rs-f-bl">
+          <div class="rs-seg" id="segProp" role="group" aria-label="{{t "js.companion.rig_studio.prop_preview"}}">
+            <span class="rs-seg-lbl">{{t "js.companion.rig_studio.prop_label"}}</span>
+            <button type="button" data-prop="laptop">{{t "js.companion.rig_studio.prop.laptop"}}</button>
+            <button type="button" data-prop="smartphone">{{t "js.companion.rig_studio.prop.smartphone"}}</button>
+            <button type="button" data-prop="none" class="on">{{t "js.companion.rig_studio.prop.none"}}</button>
+          </div>
+        </div>
+
+        <div class="rs-float rs-f-br">
+          <div class="rs-seg" id="segTheme" role="group" aria-label="{{t "js.companion.rig_studio.theme_preview"}}">
+            <span class="rs-seg-lbl">{{t "js.companion.rig_studio.preview_label"}}</span>
+            <button type="button" data-theme="dark" class="on">{{t "js.companion.rig_studio.theme.dark"}}</button>
+            <button type="button" data-theme="light">{{t "js.companion.rig_studio.theme.light"}}</button>
+          </div>
+        </div>
+
+        <div class="rs-float rs-f-hint"><span class="rs-hint" id="vpHint"></span></div>
+        <div class="rs-vp-loading" id="vpLoading">{{t "js.companion.rig_studio.loading_vrm"}}</div>
+        <div class="rs-toast" id="toast" role="status" aria-live="polite"></div>
+      </div>
+
+      <section class="rs-tl" id="tl">
+        <div class="rs-tl-bar">
+          <button type="button" class="rs-ibtn play" id="btnPlay" title="{{t "js.companion.rig_studio.play_pause"}}">▶</button>
+          <button type="button" class="rs-ibtn" id="btnLoop" title="{{t "js.companion.rig_studio.loop"}}">⟳</button>
+          <span class="rs-tl-time rs-num" id="tlTime"><b>0.00</b> / 1.40s</span>
+          <span class="rs-grow"></span>
+          <button type="button" class="rs-tpill" id="pSpeed"><i>SPEED</i><span class="rs-num" id="vSpeed">1.0x</span></button>
+          <button type="button" class="rs-tpill" id="pDur"><i>DUR</i><span class="rs-num" id="vDur">1.4s</span></button>
+          <button type="button" class="rs-tpill" id="pEase"><i>EASE</i><span id="vEase">ease_in_out</span></button>
+          <button type="button" class="rs-tl-add" id="btnSnap">+ {{t "js.companion.rig_studio.add_snapshot"}}</button>
+        </div>
+        <div class="rs-track" id="track">
+          <div class="rs-ruler" id="ruler"></div>
+          <div class="rs-lane" id="lane"></div>
+          <div class="rs-playhead" id="playhead"></div>
+        </div>
+      </section>
+    </section>
+
+    <aside class="rs-card rs-insp">
+      <div class="rs-tabs" role="tablist">
+        <button type="button" class="rs-tab on" data-tab="rig" role="tab" aria-selected="true">{{t "js.companion.rig_studio.tab.rig"}}</button>
+        <button type="button" class="rs-tab" data-tab="agent" role="tab" aria-selected="false">{{t "js.companion.rig_studio.tab.agent"}} <span class="rs-bdg off" id="tabBadge">0</span></button>
+      </div>
+      <div class="rs-insp-head" id="inspHead"></div>
+      <div class="rs-insp-body" id="inspBody"></div>
+      <button type="button" class="rs-expo-strip" id="expoStrip"></button>
+    </aside>
+  </main>
+</div>
+
+<div class="rs-scrim" id="exportScrim" hidden>
+  <div class="rs-modal" role="dialog" aria-modal="true" aria-labelledby="mdTitle">
+    <header>
+      <span id="mdTitle">{{t "js.companion.rig_studio.export_json"}}</span>
+      <span class="rs-grow"></span>
+      <span class="rs-badge mut rs-mono">.clip.json</span>
+    </header>
+    <pre id="mdPre"></pre>
+    <footer>
+      <button type="button" class="rs-tbtn" id="mdDownload">{{t "js.companion.rig_studio.download"}}</button>
+      <button type="button" class="rs-tbtn" id="mdCopy">{{t "js.companion.rig_studio.copy"}}</button>
+      <button type="button" class="rs-tbtn primary" id="mdClose">{{t "js.companion.rig_studio.close"}}</button>
+    </footer>
+  </div>
+</div>
+
+<div class="rs-scrim" id="importScrim" hidden>
+  <div class="rs-modal rs-modal-sm" role="dialog" aria-modal="true" aria-labelledby="impTitle">
+    <header>
+      <span id="impTitle">{{t "js.companion.rig_studio.import_vrma"}}</span>
+      <span class="rs-grow"></span>
+      <span class="rs-badge info rs-mono">.vrma</span>
+    </header>
+    <div class="rs-modal-body">
+      <div class="rs-field">
+        <div class="rs-fl"><span>{{t "js.companion.rig_studio.import_file"}}</span><em id="impFileName" class="rs-mono"></em></div>
+        <button type="button" class="rs-tbtn" id="impPickBtn">{{t "js.companion.rig_studio.choose_vrma"}}</button>
+      </div>
+      <div class="rs-field">
+        <div class="rs-fl"><span>{{t "js.companion.rig_studio.action_key"}}</span></div>
+        <input type="text" class="rs-inp" id="impKeyInp" maxlength="32" spellcheck="false" autocomplete="off" placeholder="wave_hello">
+        <div class="rs-note" id="impKeyHint">{{t "js.companion.rig_studio.key_rules"}}</div>
+      </div>
+      <div class="rs-field rs-check-row" id="impSentinelRow" hidden>
+        <label class="rs-swt" id="impSentinelSwt"><input type="checkbox" id="impSentinelChk" class="rs-sr-only"><span class="rs-trk"></span>{{t "js.companion.rig_studio.override_sentinel"}}</label>
+      </div>
+      <div class="rs-field rs-check-row" id="impReplaceRow" hidden>
+        <label class="rs-swt" id="impReplaceSwt"><input type="checkbox" id="impReplaceChk" class="rs-sr-only"><span class="rs-trk"></span>{{t "js.companion.rig_studio.replace_existing"}}</label>
+      </div>
+      <div class="rs-field-err" id="impErr" hidden></div>
+    </div>
+    <footer>
+      <button type="button" class="rs-tbtn" id="impCancel">{{t "js.companion.rig_studio.cancel"}}</button>
+      <button type="button" class="rs-tbtn primary" id="impSubmit" disabled>{{t "js.companion.rig_studio.import_confirm"}}</button>
+    </footer>
+  </div>
+</div>
+
+<script nonce="{{.Nonce}}">window.WsRigStudioBoot = {{.BootJSON}};</script>
+<script nonce="{{.Nonce}}">{{.I18nJS}}</script>
+<script nonce="{{.Nonce}}">{{.StudioJS}}</script>
+<script nonce="{{.Nonce}}">
+(function () {
+  var p = null;
+  window.WsCompanion = window.WsCompanion || {};
+  window.WsCompanion.vrmRuntimeLoader = function () {
+    if (!p) {
+      var u = window.WsRigStudioBoot && window.WsRigStudioBoot.runtimeUrl;
+      if (!u) return Promise.reject(new Error("Rig Studio runtime URL missing"));
+      p = import(u).catch(function (err) { p = null; throw err; });
+    }
+    return p;
+  };
+})();
+</script>
+</body>
+</html>

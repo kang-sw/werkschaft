@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -50,6 +51,57 @@ func TestLookPathNeverFallsBackToTheProcessPATH(t *testing.T) {
 	}
 	if got, err := LookPath(filepath.Join(dir, "elsewhere"), []string{"PATH="}); err != nil || got != filepath.Join(dir, "elsewhere") {
 		t.Fatalf("a path-qualified name = %q, %v; want it unchanged", got, err)
+	}
+}
+
+// TestLookPathNamesAnUnsetPATH: a non-nil environ with no usable PATH is a
+// session-environment fault, so the error says so instead of blaming the
+// program, while still wrapping exec.ErrNotFound for existing checks.
+func TestLookPathNamesAnUnsetPATH(t *testing.T) {
+	dir := fakeProgram(t, "ws-fake-tool")
+	t.Setenv("PATH", dir)
+	for name, env := range map[string][]string{
+		"empty list":           {},
+		"only WS keys":         {"WS_MCP_HARNESS=werk", "HOME=/tmp"},
+		"empty PATH":           {"PATH="},
+		"blank PATH":           {"PATH=  "},
+		"single separator":     {"PATH=" + string(os.PathListSeparator)},
+		"separator-only PATH":  {"PATH=" + strings.Repeat(string(os.PathListSeparator), 2)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := LookPath("ws-fake-tool", env)
+			if err == nil {
+				t.Fatalf("resolved %q from an environment without PATH", got)
+			}
+			var execErr *exec.Error
+			if !errors.As(err, &execErr) || !errors.Is(err, exec.ErrNotFound) {
+				t.Fatalf("error = %v, want an *exec.Error wrapping exec.ErrNotFound", err)
+			}
+			if !strings.Contains(err.Error(), "PATH is unset or empty") {
+				t.Fatalf("error = %q, want it to say PATH is unset or empty", err)
+			}
+		})
+	}
+	t.Run("mixed-case Path=", func(t *testing.T) {
+		got, err := LookPath("ws-fake-tool", []string{"Path=" + dir})
+		if runtime.GOOS == "windows" {
+			if err != nil || filepath.Dir(got) != dir {
+				t.Fatalf("Windows mixed-case Path= resolved %q, %v; want dir %q", got, err, dir)
+			}
+		} else if err == nil || !strings.Contains(err.Error(), "PATH is unset or empty") {
+			t.Fatalf("Unix mixed-case Path= resolved %q, %v; want unset PATH error", got, err)
+		}
+		if winPath, winExt := searchPathForOS("windows", []string{"Path=" + dir, "PathExt=.EXE"}); winPath != dir || winExt != ".EXE" {
+			t.Fatalf("searchPathForOS(windows) = (%q, %q), want (%q, .EXE)", winPath, winExt, dir)
+		}
+		if unixPath, _ := searchPathForOS("linux", []string{"Path=" + dir}); unixPath != "" {
+			t.Fatalf("searchPathForOS(linux) matched mixed-case Path=: %q", unixPath)
+		}
+	})
+	// A populated PATH that lacks the program keeps the plain message.
+	_, err := LookPath("ws-fake-tool", []string{"PATH=" + t.TempDir()})
+	if err == nil || strings.Contains(err.Error(), "unset or empty") {
+		t.Fatalf("populated PATH miss = %v, want the plain not-found error", err)
 	}
 }
 

@@ -43,6 +43,40 @@ func TestWhiteboardRegistryIdleReopen(t *testing.T) {
 	}
 }
 
+func TestWhiteboardRegistryRevisionMirrorsHeldBoardWithoutOpeningOne(t *testing.T) {
+	f := newWhiteboardFixture(t)
+	stores := f.s.sessions.boards
+	if got := stores.Revision(f.root, f.key); got != 0 {
+		t.Fatalf("revision of a board that is not held = %d", got)
+	}
+	if _, err := os.Stat(whiteboardBoardDir(f.root, f.key)); !os.IsNotExist(err) {
+		t.Fatalf("reading the revision touched the board directory: %v", err)
+	}
+	f.update(t, `<wb:topic name="first"><wb:log>one</wb:log></wb:topic>`)
+	first := stores.Revision(f.root, f.key)
+	if first == 0 {
+		t.Fatal("a created board reads as not held")
+	}
+	if again := stores.Revision(f.root, f.key); again != first {
+		t.Fatalf("an unchanged board's revision moved: %d -> %d", first, again)
+	}
+	f.update(t, `<wb:topic name="first"><wb:log>two</wb:log></wb:topic>`)
+	if second := stores.Revision(f.root, f.key); second == first {
+		t.Fatalf("a board mutation left the revision at %d", second)
+	}
+	// A read-only use republishes the same revision.
+	held := stores.Revision(f.root, f.key)
+	if err := stores.use(f.root, f.key, nil, false, func(*whiteboardSlot) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got := stores.Revision(f.root, f.key); got != held {
+		t.Fatalf("a read-only use changed the revision: %d -> %d", held, got)
+	}
+	if other := stores.Revision(f.root, "some-other-lead-key"); other != 0 {
+		t.Fatalf("another session's revision = %d", other)
+	}
+}
+
 func TestWhiteboardRegistryIndexReadDoesNotRenewIdleBoard(t *testing.T) {
 	f := newWhiteboardFixture(t)
 	f.update(t, `<wb:topic name="indexed"><wb:log>retained</wb:log></wb:topic>`)

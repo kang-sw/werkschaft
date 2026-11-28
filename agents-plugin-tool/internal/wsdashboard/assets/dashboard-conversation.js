@@ -80,12 +80,135 @@
     }
     return n;
   }
+  // A turn summary's data-turn-rev moves on nearly every event of a running
+  // turn, so its node is replaced often. The tool-call details inside it carry
+  // reader state the server markup cannot (the open preview with its fetched
+  // input/output, the audit rows reconciled into it, scroll position), and
+  // rebuilding them re-fires toggle, refetches the preview and collapses then
+  // regrows the row. graftLiveCalls moves each live details[data-key] of the
+  // outgoing node into the incoming one, in place of its fresh twin, after
+  // syncing the summary in place; calls new to the turn stay fresh markup.
+  function callSummary(d) {
+    var s = d.firstElementChild;
+    return s && s.tagName === "SUMMARY" ? s : null;
+  }
+  function childByClass(el, cls) {
+    for (var c = el.firstElementChild; c; c = c.nextElementSibling) if (c.classList && c.classList.contains(cls)) return c;
+    return null;
+  }
+  function liveCallStore() { var h = typeof doc !== "undefined" && doc ? doc : globalThis; return h._wsLiveCallStore || (h._wsLiveCallStore = { map: Object.create(null), order: [], turnOpen: false }); }
+  function liveCallStashPut(k, d) {
+    if (!k || !d) return;
+    var s = liveCallStore(); if (!s.map[k]) s.order.push(k); s.map[k] = d;
+    while (s.order.length > 64) delete s.map[s.order.shift()];
+  }
+  function liveCallStashTake(k) {
+    var s = liveCallStore(), d = s.map[k] || null;
+    if (d) { delete s.map[k]; var i = s.order.indexOf(k); if (i >= 0) s.order.splice(i, 1); }
+    return d;
+  }
+  function preserveTurnOpen(n, wasOpen) {
+    if (!wasOpen || !n || n.tagName !== "DETAILS") return;
+    n.open = true; if (typeof syncTurnAria === "function") syncTurnAria(n);
+    if (typeof openState !== "undefined" && typeof openKey === "function") { var ok = openKey(n); if (ok) openState[ok] = true; }
+  }
+  function flushCallDetailsUpdated(updated) { for (var i = 0; updated && i < updated.length; i++) emitAuditEvent("ws-call-details-updated", updated[i]); }
+  function collectCallDetails(root, byKey) {
+    var list = root && root.querySelectorAll ? root.querySelectorAll("details.au-call-details[data-key]") : [];
+    for (var i = 0; i < list.length; i++) { var k = list[i].getAttribute("data-key"); if (!byKey[k]) byKey[k] = list[i]; }
+  }
+  function applyHandoffOpen(n, liveTurn, store, anyOpen) {
+    var freshLive = !!(liveTurn && !liveTurn.hasAttribute("data-ws-handed-off"));
+    var wantOpen = freshLive ? !!liveTurn.open : !!(store.turnOpen || anyOpen);
+    if (freshLive && liveTurn.setAttribute) liveTurn.setAttribute("data-ws-handed-off", "1");
+    if (wantOpen) preserveTurnOpen(n, true);
+    store.turnOpen = false;
+  }
+  // syncCallSummary patches the live summary to the fresh one field by
+  // field: status class, icon, name, and the duration and token cells. The
+  // attached-events count (+N) cell and the keyboard cursor/selection classes
+  // (au-cur, au-sel) belong to the live node.
+  function syncCallSummary(cur, fresh) {
+    var hydrated = cur.hasAttribute("data-au-hydrated"), keepFail = hydrated && cur.classList.contains("au-fail") && !fresh.classList.contains("au-fail");
+    var changed = false, cls = fresh.getAttribute("class") || "";
+    if (keepFail) cls = cls.replace(/\bau-done\b/g, "").replace(/\s+/g, " ").trim() + " au-fail";
+    if (cur.classList.contains("au-cur")) cls += " au-cur";
+    if (cur.classList.contains("au-sel")) cls += " au-sel";
+    if ((cur.getAttribute("class") || "") !== cls) { cur.setAttribute("class", cls); changed = true; }
+    [".row-icon", ".row-content", ".au-dur", ".au-tok"].forEach(function (sel) {
+      var o = cur.querySelector(sel), f = fresh.querySelector(sel);
+      if (!o || !f || o.outerHTML === f.outerHTML) return;
+      if (hydrated) {
+        if (sel === ".row-icon" && keepFail) return;
+        if ((sel === ".au-dur" || sel === ".au-tok") && o.textContent.trim() && !f.textContent.trim()) return;
+        if (sel === ".au-tok" && o.getAttribute("title") && !f.getAttribute("title")) {
+          if (o.textContent !== f.textContent) { o.textContent = f.textContent; changed = true; }
+          return;
+        }
+      }
+      o.parentNode.replaceChild(f, o); changed = true;
+    });
+    return changed;
+  }
+  function syncCallDetails(cur, fresh, updated, completed) {
+    var cs = callSummary(cur), fs = callSummary(fresh);
+    if (!cs || !fs) return;
+    var changed = syncCallSummary(cs, fs);
+    // A preview already loaded in the live node may be longer than the
+    // server's argument preview; only an input it never had is added.
+    var fin = childByClass(fresh, "au-call-input");
+    if (fin && !childByClass(cur, "au-call-input")) { cur.insertBefore(fin, cs.nextSibling); changed = true; }
+    if ((changed || completed) && (cur.hasAttribute("data-au-out-pending") || cur.hasAttribute("data-au-out-inflight")) && updated) updated.push({ el: cur, completed: !!completed });
+  }
+  function graftLiveCalls(old, n, updated, extra) {
+    var res = { grafted: 0, anyOpen: false };
+    if (!n || !n.querySelectorAll) return res;
+    if (old && old.querySelectorAll) {
+      var oldItems = childByClass(old, "conv-audit-items"), newItems = childByClass(n, "conv-audit-items");
+      if (oldItems && newItems && oldItems !== newItems) n.replaceChild(oldItems, newItems);
+    }
+    var fresh = n.querySelectorAll("details.au-call-details[data-key]");
+    if (!fresh.length) return res;
+    var byKey = Object.create(null);
+    collectCallDetails(old, byKey); collectCallDetails(extra, byKey);
+    var turnCompleted = !!(n.tagName === "DETAILS" && n.hasAttribute && n.hasAttribute("data-conv-turn") && !n.classList.contains("d-turn-live"));
+    for (var i = 0; i < fresh.length; i++) {
+      var f = fresh[i], k = f.getAttribute("data-key"), cur = byKey[k] || liveCallStashTake(k);
+      if (!cur || cur === f) continue;
+      delete byKey[k];
+      syncCallDetails(cur, f, updated, turnCompleted || !!(f.closest && f.closest(".d-turn:not(.d-turn-live)")));
+      f.parentNode.replaceChild(cur, f);
+      res.grafted++;
+      if (cur.open) res.anyOpen = true;
+    }
+    return res;
+  }
+  function swapConvLive(el, html) {
+    var store = liveCallStore(), updated = [], oldTurn = el.querySelector ? el.querySelector("details.d-turn-live") : null;
+    var src = typeof frag === "function" ? frag(html) : null;
+    if (!src) { el.innerHTML = html; restoreOpen(el); fmtTimes(el); if (typeof sweepOutImgs === "function") sweepOutImgs(el); return; }
+    var newTurn = src.querySelector ? src.querySelector("details.d-turn-live") : null;
+    if (newTurn) { graftLiveCalls(el, newTurn, updated); if (oldTurn && oldTurn.open) preserveTurnOpen(newTurn, true); }
+    if (oldTurn) {
+      if (!newTurn && oldTurn.open && !oldTurn.hasAttribute("data-ws-handed-off")) store.turnOpen = true;
+      var leftovers = el.querySelectorAll ? el.querySelectorAll("details.au-call-details[data-key]") : [];
+      for (var i = 0; i < leftovers.length; i++) {
+        var d = leftovers[i], items = childByClass(d, "conv-audit-items");
+        if (d.open || d.hasAttribute("data-au-preview") || d.hasAttribute("data-au-out-pending") ||
+            d.hasAttribute("data-au-out-inflight") || (items && items.children && items.children.length)) liveCallStashPut(d.getAttribute("data-key"), d);
+      }
+    }
+    el.textContent = ""; el.appendChild(src);
+    restoreOpen(el); fmtTimes(el); if (typeof sweepOutImgs === "function") sweepOutImgs(el);
+    flushCallDetailsUpdated(updated);
+  }
   // mergeEntries inserts each node of src whose name box lacks at its sorted
   // place and returns inserted/replaced nodes, in order. Existing entries
   // stay put unless their mail-wake presentation changes: a hidden mail
   // marker must replace its row (and restore it when the association expires).
   function mergeEntries(box, src, changed) {
-    var added = [];
+    var added = [], updated = [], liveReg = typeof region === "function" ? region("convlive") : null;
+    var liveTurn = liveReg && liveReg.querySelector ? liveReg.querySelector("details.d-turn-live") : null, store = liveCallStore();
     var jTok = typeof WsJank !== "undefined" && WsJank ? WsJank.begin("convo", "mergeEntries") : null;
     try {
       var have = entryKeys(box);
@@ -93,7 +216,8 @@
         var k = n.getAttribute("data-entry");
         if (!k) return;
         n = dedupTurn(box, have, n, k);
-        var old = have[k];
+        var old = have[k], isTurn = n.tagName === "DETAILS" && n.hasAttribute("data-conv-turn");
+        var isLiveHandoff = isTurn && !n.classList.contains("d-turn-live") && (!old || old.tagName !== "DETAILS" || !old.hasAttribute("data-conv-turn"));
         if (old) {
           if (!(changed && changed[k]) &&
               old.getAttribute("data-mail-wake") === n.getAttribute("data-mail-wake") &&
@@ -101,6 +225,9 @@
               old.getAttribute("data-turn-live-absorbed") === n.getAttribute("data-turn-live-absorbed") &&
               old.getAttribute("data-conv-turn") === n.getAttribute("data-conv-turn") &&
               old.getAttribute("data-turn-rev") === n.getAttribute("data-turn-rev")) return;
+          var g = graftLiveCalls(old, n, updated, isLiveHandoff ? liveTurn : null);
+          if (isTurn && old.open) preserveTurnOpen(n, true);
+          else if (isLiveHandoff && (g.grafted > 0 || (old.hasAttribute && old.hasAttribute("data-turn-live-absorbed")))) applyHandoffOpen(n, liveTurn, store, g.anyOpen);
           box.replaceChild(n, old);
         } else {
           // New entries are usually the newest (live) or the oldest (history),
@@ -112,14 +239,15 @@
             while (prev && (!prev.getAttribute || !prev.getAttribute("data-entry"))) prev = prev.previousElementSibling;
             c = prev;
           }
-          box.insertBefore(n, c ? c.nextSibling : box.firstChild);
+          var nextSib = c ? c.nextSibling : box.firstChild;
+          var gNew = isLiveHandoff ? graftLiveCalls(null, n, updated, liveTurn) : { grafted: 0, anyOpen: false };
+          if (isLiveHandoff && (gNew.grafted > 0 || (typeof convoSwapping === "number" && convoSwapping > 0 && !nextSib))) applyHandoffOpen(n, liveTurn, store, gNew.anyOpen);
+          box.insertBefore(n, nextSib);
         }
-        have[k] = n;
-        added.push(n);
-        restoreOpen(n);
-        fmtTimes(n);
+        have[k] = n; added.push(n); restoreOpen(n); fmtTimes(n);
         if (typeof hydrateWbUpdateItems === "function") hydrateWbUpdateItems(n);
       });
+      flushCallDetailsUpdated(updated);
       return added;
     } finally {
       if (jTok) WsJank.end(jTok, { count: added.length });
@@ -527,7 +655,10 @@
   // drops a page still in flight, which would no longer join what the box
   // holds.
   var histBefore = null, histEnd = false, histBusy = false, histEpoch = 0, histPromise = null;
-  function histReset() { histBefore = null; histEnd = false; histBusy = false; histPromise = null; histEpoch++; emitAuditEvent("ws-history-reset", {}); }
+  function histReset() {
+    var s = liveCallStore(); s.map = Object.create(null); s.order = []; s.turnOpen = false;
+    histBefore = null; histEnd = false; histBusy = false; histPromise = null; histEpoch++; emitAuditEvent("ws-history-reset", {});
+  }
   function fetchHistoryPage(opts) {
     opts = opts || {};
     if (histEnd || !window.fetch || !convo || (!opts.force && !visible(convo))) return Promise.resolve({ end: !!histEnd, skipped: true });

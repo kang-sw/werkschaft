@@ -44,6 +44,9 @@ import (
 //	POST /agents/<id>/takeover    makes the terminal lead session <id> a
 //	                              hosted one, once its harness has exited
 //	POST /agents/<id>/reopen      opens a closed hosted session again
+//	POST /agents/<id>/harness     {harness, model?, effort?, provider?}
+//	                              switches a hosted lead to another external
+//	                              harness in place (clear + checkpoint handoff)
 //
 // and, for a spawned Pi worker's attached ws-mcp (children.go):
 //
@@ -194,7 +197,7 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 		}
 		return st
 	}
-	if req.Method == http.MethodPost && (id == leadsRoute || id == sleepIdleRoute || action == "settings" || action == "settings/permission" || action == "settings/dashboard-control" || action == "quota-continuation" || action == "quota-continuation/cancel" || leadMove(action) || (r.IsLead(id) && leadControl(action))) {
+	if req.Method == http.MethodPost && (id == leadsRoute || id == sleepIdleRoute || action == "settings" || action == "settings/permission" || action == "settings/dashboard-control" || action == "quota-continuation" || action == "quota-continuation/cancel" || action == "harness" || leadMove(action) || (r.IsLead(id) && leadControl(action))) {
 		if !local {
 			http.Error(w, "unknown agent route", http.StatusNotFound)
 			return
@@ -283,7 +286,7 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 		if !decode(w, req, &body) {
 			return
 		}
-		st, err := r.send(id, body.Text, local && own)
+		st, err := r.sendUser(id, body.Text, local && own)
 		writeAnswer(w, http.StatusOK, view(st), err)
 	case action == "interrupt":
 		st, returned, err := r.Interrupt(id)
@@ -453,6 +456,13 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 	case action == "quota-continuation/cancel":
 		st, err := r.CancelQuotaContinuation(id)
 		writeAnswer(w, http.StatusOK, view(st), err)
+	case action == "harness":
+		var body HarnessSwitchSpec
+		if !decode(w, req, &body) {
+			return
+		}
+		st, err := r.switchHarness(req.Context(), id, body, true)
+		writeAnswer(w, http.StatusOK, view(st), err)
 	case strings.HasPrefix(action, "approvals/"):
 		var body approvalRequest
 		if !decode(w, req, &body) {
@@ -472,7 +482,7 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 // leadControl reports whether action is one of a lead session's control
 // writes, which take the trusted gate; send and interrupt do not.
 func leadControl(action string) bool {
-	return action == "stop" || action == "restart" || action == "close" || action == "settings" || action == "quota-continuation" || action == "quota-continuation/cancel" || strings.HasPrefix(action, "approvals/")
+	return action == "stop" || action == "restart" || action == "close" || action == "settings" || action == "quota-continuation" || action == "quota-continuation/cancel" || action == "harness" || strings.HasPrefix(action, "approvals/")
 }
 
 // leadMove reports whether action moves a lead session between the daemon

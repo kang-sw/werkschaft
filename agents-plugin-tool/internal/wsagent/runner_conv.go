@@ -163,6 +163,10 @@ type conv struct {
 	// set by turnInput in the loop and acknowledged when that send succeeds.
 	passive     passiveInput
 	passiveTook []passiveTake
+	// wbRev is the lead's board revision when the running turn started, valid
+	// when wbRevOK (whiteboard_only.go). Loop-owned.
+	wbRev   uint64
+	wbRevOK bool
 
 	// compactOrigin is the origin (wslive.CompactOriginAuto or Manual) of the
 	// compaction ws itself requested, from its dispatch until its end or
@@ -218,6 +222,9 @@ type conv struct {
 	accountSlotBoundaryPending bool
 	slot2aVerifyPending        bool
 	slot2aFallbackRetried      bool
+	// deferRecordPersist suppresses disk record writes under wmu while an
+	// in-place harness switch launches the target process before atomic commit.
+	deferRecordPersist bool
 
 	// Agy model-wait watchdog state (loop-owned, in-memory only).
 	modelWaitTimeout            time.Duration
@@ -879,6 +886,7 @@ func (c *conv) steer() {
 	if len(parts) == 0 {
 		return
 	}
+	c.noteSteerWhiteboard(recs)
 	text := c.steerWithDirective(partsText(parts), recs)
 	c.applyLive(liveEvents(parts))
 	if err := st.Steer(text); err != nil {
@@ -1279,12 +1287,19 @@ func (c *conv) update(fn func(rec *Record)) error {
 	fn(&c.rec)
 	c.syncStateLocked()
 	c.mu.Unlock()
+	if c.deferRecordPersist {
+		return nil
+	}
 	return c.persistRecord()
 }
 
 // persistRecord requires wmu, so an immediate write also flushes deferred sends
 // without letting an older copy overwrite a newer change.
 func (c *conv) persistRecord() error {
+	if c.deferRecordPersist {
+		c.recordDirty = true
+		return nil
+	}
 	rec := c.record()
 	err := c.r.persistAgentRecord(c.dir, rec)
 	c.recordDirty = err != nil
@@ -1616,6 +1631,9 @@ func (c *conv) applyMode(ev wslive.Event, quiet, coalesceTurnEnd bool) {
 	}
 	if ev.Kind == wslive.KindReset {
 		c.spawnDirty = true
+		if !quiet {
+			c.passive.clearAdvisory()
+		}
 	}
 	usageChanged := false
 	if ev.Kind == wslive.KindStatus {
@@ -2188,7 +2206,7 @@ func (c *conv) kickInput() {
 			queue = append(queue, QueuedInput{Command: &cmd, After: from, Operator: operator})
 		} else if text := strings.TrimSpace(rec.Entry.Text()); text != "" {
 			_, exec := rec.Entry.ExecNotice()
-			queue = append(queue, QueuedInput{Text: text, After: from, Operator: operator, Exec: exec, WhiteboardFirst: rec.Entry.WhiteboardFirst})
+			queue = append(queue, QueuedInput{Text: text, After: from, Operator: operator, Exec: exec, WhiteboardFirst: rec.Entry.WhiteboardFirst, User: c.rec.Lead && userOriginEntry(rec.Entry)})
 		}
 	}
 	if durable && len(recs) > 0 {
@@ -2218,7 +2236,9 @@ func (c *conv) kickInput() {
 		}
 	}
 	workerInstruction := strings.Join(workerInstructionParts, "\n\n")
-	whiteboard := slices.ContainsFunc(inputs, func(input QueuedInput) bool { return input.WhiteboardFirst })
+	// The sticky whiteboard-only state this turn's user input leaves; a turn
+	// woken by mail, reports or a notice keeps it as it was.
+	whiteboard := c.setWhiteboardOnly(whiteboardOnlyAfter(c.rec.WhiteboardOnly, inputs))
 	if !durable && cmd != nil && cmd.Name == "clear" && c.hasPendingAccountSlot() {
 		// Intercept /clear before it reaches RunCommand (which codex does not
 		// support and claude would execute on the existing process), forcing a
@@ -2362,7 +2382,7 @@ func (c *conv) kickInput() {
 			// has no such command, and the turn carries the playbook's
 			// body.
 			ordinary = true
-			err = c.proc.Send(c.turnInput(text, false))
+			err = c.proc.Send(c.turnInput(text, whiteboard))
 		} else {
 			err = c.runCommand(*cmd)
 		}
@@ -2375,6 +2395,10 @@ func (c *conv) kickInput() {
 		return
 	}
 	if durable && err != nil {
+		if committed {
+			c.passive.ack(c.passiveTook)
+			c.passiveTook = nil
+		}
 		if errors.Is(err, errDurableStopping) {
 			return
 		}
@@ -2420,6 +2444,7 @@ func (c *conv) kickInput() {
 			// reports.
 			res := *c.heldRes
 			c.turnMark, c.reply = mark, ""
+			c.snapshotBoardRevision()
 			c.hold(nil)
 			c.publishWith(res, true, accepted)
 		} else {
@@ -2485,6 +2510,7 @@ func (c *conv) kickInput() {
 	c.mu.Unlock()
 	c.stopBgGrace()
 	c.turnMark, c.reply = mark, ""
+	c.snapshotBoardRevision()
 	// A child report satisfies an agent worker's hold on the completed turn
 	// that waited for it. Publish that turn before opening the report's
 	// successor. Legacy pi-worker turns, and report-free successors such as

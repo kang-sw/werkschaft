@@ -65,6 +65,15 @@
   proxy opens the connection.
 
 ### Changed
+- **The composer's whiteboard-only toggle now sticks to the session, and a
+  missed turn gets a one-shot reminder.** A hosted lead keeps the
+  whiteboard-only directive on every turn after a message sent with the
+  toggle, including turns woken by a child's report, peer mail, an exec
+  notice or a restore; only your next message sent without the toggle ends
+  it. When such a turn changes nothing on the board yet answers at length in
+  plain text, the next turn's input carries one short reminder to use the
+  board. It starts no turn of its own. Compatibility: T0; the state is one
+  optional member of the session record, which an older daemon keeps unread.
 - **Claude tier defaults in ws and wsflow target cheaper plans.** Small stays
   Haiku with high effort; medium uses Sonnet with medium effort; large uses
   Sonnet with high effort; xlarge uses Opus with high effort. User and project
@@ -128,6 +137,17 @@
 - **The `route.resolve_proceed` MCP tool and its resolver.** Its only entry
   point was the retired routing skill, and no shipped skill or playbook calls
   it. `route.resolve_implement` keeps the shared fact-parsing helpers.
+
+### Fixed
+- **Durable (`werk`) MCP sessions inherit the daemon's cleaned environment.**
+  Worker and lead `ProcessDurable` launches now populate their MCP session
+  hello with the daemon's environment (`PATH`, `HOME`, `USERPROFILE`,
+  `WS_CACHE_HOME`, `WS_CONFIG_HOME`) scrubbed of inherited `WS_*` session
+  variables, parent-harness session variables, and session credentials
+  (case-insensitively on Windows), and `LookPath` reports an unset, empty, or
+  separator-only `PATH` explicitly instead of a generic missing-binary error.
+  Compatibility: T0; the `/mcp` hello wire shape and store schemas are
+  unchanged.
 
 ## v0.52.0
 

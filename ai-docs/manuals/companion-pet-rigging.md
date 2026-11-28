@@ -372,3 +372,29 @@ Generative image editing is the core production tool for companion art. Rules an
 - **Spend generation passes, not audit turns.** Generation and edit passes are cheap; multi-turn rule-based visual audits and hand repairs by an agent cost more (owner 2026-11-22 22:14). Generate several candidates or rerun the edit, then close the unit with one scripted check and one contact sheet. A failed gate gets another generation pass, not a pixel-repair loop.
 - **Split layers by edit, not by mask rules.** To split one generated asset into stacked layers (front and back hair, for example), run one erase edit per layer on the same source and keep what remains. The editor decides what is in front.
 - **Choose by the live preview, not by rule.** A small runtime transform within its safe range, an erase-and-infill edit, or a full redraw from the dressed master are all valid cards. Use whichever looks better.
+
+## 3D VRM Control-Rig Studio, Action Catalog & Target Attach (`ws-companion-clip/v1`)
+
+Local 3D VRM packs (`ws-companion-vrm/v1`, hand-made or `Kind: "local"` imported packs) support authored keyframe clips (`.clip.json`), imported `.vrma` binary animations, per-pack prop calibration, and a dynamic Tier-1 action catalog, authored through the standalone Control-Rig Studio at `/companion/studio?pack=<id>`.
+
+### Additive `pack.json` Sections (T0)
+
+- `actions`: ordered array (≤ 64 entries) of `{ key, kind: "clip"|"vrma", file, description?, expression?, prop?, expose_to_agent?, loop?, duration_s? }`. Keys match `^[a-z][a-z0-9_]{0,31}$` and cannot collide with sentinel keys or Windows reserved names. Files live under `clips/<key>.clip.json` (≤ 256 KiB) or `clips/<key>.vrma` (≤ 4 MiB).
+- `sentinels`: optional map overriding any of the 7 built-in runtime states: `idle`, `laptop_work`, `phone_hold`, `phone_typing`, `phone_putdown`, `knock_startle`, `wakeup_jolt`. Sentinels are driven automatically by runtime beats and never appear in the agent `<<<ACTIONS>>>` catalog.
+- `calibration`: optional `{ props: { <propId>: { offset?: [x,y,z], rotation_deg?: [x,y,z], scale?: 0.25..4 } } }` applied through `C.vrmCoLeadProps` for built-in props (`smartphone`, `laptop`). Unknown subkeys are preserved.
+- `props`: reserved Stage 2/3 prop registry (`≤ 16` items, `rigid` | `chain`, `sockets`, `kit_offsets`, 5-state `lifecycle`). Validated leniently and preserved byte-for-byte on Studio writes.
+
+### `.clip.json` (`ws-companion-clip/v1`) & Target Attach Space Constraints
+
+- Each clip carries `schema: "ws-companion-clip/v1"`, `key`, `duration_s` (`0.1..30`), `loop`, `easing`, optional `prop`, and `keyframes` (`1..32` strictly ascending `t`; Studio UI edits up to 8).
+- `hands.<side>.ik` stores the wrist target in **chest-local space normalized by that side's arm chain length**, with `pole` giving the elbow bend-plane direction. Multiplying by the active VRM's arm chain length retargets clips across models with different proportions.
+- `target_attach` supports independent `gaze`, `head`, `hand_l`, and `hand_r` space constraints: `{ space, offset?: [x,y,z], weight?: 0..1 }` where `space` is `free`, `camera`, `prop:<id>#<anchor>` (`prop:smartphone#grip`, `prop:smartphone#screen`, `prop:laptop#keyboard`, `prop:laptop#screen`), or `bone:<humanoidBone>`. Non-`free` targets override the effector or look point with the resolved world anchor plus local offset, guaranteeing cross-kit contact convergence.
+- `socket_handoff: { prop, to_socket }` is preserved on keyframes for Stage 2 runtime support.
+
+### Runtime Playback, Isolation & Live Refresh
+
+- Resolution order for a requested beat or `ws/companion.act` gesture: `sentinels.<key>` (for sentinel beats and direct sentinel gesture names) → `actions.<key>` → legacy `animations.<key>` → procedural fallback.
+- Looping sentinel clips (such as an `idle` override) animate on the existing VRM stage tick without calling `markVrmActivity`, preserving idle power cadence. One-shot knock/wakeup overrides (`knock_startle`, `wakeup_jolt`) propagate clip `duration_s` to the beat timer.
+- The Studio uses a separate esbuild runtime bundle (`/s/companion-rig-studio-<hash>.mjs`, ≤ 360 KiB gz) so the main dashboard VRM bundle (`companion-vrm-runtime.mjs`) stays byte-identical and free of `OrbitControls`/`TransformControls`. Shared dashboard playback modules (`dashboard-companion-vrm-ik.js` + `dashboard-companion-vrm-clip.js`) stay within 24 KiB unminified.
+- After saving, importing, or deleting a clip in `/companion/studio`, the Studio posts `{ type: "companion-packs-changed", pack, rev }` on `BroadcastChannel("ws-companion-packs")`; open dashboards refresh their pack snapshot in place with no page reload.
+

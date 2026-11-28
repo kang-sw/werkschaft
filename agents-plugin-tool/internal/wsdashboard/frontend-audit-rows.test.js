@@ -107,6 +107,9 @@ function makeFakeDOM() {
     hasAttribute(k) {
       return Object.prototype.hasOwnProperty.call(this.attrs, k);
     }
+    removeAttribute(k) {
+      delete this.attrs[k];
+    }
     toggleAttribute(k, force) {
       const on = force === undefined ? !this.hasAttribute(k) : !!force;
       if (on) this.attrs[k] = '';
