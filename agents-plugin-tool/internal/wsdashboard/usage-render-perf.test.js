@@ -24,7 +24,7 @@ function makeClassList(initial = '') {
   };
 }
 
-function usageEnv({ now = Date.UTC(2026, 10, 15, 12, 0), withResizeObserver = false, initialClientWidth = 0 } = {}) {
+function usageEnv({ now = Date.UTC(2026, 10, 15, 12, 0), withResizeObserver = false, withRaf = false, initialClientWidth = 0, switcherOn = false } = {}) {
   class Element {
     constructor(tag) {
       this.tagName = tag;
@@ -37,6 +37,8 @@ function usageEnv({ now = Date.UTC(2026, 10, 15, 12, 0), withResizeObserver = fa
       this.className = '';
       this.hidden = false;
       this._clientWidth = null;
+      this._offsetWidth = 680;
+      this._offsetHeight = 420;
       this.textClearCount = 0;
     }
     get clientWidth() {
@@ -45,6 +47,10 @@ function usageEnv({ now = Date.UTC(2026, 10, 15, 12, 0), withResizeObserver = fa
       return initialClientWidth;
     }
     set clientWidth(v) { this._clientWidth = v; }
+    get offsetWidth() { return this.hidden ? 0 : this._offsetWidth; }
+    set offsetWidth(v) { this._offsetWidth = v; }
+    get offsetHeight() { return this.hidden ? 0 : this._offsetHeight; }
+    set offsetHeight(v) { this._offsetHeight = v; }
     set textContent(value) {
       if (value === '') this.textClearCount++;
       this._text = value;
@@ -83,15 +89,29 @@ function usageEnv({ now = Date.UTC(2026, 10, 15, 12, 0), withResizeObserver = fa
   };
 
   let payload = { entries: [], warnPercent: 80, critPercent: 95 };
-  const observers = [], timers = [];
+  let accountPayload = { loopback_peer: true, slots: {}, conversations: [] };
+  const observers = [], timers = [], rafs = [];
   const window = {
     setInterval() {},
     setTimeout(fn, ms) { const rec = { fn, ms, live: true }; timers.push(rec); return timers.length; },
     clearTimeout(id) { if (timers[id - 1]) timers[id - 1].live = false; },
-    fetch() {
+    fetch(url) {
+      if (String(url).includes('/api/account/status')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(accountPayload) });
+      }
       return Promise.resolve({ ok: true, json: () => Promise.resolve(payload) });
     }
   };
+  if (withRaf) {
+    window.requestAnimationFrame = fn => {
+      const rec = { fn, cancelled: false };
+      rafs.push(rec);
+      return rafs.length;
+    };
+    window.cancelAnimationFrame = id => {
+      if (rafs[id - 1]) rafs[id - 1].cancelled = true;
+    };
+  }
   if (withResizeObserver) {
     window.ResizeObserver = class ResizeObserver {
       constructor(cb) { this.cb = cb; this.target = null; observers.push(this); }
@@ -100,6 +120,7 @@ function usageEnv({ now = Date.UTC(2026, 10, 15, 12, 0), withResizeObserver = fa
   }
   window.wsI18n = { lang: 'en', t: JSON.parse(fs.readFileSync(path.join(__dirname, '../wsi18n/tables/en.json'), 'utf8')) };
   window.wsT = (key, ...args) => window.wsI18n.t[key].replace(/\{(\d+)\}/g, (m, i) => (i < args.length ? String(args[i]) : m));
+  if (switcherOn) window.wsAccountSwitcher = true;
   class Clock extends Date { static now() { return now; } }
   vm.runInNewContext(USAGE_SOURCE, { window, Date: Clock });
   return {
@@ -109,8 +130,10 @@ function usageEnv({ now = Date.UTC(2026, 10, 15, 12, 0), withResizeObserver = fa
     button,
     observers,
     timers,
+    rafs,
     now(v) { now = v; },
-    set(v) { payload = v; }
+    set(v) { payload = v; },
+    setAccount(v) { accountPayload = v; }
   };
 }
 
@@ -399,3 +422,152 @@ test('Bundle A Item 4b: railPopSync skips forced layout for stable usage/setting
   scrollListeners[0]({ target: ancestorTarget });
   assert.equal(ctx.placeCalls, 4);
 });
+
+function collectNodes(root, pred) {
+  const out = [];
+  for (const child of root.children || []) {
+    if (pred(child)) out.push(child);
+    out.push(...collectNodes(child, pred));
+  }
+  return out;
+}
+
+const hasClass = (el, cls) => (el.className || '').split(/\s+/).includes(cls);
+
+test('Bundle A-2 CSS: zero .12s hover transitions, isolated chart panels/layers/callout, and zero display:none SVG hover rules', () => {
+  const usageCss = readAsset('usage.css');
+  assert.doesNotMatch(usageCss, /\.12s\b/, 'usage.css must not contain .12s transitions');
+  for (const sel of ['.up-as-opt', '.up-ibtn', '.up-sp', '.up-hr', '.up-cbtn']) {
+    const escaped = sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const rule = usageCss.match(new RegExp(escaped + '\\s*\\{[^}]*\\}'));
+    assert.ok(rule, `${sel} rule exists`);
+    assert.doesNotMatch(rule[0], /transition\s*:/, `${sel} must not declare transition`);
+  }
+
+  assert.match(usageCss, /\.up-cpanel\s*\{[^}]*contain:\s*layout style;[^}]*transform:\s*translateZ\(0\);/);
+  assert.match(usageCss, /\.up-cp-body\s*\{[^}]*contain:\s*layout style;/);
+  assert.match(usageCss, /\.up-csvg\s*\{[^}]*overflow:\s*visible;/);
+  assert.match(usageCss, /\.up-clayer-base\s*\{[^}]*transform:\s*translateZ\(0\);/);
+  assert.match(usageCss, /\.up-clayer\s*\{[^}]*pointer-events:\s*none;[^}]*transform:\s*translateZ\(0\);[^}]*will-change:\s*opacity;/);
+  assert.match(usageCss, /\.up-callout\s*\{[^}]*will-change:\s*transform;[^}]*transform:\s*translate3d\(/);
+
+  assert.match(usageCss, /\.up-clayer-focus\s*\{\s*opacity:\s*0;\s*\}/);
+  assert.match(usageCss, /\.up-clayer-focus\.is-focus\s*\{\s*opacity:\s*1;\s*\}/);
+  assert.match(usageCss, /\.up-clayer-preview\s*\{\s*opacity:\s*0;\s*pointer-events:\s*none;\s*\}/);
+  assert.match(usageCss, /\.up-clayer-preview\.is-preview-on\s*\{\s*opacity:\s*1;\s*\}/);
+  for (const line of usageCss.split('\n')) {
+    if (/\.up-(clayer|pser|ppin|pgl|ser|pin|gl)\b/.test(line)) {
+      assert.doesNotMatch(line, /display\s*:\s*(none|inline)\b/, `chart layer rule must not toggle display: ${line}`);
+    }
+  }
+});
+
+test('Bundle A-2 charts & popover: stacked compositor layers, conditional setPreview place(), and rAF-coalesced mouseover', async () => {
+  const start = Date.UTC(2026, 10, 15, 8, 0), dur = 5 * 3600000, asOf = start + 0.4 * dur;
+  const env = usageEnv({ now: asOf, withRaf: true });
+  env.set({
+    entries: [
+      { harness: 'claude', asOf, windows: [{ kind: 'five_hour', percent: 45, asOf, resetsAt: start + dur }, { kind: 'seven_day', percent: 60, asOf, resetsAt: asOf + 3 * 86400000 }] },
+      { harness: 'codex', asOf, windows: [{ kind: 'five_hour', percent: 25, asOf, resetsAt: start + dur }, { kind: 'seven_day', percent: 30, asOf, resetsAt: asOf + 4 * 86400000 }] }
+    ],
+    history: {
+      schema_version: 1, status: 'ok', samples: [
+        { harness: 'claude', kind: 'five_hour', resetsAt: start + dur, asOf: start + 0.2 * dur, percent: 20 },
+        { harness: 'claude', kind: 'five_hour', resetsAt: start + dur, asOf, percent: 45 },
+        { harness: 'codex', kind: 'five_hour', resetsAt: start + dur, asOf: start + 0.2 * dur, percent: 10 },
+        { harness: 'codex', kind: 'five_hour', resetsAt: start + dur, asOf, percent: 25 }
+      ]
+    },
+    slotPreviews: {
+      claude: {
+        work: {
+          asOf: asOf - 60000,
+          windows: [{ kind: 'five_hour', percent: 70, asOf: asOf - 60000, resetsAt: start + dur }],
+          samples: [
+            { harness: 'claude', kind: 'five_hour', resetsAt: start + dur, asOf: start + 0.2 * dur, percent: 30 },
+            { harness: 'claude', kind: 'five_hour', resetsAt: start + dur, asOf: asOf - 60000, percent: 70 }
+          ]
+        }
+      }
+    }
+  });
+  env.setAccount({
+    loopback_peer: true,
+    slots: {
+      claude: [{ id: 'default', label: 'Default', active: true }, { id: 'work', label: 'Work', active: false }]
+    },
+    conversations: []
+  });
+
+  let placeCount = 0;
+  const mounted = env.window.WsUsage.mount(env.doc, env.top, { accountSwitcher: true });
+  await flush();
+  const pop = mounted.makePopover(() => { placeCount++; }, () => {});
+  pop.el.hidden = false;
+  pop.open();
+  await flush();
+
+  // Verify stacked compositor SVG layers exist (base, focus, series, pin, preview) and no inner display styles exist.
+  const stages = collectNodes(pop.el, n => hasClass(n, 'up-cstage'));
+  assert.equal(stages.length, 2);
+  const focusLayers = collectNodes(pop.el, n => hasClass(n, 'up-clayer-focus'));
+  const seriesLayers = collectNodes(pop.el, n => hasClass(n, 'up-clayer-ser'));
+  const pinLayers = collectNodes(pop.el, n => hasClass(n, 'up-clayer-pin'));
+  const previewLayers = collectNodes(pop.el, n => hasClass(n, 'up-clayer-preview'));
+  assert.ok(focusLayers.length >= 2 && seriesLayers.length >= 2 && pinLayers.length >= 2);
+  assert.ok(previewLayers.length >= 2);
+  for (const layer of [...focusLayers, ...seriesLayers, ...pinLayers, ...previewLayers]) {
+    assert.equal(layer.style.display, undefined);
+  }
+
+  // Hover mouseover coalesces via rAF: repeated mouseover on same target schedules nothing extra; different targets collapse into one frame.
+  const clPin = collectNodes(pop.el, n => hasClass(n, 'up-pin') && n.getAttribute('data-k') === 'claude')[0];
+  const cxRow = collectNodes(pop.el, n => hasClass(n, 'up-hr') && n.getAttribute('data-k') === 'codex')[0];
+  assert.ok(clPin && cxRow);
+
+  pop.el.emit('mouseover', { target: clPin });
+  assert.equal(env.rafs.length, 1);
+  pop.el.emit('mouseover', { target: clPin });
+  assert.equal(env.rafs.length, 1, 'same e.target short-circuits without scheduling another rAF');
+  pop.el.emit('mouseover', { target: cxRow });
+  assert.equal(env.rafs.length, 1, 'rapid target switch coalesces into the pending rAF');
+  assert.equal(focusLayers.some(n => hasClass(n, 'is-focus')), false, 'focus does not mutate synchronously before rAF');
+
+  env.rafs[0].fn();
+  assert.equal(focusLayers.some(n => n.getAttribute('data-k') === 'codex' && hasClass(n, 'is-focus')), true);
+  assert.equal(seriesLayers.some(n => n.getAttribute('data-k') === 'claude' && hasClass(n, 'is-dim')), true);
+  assert.equal(pinLayers.some(n => n.getAttribute('data-k') === 'claude' && hasClass(n, 'is-dim')), true);
+
+  // mouseleave cancels pending rAF and clears focus.
+  pop.el.emit('mouseover', { target: clPin });
+  assert.equal(env.rafs.length, 2);
+  assert.equal(env.rafs[1].cancelled, false);
+  pop.el.emit('mouseleave', {});
+  assert.equal(env.rafs[1].cancelled, true);
+  assert.equal(focusLayers.some(n => hasClass(n, 'is-focus')), false);
+
+  // setPreview() via inactive slot pill mouseenter does NOT call place() when popover dimensions stay unchanged.
+  const workPill = collectNodes(pop.el, n => hasClass(n, 'up-sp') && n.getAttribute('data-slot-id') === 'work')[0];
+  assert.ok(workPill);
+  const placesBeforePreview = placeCount;
+  workPill.emit('mouseenter', {});
+  assert.equal(placeCount, placesBeforePreview, 'setPreview skips place() when popover size is unchanged');
+  assert.ok(previewLayers.some(n => hasClass(n, 'is-preview-on')), 'preview layers activate via .is-preview-on');
+  for (const layer of previewLayers) {
+    assert.equal(layer.style.display, undefined, 'preview activation never sets inline style.display');
+  }
+  assert.ok(seriesLayers.some(n => n.getAttribute('data-k') === 'claude' && hasClass(n, 'is-preview-base')));
+
+  // If popover height actually changes during preview, setPreview() calls place().
+  pop.el.offsetHeight = 460;
+  workPill.emit('mouseleave', {});
+  assert.equal(placeCount, placesBeforePreview + 1, 'setPreview calls place() when popover dimensions changed');
+  assert.equal(previewLayers.some(n => hasClass(n, 'is-preview-on')), false);
+
+  // close() cancels any pending rAF.
+  pop.el.emit('mouseover', { target: clPin });
+  assert.equal(env.rafs.length, 3);
+  pop.close();
+  assert.equal(env.rafs[2].cancelled, true);
+});
+

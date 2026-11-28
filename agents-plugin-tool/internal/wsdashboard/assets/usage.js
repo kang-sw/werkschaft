@@ -235,6 +235,9 @@
     var confirmConv = null, sessOpen = false, legendOpen = false, refreshing = false, loadError = false;
     var measureCtx = null, lastFooterBtn = null, lastFooterSig = "";
     var lastChartW = 0, hasResizeObserver = typeof window.ResizeObserver === "function";
+    var chartCache = null, rowCache = null, lastAppliedVisSig = null;
+    var lastPlacedW = 0, lastPlacedH = 0;
+    var hoverRaf = null, pendingHoverTarget = null, lastHoverTarget = null;
 
     function el(tag, cls, text) {
       var n = doc.createElement(tag); n.className = cls || "";
