@@ -160,6 +160,7 @@
 
   function attachVoice(api) {
     if (!api || !api.features || !api.features.voice) return;
+    if (api.voice) return;
     if (window.WsVoiceInput && typeof window.WsVoiceInput.attachField === "function") {
       api.voice = window.WsVoiceInput.attachField(api.field, api);
       return;
@@ -647,7 +648,11 @@
         attachSlashPopup();
         syncMarkdown();
         if (features.voice && !api.voice) attachVoice(api);
-        if (!features.voice && api.voice) { api.voice.destroy(); api.voice = null; }
+        if (!features.voice) {
+          var queued = voiceQueue.indexOf(api);
+          if (queued >= 0) voiceQueue.splice(queued, 1);
+          if (api.voice) { api.voice.destroy(); api.voice = null; }
+        }
       },
       destroy: function () {
         if (destroyed) return;

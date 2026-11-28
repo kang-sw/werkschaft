@@ -20,10 +20,13 @@
 .cvox[data-state="recording"]::after { border: 2px solid var(--wb-fail); animation: cvox-ring 1.3s ease-out infinite; }
 .cvox[data-state="transcribing"]::after { border: 2px solid var(--wb-primary); animation: cvox-ring 1.1s ease-in-out infinite; }
 
-[data-voice-locked="1"],
-[data-voice-locked="1"] + .wsc-editor { opacity: .72; pointer-events: none; }
+.composer[data-voice-locked="1"] .cfield textarea,
+.composer[data-voice-locked="1"] .cfield .wsc-editor,
+textarea[data-voice-locked="1"],
+textarea[data-voice-locked="1"] + .wsc-editor { opacity: .72; pointer-events: none; }
 
-.cvox-cap[data-floating="1"] { position: fixed; z-index: 80; max-width: min(280px, calc(100vw - 8px)); box-shadow: var(--wb-shadow-hi); }
+/* Floating capsule of a secondary field floats over same-tone surfaces: the edge comes from a whisper inset line (no border). */
+.cvox-cap[data-floating="1"] { position: fixed; z-index: calc(var(--z-modal, 70) + 10); max-width: min(280px, calc(100vw - 8px)); box-shadow: var(--wb-shadow-hi), inset 0 0 0 1px var(--wb-line); }
 
 /* Inline real-time voice span inside .wsc-editor */
 [data-voice-span] { display: inline; border-radius: 6px; padding: 1px 5px; margin: 0 1px; background: color-mix(in srgb, var(--wb-primary) 13%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--wb-primary) 18%, transparent); color: var(--wb-fg); -webkit-box-decoration-break: clone; box-decoration-break: clone; }
