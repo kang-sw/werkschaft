@@ -511,7 +511,17 @@
       }
     },
     "261129-feat-ws-pi-rpc-account-ui-and-pty-login": {
-      "registered_at": "2026-11-28T16:25:31Z"
+      "registered_at": "2026-11-28T16:25:31Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-28T16:53:04Z",
+        "impl": {
+          "branch": "impl/develop/pi-rpc-account-ui-and-pty-login"
+        }
+      }
     },
     "261129-feat-ws-werk-v3-responsive-usage-popover-and-3h-buckets": {
       "registered_at": "2026-11-28T16:23:45Z"
