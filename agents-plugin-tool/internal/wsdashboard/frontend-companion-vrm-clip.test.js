@@ -20,7 +20,7 @@ function loadVrmStack(globals = {}) {
   for (const name of [
     "builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu",
     "vrm-fx", "vrm-studio", "vrm-props", "vrm-pose", "vrm-ik", "vrm-clip",
-    "vrm-colead", "vrm", "stage"
+    "vrm-colead", "vrm-speech", "vrm", "stage"
   ]) {
     vm.runInContext(
       fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"),

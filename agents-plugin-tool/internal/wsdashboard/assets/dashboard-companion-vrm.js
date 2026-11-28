@@ -146,6 +146,10 @@
       this.currentState = "idle";
       this.coLeadOverlay = null;
       this.clipTargets = null;
+      this.speechSample = null;
+      this.speechBlink = C.vrmSpeech?.createSpeechBlinkModulator?.() || null;
+      this.lastVisemeAttenuation = 1;
+      this.lastSpeechBlink = 0;
       this.surprisedStrategy = "none";
       this.blinkTimer = 2.6;
       this.blinkProgress = -1;
@@ -160,10 +164,38 @@
       this.clipTargets = map && typeof map === "object" ? map : null;
     }
 
+    setSpeechSample(sample) {
+      this.speechSample = sample && typeof sample === "object" ? sample : null;
+    }
+
+    getResolvedVisemeKeys() {
+      return {
+        aa: this.resolveAlias("aa", "a"),
+        ih: this.resolveAlias("ih", "i"),
+        ou: this.resolveAlias("ou", "u"),
+        ee: this.resolveAlias("ee", "e"),
+        oh: this.resolveAlias("oh", "o")
+      };
+    }
+
+    getVisemeWeights() {
+      const k = this.getResolvedVisemeKeys();
+      return {
+        aa: k.aa ? (this.weights.get(k.aa) ?? 0) : 0,
+        ih: k.ih ? (this.weights.get(k.ih) ?? 0) : 0,
+        ou: k.ou ? (this.weights.get(k.ou) ?? 0) : 0,
+        ee: k.ee ? (this.weights.get(k.ee) ?? 0) : 0,
+        oh: k.oh ? (this.weights.get(k.oh) ?? 0) : 0
+      };
+    }
+
     attach(vrm) {
       this.vrm = vrm;
       this.available.clear();
       this.weights.clear();
+      this.speechBlink?.reset?.();
+      this.lastVisemeAttenuation = 1;
+      this.lastSpeechBlink = 0;
       this.version = String(vrm?.meta?.metaVersion ?? "unknown");
       const mgr = vrm?.expressionManager;
       if (!mgr) return;
@@ -245,6 +277,8 @@
       const kSurprised = this.resolveAlias("surprised", "Surprised", "Fcl_ALL_Surprised");
       const kOh = this.resolveAlias("oh", "o");
       const kAa = this.resolveAlias("aa", "a");
+      const kIh = this.resolveAlias("ih", "i");
+      const kOu = this.resolveAlias("ou", "u");
       const kEe = this.resolveAlias("ee", "e");
 
       const override = C.own(this.expressionMap, this.currentState);
@@ -427,12 +461,32 @@
         }
       }
 
+      const visemeKeys = { aa: kAa, ih: kIh, ou: kOu, ee: kEe, oh: kOh };
+      if (C.vrmSpeech?.applySpeechToTargets) {
+        const speechRes = C.vrmSpeech.applySpeechToTargets({
+          dt,
+          state: this.currentState,
+          overlay,
+          allowBlink,
+          autoBlink,
+          targets,
+          keys: { blink: kBlink, blinkLeft: kBlinkLeft, blinkRight: kBlinkRight, happy: kHappy, surprised: kSurprised, sad: kSad },
+          visemeKeys,
+          sample: this.speechSample,
+          blinkModulator: this.speechBlink
+        });
+        this.lastVisemeAttenuation = speechRes.attenuation;
+        this.lastSpeechBlink = speechRes.speechBlink;
+      }
+
       const mgr = this.vrm.expressionManager;
       const lerpRate = Math.min(1, Math.max(dt, 0.016) * 11);
+      const visemeLerpRate = Math.min(1, Math.max(dt, 0.016) * 18);
       for (const name of this.available) {
         const target = targets.get(name) ?? 0;
         const prev = this.weights.get(name) ?? 0;
-        const next = Math.abs(target - prev) < 0.002 ? target : prev + (target - prev) * lerpRate;
+        const rate = (name === kAa || name === kIh || name === kOu || name === kEe || name === kOh) ? visemeLerpRate : lerpRate;
+        const next = Math.abs(target - prev) < 0.002 ? target : prev + (target - prev) * rate;
         this.weights.set(name, next);
         mgr.setValue(name, next);
       }
@@ -557,7 +611,34 @@
     let gaze = { x: 0, y: 0 }, smoothedLook = { yaw: 0, pitch: 0 }, smoothedHead = { yaw: 0, pitch: 0 };
     const boneRotations = new Map();
     const exprCtrl = new VrmExpressionController(pack?.expressionMap);
+    const silentSample = C.vrmSpeech?.SILENT_SAMPLE || { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0, speaking: false, boundary: "" };
+    let speechDriver = C.vrmSpeech?.createProceduralMouthDriver?.() || null;
+    let lastSpeechSample = silentSample;
     let listenersCancel = null;
+
+    function safeIsSpeaking() {
+      if (!speechDriver) return false;
+      try {
+        return !!(typeof speechDriver.isActive === "function" ? speechDriver.isActive() : lastSpeechSample.speaking);
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function sampleSpeechDriver(dt) {
+      if (!speechDriver || typeof speechDriver.sample !== "function") {
+        lastSpeechSample = silentSample;
+        exprCtrl.setSpeechSample(lastSpeechSample);
+        return;
+      }
+      try {
+        const raw = speechDriver.sample(dt, elapsed * 1000);
+        lastSpeechSample = C.vrmSpeech?.normalizeMouthSample ? C.vrmSpeech.normalizeMouthSample(raw) : (raw || silentSample);
+      } catch (_) {
+        lastSpeechSample = silentSample;
+      }
+      exprCtrl.setSpeechSample(lastSpeechSample);
+    }
     let cameraFraming = {
       headY: 1.45, chestY: 1.18, waistY: 0.98, topY: 1.72,
       centerX: 0, headZ: 0,
@@ -1402,6 +1483,7 @@
       if (disposed || paused || contextLost || !renderer || !scene || !camera || !vrm) return;
       const clampedDt = Math.min(Math.max(dt, 0.001), 0.1);
       const coState = updatePoseAndLook(clampedDt, currentGaze, physics, extra);
+      sampleSpeechDriver(clampedDt);
       exprCtrl.update(clampedDt);
       vrm.update(clampedDt);
       // Lazy palm probe: sampled only while the phone is held (VRM 0.x/1.0 palm frame).
@@ -1952,6 +2034,40 @@
       resume() { paused = false; },
       isContextLost() { return contextLost; },
       isClipOneShotActive() { return !!(clipRt?.isOneShotActive?.() || isVrmaOneShotActive()); },
+      setSpeechMouthDriver(driver) {
+        try { speechDriver?.stop?.(); } catch (_) { /* ignore */ }
+        lastSpeechSample = silentSample;
+        exprCtrl.setSpeechSample(lastSpeechSample);
+        if (driver == null) {
+          speechDriver = C.vrmSpeech?.createProceduralMouthDriver?.() || null;
+          return speechDriver;
+        }
+        if (C.vrmSpeech?.isValidMouthDriver ? C.vrmSpeech.isValidMouthDriver(driver) : typeof driver.sample === "function") {
+          speechDriver = driver;
+          return speechDriver;
+        }
+        return null;
+      },
+      getSpeechMouthDriver() {
+        return speechDriver;
+      },
+      startSpeech(text, speechOpts) {
+        if (!speechDriver) speechDriver = C.vrmSpeech?.createProceduralMouthDriver?.() || null;
+        if (!speechDriver) return false;
+        try { speechDriver.start?.(text, speechOpts); } catch (_) { return false; }
+        const active = safeIsSpeaking();
+        if (active) options.onSpeechStart?.();
+        return active;
+      },
+      stopSpeech() {
+        try { speechDriver?.stop?.(); } catch (_) { /* ignore */ }
+        lastSpeechSample = silentSample;
+        exprCtrl.setSpeechSample(lastSpeechSample);
+        options.onSpeechStop?.();
+      },
+      isSpeaking() {
+        return safeIsSpeaking();
+      },
       setPreset() {},
       setWardrobe() {},
       wardrobe() { return null; },
@@ -1969,6 +2085,15 @@
           activeClip: clipRt ? clipRt.getState() : null,
           activeSentinel: activeSentinelKey,
           surprisedStrategy: exprCtrl.surprisedStrategy,
+          speech: {
+            speaking: safeIsSpeaking(),
+            driverName: speechDriver?.name || "custom",
+            visemes: exprCtrl.getVisemeWeights(),
+            attenuation: exprCtrl.lastVisemeAttenuation,
+            speechBlink: exprCtrl.lastSpeechBlink,
+            blinkWeight: exprCtrl.weights.get(exprCtrl.resolveAlias("blink")) ?? 0,
+            resolvedVisemes: exprCtrl.getResolvedVisemeKeys()
+          },
           framing: { ...cameraFraming },
           projectedBounds: getCharacterBounds(),
           laptopBounds: getLaptopBounds(),
@@ -1990,6 +2115,7 @@
       dispose() {
         if (disposed) return;
         disposed = true;
+        rigApi.stopSpeech();
         if (activeVrmRig === rigApi) activeVrmRig = null;
         loadEpoch++;
         loadCancel.abort();
@@ -2021,6 +2147,11 @@
     triggerKnock(opts) { return activeVrmRig?.triggerKnock?.(opts) ?? null; },
     triggerGesture(name) { return activeVrmRig?.triggerGesture?.(name) ?? false; },
     setPhoneState(snap) { return activeVrmRig?.setPhoneState?.(snap) ?? null; },
+    setSpeechMouthDriver(driver) { return activeVrmRig?.setSpeechMouthDriver?.(driver) ?? null; },
+    getSpeechMouthDriver() { return activeVrmRig?.getSpeechMouthDriver?.() ?? null; },
+    startSpeech(text, speechOpts) { return activeVrmRig?.startSpeech?.(text, speechOpts) ?? false; },
+    stopSpeech() { activeVrmRig?.stopSpeech?.(); },
+    isSpeaking() { return activeVrmRig?.isSpeaking?.() ?? false; },
     setVrmRenderMode(mode) { return activeVrmRig?.setRenderMode?.(mode) ?? "docked"; },
     setVrmBleedPadding(pad) { return activeVrmRig?.setBleedPadding?.(pad) ?? null; },
     getVrmRenderMetrics() { return activeVrmRig?.getRenderMetrics?.() ?? null; },

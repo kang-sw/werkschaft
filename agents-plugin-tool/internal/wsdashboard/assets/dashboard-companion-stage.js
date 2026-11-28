@@ -324,6 +324,7 @@
     let lastVrmVw = 0, lastVrmVh = 0, lastVrmAnchorLeft = NaN, lastVrmAnchorTop = NaN;
     let beat = null, viewBeat, viewPlaying, prop, fx, propCanvas, propCtx, decoration, fxWidth = 36, fxHeight = 24, lastCount;
     const quipCtrl = C.quip?.create?.(node, doc) || null;
+    let lastQuipPlaying = null, lastQuipText = "", wasVrmSpeaking = false;
     let size = 96, vrmHeight = 240, dpr = 1, vw = 0, vh = 0, dirty = true;
     let frameElement = null, frameInput = null, frameBox = null;
     let home = { x: 60, y: 96 }, arrived = false, custom = null, drag = null, suppressClick = false;
@@ -381,6 +382,17 @@
           if (!vrmRailVisible) { next.pause?.(); return; }
           markVrmActivity();
           invalidated();
+        },
+        onSpeechStart: () => {
+          if (rig === next && vrmRailVisible && !doc.hidden) {
+            markVrmActivity();
+            schedule();
+          }
+        },
+        onSpeechStop: () => {
+          if (rig === next && vrmRailVisible && !doc.hidden) {
+            schedule();
+          }
         }
       }) : C.makeRig(pack, shared, preset, currentConfig);
       // Prepare the neutral body and its tint cache before replacing the active rig.
@@ -616,6 +628,12 @@
       marks = Object.create(null);
       runner.reset();
       pairs.clear();
+      if (lastQuipText) {
+        lastQuipPlaying = null;
+        lastQuipText = "";
+        quipCtrl?.hide?.();
+        rig?.stopSpeech?.();
+      }
       viewBeat = null;
       nextIdle = now + 45000;
       lastBusy = now;
@@ -878,6 +896,9 @@
       controls.close();
       if (decoration) decoration.hidden = true;
       quipCtrl?.hide?.();
+      lastQuipPlaying = null;
+      lastQuipText = "";
+      rig?.stopSpeech?.();
       if (frame) { cancelAnimationFrame(frame); frame = 0; }
       if (idleTimer) { clearTimeout(idleTimer); idleTimer = 0; }
       last = 0;
@@ -1196,7 +1217,23 @@
       const rawFx = rig.prop(propAction(next.fx), "fx");
       fx = rawFx?.data ? rawFx : { ...(rawFx || { drawable: false, draw() {} }), data: C.own(C.fxDefaults, propAction(next.fx)) };
       lastCount = null;
-      if (quipCtrl) { if (next.quip) quipCtrl.set(next.quip); else quipCtrl.hide(); }
+      const nextQuip = typeof next.quip === "string" ? next.quip.trim() : "";
+      if (quipCtrl) { if (nextQuip) quipCtrl.set(nextQuip); else quipCtrl.hide(); }
+      if (nextQuip) {
+        const sameUtterance = !!(playing && playing === lastQuipPlaying && nextQuip === lastQuipText);
+        if (!sameUtterance) {
+          lastQuipPlaying = playing || null;
+          lastQuipText = nextQuip;
+          const beatMs = playing?.until !== undefined ? Math.max(0, playing.until - now) : (Number.isFinite(next.ms) ? next.ms : 0);
+          const estMs = C.vrmSpeech?.estimateDurationMs?.(nextQuip) || 0;
+          const durationMs = beatMs > 0 && estMs > 0 ? Math.min(estMs, beatMs) : (beatMs > 0 ? beatMs : undefined);
+          rig?.startSpeech?.(nextQuip, durationMs ? { durationMs } : undefined);
+        }
+      } else if (lastQuipText) {
+        lastQuipPlaying = null;
+        lastQuipText = "";
+        rig?.stopSpeech?.();
+      }
     }
 
     function handPosition(out) {
@@ -1374,9 +1411,12 @@
         const breakoutActive = !!(co?.breakoutActive || (mode && mode !== "docked"));
         const coActive = !!(breakoutActive || (co && (co.knockActive || co.swapActive || co.dizzyActive || (co.phoneMode && co.phoneMode !== "desk"))));
         const clipOneShot = !!rig?.isClipOneShotActive?.();
-        const activeNow = !!viewPlaying || !!drag?.moving || posture.activity !== "idle" || coActive || clipOneShot ||
+        const speaking = !!rig?.isSpeaking?.();
+        const activeNow = !!viewPlaying || !!drag?.moving || posture.activity !== "idle" || coActive || clipOneShot || speaking ||
           Math.abs(position.x - target().x) > 0.5 || Math.abs(position.y - target().y) > 0.5;
         if (activeNow) markVrmActivity();
+        else if (wasVrmSpeaking && !speaking) lastVrmActivityAt = performance.now() - VRM_IDLE_AFTER_MS;
+        wasVrmSpeaking = speaking;
         const idleElapsed = performance.now() - lastVrmActivityAt;
         vrmIdleMode = !activeNow && idleElapsed >= VRM_IDLE_AFTER_MS;
         vrmBreakoutActive = breakoutActive;
@@ -1512,6 +1552,10 @@
         frame = 0;
         last = 0;
         lastVrmRenderAt = -Infinity;
+        quipCtrl?.hide?.();
+        lastQuipPlaying = null;
+        lastQuipText = "";
+        rig?.stopSpeech?.();
         rig?.pause?.();
       } else {
         if (!isVrm() || vrmRailVisible) {
@@ -1793,6 +1837,9 @@
         frameInput?.abort();
         cancelAnimationFrame(frame);
         if (idleTimer) { clearTimeout(idleTimer); idleTimer = 0; }
+        lastQuipPlaying = null;
+        lastQuipText = "";
+        rig?.stopSpeech?.();
         if (typeof rig?.dispose === "function") rig.dispose();
         rig = null;
         railChanges.disconnect();

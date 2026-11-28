@@ -119,6 +119,7 @@ var companionScriptFiles = []string{
 	"dashboard-companion-vrm-ik.js",
 	"dashboard-companion-vrm-clip.js",
 	"dashboard-companion-vrm-colead.js",
+	"dashboard-companion-vrm-speech.js",
 	"dashboard-companion-vrm.js",
 	"dashboard-companion-messenger-md.js",
 	"dashboard-companion-messenger.js",
