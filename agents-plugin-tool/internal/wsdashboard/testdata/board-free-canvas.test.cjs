@@ -1251,3 +1251,54 @@ test('10. Multi-entry RO batch, tall straddling anchor, duplicate batch entry, a
   assert.equal(afterGrow.posOf(nodes[12]), y12BeforeGrow + 60, 'card 12 shifts by +60px rather than falling back to 320px');
   assert.equal(afterGrow.posOf(nodes[11]) + 960 + 16, afterGrow.posOf(nodes[12]));
 });
+
+test('11. releaseNode({ keepCoords: true }) and freeMeasureHeight([data-max]) preserve drifted freePos and laid/cached heights across maximize/restore', () => {
+  const spec = Array.from({ length: 20 }, (_, i) => ({
+    topic: `mx${i}`,
+    height: i === 10 ? 2200 : 400,
+  }));
+  const w = makeFreeCanvasWorld(spec, { viewH: 800 });
+  const { ctx, nodes, bcol } = w;
+
+  // Place node 14 at FREE_RUNWAY_MID (50000), then scroll up to node 10 so its
+  // freePos drifts well below 50000 while staying in-window.
+  ctx.WsBoardAnchor.select(nodes[14], { smooth: false });
+  for (let step = 0; step < 12; step++) {
+    const info = ctx.WsBoardAnchor.windowInfo();
+    if (info.posOf(nodes[10]) !== undefined) break;
+    bcol.scrollTop = Math.max(0, bcol.scrollTop - 600);
+    ctx.freeOnScroll();
+    w.flushRaf();
+  }
+  const driftedY = ctx.WsBoardAnchor.windowInfo().posOf(nodes[10]);
+  assert.ok(typeof driftedY === 'number' && Math.abs(driftedY - 50000) > 1000, `node 10 drifted from 50000: ${driftedY}`);
+  bcol.scrollTop = driftedY + 900;
+  ctx.freeOnScroll();
+  w.flushRaf();
+  assert.equal(ctx.WsBoardAnchor.key(), 't:mx10');
+  assert.equal(ctx.freeHeightCache.get('t:mx10'), 2200);
+
+  // Maximize: releaseNode with keepCoords clears style.top & RO without wiping freePos/freeLaidH.
+  ctx.WsBoardAnchor.releaseNode(nodes[10], { keepCoords: true });
+  nodes[10].setAttribute('data-max', '');
+  nodes[10].offsetHeight = 736; // simulated viewport-sized fixed box
+  assert.equal(nodes[10].style.top, '', 'inline style.top cleared for position: fixed');
+  assert.equal(w.cardRO().observed.has(nodes[10]), false, 'ResizeObserver unobserved while maximized');
+  assert.equal(ctx.WsBoardAnchor.windowInfo().posOf(nodes[10]), driftedY, 'drifted freePos preserved across maximize');
+  assert.equal(ctx.WsBoardAnchor.windowInfo().heightOf(nodes[10]), 2200, 'freeLaidH preserved across maximize');
+
+  // Settle while maximized must NOT overwrite freeHeightCache/freeLaidH or style.top.
+  ctx.WsBoardAnchor.settle();
+  assert.equal(ctx.freeHeightCache.get('t:mx10'), 2200, 'freeHeightCache not polluted by fixed viewport height');
+  assert.equal(ctx.WsBoardAnchor.windowInfo().heightOf(nodes[10]), 2200, 'freeLaidH not polluted during settle');
+  assert.equal(ctx.WsBoardAnchor.windowInfo().posOf(nodes[10]), driftedY, 'drifted freePos unchanged during settle');
+  assert.equal(nodes[10].style.top, '', 'style.top stays empty while data-max is set');
+
+  // Restore: remove data-max, restore natural height, settle restores drifted Y, style.top, and RO.
+  nodes[10].removeAttribute('data-max');
+  nodes[10].offsetHeight = 2200;
+  ctx.WsBoardAnchor.settle();
+  assert.equal(ctx.WsBoardAnchor.windowInfo().posOf(nodes[10]), driftedY, 'restore keeps drifted Y (never falls back to 50000)');
+  assert.equal(nodes[10].style.top, Math.round(driftedY) + 'px', 'inline style.top restored');
+  assert.equal(w.cardRO().observed.has(nodes[10]), true, 'ResizeObserver re-observed after restore');
+});
