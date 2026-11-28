@@ -921,7 +921,7 @@ test('accountSwitcher mode renders 1-click switchers, guided Stop+Restart/queue,
       ]
     },
     conversations: [
-      { id: 'conv-1', harness: 'codex', title: 'Main Lead', account_slot_id: 'default' }
+      { id: 'conv-1', backend: 'codex', label: 'Main Lead', account_slot_id: 'default' }
     ]
   };
   const posts = [];
@@ -946,21 +946,21 @@ test('accountSwitcher mode renders 1-click switchers, guided Stop+Restart/queue,
         if (body.conversation_id && body.mode === 'queue') {
           accountStatus = {
             ...accountStatus,
-            conversations: [{ id: 'conv-1', harness: 'codex', title: 'Main Lead', account_slot_id: 'default', pending_account_slot_id: body.slot_id }]
+            conversations: [{ id: 'conv-1', backend: 'codex', label: 'Main Lead', account_slot_id: 'default', pending_account_slot: body.slot_id }]
           };
           return Promise.resolve({ ok: true, json: () => Promise.resolve({ conversation_id: body.conversation_id, mode: 'queued' }) });
         }
         if (body.conversation_id && body.mode === 'now') {
           accountStatus = {
             ...accountStatus,
-            conversations: [{ id: 'conv-1', harness: 'codex', title: 'Main Lead', account_slot_id: body.slot_id }]
+            conversations: [{ id: 'conv-1', backend: 'codex', label: 'Main Lead', account_slot_id: body.slot_id }]
           };
           return Promise.resolve({ ok: true, json: () => Promise.resolve({ conversation_id: body.conversation_id, mode: 'restarted_2a' }) });
         }
         accountStatus = {
           ...accountStatus,
           slots: { codex: accountStatus.slots.codex.map(s => ({ ...s, active: s.id === body.slot_id })) },
-          conversations: [{ id: 'conv-1', harness: 'codex', title: 'Main Lead', account_slot_id: 'default', pending_account_slot_id: body.slot_id }]
+          conversations: [{ id: 'conv-1', backend: 'codex', label: 'Main Lead', account_slot_id: 'default', pending_account_slot: body.slot_id }]
         };
         return Promise.resolve({ ok: true, json: () => Promise.resolve({ mode: 'harness_default', queued_count: 1 }) });
       }
@@ -1020,6 +1020,8 @@ test('accountSwitcher mode renders 1-click switchers, guided Stop+Restart/queue,
   assert.deepEqual(posts[2], { url: '/api/account/slots/switch', body: { conversation_id: 'conv-1', slot_id: 'work', mode: 'now' } });
 
   const statusCallsBefore = env.calls.filter(c => c.url === '/api/account/status').length;
+  const streamJs = fs.readFileSync(__dirname + '/assets/dashboard-stream.js', 'utf8');
+  assert.match(streamJs, /"account-changed":\s*onAccountChanged/);
   env.doc.events['ws-account-changed']();
   await flush();
   assert.ok(env.calls.filter(c => c.url === '/api/account/status').length > statusCallsBefore);
@@ -1046,7 +1048,7 @@ test('Phase 3 topbar switcher supports claude slots and renders agy as single-sl
       { harness: 'agy', label: 'Antigravity', single_slot: true, available: true, probed: true, auth_required: false }
     ],
     conversations: [
-      { id: 'claude-conv-1', harness: 'claude', title: 'Claude Lead', account_slot_id: 'default' }
+      { id: 'claude-conv-1', backend: 'claude', label: 'Claude Lead', account_slot_id: 'default' }
     ]
   };
   const posts = [];
@@ -1069,7 +1071,7 @@ test('Phase 3 topbar switcher supports claude slots and renders agy as single-sl
           claude: accountStatus.slots.claude.map(s => ({ ...s, active: s.id === body.slot_id }))
         },
         conversations: [
-          { id: 'claude-conv-1', harness: 'claude', title: 'Claude Lead', account_slot_id: 'default', pending_account_slot_id: body.slot_id }
+          { id: 'claude-conv-1', backend: 'claude', label: 'Claude Lead', account_slot_id: 'default', pending_account_slot: body.slot_id }
         ]
       };
       return Promise.resolve({ ok: true, json: () => Promise.resolve({ mode: 'harness_default', queued_count: 1 }) });

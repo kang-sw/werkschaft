@@ -751,8 +751,8 @@
       });
 
       var convs = Array.isArray(accountData.conversations) ? accountData.conversations.filter(function (c) {
-        var list = slotsMap[c.harness];
-        return Array.isArray(list) && (list.length > 1 || !!c.pending_account_slot_id);
+        var list = slotsMap[c.backend];
+        return Array.isArray(list) && (list.length > 1 || !!c.pending_account_slot);
       }) : [];
       if (convs.length) {
         var cList = el("div", "usage-conv-list");
@@ -760,27 +760,27 @@
         convs.forEach(function (conv) {
           var cRow = el("div", "usage-conv-row");
           cRow.setAttribute("data-conv-id", conv.id);
-          var titleText = conv.title || conv.id;
+          var titleText = conv.label || conv.id;
           var titleEl = el("span", "usage-conv-title", titleText);
           titleEl.title = titleText;
           cRow.appendChild(titleEl);
-          cRow.appendChild(el("span", "usage-conv-badge", slotDisplayLabel(conv.harness, conv.account_slot_id)));
-          if (conv.pending_account_slot_id) {
-            cRow.appendChild(el("span", "usage-conv-badge queued", t("queuedSlot", slotDisplayLabel(conv.harness, conv.pending_account_slot_id))));
+          cRow.appendChild(el("span", "usage-conv-badge", slotDisplayLabel(conv.backend, conv.account_slot_id)));
+          if (conv.pending_account_slot) {
+            cRow.appendChild(el("span", "usage-conv-badge queued", t("queuedSlot", slotDisplayLabel(conv.backend, conv.pending_account_slot))));
           }
           var actions = el("div", "usage-conv-actions");
-          if (conv.pending_account_slot_id) {
+          if (conv.pending_account_slot) {
             var applyNow = el("button", "usage-act-btn pri", t("switchNow"));
             applyNow.type = "button";
             applyNow.disabled = switchBusy;
             applyNow.addEventListener("click", function () {
-              postAccountSwitch("slots/switch", { conversation_id: conv.id, slot_id: conv.pending_account_slot_id, mode: "now" }, function () {
+              postAccountSwitch("slots/switch", { conversation_id: conv.id, slot_id: conv.pending_account_slot, mode: "now" }, function () {
                 return t("switchedNow");
               });
             });
             actions.appendChild(applyNow);
           } else {
-            (slotsMap[conv.harness] || []).forEach(function (slot) {
+            (slotsMap[conv.backend] || []).forEach(function (slot) {
               var curSlot = conv.account_slot_id || "default";
               if (slot.id === curSlot) return;
               var slotLabel = slot.id === "default" ? t("defaultSlot") : (slot.label || slot.id);
@@ -788,7 +788,7 @@
               pick.type = "button";
               pick.disabled = switchBusy;
               pick.addEventListener("click", function () {
-                guideConv = { convId: conv.id, harness: conv.harness, slotId: slot.id, slotLabel: slotLabel, convTitle: titleText };
+                guideConv = { convId: conv.id, harness: conv.backend, slotId: slot.id, slotLabel: slotLabel, convTitle: titleText };
                 drawAccounts();
               });
               actions.appendChild(pick);

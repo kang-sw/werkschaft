@@ -452,3 +452,51 @@ func TestPhase3AgyProbeSerializationNeverFansOutConcurrently(t *testing.T) {
 	}
 	_ = strconv.Itoa(ran)
 }
+
+func TestPhase3AccountSSEEventNameAndConversationWireContract(t *testing.T) {
+	// Verify AccountSlotConversation JSON field names match assets/usage.js consumers.
+	raw, err := json.Marshal(AccountSlotConversation{
+		ID:                   "conv-wire-1",
+		Backend:              "claude",
+		Label:                "Claude Lead",
+		AccountSlotID:        "default",
+		PendingAccountSlotID: "work",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"id", "backend", "label", "account_slot_id", "pending_account_slot"} {
+		if _, ok := fields[want]; !ok {
+			t.Fatalf("AccountSlotConversation JSON missing %q: %s", want, string(raw))
+		}
+	}
+
+	// Verify /rail/events emits the exact "account-changed" SSE event subscribed by dashboard-stream.js.
+	f := startPageFixture(t)
+	rail := openSSE(t, f.base+"/rail/events")
+	_, _ = collect(rail)
+
+	f.d.accountChanged()
+
+	deadline := time.Now().Add(3 * time.Second)
+	var gotEvent bool
+	for time.Now().Before(deadline) && !gotEvent {
+		select {
+		case ev := <-rail:
+			if ev.name == "account-changed" {
+				if !strings.Contains(ev.data, `"rev":1`) {
+					t.Fatalf("account-changed payload = %q, want rev:1", ev.data)
+				}
+				gotEvent = true
+			}
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	if !gotEvent {
+		t.Fatal("did not receive SSE event \"account-changed\" after notifyAccountChanged()")
+	}
+}

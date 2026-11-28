@@ -158,7 +158,8 @@
         if (!slotBusy && result.slot_sign_in && JSON.stringify(slotSignIn) !== JSON.stringify(result.slot_sign_in)) slotSignIn = result.slot_sign_in;
         if (pending(slotSignIn)) scheduleSlotPoll();
         const activeHarnessAuth = Array.isArray(result.harness_auth) ? result.harness_auth.find(item => pending(item.sign_in))?.sign_in || result.harness_auth.find(item => item.sign_in && item.sign_in.state && item.sign_in.state !== "idle")?.sign_in : null;
-        if (!harnessAuthBusy && activeHarnessAuth && JSON.stringify(harnessAuthSignIn) !== JSON.stringify(activeHarnessAuth)) harnessAuthSignIn = activeHarnessAuth;
+        const nextHarnessAuth = activeHarnessAuth || { state: "idle" };
+        if (!harnessAuthBusy && JSON.stringify(harnessAuthSignIn) !== JSON.stringify(nextHarnessAuth)) harnessAuthSignIn = nextHarnessAuth;
         if (pending(harnessAuthSignIn)) scheduleHarnessAuthPoll();
         if (JSON.stringify(before?.openrouter) !== JSON.stringify(result.openrouter)) updateOpenRouter();
         if (before?.openai_ready !== result.openai_ready || before?.loopback_peer !== result.loopback_peer ||

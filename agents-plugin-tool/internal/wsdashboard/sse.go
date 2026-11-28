@@ -698,7 +698,7 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 			}
 			if localStream && (src.key.kind == regionRail || !framedRequest(r)) {
 				if rev := d.accountRev.Load(); rev != sentAccountRev {
-					if sink.event("account", fmt.Appendf(nil, `{"rev":%d}`, rev)) != nil {
+					if sink.event("account-changed", fmt.Appendf(nil, `{"rev":%d}`, rev)) != nil {
 						return false
 					}
 					sentAccountRev = rev
