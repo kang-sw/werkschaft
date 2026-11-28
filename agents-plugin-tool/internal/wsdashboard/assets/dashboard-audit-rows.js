@@ -875,36 +875,86 @@
       var summary = detail.querySelector(".au-row[data-call]");
       if (!summary) return;
       var call = summary.getAttribute("data-call"), cached = auPreviewGet(call);
-      if (cached) { auApplyPreview(detail, summary, cached); return; }
+      if (cached) {
+        detail.removeAttribute("data-au-out-pending");
+        detail.removeAttribute("data-au-refresh-queued");
+        auApplyPreview(detail, summary, cached);
+        return;
+      }
+      if (!auRowsRid) return;
       auInlinePending.add(detail);
-      var base = "/s/" + encodeURIComponent(auRowsRid) + "/audit", settled = false;
+      var epoch = typeof auEpoch === "number" ? auEpoch : 0;
+      var tokEl = detail.querySelector(".au-tok");
+      if (!detail.hasAttribute("data-au-tok-snap")) {
+        detail.setAttribute("data-au-tok-snap", tokEl ? tokEl.textContent.trim() : "");
+      }
+      detail.setAttribute("data-au-out-inflight", "");
+      var base = "/s/" + encodeURIComponent(auRowsRid) + "/audit", settled = false, failed = false;
       auInlineJSON(base + "/events?call=" + encodeURIComponent(call)).then(function (bundle) {
-        if (!bundle || !detail.isConnected) return;
+        if (!bundle || epoch !== (typeof auEpoch === "number" ? auEpoch : 0) || !detail.isConnected) return;
         var result = (bundle.events || []).find(function (ev) { return auIsResultSummary(ev, call); });
         settled = !!result;
         return Promise.all([auInlineCallBody(base, bundle.call, "in"), auInlineCallBody(base, result, "out")]);
       }).then(function (parts) {
-        if (!parts || !detail.isConnected) return;
+        if (!parts || epoch !== (typeof auEpoch === "number" ? auEpoch : 0) || !detail.isConnected) return;
         auApplyPreview(detail, summary, parts);
         // A call without a result is still running: remember to read its
         // output once the live turn row reports it complete.
-        if (settled) { detail.removeAttribute("data-au-out-pending"); auPreviewPut(call, parts); }
-        else detail.setAttribute("data-au-out-pending", "");
+        if (settled) {
+          detail.removeAttribute("data-au-out-pending");
+          detail.removeAttribute("data-au-refresh-queued");
+          detail.removeAttribute("data-au-tok-snap");
+          auPreviewPut(call, parts);
+        } else {
+          detail.setAttribute("data-au-out-pending", "");
+        }
       }).catch(function () {
-        // A later open retries a failed bundle or body.
-      }).finally(function () { auInlinePending.delete(detail); });
+        failed = true;
+        // A later open or update retries a failed bundle or body. Keep
+        // data-au-out-pending intact so transient errors are retried.
+      }).finally(function () {
+        auInlinePending.delete(detail);
+        detail.removeAttribute("data-au-out-inflight");
+        var curEpoch = typeof auEpoch === "number" ? auEpoch : 0;
+        if (!failed && epoch === curEpoch && detail.isConnected && !settled && detail.hasAttribute("data-au-refresh-queued")) {
+          detail.removeAttribute("data-au-refresh-queued");
+          detail.removeAttribute("data-au-preview");
+          auLoadPreview(detail);
+        }
+      });
     }
     doc.addEventListener("toggle", function (e) { auLoadPreview(e.target); }, true);
+    function auHasCompletionSignal(detail, evDetail) {
+      if (evDetail && evDetail.completed) return true;
+      var dur = detail.querySelector(".au-dur");
+      if (dur && dur.textContent.trim()) return true;
+      var row = detail.querySelector(".au-row");
+      if (row && row.classList && row.classList.contains("au-fail")) return true;
+      var tok = detail.querySelector(".au-tok");
+      var tokTxt = tok ? tok.textContent.trim() : "";
+      if (tokTxt) {
+        var snap = detail.getAttribute("data-au-tok-snap");
+        if (snap === null || tokTxt !== snap) return true;
+      }
+      var turn = detail.closest ? detail.closest(".d-turn") : null;
+      return !!(turn && turn.classList && !turn.classList.contains("d-turn-live"));
+    }
     // The conversation merge keeps an open call's details alive and syncs its
     // summary in place. A call that was running when its preview loaded has no
-    // output yet; once its summary shows a duration the output is read, in
-    // place, beside the input already shown.
+    // output yet; once its summary or turn signals completion, the output is
+    // read in place beside the input already shown.
     doc.addEventListener("ws-call-details-updated", function (e) {
-      var detail = e.detail && e.detail.el;
-      if (!detail || !detail.hasAttribute || !detail.hasAttribute("data-au-out-pending")) return;
-      var dur = detail.querySelector(".au-dur");
-      if (!dur || !dur.textContent.trim()) return;
-      detail.removeAttribute("data-au-out-pending");
+      var evDetail = (e && e.detail) || {};
+      var detail = evDetail.el;
+      if (!detail || !detail.hasAttribute) return;
+      var inflight = detail.hasAttribute("data-au-out-inflight") || auInlinePending.has(detail);
+      var pending = detail.hasAttribute("data-au-out-pending");
+      if (!inflight && !pending) return;
+      if (!auHasCompletionSignal(detail, evDetail)) return;
+      if (inflight) {
+        detail.setAttribute("data-au-refresh-queued", "");
+        return;
+      }
       detail.removeAttribute("data-au-preview");
       auLoadPreview(detail);
     });

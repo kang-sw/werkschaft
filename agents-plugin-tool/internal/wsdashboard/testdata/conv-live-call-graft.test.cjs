@@ -14,6 +14,7 @@ const vm = require("node:vm");
 const assetsDir = path.join(__dirname, "..", "assets");
 const convSrc = fs.readFileSync(path.join(assetsDir, "dashboard-conversation.js"), "utf8");
 const auditSrc = fs.readFileSync(path.join(assetsDir, "dashboard-audit-rows.js"), "utf8");
+const auditViewSrc = fs.readFileSync(path.join(assetsDir, "dashboard-audit.js"), "utf8");
 
 function sliceBetween(src, startMarker, endMarker) {
   const start = src.indexOf(startMarker);
@@ -45,6 +46,10 @@ class El {
   }
   get className() { return this.attrs.get("class") || ""; }
   set className(v) { this.attrs.set("class", v); }
+  get title() { return this.getAttribute("title") || ""; }
+  set title(v) { this.setAttribute("title", v); }
+  get hidden() { return this.attrs.has("hidden"); }
+  set hidden(v) { if (v) this.attrs.set("hidden", ""); else this.attrs.delete("hidden"); }
   get isConnected() { let n = this; while (n.parentNode) n = n.parentNode; return n.isRoot === true; }
   get open() { return this.attrs.has("open"); }
   set open(v) {
@@ -140,11 +145,13 @@ const turn = (rev, count, calls) =>
   `<summary class="conv-row d-turn-sum" data-conv-turn-summary aria-expanded="false"><span class="d-turn-count">${count}</span></summary>` +
   `<div class="d-turn-drawer" data-conv-turn-drawer><div class="d-turn-gap"><ol class="au-calls">${calls.join("")}</ol></div></div></details>`;
 
-// harness wires the two production sources against one document and a fetch
-// stub; bundles maps a call id to its audit bundle.
-function harness(bundles) {
+// harness wires the production sources against one document and a fetch stub;
+// bundles maps a call id to its audit bundle.
+function harness(bundles, opts = {}) {
   const listeners = new Map();
   const fetches = [];
+  const updatedEvents = [];
+  const openState = {};
   const doc = {
     root: null,
     addEventListener(type, fn) { listeners.set(type, (listeners.get(type) || []).concat(fn)); },
@@ -154,8 +161,7 @@ function harness(bundles) {
   toggleHook = (target) => doc.dispatchEvent({ type: "toggle", target });
   class CustomEvent { constructor(type, init) { this.type = type; this.detail = (init && init.detail) || {}; } }
   const pins = { n: 0 };
-  const fetch = (url) => {
-    fetches.push(url);
+  const defaultFetch = (url) => {
     const call = /call=([^&]+)/.exec(url);
     const body = /\/event\/([^?]+)\?part=(in|out)/.exec(url);
     let payload = null;
@@ -163,29 +169,96 @@ function harness(bundles) {
     else if (body) payload = { data: body[2] === "in" ? "INPUT " + body[1] : "OUTPUT " + body[1], end: true };
     return Promise.resolve({ ok: !!payload, status: payload ? 200 : 404, json: () => Promise.resolve(payload) });
   };
+  const impl = opts.fetchImpl || defaultFetch;
+  const fetch = (url) => { fetches.push(url); return impl(url); };
+
+  const convo = new El("div");
+  convo.isRoot = true;
+  convo.setAttribute("id", "convo");
+  const entriesReg = new El("div");
+  entriesReg.setAttribute("id", "r-entries");
+  const box = new El("div");
+  box.setAttribute("class", "centries");
+  entriesReg.appendChild(box);
+  const convlive = new El("div");
+  convlive.setAttribute("id", "r-convlive");
+  convo.appendChild(entriesReg);
+  convo.appendChild(convlive);
+  doc.root = convo;
+
+  const wrap = (nodes) => { const w = new El("div"); nodes.forEach((n) => w.appendChild(n)); return w; };
+  const openKey = (d) => (d && d.hasAttribute && d.hasAttribute("data-key") ? "k:" + d.getAttribute("data-key") : null);
+  const syncTurnAria = (d) => {
+    const s = d && d.firstElementChild;
+    if (s && s.hasAttribute && s.hasAttribute("data-conv-turn-summary")) s.setAttribute("aria-expanded", d.open ? "true" : "false");
+  };
+  const restoreOpen = (el) => {
+    const all = el.tagName === "DETAILS" ? [el] : [];
+    if (el.querySelectorAll) all.push(...el.querySelectorAll("details"));
+    all.forEach((d) => {
+      const k = openKey(d);
+      if (k && Object.prototype.hasOwnProperty.call(openState, k)) d.open = openState[k];
+      syncTurnAria(d);
+    });
+  };
+  doc.addEventListener("toggle", (e) => {
+    const d = e && e.target;
+    if (!d || d.tagName !== "DETAILS") return;
+    syncTurnAria(d);
+    const k = openKey(d);
+    if (k) openState[k] = d.open;
+  });
+  doc.addEventListener("ws-call-details-updated", (e) => {
+    const el = e && e.detail && e.detail.el;
+    updatedEvents.push({ el, connected: !!(el && el.isConnected), completed: !!(e && e.detail && e.detail.completed) });
+  });
+
   const sandbox = {
-    doc, CustomEvent, fetch, Map, Object, Array, Promise, WeakSet, encodeURIComponent, decodeURIComponent, String, JSON,
-    auRowsRid: "sess", stick: false, pinConvo() { pins.n++; },
+    doc, CustomEvent, fetch, Map, Object, Array, Promise, WeakSet, Number, isFinite,
+    encodeURIComponent, decodeURIComponent, String, JSON,
+    auRowsRid: opts.auRowsRid !== undefined ? opts.auRowsRid : "sess",
+    auEpoch: 0,
+    auLatestAfter: "",
+    auCoveredSince: "",
+    auOpenBelowDone: false,
+    auUnboundedDone: false,
+    auReset410Done: false,
+    auFailedJobs: [],
+    auFetchQueue: Promise.resolve(),
+    auEventsById: Object.create(null),
+    auEntriesContainer: () => box,
+    auFirstDataEntryAt: () => "",
+    auScheduleReconcile() {},
+    auInitialSync() {},
+    stick: false,
+    pinConvo() { pins.n++; },
     wsT: (k) => (k === "js.audit.tab.out" ? "Output" : k),
     auIsResultSummary: (ev, id) => !!ev && ev.call_id === id && ev.kind === "tool_result",
-    restoreOpen() {}, fmtTimes() {},
+    auFmtSpan: (ms) => ms + "ms",
+    auEstContextText: (inB, outB) => (inB || outB ? "+" + (inB + outB) + "B" : ""),
+    auEstContextTitle: (inB, outB) => inB + "/" + outB,
+    $: (id) => (id === "convo" ? convo : null),
+    q: (sel, el) => (el || convo).querySelectorAll(sel),
+    region: (name) => (name === "convlive" ? convlive : name === "entries" ? entriesReg : null),
+    frag: (html) => wrap(parse(html)),
+    openState, openKey, syncTurnAria,
+    convoSwapping: 0,
+    restoreOpen, fmtTimes() {},
   };
   vm.runInNewContext(
     sliceBetween(auditSrc, "    function auDirectItems(el) {", "\n    function auRenderedOwners(") + "\n" +
-    sliceBetween(auditSrc, "    function auInlineJSON(url) {", "\n    doc.addEventListener(\"ws-approval-rows-changed\"") +
-    "\n" + sliceBetween(convSrc, "  function entryKeys(box) {", "\n  // gapped reports") +
-    ";globalThis.__api = { mergeEntries, cache: auPreviewCache, cap: AU_PREVIEW_CAP };",
+    sliceBetween(auditSrc, "    doc.addEventListener(\"ws-history-reset\", function () {", "\n    doc.addEventListener(\"ws-approval-rows-changed\"") + "\n" +
+    sliceBetween(convSrc, "  function entryKeys(box) {", "\n  // gapped reports") + "\n" +
+    sliceBetween(auditViewSrc, "  function auApplyHydration(summaries, markChecked, opts) {", "\n  function auGetHydrationState(") +
+    ";globalThis.__api = { mergeEntries, swapConvLive, syncCallSummary, liveCallStore, auApplyHydration, reset: () => doc.dispatchEvent({ type: 'ws-history-reset' }), cache: auPreviewCache, cap: AU_PREVIEW_CAP };",
     sandbox
   );
-  const box = new El("div");
-  box.isRoot = true;
-  doc.root = box;
   const merge = (html) => sandbox.__api.mergeEntries(box, wrap(parse(html)));
-  const wrap = (nodes) => { const w = new El("div"); nodes.forEach((n) => w.appendChild(n)); return w; };
-  return { doc, box, fetches, pins, merge, api: sandbox.__api, parse, sandbox };
+  const swapLive = (html) => sandbox.__api.swapConvLive(convlive, html);
+  return { doc, box, convlive, fetches, pins, merge, swapLive, openState, updatedEvents, api: sandbox.__api, parse, sandbox };
 }
 
-const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+const flush = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
 const eventsFetches = (h, id) => h.fetches.filter((u) => u.includes("/events?call=" + id));
 const bundle = (id, { result = true } = {}) => ({
   call: { id: "ev-" + id, in_bytes: 5 },
@@ -313,4 +386,217 @@ test("the preview cache is bounded and drops the least recently used call", asyn
   assert.equal(h.api.cache.size, h.api.cap, "cache never exceeds its cap");
   assert.equal(h.api.cache.has("k0"), false, "oldest entry evicted");
   assert.equal(h.api.cache.has("k" + (n - 1)), true, "newest entry kept");
+});
+
+test("LRU recency promotion keeps re-opened entry and history-reset clears cache and rejects stale fetches", async () => {
+  let resolveSlow;
+  const slowDone = new Promise((r) => { resolveSlow = r; });
+  const h = harness({
+    slow: bundle("slow"),
+  }, {
+    fetchImpl: (url) => {
+      if (url.includes("call=slow")) {
+        return new Promise((r) => {
+          resolveSlow = () => r({ ok: true, status: 200, json: () => Promise.resolve(bundle("slow")) });
+          slowDone;
+        });
+      }
+      const call = /call=([^&]+)/.exec(url);
+      const body = /\/event\/([^?]+)\?part=(in|out)/.exec(url);
+      const payload = call ? bundle(decodeURIComponent(call[1])) : { data: body[2] === "in" ? "IN" : "OUT", end: true };
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(payload) });
+    },
+  });
+  const cap = h.api.cap;
+  const calls = Array.from({ length: cap }, (_, i) => callLi("m" + i));
+  h.merge(turn("r1", "calls", calls));
+  const all = h.box.querySelectorAll("details.au-call-details");
+  for (let i = 0; i < cap; i++) { all[i].open = true; await flush(); }
+  // Re-open m0 (cached) to promote it to MRU before adding one more call.
+  all[0].open = false;
+  all[0].removeAttribute("data-au-preview");
+  all[0].open = true;
+  await flush();
+  h.merge(turn("r2", "calls", calls.concat(callLi("extra"))));
+  h.box.querySelector('details[data-key="call-extra"]').open = true;
+  await flush();
+  assert.equal(h.api.cache.has("m0"), true, "re-touched m0 is promoted and kept");
+  assert.equal(h.api.cache.has("m1"), false, "m1 became LRU and was evicted");
+
+  // Stale in-flight fetch across ws-history-reset must not write cache or DOM.
+  h.merge(turn("r3", "calls", [callLi("slow", { dur: "" })]));
+  const slowEl = h.box.querySelector('details[data-key="call-slow"]');
+  slowEl.open = true;
+  await Promise.resolve();
+  h.api.reset();
+  assert.equal(h.api.cache.size, 0, "history-reset clears auPreviewCache");
+  resolveSlow();
+  await flush();
+  assert.equal(h.api.cache.has("slow"), false, "stale fetch from prior epoch must not repopulate cache");
+  assert.equal(slowEl.querySelector(".au-call-output"), null, "stale fetch must not mutate DOM after epoch change");
+
+  // Empty auRowsRid performs zero fetches.
+  const emptyRid = harness({ c1: bundle("c1") }, { auRowsRid: "" });
+  emptyRid.merge(turn("r1", "1 call", [callLi("c1")]));
+  emptyRid.box.querySelector("details.au-call-details").open = true;
+  await flush();
+  assert.equal(emptyRid.fetches.length, 0, "empty auRowsRid skips preview fetch");
+});
+
+const liveRegionHtml = (rev, calls) =>
+  `<div class="conv clive" data-phase="running"><details class="toolsline d-turn live d-turn-live" data-conv-turn="1" data-key="turn-live" data-turn-rev="${rev}">` +
+  `<summary class="conv-row d-turn-sum" data-conv-turn-summary aria-expanded="false"><span class="d-turn-count">${rev}</span></summary>` +
+  `<div class="d-turn-drawer" data-conv-turn-drawer><div class="d-turn-gap"><ol class="au-calls">${calls.join("")}</ol></div></div></details></div>`;
+
+const completedTurn = (entry, rev, calls) =>
+  `<details class="toolsline d-turn" data-conv-turn="1" data-entry="${entry}" data-key="turn-${entry}" data-turn-rev="${rev}">` +
+  `<summary class="conv-row d-turn-sum" data-conv-turn-summary aria-expanded="false"><span class="d-turn-count">${rev}</span></summary>` +
+  `<div class="d-turn-drawer" data-conv-turn-drawer><div class="d-turn-gap"><ol class="au-calls">${calls.join("")}</ol></div></div><div class="conv-audit-items"></div></details>`;
+
+test("swapConvLive and r-convlive -> r-entries handoff preserve open call and outer turn state in both orders", async () => {
+  // Order A: r-entries completes while r-convlive still holds LiveTurnSummary.
+  const bundlesA = { c1: bundle("c1", { result: false }) };
+  const hA = harness(bundlesA);
+  hA.swapLive(liveRegionHtml("r1", [callLi("c1", { dur: "" })]));
+  const liveTurnA = hA.convlive.querySelector("details.d-turn-live");
+  liveTurnA.open = true;
+  const callA = hA.convlive.querySelector('details[data-key="call-c1"]');
+  callA.open = true;
+  await flush();
+  const inputA = callA.querySelector(".au-call-input");
+  assert.equal(callA.hasAttribute("data-au-out-pending"), true);
+
+  // Streaming tick updates rev inside r-convlive without rebuilding callA or collapsing liveTurnA.
+  hA.swapLive(liveRegionHtml("r2", [callLi("c1", { dur: "" }), callLi("c2", { dur: "" })]));
+  await flush();
+  assert.equal(hA.convlive.querySelector('details[data-key="call-c1"]'), callA);
+  assert.equal(hA.convlive.querySelector("details.d-turn-live").open, true);
+  assert.equal(callA.querySelector(".au-call-input"), inputA);
+  assert.equal(eventsFetches(hA, "c1").length, 1);
+
+  // Live->completed handoff replaces absorbed placeholder in r-entries while r-convlive still holds liveTurnA.
+  hA.merge(`<span hidden data-entry="002" data-turn-live-absorbed="1"></span>`);
+  hA.sandbox.convoSwapping = 1;
+  bundlesA.c1 = bundle("c1");
+  hA.merge(completedTurn("002", "done", [callLi("c1", { dur: "" })]));
+  hA.sandbox.convoSwapping = 0;
+  await flush();
+  const handedTurn = hA.box.querySelector('details[data-entry="002"]');
+  assert.equal(handedTurn.open, true, "outer turn stays open across r-convlive -> r-entries handoff");
+  assert.equal(handedTurn.querySelector("[data-conv-turn-summary]").getAttribute("aria-expanded"), "true");
+  assert.equal(hA.openState["k:turn-002"], true);
+  assert.equal(handedTurn.querySelector('details[data-key="call-c1"]'), callA, "call node grafted across regions");
+  assert.equal(callA.querySelector(".au-call-output").textContent, "Output\nOUTPUT res-c1", "completion output fetched on handoff");
+  assert.ok(hA.updatedEvents.some((ev) => ev.el === callA && ev.connected === true && ev.completed === true), "ws-call-details-updated fires AFTER attachment");
+
+  // Order B: r-convlive clears BEFORE r-entries receives the completed TurnSummary.
+  const hB = harness({ c9: bundle("c9") });
+  hB.swapLive(liveRegionHtml("r1", [callLi("c9", { dur: "" })]));
+  hB.convlive.querySelector("details.d-turn-live").open = true;
+  const callB = hB.convlive.querySelector('details[data-key="call-c9"]');
+  callB.open = true;
+  await flush();
+  // convlive goes idle first.
+  hB.swapLive(`<div class="conv clive" data-phase="idle"></div>`);
+  assert.equal(hB.api.liveCallStore().turnOpen, true);
+  // An older history page merged before handoff must NOT consume turnOpen.
+  hB.merge(completedTurn("000", "old", [callLi("old1")]));
+  assert.equal(hB.box.querySelector('details[data-entry="000"]').open, false, "history page must not inherit live turnOpen");
+  // Now the completed turn arrives in r-entries.
+  hB.sandbox.convoSwapping = 1;
+  hB.merge(completedTurn("005", "done", [callLi("c9", { dur: "2ms" })]));
+  hB.sandbox.convoSwapping = 0;
+  const doneB = hB.box.querySelector('details[data-entry="005"]');
+  assert.equal(doneB.open, true, "turnOpen restored via liveCallStore stash");
+  assert.equal(doneB.querySelector('details[data-key="call-c9"]'), callB, "callB grafted from liveCallStore stash");
+});
+
+test("syncCallSummary preserves au-sel and hydrated fields against empty server cells", () => {
+  const h = harness({});
+  const cur = parse(callLi("c1", { dur: "120ms", fail: true }))[0].querySelector("summary");
+  cur.classList.add("au-cur");
+  cur.classList.add("au-sel");
+  cur.setAttribute("data-au-hydrated", "1");
+  cur.querySelector(".au-tok").setAttribute("title", "100 in / 20 out · 1000 → 1120");
+  const fresh = parse(`<summary class="conv-row au-row au-done" data-call="c1"><span class="row-icon au-mk">ok</span><span class="row-content trace-content"><span class="au-tool">Bash</span></span><span class="row-time au-right"><span class="au-att" hidden></span><span class="au-dur"></span><span class="au-tok"></span></span></summary>`)[0];
+  h.api.syncCallSummary(cur, fresh);
+  assert.equal(cur.classList.contains("au-cur"), true);
+  assert.equal(cur.classList.contains("au-sel"), true);
+  assert.equal(cur.classList.contains("au-fail"), true, "hydrated au-fail preserved");
+  assert.equal(cur.querySelector(".row-icon").textContent, "x", "hydrated fail icon preserved");
+  assert.equal(cur.querySelector(".au-dur").textContent, "120ms", "hydrated dur preserved against empty server cell");
+  assert.equal(cur.querySelector(".au-tok").textContent, "+1k", "hydrated tok preserved against empty server cell");
+  assert.equal(cur.querySelector(".au-tok").getAttribute("title"), "100 in / 20 out · 1000 → 1120");
+
+  // Non-empty server dur still updates cleanly, and fresh tok without title keeps hydrated title.
+  const fresh2 = parse(`<summary class="conv-row au-row au-done" data-call="c1"><span class="row-icon au-mk">ok</span><span class="row-content trace-content"><span class="au-tool">Bash</span></span><span class="row-time au-right"><span class="au-att" hidden></span><span class="au-dur">2s</span><span class="au-tok">+2k</span></span></summary>`)[0];
+  h.api.syncCallSummary(cur, fresh2);
+  assert.equal(cur.querySelector(".au-dur").textContent, "2s");
+  assert.equal(cur.querySelector(".au-tok").textContent, "+2k");
+  assert.equal(cur.querySelector(".au-tok").getAttribute("title"), "100 in / 20 out · 1000 → 1120");
+});
+
+test("in-flight completion race, non-dur signals (<1ms), and transient error retry work cleanly", async () => {
+  // 1. In-flight race: initial fetch still pending when completion arrives.
+  let resolveInitial;
+  let phase = "running";
+  const hRace = harness({}, {
+    fetchImpl: (url) => {
+      if (url.includes("/events?call=race")) {
+        if (phase === "running") {
+          return new Promise((r) => {
+            resolveInitial = () => r({ ok: true, status: 200, json: () => Promise.resolve(bundle("race", { result: false })) });
+          });
+        }
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(bundle("race", { result: true })) });
+      }
+      const m = /part=(in|out)/.exec(url);
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ data: m[1].toUpperCase(), end: true }) });
+    },
+  });
+  hRace.swapLive(liveRegionHtml("r1", [callLi("race", { dur: "" }).replace("+1k", "")]));
+  const dRace = hRace.convlive.querySelector('details[data-key="call-race"]');
+  dRace.open = true;
+  await Promise.resolve();
+  assert.equal(dRace.hasAttribute("data-au-out-inflight"), true);
+
+  // Completion arrives while initial fetch is still in flight (via <1ms non-dur .au-tok change).
+  phase = "done";
+  hRace.swapLive(liveRegionHtml("r2", [callLi("race", { dur: "" })]));
+  assert.equal(dRace.hasAttribute("data-au-refresh-queued"), true);
+  resolveInitial();
+  await flush();
+  assert.equal(eventsFetches(hRace, "race").length, 2, "queued completion refetch runs once after in-flight resolves");
+  assert.equal(dRace.querySelector(".au-call-output").textContent, "Output\nOUT");
+  assert.equal(dRace.hasAttribute("data-au-out-pending"), false);
+
+  // 2. Transient error on completion refetch preserves data-au-out-pending for retry.
+  let failNext = false;
+  const hErr = harness({}, {
+    fetchImpl: (url) => {
+      if (url.includes("/events?call=err1")) {
+        if (failNext) return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve(null) });
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(bundle("err1", { result: phase === "done" })) });
+      }
+      const m = /part=(in|out)/.exec(url);
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ data: m[1].toUpperCase(), end: true }) });
+    },
+  });
+  phase = "running";
+  hErr.swapLive(liveRegionHtml("r1", [callLi("err1", { dur: "" })]));
+  const dErr = hErr.convlive.querySelector('details[data-key="call-err1"]');
+  dErr.open = true;
+  await flush();
+  assert.equal(dErr.hasAttribute("data-au-out-pending"), true);
+  failNext = true;
+  hErr.swapLive(liveRegionHtml("r2", [callLi("err1", { dur: "1s" })]));
+  await flush();
+  assert.equal(dErr.hasAttribute("data-au-out-pending"), true, "transient error must not drop data-au-out-pending");
+  failNext = false;
+  phase = "done";
+  // Hydration tool_result completion triggers retry.
+  hErr.api.auApplyHydration([{ call_id: "err1", kind: "tool_result", out_bytes: 7 }], true);
+  await flush();
+  assert.equal(dErr.hasAttribute("data-au-out-pending"), false);
+  assert.equal(dErr.querySelector(".au-call-output").textContent, "Output\nOUT");
 });

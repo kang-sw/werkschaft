@@ -934,6 +934,7 @@
     var inBytesByCall = Object.create(null);
     var outBytesByCall = Object.create(null);
     var errByCall = Object.create(null);
+    var resultByCall = Object.create(null);
     var ordered = Array.isArray(summaries)
       ? summaries.slice().sort(function (a, b) { return (a.seq || 0) - (b.seq || 0); })
       : [];
@@ -946,6 +947,7 @@
           inBytesByCall[ev.call_id] = ev.in_bytes;
         }
       } else if (ev.kind === "tool_result") {
+        resultByCall[ev.call_id] = true;
         if (typeof ev.out_bytes === "number" && isFinite(ev.out_bytes) && ev.out_bytes > 0) {
           outBytesByCall[ev.call_id] = (outBytesByCall[ev.call_id] || 0) + ev.out_bytes;
         }
@@ -964,7 +966,7 @@
       var s = byCall[cid];
       var inB = inBytesByCall[cid] || 0;
       var outB = outBytesByCall[cid] || 0;
-      var hasAny = !!(s || outB > 0 || errByCall[cid]);
+      var hasAny = !!(s || outB > 0 || errByCall[cid] || resultByCall[cid]);
       if (s || markChecked) row.setAttribute("data-au-hydrated", "1");
       if (!hasAny) continue;
 
@@ -1004,6 +1006,12 @@
         } else {
           attEl.hidden = true;
         }
+      }
+      var detailEl = row.closest ? row.closest(".au-call-details") : null;
+      var rowCompleted = !!(resultByCall[cid] || outB > 0 || errByCall[cid] || (s && typeof s.duration_ms === "number" && s.duration_ms > 0));
+      if (rowCompleted && detailEl && (detailEl.hasAttribute("data-au-out-pending") || detailEl.hasAttribute("data-au-out-inflight")) &&
+          typeof CustomEvent === "function" && doc && typeof doc.dispatchEvent === "function") {
+        doc.dispatchEvent(new CustomEvent("ws-call-details-updated", { detail: { el: detailEl, completed: true } }));
       }
     }
   }

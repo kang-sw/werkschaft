@@ -105,7 +105,7 @@ function keydown(k){return {target:target(),key:k,preventDefault:function(){this
 }
 
 func TestConversationPresentationMergePreservesIdentityAndDisclosures(t *testing.T) {
-	src := whiteboardBridgeFunctions(t, string(mustAsset(t, "dashboard.js")), "entryKeys", "turnSummaryEl", "absorbedMarker", "dedupTurn", "callSummary", "childByClass", "syncCallSummary", "syncCallDetails", "graftLiveCalls", "mergeEntries", "gapped", "evictEntries")
+	src := whiteboardBridgeFunctions(t, string(mustAsset(t, "dashboard.js")), "entryKeys", "emitAuditEvent", "turnSummaryEl", "absorbedMarker", "dedupTurn", "callSummary", "childByClass", "liveCallStore", "liveCallStashPut", "liveCallStashTake", "preserveTurnOpen", "flushCallDetailsUpdated", "collectCallDetails", "applyHandoffOpen", "syncCallSummary", "syncCallDetails", "graftLiveCalls", "mergeEntries", "gapped", "evictEntries")
 	runNode(t, "conversation keyed insertion", `
 var bad=[],ENTRY_CAP=150,restored=[];
 function check(label,got,want){if(JSON.stringify(got)!==JSON.stringify(want))bad.push(label+': '+JSON.stringify(got));}

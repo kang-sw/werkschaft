@@ -1,9 +1,12 @@
 package wsdashboard_test
 
 import (
+	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
+	"time"
 )
 
 // A running turn's summary is replaced on nearly every event; the open
@@ -13,7 +16,9 @@ func TestConversationLiveCallGraft(t *testing.T) {
 	if err != nil {
 		t.Skip("node not installed; run testdata/conv-live-call-graft.test.cjs locally")
 	}
-	out, err := exec.Command(node, "--test", "testdata/conv-live-call-graft.test.cjs").CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, node, "--test", "testdata/conv-live-call-graft.test.cjs").CombinedOutput()
 	if err != nil {
 		t.Fatalf("live call graft cases: %v\n%s", err, out)
 	}
@@ -26,7 +31,18 @@ func TestConversationLiveCallGraftBrowser(t *testing.T) {
 	if os.Getenv("WS_PLAYWRIGHT_MODULE") == "" {
 		t.Skip("set WS_PLAYWRIGHT_MODULE to run the live call graft check in cached Chromium")
 	}
-	out, err := exec.Command("node", "testdata/conv-live-call-graft.browser.cjs").CombinedOutput()
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	if os.Getenv("PLAYWRIGHT_BROWSERS_PATH") == "" {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			t.Setenv("PLAYWRIGHT_BROWSERS_PATH", filepath.Join(home, "Library", "Caches", "ms-playwright"))
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, node, "testdata/conv-live-call-graft.browser.cjs").CombinedOutput()
 	t.Log(string(out))
 	if err != nil {
 		t.Fatalf("Chromium live call graft: %v", err)
