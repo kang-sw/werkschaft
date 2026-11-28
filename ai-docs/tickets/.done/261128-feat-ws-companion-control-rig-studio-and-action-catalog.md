@@ -10,6 +10,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: c4a486b2b383bc21
 sage-review-completeness-reviewed: c4a486b2b383bc21
+completed: 2026-11-28
 ---
 
 # Companion Control-Rig & Pack Clip Studio, Dynamic `companion-body` Action Catalog, and Reserved Prop/Target-Attach Contract
@@ -727,3 +728,8 @@ Phase 2 (Isolated Studio bundle, `/companion/studio` Control-Rig UI, runtime cli
   - `node --test agents-plugin-tool/internal/wsdashboard/frontend-companion*.test.js` — PASS (`123/123`, 0 failures).
   - `python3 agents-plugin-tool/scripts/generate-package-assets.py --check` — PASS.
   - Note: Two unrelated pre-existing Playwright tests on `develop @ c894b8f49` (`TestCompanionSettingsVrmAndThemeBrowser` waiting on legacy `#rail [data-scope-entry="global"]` moved in `9a7b4eb9e`, and `TestCompanionVrmStep4Phase1Browser` filling hidden `.ws-cm-input.wsc-backing`) were left untouched outside Phase 2 scope.
+
+
+## Resolution (2026-11-28)
+
+Both phases completed and verified: Phase 1 (a1f0aab88, pack clip schema, authoring write API, reserved schema preservation, dynamic <<<ACTIONS>>> catalog, T0 compatibility record) and Phase 2 (7f5d37af5, isolated studio runtime bundle, runtime clip/IK/Target Attach playback, /companion/studio Control-Rig UI, BroadcastChannel live refresh, Settings entry, 11-locale i18n, and real-VRM 0.x/1.0 Playwright QA). Deferred Stage 2/3 runtime prop-equipping work remains out of scope for this ticket.
