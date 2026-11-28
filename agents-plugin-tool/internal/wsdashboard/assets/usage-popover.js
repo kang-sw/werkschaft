@@ -176,6 +176,7 @@
       if (!e && !slots.length) return null;
       var r = el("div", "up-hr");
       r.setAttribute("data-k", def.k);
+      var rec = { k: def.k, el: r, liveCells: [], liveStatus: [], prevCells: [], nocacheEls: [] };
       var id = el("div", "up-hr-id");
       id.appendChild(hbadge(def, false));
       var displayName = def.harness === "codex" && e && e.harness === "codex_openai" ? localizedEntryName(e)
@@ -195,14 +196,19 @@
         pendEl.appendChild(sp);
         pendEl.appendChild(el("span", "", t("pending")));
         r.appendChild(pendEl);
+        rec.liveStatus.push(pendEl);
       } else if (!s5 && !s7) {
         var st = el("div", "up-hr-status up-hr-status-live");
         st.appendChild(el("span", "", e ? statusText(e.status) : t("unavailable")));
         if (e && e.status === "sign-in required" && !def.group) st.appendChild(buildAuthCta());
         r.appendChild(st);
+        rec.liveStatus.push(st);
       } else {
-        r.appendChild(buildNumCell(s5, "five_hour", now, "up-nc-live", null));
-        r.appendChild(buildNumCell(s7, "seven_day", now, "up-nc-live", null));
+        var l5 = buildNumCell(s5, "five_hour", now, "up-nc-live", null);
+        var l7 = buildNumCell(s7, "seven_day", now, "up-nc-live", null);
+        r.appendChild(l5);
+        r.appendChild(l7);
+        rec.liveCells.push(l5, l7);
       }
       // Pre-built inactive slot preview cells (hidden until pill hover/focus).
       if (withSlots && switcherOn && slots.length > 1) {
@@ -215,14 +221,17 @@
             var c7 = buildNumCell(p7, "seven_day", now, "up-nc-prev", { "data-preview-slot": slot.id });
             c5.hidden = true; c7.hidden = true;
             r.appendChild(c5); r.appendChild(c7);
+            rec.prevCells.push({ slot: slot.id, el: c5 }, { slot: slot.id, el: c7 });
           } else {
             var nc = el("div", "up-hr-status up-hr-nocache", t("previewNoCache"));
             nc.setAttribute("data-preview-slot", slot.id);
             nc.hidden = true;
             r.appendChild(nc);
+            rec.nocacheEls.push({ slot: slot.id, el: nc });
           }
         });
       }
+      if (rowCache) rowCache.push(rec);
       return r;
     }
     function eligibleConversations() {
@@ -347,6 +356,8 @@
       var g = popover.querySelector(".up-grp1");
       if (!g) return;
       g.textContent = "";
+      rowCache = [];
+      lastAppliedVisSig = null;
       var hd = el("div", "up-grp-h");
       hd.appendChild(el("span", "up-grp-n", "\u2460"));
       var titleWrap = el("span", "up-grp-t", t("group1Title"));
@@ -424,8 +435,17 @@
       ph.appendChild(el("span", "up-pill sm", t("placeholder")));
       g.appendChild(ph);
     }
+    function cancelHoverRaf() {
+      if (hoverRaf !== null && typeof window.cancelAnimationFrame === "function") {
+        window.cancelAnimationFrame(hoverRaf);
+      }
+      hoverRaf = null;
+      pendingHoverTarget = null;
+    }
     function drawPopover() {
       if (!popover || !shown) return;
+      cancelHoverRaf();
+      lastHoverTarget = null;
       var now = Date.now();
       var scroll = popover.querySelector(".up-scroll");
       var emptyBox = popover.querySelector(".up-empty-state");
@@ -434,6 +454,9 @@
       var hasSlots = !!(accountData && accountData.slots && Object.keys(accountData.slots).length > 0);
       var hasSingle = !!(accountData && Array.isArray(accountData.harness_auth) && accountData.harness_auth.some(function (x) { return x && x.single_slot && (x.available || x.probed || x.auth_required); }));
       if (!hasEntries && !hasSlots && !hasSingle) {
+        chartCache = null;
+        rowCache = null;
+        lastAppliedVisSig = null;
         popover.setAttribute("data-cols", "0");
         if (scroll) scroll.hidden = true;
         if (emptyBox) {
@@ -619,7 +642,14 @@
       return false;
     }
     function makePopover(onPlace, onClose) {
-      place = onPlace || function () {};
+      var rawPlace = onPlace || function () {};
+      place = function () {
+        rawPlace();
+        if (popover) {
+          lastPlacedW = popover.offsetWidth || 0;
+          lastPlacedH = popover.offsetHeight || 0;
+        }
+      };
       var box = el("div", "rpop usage-pop");
       box.hidden = true;
       box.tabIndex = -1;
@@ -723,16 +753,36 @@
       scroll.appendChild(el("div", "up-grp2"));
       box.appendChild(scroll);
 
-      // Hover, focus, lock, and Esc delegation (zero SVG re-render)
-      box.addEventListener("mouseover", function (e) {
+      // Hover, focus, lock, and Esc delegation (zero SVG re-render, rAF-coalesced mouseover)
+      function applyHoverTarget(targetEl) {
         if (focusLocked || previewState) return;
-        var target = closestEl(e && e.target, function (n) {
+        var target = closestEl(targetEl, function (n) {
           return hasAnyClass(n, ["up-pin", "up-gl", "up-hr"]) && !!getAttr(n, "data-k") && getAttr(n, "tabindex") !== "-1";
         });
         var k = target ? getAttr(target, "data-k") : null;
         if (k !== focusKey) setFocus(k);
+      }
+      box.addEventListener("mouseover", function (e) {
+        if (focusLocked || previewState) return;
+        var tNode = e && e.target;
+        if (tNode === lastHoverTarget) return;
+        lastHoverTarget = tNode;
+        if (typeof window.requestAnimationFrame !== "function") {
+          applyHoverTarget(tNode);
+          return;
+        }
+        pendingHoverTarget = tNode;
+        if (hoverRaf !== null) return;
+        hoverRaf = window.requestAnimationFrame(function () {
+          hoverRaf = null;
+          var tEl = pendingHoverTarget;
+          pendingHoverTarget = null;
+          applyHoverTarget(tEl);
+        });
       });
       box.addEventListener("mouseleave", function () {
+        cancelHoverRaf();
+        lastHoverTarget = null;
         if (previewState) setPreview(null, null);
         if (!focusLocked && focusKey) setFocus(null);
       });
@@ -792,6 +842,11 @@
         el: box,
         open: function () {
           shown = true;
+          cancelHoverRaf();
+          lastHoverTarget = null;
+          lastAppliedVisSig = null;
+          lastPlacedW = 0;
+          lastPlacedH = 0;
           confirmConv = null;
           focusKey = null;
           focusLocked = false;
@@ -802,6 +857,13 @@
         },
         close: function () {
           shown = false;
+          cancelHoverRaf();
+          lastHoverTarget = null;
+          chartCache = null;
+          rowCache = null;
+          lastAppliedVisSig = null;
+          lastPlacedW = 0;
+          lastPlacedH = 0;
           lastChartW = 0;
           if (rzTimer !== null) { window.clearTimeout(rzTimer); rzTimer = null; }
           confirmConv = null;
