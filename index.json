@@ -507,7 +507,14 @@
       "registered_at": "2026-11-28T11:39:31Z"
     },
     "261128-refactor-ws-daemon-wake-driven-stat-invalidation": {
-      "registered_at": "2026-11-28T11:39:20Z"
+      "registered_at": "2026-11-28T11:39:20Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-28T13:18:00Z"
+      }
     },
     "261128-refactor-ws-live-observed-batch-writes": {
       "registered_at": "2026-11-28T11:39:25Z"
