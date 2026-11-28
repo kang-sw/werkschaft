@@ -55,11 +55,9 @@
     var C = window.WsCards, g = C && C.gallery && C.gallery();
     return wpMounted && !!g && !g.hidden && !!C.activeSys && C.activeSys() === "workpanel";
   }
-  // drawerWait keeps the approval-wait signal current on its hosts: the
+  // drawerWait keeps the approval-wait signal current on its host: the
   // gallery rail's Workpanel slot (the retired drawer cards' direct
-  // replacement), and, while the transitional drawer handle remains, that
-  // handle and the fold button in its slot (dashboard-drawer.js drTitle
-  // announces theirs). The tree region's hidden compact roster (.ag-source)
+  // replacement). The tree region's hidden compact roster (.ag-source)
   // does not count: it repeats this tree's running rows and adds linked
   // delegate sessions' agents, whose approvals are not this session's to
   // wait on. Called after each tree or conversation swap
@@ -76,10 +74,6 @@
       slot.setAttribute("aria-label", label);
       if (slot.hasAttribute("title")) slot.title = label;
     }
-    if (!drhandle) return;
-    drhandle.classList.toggle("wait", wait);
-    if (drfold) drfold.classList.toggle("wait", wait);
-    drTitle();
   }
 
   // wpGallery follows the gallery: each coming into view reads the shown

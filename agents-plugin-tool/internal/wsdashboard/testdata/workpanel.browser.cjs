@@ -128,7 +128,7 @@ async function liveSession(browser, theme, galW) {
     open: [...document.querySelectorAll('#r-panels > details.panel')].every(p => p.open),
     drawer: [...document.querySelectorAll('#drbody details.panel')].map(p => p.id).sort(),
     notesCard: !!document.getElementById('p-notes'),
-  })), { panels: 1, inDock: true, cards: ['p-todo', 'p-agenda'], open: true, drawer: ['p-holders'], notesCard: false }, `${tag}: panels in the Workpanel, the drawer slimmed`);
+  })), { panels: 1, inDock: true, cards: ['p-todo', 'p-agenda'], open: true, drawer: [], notesCard: false }, `${tag}: panels in the Workpanel, the drawer slimmed`);
   // Todo's progress reads the chip: 1/4.
   const prog = () => fr.evaluate(() => {
     const fill = document.getElementById('wpprog'), bar = fill.closest('[role=progressbar]');
@@ -232,28 +232,25 @@ async function liveSession(browser, theme, galW) {
   await fr.waitForFunction(() => document.getElementById('p-agenda').textContent.includes('review running'));
   assert.equal(await fr.evaluate(() => [...document.querySelectorAll('#r-panels > details.panel')].every(p => p.open)), true, `${tag}: cards stay open after a swap`);
 
-  // 7. The approval wait lights the rail slot and the drawer handle.
+  // 7. The approval wait lights the rail slot (the drawer's panels handle,
+  // which shared it, retired with the drawer cards).
   const wait = () => fr.evaluate(() => {
     const slot = document.querySelector('#bgal .gal-dot.sys[data-sys="workpanel"]');
-    return { slot: slot.classList.contains('wait'), label: /; /.test(slot.getAttribute('aria-label') || ''), handle: document.getElementById('drhandle').classList.contains('wait') };
+    return { slot: slot.classList.contains('wait'), label: /; /.test(slot.getAttribute('aria-label') || '') };
   });
-  assert.deepEqual(await wait(), { slot: false, label: false, handle: false }, `${tag}: no wait at first`);
+  assert.deepEqual(await wait(), { slot: false, label: false }, `${tag}: no wait at first`);
   await op('permission');
   await eventually(async () => (await wait()).slot, `${tag}: wait on the slot`);
-  assert.deepEqual(await wait(), { slot: true, label: true, handle: true }, `${tag}: wait on the slot and the handle`);
+  assert.deepEqual(await wait(), { slot: true, label: true }, `${tag}: wait on the slot`);
   await shot(fr.locator('#bgal > .gal-rail'), `wp-${theme}-${wide ? 'wide' : 'narrow'}-wait-rail`);
   await op('clear');
   await eventually(async () => !(await wait()).slot, `${tag}: wait cleared`);
-  assert.deepEqual(await wait(), { slot: false, label: false, handle: false }, `${tag}: cleared everywhere`);
+  assert.deepEqual(await wait(), { slot: false, label: false }, `${tag}: cleared everywhere`);
 
-  // 8. The drawer sheet keeps the holders card only.
-  await fr.locator('#drhandle').click();
-  await fr.waitForFunction(() => { const b = document.getElementById('drbody'); return !b.hidden && b.getBoundingClientRect().height > 0; });
-  assert.deepEqual(await fr.evaluate(() => [...document.querySelectorAll('#drbody > details.panel, #drbody details.panel')].filter(p => p.getClientRects().length).map(p => p.id).sort()),
-    ['p-holders'], `${tag}: the drawer's cards`);
+  // 8. The drawer carries no cards: only the search sheet and its handle.
+  assert.deepEqual(await fr.evaluate(() => ({ drhandle: !!document.getElementById('drhandle'), drbody: !!document.getElementById('drbody'), holders: !!document.getElementById('p-holders') })),
+    { drhandle: false, drbody: false, holders: false }, `${tag}: the drawer's cards retired`);
   assert.equal(await fr.locator('#shandle').count(), 1, `${tag}: the search handle stays`);
-  await fr.locator('#drfold').click();
-  await fr.waitForFunction(() => document.getElementById('drhandle').getAttribute('aria-expanded') === 'false');
   assert.equal(await shown(fr, '#wproot'), true, `${tag}: the Workpanel stays shown`);
 
   await page.waitForTimeout(150);

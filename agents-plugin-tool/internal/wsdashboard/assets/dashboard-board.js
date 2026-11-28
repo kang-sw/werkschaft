@@ -217,7 +217,7 @@
       if (wbBatch && typeof wbUpdateEndBatch === "function") wbUpdateEndBatch();
     }
     if (name === "convlive" || name === "entries") outboxSync();
-    if (name === "panels") { drawerSync(); wpSync(); restorePanelReader(el, panelReader); }
+    if (name === "panels") { wpSync(); restorePanelReader(el, panelReader); }
     if (name === "git") gpSwapped();
     if (treeFocus && treeFocus.isConnected && doc.activeElement !== treeFocus) treeFocus.focus({ preventScroll: true });
     restoreScroll(scroll);

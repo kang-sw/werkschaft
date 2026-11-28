@@ -11,12 +11,15 @@ import (
 
 // The session holders (internal/wsholder): processes that each own one
 // child and outlive this daemon. The daemon attaches to every holder it
-// finds at start and on each rescan, and never ends one on its own. Two
-// routes serve the drawer's holders card:
+// finds at start and on each rescan, and never ends one on its own. These
+// routes serve the shell's Holders popup:
 //
 //   - GET /holders answers every known holder (attached or not, with the
 //     cause when not, and whether it is restart-safe), the recent holder
-//     start failures, and can_stop: whether this viewer may stop one.
+//     start failures, can_stop: whether this viewer may stop one, and
+//     parents: the live parent of a holder whose descriptor names none.
+//   - GET /holders/metrics is the open popup's resource trace
+//     (holders_metrics.go).
 //   - POST /holders/<id>/stop ends a holder and its child: through the
 //     protocol when attached, otherwise with the kill guarded by the
 //     holder's recorded start time. A holder may own a terminal, so the
@@ -63,8 +66,24 @@ func (d *Daemon) durableSessionHost() DurableSessionHost {
 	return host
 }
 
+// holdersOffered reports whether /holders answers with anything: a holder
+// manager, or a host of durable in-process sessions, which the listing
+// merges in. Pages show the Holders surface on the same condition.
+func (d *Daemon) holdersOffered() bool {
+	return d.holders != nil || d.durableSessionHost() != nil
+}
+
 func durableHolderInfo(session DurableSession) wsholder.Info {
 	return wsholder.Info{ID: durableHolderPrefix + session.ID, Attached: !session.Unavailable, RestartSafe: true}
+}
+
+// AgentParentHost is an AgentHost that knows which session spawned each of
+// its conversations: the holders route nests a worker's holder whose
+// descriptor predates parent_reply_id under its lead with it.
+type AgentParentHost interface {
+	// AgentParents answers the spawning session's reply id of each of
+	// replyIDs that has one.
+	AgentParents(replyIDs []string) map[string]string
 }
 
 // holderList is the holders route's answer.
@@ -72,11 +91,55 @@ type holderList struct {
 	wsholder.Listing
 	// CanStop reports whether this viewer may use the stop route.
 	CanStop bool `json:"can_stop"`
+	// Parents is the spawning session's reply id, by holder id, of each
+	// holder whose session descriptor names none (an older descriptor)
+	// while the agent host knows one.
+	Parents map[string]string `json:"parents,omitempty"`
 }
 
-// handleHolders serves GET /holders and POST /holders/<id>/stop.
+// holderParents looks up, in the agent host, the parent of each holder
+// whose descriptor has a reply id but no parent_reply_id.
+func (d *Daemon) holderParents(holders []wsholder.Info) map[string]string {
+	host, ok := d.agents.(AgentParentHost)
+	if !ok {
+		return nil
+	}
+	byReply := map[string]string{}
+	var ids []string
+	for _, h := range holders {
+		var s struct {
+			ReplyID       string `json:"reply_id"`
+			ParentReplyID string `json:"parent_reply_id"`
+		}
+		if len(h.Session) == 0 || json.Unmarshal(h.Session, &s) != nil || s.ReplyID == "" || s.ParentReplyID != "" {
+			continue
+		}
+		byReply[s.ReplyID] = h.ID
+		ids = append(ids, s.ReplyID)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	for reply, parent := range host.AgentParents(ids) {
+		if id, ok := byReply[reply]; ok && parent != "" {
+			out[id] = parent
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// handleHolders serves GET /holders, GET /holders/metrics
+// (holders_metrics.go), and POST /holders/<id>/stop.
 func (d *Daemon) handleHolders(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/holders"), "/")
+	if rest == "metrics" {
+		d.serveHolderMetrics(w, r)
+		return
+	}
 	if rest == "" {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -93,7 +156,7 @@ func (d *Daemon) handleHolders(w http.ResponseWriter, r *http.Request) {
 				listing.Holders = append(listing.Holders, durableHolderInfo(session))
 			}
 		}
-		_ = json.NewEncoder(w).Encode(holderList{Listing: listing, CanStop: localViewer(r)})
+		_ = json.NewEncoder(w).Encode(holderList{Listing: listing, CanStop: localViewer(r), Parents: d.holderParents(listing.Holders)})
 		return
 	}
 	id, ok := strings.CutSuffix(rest, "/stop")

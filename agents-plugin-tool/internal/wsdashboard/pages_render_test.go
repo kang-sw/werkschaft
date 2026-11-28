@@ -147,14 +147,14 @@ func TestSessionPagesCarryScriptHooks(t *testing.T) {
 	}
 	assertSettingsOwner(t, live, false)
 	assertSettingsOwner(t, board, false)
-	// Both pages carry the drawer, now hosting only its own cards, and the
+	// Both pages carry the drawer, now only the search sheet (its cards
+	// retired: the holders went to the shell's bottom-bar popup), and the
 	// hidden Workpanel the gallery adopts: the panels region sits once in
 	// its working memory, out of the drawer and the board column, and the
 	// Workpanel chrome stays outside the region.
 	for name, page := range map[string]string{"live": live, "board-first": board} {
 		for _, want := range []string{
-			`<div class="drawer" id="drawer">`, `id="drclip"`, `id="drsheet"`, `id="drhandle"`, `class="dr-wait"`, `class="tdot"`,
-			`<div class="dr-body" id="drbody">`,
+			`<div class="drawer" id="drawer">`, `id="drclip"`, `<div class="dr-sheet" id="drsheet" role="region"`,
 			`<div class="wp-root" id="wproot" hidden>`, `<section class="wp-memory" id="wpmemory" data-active-mem="todo"`,
 			`</div><div id="r-panels" class="region r-panels" data-region="panels"`,
 			`id="wptab-notes"`, `id="wptab-manuals"`, `id="wpnoteslist"`, `id="wpmanualslist"`,
@@ -170,8 +170,10 @@ func TestSessionPagesCarryScriptHooks(t *testing.T) {
 		if mem < 0 || region < mem || ref < region || bcol < ref {
 			t.Errorf("%s page: the panels region is not inside the Workpanel's working memory ahead of the board column", name)
 		}
-		if drbody := strings.Index(page, `id="drbody"`); drbody >= 0 && strings.Contains(page[drbody:strings.Index(page[drbody:], "</div>")+drbody], `r-panels`) {
-			t.Errorf("%s page: the drawer body still holds the panels region", name)
+		for _, gone := range []string{`id="drbody"`, `id="drhandle"`, `class="dr-wait"`, `id="p-holders"`} {
+			if strings.Contains(page, gone) {
+				t.Errorf("%s page: the retired drawer card markup %s remains", name, gone)
+			}
 		}
 	}
 	// Both pages run the image viewer once, outside any region, and style it.

@@ -45,7 +45,8 @@ function handles(fr) {
   return fr.evaluate(() => {
     const top = document.querySelector('.dwrap > .top'), cs = getComputedStyle(document.documentElement);
     const px = v => parseFloat(v) || 0;
-    return { thandle: !!document.getElementById('thandle'), room: top ? top.classList.contains('dr-room') : null, thr: cs.getPropertyValue('--thr'),
+    return { thandle: !!document.getElementById('thandle'), room: top ? top.classList.contains('dr-room') || top.classList.contains('tk-room') : null,
+      drRoom: top ? top.classList.contains('dr-room') : null, thr: cs.getPropertyValue('--thr'),
       pad: top ? px(getComputedStyle(top).paddingRight) : null, drhw: px(cs.getPropertyValue('--drhw')), tkhw: px(cs.getPropertyValue('--tkhw')) };
   });
 }
@@ -212,12 +213,19 @@ async function overlaySession(browser, theme, W, H, narrow) {
   let h = await handles(fr);
   assert.equal(h.thandle, false, `${tag}: no #thandle`);
   assert.equal(h.thr.trim(), '', `${tag}: no --thr`);
-  assert.equal(h.room, true, `${tag}: header takes the handle room`);
-  near(h.pad, h.drhw + h.tkhw + 6, 0.5, `${tag}: header right padding is --drhw + --tkhw + 6`);
+  // The framed search handle hides behind the shell's search pill, so the
+  // drawer reserves nothing (--drhw 0, no dr-room); the tracker's handles
+  // keep the header's room (tk-room).
+  assert.equal(h.drRoom, false, `${tag}: no drawer handle room in the frame`);
+  assert.equal(h.drhw, 0, `${tag}: --drhw 0 in the frame`);
+  assert.equal(h.room, h.tkhw > 0, `${tag}: header takes the tracker handles' room`);
+  if (h.room) near(h.pad, h.drhw + h.tkhw + 6, 0.5, `${tag}: header right padding is --drhw + --tkhw + 6`);
 
-  // The drawer is open when the map opens: the map closes it (item 11).
-  await fr.locator('#drhandle').click();
-  await fr.waitForFunction(() => !!document.querySelector('.drawer.open'));
+  // Item 11 opened the drawer through #drhandle before the map; the framed
+  // page has no drawer opener since the drawer cards retired (the framed
+  // search handle hides behind the shell's search pill), so the drawer
+  // stays closed under the map.
+  assert.equal(await fr.evaluate(() => !!document.getElementById('drhandle')), false, `${tag}: no #drhandle`);
 
   // 2. One request, a viewport-covering overlay, View B first.
   await expandMap(page, fr);

@@ -1,8 +1,8 @@
 'use strict';
 
-// Ticket map geometry, pure: drRoom's right-edge handle offsets
-// (assets/dashboard-drawer.js) for every combination of present and absent
-// handles (the ticket map docks in the gallery, so no map handle takes room),
+// Ticket map geometry, pure: drRoom's right-edge handle offset
+// (assets/dashboard-drawer.js) with and without the search handle (the
+// ticket map docks in the gallery, so no map handle takes room),
 // and View B's layoutHier column solver
 // (assets/dashboard-ticketmap-viewb.js, the block between "tm:hier-begin"
 // and "tm:hier-end").
@@ -21,16 +21,16 @@ function section(text, start, end) {
   return text.slice(i, j);
 }
 
-// room runs drRoom over one handle set: each width is the handle's measured
-// width, or 0 for an absent one (the panels handle with no panel, no search
-// handle). The git handle retired with the gallery Git page.
-function room(h) {
+// room runs drRoom with the search handle's measured width, or no search
+// handle (0). The git and panels handles retired (the Git page and the
+// shell's Holders popup took their content), so the search handle is the
+// only one at the right edge.
+function room(search) {
   const props = {}, toggles = {};
   const box = width => ({ getBoundingClientRect: () => ({ width }) });
   const ctx = vm.createContext({
-    drHas: h.drawer > 0, drRoomW: -1, drFoldW: -1,
-    drhandle: box(h.drawer),
-    shandle: h.search ? box(h.search) : null,
+    drRoomW: -1,
+    shandle: search ? box(search) : null,
     drheader: { classList: { toggle: (k, on) => { toggles[k] = on; } } },
     doc: { documentElement: { style: { setProperty: (k, v) => { props[k] = v; } } } }
   });
@@ -38,47 +38,16 @@ function room(h) {
   return { props, room: toggles['dr-room'] };
 }
 
-// expect is an independent model: right to left, panels then search; a
-// present search handle sits 6px left of a present panels handle.
-function expect(h) {
-  const order = [['drawer', null], ['search', '--shr']];
-  const want = { '--shr': '0px' };
-  let acc = 0;
-  for (const [name, prop] of order) {
-    const w = h[name] || 0;
-    if (!w) continue;
-    const at = acc ? acc + 6 : 0;
-    if (prop) want[prop] = at + 'px';
-    acc = at + w;
+test('drRoom places the search handle at the right edge, with or without it', () => {
+  for (const search of [0, 35]) {
+    const got = room(search), label = 'search ' + search;
+    assert.equal(got.props['--shr'], '0px', label + ' --shr');
+    assert.equal(got.props['--drhw'], search + 'px', label + ' --drhw');
+    assert.equal(got.props['--ghr'], undefined, label + ' writes no --ghr (the git handle retired)');
+    assert.equal(got.props['--thr'], undefined, label + ' writes no --thr');
+    assert.equal(got.room, search > 0, label + ' header room');
   }
-  want['--drhw'] = acc + 'px';
-  return want;
-}
-
-test('drRoom places every handle combination', () => {
-  let n = 0;
-  for (const drawerW of [0, 178]) {
-    for (const search of [0, 35]) {
-      const h = { drawer: drawerW, search };
-      const got = room(h), want = expect(h);
-      const label = JSON.stringify(h);
-      for (const k of ['--shr', '--drhw']) assert.equal(got.props[k], want[k], label + ' ' + k);
-      assert.equal(got.props['--ghr'], undefined, label + ' writes no --ghr (the git handle retired)');
-      assert.equal(got.props['--thr'], undefined, label + ' writes no --thr');
-      assert.equal(got.room, want['--drhw'] !== '0px', label + ' header room');
-      n++;
-    }
-  }
-  assert.equal(n, 4);
-});
-
-test('search sits 6px left of the panels handle, and the header reserves both', () => {
-  const got = room({ drawer: 178, search: 35 }).props;
-  assert.equal(got['--shr'], '184px');
-  assert.equal(got['--drhw'], '219px', '178 + 6 + 35');
-  const noDrawer = room({ drawer: 0, search: 35 }).props;
-  assert.equal(noDrawer['--shr'], '0px');
-  assert.equal(noDrawer['--drhw'], '35px');
+  assert.doesNotMatch(section(drawer, '\n  function drRoom() {', '\n  // drFoldShow'), /drhandle|drHas/, 'the panels handle retired');
 });
 
 const hier = vm.createContext({});

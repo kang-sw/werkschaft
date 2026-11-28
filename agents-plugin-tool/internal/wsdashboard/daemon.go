@@ -516,6 +516,9 @@ type Daemon struct {
 	holders          HolderHost
 	fullStopMu       sync.Mutex
 	fullStopAccepted bool
+	// holderTrace is GET /holders/metrics's in-memory sample ring
+	// (holders_metrics.go).
+	holderTrace holderTrace
 	// terminals are the shells on holder PTYs the session pages show, nil
 	// unless the holder manager can host them (terminals.go); shell picks a
 	// new one's shell.

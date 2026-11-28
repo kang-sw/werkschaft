@@ -447,7 +447,7 @@
     return updates;
   }
   // Cards are themselves scrollers on wide screens. Preserve their offsets
-  // after drawerSync lays out replacements, and remap a changed card's focused
+  // after a panels swap lays out replacements, and remap a changed card's focused
   // keyed disclosure without touching an unchanged card's content/frame nodes.
   function panelReaderState(root) {
     var active = doc.activeElement, focus = null;

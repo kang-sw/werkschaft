@@ -121,6 +121,10 @@ type holderSession struct {
 	ReplyID string `json:"reply_id"`
 	Cwd     string `json:"cwd,omitempty"`
 	Label   string `json:"label,omitempty"`
+	// ParentReplyID is the spawning session's reply id (Record.Parent), so
+	// the dashboard's holder listing can nest a worker under its lead. Not
+	// part of ownership matching; an older descriptor lacks it.
+	ParentReplyID string `json:"parent_reply_id,omitempty"`
 	// Capability binds a persisted worker token to this held process.
 	Capability string `json:"capability,omitempty"`
 }

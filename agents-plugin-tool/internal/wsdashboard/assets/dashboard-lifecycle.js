@@ -1177,6 +1177,7 @@
     headHeld = null;
     shOn = ent;
     shFrames.splice(shFrames.indexOf(ent), 1); shFrames.push(ent);
+    hdNavigated();
     if (ent.cached || !ent.settingsSent) {
       ent.settingsSent = true;
       shSettings(ent);
@@ -1515,6 +1516,9 @@
         case "daemon-bridge-res":
           if (typeof handleDaemonBridgeRes === "function") handleDaemonBridgeRes(e.source, m);
           break;
+        case "term-list":
+          if (on) hdFrameTerms(ent, m);
+          break;
       }
     });
     window.addEventListener("popstate", function () {
@@ -1734,6 +1738,7 @@
       else if (m.wsShell === "rail-open") { if (typeof tkApi !== "undefined" && tkApi && tkApi.closeStore) tkApi.closeStore(); }
       else if (m.wsShell === "sync") { sent = {}; queueHead(); shPost("title", { title: doc.title }); }
       else if (m.wsShell === "daemon-bridge-req") { if (typeof handleDaemonFrameBridgeReq === "function") handleDaemonFrameBridgeReq(m); }
+      else if (m.wsShell === "term-list-req" || m.wsShell === "term-attach") hdFrameTermReq(m);
     });
     queue();
     if (typeof WsJank !== "undefined" && WsJank) {

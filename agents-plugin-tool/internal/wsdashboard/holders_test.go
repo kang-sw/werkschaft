@@ -286,31 +286,39 @@ func TestDaemonRunsAndReleasesItsHolderHost(t *testing.T) {
 	}
 }
 
-// TestHoldersCardInTheDrawer pins the drawer's holders card: on a session
-// page of a daemon that runs a holder host, inside the drawer's body (the
-// panels region lives in the Workpanel and the worktree pool on the Git page),
-// with its list, count chip, and note line; a daemon without a holder host
-// has no card.
-func TestHoldersCardInTheDrawer(t *testing.T) {
+// TestHoldersTriggerInTheShellBar pins the Holders surface: the shell's
+// bottom bar ends with the compact trigger (after the plan usage toggle)
+// when the daemon runs a holder host, and the framed session page carries
+// no holders card, drawer body, or panels handle (the drawer is the search
+// sheet only). A daemon without a holder host or durable sessions renders
+// no trigger.
+func TestHoldersTriggerInTheShellBar(t *testing.T) {
 	f := startPageFixture(t, func(o *DaemonOptions) { o.Worktrees = &fakeWorktrees{} }, withHolders(newFakeHolders()))
-	_, page := get(t, f.base+"/s/livesession?frame=1")
-	body, card, end := strings.Index(page, `id="drbody"`), strings.Index(page, `id="p-holders"`), strings.Index(page, `<button type="button" class="dr-handle"`)
-	if body < 0 || card < body || end < card {
-		t.Fatalf("drawer order: drbody %d, holders %d, handle %d", body, card, end)
+	_, shell := get(t, f.base+"/s/livesession")
+	right := strings.Index(shell, `<div class="bot-right" id="slot-bot-right">`)
+	usage, trig := strings.Index(shell, `class="usage-toggle"`), strings.Index(shell, `<button type="button" class="hd-trigger" id="holders-trigger" data-state="zero"`)
+	if right < 0 || usage < right || trig < usage || trig > strings.Index(shell, `</footer>`) {
+		t.Fatalf("bottom bar order: right slot %d, usage %d, trigger %d", right, usage, trig)
 	}
-	if strings.Contains(page, `id="p-worktrees"`) {
-		t.Error("the drawer still carries the retired worktrees card")
-	}
-	assertSettingsOwner(t, page, false)
-	for _, want := range []string{`id="hdlist" aria-live="polite"`, `id="hdcount" hidden`, `id="hdnote" role="status"`, `Session holders`} {
-		if !strings.Contains(page, want) {
-			t.Errorf("session page lacks %q", want)
+	for _, want := range []string{`aria-haspopup="dialog" aria-controls="holders-pop" aria-expanded="false"`, `<span class="hd-count" id="hd-count">0</span>`, `href="#i-layers"`} {
+		if !strings.Contains(shell[trig:], want) {
+			t.Errorf("the trigger lacks %q", want)
 		}
 	}
+	_, page := get(t, f.base+"/s/livesession?frame=1")
+	for _, gone := range []string{`id="p-holders"`, `id="drbody"`, `id="drhandle"`, `id="hdlist"`, `id="hdcount"`, `id="p-worktrees"`, `id="holders-trigger"`} {
+		if strings.Contains(page, gone) {
+			t.Errorf("the framed session page still carries %s", gone)
+		}
+	}
+	if !strings.Contains(page, `<div class="dr-sheet" id="drsheet" role="region"`) {
+		t.Error("the framed page lost the search sheet")
+	}
+	assertSettingsOwner(t, page, false)
 
 	bare := startPageFixture(t)
-	if _, page := get(t, bare.base+"/s/livesession?frame=1"); strings.Contains(page, `id="p-holders"`) {
-		t.Errorf("a daemon without a holder host: holders card present")
+	if _, shell := get(t, bare.base+"/s/livesession"); strings.Contains(shell, `id="holders-trigger"`) {
+		t.Errorf("a daemon without a holder host: trigger present")
 	}
 }
 

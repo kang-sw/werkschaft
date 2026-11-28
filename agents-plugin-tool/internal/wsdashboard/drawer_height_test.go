@@ -6,16 +6,16 @@ import "testing"
 // deliveries outside that callback, reading current widths even if the
 // drawer closed or its regions changed before the frame runs.
 func TestDrawerRoomResizeFrame(t *testing.T) {
-	observer := dashboardJSBlock(t, "\n    if (window.ResizeObserver) {\n      var drRoomFrame = 0;", "\n    // The panels grid's column count")
+	observer := dashboardJSBlock(t, "\n    if (window.ResizeObserver) {\n      var drRoomFrame = 0;", "\n    // The board-first page scrolls")
 	runTrackerNode(t, "drawer room resize frame", `
 var bad = [], frames = [], deliveries, watched = [], calls = [], width = 178;
 function check(what, got, want) { if (JSON.stringify(got) !== JSON.stringify(want)) bad.push(what + ': got ' + JSON.stringify(got) + ', want ' + JSON.stringify(want)); }
-var window = { ResizeObserver: true }, drawer = { isConnected: true, open: true }, drhandle = {};
+var window = { ResizeObserver: true }, drawer = { isConnected: true, open: true }, shandle = {};
 function ResizeObserver(fn) { deliveries = fn; this.observe = function (n) { watched.push(n); }; }
 function requestAnimationFrame(fn) { frames.push(fn); return frames.length; }
 function drRoom() { calls.push(width); }
 `+observer+`
-check('the panels handle is watched', watched.length, 1);
+check('the search handle is watched', watched.length, 1);
 deliveries(); deliveries(); deliveries();
 check('a resize burst queues one frame without writing the header', [frames.length, calls], [1, []]);
 width = 167; drawer.open = false;
@@ -63,11 +63,10 @@ var headerBottom = 40, composerTop = 800, composerVisible = true;
 var header = { getBoundingClientRect: function () { return { bottom: headerBottom }; } };
 var composer = { getBoundingClientRect: function () { return { top: composerTop }; } };
 var win = { innerHeight: 1000 }, ctx = {
-  window: win, drheader: header, drhandle: el(), drawer: el(), drsheet: el(), drclip: el(), drbody: el(), sbody: el(), shandle: el(),
-  drMode: 'panels', drOpen: true, drShown: '', drTop: -500, tkApi: null,
+  window: win, drheader: header, drawer: el(), drsheet: el(), drclip: el(), sbody: el(), shandle: el(),
+  drMode: 'search', drOpen: true, drShown: '', drTop: -500, tkApi: null,
   $: function (id) { return id === 'composer' ? composer : null; }, visible: function () { return composerVisible; },
-  wsT: function (s) { return s; }, drTitle: function () {}, drFill: function () {},
-  drFoldShow: function () {}, hdLoad: function () {}
+  wsT: function (s) { return s; }, drTitle: function () {}, drFoldShow: function () {}
 };
 vm.createContext(ctx);
 vm.runInContext(funcs(dash, ['drHeaderBottom', 'drMax', 'drApply']), ctx);
@@ -76,11 +75,9 @@ var tkdrawer = el(), tk = { window: win, O: { header: header, drawerHeight: ctx.
 vm.createContext(tk);
 vm.runInContext(funcs(render, ['fitDrawer']), tk);
 function allHeights(label, want) {
-  ['panels', 'search'].forEach(function (mode) {
-    ctx.drMode = mode; ctx.drApply(false);
-    check(label + ' ' + mode, [ctx.drsheet.style.height, ctx.drclip.style.height], [want + 'px', want + 'px']);
-    check(label + ' active mode', ['panels', 'search'].filter(function (k) { return ctx.drawer.classList.contains(k); }), [mode]);
-  });
+  ctx.drApply(false);
+  check(label + ' search', [ctx.drsheet.style.height, ctx.drclip.style.height], [want + 'px', want + 'px']);
+  check(label + ' active mode', ['panels', 'search'].filter(function (k) { return ctx.drawer.classList.contains(k); }), ['search']);
   ['A', 'B'].forEach(function (store) { tk.ui.store = store; tk.fitDrawer(); check(label + ' store ' + store, tkdrawer.style.props['--tkh'], want + 'px'); });
 }
 check('host reads the header rather than stale drTop', ctx.drMax(), 720);
@@ -134,7 +131,8 @@ function cssContract(src, selector, label) {
 }
 var css = read('tracker.css'), dashboardCSS = read('dashboard-drawer.css');
 cssContract(css, '.tk .tk-handle.open', 'active tracker opener');
-['.drawer.open.panels #drhandle', '.drawer.open.search #shandle'].forEach(function (s) { cssContract(dashboardCSS, s, s); });
+cssContract(dashboardCSS, '.drawer.open.search #shandle', '.drawer.open.search #shandle');
+check('the panels sheet retired with the drawer cards', /\.drawer\.open\.panels|#drhandle|#drbody/.test(dashboardCSS), false);
 check('the git sheet retired with the Git page', /\.drawer\.open\.git|#r-git/.test(dashboardCSS), false);
 check('tracker clip uses maximum directly', /\.tk\.tk-drawer\.open \.tk-dr-clip\s*\{\s*height:\s*var\(--tkh\)/.test(css), true);
 check('tracker has no drawer drag CSS', /--tkext|\.tk-drawer\.drag/.test(css), false);
@@ -146,7 +144,7 @@ process.stdout.write(bad.join('\n'));
 if (bad.length) process.exitCode = 1;
 `
 
-// TestDrawerFoldButtons pins the fold button in the hidden active handle's
+// TestDrawerFoldButtons pins the fold button in the hidden search handle's
 // slot. It shows only for the open sheet, takes focus from a keyboard-opened
 // opener, closes with the click animation, and restores keyboard focus to
 // its opener. Tracker fold buttons never show on the store page, and closing
@@ -169,52 +167,43 @@ function el(id) {
     setAttribute: function (k, v) { this.attrs[k] = v; },
     contains: function () { return false; }, focus: function () { doc.activeElement = this; } };
 }
-// The dashboard's drawer, the frame stubbed.
+// The dashboard's drawer, the frame stubbed. The search sheet is its only
+// sheet: the panels sheet and its handle retired with the drawer cards.
 var doc = { activeElement: null, addEventListener: function () {} };
-var drawer = el('drawer'), drbody = el('drbody'), sbody = el('sbody'), shandle = el('shandle'), drsheet = el('drsheet'), drclip = el('drclip');
-var drhandle = el('drhandle'), drfold = el('drfold');
+var drawer = el('drawer'), sbody = el('sbody'), shandle = el('shandle'), drsheet = el('drsheet'), drclip = el('drclip');
+var drfold = el('drfold');
 var drheader = {getBoundingClientRect:function(){return {bottom:40};}};
-var drOpen = false, drMode = 'panels', drWant = false, drTop = 40, drShown = '', drHas = true, DR_OPEN = 'k', DR_SEARCH = 'search', tkApi = null;
+var drOpen = false, drMode = 'search', drTop = 40, drShown = '', DR_SEARCH = 'search', tkApi = null;
 function drMax() { return 600; }
-function drTitle() {} function drFill() {} function hdLoad() {} function drDot() {} function drAnnounce() {}
+function drTitle() {} function drAnnounce() {}
 var stored = {};
 function save(k, v) { stored[k] = v; }
 function wsT(k) { return k; }
 `+dashboardFuncs(t, "drHeaderBottom")+fold+apply+setOpen+`
-function shown() { return drfold.hidden ? '' : drfold.classList.contains('search') ? 'search' : 'panels'; }
+function shown() { return drfold.hidden ? '' : drfold.classList.contains('search') ? 'search' : 'other'; }
 
 drApply(false);
 check('a closed drawer has no fold button', shown(), '');
 drSetOpen(true, 'panels');
-check('the panels sheet: the fold button in the panels slot', shown(), 'panels');
-check('the panels sheet fills the maximum below the header', [drsheet.style.height, drclip.style.height, drawer.style.props['--drtop']], ['600px', '600px', '40px']);
-check('panels keeps its open state', [stored[DR_OPEN], stored[DR_SEARCH]], ['1', null]);
+check('a retired panels sheet opens nothing', [drOpen, shown(), stored[DR_SEARCH]], [false, '', undefined]);
 drSetOpen(true, 'search');
-check('search shows only its sheet and fold slot', [shown(), drbody.hidden, sbody.hidden], ['search', true, false]);
-check('search persists independently', [stored[DR_OPEN], stored[DR_SEARCH]], [null, '1']);
+check('search shows its sheet and fold slot', [shown(), sbody.hidden], ['search', false]);
+check('the search sheet fills the maximum below the header', [drsheet.style.height, drclip.style.height, drawer.style.props['--drtop']], ['600px', '600px', '40px']);
+check('search persists its open state', stored[DR_SEARCH], '1');
 doc.activeElement = drfold;
 drFold();
 check('search fold closes and restores focus', [drOpen, shown(), doc.activeElement.id, stored[DR_SEARCH]], [false, '', 'shandle', null]);
-
-// A click on the fold button closes as the handle's click does, animated,
-// and keyboard focus goes to the shown sheet's handle.
-drSetOpen(true, 'panels');
-doc.activeElement = drfold;
-drFold();
-check('the fold closes the panels sheet', [drOpen, drawer.classList.contains('open'), drawer.classList.contains('anim'), shown()], [false, false, true, '']);
-check('focus goes to the panels handle', doc.activeElement && doc.activeElement.id, 'drhandle');
+check('the fold closes animated', [drawer.classList.contains('open'), drawer.classList.contains('anim')], [false, true]);
 drFold();
 check('a fold click on a closed drawer does nothing', drOpen, false);
 
 // A keyboard open hides the focused opener: focus moves to the fold button
 // in its slot, not to the body, and the fold hands it back.
-[['panels', drhandle]].forEach(function (c) {
-  doc.activeElement = c[1];
-  drSetOpen(true, c[0]);
-  check(c[0] + ' keyboard open focuses the fold button', [shown(), doc.activeElement && doc.activeElement.id], [c[0], 'drfold']);
-  drFold();
-  check(c[0] + ' fold hands focus back to its opener', doc.activeElement && doc.activeElement.id, c[1].id);
-});
+doc.activeElement = shandle;
+drSetOpen(true, 'search');
+check('search keyboard open focuses the fold button', [shown(), doc.activeElement && doc.activeElement.id], ['search', 'drfold']);
+drFold();
+check('search fold hands focus back to its opener', doc.activeElement && doc.activeElement.id, 'shandle');
 // Opening search focuses its input (tkApi.openSearch, inside drApply): the
 // handoff leaves that focus alone, from the keyboard or a mouse click.
 var tkqin = el('tkqin');

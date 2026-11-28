@@ -267,7 +267,7 @@ func (d *Daemon) handleSessionPage(w http.ResponseWriter, r *http.Request, reply
 	// The shared render already set Git and rendered the regions, which
 	// depend on neither Worktrees, Holders nor LangPref.
 	view.Worktrees = d.worktrees != nil
-	view.Holders = d.holders != nil
+	view.Holders = d.holdersOffered()
 	view.CanEditSettings = view.Hosted && !view.IsChild && localViewer(r)
 	err := errors.New("session regions failed to render")
 	if regions != nil {
@@ -299,7 +299,7 @@ func (d *Daemon) serveShellStatus(w http.ResponseWriter, r *http.Request, view *
 	page := shellPageData{
 		Lang: lang, LangPref: pref, Theme: requestTheme(r), SysOpen: localViewer(r), Src: src,
 		Title: "Werkschaft (alpha)", Version: d.endpoint.Version, LAN: d.lanAccessFor(r),
-		Companion: d.companion.current().config,
+		Companion: d.companion.current().config, Holders: d.holdersOffered(),
 	}
 	if view != nil {
 		page.RID = view.ReplyID

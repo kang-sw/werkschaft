@@ -49,7 +49,7 @@ function harness(extra = {}) {
   const c = vm.createContext({
     doc: { createElement: tag => new El(tag), createElementNS: (ns, tag) => new El(tag), querySelector: () => null },
     $: id => id === 'wproot' ? wproot : ids[id] || null, rid: 'session', wsT: k => k, glRel: () => 'ago', relAgo: () => 'just now', wsI18n: { lang: 'en' },
-    q: sel => sel === '.wp-lchip' ? chips : [], region: () => null, drhandle: null, drfold: null, drTitle() {},
+    q: sel => sel === '.wp-lchip' ? chips : [], region: () => null,
     window: { WsPreview: { open: (p, o) => opened.push([p, o]) } }, Date, Promise,
     fetch: (url, opts) => { requests.push([url, opts || {}]); return new Promise((resolve, reject) => pending.push({ resolve, reject })); },
     ...extra });
@@ -174,27 +174,24 @@ test('wpSync reads the region chips into the chrome, never into the region', () 
   assert.equal(todo.children.length, 0, 'nothing is written inside the region');
 });
 
-test('drawerWait lights the Workpanel rail slot and the retained drawer handle, then clears both', () => {
+test('drawerWait lights the Workpanel rail slot, then clears it; the drawer carries no wait', () => {
   const slot = new El('button'); slot.setAttribute('aria-label', 'Workpanel'); slot.title = 'Workpanel'; slot.attrs.title = 'Workpanel';
-  const handle = new El('button'), fold = new El('button');
-  let found = [], titled = 0;
+  let found = [];
   const row = inSource => ({ closest: s => s === '.ag-source' && inSource ? {} : null });
-  const h = harness({ drhandle: handle, drfold: fold, drTitle() { titled++; } });
+  const h = harness({});
   h.c.doc.querySelector = sel => sel === '#bgal .gal-dot.sys[data-sys="workpanel"]' ? slot : null;
   h.c.q = () => found;
   found = [row(true)]; h.c.drawerWait();
   assert.equal(slot.classList.contains('wait'), false, 'the hidden roster alone does not count');
   found = [row(false)]; h.c.drawerWait();
-  assert.equal(slot.classList.contains('wait'), true); assert.equal(handle.classList.contains('wait'), true); assert.equal(fold.classList.contains('wait'), true);
+  assert.equal(slot.classList.contains('wait'), true);
   assert.equal(slot.getAttribute('aria-label'), 'Workpanel; js.drawer.waiting'); assert.equal(slot.title, slot.getAttribute('aria-label'));
   h.c.drawerWait(); assert.equal(slot.getAttribute('aria-label'), 'Workpanel; js.drawer.waiting', 'the suffix is not repeated');
   found = []; h.c.drawerWait();
-  assert.equal(slot.classList.contains('wait'), false); assert.equal(handle.classList.contains('wait'), false);
+  assert.equal(slot.classList.contains('wait'), false);
   assert.equal(slot.getAttribute('aria-label'), 'Workpanel');
-  assert.ok(titled >= 3, 'the drawer handle relabels its wait');
-  h.c.drhandle = null; found = [row(false)];
-  assert.doesNotThrow(() => h.c.drawerWait(), 'tolerates the handle\'s removal');
-  assert.equal(slot.classList.contains('wait'), true);
+  const wait = js.slice(js.indexOf('  function drawerWait()'), js.indexOf('  // wpGallery follows'));
+  assert.doesNotMatch(wait, /drhandle|drfold|drTitle/, 'the panels handle retired: only the rail slot signals');
   assert.match(js, /#r-convlive \.permwait, #r-tree \.phase\.permission, #r-tree \.brow\.perm/);
   assert.match(css, /\.gal-dot\.sys\[data-sys="workpanel"\]\.wait::after \{[^}]*var\(--wb-ph-perm\)/);
 });

@@ -580,11 +580,6 @@
   width: 14px;
   height: 14px;
 }
-:root[data-frame] .dr-handle .tdot {
-  top: 4px;
-  right: 4px;
-  box-shadow: 0 0 0 1.5px var(--d-shell-bg);
-}
 :root[data-frame] .dr-fold {
   top: 5px;
   height: 26px;

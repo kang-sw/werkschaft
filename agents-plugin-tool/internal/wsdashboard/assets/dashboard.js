@@ -442,10 +442,7 @@
   // The panes that scroll on their own; the page itself scrolls on / and on
   // the board-first page. A pane hidden by the tabs view loses its offset, so
   // each pane's last visible offset is kept and put back when it shows again.
-  // The drawer's body (drbody) is only clipped while the drawer is closed
-  // (hidden only while the frame shows the git sheet), so a panels swap
-  // keeps its offset whether the drawer is open or closed.
-  var PANES = ["bcol", "r-tree", "convo", "drbody"];
+  var PANES = ["bcol", "r-tree", "convo"];
   // A scroll only marks its pane; the offset is read once per frame, in a
   // frame callback beside the board rail's. ResizeObserver caches whether
   // each pane is laid out, so scroll callbacks never probe its geometry.
