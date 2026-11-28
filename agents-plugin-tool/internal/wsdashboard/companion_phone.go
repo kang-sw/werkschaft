@@ -96,6 +96,16 @@ type CompanionPhoneRotationMeta struct {
 	SummaryCap int `json:"summaryCap"`
 }
 
+// CompanionPendingApproval describes an active companion-work 1-click approval
+// banner request rendered as a daemon-owned pause status echo in the Tier-1
+// messenger thread ((1728)=a, (1750)).
+type CompanionPendingApproval struct {
+	RequestID string `json:"requestId"`
+	Tool      string `json:"tool"`
+	Summary   string `json:"summary,omitempty"`
+	CreatedAt int64  `json:"createdAt"`
+}
+
 // CompanionPhoneSnapshot is the wire shape returned by GET /api/companion/phone/thread
 // and broadcast over the rail SSE stream as event: companion-phone.
 type CompanionPhoneSnapshot struct {
@@ -107,6 +117,7 @@ type CompanionPhoneSnapshot struct {
 	Typing             bool                       `json:"typing,omitempty"`
 	DelegationInFlight bool                       `json:"delegationInFlight,omitempty"`
 	Unavailable        bool                       `json:"unavailable,omitempty"`
+	PendingApproval    *CompanionPendingApproval  `json:"pendingApproval,omitempty"`
 	Messages           []CompanionPhoneMessage    `json:"messages"`
 	UnreadClient       int                        `json:"unreadClient"`
 	UnreadAgent        int                        `json:"unreadAgent"`
@@ -143,6 +154,7 @@ type CompanionPhoneStore struct {
 	unavailable        bool
 	wakeFailures       int
 	phoneFaceDown      bool
+	pendingApprovals   []CompanionPendingApproval
 	messages           []CompanionPhoneMessage
 	unreadAgent        []CompanionPhoneMessage
 	unreadClient       int
@@ -177,6 +189,11 @@ func (s *CompanionPhoneStore) snapshotLocked() CompanionPhoneSnapshot {
 	copy(msgs, s.messages)
 	summaries := make([]string, len(s.tier1Summary))
 	copy(summaries, s.tier1Summary)
+	var pending *CompanionPendingApproval
+	if len(s.pendingApprovals) > 0 {
+		p := s.pendingApprovals[0]
+		pending = &p
+	}
 	return CompanionPhoneSnapshot{
 		Seq:                s.seq,
 		State:              s.state,
@@ -186,6 +203,7 @@ func (s *CompanionPhoneStore) snapshotLocked() CompanionPhoneSnapshot {
 		Typing:             s.typing,
 		DelegationInFlight: s.delegationInFlight,
 		Unavailable:        s.unavailable,
+		PendingApproval:    pending,
 		Messages:           msgs,
 		UnreadClient:       s.unreadClient,
 		UnreadAgent:        len(s.unreadAgent),
@@ -508,6 +526,58 @@ func (s *CompanionPhoneStore) SetTyping(owner string, typing bool) bool {
 	s.typing = typing
 	s.publishLocked()
 	return true
+}
+
+// BeginApprovalPause records a pending companion-work 1-click confirmation
+// request so the Tier-1 messenger renders a daemon-owned status echo while
+// paused ((1728)=a, (1750)). Purely in-memory (zero disk I/O).
+func (s *CompanionPhoneStore) BeginApprovalPause(requestID, tool, summary string) CompanionPhoneSnapshot {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return s.Snapshot()
+	}
+	tool = strings.TrimSpace(tool)
+	summary = clampString(strings.TrimSpace(summary), 240)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLocked()
+	for _, existing := range s.pendingApprovals {
+		if existing.RequestID == requestID {
+			return s.snapshotLocked()
+		}
+	}
+	s.pendingApprovals = append(s.pendingApprovals, CompanionPendingApproval{
+		RequestID: requestID,
+		Tool:      tool,
+		Summary:   summary,
+		CreatedAt: s.clock().UnixMilli(),
+	})
+	return s.publishLocked()
+}
+
+// EndApprovalPause clears the matching pending companion-work approval pause
+// echo once the 1-click confirmation banner settles (approve, deny, dismiss,
+// timeout, or tab disconnect). Purely in-memory (zero disk I/O).
+func (s *CompanionPhoneStore) EndApprovalPause(requestID string) CompanionPhoneSnapshot {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return s.Snapshot()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLocked()
+	idx := -1
+	for i, existing := range s.pendingApprovals {
+		if existing.RequestID == requestID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return s.snapshotLocked()
+	}
+	s.pendingApprovals = append(s.pendingApprovals[:idx], s.pendingApprovals[idx+1:]...)
+	return s.publishLocked()
 }
 
 // RecordWakeFailure increments consecutive Tier-1 wake/turn failure count and

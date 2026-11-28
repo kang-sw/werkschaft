@@ -1,11 +1,15 @@
 package mcp
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
 // isLeadOnlyTool reports whether a tool is restricted to lead-scoped session
@@ -145,18 +149,81 @@ func companionWorkAllowsWithoutApproval(name string, args map[string]any) bool {
 	}
 }
 
-// companionWorkApprovalRefusal enforces the (1750) high-impact confirmation
-// gate at MCP dispatch for companion-work sessions. In Phase 1 it returns a
-// structured approval_required payload without executing; Phase 2 replaces the
-// deny with the shared top-level shell 1-click approval banner.
-func (s *Server) companionWorkApprovalRefusal(entry sessionEntry, found bool, name string, args map[string]any) string {
+func formatCompanionDeniedError(tool, reason, message string) string {
+	payload := struct {
+		Error   string `json:"error"`
+		Reason  string `json:"reason,omitempty"`
+		Tool    string `json:"tool"`
+		Message string `json:"message"`
+	}{
+		Error:   "denied",
+		Reason:  reason,
+		Tool:    tool,
+		Message: message,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "denied: " + message
+	}
+	return string(raw)
+}
+
+func companionApprovalSummary(name string, args map[string]any) string {
+	var parts []string
+	for _, field := range []string{"key", "scope", "layer", "action", "topic", "id", "slug", "target", "name"} {
+		if raw, ok := args[field]; ok {
+			if s, ok := raw.(string); ok {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					parts = append(parts, field+"="+wsdashboard.RedactCredentials(s))
+				}
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return name
+	}
+	summary := name + " (" + strings.Join(parts, ", ") + ")"
+	if len(summary) > 180 {
+		summary = summary[:180]
+	}
+	return summary
+}
+
+// companionWorkApprovalGate enforces the (1750) high-impact confirmation gate
+// at MCP dispatch for companion-work sessions via the shared top-level shell
+// 1-click approval banner ((1728)=a, (1742), (1750)). Read-only and allowlisted
+// tools execute immediately; ws/daemon.* tools run their own server-classified
+// 1-click banner with CompanionPause=true inside DaemonCurl/DaemonUI (avoiding
+// double-prompting). Any other high-impact lead tool blocks until approved or
+// fails closed with structured error="denied" (reject, dismiss, timeout, or no
+// active tab) and zero side effects.
+func (s *Server) companionWorkApprovalGate(ctx context.Context, entry sessionEntry, found bool, name string, args map[string]any) string {
 	if !found || entry.companionRole != CompanionRoleWork {
+		return ""
+	}
+	if isDaemonControlTool(name) {
 		return ""
 	}
 	if companionWorkAllowsWithoutApproval(name, args) {
 		return ""
 	}
-	return formatStructuredGateError("approval_required", name, "", fmt.Sprintf("%s requires 1-click user approval before execution in companion-work mode.", name))
+	if s.daemonControl == nil {
+		return formatCompanionDeniedError(name, "no_active_tab", fmt.Sprintf("%s denied: no dashboard confirmation host is available.", name))
+	}
+	res := s.daemonControl.RequestDaemonConfirmation(ctx, wsdashboard.DaemonConfirmRequest{
+		Tool:           name,
+		Summary:        companionApprovalSummary(name, args),
+		CompanionPause: true,
+	})
+	if res.Approved {
+		return ""
+	}
+	reason := strings.TrimSpace(res.Reason)
+	if reason == "" {
+		reason = "denied"
+	}
+	return formatCompanionDeniedError(name, reason, fmt.Sprintf("%s denied (%s) by 1-click user confirmation gate.", name, reason))
 }
 
 func workflowPreferenceWriterTool(name string) bool {

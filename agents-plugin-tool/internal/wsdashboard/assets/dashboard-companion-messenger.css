@@ -142,7 +142,8 @@
   box-shadow: 0 0 0 2px var(--ws-cm-header);
 }
 
-.ws-cm-status-dot[data-state="buzz"] {
+.ws-cm-status-dot[data-state="buzz"],
+.ws-cm-status-dot[data-state="approval"] {
   background: var(--wb-warn);
   animation: ws-cm-pulse 1.1s ease-in-out infinite;
 }
@@ -626,6 +627,58 @@
 }
 
 .ws-cm-confirm-card[data-status="cancelled"] .ws-cm-confirm-receipt {
+  color: var(--wb-muted-fg);
+}
+
+/* Daemon-rendered Companion-Work Approval Pause Status Echo */
+.ws-cm-pause-echo {
+  margin-top: 2px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--wb-warn) 11%, var(--wb-card));
+  box-shadow: var(--wb-shadow), inset 0 0 0 1.5px color-mix(in srgb, var(--wb-warn) 38%, transparent);
+  padding: 9px 11px;
+  display: grid;
+  gap: 5px;
+  animation: ws-cm-msg-in .18s cubic-bezier(.22, 1, .36, 1);
+}
+
+.ws-cm-pause-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--wb-warn-ink, var(--wb-warn));
+}
+
+.ws-cm-pause-title {
+  min-width: 0;
+}
+
+.ws-cm-pause-tool {
+  margin-left: auto;
+  font-family: var(--wb-mono, ui-monospace, monospace);
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-fg) 8%, transparent);
+  color: var(--wb-fg);
+}
+
+.ws-cm-pause-summary {
+  margin: 0;
+  font-family: var(--wb-mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--wb-fg);
+  overflow-wrap: anywhere;
+}
+
+.ws-cm-pause-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
   color: var(--wb-muted-fg);
 }
 

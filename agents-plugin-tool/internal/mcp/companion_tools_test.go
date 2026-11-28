@@ -407,41 +407,122 @@ func TestCompanionMarkerScopingRegression(t *testing.T) {
 
 func TestCompanionWorkApprovalGateAndDelegationReport(t *testing.T) {
 	t.Setenv("WS_CACHE_HOME", t.TempDir())
+	t.Setenv("WS_CONFIG_HOME", t.TempDir())
 	root := t.TempDir()
 	host := &testCompanionHost{}
 	s := NewServer(root, "test")
 	s.companion = host
 	workKey := mintCompanionTestKey(t, s, root, CompanionRoleWork)
 
-	// High-impact lead tool (config.tune) returns structured approval_required and does not execute.
+	// 1. No confirmation host wired -> fails closed with structured denied (no_active_tab) and zero side effects.
 	txt, isErr := invokeCompanionTestTool(t, s, "config.tune", map[string]any{
 		"session_key": workKey,
 		"key":         "workflow.lang",
 		"scope":       "global",
 		"value":       "ko",
 	})
-	if !isErr || !strings.Contains(txt, `"approval_required"`) || !strings.Contains(txt, `"config.tune"`) {
-		t.Fatalf("companion-work config.tune = (%q, isErr=%v), want approval_required", txt, isErr)
+	if !isErr || !strings.Contains(txt, `"error":"denied"`) || !strings.Contains(txt, `"no_active_tab"`) || !strings.Contains(txt, `"config.tune"`) {
+		t.Fatalf("companion-work config.tune without host = (%q, isErr=%v), want denied/no_active_tab", txt, isErr)
+	}
+	gotCfg, cfgErr := invokeCompanionTestTool(t, s, "config.get", map[string]any{"session_key": workKey, "key": "workflow.lang"})
+	if cfgErr || strings.Contains(gotCfg, "ko") {
+		t.Fatalf("denied config.tune mutated config: (%q, isErr=%v)", gotCfg, cfgErr)
 	}
 
-	// Non-session note mutation fails closed with approval_required.
+	// 2. Wire confirmation host and verify reject, dismiss, timeout, and no_active_tab
+	// all return structured error="denied" with CompanionPause=true and zero side effects.
+	dcHost := &fakeDaemonControlHost{}
+	s.daemonControl = dcHost
+
+	for _, tc := range []struct {
+		name   string
+		result wsdashboard.DaemonConfirmResult
+		reason string
+	}{
+		{"reject", wsdashboard.DaemonConfirmResult{Approved: false, Code: "denied", Reason: "denied"}, "denied"},
+		{"dismiss", wsdashboard.DaemonConfirmResult{Approved: false, Code: "denied", Reason: "dismissed"}, "dismissed"},
+		{"timeout", wsdashboard.DaemonConfirmResult{Approved: false, Code: "timeout", Reason: "timeout"}, "timeout"},
+		{"no_active_tab", wsdashboard.DaemonConfirmResult{Approved: false, Code: "no_active_tab", Reason: "no_active_tab"}, "no_active_tab"},
+	} {
+		dcHost.confirmResp = tc.result
+		before := dcHost.confirmCalls
+		txt, isErr = invokeCompanionTestTool(t, s, "config.tune", map[string]any{
+			"session_key": workKey,
+			"key":         "workflow.lang",
+			"scope":       "global",
+			"value":       "ko",
+		})
+		if !isErr || !strings.Contains(txt, `"error":"denied"`) || !strings.Contains(txt, tc.reason) {
+			t.Fatalf("%s: config.tune = (%q, isErr=%v), want error=denied reason=%s", tc.name, txt, isErr, tc.reason)
+		}
+		if dcHost.confirmCalls != before+1 || !dcHost.lastConfirmReq.CompanionPause || dcHost.lastConfirmReq.Tool != "config.tune" || !strings.Contains(dcHost.lastConfirmReq.Summary, "workflow.lang") {
+			t.Fatalf("%s: unexpected confirm request: calls=%d req=%+v", tc.name, dcHost.confirmCalls, dcHost.lastConfirmReq)
+		}
+		gotCfg, cfgErr = invokeCompanionTestTool(t, s, "config.get", map[string]any{"session_key": workKey, "key": "workflow.lang"})
+		if cfgErr || strings.Contains(gotCfg, "ko") {
+			t.Fatalf("%s: denied config.tune had side effect: %q", tc.name, gotCfg)
+		}
+	}
+
+	// 3. Invalid arguments fail fast in precheckToolArguments WITHOUT popping a confirmation banner.
+	beforePrecheck := dcHost.confirmCalls
+	txt, isErr = invokeCompanionTestTool(t, s, "config.tune", map[string]any{
+		"session_key":   workKey,
+		"unknown_param": true,
+	})
+	if !isErr || dcHost.confirmCalls != beforePrecheck {
+		t.Fatalf("invalid config.tune args should fail precheck without banner: txt=%q isErr=%v calls=%d/%d", txt, isErr, dcHost.confirmCalls, beforePrecheck)
+	}
+
+	// 4. Non-session note mutation routes through 1-click banner and returns denied on reject.
+	dcHost.confirmResp = wsdashboard.DaemonConfirmResult{Approved: false, Code: "denied", Reason: "denied"}
 	txt, isErr = invokeCompanionTestTool(t, s, "note.write", map[string]any{
 		"session_key": workKey,
 		"layer":       "machine",
-		"key":         "k",
-		"value":       "v",
+		"reason":      "shared note mutation test",
+		"notes":       []map[string]any{{"key": "k", "value": "v"}},
 	})
-	if !isErr || !strings.Contains(txt, `"approval_required"`) {
-		t.Fatalf("companion-work machine note.write = (%q, isErr=%v), want approval_required", txt, isErr)
+	if !isErr || !strings.Contains(txt, `"error":"denied"`) || dcHost.lastConfirmReq.Tool != "note.write" || !dcHost.lastConfirmReq.CompanionPause {
+		t.Fatalf("companion-work machine note.write = (%q, isErr=%v), req=%+v", txt, isErr, dcHost.lastConfirmReq)
 	}
 
-	// Allowlisted read/state tools execute without approval.
+	// 5. Allowlisted session state and read tools execute immediately with NO banner,
+	// and (1750) allowlist semantics remain unchanged.
+	if !companionWorkAllowsWithoutApproval("note.write", map[string]any{"layer": "session"}) {
+		t.Fatalf("expected (1750) allowlist to preserve session-layer note.write")
+	}
+	beforeAllow := dcHost.confirmCalls
+	txt, isErr = invokeCompanionTestTool(t, s, "agenda.set", map[string]any{
+		"session_key": workKey,
+		"key":         "scratch",
+		"value":       map[string]any{"status": "ok"},
+	})
+	if isErr || dcHost.confirmCalls != beforeAllow {
+		t.Fatalf("allowlisted agenda.set failed or prompted: txt=%q isErr=%v calls=%d/%d", txt, isErr, dcHost.confirmCalls, beforeAllow)
+	}
 	txt, isErr = invokeCompanionTestTool(t, s, "config.list", map[string]any{"session_key": workKey})
-	if isErr {
-		t.Fatalf("companion-work allowlisted config.list failed: %q", txt)
+	if isErr || dcHost.confirmCalls != beforeAllow {
+		t.Fatalf("companion-work allowlisted config.list failed or prompted: txt=%q isErr=%v", txt, isErr)
 	}
 
-	// ws/delegation.report transports lossless multi-kilobyte result and artifacts.
+	// 6. Approving the 1-click banner lets config.tune execute and persist its write.
+	dcHost.confirmResp = wsdashboard.DaemonConfirmResult{Approved: true, RequestID: "req-approve-1"}
+	txt, isErr = invokeCompanionTestTool(t, s, "config.tune", map[string]any{
+		"session_key": workKey,
+		"key":         "workflow.lang",
+		"scope":       "global",
+		"value":       "ko",
+	})
+	if isErr {
+		t.Fatalf("approved config.tune failed: %q", txt)
+	}
+	gotCfg, cfgErr = invokeCompanionTestTool(t, s, "config.get", map[string]any{"session_key": workKey, "key": "workflow.lang"})
+	if cfgErr || !strings.Contains(gotCfg, "ko") {
+		t.Fatalf("approved config.tune did not persist workflow.lang=ko: (%q, isErr=%v)", gotCfg, cfgErr)
+	}
+
+	// 7. ws/delegation.report transports lossless multi-kilobyte result and artifacts without banner.
+	beforeReport := dcHost.confirmCalls
 	bigResult := strings.Repeat("detailed-technical-findings-line\n", 300)
 	artifacts := []string{"/tmp/report.md", "https://example.local/diff"}
 	txt, isErr = invokeCompanionTestTool(t, s, delegationReportTool, map[string]any{
@@ -451,8 +532,8 @@ func TestCompanionWorkApprovalGateAndDelegationReport(t *testing.T) {
 		"result":        bigResult,
 		"artifacts":     artifacts,
 	})
-	if isErr || !strings.Contains(txt, "delegation_id: del-42") || !strings.Contains(txt, "status: done") {
-		t.Fatalf("delegation.report = (%q, isErr=%v)", txt, isErr)
+	if isErr || !strings.Contains(txt, "delegation_id: del-42") || !strings.Contains(txt, "status: done") || dcHost.confirmCalls != beforeReport {
+		t.Fatalf("delegation.report = (%q, isErr=%v, calls=%d/%d)", txt, isErr, dcHost.confirmCalls, beforeReport)
 	}
 	if len(host.reports) != 1 || host.reports[0].result != bigResult || len(host.reports[0].artifacts) != 2 {
 		t.Fatalf("delegation.report captured = %+v", host.reports)

@@ -14,21 +14,25 @@ import (
 )
 
 type fakeDaemonControlHost struct {
-	lastReq     wsdashboard.DaemonCurlRequest
-	lastDOMReq  wsdashboard.DaemonDOMRequest
-	lastUIReq   wsdashboard.DaemonUIRequest
-	lastShotReq wsdashboard.DaemonScreenshotRequest
-	calls       int
-	tabsCalls   int
-	domCalls    int
-	uiCalls     int
-	shotCalls   int
-	resp        wsdashboard.DaemonCurlResponse
-	tabsResp    []wsdashboard.DaemonTabInfo
-	domResp     wsdashboard.DaemonDOMSnapshot
-	uiResp      wsdashboard.DaemonUIResponse
-	shotResp    wsdashboard.DaemonScreenshotResponse
-	err         error
+	lastReq        wsdashboard.DaemonCurlRequest
+	lastDOMReq     wsdashboard.DaemonDOMRequest
+	lastUIReq      wsdashboard.DaemonUIRequest
+	lastShotReq    wsdashboard.DaemonScreenshotRequest
+	lastConfirmReq wsdashboard.DaemonConfirmRequest
+	calls          int
+	tabsCalls      int
+	domCalls       int
+	uiCalls        int
+	shotCalls      int
+	confirmCalls   int
+	resp           wsdashboard.DaemonCurlResponse
+	tabsResp       []wsdashboard.DaemonTabInfo
+	domResp        wsdashboard.DaemonDOMSnapshot
+	uiResp         wsdashboard.DaemonUIResponse
+	shotResp       wsdashboard.DaemonScreenshotResponse
+	confirmResp    wsdashboard.DaemonConfirmResult
+	confirmFn      func(context.Context, wsdashboard.DaemonConfirmRequest) wsdashboard.DaemonConfirmResult
+	err            error
 }
 
 func (f *fakeDaemonControlHost) DaemonCurl(_ context.Context, req wsdashboard.DaemonCurlRequest) (wsdashboard.DaemonCurlResponse, error) {
@@ -70,6 +74,15 @@ func (f *fakeDaemonControlHost) DaemonScreenshot(_ context.Context, req wsdashbo
 		return wsdashboard.DaemonScreenshotResponse{}, f.err
 	}
 	return f.shotResp, nil
+}
+
+func (f *fakeDaemonControlHost) RequestDaemonConfirmation(ctx context.Context, req wsdashboard.DaemonConfirmRequest) wsdashboard.DaemonConfirmResult {
+	f.confirmCalls++
+	f.lastConfirmReq = req
+	if f.confirmFn != nil {
+		return f.confirmFn(ctx, req)
+	}
+	return f.confirmResp
 }
 
 type fakePostureCompanionHost struct {
@@ -443,5 +456,173 @@ func TestDaemonControlTabsDOMAndUIDispatchAndErrors(t *testing.T) {
 	resStale := callToolOnce(t, s, 33, daemonUITool, map[string]any{"action": "click_ref", "ref": "g1-r1"})
 	if !toolIsError(t, resStale) || !strings.Contains(resStale, "stale_ref") {
 		t.Fatalf("expected stale_ref error, got %s", resStale)
+	}
+}
+
+func TestDaemonControlCompanionWorkAutoGrantAndIsolation(t *testing.T) {
+	regs := descriptorRegistrations()
+
+	for _, tc := range []struct {
+		backend   string
+		wantNames []string
+		curlName  string
+		uiName    string
+	}{
+		{
+			backend:   wsagent.BackendClaude,
+			wantNames: []string{daemonCurlTool, daemonTabsTool, daemonDOMTool, daemonUITool, daemonScreenshotTool},
+			curlName:  daemonCurlTool,
+			uiName:    daemonUITool,
+		},
+		{
+			backend:   wsagent.BackendAgy,
+			wantNames: []string{"daemon_curl", "daemon_tabs", "daemon_dom", "daemon_ui", "daemon_screenshot"},
+			curlName:  "daemon_curl",
+			uiName:    "daemon_ui",
+		},
+	} {
+		t.Run(tc.backend, func(t *testing.T) {
+			s, f := hostedBackendConnection(t, tc.backend, regs)
+			defer s.Close()
+			// Companion-work record with DashboardControlAccess=false and
+			// dashboardControlEffective=false must STILL be auto-granted ws/daemon.*.
+			workKey, err := s.sessions.mintWithCompanionRole(f.root, roleLead, "", "", CompanionRoleWork)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec, _ := f.records.RecordByReplyID(s.conversation)
+			rec.ReplyID = wsmailbox.ReplyID(workKey)
+			rec.WSKey = workKey
+			rec.CompanionRole = CompanionRoleWork
+			rec.DashboardControlAccess = false
+			f.records.Set(rec)
+			s.conversation = rec.ReplyID
+			s.hostedKey = workKey
+			s.dashboardControlEffective = false
+			if bc, ok := s.callerBinding.(boundCallers); ok {
+				bc.backends[rec.ReplyID] = tc.backend
+			}
+			workEntry, ok := s.lookupSession(workKey)
+			if !ok {
+				t.Fatal("failed to lookup minted companion-work key")
+			}
+
+			host := &fakeDaemonControlHost{
+				resp:     wsdashboard.DaemonCurlResponse{Status: 200, Body: "ok"},
+				tabsResp: []wsdashboard.DaemonTabInfo{{TabID: "tab-1", Visible: true, Focused: true}},
+				domResp:  wsdashboard.DaemonDOMSnapshot{TabID: "tab-1", Generation: 1, NodeCount: 1, ByteSize: 32},
+				uiResp:   wsdashboard.DaemonUIResponse{OK: true, Action: "click_ref", TabID: "tab-1", Ref: "g1-r1"},
+				shotResp: wsdashboard.DaemonScreenshotResponse{Mode: "dom_fallback", Live: false, TabID: "tab-1"},
+			}
+			s.daemonControl = host
+
+			// 1. tools/list and callDiscoveryTools advertise all 5 ws/daemon.* tools without opt-in.
+			listed := daemonTestListedToolNames(t, s)
+			for _, want := range tc.wantNames {
+				if !listed[want] {
+					t.Fatalf("companion-work %s tools/list missing %s: %v", tc.backend, want, listed)
+				}
+			}
+			disc := discoveryToolNames(s.callDiscoveryTools(workKey, workEntry, true))
+			for _, want := range tc.wantNames {
+				if !disc[want] {
+					t.Fatalf("companion-work %s callDiscoveryTools missing %s", tc.backend, want)
+				}
+			}
+
+			// 2. Dispatch forwards CompanionPause=true for daemon.curl and daemon.ui without double-prompting.
+			resCurl := callToolOnce(t, s, 40, tc.curlName, map[string]any{
+				"session_key": workKey,
+				"method":      "POST",
+				"path":        "/health",
+			})
+			if toolIsError(t, resCurl) || host.calls != 1 || !host.lastReq.CompanionPause {
+				t.Fatalf("companion-work %s failed or missed CompanionPause: res=%s calls=%d req=%+v", tc.curlName, resCurl, host.calls, host.lastReq)
+			}
+			resUI := callToolOnce(t, s, 41, tc.uiName, map[string]any{
+				"session_key": workKey,
+				"action":      "click_ref",
+				"ref":         "g1-r1",
+			})
+			if toolIsError(t, resUI) || host.uiCalls != 1 || !host.lastUIReq.CompanionPause {
+				t.Fatalf("companion-work %s failed or missed CompanionPause: res=%s calls=%d req=%+v", tc.uiName, resUI, host.uiCalls, host.lastUIReq)
+			}
+			if host.confirmCalls != 0 {
+				t.Fatalf("daemon.* calls must not double-prompt in companionWorkApprovalGate: confirmCalls=%d", host.confirmCalls)
+			}
+
+			// 3. Worker subagent keys spawned from companion-work remain strictly blocked.
+			workerKey, err := s.sessions.mint(f.root, roleDelegate, workKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			workerEntry, _ := s.lookupSession(workerKey)
+			workerDisc := discoveryToolNames(s.callDiscoveryTools(workerKey, workerEntry, true))
+			for _, want := range tc.wantNames {
+				if workerDisc[want] {
+					t.Fatalf("worker subagent under companion-work unexpectedly discovered %s", want)
+				}
+			}
+			resWorker := callToolOnce(t, s, 42, tc.curlName, map[string]any{
+				"session_key": workerKey,
+				"method":      "GET",
+				"path":        "/health",
+			})
+			if !strings.Contains(resWorker, `"error"`) {
+				t.Fatalf("worker subagent reached %s: %s", tc.curlName, resWorker)
+			}
+			if host.calls != 1 {
+				t.Fatalf("blocked worker reached DaemonCurl: calls=%d", host.calls)
+			}
+		})
+	}
+
+	// 4. Agy RenderLeadManual auto-grants daemon_* [direct] for companion-work
+	// even with DashboardControlAccess=false, and blocks companion-body even with DashboardControlAccess=true.
+	setupWorkflowManualNoteEnv(t)
+	root := t.TempDir()
+	initGit(t, root)
+	key, err := NewAgentKeyStore().MintLead(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := newTestRecordReader()
+	replyID := wsmailbox.ReplyID(key)
+	agyReg := descriptorRegistrations()[wsagent.BackendAgy]
+	render := HostedRender{
+		Harness:          agyReg.ManualHarness,
+		PlaybookCommands: agyReg.PlaybookCommands,
+		ToolNameScheme:   agyReg.ToolNameScheme,
+		CallFallback:     agyReg.CallFallback,
+		DirectTools:      agyReg.DirectTools,
+		Records:          records,
+	}
+
+	records.Set(wsagent.Record{
+		ReplyID: replyID, WSKey: key, Root: root, CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		Backend: wsagent.BackendAgy, Lead: true, CompanionRole: CompanionRoleWork, DashboardControlAccess: false,
+	})
+	workManual, err := RenderLeadManual(nil, root, render, key)
+	if err != nil {
+		t.Fatalf("RenderLeadManual (companion-work): %v", err)
+	}
+	for _, alias := range []string{"daemon_curl [direct]", "daemon_tabs [direct]", "daemon_dom [direct]", "daemon_ui [direct]", "daemon_screenshot [direct]"} {
+		if !strings.Contains(workManual, alias) {
+			t.Fatalf("companion-work agy manual missing %q", alias)
+		}
+	}
+
+	records.Set(wsagent.Record{
+		ReplyID: replyID, WSKey: key, Root: root, CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		Backend: wsagent.BackendAgy, Lead: true, CompanionRole: CompanionRoleBody, DashboardControlAccess: true,
+	})
+	bodyManual, err := RenderLeadManual(nil, root, render, key)
+	if err != nil {
+		t.Fatalf("RenderLeadManual (companion-body): %v", err)
+	}
+	for _, alias := range []string{"daemon_curl", "daemon_tabs", "daemon_dom", "daemon_ui", "daemon_screenshot"} {
+		if strings.Contains(bodyManual, alias) {
+			t.Fatalf("companion-body agy manual unexpectedly listed %s", alias)
+		}
 	}
 }

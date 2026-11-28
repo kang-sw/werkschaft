@@ -25,12 +25,13 @@ const (
 
 // DaemonCurlRequest is the structured input to ws/daemon.curl (ticket (1753)).
 type DaemonCurlRequest struct {
-	Method  string            `json:"method"`
-	Path    string            `json:"path"`
-	Query   map[string]string `json:"query,omitempty"`
-	Body    string            `json:"body,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
-	TabID   string            `json:"tab_id,omitempty"`
+	Method         string            `json:"method"`
+	Path           string            `json:"path"`
+	Query          map[string]string `json:"query,omitempty"`
+	Body           string            `json:"body,omitempty"`
+	Headers        map[string]string `json:"headers,omitempty"`
+	TabID          string            `json:"tab_id,omitempty"`
+	CompanionPause bool              `json:"companion_pause,omitempty"`
 }
 
 // DaemonCurlResponse is the bounded, credential-redacted response of ws/daemon.curl.
@@ -271,15 +272,16 @@ func (d *Daemon) DaemonCurl(ctx context.Context, req DaemonCurlRequest) (DaemonC
 	// every other method passes through the top-level shell 1-click gate.
 	if method != http.MethodGet && method != http.MethodHead {
 		confirm := d.RequestDaemonConfirmation(ctx, DaemonConfirmRequest{
-			TabID:   req.TabID,
-			Tool:    "daemon.curl",
-			Method:  method,
-			Path:    cleanPath,
-			Summary: fmt.Sprintf("%s %s", method, cleanPath),
+			TabID:          req.TabID,
+			Tool:           "daemon.curl",
+			Method:         method,
+			Path:           cleanPath,
+			Summary:        fmt.Sprintf("%s %s", method, cleanPath),
+			CompanionPause: req.CompanionPause,
 		})
 		if !confirm.Approved {
 			code := confirm.Code
-			if code == "" {
+			if req.CompanionPause || code == "" {
 				code = "denied"
 			}
 			return DaemonCurlResponse{}, &DaemonControlError{

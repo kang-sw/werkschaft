@@ -527,6 +527,42 @@ const CHOICES_WITH_DC = {
       await ctrlJSON('/ctrl/screenshot-module', { module: '' });
     }
 
+    // --- Part 6: 261127 Phase 2 — companion-work 1-click approval banner +
+    // daemon-owned messenger pause echo lifecycle (set while pending, cleared on
+    // deny and approve).
+    const cwDenyCall = ctrlJSON('/ctrl/confirm', {
+      tab_id: tab2,
+      tool: 'config.tune',
+      summary: 'config.tune (key=workflow.lang, scope=global)',
+      companion_pause: true
+    });
+    await confirm2.waitFor();
+    assert.equal(await page1.locator('section[data-daemon-confirm]').isHidden(), true, 'unfocused tab must not show companion-work confirm banner');
+    assert.ok((await confirm2.textContent()).includes('config.tune'), 'confirm banner must display tool name for companion-work mutation');
+    const snapPaused = await ctrlJSON('/ctrl/phone-snapshot');
+    assert.ok(snapPaused.pendingApproval && snapPaused.pendingApproval.requestId && snapPaused.pendingApproval.tool === 'config.tune', `expected pendingApproval while paused, got: ${JSON.stringify(snapPaused)}`);
+    await confirm2.locator('[data-daemon-confirm-action="deny"]').click();
+    const cwDenyRes = await cwDenyCall;
+    assert.equal(cwDenyRes.approved, false);
+    assert.equal(cwDenyRes.code, 'denied');
+    await waitFor('banner hidden after companion-work deny', () => page2.locator('section[data-daemon-confirm]').isHidden());
+    const snapAfterDeny = await ctrlJSON('/ctrl/phone-snapshot');
+    assert.equal(snapAfterDeny.pendingApproval, undefined, `pendingApproval must clear after deny: ${JSON.stringify(snapAfterDeny)}`);
+
+    const cwApproveCall = ctrlJSON('/ctrl/confirm', {
+      tab_id: tab2,
+      tool: 'config.tune',
+      summary: 'config.tune (key=workflow.lang, scope=global)',
+      companion_pause: true
+    });
+    await confirm2.waitFor();
+    await confirm2.locator('[data-daemon-confirm-action="approve"]').click();
+    const cwApproveRes = await cwApproveCall;
+    assert.equal(cwApproveRes.approved, true);
+    await waitFor('banner hidden after companion-work approve', () => page2.locator('section[data-daemon-confirm]').isHidden());
+    const snapAfterApprove = await ctrlJSON('/ctrl/phone-snapshot');
+    assert.equal(snapAfterApprove.pendingApproval, undefined, `pendingApproval must clear after approve: ${JSON.stringify(snapAfterApprove)}`);
+
     assert.deepEqual(errors, [], `unexpected page errors: ${errors.join('\n')}`);
     console.log('daemon-control browser acceptance passed');
   } finally {

@@ -233,12 +233,8 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		return errorResponse(req.ID, -32601, fmt.Sprintf("tool not available in current %s MCP profile: %s", s.runtimeNamespace(), params.Name))
 	}
 
-	// Companion capability gates: posture lock for companion-body ((1740)) and
-	// high-impact confirmation gate for companion-work ((1750)).
+	// Companion posture lock for companion-body ((1740)).
 	if refusal := s.companionPostureRefusal(params.Name, callerKey, caller, callerFound); refusal != "" {
-		return toolErrorTextResponse(req.ID, refusal)
-	}
-	if refusal := s.companionWorkApprovalRefusal(caller, callerFound, params.Name, params.Arguments); refusal != "" {
 		return toolErrorTextResponse(req.ID, refusal)
 	}
 	if refusal := s.convAccessRefusal(params.Name); refusal != "" {
@@ -246,8 +242,13 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	}
 	// Central argument precheck: refuse a call that misses a required
 	// property or carries an undeclared top-level argument before any handler
-	// runs, naming every problem and the tool's own schema at once.
+	// or interactive confirmation banner runs, naming every problem and the
+	// tool's own schema at once.
 	if refusal, ok := s.precheckToolArguments(params.Name, params.Arguments); !ok {
+		return toolErrorTextResponse(req.ID, refusal)
+	}
+	// High-impact 1-click confirmation gate for companion-work ((1728)=a, (1750)).
+	if refusal := s.companionWorkApprovalGate(ctx, caller, callerFound, params.Name, params.Arguments); refusal != "" {
 		return toolErrorTextResponse(req.ID, refusal)
 	}
 
@@ -1719,7 +1720,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	case delegationReportTool:
 		return s.handleDelegationReport(req.ID, params.Arguments, callerKey, caller, callerFound)
 	case daemonCurlTool, daemonTabsTool, daemonDOMTool, daemonUITool, daemonScreenshotTool:
-		return s.handleDaemonTool(ctx, req.ID, params.Name, params.Arguments)
+		return s.handleDaemonTool(ctx, req.ID, params.Name, params.Arguments, callerFound && caller.companionRole == CompanionRoleWork)
 	case convSessionsTool, convSearchTool, convHistoryTool, convReadTool, convRevealTool:
 		return s.handleConvTool(ctx, req.ID, params.Name, params.Arguments, params.Meta)
 	case "mailbox.send":
