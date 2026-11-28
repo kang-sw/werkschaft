@@ -1,10 +1,10 @@
 ---
-summary: Living production spec for the Werkschaft lead companion (desktop pet) — v3.1+ data-driven doll-maker schema, full timing/easing/stage/prop-motion assetization, articulated drag inertia, mesh-deform leg and breath articulation, hybrid global #rail + active-session relay, hover resize UX, and 1-by-1 art craft gates
+summary: Living production spec for the Werkschaft lead companion — v3.1+ data-driven doll-maker schema, full timing/easing/stage/prop-motion assetization, articulated drag inertia, mesh-deform leg and breath articulation, hybrid global #rail + active-session relay, hover resize UX, and 1-by-1 art craft gates
 ---
 
 # Werkschaft Lead Companion: v3.1+ Doll-Maker Rigging & Architecture Manual
 
-Living specification and asset-production manual for the opt-in Werkschaft lead companion (desktop pet) engine. Revise this manual directly as runtime capabilities and official art packs evolve. For historical prototyping data and rejected early experiments, see research ticket `261121-research-werkschaft-lead-companion-rig`.
+Living specification and asset-production manual for the opt-in Werkschaft lead companion engine. Revise this manual directly as runtime capabilities and official art packs evolve. For historical prototyping data and rejected early experiments, see research ticket `261121-research-werkschaft-lead-companion-rig`.
 
 ## Production Workflow (Engine-First, Then 1-by-1 Asset Crafting)
 

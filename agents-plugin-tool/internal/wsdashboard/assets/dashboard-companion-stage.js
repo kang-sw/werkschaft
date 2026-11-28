@@ -170,6 +170,38 @@
     return svg;
   }
 
+  function chatIcon(doc) {
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = doc.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    const bubble = doc.createElementNS(ns, "path");
+    bubble.setAttribute("d", "M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z");
+    bubble.setAttribute("fill", "none");
+    bubble.setAttribute("stroke", "currentColor");
+    bubble.setAttribute("stroke-width", "2");
+    bubble.setAttribute("stroke-linecap", "round");
+    bubble.setAttribute("stroke-linejoin", "round");
+    svg.append(bubble);
+    for (const cx of ["9.2", "12.5", "15.8"]) {
+      const dot = doc.createElementNS(ns, "circle");
+      dot.setAttribute("cx", cx);
+      dot.setAttribute("cy", "11.5");
+      dot.setAttribute("r", "1.05");
+      dot.setAttribute("fill", "currentColor");
+      svg.append(dot);
+    }
+    return svg;
+  }
+
+  function tOr(key, fallback) {
+    if (typeof window.wsT === "function") {
+      const val = window.wsT(key);
+      if (val && val !== key) return val;
+    }
+    return fallback;
+  }
+
   function mount(config, mute, openSettings) {
     const doc = document, root = doc.documentElement, rail = doc.getElementById("rail");
     const cancel = new AbortController(), options = { signal: cancel.signal };
@@ -211,7 +243,30 @@
     } else {
       gear.hidden = true;
     }
-    hit.append(character, grip, gear);
+    const chatBtn = doc.createElement("button");
+    chatBtn.type = "button";
+    chatBtn.id = "companion-chat-btn";
+    chatBtn.className = "ws-companion-chat-btn";
+    chatBtn.title = tOr("js.companion.messenger.open", "Open companion messenger");
+    chatBtn.setAttribute("aria-label", chatBtn.title);
+    chatBtn.setAttribute("aria-expanded", "false");
+    chatBtn.setAttribute("aria-pressed", "false");
+    chatBtn.setAttribute("aria-controls", "companion-messenger");
+    chatBtn.append(chatIcon(doc));
+    const unreadBadge = doc.createElement("span");
+    unreadBadge.className = "ws-companion-unread";
+    unreadBadge.hidden = true;
+    unreadBadge.setAttribute("aria-live", "polite");
+    chatBtn.append(unreadBadge);
+    chatBtn.addEventListener("click", event => {
+      event.stopPropagation();
+      controls.close();
+      window.WsCompanionMessenger?.toggle?.(chatBtn);
+    }, options);
+    const knockFxLayer = doc.createElement("div");
+    knockFxLayer.className = "ws-companion-knock-fx";
+    knockFxLayer.setAttribute("aria-hidden", "true");
+    hit.append(character, knockFxLayer, grip, chatBtn, gear);
     hit.hidden = true;
     const ctx = canvas.getContext("2d");
     const menu = doc.createElement("div");
@@ -363,13 +418,77 @@
       requestPack();
     }
 
+    let latestPhoneSnap = null;
+    const knockTimers = new Set();
+
+    function spawnKnockFx(clientX, clientY, label) {
+      if (!knockFxLayer) return;
+      const rect = typeof hit.getBoundingClientRect === "function" ? hit.getBoundingClientRect() : null;
+      const relX = rect && Number.isFinite(clientX) && (clientX !== 0 || clientY !== 0)
+        ? clamp(clientX - rect.left, 18, Math.max(18, (rect.width || size) - 18))
+        : Math.round((rect?.width || size) * 0.5);
+      const relY = rect && Number.isFinite(clientY) && (clientX !== 0 || clientY !== 0)
+        ? clamp(clientY - rect.top, 22, Math.max(22, (rect.height || vrmHeight) - 22))
+        : Math.round((rect?.height || vrmHeight) * 0.42);
+      const r1 = doc.createElement("span");
+      r1.className = "ws-knock-ring";
+      r1.style.left = relX + "px";
+      r1.style.top = relY + "px";
+      const r2 = doc.createElement("span");
+      r2.className = "ws-knock-ring ring-2";
+      r2.style.left = relX + "px";
+      r2.style.top = relY + "px";
+      const word = doc.createElement("span");
+      word.className = "ws-knock-word";
+      word.textContent = label || tOr("js.companion.knock.cue", "톡톡");
+      word.style.left = relX + "px";
+      word.style.top = Math.max(18, relY - 8) + "px";
+      knockFxLayer.append(r1, r2, word);
+      const tid = setTimeout(() => {
+        knockTimers.delete(tid);
+        r1.remove?.();
+        r2.remove?.();
+        word.remove?.();
+      }, 840);
+      knockTimers.add(tid);
+    }
+
+    function updateUnreadBadge(count) {
+      const n = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+      unreadBadge.hidden = n <= 0;
+      unreadBadge.textContent = n > 9 ? "9+" : (n > 0 ? String(n) : "");
+      chatBtn.dataset.unread = n > 0 ? "1" : "0";
+    }
+
+    function phoneState(snap) {
+      if (!C.record(snap)) return;
+      latestPhoneSnap = snap;
+      updateUnreadBadge(snap.unreadClient || 0);
+      rig?.setPhoneState?.(snap);
+      if (isVrm() && vrmRailVisible && (snap.state === "phone_active" || (snap.unreadAgent || 0) > 0 || snap.phoneFaceDown)) {
+        markVrmActivity();
+        schedule();
+      }
+    }
+
     // command plays an agent-director command for the shown session over the
-    // rules engine until its TTL ends. Commands for other sessions, and
-    // fields naming IDs the active pack does not know, are dropped.
+    // rules engine until its TTL ends. Wildcard "*" targets the active shell
+    // companion regardless of focused session tab (used by phone/MCP tools).
     function command(payload) {
-      if (!rig || !activeRid || !C.record(payload) || payload.sessionId !== activeRid) return false;
+      if (!rig || !C.record(payload)) return false;
+      if (payload.sessionId !== "*" && (!activeRid || payload.sessionId !== activeRid)) return false;
       const directed = C.directedCommand(payload, model, sharedPack, runner);
-      if (!directed) return false;
+      if (isVrm() && typeof payload.gesture === "string" && payload.gesture) {
+        rig.triggerGesture?.(payload.gesture);
+      }
+      if (!directed) {
+        if (isVrm() && typeof payload.gesture === "string" && payload.gesture) {
+          markVrmActivity();
+          schedule();
+          return true;
+        }
+        return false;
+      }
       runner.direct(directed.beats, now, directed.ttl, directed.id);
       viewBeat = null;
       if (isVrm()) markVrmActivity();
@@ -601,6 +720,8 @@
             markVrmActivity();
           }
         }
+        if (latestPhoneSnap) rig?.setPhoneState?.(latestPhoneSnap);
+        window.WsCompanionMessenger?.reposition?.();
         return;
       }
       node.dataset.avoiding = "0";
@@ -972,7 +1093,9 @@
       if (dirty) layout();
       if (isVrm() && !vrmRailVisible) return;
       if (isVrm()) {
-        const activeNow = !!viewPlaying || !!drag?.moving || posture.activity !== "idle" ||
+        const co = rig?.getCoLeadState?.();
+        const coActive = !!(co && (co.knockActive || co.swapActive || co.dizzyActive || (co.phoneMode && co.phoneMode !== "desk")));
+        const activeNow = !!viewPlaying || !!drag?.moving || posture.activity !== "idle" || coActive ||
           Math.abs(position.x - target().x) > 0.5 || Math.abs(position.y - target().y) > 0.5;
         if (activeNow) markVrmActivity();
         const idleElapsed = performance.now() - lastVrmActivityAt;
@@ -1189,14 +1312,61 @@
       invalidated();
     }
     for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) character.addEventListener(name, drop, options);
-    character.addEventListener("click", () => { if (!suppressClick) { markVrmActivity(); fire("user.poke"); } suppressClick = false; }, options);
+    character.addEventListener("click", event => {
+      if (!suppressClick) {
+        markVrmActivity();
+        if (isVrm() && home.rail) {
+          // Pure cosmetic glass knock: NEVER opens the messenger popup or menu.
+          const co = rig?.getCoLeadState?.();
+          const isSleepy = beat?.expression === "idle_doze" || co?.mode === "sleepy" || co?.sleepyWeight > 0.35 ||
+            latestPhoneSnap?.state === "laptop_sleepy";
+          const res = rig?.triggerKnock?.({ sleepy: isSleepy });
+          const label = res?.wokeFromSleepy
+            ? tOr("js.companion.knock.wakeup", "화들짝!")
+            : res?.kind === "annoyed_tap"
+              ? tOr("js.companion.knock.annoyed", "콕!")
+              : tOr("js.companion.knock.cue", "톡톡");
+          spawnKnockFx(event?.clientX, event?.clientY, label);
+          schedule();
+        } else {
+          fire("user.poke");
+        }
+      }
+      suppressClick = false;
+    }, options);
     character.addEventListener("dblclick", () => { markVrmActivity(); returnHome(); }, options);
+
+    if (window.WsCompanionMessenger && typeof window.WsCompanionMessenger.mount === "function") {
+      window.WsCompanionMessenger.mount({
+        getAnchorRect() {
+          const slotEl = rail?.querySelector("#rail-companion-slot");
+          if (slotEl && !slotEl.hidden && typeof slotEl.getBoundingClientRect === "function") {
+            const r = slotEl.getBoundingClientRect();
+            if (r && r.width > 0 && r.height > 0) return r;
+          }
+          return typeof hit.getBoundingClientRect === "function" ? hit.getBoundingClientRect() : null;
+        },
+        getChatButton() { return chatBtn; },
+        openSettings: openSettings || null,
+        onOpenChange(isOpen) {
+          chatBtn.setAttribute("aria-expanded", isOpen ? "true" : "false");
+          chatBtn.setAttribute("aria-pressed", isOpen ? "true" : "false");
+          if (isVrm() && vrmRailVisible) {
+            markVrmActivity();
+            schedule();
+          }
+        },
+        onSnapshot(snap) {
+          phoneState(snap);
+        }
+      });
+    }
 
     mountedRailObserver = observeRail;
     if (rail) observeRail(rail, activeRid, true);
     requestPack();
     const api = {
-      apply, reset, context, trackFrame, command, closeMenu: controls.close,
+      apply, reset, context, trackFrame, command, phoneState, closeMenu: controls.close,
       packsChanged, resetSize, returnHome,
       debugState() {
         const slotEl = rail?.querySelector("#rail-companion-slot");
@@ -1215,6 +1385,8 @@
           avoiding: false,
           companionHover,
           vrmIdleMode,
+          unreadClient: latestPhoneSnap?.unreadClient || 0,
+          messengerOpen: !!window.WsCompanionMessenger?.isOpen?.(),
           vrm: rig?.debugState?.() || null,
           projectedBounds: null
         };
@@ -1222,6 +1394,9 @@
       dispose() {
         if (mountedRailObserver === observeRail) mountedRailObserver = null;
         if (mountedStage === api) mountedStage = null;
+        for (const tid of knockTimers) clearTimeout(tid);
+        knockTimers.clear();
+        window.WsCompanionMessenger?.dispose?.();
         cancel.abort();
         frameInput?.abort();
         cancelAnimationFrame(frame);
@@ -1242,6 +1417,10 @@
 
   Object.assign(C, { mount, railSignals, signalPairs, resizeControl,
     debugStage() { return mountedStage?.debugState?.() || null; },
+    phoneState(snap) { mountedStage?.phoneState?.(snap); },
+    toggleMessenger() { return window.WsCompanionMessenger?.toggle?.() ?? false; },
+    openMessenger() { return window.WsCompanionMessenger?.open?.() ?? false; },
+    closeMessenger() { return window.WsCompanionMessenger?.close?.() ?? false; },
     hasRailObserver() { return !!mountedRailObserver; },
     observeRail(fragment, activeRid, baseline) { mountedRailObserver?.(fragment, activeRid, baseline); } });
 })(window.WsCompanion);

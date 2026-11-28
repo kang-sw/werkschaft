@@ -19,6 +19,7 @@ func (d *Daemon) registerCompanionPackRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(companionPacksRoute+"/reload", d.handleCompanionReload)
 	d.registerCompanionInstallRoutes(mux)
 	d.registerCompanionAuthoringRoutes(mux)
+	d.registerCompanionPhoneRoutes(mux)
 	mux.HandleFunc(companionFocusRoute, d.handleCompanionFocus)
 }
 

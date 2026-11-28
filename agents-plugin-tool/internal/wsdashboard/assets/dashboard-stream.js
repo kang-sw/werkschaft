@@ -512,7 +512,7 @@
         trackerLost();
         retry(connect, 3000);
       },
-      events: { assets: onAssets, "openai-consent": onOpenAIConsent, companion: onCompanion, "companion-focus": onCompanionFocus, "companion-command": onCompanionCommand, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, usercmd: onUsercmd, execjobs: onExecJobs, gone: onGone }
+      events: { assets: onAssets, "openai-consent": onOpenAIConsent, companion: onCompanion, "companion-focus": onCompanionFocus, "companion-command": onCompanionCommand, "companion-phone": onCompanionPhone, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, usercmd: onUsercmd, execjobs: onExecJobs, gone: onGone }
     });
     mainStream = st;
     function onOpenAIConsent(event) {
@@ -535,6 +535,11 @@
     function onCompanionCommand(command) {
       if (!shell || !current() || !command) return;
       doc.dispatchEvent(new CustomEvent("ws-companion-command", { detail: command }));
+    }
+    function onCompanionPhone(snapshot) {
+      if (!shell || !current() || !snapshot) return;
+      window.wsCompanionPhoneState = snapshot;
+      doc.dispatchEvent(new CustomEvent("ws-companion-phone", { detail: snapshot }));
     }
     function onRegion(ev) {
       if (!current() || !ev) return;

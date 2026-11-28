@@ -1750,7 +1750,15 @@
     shShellInit();
     doc.addEventListener("ws-companion-config", function (event) { shCompanionConfigure(event.detail); });
     doc.addEventListener("ws-companion-command", function (event) { if (shCompanion) shCompanion.command(event.detail); });
+    doc.addEventListener("ws-companion-phone", function (event) {
+      if (shCompanion && typeof shCompanion.phoneState === "function") shCompanion.phoneState(event.detail);
+      if (window.WsCompanionMessenger && typeof window.WsCompanionMessenger.applySnapshot === "function") window.WsCompanionMessenger.applySnapshot(event.detail);
+    });
     shCompanionConfigure(window.wsCompanionConfig);
+    if (window.wsCompanionPhoneState) {
+      if (shCompanion && typeof shCompanion.phoneState === "function") shCompanion.phoneState(window.wsCompanionPhoneState);
+      if (window.WsCompanionMessenger && typeof window.WsCompanionMessenger.applySnapshot === "function") window.WsCompanionMessenger.applySnapshot(window.wsCompanionPhoneState);
+    }
     doc.addEventListener("ws-companion-focus", function (event) { window.WsCompanion?.focus?.token(event.detail); });
     doc.addEventListener("ws-companion-config", function (event) { window.WsCompanion?.focus?.config(event.detail); });
     window.WsCompanion?.focus?.config(window.wsCompanionConfig);

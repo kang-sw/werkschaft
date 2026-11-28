@@ -85,6 +85,7 @@
     "companion-gate": { active: "boolean" },
     "companion-packs-changed": {},
     "companion-stage-action": { action: "string" },
+    "companion-phone": { state: "string", posture: "string" },
     "companion-context": {
       sessionId: "string", routeKind: "string", harness: "string", model: "string",
       activity: "string", openAskCount: "number", runningSubagents: "number",

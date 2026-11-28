@@ -72,6 +72,10 @@ type ServerOptions struct {
 	// Agents is the dashboard daemon's runner for spawning and reading
 	// conversations. It is nil on the direct path.
 	Agents AgentHost
+	// Companion is the dashboard daemon's in-memory companion embodiment and
+	// phone messenger host. When nil and Live implements CompanionHost,
+	// NewServerWithOptions binds Live automatically.
+	Companion CompanionHost
 	// EphemeralPool is the dashboard daemon's shared lightweight ephemeral
 	// harness pool used by opt-in dynamic tier routing on agent.spawn. Nil
 	// leaves dynamic tier routing inert (static fallback).
@@ -242,6 +246,12 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 		s.observeHarness("hello", opts.Harness)
 	}
 	s.agents = opts.Agents
+	s.companion = opts.Companion
+	if s.companion == nil && opts.Live != nil {
+		if host, ok := opts.Live.(CompanionHost); ok {
+			s.companion = host
+		}
+	}
 	s.ephemeralPool = opts.EphemeralPool
 	s.exec, s.conversation = opts.Exec, opts.Conversation
 	s.cron = opts.Cron
