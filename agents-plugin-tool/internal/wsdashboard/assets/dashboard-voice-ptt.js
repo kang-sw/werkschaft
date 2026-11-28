@@ -616,7 +616,7 @@
     if (code === "upstream_timeout") return translate("js.voice.err.timeout");
     if (code === "provider_auth_failed") return translate("js.voice.err.auth");
     if (code === "audio_too_large") return translate("js.voice.err.too_large");
-    if (code === "unavailable" || code === "privacy_disabled" || code === "language_unavailable") return translate("js.voice.err.unavailable");
+    if (code === "unavailable" || code === "recognizer_unavailable" || code === "privacy_disabled" || code === "language_unavailable") return translate("js.voice.err.unavailable");
     return translate("js.voice.err.failed");
   }
 

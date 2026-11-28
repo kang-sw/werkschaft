@@ -1144,6 +1144,28 @@ test('PTT drops a stale active hold (lost keyup, failed recording) so the next p
   t.handle.destroy();
 });
 
+test('macOS LSR 201 (recognizer_unavailable) shows the unavailable label, not the generic failure', async () => {
+  const label = makeVoiceEnv().window.WsVoicePTT.errorLabel;
+  for (const code of ['recognizer_unavailable', 'unavailable', 'privacy_disabled', 'language_unavailable']) {
+    assert.equal(label({ code }), 'js.voice.err.unavailable', code);
+  }
+  assert.equal(label({ code: 'something_else' }), 'js.voice.err.failed');
+  assert.equal(label({ code: 'mic_denied' }), 'js.voice.err.mic');
+  const t = makeCapsulesForwardingPTT({
+    value: '',
+    backend: {
+      id: 'native', label: 'OS Native', kind: 'native', available: () => true,
+      start: () => Promise.reject(Object.assign(new Error('201'), { code: 'recognizer_unavailable' })),
+      stop: () => Promise.resolve({ text: '' }), cancel: () => {}
+    }
+  });
+  t.env.btn.click();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'error');
+  assert.equal(t.env.cap.querySelector('.cvox-text').textContent, 'js.voice.err.unavailable');
+  t.handle.destroy();
+});
+
 test('dismissing the error capsule returns the controller to idle', async () => {
   const t = makeCapsulesForwardingPTT({
     value: '',
