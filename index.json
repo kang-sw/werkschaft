@@ -520,7 +520,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-28T13:18:00Z"
+        "touched_at": "2026-11-28T13:19:38Z",
+        "impl": {
+          "branch": "impl/develop/goon-cost-stray"
+        }
       }
     },
     "261128-refactor-ws-live-observed-batch-writes": {
