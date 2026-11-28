@@ -471,19 +471,6 @@
     "261127-refactor-split-oversized-multi-responsibility-files": {
       "registered_at": "2026-11-27T01:26:05Z"
     },
-    "261128-feat-ws-companion-puppeteer-and-full-lead-messenger": {
-      "registered_at": "2026-11-28T13:32:59Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-28T14:31:36Z",
-        "impl": {
-          "branch": "impl/develop/swell-polar-swan"
-        }
-      }
-    },
     "261128-feat-ws-companion-visual-polish-and-metafiction-overlay": {
       "registered_at": "2026-11-28T06:52:51Z"
     },
