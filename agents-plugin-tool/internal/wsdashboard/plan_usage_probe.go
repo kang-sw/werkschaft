@@ -82,13 +82,16 @@ func (s *planUsageStore) query(ctx context.Context, force bool) {
 	if !codex {
 		return
 	}
+	s.mu.Lock()
+	slotID := s.gptSlotID
+	s.mu.Unlock()
 	// A viewer disconnect must not cache a failed query for every viewer.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	entry, err := s.queryCodex(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.closed || s.gptSlotID != slotID {
 		return
 	}
 	if err != nil {
@@ -100,7 +103,7 @@ func (s *planUsageStore) query(ctx context.Context, force bool) {
 		s.gpt = entry
 		now := time.Now().UnixMilli()
 		var shared, codex5h []planUsageSample
-		for _, sample := range usageSamples(entry) {
+		for _, sample := range usageSamplesWithSlot(entry, slotID) {
 			if s.harnesses.separateFiveHour(sample.Harness) && sample.Kind == wslive.LimitFiveHour {
 				codex5h = append(codex5h, sample)
 			} else {

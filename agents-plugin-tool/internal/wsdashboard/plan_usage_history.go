@@ -34,6 +34,7 @@ type planUsageSample struct {
 	Group    string  `json:"group,omitempty"`
 	Kind     string  `json:"kind"`
 	Source   string  `json:"source"`
+	SlotID   string  `json:"slotId,omitempty"`
 	ResetsAt int64   `json:"resetsAt"`
 	AsOf     int64   `json:"asOf"`
 	Percent  float64 `json:"percent"`
@@ -312,6 +313,9 @@ func prunePlanUsageHistory(records []planUsageHistoryRecord, now int64) []planUs
 		if a.Source != b.Source {
 			return a.Source < b.Source
 		}
+		if a.SlotID != b.SlotID {
+			return a.SlotID < b.SlotID
+		}
 		return strconv.FormatInt(a.ResetsAt, 10) < strconv.FormatInt(b.ResetsAt, 10)
 	})
 	counts := map[[3]string]int{}
@@ -345,10 +349,12 @@ func (s *planUsageStore) appendHistoryFileLocked(memo *planUsageHistoryMemo, spe
 		return
 	} // Preserve corrupt/newer files for explicit repair.
 	type identity struct {
-		harness, group, kind, source string
-		reset, at                    int64
+		harness, group, kind, source, slotID string
+		reset, at                            int64
 	}
-	key := func(v planUsageSample) identity { return identity{v.Harness, v.Group, v.Kind, v.Source, v.ResetsAt, v.AsOf} }
+	key := func(v planUsageSample) identity {
+		return identity{v.Harness, v.Group, v.Kind, v.Source, v.SlotID, v.ResetsAt, v.AsOf}
+	}
 	h := planUsageHistoryFile{Fields: make(map[string]json.RawMessage, len(current.Fields)+2), Records: append([]planUsageHistoryRecord(nil), current.Records...)}
 	for k, raw := range current.Fields {
 		h.Fields[k] = raw
@@ -544,6 +550,16 @@ func (s *planUsageStore) codexFiveHourHistory(now int64) planUsageHistoryProject
 	return s.historyFile(&s.codexHist, codexFiveHourHistorySpec, now)
 }
 
+// Retained name check: unified codex_openai entries project against the
+// persisted "codex" history series
+// (TestPlanUsageCodexOpenAIExactWorkspaceMatchUnifiesAndDeduplicatesProbe).
+func historyHarnessFor(harness string) string {
+	if harness == codexOpenAIUnifiedHarness {
+		return "codex"
+	}
+	return harness
+}
+
 // codexFiveHourHistoryView returns the projected ?history=1 member for Codex
 // five-hour windows, and reports whether any non-expired Codex five-hour
 // samples exist in the separate history file.
@@ -553,10 +569,7 @@ func (s *planUsageStore) codexFiveHourHistoryView(entries []planUsageEntry, now 
 	}
 	var filtered []planUsageEntry
 	for _, e := range entries {
-		histHarness := e.Harness
-		if histHarness == codexOpenAIUnifiedHarness {
-			histHarness = "codex"
-		}
+		histHarness := historyHarnessFor(e.Harness)
 		if !s.harnesses.separateFiveHour(histHarness) {
 			continue
 		}
@@ -608,7 +621,8 @@ func (s *planUsageStore) historyFileViewHas(memo *planUsageHistoryMemo, spec pla
 		raw, _ := json.Marshal(p)
 		return raw, false
 	}
-	if memo.view != nil && memo.viewRev == memo.rev && memo.viewKey == string(key) && now <= memo.viewUntil {
+	viewKey := s.claudeSlotID + "|" + s.gptSlotID + "|" + string(key)
+	if memo.view != nil && memo.viewRev == memo.rev && memo.viewKey == viewKey && now <= memo.viewUntil {
 		return memo.view, memo.viewHas
 	}
 	pruned := prunePlanUsageHistory(h.Records, now)
@@ -619,13 +633,23 @@ func (s *planUsageStore) historyFileViewHas(memo *planUsageHistoryMemo, spec pla
 	if len(pruned) > 0 {
 		p.Status = "ok"
 	}
-	p.Samples = projectPlanUsageHistory(pruned, entries)
+	var slotFilter map[string]string
+	for _, e := range entries {
+		histH := historyHarnessFor(e.Harness)
+		if id := s.activeSlotForHarnessLocked(histH); id != "" {
+			if slotFilter == nil {
+				slotFilter = map[string]string{}
+			}
+			slotFilter[histH] = id
+		}
+	}
+	p.Samples = projectPlanUsageHistoryForSlots(pruned, entries, slotFilter, false)
 	raw, err := json.Marshal(p)
 	if err != nil {
 		raw, _ = json.Marshal(planUsageHistoryProjection{SchemaVersion: 1, Status: "unavailable", Samples: []planUsageSample{}})
 		return raw, false
 	}
-	memo.viewRev, memo.viewKey, memo.viewUntil, memo.view, memo.viewHas = memo.rev, string(key), until, raw, len(pruned) > 0
+	memo.viewRev, memo.viewKey, memo.viewUntil, memo.view, memo.viewHas = memo.rev, viewKey, until, raw, len(pruned) > 0
 	return raw, len(pruned) > 0
 }
 
@@ -639,13 +663,20 @@ func (s *planUsageStore) historyFileViewHas(memo *planUsageHistoryMemo, spec pla
 // kind, and trend() runs once per window. A group without an entry window is
 // never drawn and sends nothing.
 func projectPlanUsageHistory(records []planUsageHistoryRecord, entries []planUsageEntry) []planUsageSample {
+	return projectPlanUsageHistoryForSlots(records, entries, nil, false)
+}
+
+// projectPlanUsageHistoryForSlots projects drawable samples with optional
+// per-harness slot filtering. When strictSlot is false (active slot view),
+// samples stamped with the active slot or unstamped legacy samples are kept and
+// samples stamped for other slots are dropped before neighbor selection. When
+// strictSlot is true (inactive slot preview), only samples stamped with the
+// requested slot id are kept.
+func projectPlanUsageHistoryForSlots(records []planUsageHistoryRecord, entries []planUsageEntry, slotFilter map[string]string, strictSlot bool) []planUsageSample {
 	type group struct{ harness, grp, kind string }
 	current := map[group][]planUsageSample{}
 	for _, e := range entries {
-		h := e.Harness
-		if h == codexOpenAIUnifiedHarness {
-			h = "codex"
-		}
+		h := historyHarnessFor(e.Harness)
 		for _, w := range e.Windows {
 			at := w.AsOf
 			if at == 0 {
@@ -657,9 +688,20 @@ func projectPlanUsageHistory(records []planUsageHistoryRecord, entries []planUsa
 	}
 	series := map[group][]int{}
 	for i, r := range records {
-		if g := (group{r.Sample.Harness, r.Sample.Group, r.Sample.Kind}); len(current[g]) > 0 {
-			series[g] = append(series[g], i)
+		g := group{r.Sample.Harness, r.Sample.Group, r.Sample.Kind}
+		if len(current[g]) == 0 {
+			continue
 		}
+		if wantSlot, ok := slotFilter[r.Sample.Harness]; ok && wantSlot != "" {
+			if strictSlot {
+				if r.Sample.SlotID != wantSlot {
+					continue
+				}
+			} else if r.Sample.SlotID != "" && r.Sample.SlotID != wantSlot {
+				continue
+			}
+		}
+		series[g] = append(series[g], i)
 	}
 	keep := make([]bool, len(records))
 	for g, indices := range series {
@@ -702,9 +744,13 @@ func usageTrendIdentity(v planUsageSample) string {
 }
 
 func usageSamples(entry planUsageEntry) []planUsageSample {
+	return usageSamplesWithSlot(entry, "")
+}
+
+func usageSamplesWithSlot(entry planUsageEntry, slotID string) []planUsageSample {
 	samples := make([]planUsageSample, 0, len(entry.Windows))
 	for _, w := range entry.Windows {
-		samples = append(samples, planUsageSample{Harness: entry.Harness, Group: entry.Group, Kind: w.Kind, Source: entry.Source, ResetsAt: w.ResetsAt, AsOf: w.AsOf, Percent: w.Percent})
+		samples = append(samples, planUsageSample{Harness: entry.Harness, Group: entry.Group, Kind: w.Kind, Source: entry.Source, SlotID: slotID, ResetsAt: w.ResetsAt, AsOf: w.AsOf, Percent: w.Percent})
 	}
 	return samples
 }
