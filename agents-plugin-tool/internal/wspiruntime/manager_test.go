@@ -489,6 +489,23 @@ func TestArchivePathTraversalAndSymlinkEscapeRejected(t *testing.T) {
 			{name: "pi/pi", body: "ok", mode: 0o755},
 			{name: "pi/hl", typeflag: tar.TypeLink, linkname: "../outside"},
 		}},
+		{"chained symlink dir traversal", []tarEntry{
+			{name: "pi/pi", body: "ok", mode: 0o755},
+			{name: "pi/a/b/s1", typeflag: tar.TypeSymlink, linkname: ".."},
+			{name: "pi/a/b/s1/s2", typeflag: tar.TypeSymlink, linkname: "../.."},
+			{name: "pi/a/b/s1/s2/evil.txt", body: "pwned"},
+		}},
+		{"forward-referenced chained symlink escape", []tarEntry{
+			{name: "pi/pi", body: "ok", mode: 0o755},
+			{name: "pi/x/y/z/s2", typeflag: tar.TypeSymlink, linkname: "s1/../.."},
+			{name: "pi/x/y/z/s1", typeflag: tar.TypeSymlink, linkname: "../.."},
+		}},
+		{"hardlink via symlink parent", []tarEntry{
+			{name: "pi/pi", body: "ok", mode: 0o755},
+			{name: "pi/a/real.txt", body: "real"},
+			{name: "pi/a/b/s1", typeflag: tar.TypeSymlink, linkname: ".."},
+			{name: "pi/hl", typeflag: tar.TypeLink, linkname: "pi/a/b/s1/real.txt"},
+		}},
 		{"special fifo node", []tarEntry{
 			{name: "pi/pipe", typeflag: tar.TypeFifo},
 		}},
@@ -521,6 +538,17 @@ func TestArchivePathTraversalAndSymlinkEscapeRejected(t *testing.T) {
 		{"escaping symlink", []zipEntry{
 			{name: "pi/pi.exe", body: "ok"},
 			{name: "pi/link", mode: os.ModeSymlink | 0o777, body: "../../outside"},
+		}},
+		{"chained symlink dir traversal", []zipEntry{
+			{name: "pi/pi.exe", body: "ok"},
+			{name: "pi/a/b/s1", mode: os.ModeSymlink | 0o777, body: ".."},
+			{name: "pi/a/b/s1/s2", mode: os.ModeSymlink | 0o777, body: "../.."},
+			{name: "pi/a/b/s1/s2/evil.txt", body: "pwned"},
+		}},
+		{"forward-referenced chained symlink escape", []zipEntry{
+			{name: "pi/pi.exe", body: "ok"},
+			{name: "pi/x/y/z/s2", mode: os.ModeSymlink | 0o777, body: "s1/../.."},
+			{name: "pi/x/y/z/s1", mode: os.ModeSymlink | 0o777, body: "../.."},
 		}},
 	}
 	for _, tc := range zipCases {
@@ -600,6 +628,83 @@ func TestSingleFlightConcurrentInstall(t *testing.T) {
 	}
 	if st := m.Status(); !st.Installed || st.Installing {
 		t.Fatalf("unexpected post-install status: %+v", st)
+	}
+}
+
+func TestSingleFlightWaiterCancellationAllowsNewInstall(t *testing.T) {
+	archive, digest := standardTarPayload(t, "cancel-recover")
+	spec := AssetSpec{
+		GOOS: "darwin", GOARCH: "arm64",
+		Filename: "pi-darwin-arm64.tar.gz", SHA256: digest,
+		ArchiveKind: ArchiveTarGz, BinaryName: "pi",
+	}
+
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var shaHits atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/SHA256SUMS":
+			if shaHits.Add(1) == 1 {
+				close(firstEntered)
+				<-releaseFirst
+			}
+			_, _ = w.Write([]byte(digest + "  " + spec.Filename + "\n"))
+		case "/" + spec.Filename:
+			_, _ = w.Write(archive)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	m := newTestManager(t, t.TempDir(), srv.URL, "darwin", "arm64", spec)
+	// Delay teardown of the first cancelled install so caller 2 arrives while
+	// caller 1's executeInstall is still unwinding.
+	teardownEntered := make(chan struct{})
+	releaseTeardown := make(chan struct{})
+	var firstTeardownOnce sync.Once
+	m.removeAll = func(path string) error {
+		firstTeardownOnce.Do(func() {
+			close(teardownEntered)
+			<-releaseTeardown
+		})
+		return os.RemoveAll(path)
+	}
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	err1Ch := make(chan error, 1)
+	go func() {
+		err1Ch <- m.Install(ctx1, nil)
+	}()
+
+	<-firstEntered
+	cancel1()
+	if err1 := <-err1Ch; !errors.Is(err1, context.Canceled) {
+		t.Fatalf("caller 1 error = %v, want context.Canceled", err1)
+	}
+
+	// Start caller 2 while caller 1's server handler / teardown is still active.
+	err2Ch := make(chan error, 1)
+	go func() {
+		err2Ch <- m.Install(context.Background(), nil)
+	}()
+
+	close(releaseFirst)
+	// Caller 1 may fail before staging dir removal; unblock teardown if reached.
+	select {
+	case <-teardownEntered:
+		close(releaseTeardown)
+	default:
+		close(releaseTeardown)
+	}
+
+	if err2 := <-err2Ch; err2 != nil {
+		t.Fatalf("caller 2 failed after caller 1 cancelled: %v", err2)
+	}
+	if st := m.Status(); !st.Installed || st.Installing {
+		t.Fatalf("post-recovery status = %+v, want installed", st)
 	}
 }
 

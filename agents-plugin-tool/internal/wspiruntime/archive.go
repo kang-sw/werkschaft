@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -48,6 +49,9 @@ func extractArchive(archivePath string, kind ArchiveKind, stagingDir, binaryName
 		if err := os.Chmod(binPath, 0o755); err != nil {
 			return fmt.Errorf("chmod %s: %w", binaryName, err)
 		}
+	}
+	if err := verifyExtractedSymlinks(stagingDir); err != nil {
+		return err
 	}
 	return nil
 }
@@ -93,14 +97,14 @@ func extractTarGz(archivePath, stagingDir string) error {
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(dest, 0o755); err != nil {
+			if err := mkdirNoSymlink(stagingDir, rel); err != nil {
 				return fmt.Errorf("mkdir %s: %w", rel, err)
 			}
 		case tar.TypeReg, tar.TypeRegA:
 			if hdr.Size < 0 || hdr.Size > maxFileBytes {
 				return fmt.Errorf("archive entry %q size %d exceeds limit", hdr.Name, hdr.Size)
 			}
-			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			if err := mkdirParentNoSymlink(stagingDir, rel); err != nil {
 				return fmt.Errorf("mkdir parent for %s: %w", rel, err)
 			}
 			n, err := writeLimitedFile(dest, tr, sanitizedFileMode(os.FileMode(hdr.Mode)), maxFileBytes)
@@ -115,10 +119,12 @@ func extractTarGz(archivePath, stagingDir string) error {
 			if err := validateSymlinkTarget(stagingDir, dest, hdr.Linkname); err != nil {
 				return fmt.Errorf("unsafe symlink %q -> %q: %w", hdr.Name, hdr.Linkname, err)
 			}
-			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			if err := mkdirParentNoSymlink(stagingDir, rel); err != nil {
 				return fmt.Errorf("mkdir parent for symlink %s: %w", rel, err)
 			}
-			_ = os.Remove(dest)
+			if err := prepareLeafForReplace(dest); err != nil {
+				return fmt.Errorf("prepare symlink %s: %w", rel, err)
+			}
 			if err := os.Symlink(hdr.Linkname, dest); err != nil {
 				return fmt.Errorf("create symlink %s: %w", rel, err)
 			}
@@ -131,10 +137,22 @@ func extractTarGz(archivePath, stagingDir string) error {
 			if err != nil {
 				return fmt.Errorf("unsafe hardlink %q -> %q: %w", hdr.Name, hdr.Linkname, err)
 			}
-			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			if err := ensurePathNoSymlinks(stagingDir, linkRel); err != nil {
+				return fmt.Errorf("unsafe hardlink target %q -> %q: %w", hdr.Name, hdr.Linkname, err)
+			}
+			targetInfo, err := os.Lstat(target)
+			if err != nil {
+				return fmt.Errorf("stat hardlink target %s: %w", linkRel, err)
+			}
+			if !targetInfo.Mode().IsRegular() {
+				return fmt.Errorf("unsafe hardlink target %q is not a regular file", hdr.Linkname)
+			}
+			if err := mkdirParentNoSymlink(stagingDir, rel); err != nil {
 				return fmt.Errorf("mkdir parent for hardlink %s: %w", rel, err)
 			}
-			_ = os.Remove(dest)
+			if err := prepareLeafForReplace(dest); err != nil {
+				return fmt.Errorf("prepare hardlink %s: %w", rel, err)
+			}
 			if err := os.Link(target, dest); err != nil {
 				return fmt.Errorf("create hardlink %s: %w", rel, err)
 			}
@@ -168,7 +186,7 @@ func extractZip(archivePath, stagingDir string) error {
 
 		mode := f.Mode()
 		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(dest, 0o755); err != nil {
+			if err := mkdirNoSymlink(stagingDir, rel); err != nil {
 				return fmt.Errorf("mkdir %s: %w", rel, err)
 			}
 			continue
@@ -187,10 +205,12 @@ func extractZip(archivePath, stagingDir string) error {
 			if err := validateSymlinkTarget(stagingDir, dest, linkTarget); err != nil {
 				return fmt.Errorf("unsafe zip symlink %q -> %q: %w", f.Name, linkTarget, err)
 			}
-			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			if err := mkdirParentNoSymlink(stagingDir, rel); err != nil {
 				return fmt.Errorf("mkdir parent for symlink %s: %w", rel, err)
 			}
-			_ = os.Remove(dest)
+			if err := prepareLeafForReplace(dest); err != nil {
+				return fmt.Errorf("prepare symlink %s: %w", rel, err)
+			}
 			if err := os.Symlink(linkTarget, dest); err != nil {
 				return fmt.Errorf("create symlink %s: %w", rel, err)
 			}
@@ -200,7 +220,7 @@ func extractZip(archivePath, stagingDir string) error {
 			return fmt.Errorf("unsupported special zip entry %q", f.Name)
 		}
 
-		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		if err := mkdirParentNoSymlink(stagingDir, rel); err != nil {
 			return fmt.Errorf("mkdir parent for %s: %w", rel, err)
 		}
 		rc, err := f.Open()
@@ -327,7 +347,10 @@ func sanitizedFileMode(mode os.FileMode) os.FileMode {
 }
 
 func writeLimitedFile(dest string, r io.Reader, mode os.FileMode, limit int64) (int64, error) {
-	f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err := prepareLeafForReplace(dest); err != nil {
+		return 0, err
+	}
+	f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_EXCL, mode)
 	if err != nil {
 		return 0, err
 	}
@@ -346,4 +369,178 @@ func writeLimitedFile(dest string, r io.Reader, mode os.FileMode, limit int64) (
 		return 0, closeErr
 	}
 	return n, nil
+}
+
+// mkdirNoSymlink creates every directory component of rel under stagingDir
+// while refusing to traverse any existing symlink or non-directory component.
+func mkdirNoSymlink(stagingDir, rel string) error {
+	cleanRoot := filepath.Clean(stagingDir)
+	if rel == "" || rel == "." {
+		return nil
+	}
+	cur := cleanRoot
+	for _, seg := range strings.Split(rel, "/") {
+		if seg == "" || seg == "." {
+			continue
+		}
+		cur = filepath.Join(cur, seg)
+		if !isWithinDir(cleanRoot, cur) {
+			return fmt.Errorf("path component %q escapes staging root", rel)
+		}
+		info, err := os.Lstat(cur)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				if mkErr := os.Mkdir(cur, 0o755); mkErr != nil {
+					return mkErr
+				}
+				continue
+			}
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("archive entry traverses symlink directory component %q", seg)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("archive entry parent %q is not a directory", seg)
+		}
+	}
+	return nil
+}
+
+// mkdirParentNoSymlink ensures the parent directory of rel exists under
+// stagingDir without traversing any symlinked ancestor.
+func mkdirParentNoSymlink(stagingDir, rel string) error {
+	idx := strings.LastIndex(rel, "/")
+	if idx < 0 {
+		return nil
+	}
+	return mkdirNoSymlink(stagingDir, rel[:idx])
+}
+
+// ensurePathNoSymlinks verifies that no existing component along rel under
+// stagingDir (including the leaf itself) is a symlink.
+func ensurePathNoSymlinks(stagingDir, rel string) error {
+	cleanRoot := filepath.Clean(stagingDir)
+	cur := cleanRoot
+	for _, seg := range strings.Split(rel, "/") {
+		if seg == "" || seg == "." {
+			continue
+		}
+		cur = filepath.Join(cur, seg)
+		if !isWithinDir(cleanRoot, cur) {
+			return fmt.Errorf("path %q escapes staging root", rel)
+		}
+		info, err := os.Lstat(cur)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("path component %q is a symlink", seg)
+		}
+	}
+	return nil
+}
+
+// prepareLeafForReplace checks the destination leaf via Lstat before creating
+// a file, symlink, or hardlink so an existing symlink is never followed.
+func prepareLeafForReplace(dest string) error {
+	info, err := os.Lstat(dest)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to overwrite symlink leaf %q", filepath.Base(dest))
+	}
+	if info.IsDir() {
+		return fmt.Errorf("refusing to overwrite directory %q", filepath.Base(dest))
+	}
+	return os.Remove(dest)
+}
+
+// verifyExtractedSymlinks walks stagingDir after extraction and resolves every
+// symlink (including multi-hop and forward-referenced chains) to guarantee no
+// link resolves outside stagingDir.
+func verifyExtractedSymlinks(stagingDir string) error {
+	realRoot, err := filepath.EvalSymlinks(stagingDir)
+	if err != nil {
+		return fmt.Errorf("resolve staging root: %w", err)
+	}
+	realRoot = filepath.Clean(realRoot)
+	return filepath.WalkDir(realRoot, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.Type()&os.ModeSymlink == 0 {
+			return nil
+		}
+		target, err := os.Readlink(path)
+		if err != nil {
+			return fmt.Errorf("read extracted symlink %s: %w", path, err)
+		}
+		resolved, err := resolveConfinedSymlink(realRoot, filepath.Dir(path), target, 0)
+		if err != nil {
+			return fmt.Errorf("unsafe extracted symlink %q -> %q: %w", path, target, err)
+		}
+		if !isWithinDir(realRoot, resolved) {
+			return fmt.Errorf("extracted symlink %q -> %q resolves outside staging directory", path, target)
+		}
+		return nil
+	})
+}
+
+const maxSymlinkHops = 40
+
+func resolveConfinedSymlink(root, startDir, target string, depth int) (string, error) {
+	if depth > maxSymlinkHops {
+		return "", errors.New("symlink resolution depth exceeded")
+	}
+	if target == "" {
+		return "", errors.New("empty symlink target")
+	}
+	norm := strings.ReplaceAll(target, `\`, "/")
+	if strings.HasPrefix(norm, "/") || hasWindowsDrivePrefix(norm) {
+		return "", errors.New("absolute symlink target")
+	}
+	cur := filepath.Clean(startDir)
+	for _, seg := range strings.Split(norm, "/") {
+		if seg == "" || seg == "." {
+			continue
+		}
+		if seg == ".." {
+			cur = filepath.Dir(cur)
+			if cur != root && !isWithinDir(root, cur) {
+				return "", errors.New("symlink chain escapes staging directory")
+			}
+			continue
+		}
+		next := filepath.Join(cur, seg)
+		if !isWithinDir(root, next) {
+			return "", errors.New("symlink chain escapes staging directory")
+		}
+		info, err := os.Lstat(next)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				cur = next
+				continue
+			}
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			linkTarget, err := os.Readlink(next)
+			if err != nil {
+				return "", err
+			}
+			resolved, err := resolveConfinedSymlink(root, cur, linkTarget, depth+1)
+			if err != nil {
+				return "", err
+			}
+			cur = resolved
+			continue
+		}
+		cur = next
+	}
+	return cur, nil
 }

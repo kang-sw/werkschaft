@@ -72,9 +72,12 @@ type inflightInstall struct {
 	done chan struct{}
 	err  error
 
-	mu        sync.Mutex
-	waiters   int
+	waiters   int // guarded by Manager.mu
+	cancelled bool
+	finished  bool
 	cancel    context.CancelFunc
+
+	mu        sync.Mutex
 	listeners []ProgressFunc
 }
 
@@ -96,17 +99,6 @@ func (f *inflightInstall) notify(p Progress) {
 	}
 }
 
-func (f *inflightInstall) releaseWaiter() {
-	f.mu.Lock()
-	f.waiters--
-	cancel := f.cancel
-	noneLeft := f.waiters <= 0
-	f.mu.Unlock()
-	if noneLeft && cancel != nil {
-		cancel()
-	}
-}
-
 // Manager manages the pinned standalone Pi runtime and embedded bridge under
 // <CacheRoot>/runtimes/pi/. Readiness is cached in memory after the first disk
 // check so interactive paths perform zero stat() polling.
@@ -123,6 +115,7 @@ type Manager struct {
 	bridgePath string
 	inflight   *inflightInstall
 
+	execSem       chan struct{}
 	bridgeWriteMu sync.Mutex
 
 	// Test hooks (nil in production).
@@ -168,6 +161,7 @@ func NewManager(opts Options) *Manager {
 		goarch:     goarch,
 		baseURL:    baseURL,
 		httpClient: client,
+		execSem:    make(chan struct{}, 1),
 	}
 }
 
@@ -312,14 +306,12 @@ func (m *Manager) runInstall(ctx context.Context, force bool, onProgress Progres
 	}
 
 	m.mu.Lock()
-	if m.inflight != nil {
+	if m.inflight != nil && !m.inflight.cancelled {
 		call := m.inflight
-		call.mu.Lock()
 		call.waiters++
-		call.mu.Unlock()
 		call.addListener(onProgress)
 		m.mu.Unlock()
-		return waitInflight(ctx, call)
+		return m.waitInflight(ctx, call)
 	}
 	installCtx, cancel := context.WithCancel(context.Background())
 	call := &inflightInstall{
@@ -336,7 +328,10 @@ func (m *Manager) runInstall(ctx context.Context, force bool, onProgress Progres
 		err := m.executeInstall(installCtx, force, call.notify)
 		call.err = err
 		m.mu.Lock()
-		m.inflight = nil
+		call.finished = true
+		if m.inflight == call {
+			m.inflight = nil
+		}
 		if err == nil {
 			m.status = RuntimeStatus{
 				Installed:  true,
@@ -345,18 +340,18 @@ func (m *Manager) runInstall(ctx context.Context, force bool, onProgress Progres
 				InstallDir: m.InstallDir(),
 			}
 			m.cached = true
-		} else {
+		} else if !call.cancelled {
 			m.cached = false
 		}
 		m.mu.Unlock()
 		close(call.done)
 	}()
 
-	return waitInflight(ctx, call)
+	return m.waitInflight(ctx, call)
 }
 
-func waitInflight(ctx context.Context, call *inflightInstall) error {
-	defer call.releaseWaiter()
+func (m *Manager) waitInflight(ctx context.Context, call *inflightInstall) error {
+	defer m.releaseWaiter(call)
 	select {
 	case <-call.done:
 		return call.err
@@ -365,7 +360,32 @@ func waitInflight(ctx context.Context, call *inflightInstall) error {
 	}
 }
 
+func (m *Manager) releaseWaiter(call *inflightInstall) {
+	m.mu.Lock()
+	call.waiters--
+	var cancel context.CancelFunc
+	if call.waiters <= 0 && !call.finished {
+		call.cancelled = true
+		cancel = call.cancel
+		if m.inflight == call {
+			m.inflight = nil
+		}
+	}
+	m.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
 func (m *Manager) executeInstall(ctx context.Context, force bool, notify ProgressFunc) error {
+	if m.execSem != nil {
+		select {
+		case m.execSem <- struct{}{}:
+			defer func() { <-m.execSem }()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	spec, err := m.assetSpec()
 	if err != nil {
 		return err

@@ -127,17 +127,18 @@ type pirpcMapper struct {
 	turnErr       string
 	batches       batchTracker
 	pendingTools  map[string]string
-	finalStats    bool
+	finalStatsIDs map[string]struct{}
 	now           func() int64
 }
 
 func newPiRPCMapper(sessionID, piHome string, worker bool) *pirpcMapper {
 	return &pirpcMapper{
-		sessionID:    sessionID,
-		piHome:       piHome,
-		worker:       worker,
-		batches:      newBatchTracker("pirpc-"),
-		pendingTools: map[string]string{},
+		sessionID:     sessionID,
+		piHome:        piHome,
+		worker:        worker,
+		batches:       newBatchTracker("pirpc-"),
+		pendingTools:  map[string]string{},
+		finalStatsIDs: map[string]struct{}{},
 	}
 }
 
@@ -227,6 +228,10 @@ func (m *pirpcMapper) handleResponse(ev pirpcEnvelope, replies lineReplies) []Ev
 	var out []Event
 	kind := pirpcIDKind(ev.ID)
 
+	_, isFinalStats := m.finalStatsIDs[ev.ID]
+	if isFinalStats {
+		delete(m.finalStatsIDs, ev.ID)
+	}
 	if ev.Success {
 		switch ev.Command {
 		case "get_state":
@@ -245,7 +250,7 @@ func (m *pirpcMapper) handleResponse(ev pirpcEnvelope, replies lineReplies) []Ev
 				}
 			}
 		case "get_session_stats":
-			if statusEv := m.parseSessionStats(ev.Data); statusEv != nil {
+			if statusEv := m.parseSessionStats(ev.Data, isFinalStats); statusEv != nil {
 				out = append(out, *statusEv)
 			}
 		case "get_available_models":
@@ -475,8 +480,7 @@ func (m *pirpcMapper) handleAgentSettled(ev pirpcEnvelope, replies lineReplies, 
 	m.turnErr = ""
 	out = append(out, turnEnd)
 
-	m.finalStats = true
-	m.requestStats(replies)
+	m.requestStats(replies, true)
 	return out
 }
 
@@ -486,7 +490,7 @@ func (m *pirpcMapper) handleCompactionEnd(ev pirpcEnvelope, replies lineReplies)
 	if ev.Aborted || strings.TrimSpace(ev.ErrorMessage) != "" {
 		phase = wslive.CompactFailed
 	}
-	m.requestStats(replies)
+	m.requestStats(replies, false)
 	return []Event{{Live: &wslive.Event{
 		Kind:    wslive.KindCompact,
 		Phase:   phase,
@@ -494,15 +498,22 @@ func (m *pirpcMapper) handleCompactionEnd(ev pirpcEnvelope, replies lineReplies)
 	}}}
 }
 
-func (m *pirpcMapper) requestStats(replies lineReplies) {
+func (m *pirpcMapper) requestStats(replies lineReplies, final bool) {
 	m.statsSeq++
+	id := "wspi/stats/auto-" + strconv.Itoa(m.statsSeq)
+	if final {
+		if m.finalStatsIDs == nil {
+			m.finalStatsIDs = map[string]struct{}{}
+		}
+		m.finalStatsIDs[id] = struct{}{}
+	}
 	replies.send(map[string]any{
-		"id":   "wspi/stats/auto-" + strconv.Itoa(m.statsSeq),
+		"id":   id,
 		"type": "get_session_stats",
 	})
 }
 
-func (m *pirpcMapper) parseSessionStats(raw json.RawMessage) *Event {
+func (m *pirpcMapper) parseSessionStats(raw json.RawMessage, final bool) *Event {
 	var stats pirpcSessionStatsData
 	if json.Unmarshal(raw, &stats) != nil {
 		return nil
@@ -544,8 +555,6 @@ func (m *pirpcMapper) parseSessionStats(raw json.RawMessage) *Event {
 	if ctxUsage == nil && cost == nil {
 		return nil
 	}
-	final := m.finalStats
-	m.finalStats = false
 	return &Event{
 		Live: &wslive.Event{
 			Kind:    wslive.KindStatus,

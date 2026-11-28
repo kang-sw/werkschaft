@@ -814,3 +814,60 @@ func TestPiRPCSharedRuntimeBinderAndLeadPermissionRestart(t *testing.T) {
 		t.Fatal("BuiltinBackendRegistrations()[BackendPiRPC].Permission mismatch")
 	}
 }
+
+type captureLineReplies struct {
+	sent []map[string]any
+}
+
+func (c *captureLineReplies) answer(string, controlAnswer) {}
+func (c *captureLineReplies) send(v any) {
+	if msg, ok := v.(map[string]any); ok {
+		c.sent = append(c.sent, msg)
+	}
+}
+
+func TestPiRPCMapperFinalUsageCorrelatedToSettlementID(t *testing.T) {
+	m := newPiRPCMapper("sess-1", "", false)
+	replies := &captureLineReplies{}
+
+	// 1. agent_settled queues a final stats request (auto-1).
+	m.mapLine([]byte(`{"type":"agent_settled","aborted":false}`), replies)
+	// 2. compaction_end queues a non-final stats request (auto-2).
+	m.mapLine([]byte(`{"type":"compaction_end","reason":"manual"}`), replies)
+	if len(replies.sent) != 2 {
+		t.Fatalf("sent stats requests = %d, want 2: %+v", len(replies.sent), replies.sent)
+	}
+	settledID, _ := replies.sent[0]["id"].(string)
+	compactID, _ := replies.sent[1]["id"].(string)
+
+	// Overlapping compaction stats arrives first: must NOT steal FinalUsage.
+	evs := m.mapLine([]byte(`{"id":"`+compactID+`","type":"response","command":"get_session_stats","success":true,"data":{"tokens":{"total":100},"cost":0.01}}`), replies)
+	if len(evs) != 1 || evs[0].FinalUsage {
+		t.Fatalf("compaction stats events = %+v, want single event with FinalUsage=false", evs)
+	}
+
+	// Ad-hoc SessionStats response must NOT steal FinalUsage either.
+	evs = m.mapLine([]byte(`{"id":"wspi/stats/99","type":"response","command":"get_session_stats","success":true,"data":{"tokens":{"total":120},"cost":0.02}}`), replies)
+	if len(evs) != 1 || evs[0].FinalUsage {
+		t.Fatalf("ad-hoc stats events = %+v, want single event with FinalUsage=false", evs)
+	}
+
+	// Settlement stats response returns empty usage/cost -> emits no event and
+	// MUST clear its pending final ID so later responses never inherit FinalUsage.
+	evs = m.mapLine([]byte(`{"id":"`+settledID+`","type":"response","command":"get_session_stats","success":true,"data":{}}`), replies)
+	if len(evs) != 0 {
+		t.Fatalf("empty settlement stats events = %+v, want none", evs)
+	}
+	evs = m.mapLine([]byte(`{"id":"wspi/stats/100","type":"response","command":"get_session_stats","success":true,"data":{"tokens":{"total":140},"cost":0.03}}`), replies)
+	if len(evs) != 1 || evs[0].FinalUsage {
+		t.Fatalf("post-empty ad-hoc stats events = %+v, want FinalUsage=false (no stale armed flag)", evs)
+	}
+
+	// Subsequent settlement response with real usage DOES set FinalUsage=true.
+	m.mapLine([]byte(`{"type":"agent_settled","aborted":false}`), replies)
+	settledID2, _ := replies.sent[2]["id"].(string)
+	evs = m.mapLine([]byte(`{"id":"`+settledID2+`","type":"response","command":"get_session_stats","success":true,"data":{"tokens":{"total":200},"cost":0.04}}`), replies)
+	if len(evs) != 1 || !evs[0].FinalUsage {
+		t.Fatalf("second settlement stats events = %+v, want single event with FinalUsage=true", evs)
+	}
+}
