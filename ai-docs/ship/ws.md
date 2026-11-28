@@ -362,7 +362,11 @@ merge, zero ephemeral `release/canary-*` branch, zero manual tag push):
     `v<next-patch-core>` does not already exist on origin, and picks the next
     monotonic integer `N = max(claimed, 0) + 1` (`N >= 1`) for
     `v<next-patch-core>-canary.<N>` across remote tags (`git ls-remote --tags
-    origin`) and GitHub Releases.
+    origin`) and GitHub Releases, **including orphaned draft releases** left by
+    a failed publish. Drafts are invisible to `contents: read` tokens, so a
+    checkout-free `release-scan` job (`contents: write`, develop prerelease
+    only) lists release tags and hands them to the read-only `plan` job via
+    `--release-tags`; a failed scan fails the plan closed.
   - Ephemerally runs `agents-plugin-tool/scripts/bump-ws-version.sh
     <next-patch-core>` inside the `build`, `windows-smoke`, and
     `werkschaft-tauri-build.yml` `package` checkout jobs without committing or

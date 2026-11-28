@@ -163,6 +163,91 @@ class ResolveCanaryVersionTest(unittest.TestCase):
             self.assertEqual(plan["tag"], "v0.53.3-canary.1")
             self.assertEqual(plan["bump_core"], "0.53.3")
 
+    def test_parse_release_tag_list_accepts_whitespace_and_commas(self):
+        self.assertEqual(MOD.parse_release_tag_list(""), [])
+        self.assertEqual(MOD.parse_release_tag_list("  \n"), [])
+        self.assertEqual(
+            MOD.parse_release_tag_list("v0.53.3-canary.1 v0.53.3-canary.2\nv0.53.2,v0.53.1 "),
+            ["v0.53.3-canary.1", "v0.53.3-canary.2", "v0.53.2", "v0.53.1"],
+        )
+
+    def test_prerelease_skips_orphaned_draft_release_tag_from_prescanned_list(self):
+        # A failed publish leaves a draft release (no git tag yet). A read-only
+        # token cannot list it, so the write-scoped scan hands it to the planner.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            write_runtime_pair(repo, "0.53.2")
+            draft_tags = MOD.parse_release_tag_list("v0.53.3-canary.1 v0.53.3-canary.2")
+            plan = MOD.resolve_canary_plan(
+                repo=repo,
+                mode="prerelease",
+                ref="refs/heads/develop",
+                remote_tags=["refs/tags/v0.53.3-canary.1"],
+                release_tags=draft_tags,
+            )
+            self.assertEqual(plan["tag"], "v0.53.3-canary.3")
+
+            # Without draft visibility the planner would collide on canary.2.
+            blind = MOD.resolve_canary_plan(
+                repo=repo,
+                mode="prerelease",
+                ref="refs/heads/develop",
+                remote_tags=["refs/tags/v0.53.3-canary.1"],
+                release_tags=[],
+            )
+            self.assertEqual(blind["tag"], "v0.53.3-canary.2")
+
+    def test_cli_release_tags_flag_skips_gh_and_avoids_draft_collision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            write_runtime_pair(repo, "0.53.2")
+            out_file = repo / "gh_output.txt"
+            argv = [
+                "resolve-canary-version.py",
+                "resolve",
+                "--repo", str(repo),
+                "--mode", "prerelease",
+                "--ref", "refs/heads/develop",
+                "--github-repository", "example/repo",
+                "--release-tags=v0.53.3-canary.1 v0.53.3-canary.2 ",
+                "--github-output", str(out_file),
+            ]
+            with mock.patch.object(sys, "argv", argv), \
+                 mock.patch.object(MOD, "fetch_remote_canary_tags", return_value=[]), \
+                 mock.patch.object(MOD, "fetch_github_release_tags") as gh_fetch, \
+                 mock.patch("builtins.print"):
+                self.assertEqual(MOD.main(), 0)
+            gh_fetch.assert_not_called()
+            text = out_file.read_text(encoding="utf-8")
+            self.assertIn("tag=v0.53.3-canary.3\n", text)
+
+            # An explicitly empty pre-scan (no releases) is honored, not treated as missing.
+            out_empty = repo / "gh_output_empty.txt"
+            argv_empty = [*argv[:-1], str(out_empty)]
+            argv_empty[argv_empty.index("--release-tags=v0.53.3-canary.1 v0.53.3-canary.2 ")] = "--release-tags="
+            with mock.patch.object(sys, "argv", argv_empty), \
+                 mock.patch.object(MOD, "fetch_remote_canary_tags", return_value=[]), \
+                 mock.patch.object(MOD, "fetch_github_release_tags") as gh_fetch, \
+                 mock.patch("builtins.print"):
+                self.assertEqual(MOD.main(), 0)
+            gh_fetch.assert_not_called()
+            self.assertIn("tag=v0.53.3-canary.1\n", out_empty.read_text(encoding="utf-8"))
+
+    def test_workflow_isolates_write_scope_to_checkout_free_release_scan(self):
+        workflow = (SCRIPT.parents[2] / ".github" / "workflows" / "ws-canary.yml").read_text(encoding="utf-8")
+        head, _, rest = workflow.partition("\n  release-scan:\n")
+        self.assertTrue(rest, "release-scan job missing")
+        scan_block, _, plan_block = rest.partition("\n  plan:\n")
+        plan_block = plan_block.split("\n  ci:\n", 1)[0]
+        self.assertIn("contents: write", scan_block)
+        self.assertNotIn("actions/checkout", scan_block)
+        self.assertNotIn("uses:", scan_block)
+        self.assertIn("github.ref == 'refs/heads/develop'", scan_block)
+        self.assertIn("contents: read", plan_block)
+        self.assertNotIn("contents: write", plan_block)
+        self.assertIn("needs: release-scan", plan_block)
+        self.assertIn("--release-tags=", plan_block)
+
     def test_runtime_contract_mismatch_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
