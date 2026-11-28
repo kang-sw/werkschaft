@@ -51,7 +51,7 @@
     send();
   }
   function rpLeadMake() {
-    var P = { gen: 0, busy: false, loading: false, root: "", harness: "claude", model: "", effort: "", mode: "", iso: "default", level: "", dropped: "", refused: 0, statusText: "" };
+    var P = { gen: 0, busy: false, loading: false, root: "", harness: "claude", model: "", effort: "", mode: "", iso: "default", level: "", dropped: "", refused: 0, statusText: "", dashboardControl: false };
     var settingsKey = "ws.dashboard.newSession", saved = {}, picks = Object.create(null);
     function readSettings() {
       try {
@@ -249,6 +249,15 @@
     isoSw.appendChild(mk("i"));
     var isoLbl = isoSw.appendChild(mk("span", null, wsT("js.lead.iso") + " · " + wsT("js.lead.iso.default")));
 
+    var dcSw = footMain.appendChild(rpBtn("ns-sw", ""));
+    dcSw.setAttribute("role", "switch");
+    dcSw.setAttribute("data-dashboard-control-switch", "1");
+    dcSw.setAttribute("aria-label", wsT("js.dc.title"));
+    dcSw.setAttribute("aria-checked", "false");
+    dcSw.hidden = true;
+    dcSw.appendChild(mk("i"));
+    var dcLbl = dcSw.appendChild(mk("span", null, wsT("js.dc.short") + " · " + wsT("js.dc.off")));
+
     var pNativeNote = foot.appendChild(mk("p", "ns-adv-note spdesc"));
     pNativeNote.hidden = true;
     var pfine = foot.appendChild(mk("p", "ns-fine pmfine", wsT("js.perm.fine.intent")));
@@ -445,6 +454,13 @@
       labelIn.disabled = P.busy;
       isoLbl.textContent = wsT("js.lead.iso") + " · " + wsT(isolated ? "js.lead.iso.isolated" : "js.lead.iso.default");
       isoSw.title = wsT(isolated ? "js.lead.iso.isolated.hint" : "js.lead.iso.default.hint");
+      var dcSup = dashboardControlSupported(P.harness) === true;
+      if (!dcSup && P.dashboardControl) P.dashboardControl = false;
+      dcSw.hidden = !dcSup;
+      dcSw.setAttribute("aria-checked", String(!!P.dashboardControl));
+      dcSw.disabled = P.busy || P.loading || off(P.harness);
+      dcLbl.textContent = wsT("js.dc.short") + " · " + wsT(P.dashboardControl ? "js.dc.on" : "js.dc.off");
+      dcSw.title = wsT("js.dc.desc");
       drawModelAndEffort();
       tierPick.busy = P.busy || !!P.loading;
       tierPick.draw();
@@ -464,6 +480,7 @@
       P.harness = k;
       P.level = P.dropped = "";
       P.refused = 0;
+      P.dashboardControl = false;
       showPick(k);
       edited();
     }
@@ -493,7 +510,17 @@
       return {
         harness: P.harness,
         chosen: chosen,
-        form: { harness: P.harness, model: chosen.model, provider: chosen.provider, effort: effortOff() ? "" : P.effort, mode: level ? "" : freeMode(), isolation: P.iso, level: level, ack: ack }
+        form: {
+          harness: P.harness,
+          model: chosen.model,
+          provider: chosen.provider,
+          effort: effortOff() ? "" : P.effort,
+          mode: level ? "" : freeMode(),
+          isolation: P.iso,
+          level: level,
+          ack: ack,
+          dashboardControl: dashboardControlSupported(P.harness) === true && P.dashboardControl === true
+        }
       };
     }
     function launch(snap) {
@@ -501,11 +528,30 @@
       var gen = P.gen, chosenHarness = snap.harness, chosen = snap.chosen, form = snap.form, level = form.level;
       var label = leadLabelClean(labelIn.value);
       P.busy = true;
-      P.statusText = wsT(level ? "js.perm.checking" : "js.lead.starting");
+      P.statusText = wsT(level || form.dashboardControl ? "js.perm.checking" : "js.lead.starting");
       setErr("");
       permDraw();
       sync();
-      if (!level) { post(gen, chosenHarness, chosen, "/agents/leads", form, label); return; }
+      if (!level && !form.dashboardControl) { post(gen, chosenHarness, chosen, "/agents/leads", form, label); return; }
+      if (!level && form.dashboardControl) {
+        dashboardControlPreflight(chosenHarness, function (ok) {
+          if (!rpLive(P, gen)) { P.busy = false; P.statusText = ""; return; }
+          if (!ok) {
+            P.busy = false;
+            P.statusText = "";
+            P.dashboardControl = false;
+            setErr(wsT("js.dc.refused", 404));
+            permDraw();
+            sync();
+            railPopPlace();
+            return;
+          }
+          P.statusText = wsT("js.lead.starting");
+          drawCta();
+          post(gen, chosenHarness, chosen, "/agents/leads", form, label);
+        });
+        return;
+      }
       permPreflight(chosenHarness, level, function (ok) {
         if (!rpLive(P, gen)) { P.busy = false; P.statusText = ""; return; }
         if (!ok) {
@@ -513,6 +559,16 @@
           P.statusText = "";
           if (P.harness === chosenHarness) P.dropped = level;
           else setErr(wsT("js.perm.unsent"));
+          permDraw();
+          sync();
+          railPopPlace();
+          return;
+        }
+        if (form.dashboardControl && dashboardControlSupported(chosenHarness) !== true) {
+          P.busy = false;
+          P.statusText = "";
+          P.dashboardControl = false;
+          setErr(wsT("js.dc.refused", 404));
           permDraw();
           sync();
           railPopPlace();
@@ -587,6 +643,7 @@
       });
     }
     isoSw.addEventListener("click", function () { if (P.busy) return; P.iso = P.iso === "isolated" ? "default" : "isolated"; sync(); });
+    dcSw.addEventListener("click", function () { if (P.busy || dcSw.disabled || dcSw.hidden) return; P.dashboardControl = !P.dashboardControl; sync(); });
     seg.addEventListener("click", function (e) { var b = e.target.closest && e.target.closest("[data-harness]"); if (b && !b.disabled) setHarness(b.getAttribute("data-harness")); });
     effRst.addEventListener("click", function () { if (P.busy || P.loading || !P.effort) return; P.effort = ""; tierPick.manual(); edited(); });
     xBtn.addEventListener("click", function () { railPopClose(true); });
@@ -612,6 +669,7 @@
       }
       P.harness = "claude";
       P.iso = "default";
+      P.dashboardControl = false;
       P.loading = true;
       loc.textContent = "";
       loc.wsName = name;

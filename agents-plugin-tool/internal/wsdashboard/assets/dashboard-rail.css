@@ -924,6 +924,28 @@ button.bgbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-o
 .pmstate .pmsrc { font-size: 11px; color: var(--wb-muted-fg); }
 .pmstate .pmnote { grid-column: 1 / -1; margin: 0; font-size: 11.5px; color: var(--wb-muted-fg); }
 .rpop .pmchg { display: grid; gap: 5px; }
+/* per-session dashboard control MCP opt-in (dashboard-leads.js rpSessMake) */
+.rpop .dcsec { display: grid; gap: 6px; padding-top: 2px; }
+.rpop .dcsec[hidden] { display: none; }
+.rpop .dchd { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rpop .dc-sw { display: inline-flex; align-items: center; gap: 7px; border: 0; background: transparent; padding: 2px 0; color: var(--wb-muted-fg); font: 600 11.5px/1.2 var(--wb-sans); cursor: pointer; white-space: nowrap; }
+.rpop .dc-sw:hover:not(:disabled) { color: var(--wb-fg); }
+.rpop .dc-sw:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: 2px; border-radius: 6px; }
+.rpop .dc-sw:disabled { opacity: .45; cursor: not-allowed; }
+.rpop .dc-sw i { width: 28px; height: 16px; border-radius: 999px; background: var(--wb-line); position: relative; transition: background-color .12s; flex: none; }
+.rpop .dc-sw i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--wb-card); box-shadow: 0 1px 2px rgb(0 0 0 / .22); transition: left .12s, background-color .12s; }
+.rpop .dc-sw[aria-checked="true"] { color: var(--wb-fg); }
+.rpop .dc-sw[aria-checked="true"] i { background: color-mix(in srgb, var(--wb-primary) 55%, var(--wb-muted)); }
+.rpop .dc-sw[aria-checked="true"] i::after { left: 14px; background: var(--wb-primary); }
+.rpop .dcdesc { margin: 0; font-size: 11.5px; color: var(--wb-muted-fg); line-height: 1.4; }
+.rpop .dcpend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 7px 9px; border-radius: 8px; background: color-mix(in srgb, var(--wb-warn) 12%, var(--wb-card)); font-size: 11.5px; color: var(--wb-fg); }
+.rpop .dcpend[hidden] { display: none; }
+.rpop .dcbadge { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 700; background: color-mix(in srgb, var(--wb-warn) 22%, var(--wb-card)); color: var(--wb-warn-ink); white-space: nowrap; }
+.rpop .dcpend-text { flex: 1 1 160px; min-width: 0; color: var(--wb-muted-fg); line-height: 1.35; }
+.rpop .dc-stop-btn { margin-inline-start: auto; border: 0; border-radius: 7px; padding: 4px 10px; background: color-mix(in srgb, var(--wb-fail) 16%, var(--wb-card)); color: var(--wb-fail); font: 700 11.5px var(--wb-sans); cursor: pointer; white-space: nowrap; }
+.rpop .dc-stop-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--wb-fail) 24%, var(--wb-card)); }
+.rpop .dc-stop-btn:focus-visible { outline: 1.5px solid var(--wb-fail); outline-offset: 1px; }
+.rpop .dc-stop-btn:disabled { opacity: .45; cursor: not-allowed; }
 /* unsupported and refused */
 .rpop .pmoff { margin: 0; padding: 6px 9px; border-radius: 8px; background: var(--wb-muted); font-size: 11.5px; color: var(--wb-muted-fg); }
 .rpop .pmerr { margin: 0; padding: 7px 10px; border-radius: 8px; background: color-mix(in srgb, var(--wb-fail) 12%, var(--wb-card)); color: var(--wb-fail); font-size: 11.5px; display: grid; gap: 2px; }

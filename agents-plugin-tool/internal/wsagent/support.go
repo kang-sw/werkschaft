@@ -684,7 +684,7 @@ func (s *Support) Choices(ctx context.Context) ChoicesAnswer {
 	sort.Strings(names)
 	for _, name := range names {
 		reg := s.opts.Runner.opts.Backends[name]
-		h := SupportHarness{Harness: name, Lead: true, PermissionModes: append([]string(nil), reg.PermissionModes...), Models: []ModelChoice{}, Efforts: []string{}}
+		h := SupportHarness{Harness: name, Lead: true, DashboardControl: true, PermissionModes: append([]string(nil), reg.PermissionModes...), Models: []ModelChoice{}, Efforts: []string{}}
 		h.PermissionLevels = s.leadPermissionLevels(name)
 		h.Available, h.Error = supportBackendAvailability(name, reg.Backend)
 		hs = append(hs, h)

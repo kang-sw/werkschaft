@@ -293,7 +293,14 @@
         if (jTok && !skipCrumb) WsJank.end(jTok, { event: evName, bytes: rawBytes });
       }
     };
-    return { close: function () { over = true; cleanup(); try { ws.close(); } catch (x) {} } };
+    function send(payload) {
+      if (over || ws.readyState !== WebSocket.OPEN) return false;
+      var raw = typeof payload === "string" ? payload : JSON.stringify(payload);
+      var bytes = typeof TextEncoder === "function" ? new TextEncoder().encode(raw).length : raw.length;
+      if (bytes > 1024) return false;
+      try { ws.send(raw); return true; } catch (x) { return false; }
+    }
+    return { close: function () { over = true; cleanup(); try { ws.close(); } catch (x) {} }, send: send };
   }
   // Immutable tree inputs keep each nested row independent of its children.
   // Slots are private transport comments; materialization removes every slot
@@ -483,6 +490,58 @@
     else { boardReturnShown(); connect(); }
   }
   doc.addEventListener("ws-page-visibility", syncMainStream);
+  // Local shell bridge heartbeat: opts this local top-level shell tab into the
+  // daemon's multi-tab registry over the existing /rail/events WebSocket without
+  // opening a second stream. Every frame stays well within wsMaxFrame (1 KiB).
+  var daemonBridgeEnabled = !!(shell && root.hasAttribute("data-sysopen"));
+  var daemonTabId = "";
+  if (daemonBridgeEnabled) {
+    daemonTabId = (function () {
+      try {
+        if (window.crypto && typeof window.crypto.getRandomValues === "function") {
+          var b = new Uint8Array(8);
+          window.crypto.getRandomValues(b);
+          return "tab-" + Array.prototype.map.call(b, function (n) { return (n < 16 ? "0" : "") + n.toString(16); }).join("");
+        }
+      } catch (_) {}
+      return "tab-" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    })();
+    window.wsDaemonTabId = daemonTabId;
+  }
+  var daemonLastFocusedAt = 0;
+  function sendDaemonHeartbeat(focusedOverride) {
+    if (!daemonBridgeEnabled || !mainStream || typeof mainStream.send !== "function") return;
+    var visible = !pageHidden();
+    var focused = visible && (typeof focusedOverride === "boolean" ? focusedOverride : (typeof doc.hasFocus === "function" ? !!doc.hasFocus() : true));
+    if (focused || (visible && !daemonLastFocusedAt)) daemonLastFocusedAt = Date.now();
+    var activeRoute = String(location.pathname || "/").slice(0, 256);
+    var activeReplyId = String(rid || "").slice(0, 64);
+    var nativeCapture = !!(window.wsDaemonNativeCapture && typeof window.wsDaemonNativeCapture.capture === "function");
+    mainStream.send({
+      event: "tab-heartbeat",
+      tab_id: daemonTabId,
+      visible: visible,
+      focused: focused,
+      last_focused_at: daemonLastFocusedAt,
+      active_route: activeRoute,
+      active_reply_id: activeReplyId,
+      capabilities: { confirm_banner: true, native_capture: nativeCapture }
+    });
+  }
+  if (daemonBridgeEnabled) {
+    window.addEventListener("focus", function () { sendDaemonHeartbeat(true); });
+    window.addEventListener("blur", function () {
+      // Moving focus into a same-origin session iframe blurs window while
+      // document.hasFocus() stays true; defer one tick to distinguish real blur.
+      setTimeout(function () {
+        sendDaemonHeartbeat(typeof doc.hasFocus === "function" ? !!doc.hasFocus() : false);
+      }, 0);
+    });
+    doc.addEventListener("visibilitychange", function () { sendDaemonHeartbeat(); });
+    doc.addEventListener("ws-page-visibility", function () { sendDaemonHeartbeat(); });
+    doc.addEventListener("ws-shell-route", function () { sendDaemonHeartbeat(); });
+    doc.addEventListener("ws-shell-focus", function () { sendDaemonHeartbeat(true); });
+  }
   function connect(withoutBoard) {
     if (!window.WebSocket || shHidden) return;
     if (framed && rid) companionStream(false);
@@ -502,21 +561,39 @@
     // The shell streams the rail alone; a framed session page streams its
     // session without the rail.
     var path = shell ? "/rail/events" : mode === "index" || worktree ? "/events" : "/s/" + rid + "/events";
-    var st = openStream(path + "?h=" + encodeURIComponent(held(withoutBoard)) + (framed && mode !== "index" ? "&frame=1" : "") + (!shell && mode !== "index" ? "&topics=1" : "") + (shell || (!framed && mode !== "index") ? "&railrows=1" : "") + (!shell && !worktree && mode !== "index" ? "&treerows=1&entryrows=1&panelrows=1" : ""), {
-      open: function () { connected(true); },
+    var st = openStream(path + "?h=" + encodeURIComponent(held(withoutBoard)) + (framed && mode !== "index" ? "&frame=1" : "") + (!shell && mode !== "index" ? "&topics=1" : "") + (shell || (!framed && mode !== "index") ? "&railrows=1" : "") + (!shell && !worktree && mode !== "index" ? "&treerows=1&entryrows=1&panelrows=1" : "") + (daemonBridgeEnabled ? "&bridge=1&tab_id=" + encodeURIComponent(daemonTabId) : ""), {
+      open: function () {
+        connected(true);
+        if (daemonBridgeEnabled) sendDaemonHeartbeat();
+      },
       // Reopen with the hashes held now, so a reconnect sends only what
       // changed since.
       drop: function () {
         if (framed && rid) companionStream(false);
+        if (daemonBridgeEnabled && typeof clearDaemonConfirm === "function") clearDaemonConfirm();
         connected(false);
         trackerLost();
         retry(connect, 3000);
       },
-      events: { assets: onAssets, "openai-consent": onOpenAIConsent, "account-changed": onAccountChanged, companion: onCompanion, "companion-focus": onCompanionFocus, "companion-command": onCompanionCommand, "companion-phone": onCompanionPhone, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, usercmd: onUsercmd, execjobs: onExecJobs, gone: onGone }
+      events: { assets: onAssets, "openai-consent": onOpenAIConsent, "account-changed": onAccountChanged, "daemon-confirm-request": onDaemonConfirmRequest, "daemon-confirm-clear": onDaemonConfirmClear, "daemon-bridge-request": onDaemonBridgeRequest, companion: onCompanion, "companion-focus": onCompanionFocus, "companion-command": onCompanionCommand, "companion-phone": onCompanionPhone, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, usercmd: onUsercmd, execjobs: onExecJobs, gone: onGone }
     });
     mainStream = st;
     function onOpenAIConsent(event) {
       if (!framed && current()) showOpenAIConsent(event);
+    }
+    function onDaemonConfirmRequest(event) {
+      if (!daemonBridgeEnabled || !current() || !event) return;
+      if (typeof showDaemonConfirm === "function") showDaemonConfirm(event);
+      doc.dispatchEvent(new CustomEvent("ws-daemon-confirm-request", { detail: event }));
+    }
+    function onDaemonConfirmClear(event) {
+      if (!daemonBridgeEnabled || !current()) return;
+      if (typeof clearDaemonConfirm === "function") clearDaemonConfirm(event && event.request_id);
+      doc.dispatchEvent(new CustomEvent("ws-daemon-confirm-clear", { detail: event || {} }));
+    }
+    function onDaemonBridgeRequest(event) {
+      if (!daemonBridgeEnabled || !current() || !event) return;
+      doc.dispatchEvent(new CustomEvent("ws-daemon-bridge-request", { detail: event }));
     }
     function onAccountChanged(event) {
       if (!framed && current()) doc.dispatchEvent(new CustomEvent("ws-account-changed", { detail: event }));

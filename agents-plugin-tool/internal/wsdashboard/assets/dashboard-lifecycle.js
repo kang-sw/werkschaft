@@ -1107,6 +1107,7 @@
     rid = id;
     root.setAttribute("data-rid", id);
     railMarks();
+    doc.dispatchEvent(new CustomEvent("ws-shell-route", { detail: { rid: id, path: location.pathname } }));
   }
   function shShow(ent, from) {
     // ready/head can precede iframe.load (which waits for nested about:srcdoc
@@ -1429,7 +1430,11 @@
           else if (m.key === "esc" && railShown()) railOpen(false);
           break;
         case "press":
-          if (on) { railPopClose(false); shCompanion?.closeMenu(); }
+          if (on) {
+            railPopClose(false);
+            shCompanion?.closeMenu();
+            doc.dispatchEvent(new CustomEvent("ws-shell-focus"));
+          }
           break;
         case "companion-context":
           if (on && ent === shCompanionFrame && e.source === shOn.el.contentWindow) {

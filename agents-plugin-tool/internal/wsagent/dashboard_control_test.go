@@ -236,13 +236,24 @@ func TestDashboardControlHTTPRoutes(t *testing.T) {
 		}
 	}
 
-	// Support advertises dashboard_control on lead harnesses.
+	// Support advertises dashboard_control on lead harnesses (both built-in
+	// support profiles and lead-only backends such as agy/werk).
+	if h.runner.opts.Backends == nil {
+		h.runner.opts.Backends = map[string]BackendRegistration{}
+	}
+	h.runner.opts.Backends["agy-lead-test"] = BackendRegistration{
+		LeadProfile: "agy-lead-test",
+		Backend:     h.runner.opts.Backends[BackendClaude].Backend,
+	}
 	s := NewSupport(SupportOptions{Runner: h.runner, Dir: t.TempDir()})
 	choices := s.Choices(context.Background())
-	foundLead := false
+	foundLead, foundExtraLead := false, false
 	for _, entry := range choices.Harnesses {
 		if entry.Lead {
 			foundLead = true
+			if entry.Harness == "agy-lead-test" {
+				foundExtraLead = true
+			}
 			if !entry.DashboardControl {
 				t.Fatalf("lead harness %s omits dashboard_control support", entry.Harness)
 			}
@@ -250,8 +261,8 @@ func TestDashboardControlHTTPRoutes(t *testing.T) {
 			t.Fatalf("non-lead harness %s advertises dashboard_control", entry.Harness)
 		}
 	}
-	if !foundLead {
-		t.Fatal("no lead harness in support choices")
+	if !foundLead || !foundExtraLead {
+		t.Fatalf("support choices missing lead harnesses: foundLead=%v foundExtraLead=%v", foundLead, foundExtraLead)
 	}
 }
 

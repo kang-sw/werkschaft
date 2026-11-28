@@ -172,6 +172,23 @@
     var h = supHarness(harness), have = h && Array.isArray(h.permission_levels) ? h.permission_levels : [];
     return PERM_LEVELS.filter(function (l) { return have.indexOf(l) >= 0; });
   }
+  // dashboardControlSupported reports whether the current daemon epoch
+  // advertises per-session dashboard_control_access opt-in for harness:
+  // null while unknown (no choices of this epoch), boolean otherwise.
+  function dashboardControlSupported(harness) {
+    if (!supChoices || supChoices.error || supChoices.wsEpoch !== permEpoch) return null;
+    var h = supHarness(harness);
+    return !!(h && h.lead === true && h.dashboard_control === true);
+  }
+  function dashboardControlPreflight(harness, done) {
+    var epoch = permEpoch;
+    tkFetch("/support/choices", undefined, function (status, v) {
+      if (status === 200 && v && Array.isArray(v.harnesses)) { v.wsEpoch = epoch; supChoices = v; }
+      else if (supChoices) supChoices.wsEpoch = -1;
+      var h = supHarness(harness);
+      done(!!h && h.lead === true && h.available === true && h.dashboard_control === true);
+    });
+  }
   // permPreflight re-reads the choices and answers whether the daemon that
   // answers now offers level on an available lead-capable harness.
   function permPreflight(harness, level, done) {
@@ -552,6 +569,26 @@
     pchg.appendChild(mk("div", "splbl", wsT("js.perm.title")));
     var pseg = permSeg(pchg, pickLevel);
     var pwhat = pchg.appendChild(mk("p", "pmwhat")), pmap = pchg.appendChild(mk("p", "pmmap")), pfine = pchg.appendChild(mk("p", "pmfine"));
+    var dcsec = el.appendChild(mk("div", "spsec dcsec"));
+    dcsec.hidden = true;
+    var dchead = dcsec.appendChild(mk("div", "dchd"));
+    dchead.appendChild(mk("div", "splbl", wsT("js.dc.title")));
+    var dcSw = dchead.appendChild(rpBtn("dc-sw", ""));
+    dcSw.setAttribute("role", "switch");
+    dcSw.setAttribute("data-dashboard-control-toggle", "1");
+    dcSw.setAttribute("aria-label", wsT("js.dc.title"));
+    dcSw.setAttribute("aria-checked", "false");
+    dcSw.appendChild(mk("i"));
+    var dcStateLbl = dcSw.appendChild(mk("span", null, wsT("js.dc.off")));
+    dcsec.appendChild(mk("p", "spdesc dcdesc", wsT("js.dc.desc")));
+    var dcPend = dcsec.appendChild(mk("div", "dcpend"));
+    dcPend.setAttribute("data-dashboard-control-pending", "1");
+    dcPend.setAttribute("role", "status");
+    dcPend.hidden = true;
+    dcPend.appendChild(mk("span", "dcbadge", wsT("js.dc.pending.badge")));
+    var dcPendText = dcPend.appendChild(mk("span", "dcpend-text"));
+    var dcStopBtn = dcPend.appendChild(rpBtn("dc-stop-btn", wsT("js.dc.stop_now")));
+    dcStopBtn.setAttribute("data-dashboard-control-stop", "1");
     var opts = el.appendChild(mk("div", "spopts"));
     var adv = el.appendChild(mk("details", "pmadv")), advSum = adv.appendChild(mk("summary", null, wsT("js.perm.adv")));
     var advOwn = advSum.appendChild(mk("span", "pmown", wsT("js.perm.adv.owned")));
@@ -631,9 +668,11 @@
         var msg = action === "hide" || action === "unhide" ? archErr(action, st, s) : leadErr(st, s);
         // A daemon without the selection route changed nothing; its support
         // is read again, and nothing is resent on the legacy route.
-        var refused = action === "settings/permission" && permRefused(st);
+        var refused = (action === "settings/permission" || action === "settings/dashboard-control") && permRefused(st);
         if (refused) {
-          msg = wsT("js.perm.refused", st) + " " + wsT("js.perm.refused.settings");
+          msg = action === "settings/dashboard-control"
+            ? wsT("js.dc.refused", st)
+            : wsT("js.perm.refused", st) + " " + wsT("js.perm.refused.settings");
           if (supChoices) supChoices.wsEpoch = -1;
         }
         if (P.live(gen)) failed = msg;
@@ -767,6 +806,20 @@
       var n = bgTasks();
       confirmAction("restart", restart.b, n > 0 ? wsTn("js.lead.restart.confirm", n) : "", n);
     });
+    dcSw.addEventListener("click", function () {
+      var st = state();
+      if (P.busy || dcSw.disabled || !st || !st.can_control || leadGone(st) || !st.lead || st.is_child) return;
+      act("settings/dashboard-control", { dashboard_control_access: !st.dashboard_control_access });
+    });
+    dcStopBtn.addEventListener("click", function () {
+      var st = state();
+      if (!canActOn(dcStopBtn, function (s) { return !!s.process; })) return;
+      if (canClickStop(st)) {
+        act("stop", { safe_only: true });
+        return;
+      }
+      confirmAction("stop", dcStopBtn, wsT("js.dc.stop_confirm"), bgTasks());
+    });
     // draw shows the session's state; it runs when the menu opens and after
     // every read of the state while it is open.
     P.draw = function () {
@@ -853,6 +906,21 @@
       advOwn.hidden = !owned;
       rows.inline(!supported);
       adv.hidden = !(supported && modes);
+      var dcSup = lead && dashboardControlSupported(harness) === true;
+      var dcPersisted = !!st.dashboard_control_access;
+      var dcEffective = !!st.dashboard_control_access_effective;
+      var dcPending = !!(st.process && dcPersisted !== dcEffective);
+      dcsec.hidden = !dcSup;
+      if (dcSup) {
+        dcSw.setAttribute("aria-checked", String(dcPersisted));
+        dcSw.disabled = P.busy;
+        dcStateLbl.textContent = wsT(dcPersisted ? "js.dc.on" : "js.dc.off");
+        dcPend.hidden = !dcPending;
+        if (dcPending) {
+          dcPendText.textContent = wsT(dcPersisted ? "js.dc.pending.enable" : "js.dc.pending.disable");
+          dcStopBtn.disabled = P.busy || !st.process;
+        }
+      }
     }
     // permSync redraws after the live stream dropped or a refusal (support
     // unknown) and re-reads the choices when read is set.

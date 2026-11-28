@@ -90,6 +90,7 @@ until then. */}}
 <div class="dwrap">
 <div class="top{{if .OwnHead}} sh-own{{end}}">{{template "railbtn"}}{{region . "head"}}{{template "sse"}}{{template "tcen"}}{{template "qsslot"}}</div>
 {{template "account-consent"}}
+{{template "daemon-confirm"}}
 <div class="dbody"><aside id="rail" class="rail" aria-label="{{t "rail.title"}}" data-premark>{{region . "rail"}}</aside><script>(function () {
   var R = window.WsRail, r = document.getElementById("r-rail"), s = null;
   try {
@@ -156,6 +157,7 @@ The footer button survives usage redraws; the existing rail popover controller
 keeps the card positioned and returns focus even after a rail replacement.
 Layout/input preferences also remain available before a session is selected. */}}
 {{define "account-consent"}}<section class="account-banner" data-openai-consent hidden aria-label="{{t "js.account.banner_title"}}" aria-live="polite"></section>{{end}}
+{{define "daemon-confirm"}}<section class="daemon-confirm-banner" data-daemon-confirm data-ws-dom-exclude="1" hidden aria-label="{{t "js.dc.confirm.title"}}" aria-live="assertive"></section>{{end}}
 
 {{define "settings"}}<div class="rpop settings-pop" id="gmenu" role="dialog" aria-label="{{t "drawer.settings"}}" tabindex="-1" hidden><div class="sphd">{{t "drawer.settings"}}<button type="button" class="usage-close" id="settings-close" aria-label="{{t "js.card.close"}}">×</button></div><div class="gmenu gcard">{{template "gearitems" .}}{{if .LoginLocal}}<a class="settings-page-link" href="/settings">{{icon "gear"}}{{t "js.settings.title"}}</a>{{end}}</div>{{if .LoginLocal}}<div class="gmenu gcard loginbox"><span class="gt">{{t "login.title"}}</span><button type="button" id="login-copy"><span class="gk"><svg class="i" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></span><span>{{t "login.copy"}}<span class="gs">{{t "login.copy.sub"}}</span></span></button></div>{{end}}{{with .LAN}}<div class="lanbox"><b>{{t "lan.on"}}</b> {{t "lan.open"}}{{range .URLs}}<code class="lanurl">{{.}}</code>{{end}}<span class="lannote">{{tcode "lan.note" .TokenFile}}</span></div>{{end}}</div>{{end}}
 
