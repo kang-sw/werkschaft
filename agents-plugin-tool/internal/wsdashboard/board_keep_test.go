@@ -20,7 +20,7 @@ func TestBoardKeepWiring(t *testing.T) {
 		"html = boardStageInput(boardLatest.html || html);",
 		"var anchored = board ? anchorCards() : null;",
 		"var kept = board ? boardKeep() : null",
-		"ins = morphBoard(el, html);",
+		"ins = morphBoard(el, html, boardPrev);",
 		"window.wbHistory.sweep();",
 		"window.wbHistory.restore(n, history);",
 		"watchBoard(n);",

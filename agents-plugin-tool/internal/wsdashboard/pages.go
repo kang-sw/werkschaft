@@ -75,6 +75,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-frames.js",
 	"dashboard-git.js",
 	"dashboard-gitpage.js",
+	"dashboard-gitpage-wt.js",
 	"dashboard-tracker.js",
 	"dashboard-selection.js",
 	"dashboard-stream.js",
@@ -111,6 +112,7 @@ var companionScriptFiles = []string{
 	"dashboard-companion-vrm-colead.js",
 	"dashboard-companion-vrm.js",
 	"dashboard-companion-messenger.js",
+	"dashboard-companion-messenger-presence.js",
 	"dashboard-companion-stage.js",
 }
 

@@ -142,8 +142,9 @@
    that scopes its bare shortcuts. */
 .tm-docked { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; border-radius: inherit; overflow: hidden; outline: none; }
 .tm-docked[data-focus]::after { content: ""; position: absolute; inset: 0; z-index: 8; border-radius: inherit; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 48%, transparent); pointer-events: none; }
-/* the Git page: its regions are cards of their own (dashboard-gitpage.css),
-   so the page drops the card it would sit on. */
+/* the Git page: its strip and its one graph panel are cards of their own
+   (dashboard-gitpage.css), so the page drops the card it would sit on; the
+   Worktrees popover overhangs the strip, so nothing here clips it. */
 .gal-sys-gitpage { background: transparent; box-shadow: none; overflow: visible; }
 .gal-sys-foot { flex: none; display: flex; justify-content: flex-end; padding-top: 4px; }
 .gal-sys-jump { border: 0; border-radius: 8px; padding: 6px 12px; background: var(--wb-primary); color: var(--wb-primary-fg); font: 700 12px/1.2 var(--wb-sans); cursor: pointer; }

@@ -8,7 +8,18 @@ import (
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsi18n"
+	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wsmailbox"
 )
+
+// SystemMail reports a received mail the ws runtime posted itself (the hourly
+// whiteboard nudge, hire and config notices): peer "system", no reply address,
+// and no peer-lead body. It feeds data-mail-system so the whiteboard-only
+// cluster can absorb such a row without matching localized text; a peer or
+// user mail never qualifies.
+func (e ConvEntry) SystemMail() bool {
+	return e.Kind == wslive.RingMail && e.Direction == wslive.MailRecv && e.Peer == wsmailbox.SystemLabel && !e.PeerLinked && !e.PeerLead()
+}
 
 // Child reports require a typed wake cause. Whiteboard-origin user records
 // also carry dashboard inbox input, so their origin cannot demote user turns.

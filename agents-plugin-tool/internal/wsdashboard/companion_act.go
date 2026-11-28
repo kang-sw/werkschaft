@@ -302,6 +302,9 @@ func (d *Daemon) CompanionAct(ctx context.Context, owner string, req CompanionAc
 	if owner = strings.TrimSpace(owner); owner != "" {
 		d.companionPhone.RenewLease(owner)
 	}
+	// A phone gesture moves the Embodiment Lease with it (or is dropped when
+	// it cannot), so the stage pose and the lease never disagree.
+	gesture := d.alignCompanionPhoneGesture(owner, req.Gesture)
 
 	// Register waiter BEFORE publishing command so any concurrent user message
 	// or glass knock arriving while the beat is live is captured without loss.
@@ -311,7 +314,7 @@ func (d *Daemon) CompanionAct(ctx context.Context, owner string, req CompanionAc
 	d.PublishCompanionCommand(CompanionCommand{
 		SessionID:  sessionID,
 		Expression: strings.TrimSpace(req.Expression),
-		Gesture:    strings.TrimSpace(req.Gesture),
+		Gesture:    strings.TrimSpace(gesture),
 		Prop:       strings.TrimSpace(req.Prop),
 		FX:         strings.TrimSpace(req.FX),
 		Quip:       strings.TrimSpace(req.Speech),
@@ -381,7 +384,6 @@ func (d *Daemon) CompanionRememberSoul(ctx context.Context, owner, content, kind
 	return d.companionMemoryStore().RememberSoul(ctx, RememberSoulInput{
 		SoulDir:        cfg.SoulDir,
 		SoulID:         cfg.Soul,
-		StarterPersona: d.activePackStarterPersona(),
 		Kind:           strings.TrimSpace(kind),
 		Content:        content,
 		Tags:           tags,

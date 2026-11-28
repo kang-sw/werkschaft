@@ -226,6 +226,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	if err := d.refreshCompanion(); err != nil {
 		fmt.Fprintf(logw, "dashboard: load companion settings: %v\n", err)
 	}
+	d.openCompanionMessengerRing()
 	if d.clipboard == nil {
 		d.clipboard = newNativeClipboardWriter()
 	}

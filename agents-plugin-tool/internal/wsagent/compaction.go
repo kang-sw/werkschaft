@@ -1078,8 +1078,11 @@ func (c *conv) stageHardCompaction(resume, internal bool) {
 	if c.compactHardForce {
 		triggerPath = "stage2_hard_cap"
 	}
-	req := &compactRequest{resume: resume, internal: internal, auto: true, crossing: true, stage1: c.wsManagedLeadCompaction() && !c.compactHardForce, triggerPath: triggerPath}
-	if c.wsManagedWorkerCompaction() || c.compactHardForce && c.wsManagedLeadCompaction() {
+	// A companion session has no ws/compact tool: the daemon rotates it from
+	// the ring dialog without a Stage 1 prose round trip.
+	companion := c.rec.CompanionRole != ""
+	req := &compactRequest{resume: resume, internal: internal, auto: true, crossing: true, stage1: c.wsManagedLeadCompaction() && !c.compactHardForce && !companion, triggerPath: triggerPath}
+	if c.wsManagedWorkerCompaction() || (c.compactHardForce || companion) && c.wsManagedLeadCompaction() {
 		// No Stage 1 prose round trip for a worker: rotate from the ring dialog.
 		req.lead = emptyWorkerSummary()
 	}
@@ -1365,6 +1368,10 @@ func (c *conv) retireCompactionProcess() error {
 }
 
 func (c *conv) compactionStateInstruction() string {
+	if c.rec.CompanionRole != "" {
+		// No ws/compact or agenda tool: the daemon carries companion state.
+		return ""
+	}
 	if !c.rec.Lead && c.workerPermissionLevel == PermissionReadOnly {
 		return "Put the state needed to resume in your report."
 	}
@@ -1408,7 +1415,11 @@ func (c *conv) steerCompaction(boundary bool) {
 	}
 	hard := c.compactHard.Point(c.compactWindow)
 	var text string
-	if c.compactPending != nil && !c.compactHardSteered {
+	if c.rec.CompanionRole != "" {
+		// A companion session cannot call ws/compact: only ask it to end
+		// the turn so the daemon-managed rotation can run.
+		text = fmt.Sprintf("Context usage is %s and has passed the hard point of %s. Wrap up and end your turn now so the session can be refreshed.", compactTokenCount(c.compactTokens), compactTokenCount(hard))
+	} else if c.compactPending != nil && !c.compactHardSteered {
 		// ws/compact is already queued: calling it again changes nothing, only
 		// ending the turn lets it run.
 		text = fmt.Sprintf("Context usage is %s and has passed the hard point of %s. Your ws/compact request is queued and cannot run while your turn is open: stop calling tools and end your turn now so compaction can run and work can continue.", compactTokenCount(c.compactTokens), compactTokenCount(hard))
@@ -1493,6 +1504,12 @@ func (c *conv) stageCompactionNudge(hard float64) {
 		}
 	}
 	if level == 0 || c.compactAdvised && (level == 1 || level == 2 && c.compactM1Issued || level == 3 && c.compactM2Issued) {
+		c.compactNudge = compactionNudge{}
+		return
+	}
+	if c.rec.CompanionRole != "" {
+		// A companion session has no ws/compact tool to act on the advisory;
+		// its rotation is daemon-managed (hard cap or runtime rotation).
 		c.compactNudge = compactionNudge{}
 		return
 	}

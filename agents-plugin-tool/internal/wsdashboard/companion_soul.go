@@ -38,6 +38,10 @@ const (
 	companionSoulZipMaxFiles    = 256
 	companionSoulZipMaxFileSize = 2 << 20
 	companionSoulRecentDefault  = 30
+	// companionSoulPresetFile holds the official persona preset ID the user
+	// picked for a Soul; it exists only for a non-default pick.
+	companionSoulPresetFile     = "persona-preset"
+	companionSoulPresetMaxBytes = 256
 )
 
 var (
@@ -68,7 +72,16 @@ type SoulSnapshot struct {
 	RecentEntries  []SoulShardEntry `json:"recentEntries"`
 	TotalEntries   int              `json:"totalEntries"`
 	ShardCount     int              `json:"shardCount"`
-	SeededFromPack bool             `json:"seededFromPack,omitempty"`
+	// PersonaSource is "user" when persona.md holds the user's own text;
+	// otherwise the store leaves it empty and the daemon fills in "pack" or
+	// "official" with the inherited persona text.
+	PersonaSource string `json:"personaSource,omitempty"`
+	// PersonaInherited is true when no user persona.md overrides the
+	// inherited (preset, pack, or official) persona.
+	PersonaInherited bool `json:"personaInherited"`
+	// PersonaPreset is the official preset ID the user picked for this Soul
+	// ("" when none, which also means "default").
+	PersonaPreset string `json:"personaPreset,omitempty"`
 }
 
 type soulZipManifest struct {
@@ -87,25 +100,32 @@ type SoulImportResult struct {
 }
 
 // CompanionSoulStore manages Portable Soul files with a daemon RAM hot cache:
-// cold load reads persona.md, profile.md, and log/*.jsonl once; warm reads
-// touch zero files; shard writes append a single JSONL line without rewriting
-// existing files or rescanning directories.
+// cold load reads persona.md, profile.md, and log/*.jsonl once (or caches
+// that the Soul directory is absent); warm reads touch zero files; reads
+// never write. Only explicit user actions (Settings save or reset, approving
+// a pending item, import, create) and memory appends write files; shard
+// writes append a single JSONL line without rewriting existing files or
+// rescanning directories. persona.md is user-owned: nothing seeds it, and an
+// absent or blank persona.md inherits a picked official preset, the pack, or
+// the default preset. The picked preset lives in persona-preset, written only
+// for a non-default pick, so a default Soul has no such file.
 type CompanionSoulStore struct {
 	stateDir string
 	homeDir  string
 	now      func() time.Time
 
-	mu             sync.RWMutex
-	machineID      string
-	loaded         bool
-	loadedRoot     string
-	loadedID       string
-	persona        string
-	profile        string
-	entries        []SoulShardEntry
-	entryIDs       map[string]struct{}
-	shardFiles     map[string]struct{}
-	seededFromPack bool
+	mu         sync.RWMutex
+	machineID  string
+	loaded     bool
+	loadedRoot string
+	loadedID   string
+	dirExists  bool
+	persona    string
+	preset     string
+	profile    string
+	entries    []SoulShardEntry
+	entryIDs   map[string]struct{}
+	shardFiles map[string]struct{}
 
 	// diskReads increments on every cold disk load so tests can assert zero
 	// warm disk reads.
@@ -274,48 +294,20 @@ func (s *CompanionSoulStore) Invalidate() {
 }
 
 // Load returns the RAM-cached SoulSnapshot for (customDir, soulID). On cache
-// hit (same resolved root and soulID), zero disk reads occur. On cold load, if
-// persona.md does not exist on disk yet, it initializes the Soul directory and
-// seeds persona.md from starterPersona without ever overwriting an existing Soul.
-func (s *CompanionSoulStore) Load(customDir, rawSoulID string, starterPersona *CompanionPersona, recentLimit int) (SoulSnapshot, error) {
-	root, err := s.ResolveRootDir(customDir)
-	if err != nil {
-		return SoulSnapshot{}, err
-	}
-	defaultRoot, _ := s.DefaultRootDir()
-	soulID, err := ResolveSoulID(rawSoulID)
-	if err != nil {
-		return SoulSnapshot{}, err
-	}
-	if recentLimit <= 0 {
-		recentLimit = companionSoulRecentDefault
-	}
-
-	// Fast RAM hot-cache path: zero disk reads.
-	s.mu.RLock()
-	if s.loaded && s.loadedRoot == root && s.loadedID == soulID {
-		snap := s.snapshotLocked(root, defaultRoot, recentLimit)
-		s.mu.RUnlock()
-		return snap, nil
-	}
-	s.mu.RUnlock()
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.loaded && s.loadedRoot == root && s.loadedID == soulID {
-		return s.snapshotLocked(root, defaultRoot, recentLimit), nil
-	}
-	if err := s.loadColdLocked(root, soulID, starterPersona); err != nil {
-		return SoulSnapshot{}, err
-	}
-	return s.snapshotLocked(root, defaultRoot, recentLimit), nil
+// hit (same resolved root and soulID), zero disk reads occur. A cold load
+// reads the Soul's files once and writes nothing: an absent Soul yields an
+// empty snapshot (cached, so later reads touch no file either).
+func (s *CompanionSoulStore) Load(customDir, rawSoulID string, recentLimit int) (SoulSnapshot, error) {
+	snap, _, err := s.PeekExisting(customDir, rawSoulID, recentLimit)
+	return snap, err
 }
 
 // PeekExisting returns the RAM-cached SoulSnapshot for (customDir, rawSoulID)
-// only if that Soul already exists in memory or on disk (persona.md present).
-// Unlike Load, it never creates directories, never seeds starter files, and
-// never writes companion-machine-id — returning (zero, false, nil) when no
-// Soul exists yet so callers can fall back to the visual pack persona (D9).
+// and whether that Soul's directory exists. It never creates directories,
+// never writes persona.md, and never writes companion-machine-id. Absence is
+// cached in RAM like any loaded Soul, so repeated wakes for a Soul that does
+// not exist yet touch no file; writes through this store update the cache,
+// and Invalidate (Soul config change, import) forces a reread.
 func (s *CompanionSoulStore) PeekExisting(customDir, rawSoulID string, recentLimit int) (SoulSnapshot, bool, error) {
 	root, err := s.ResolveRootDir(customDir)
 	if err != nil {
@@ -330,30 +322,23 @@ func (s *CompanionSoulStore) PeekExisting(customDir, rawSoulID string, recentLim
 		recentLimit = companionSoulRecentDefault
 	}
 
+	// Fast RAM hot-cache path: zero disk reads.
 	s.mu.RLock()
 	if s.loaded && s.loadedRoot == root && s.loadedID == soulID {
-		snap := s.snapshotLocked(root, defaultRoot, recentLimit)
+		snap, exists := s.snapshotLocked(root, defaultRoot, recentLimit), s.dirExists
 		s.mu.RUnlock()
-		return snap, true, nil
+		return snap, exists, nil
 	}
 	s.mu.RUnlock()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.loaded && s.loadedRoot == root && s.loadedID == soulID {
-		return s.snapshotLocked(root, defaultRoot, recentLimit), true, nil
-	}
-	personaPath := filepath.Join(root, soulID, "persona.md")
-	if _, err := os.Lstat(personaPath); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return SoulSnapshot{}, false, nil
+	if !s.loaded || s.loadedRoot != root || s.loadedID != soulID {
+		if err := s.loadColdLocked(root, soulID); err != nil {
+			return SoulSnapshot{}, false, err
 		}
-		return SoulSnapshot{}, false, err
 	}
-	if err := s.loadExistingColdLocked(root, soulID); err != nil {
-		return SoulSnapshot{}, false, err
-	}
-	return s.snapshotLocked(root, defaultRoot, recentLimit), true, nil
+	return s.snapshotLocked(root, defaultRoot, recentLimit), s.dirExists, nil
 }
 
 // SearchCached searches the active Soul's RAM-cached shard entries without
@@ -374,28 +359,20 @@ func (s *CompanionSoulStore) SearchCached(customDir, rawSoulID, query string, li
 
 	s.mu.RLock()
 	if s.loaded && s.loadedRoot == root && s.loadedID == soulID {
-		out := matchSoulEntriesLocked(s.entries, query, limit)
+		out, exists := matchSoulEntriesLocked(s.entries, query, limit), s.dirExists
 		s.mu.RUnlock()
-		return out, true, nil
+		return out, exists, nil
 	}
 	s.mu.RUnlock()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.loaded && s.loadedRoot == root && s.loadedID == soulID {
-		return matchSoulEntriesLocked(s.entries, query, limit), true, nil
-	}
-	personaPath := filepath.Join(root, soulID, "persona.md")
-	if _, err := os.Lstat(personaPath); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, false, nil
+	if !s.loaded || s.loadedRoot != root || s.loadedID != soulID {
+		if err := s.loadColdLocked(root, soulID); err != nil {
+			return nil, false, err
 		}
-		return nil, false, err
 	}
-	if err := s.loadExistingColdLocked(root, soulID); err != nil {
-		return nil, false, err
-	}
-	return matchSoulEntriesLocked(s.entries, query, limit), true, nil
+	return matchSoulEntriesLocked(s.entries, query, limit), s.dirExists, nil
 }
 
 func matchSoulEntriesLocked(entries []SoulShardEntry, query string, limit int) []SoulShardEntry {
@@ -481,8 +458,11 @@ func tokenizeCompanionSearchQuery(raw string) []string {
 	return tokens
 }
 
-func (s *CompanionSoulStore) loadExistingColdLocked(root, soulID string) error {
-	// Read existing machine-id if present without creating/writing files on disk.
+// loadColdLocked reads one Soul into the RAM cache without writing anything:
+// the machine ID only if already persisted, then one stat of the Soul
+// directory; when it exists, persona.md, profile.md, and log/*.jsonl. An
+// absent directory caches an empty Soul.
+func (s *CompanionSoulStore) loadColdLocked(root, soulID string) error {
 	if s.machineID == "" && strings.TrimSpace(s.stateDir) != "" {
 		if raw, err := os.ReadFile(filepath.Join(s.stateDir, companionMachineIDFile)); err == nil {
 			if sanitized := sanitizeMachineID(string(raw)); sanitized != "" {
@@ -493,82 +473,48 @@ func (s *CompanionSoulStore) loadExistingColdLocked(root, soulID string) error {
 	s.diskReads.Add(1)
 
 	soulDir := filepath.Join(root, soulID)
-	persona, exists, err := readOptionalRegularFile(filepath.Join(soulDir, "persona.md"), companionSoulDocMaxBytes)
-	if err != nil {
-		return fmt.Errorf("read persona.md: %w", err)
-	}
-	if !exists {
-		return fs.ErrNotExist
-	}
-	profile, _, err := readOptionalRegularFile(filepath.Join(soulDir, "profile.md"), companionSoulDocMaxBytes)
-	if err != nil {
-		return fmt.Errorf("read profile.md: %w", err)
-	}
-	entries, entryIDs, shardFiles, err := loadSoulShards(filepath.Join(soulDir, "log"))
-	if err != nil {
-		return fmt.Errorf("load soul shards: %w", err)
-	}
-
-	s.loaded = true
-	s.loadedRoot = root
-	s.loadedID = soulID
-	s.persona = persona
-	s.profile = profile
-	s.entries = entries
-	s.entryIDs = entryIDs
-	s.shardFiles = shardFiles
-	s.seededFromPack = false
-	return nil
-}
-
-func (s *CompanionSoulStore) loadColdLocked(root, soulID string, starterPersona *CompanionPersona) error {
-	if _, err := s.ensureMachineIDLocked(); err != nil {
+	var (
+		persona, profile     string
+		preset               string
+		entries              = make([]SoulShardEntry, 0)
+		entryIDs, shardFiles = map[string]struct{}{}, map[string]struct{}{}
+		dirExists            bool
+	)
+	info, err := os.Stat(soulDir)
+	switch {
+	case err == nil && info.IsDir():
+		dirExists = true
+	case err == nil:
+		return fmt.Errorf("soul path %s is not a directory", soulID)
+	case !errors.Is(err, fs.ErrNotExist):
 		return err
 	}
-	s.diskReads.Add(1)
-
-	soulDir := filepath.Join(root, soulID)
-	personaPath := filepath.Join(soulDir, "persona.md")
-	profilePath := filepath.Join(soulDir, "profile.md")
-	logDir := filepath.Join(soulDir, "log")
-
-	persona, personaExists, err := readOptionalRegularFile(personaPath, companionSoulDocMaxBytes)
-	if err != nil {
-		return fmt.Errorf("read persona.md: %w", err)
-	}
-	seeded := false
-	if !personaExists {
-		// Initialize brand-new Soul from optional pack starter persona ONLY.
-		// Never overwrite an existing persona.md.
-		persona = formatStarterPersonaMarkdown(soulID, starterPersona)
-		if err := os.MkdirAll(logDir, 0o700); err != nil {
-			return fmt.Errorf("create soul directory: %w", err)
+	if dirExists {
+		if persona, _, err = readOptionalRegularFile(filepath.Join(soulDir, "persona.md"), companionSoulDocMaxBytes); err != nil {
+			return fmt.Errorf("read persona.md: %w", err)
 		}
-		if err := writeAtomicPrivateFile(personaPath, []byte(persona)); err != nil {
-			return fmt.Errorf("seed persona.md: %w", err)
+		// A malformed preset file reads as no pick rather than failing the Soul.
+		if raw, _, err := readOptionalRegularFile(filepath.Join(soulDir, companionSoulPresetFile), companionSoulPresetMaxBytes); err == nil {
+			preset = sanitizeSoulPersonaPreset(raw)
 		}
-		seeded = starterPersona != nil && (starterPersona.Name != "" || starterPersona.Voice != "")
-	}
-
-	profile, _, err := readOptionalRegularFile(profilePath, companionSoulDocMaxBytes)
-	if err != nil {
-		return fmt.Errorf("read profile.md: %w", err)
-	}
-
-	entries, entryIDs, shardFiles, err := loadSoulShards(logDir)
-	if err != nil {
-		return fmt.Errorf("load soul shards: %w", err)
+		if profile, _, err = readOptionalRegularFile(filepath.Join(soulDir, "profile.md"), companionSoulDocMaxBytes); err != nil {
+			return fmt.Errorf("read profile.md: %w", err)
+		}
+		if entries, entryIDs, shardFiles, err = loadSoulShards(filepath.Join(soulDir, "log")); err != nil {
+			return fmt.Errorf("load soul shards: %w", err)
+		}
 	}
 
 	s.loaded = true
 	s.loadedRoot = root
 	s.loadedID = soulID
+	s.dirExists = dirExists
 	s.persona = persona
+	s.preset = preset
 	s.profile = profile
 	s.entries = entries
 	s.entryIDs = entryIDs
 	s.shardFiles = shardFiles
-	s.seededFromPack = seeded
 	return nil
 }
 
@@ -583,19 +529,25 @@ func (s *CompanionSoulStore) snapshotLocked(root, defaultRoot string, recentLimi
 	for i := total - 1; i >= start; i-- {
 		recent = append(recent, cloneShardEntry(s.entries[i]))
 	}
-	return SoulSnapshot{
+	snap := SoulSnapshot{
 		SoulID:         s.loadedID,
 		SoulDir:        root,
 		DefaultSoulDir: defaultRoot,
 		MachineID:      s.machineID,
 		Souls:          []string{s.loadedID},
 		Persona:        s.persona,
+		PersonaPreset:  s.preset,
 		Profile:        s.profile,
 		RecentEntries:  recent,
 		TotalEntries:   total,
 		ShardCount:     len(s.shardFiles),
-		SeededFromPack: s.seededFromPack,
 	}
+	if strings.TrimSpace(s.persona) != "" {
+		snap.PersonaSource = CompanionPersonaSourceUser
+	} else {
+		snap.PersonaInherited = true
+	}
+	return snap
 }
 
 // ListSouls returns valid soul folder IDs under root, always including activeID.
@@ -628,20 +580,39 @@ func (s *CompanionSoulStore) ListSouls(customDir, activeID string) ([]string, er
 	return out, nil
 }
 
-// CreateSoul initializes a new Soul directory if it does not yet exist, seeding
-// persona.md from starterPersona without overwriting existing files.
-func (s *CompanionSoulStore) CreateSoul(customDir, rawSoulID string, starterPersona *CompanionPersona) (SoulSnapshot, error) {
+// CreateSoul initializes a new Soul directory (with its log/ folder) when it
+// does not exist yet, on an explicit user request. It writes no persona.md:
+// a new Soul inherits the pack or official persona until the user saves one.
+func (s *CompanionSoulStore) CreateSoul(customDir, rawSoulID string) (SoulSnapshot, error) {
+	root, err := s.ResolveRootDir(customDir)
+	if err != nil {
+		return SoulSnapshot{}, err
+	}
+	defaultRoot, _ := s.DefaultRootDir()
 	soulID, err := ResolveSoulID(rawSoulID)
 	if err != nil {
 		return SoulSnapshot{}, err
 	}
-	return s.Load(customDir, soulID, starterPersona, companionSoulRecentDefault)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.ensureMachineIDLocked(); err != nil {
+		return SoulSnapshot{}, err
+	}
+	if err := os.MkdirAll(filepath.Join(root, soulID, "log"), 0o700); err != nil {
+		return SoulSnapshot{}, fmt.Errorf("create soul directory: %w", err)
+	}
+	if !s.loaded || s.loadedRoot != root || s.loadedID != soulID || !s.dirExists {
+		if err := s.loadColdLocked(root, soulID); err != nil {
+			return SoulSnapshot{}, err
+		}
+	}
+	return s.snapshotLocked(root, defaultRoot, companionSoulRecentDefault), nil
 }
 
 // AppendShardEntry appends ONE JSONL line to log/YYYY-MM-<machine-id>.jsonl
 // without rewriting existing files or rescanning directories, and updates the
 // RAM hot cache in-place.
-func (s *CompanionSoulStore) AppendShardEntry(customDir, rawSoulID string, starterPersona *CompanionPersona, kind, content string, tags []string) (SoulShardEntry, error) {
+func (s *CompanionSoulStore) AppendShardEntry(customDir, rawSoulID, kind, content string, tags []string) (SoulShardEntry, error) {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return SoulShardEntry{}, errors.New("soul memory content is required")
@@ -661,7 +632,7 @@ func (s *CompanionSoulStore) AppendShardEntry(customDir, rawSoulID string, start
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.loaded || s.loadedRoot != root || s.loadedID != soulID {
-		if err := s.loadColdLocked(root, soulID, starterPersona); err != nil {
+		if err := s.loadColdLocked(root, soulID); err != nil {
 			return SoulShardEntry{}, err
 		}
 	}
@@ -711,6 +682,7 @@ func (s *CompanionSoulStore) AppendShardEntry(customDir, rawSoulID string, start
 	}
 
 	// Update RAM hot cache in-place (zero rescan).
+	s.dirExists = true
 	s.entries = append(s.entries, cloneShardEntry(entry))
 	if s.entryIDs == nil {
 		s.entryIDs = map[string]struct{}{}
@@ -725,7 +697,9 @@ func (s *CompanionSoulStore) AppendShardEntry(customDir, rawSoulID string, start
 
 // WriteUserDoc writes user-edited persona.md or profile.md atomically and
 // updates the RAM cache in-place. Agent tools never call this method (D11).
-func (s *CompanionSoulStore) WriteUserDoc(customDir, rawSoulID string, starterPersona *CompanionPersona, docName SoulPendingTarget, content string) error {
+// A blank persona.md is never written: it resets the persona to inherit the
+// pack or official default (ResetPersona).
+func (s *CompanionSoulStore) WriteUserDoc(customDir, rawSoulID string, docName SoulPendingTarget, content string) error {
 	if docName != SoulPendingTargetPersona && docName != SoulPendingTargetProfile {
 		return fmt.Errorf("invalid soul document %q", docName)
 	}
@@ -734,6 +708,10 @@ func (s *CompanionSoulStore) WriteUserDoc(customDir, rawSoulID string, starterPe
 	}
 	if len(content) > companionSoulDocMaxBytes {
 		return fmt.Errorf("soul document exceeds %d bytes", companionSoulDocMaxBytes)
+	}
+	if docName == SoulPendingTargetPersona && strings.TrimSpace(content) == "" {
+		_, err := s.ResetPersona(customDir, rawSoulID)
+		return err
 	}
 	root, err := s.ResolveRootDir(customDir)
 	if err != nil {
@@ -747,7 +725,7 @@ func (s *CompanionSoulStore) WriteUserDoc(customDir, rawSoulID string, starterPe
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.loaded || s.loadedRoot != root || s.loadedID != soulID {
-		if err := s.loadColdLocked(root, soulID, starterPersona); err != nil {
+		if err := s.loadColdLocked(root, soulID); err != nil {
 			return err
 		}
 	}
@@ -759,19 +737,122 @@ func (s *CompanionSoulStore) WriteUserDoc(customDir, rawSoulID string, starterPe
 	if err := writeAtomicPrivateFile(targetPath, []byte(content)); err != nil {
 		return err
 	}
+	s.dirExists = true
 	if docName == SoulPendingTargetPersona {
 		s.persona = content
-		s.seededFromPack = false
 	} else {
 		s.profile = content
 	}
 	return nil
 }
 
+// ResetPersona removes the user's persona.md override so the Soul inherits
+// the live pack or official persona again, and reports whether a file was
+// removed. Only the persona.md file is removed; profile.md and shards stay.
+func (s *CompanionSoulStore) ResetPersona(customDir, rawSoulID string) (bool, error) {
+	root, err := s.ResolveRootDir(customDir)
+	if err != nil {
+		return false, err
+	}
+	soulID, err := ResolveSoulID(rawSoulID)
+	if err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.loaded || s.loadedRoot != root || s.loadedID != soulID {
+		if err := s.loadColdLocked(root, soulID); err != nil {
+			return false, err
+		}
+	}
+	// An explicit user action: stat the file even when the cache holds the
+	// Soul as absent, so a persona.md written behind the cache still resets.
+	personaPath := filepath.Join(root, soulID, "persona.md")
+	info, err := os.Lstat(personaPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		s.persona = ""
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, errors.New("persona.md is not a regular file")
+	}
+	if err := os.Remove(personaPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, err
+	}
+	s.persona = ""
+	return true, nil
+}
+
+// sanitizeSoulPersonaPreset reads a persona-preset file's content: a
+// well-formed non-default preset ID, else "" (no pick).
+func sanitizeSoulPersonaPreset(raw string) string {
+	id := strings.TrimSpace(raw)
+	if id == CompanionPersonaPresetDefault || !companionPersonaPresetID.MatchString(id) {
+		return ""
+	}
+	return id
+}
+
+// SetPersonaPreset records the official preset the user picked for a Soul.
+// A non-default ID is written to persona-preset; "" or the default ID removes the
+// file, so a Soul on the default preset keeps no file. The caller checks the
+// ID against the embedded catalog; persona.md is left alone.
+func (s *CompanionSoulStore) SetPersonaPreset(customDir, rawSoulID, presetID string) error {
+	presetID = strings.TrimSpace(presetID)
+	if presetID != "" && presetID != CompanionPersonaPresetDefault && sanitizeSoulPersonaPreset(presetID) == "" {
+		return fmt.Errorf("invalid persona preset %q", presetID)
+	}
+	root, err := s.ResolveRootDir(customDir)
+	if err != nil {
+		return err
+	}
+	soulID, err := ResolveSoulID(rawSoulID)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.loaded || s.loadedRoot != root || s.loadedID != soulID {
+		if err := s.loadColdLocked(root, soulID); err != nil {
+			return err
+		}
+	}
+	presetPath := filepath.Join(root, soulID, companionSoulPresetFile)
+	if pick := sanitizeSoulPersonaPreset(presetID); pick != "" {
+		if err := writeAtomicPrivateFile(presetPath, []byte(pick+"\n")); err != nil {
+			return err
+		}
+		s.dirExists = true
+		s.preset = pick
+		return nil
+	}
+	// An explicit user action: stat even when the cache holds no pick, so a
+	// file written behind the cache is still cleared.
+	info, err := os.Lstat(presetPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		s.preset = ""
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("persona-preset is not a regular file")
+	}
+	if err := os.Remove(presetPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	s.preset = ""
+	return nil
+}
+
 // ExportZIP packages only the Portable Soul files (manifest.json, persona.md,
 // profile.md, and log/YYYY-MM-<machine-id>.jsonl) into an in-memory ZIP.
 // Machine-local episodes DB and any unrelated files are strictly excluded.
-func (s *CompanionSoulStore) ExportZIP(customDir, rawSoulID string, starterPersona *CompanionPersona) ([]byte, string, error) {
+func (s *CompanionSoulStore) ExportZIP(customDir, rawSoulID string) ([]byte, string, error) {
 	root, err := s.ResolveRootDir(customDir)
 	if err != nil {
 		return nil, "", err
@@ -780,8 +861,9 @@ func (s *CompanionSoulStore) ExportZIP(customDir, rawSoulID string, starterPerso
 	if err != nil {
 		return nil, "", err
 	}
-	// Ensure the soul exists before export.
-	if _, err := s.Load(customDir, soulID, starterPersona, 1); err != nil {
+	// Export reads only what exists; it never creates the Soul. An inherited
+	// persona is not exported: it stays live with the pack or official default.
+	if _, err := s.Load(customDir, soulID, 1); err != nil {
 		return nil, "", err
 	}
 
@@ -1155,32 +1237,6 @@ func parseShardBytes(raw []byte) []SoulShardEntry {
 	return out
 }
 
-func formatStarterPersonaMarkdown(soulID string, starter *CompanionPersona) string {
-	var b strings.Builder
-	name := "Companion"
-	if starter != nil && strings.TrimSpace(starter.Name) != "" {
-		name = strings.TrimSpace(starter.Name)
-	} else if soulID != "" && soulID != companionDefaultSoulID {
-		name = soulID
-	}
-	b.WriteString("# ")
-	b.WriteString(name)
-	b.WriteString("\n\n")
-	if starter != nil && strings.TrimSpace(starter.Voice) != "" {
-		b.WriteString("## Voice\n\n")
-		b.WriteString(strings.TrimSpace(starter.Voice))
-		b.WriteString("\n")
-	} else {
-		b.WriteString("## Voice\n\nCalm, concise, and supportive coding companion.\n")
-	}
-	if starter != nil && strings.TrimSpace(starter.QuipLanguage) != "" {
-		b.WriteString("\n## Language\n\n")
-		b.WriteString(strings.TrimSpace(starter.QuipLanguage))
-		b.WriteString("\n")
-	}
-	return b.String()
-}
-
 func readOptionalRegularFile(p string, maxBytes int64) (string, bool, error) {
 	info, err := os.Lstat(p)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -1381,7 +1437,6 @@ func (m *CompanionMemory) Close() error {
 type RememberSoulInput struct {
 	SoulDir        string
 	SoulID         string
-	StarterPersona *CompanionPersona
 	Kind           string
 	Content        string
 	Tags           []string
@@ -1461,7 +1516,7 @@ func (m *CompanionMemory) RememberSoul(ctx context.Context, in RememberSoulInput
 			Findings: scrub.Findings,
 		}, nil
 	default:
-		entry, err := m.soul.AppendShardEntry(in.SoulDir, in.SoulID, in.StarterPersona, in.Kind, in.Content, in.Tags)
+		entry, err := m.soul.AppendShardEntry(in.SoulDir, in.SoulID, in.Kind, in.Content, in.Tags)
 		if err != nil {
 			return RememberSoulResult{}, err
 		}
@@ -1483,7 +1538,7 @@ type SaveUserDocResult struct {
 // SaveUserDoc scrubs a Settings drawer edit of persona.md or profile.md. Per
 // ticket constraints, user edits through Settings are held in the approval
 // queue on any scrubber hit rather than rejected outright.
-func (m *CompanionMemory) SaveUserDoc(ctx context.Context, soulDir, rawSoulID string, starter *CompanionPersona, target SoulPendingTarget, content string, activeProjects []string) (SaveUserDocResult, error) {
+func (m *CompanionMemory) SaveUserDoc(ctx context.Context, soulDir, rawSoulID string, target SoulPendingTarget, content string, activeProjects []string) (SaveUserDocResult, error) {
 	if target != SoulPendingTargetPersona && target != SoulPendingTargetProfile {
 		return SaveUserDocResult{}, fmt.Errorf("invalid soul document target %q", target)
 	}
@@ -1520,7 +1575,7 @@ func (m *CompanionMemory) SaveUserDoc(ctx context.Context, soulDir, rawSoulID st
 			Findings: scrub.Findings,
 		}, nil
 	}
-	if err := m.soul.WriteUserDoc(soulDir, soulID, starter, target, content); err != nil {
+	if err := m.soul.WriteUserDoc(soulDir, soulID, target, content); err != nil {
 		return SaveUserDocResult{}, err
 	}
 	return SaveUserDocResult{Status: "saved"}, nil
@@ -1529,7 +1584,7 @@ func (m *CompanionMemory) SaveUserDoc(ctx context.Context, soulDir, rawSoulID st
 // ApprovePending approves a scrubber-held item (optionally with edited text),
 // commits it to its target (persona.md, profile.md, or a JSONL shard), and
 // removes it from soul_pending.
-func (m *CompanionMemory) ApprovePending(ctx context.Context, soulDir string, starter *CompanionPersona, id int64, editedContent *string) (SoulPendingItem, error) {
+func (m *CompanionMemory) ApprovePending(ctx context.Context, soulDir string, id int64, editedContent *string) (SoulPendingItem, error) {
 	ep, err := m.Episodes()
 	if err != nil {
 		return SoulPendingItem{}, err
@@ -1547,11 +1602,11 @@ func (m *CompanionMemory) ApprovePending(ctx context.Context, soulDir string, st
 	}
 	switch item.Target {
 	case SoulPendingTargetPersona, SoulPendingTargetProfile:
-		if err := m.soul.WriteUserDoc(soulDir, item.SoulID, starter, item.Target, content); err != nil {
+		if err := m.soul.WriteUserDoc(soulDir, item.SoulID, item.Target, content); err != nil {
 			return SoulPendingItem{}, err
 		}
 	case SoulPendingTargetShard:
-		if _, err := m.soul.AppendShardEntry(soulDir, item.SoulID, starter, item.Category, content, nil); err != nil {
+		if _, err := m.soul.AppendShardEntry(soulDir, item.SoulID, item.Category, content, nil); err != nil {
 			return SoulPendingItem{}, err
 		}
 	default:

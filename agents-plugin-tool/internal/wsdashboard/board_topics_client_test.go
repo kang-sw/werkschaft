@@ -38,7 +38,7 @@ window.WsCards = {
 `
 
 func TestBoardTopicsClientSnapshots(t *testing.T) {
-	src := dashboardFuncs(t, "topicKey", "topicSeen", "boardInputFull", "boardInputPatch", "boardNodes", "morphBoard", "forgetOpen", "openKey", "frameKeep", "frameKept", "frameChain", "frameGraftable", "frameGrafts", "settleMoves", "frameGraft")
+	src := dashboardFuncs(t, "topicKey", "topicSeen", "boardInputFull", "boardInputPatch", "boardNodes", "holdEcho", "morphBoard", "forgetOpen", "openKey", "frameKeep", "frameKept", "frameChain", "frameGraftable", "frameGrafts", "settleMoves", "frameGraft")
 	runNode(t, "board incremental snapshots", streamPageHarness(t)+boardTopicsClientDOM+src+`
 var base = boardInputFull(section("A","a1","A1")+section("B","b1","B1")+"<div>reply</div>");
 var one = boardInputPatch(base,delta("A","a2","A2",["A","B"]));
