@@ -715,6 +715,7 @@ func newAgentRunnerWithHooks(dir string, logw io.Writer, trackerChanged, agyActi
 		TrackerChanged: trackerChanged,
 		AgyActivity:    agyActivity,
 		QuotaResetAt:        quotaResetAt,
+		WhiteboardRevision:  boards.Revision,
 		OnHired:             onHired,
 		OnCompanionTurnEnd:  companion.onTurnEnd,
 		OnCompanionActivity: companion.onActivity,

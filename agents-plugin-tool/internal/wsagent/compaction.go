@@ -993,6 +993,9 @@ postCompact:
 			note = insertBeforeRestoreClose(note, held)
 		}
 		text := note + "\n\nContinue the work that was pending."
+		if c.rec.Lead {
+			text = c.appendAmbient(text, c.rec.WhiteboardOnly)
+		}
 		c.compactResume = false
 		if err := c.sendStandalonePrompt(!c.compactResumeInternal, func() error { return c.proc.Send(text) }); err != nil {
 			c.compactResumeInternal = false
@@ -1021,6 +1024,9 @@ postCompact:
 			return false
 		}
 		text := c.renderPendingNote(c.compactNote)
+		if c.rec.Lead {
+			text = c.appendAmbient(text, c.rec.WhiteboardOnly)
+		}
 		if err := c.sendStandalonePrompt(true, func() error { return c.proc.Send(text) }); err != nil {
 			if checkout, ok := releasedInput(err); ok {
 				c.dropReleasedInput("restore turn", checkout)
@@ -1692,6 +1698,7 @@ func (c *conv) compactEvent(ev wslive.Event) {
 			return
 		}
 		c.compacting = false
+		c.passive.clearAdvisory()
 		completed = true
 		origin := c.compactOrigin
 		if origin == "" {

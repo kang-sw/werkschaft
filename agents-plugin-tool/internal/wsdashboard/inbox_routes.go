@@ -576,7 +576,7 @@ func (d *Daemon) sendMessage(dir string, req messageRequest, images []decodedIma
 		fmt.Fprintf(d.log, "dashboard: write attachments: %v\n", err)
 		return http.StatusInternalServerError, "could not store the images"
 	}
-	entry := wsinbox.Entry{Operator: operator, Parts: []string{req.Text}, Chips: req.Chips, Topics: req.Topics, Mentions: req.Mentions, CloseRequests: req.CloseRequests, Picks: req.Picks, Consoles: req.Consoles, Images: append(paths, written...), ImageNums: nums, UTCOffsetMinutes: req.UTCOffsetMinutes, WhiteboardFirst: req.WhiteboardFirst}
+	entry := wsinbox.Entry{Operator: operator, User: true, Parts: []string{req.Text}, Chips: req.Chips, Topics: req.Topics, Mentions: req.Mentions, CloseRequests: req.CloseRequests, Picks: req.Picks, Consoles: req.Consoles, Images: append(paths, written...), ImageNums: nums, UTCOffsetMinutes: req.UTCOffsetMinutes, WhiteboardFirst: req.WhiteboardFirst}
 	var name string
 	var merged bool
 	if hasBoardAnswer(req) {

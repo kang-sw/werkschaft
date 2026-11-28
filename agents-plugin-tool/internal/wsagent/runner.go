@@ -245,6 +245,12 @@ type Options struct {
 	// (epoch ms) from daemon memory for (backend, model) when a usage-limit
 	// alert arrives with ResetsAt == 0. Must not perform disk or network I/O.
 	QuotaResetAt func(backend, model string) int64
+	// WhiteboardRevision, when not nil, reads the in-memory revision of the
+	// whiteboard a lead (working root, ws session key) already holds, 0 when
+	// none is held. A whiteboard-only lead's turn that leaves it unchanged yet
+	// answers at length in plain text earns a one-shot advisory. It must not
+	// perform I/O or open a board, and may be called from any conversation loop.
+	WhiteboardRevision func(root, key string) uint64
 	// QuotaContinuationJitter, when not nil, returns the jitter duration added
 	// past ResetsAt + buffer when scheduling a quota continuation (clamped to
 	// [0, max]). Nil uses bounded random jitter.

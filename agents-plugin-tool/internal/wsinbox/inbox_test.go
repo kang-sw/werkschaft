@@ -1,6 +1,7 @@
 package wsinbox
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -767,5 +768,49 @@ func TestDrainsAndTheInterruptEntry(t *testing.T) {
 	}
 	if got, err := DrainInterrupt(Dir(t.TempDir())); err != nil || got != nil {
 		t.Fatalf("DrainInterrupt of a missing inbox = %+v, %v", got, err)
+	}
+}
+
+func TestEntryUserFieldT0AndSteer(t *testing.T) {
+	dir := Dir(t.TempDir())
+	// User defaults to false and omits from JSON when false.
+	plainBytes, err := json.Marshal(Entry{SchemaVersion: SchemaVersion, Parts: []string{"sys"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plainBytes), `"user"`) {
+		t.Fatalf("expected user field omitted when false: %s", plainBytes)
+	}
+	// Normalize preserves User: true while copying unknown-field resilience.
+	norm, err := Normalize(Entry{User: true, Parts: []string{"hello"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !norm.User {
+		t.Fatal("Normalize dropped User: true")
+	}
+	// Unmarshaling an entry from a newer/unknown-field writer preserves User.
+	var decoded Entry
+	if err := json.Unmarshal([]byte(`{"schemaVersion":1,"user":true,"parts":["hi"],"future_field":123}`), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.User {
+		t.Fatal("json.Unmarshal dropped User: true")
+	}
+	// Send + Steer preserves User: true on disk.
+	name, _, err := Send(dir, Entry{User: true, Parts: []string{"lan msg"}}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	steered, err := Steer(dir, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := Held(dir)
+	if err != nil || len(held) != 1 || held[0].Name != steered {
+		t.Fatalf("held after Steer = %+v, %v", held, err)
+	}
+	if !held[0].Entry.User || held[0].Entry.Operator || !held[0].Entry.Steer {
+		t.Fatalf("steered entry lost User or mutated flags: %+v", held[0].Entry)
 	}
 }

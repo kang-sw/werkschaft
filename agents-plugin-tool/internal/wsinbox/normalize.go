@@ -62,7 +62,7 @@ func Normalize(e Entry) (Entry, error) {
 	if e.Cron != nil {
 		return normalizeCron(e)
 	}
-	out := Entry{SchemaVersion: SchemaVersion, SentAt: e.SentAt, Operator: e.Operator, Steer: e.Steer, WhiteboardFirst: e.WhiteboardFirst, EventID: strings.TrimSpace(e.EventID), UTCOffsetMinutes: e.UTCOffsetMinutes}
+	out := Entry{SchemaVersion: SchemaVersion, SentAt: e.SentAt, Operator: e.Operator, User: e.User, Steer: e.Steer, WhiteboardFirst: e.WhiteboardFirst, EventID: strings.TrimSpace(e.EventID), UTCOffsetMinutes: e.UTCOffsetMinutes}
 	size, selectionMentions := 0, 0
 	for _, p := range e.Parts {
 		p = trimPart(p, e.Operator)

@@ -72,6 +72,14 @@ type Record struct {
 	// WSKey is a lead key, Root its canonical git root, and the fields
 	// below apply.
 	Lead bool `json:"lead,omitempty"`
+	// WhiteboardOnly is the lead's sticky whiteboard-only state: set by a user
+	// message sent with the composer's whiteboard toggle, cleared by a user
+	// message sent without it, and left alone by every other wake (mail, child
+	// reports, exec notices, restores). While set, every turn carries the
+	// whiteboard-first directive. Additive top-level member (T0): an older
+	// daemon keeps it as an unknown member and its next whiteboard message
+	// sets it again.
+	WhiteboardOnly bool `json:"whiteboard_only,omitempty"`
 	// ConvHistoryAccess opts this lead session into the conv.* conversation
 	// history MCP tools. Additive top-level member (T0).
 	ConvHistoryAccess bool `json:"conv_history_access,omitempty"`
@@ -376,6 +384,10 @@ type QueuedInput struct {
 	// WhiteboardFirst carries Entry.WhiteboardFirst through the queue, so a
 	// retried turn composes the same directive. An older binary ignores it.
 	WhiteboardFirst bool `json:"whiteboard_first,omitempty"`
+	// User marks a message the user typed (userOriginEntry), the only kind
+	// that clears the lead's sticky WhiteboardOnly when it is sent without the
+	// toggle. An older binary ignores it.
+	User bool `json:"user,omitempty"`
 	// After is the send coverage before this input's drain.
 	After uint64 `json:"after,omitempty"`
 }

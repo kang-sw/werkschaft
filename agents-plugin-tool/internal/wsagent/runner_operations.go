@@ -169,14 +169,22 @@ func (r *Runner) CompactCompanionIdle(wsKey string) CompactResult {
 // as it drops every held message) or is refused, never written into a
 // closed conversation's inbox that nothing reads.
 func (r *Runner) Send(id, text string) (State, error) {
-	return r.send(id, text, true)
+	return r.sendUser(id, text, true)
 }
 
 func (r *Runner) send(id, text string, operator bool) (State, error) {
-	return r.sendFrom(id, text, operator, "")
+	return r.sendWithSender(id, text, operator, false, "")
+}
+
+func (r *Runner) sendUser(id, text string, operator bool) (State, error) {
+	return r.sendWithSender(id, text, operator, true, "")
 }
 
 func (r *Runner) sendFrom(id, text string, operator bool, sender string) (State, error) {
+	return r.sendWithSender(id, text, operator, false, sender)
+}
+
+func (r *Runner) sendWithSender(id, text string, operator, user bool, sender string) (State, error) {
 	if strings.TrimSpace(text) == "" {
 		return State{}, badRequest("text is empty")
 	}
@@ -194,7 +202,7 @@ func (r *Runner) sendFrom(id, text string, operator bool, sender string) (State,
 		// open rehydrates it, and the send goes to the new conversation.
 		c.mu.Unlock()
 		c.wmu.Unlock()
-		return r.sendFrom(id, text, operator, sender)
+		return r.sendWithSender(id, text, operator, user, sender)
 	}
 	defer c.wmu.Unlock()
 	if c.closed {
@@ -202,7 +210,7 @@ func (r *Runner) sendFrom(id, text string, operator bool, sender string) (State,
 		c.mu.Unlock()
 		return State{}, err
 	}
-	name, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{text}, Operator: operator && c.rec.Lead}, r.opts.Now())
+	name, _, err := wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{text}, Operator: operator && c.rec.Lead, User: user}, r.opts.Now())
 	if err == nil {
 		// After the write, under the lock kick drains with: a turn whose
 		// drain counted this send holds its message (Wait). These rec

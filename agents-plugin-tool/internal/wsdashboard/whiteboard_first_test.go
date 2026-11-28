@@ -3,6 +3,9 @@ package wsdashboard
 import (
 	"net/http"
 	"testing"
+	"time"
+
+	"github.com/kang-sw/devenv/internal/wslive"
 )
 
 // TestMessageRouteCarriesWhiteboardFirstOnTheEntryOnly: the optional
@@ -39,5 +42,39 @@ func TestMessageRouteCarriesWhiteboardFirstOnTheEntryOnly(t *testing.T) {
 	}
 	if steered != 1 {
 		t.Fatalf("steered entries = %d, want 1", steered)
+	}
+}
+
+func TestMessageRouteStampsUserOnLocalAndLANMessages(t *testing.T) {
+	f := startPageFixture(t)
+	f.withCommands(t, wslive.SlashCommand{Name: "compact"})
+	now := time.Now()
+	dir := f.inbox("livesession")
+
+	code, _ := f.d.messageWrite(dir, "livesession", []byte(`{"text":"local msg"}`), true, now)
+	if code != http.StatusOK {
+		t.Fatalf("local messageWrite = %d", code)
+	}
+	code, _ = f.d.messageWrite(dir, "livesession", []byte(`{"text":"lan msg","whiteboard_first":true}`), false, now.Add(time.Millisecond))
+	if code != http.StatusOK {
+		t.Fatalf("LAN messageWrite = %d", code)
+	}
+	code, _ = f.d.messageWrite(dir, "livesession", []byte(`{"command":"compact"}`), true, now.Add(2*time.Millisecond))
+	if code != http.StatusOK {
+		t.Fatalf("command messageWrite = %d", code)
+	}
+
+	held := f.held(t)
+	if len(held) != 3 {
+		t.Fatalf("held = %d, want 3", len(held))
+	}
+	if !held[0].Entry.Operator || !held[0].Entry.User {
+		t.Fatalf("local message entry = %+v, want Operator=true User=true", held[0].Entry)
+	}
+	if held[1].Entry.Operator || !held[1].Entry.User || !held[1].Entry.WhiteboardFirst {
+		t.Fatalf("LAN message entry = %+v, want Operator=false User=true WhiteboardFirst=true", held[1].Entry)
+	}
+	if held[2].Entry.Command == nil || held[2].Entry.User {
+		t.Fatalf("command entry = %+v, want Command!=nil User=false", held[2].Entry)
 	}
 }

@@ -2,7 +2,6 @@ package wsagent
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
@@ -70,9 +69,19 @@ func (c *conv) refreshAmbient() {
 // turnInput composes model-only turn input. Compaction notes go first, then
 // the passive receipts of dashboard-run commands, and ambient stays last. Both are kept out of dashboard and history user text.
 //
-// whiteboard is the union of the composed entries' whiteboard_first flags: the
-// whiteboard-only directive joins the ambient block once, model-only.
+// whiteboard is the whiteboard-only state the turn's entries leave; a lead in
+// the sticky whiteboard-only state (Record.WhiteboardOnly) gets the directive
+// on every turn, not just the one a flagged message opens. The directive joins
+// the ambient block once, model-only.
 func (c *conv) turnInput(text string, whiteboard bool) string {
+	whiteboardOnly := c.rec.Lead && (whiteboard || c.rec.WhiteboardOnly)
+	if !whiteboardOnly {
+		// A staged whiteboard advisory means nothing outside the mode.
+		c.passive.clearAdvisory()
+	} else if c.passive.hasAdvisoryRevision() {
+		rev, ok := c.boardRevision()
+		c.passive.dropStaleAdvisory(rev, ok)
+	}
 	if block, took := c.passive.render(c.openGen()); block != "" {
 		// Passive receipts of dashboard-run commands ride this send; they are
 		// acknowledged only once the send is accepted (passiveTook).
@@ -84,8 +93,14 @@ func (c *conv) turnInput(text string, whiteboard bool) string {
 		}
 	}
 	text = c.compactInput(text)
+	return c.appendAmbient(text, whiteboardOnly)
+}
+
+// appendAmbient appends the conversation's cached <ws-ambient> block to text,
+// folding in whiteboardFirstDirective when whiteboardOnly is true.
+func (c *conv) appendAmbient(text string, whiteboardOnly bool) string {
 	ambient := c.ambient
-	if whiteboard && c.rec.Lead {
+	if whiteboardOnly {
 		ambient = ambientWithDirective(ambient, whiteboardFirstDirective)
 	}
 	if ambient == "" {
@@ -115,9 +130,13 @@ func ambientWithDirective(block, directive string) string {
 }
 
 // steerWithDirective appends the whiteboard-only directive, as its own
-// ambient block, to a steered text; unflagged text is returned unchanged.
+// ambient block, to a steered text when the lead is in the whiteboard-only
+// state recs leave it in (a steered user message may set or clear it, as a
+// turn's input does); otherwise the text is returned unchanged. It does not
+// persist that state: the steering paths call noteSteerWhiteboard first, and
+// folding recs again over the result changes nothing.
 func (c *conv) steerWithDirective(text string, recs []wsinbox.Record) string {
-	if !c.rec.Lead || !slices.ContainsFunc(recs, func(r wsinbox.Record) bool { return r.Entry.WhiteboardFirst }) {
+	if !c.rec.Lead || !whiteboardOnlyAfterRecs(c.rec.WhiteboardOnly, recs) {
 		return text
 	}
 	return text + "\n\n" + ambientBlock(whiteboardFirstDirective)
