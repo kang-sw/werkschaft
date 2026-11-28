@@ -15,6 +15,13 @@
     return !!(e && (e.key === " " || e.code === "Space"));
   }
 
+  // Events an IME hands over without a usable key identity (macOS Korean IME
+  // reports held-Space repeats as keyCode 229 / key "Process"). While a Space
+  // hold is pending or active they can only belong to that held key.
+  function isImeKey(e) {
+    return !!(e && (e.keyCode === 229 || e.isComposing || e.key === "Process" || e.key === "Unidentified"));
+  }
+
   // Collapse consecutive horizontal spaces immediately preceding the caret down
   // to exactly 1 space when preceded by non-space text on the line, or to ""
   // when at the start of an empty composer or line.
@@ -305,12 +312,21 @@
     }
 
     function commitFinal(text) {
-      var finalText = String(text == null ? "" : text);
+      var finalText = String(text == null ? "" : text).trim();
       var hadSpan = !!liveSpan;
       clearSpan();
       renderCapsule("idle", "");
       if (finalText) {
-        applyRangeEdit(ctext, caretStart, caretEnd, finalText);
+        // One uniform spacing rule for every start path (Space hold, mic button)
+        // and backend: the dictation follows text on its line after exactly one
+        // space, however many (or none) were typed, and starts a line or an
+        // empty composer with none. The Space hold already collapsed its arming
+        // spaces; this makes the rule independent of that.
+        var val = String((ctext && ctext.value) || "");
+        var ws = Math.min(caretStart, val.length);
+        while (ws > 0 && /[ \t ]/.test(val.charAt(ws - 1))) ws--;
+        var lead = ws === 0 || val.charAt(ws - 1) === "\n" ? "" : " ";
+        applyRangeEdit(ctext, ws, Math.max(ws, caretEnd), lead + finalText);
       }
       if (hadSpan || finalText) {
         reconcileEditorOnce();
@@ -359,10 +375,16 @@
     var onHoldingChange = opts.onHoldingChange || function () {};
 
     var timer = null;
+    // Generation counter bumped on every arm/disarm; each timer callback is
+    // bound to the token it was scheduled under, so a timer that somehow
+    // outlives its press can never fire for a later one.
+    var armToken = 0;
     var armed = false;
     var active = false;
     var composing = false;
     var lockBlurSuppressed = false;
+    // ctext.value when the pending arm began (before the Space itself is typed).
+    var armValue = "";
 
     function getEditor() {
       return (ctext && ctext.wsc && ctext.wsc.editor) || null;
@@ -379,6 +401,7 @@
     }
 
     function disarm() {
+      armToken++;
       if (timer !== null) {
         clearTimer(timer);
         timer = null;
@@ -389,52 +412,135 @@
       if (wasArmed) onHoldingChange(false);
     }
 
+    // Controller.start() accepts "idle" and "error" (a failed attempt leaves
+    // "error" until something resets it); PTT must not be stricter than the
+    // mic button or one failure locks Space out for good.
+    function canStartFrom(state) {
+      return state === "idle" || state === "error";
+    }
+
+    function isLiveState(state) {
+      return state === "recording" || state === "transcribing" || state === "refining";
+    }
+
+    function disarmPending() {
+      if (armed && !active) disarm();
+    }
+
+    // True when cur is prev plus one or more inserted spaces at a single point:
+    // the arming Space typing itself into the composer, plus any key-repeat
+    // spaces the browser inserted before PTT could suppress them (WebKit may
+    // type a trailing space as U+00A0, so both count as a space).
+    function isSpaceOnlyInsertion(prev, cur) {
+      prev = prev.replace(/ /g, " ");
+      cur = cur.replace(/ /g, " ");
+      if (cur.length <= prev.length) return false;
+      var i = 0;
+      while (i < prev.length && prev.charAt(i) === cur.charAt(i)) i++;
+      var added = cur.length - prev.length;
+      return cur.slice(i + added) === prev.slice(i) && /^ +$/.test(cur.slice(i, i + added));
+    }
+
+    // Anything other than the held Space's own typed character(s) means the user
+    // is typing/clicking, not holding to talk. Space repeats are not breakers:
+    // they begin well before holdMs and carry the same space data.
+    function onPendingBreaker(e) {
+      if (!armed || active) return;
+      var type = e && e.type;
+      if (type === "beforeinput" || type === "input") {
+        if (typeof e.data === "string" && /^[  ]+$/.test(e.data)) return;
+        if (type === "input" && (e.data === undefined || e.data === null) &&
+            isSpaceOnlyInsertion(armValue, String(ctext.value || ""))) return;
+      }
+      disarm();
+    }
+
     function onCompositionStart() {
       composing = true;
-      if (armed && !active) disarm();
+      disarmPending();
     }
 
     function onCompositionEnd() {
       composing = false;
     }
 
+    // capsules.js re-dispatches editor key events onto ctext, so one physical
+    // key press can reach this handler twice (ctext copy, then the real event
+    // on the editor). The `armed` guard below makes the second one a no-op.
     function onKeyDown(e) {
       if (!e) return;
-      if (!isSpaceKey(e)) {
-        if (armed && !active) disarm();
-        return;
-      }
+      // Key repeat belongs to the held key. Decide it before anything else so
+      // a repeat tick (before or after holdMs) can never disarm or restart the
+      // hold, even when an IME reports it without Space's key identity.
       if (e.repeat) {
         if (armed || active) {
-          if (typeof e.preventDefault === "function") e.preventDefault();
+          if (isSpaceKey(e) || isImeKey(e)) {
+            if (typeof e.preventDefault === "function") e.preventDefault();
+          } else {
+            disarmPending();
+          }
         }
         return;
       }
+      if (!isSpaceKey(e)) {
+        disarmPending();
+        return;
+      }
       if (!isComposerTarget(e.target)) return;
-      if (e.defaultPrevented || e.isComposing || e.keyCode === 229 || composing) return;
+      if (e.isComposing || e.keyCode === 229 || composing) {
+        disarmPending();
+        return;
+      }
+      if (e.defaultPrevented) {
+        // Someone consumed the key (e.g. a forwarded copy was handled): a
+        // pending arm from the sibling listener must not survive it.
+        disarmPending();
+        return;
+      }
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
       if (isPopupOpen(ctext, doc)) return;
-      if (!controller || controller.getState() !== "idle") return;
+      if (!controller) return;
+      // A hold whose recording failed (error/idle) or was cancelled underneath
+      // it is stale: drop it so a fresh press can arm even if its keyup was lost.
+      if (armed && active && !isLiveState(controller.getState())) disarm();
+      if (!canStartFrom(controller.getState())) return;
       if (!controller.getResolvedBackend || !controller.getResolvedBackend()) return;
+      // Duplicate delivery of the same press (or a press while recording).
+      if (armed) return;
 
       armed = true;
       active = false;
+      armValue = String((ctext && ctext.value) || "");
+      var token = ++armToken;
+      if (timer !== null) {
+        clearTimer(timer);
+        timer = null;
+      }
       onHoldingChange(true);
       timer = setTimer(function () {
+        if (token !== armToken) return;
         timer = null;
         if (!armed) return;
-        if (!controller || controller.getState() !== "idle" || !controller.getResolvedBackend()) {
+        if (!controller || !canStartFrom(controller.getState()) || !controller.getResolvedBackend()) {
           disarm();
           return;
         }
         active = true;
         onHoldingChange(false);
-        var caret = typeof ctext.selectionStart === "number" ? ctext.selectionStart : String(ctext.value || "").length;
-        var trimmed = trimPrecedingSpacesForPTT(ctext.value || "", caret);
-        if (trimmed.changed) {
-          applyRangeEdit(ctext, trimmed.start, trimmed.end, trimmed.replacement);
+        try {
+          var caret = typeof ctext.selectionStart === "number" ? ctext.selectionStart : String(ctext.value || "").length;
+          var trimmed = trimPrecedingSpacesForPTT(ctext.value || "", caret);
+          if (trimmed.changed) {
+            applyRangeEdit(ctext, trimmed.start, trimmed.end, trimmed.replacement);
+          }
+          onStartPTT();
+        } catch (err) {
+          disarm();
+          return;
         }
-        onStartPTT();
+        // start() refused synchronously (e.g. recorder busy): nothing is
+        // recording, so do not leave a phantom active hold behind.
+        if (token === armToken && !isLiveState(controller.getState())) disarm();
       }, holdMs);
     }
 
@@ -451,14 +557,16 @@
     }
 
     function onDocKeyUp(e) {
-      if (!isSpaceKey(e)) return;
       if (!armed && !active) return;
+      if (!isSpaceKey(e) && !isImeKey(e)) return;
       releaseFromPTT(e);
     }
 
+    // The recording lock disables the composer, so the editor loses focus by
+    // design (possibly after the lock guard lapsed). An active hold ends on
+    // Space keyup, window blur, Escape or teardown, never on that blur.
     function onEditorBlur() {
-      if (!armed && !active) return;
-      if (active && lockBlurSuppressed) return;
+      if (!armed || active) return;
       releaseFromPTT(null);
     }
 
@@ -479,19 +587,29 @@
       }
     }
 
+    // Listen on both ctext and (when WsCapsules is attached) its editor. Key
+    // events from the editor reach ctext only as capsules' forwarded copies,
+    // and capsules skips forwarding when the real event is already
+    // defaultPrevented, so keyup must be observed on the editor too to release
+    // reliably. Every handler is idempotent, so duplicate delivery is harmless.
     var editor = getEditor();
-    if (ctext && ctext.addEventListener) {
-      ctext.addEventListener("keydown", onKeyDown);
-      ctext.addEventListener("blur", onEditorBlur);
-      ctext.addEventListener("compositionstart", onCompositionStart);
-      ctext.addEventListener("compositionend", onCompositionEnd);
-    }
-    if (editor && editor !== ctext && editor.addEventListener) {
-      editor.addEventListener("keydown", onKeyDown);
-      editor.addEventListener("blur", onEditorBlur);
-      editor.addEventListener("compositionstart", onCompositionStart);
-      editor.addEventListener("compositionend", onCompositionEnd);
-    }
+    var boundTargets = [];
+    if (ctext && ctext.addEventListener) boundTargets.push(ctext);
+    if (editor && editor !== ctext && editor.addEventListener) boundTargets.push(editor);
+    var boundHandlers = [
+      ["keydown", onKeyDown],
+      ["keyup", onDocKeyUp],
+      ["blur", onEditorBlur],
+      ["compositionstart", onCompositionStart],
+      ["compositionend", onCompositionEnd],
+      ["mousedown", onPendingBreaker],
+      ["pointerdown", onPendingBreaker],
+      ["beforeinput", onPendingBreaker],
+      ["input", onPendingBreaker]
+    ];
+    boundTargets.forEach(function (target) {
+      boundHandlers.forEach(function (h) { target.addEventListener(h[0], h[1]); });
+    });
     if (doc && doc.addEventListener) {
       doc.addEventListener("keyup", onDocKeyUp);
     }
@@ -507,18 +625,10 @@
       endLockBlurGuard: endLockBlurGuard,
       destroy: function () {
         disarm();
-        if (ctext && ctext.removeEventListener) {
-          ctext.removeEventListener("keydown", onKeyDown);
-          ctext.removeEventListener("blur", onEditorBlur);
-          ctext.removeEventListener("compositionstart", onCompositionStart);
-          ctext.removeEventListener("compositionend", onCompositionEnd);
-        }
-        if (editor && editor !== ctext && editor.removeEventListener) {
-          editor.removeEventListener("keydown", onKeyDown);
-          editor.removeEventListener("blur", onEditorBlur);
-          editor.removeEventListener("compositionstart", onCompositionStart);
-          editor.removeEventListener("compositionend", onCompositionEnd);
-        }
+        boundTargets.forEach(function (target) {
+          if (typeof target.removeEventListener !== "function") return;
+          boundHandlers.forEach(function (h) { target.removeEventListener(h[0], h[1]); });
+        });
         if (doc && doc.removeEventListener) {
           doc.removeEventListener("keyup", onDocKeyUp);
         }
@@ -536,7 +646,7 @@
     if (code === "upstream_timeout") return translate("js.voice.err.timeout");
     if (code === "provider_auth_failed") return translate("js.voice.err.auth");
     if (code === "audio_too_large") return translate("js.voice.err.too_large");
-    if (code === "unavailable" || code === "privacy_disabled" || code === "language_unavailable") return translate("js.voice.err.unavailable");
+    if (code === "unavailable" || code === "recognizer_unavailable" || code === "privacy_disabled" || code === "language_unavailable") return translate("js.voice.err.unavailable");
     return translate("js.voice.err.failed");
   }
 
@@ -631,8 +741,66 @@
     return false;
   }
 
+  // Mouse/pen/touch press-and-hold on the mic button: a primary press starts at
+  // once (pressing the dedicated button is explicit intent, so no hold delay) and
+  // the release, wherever it lands (window listeners), stops. canStart gates it
+  // to idle/error with a configured backend; any other press keeps the click
+  // behaviour (stop, cancel, open settings). The synthetic click that follows a
+  // handled press is swallowed by consumeClick; a keyboard click (detail 0) never is.
+  function attachMicPointerPTT(opts) {
+    var btn = opts.button, win = opts.window;
+    var held = null, swallow = false, swallowTimer = null;
+    var setT = opts.setTimeout || function (fn, ms) { return setTimeout(fn, ms); };
+    var clearT = opts.clearTimeout || function (id) { clearTimeout(id); };
+    function release() {
+      if (!held) return;
+      var h = held;
+      held = null;
+      win.removeEventListener("pointerup", onRelease);
+      win.removeEventListener("pointercancel", onRelease);
+      win.removeEventListener("blur", onRelease);
+      try { if (h.id != null && btn.releasePointerCapture) btn.releasePointerCapture(h.id); } catch (e) {}
+      // A click for this press, if any, follows in the same task; later clicks are the user's.
+      swallowTimer = setT(function () { swallow = false; swallowTimer = null; }, 0);
+      opts.onStop();
+    }
+    function onRelease(e) {
+      if (e && e.type !== "blur" && held && e.pointerId != null && held.id != null && e.pointerId !== held.id) return;
+      release();
+    }
+    function onDown(e) {
+      if (held || !e || e.button !== 0 || e.isPrimary === false || !opts.canStart()) return;
+      clearT(swallowTimer);
+      swallowTimer = null;
+      if (typeof e.preventDefault === "function") e.preventDefault();
+      held = { id: e.pointerId == null ? null : e.pointerId };
+      swallow = true;
+      try { if (held.id != null && btn.setPointerCapture) btn.setPointerCapture(held.id); } catch (err) {}
+      win.addEventListener("pointerup", onRelease);
+      win.addEventListener("pointercancel", onRelease);
+      win.addEventListener("blur", onRelease);
+      opts.onStart();
+    }
+    function onSuppressed(e) { if (held && e && typeof e.preventDefault === "function") e.preventDefault(); }
+    btn.addEventListener("pointerdown", onDown);
+    btn.addEventListener("mousedown", onSuppressed);
+    btn.addEventListener("contextmenu", onSuppressed);
+    return {
+      isHeld: function () { return !!held; },
+      consumeClick: function (e) { return swallow && !!e && e.detail !== 0; },
+      destroy: function () {
+        release();
+        clearT(swallowTimer);
+        btn.removeEventListener("pointerdown", onDown);
+        btn.removeEventListener("mousedown", onSuppressed);
+        btn.removeEventListener("contextmenu", onSuppressed);
+      }
+    };
+  }
+
   window.WsVoicePTT = {
     DEFAULT_HOLD_MS: DEFAULT_HOLD_MS,
+    attachMicPointerPTT: attachMicPointerPTT,
     errorLabel: errorLabel,
     createComposerLock: createComposerLock,
     syncMicButton: syncMicButton,

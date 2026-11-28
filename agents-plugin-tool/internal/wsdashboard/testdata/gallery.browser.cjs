@@ -86,7 +86,7 @@ const helpers = () => {
       return i < 0 ? null : i;
     },
     pos: () => +document.getElementById('bgal').getAttribute('data-pos'),
-    dots: () => [...document.querySelectorAll('#bgal .gal-dot')].map(b => (b.dataset.count || b.textContent) + (b.classList.contains('active') ? '*' : '')),
+    dots: () => [...document.querySelectorAll('#bgal .gal-dot')].map(b => (b.dataset.sys || b.dataset.count || b.textContent) + (b.classList.contains('active') ? '*' : '')),
     // seen tells, per element, whether a fresh IntersectionObserver
     // (root: the viewport) reports it intersecting.
     seen: els => new Promise(done => {
@@ -211,20 +211,32 @@ async function routeTerminal(context) {
       await routeTerminal(context);
       await seed(context, 'livesession', {});
       const { tab, page, errors } = await open(context, 'livesession');
-      assert.equal(await page.locator('#bgal').isHidden(), true, 'no docked page and no drag: no gallery');
-      assert.equal(await page.evaluate(() => document.documentElement.getAttribute('data-gal')), null);
+      assert.equal(await page.locator('#bgal').isHidden(), false, 'always-open narrow gallery visible even with 0 user pins');
+      assert.equal(await page.evaluate(() => document.documentElement.getAttribute('data-gal')), 'narrow');
+      assert.equal(await pos(page), -1, 'narrow zero-pin defaults to Home (Page 0)');
+      assert.deepEqual(await page.evaluate(() => window.__gal.dots()), ['⌂*', '+', 'workpanel', 'ticketmap', 'git'], 'exact .gal-rail top-to-bottom order');
+      const railOrder = await page.evaluate(() => [...document.querySelector('#bgal .gal-dots').children].map(el => el.className));
+      assert.equal(railOrder.indexOf('gal-sep'), railOrder.indexOf('gal-dot empty') + 1, '.gal-sep sits directly below +');
+      assert.equal(railOrder.indexOf('gal-group-sys'), railOrder.indexOf('gal-sep') + 1, '.gal-group-sys sits directly below .gal-sep');
 
-      // Drag-dock from the Main Board: the rail shows on the drag start,
-      // with ⌂ and + only, and + docks on a new page with no page before.
+      // System pages switch cleanly in narrow mode and Home returns to the Main Board.
+      await page.locator('#bgal .gal-dot.sys[data-sys="ticketmap"]').click();
+      await until(() => page.evaluate(() => document.querySelector('#bgal .gal-sys-page[data-page="ticketmap"]').hasAttribute('data-active')), 'ticketmap system page active');
+      await page.locator('#bgal .gal-dot.sys[data-sys="workpanel"]').click();
+      await until(() => page.evaluate(() => document.querySelector('#bgal .gal-sys-page[data-page="workpanel"]').hasAttribute('data-active')), 'workpanel system page active');
+      await dot(page, -1).click();
+      await until(async () => await pos(page) === -1, 'return to Home from system page');
+
+      // Drag-dock from the Main Board: the narrow rail stays visible and + docks on a new page.
       const during = await drag(tab, await grip(bar(page, 'alpha')), () => plus(page), async () => {
         await until(() => page.locator('#bgal').isVisible(), 'rail on drag start');
         return { dots: await page.evaluate(() => window.__gal.dots()), gal: await page.evaluate(() => document.documentElement.getAttribute('data-gal')) };
       });
-      assert.deepEqual(during, { dots: ['⌂*', '+'], gal: 'narrow' }, 'a drag start shows the narrow rail with no docked page');
+      assert.deepEqual(during, { dots: ['⌂*', '+', 'workpanel', 'ticketmap', 'git'], gal: 'narrow' }, 'drag preserves always-open narrow rail order');
       await until(async () => JSON.stringify(await pages(page)) === '[["alpha"]]', 'drop on + docks alpha');
       assert.equal(await active(page), 0, 'the new page shows');
-      assert.deepEqual(await page.evaluate(() => window.__gal.dots()), ['⌂', '1*', '+'], 'rail: ⌂ · 1 · +, the page shows its pane count');
-      done.push('drag-dock from the Main Board onto + with zero pages (narrow), rail on drag start');
+      assert.deepEqual(await page.evaluate(() => window.__gal.dots()), ['⌂', '1*', '+', 'workpanel', 'ticketmap', 'git'], 'rail: ⌂ · 1 · + | sys');
+      done.push('always-open narrow gallery, exact .gal-rail order, system pages, and drag-dock onto +');
 
       // The narrow Main Board behind a shown page reports out of view;
       // its scroll offset and nodes stay.
@@ -531,7 +543,7 @@ async function routeTerminal(context) {
       await until(async () => JSON.stringify(await pages(page)) === '[["alpha","epsilon"],["beta"],["deep"]]', 'right edge splits alpha');
       assert.deepEqual([await tree(), await domTree()], [{ row: ['alpha', 'epsilon'] }, { row: ['alpha', 'epsilon'] }], 'a row split, rendered with its divider');
       assert.equal(await page.evaluate(() => document.querySelectorAll('#bgal [data-dz]').length + (document.querySelector('#bgal .gal-overlay').hidden ? 0 : 1)), 0, 'the preview clears on drop');
-      assert.deepEqual(await page.evaluate(() => window.__gal.dots()), ['2*', '1', '1', '+'], 'the dot counts two panes');
+      assert.deepEqual(await page.evaluate(() => window.__gal.dots()), ['2*', '1', '1', '+', 'workpanel', 'ticketmap', 'git'], 'the dot counts two panes');
       await until(() => page.evaluate(() => !!document.querySelector('#bgal section.topic[data-topic="epsilon"] iframe.doc-frame')), 'epsilon frame mounted');
       k = await keep();
       assert.deepEqual(k.bad, [], 'an edge split keeps the docked nodes and frames');
@@ -552,7 +564,7 @@ async function routeTerminal(context) {
       });
       await until(async () => JSON.stringify(await pages(page)) === '[["alpha","beta","epsilon"],["deep"]]', 'beta moves across pages to alpha\'s bottom');
       assert.deepEqual(await domTree(), { row: [{ col: ['alpha', 'beta'] }, 'epsilon'] }, 'bottom splits alpha in a column');
-      assert.deepEqual(await page.evaluate(() => window.__gal.dots()), ['3*', '1', '+'], 'the emptied page left the rail');
+      assert.deepEqual(await page.evaluate(() => window.__gal.dots()), ['3*', '1', '+', 'workpanel', 'ticketmap', 'git'], 'the emptied page left the rail');
       assert.deepEqual((await keep()).bad, [], 'a cross-page move keeps nodes and frames');
       done.push('pane move across pages (rail wheel mid-drag), bottom edge split, emptied page removed');
 
@@ -573,7 +585,7 @@ async function routeTerminal(context) {
       });
       await until(async () => JSON.stringify(await pages(page)) === '[["epsilon","alpha","deep","beta"]]', 'deep lands left of beta');
       assert.deepEqual(await domTree(), { col: [{ col: ['epsilon', 'alpha'] }, { row: ['deep', 'beta'] }] }, 'four panes');
-      assert.deepEqual(await page.evaluate(() => window.__gal.dots()), ['4*', '+']);
+      assert.deepEqual(await page.evaluate(() => window.__gal.dots()), ['4*', '+', 'workpanel', 'ticketmap', 'git']);
       assert.deepEqual((await keep()).bad, [], 'four panes: nodes and frames kept');
       await shot(tab, 'wide-four-panes');
       done.push('left edge split from another page: four panes on one page, dot shows 4');
@@ -665,7 +677,7 @@ async function routeTerminal(context) {
       assert.equal(await rootRatio(), r0, 'the root keeps its ratio');
       await forget(['deep']);
       assert.deepEqual((await keep()).bad, [], 'the remaining panes keep nodes and frames');
-      assert.deepEqual(await page.evaluate(() => window.__gal.dots()), ['3*', '+']);
+      assert.deepEqual(await page.evaluate(() => window.__gal.dots()), ['3*', '+', 'workpanel', 'ticketmap', 'git']);
       done.push('header drag to the Main Board unpins one pane of a multi-pane page; its parent split collapses; others not remounted');
 
       // The pin button unpins the rest one by one; the last pane's page
@@ -680,7 +692,7 @@ async function routeTerminal(context) {
       assert.deepEqual((await keep()).bad, [], 'the last pane keeps its node and frame');
       await drag(tab, await grip(bar(page, 'epsilon')), board);
       await until(async () => JSON.stringify(await pages(page)) === '[]', 'the last pane\'s page goes');
-      assert.equal(await page.evaluate(() => document.querySelectorAll('#bgal .gal-page:not(.gal-plus), #bgal .gal-split, #bgal .gal-pane, #bgal .gal-div').length), 0, 'no page, split, pane or divider left');
+      assert.equal(await page.evaluate(() => document.querySelectorAll('#bgal .gal-page:not(.gal-plus):not(.gal-sys-page), #bgal .gal-split, #bgal .gal-pane, #bgal .gal-div').length), 0, 'no user page, split, pane or divider left');
       done.push('last-pane page removal (pin button and header drag)');
       assert.deepEqual(errors, [], 'no page errors (split, reloaded)');
       await context.close();
@@ -774,22 +786,29 @@ async function routeTerminal(context) {
       assert.equal(await pos(page), 1, 'and stays on page 2');
       done.push('420ms refractory lock after a flip; 240ms idle spring-back below 100%');
 
-      // alpha's end flips to +; +'s bottom only micro-bounces (no wrap to
-      // page 1).
+      // alpha's end flips to +; + flips into the fixed system pages
+      // (workpanel -> ticketmap -> git), and git's bottom only micro-bounces
+      // (no wrap to page 1).
       await scrollTo('alpha', 'end');
       await sleep(G_INERTIA + 80);
       await wheel(alphaAt, 100, 4, 30);
       assert.equal(await pos(page), 2, 'alpha\'s end flips to +');
       await sleep(G_LOCK);
       const plusAt = await spot('#bgal .gal-plus');
-      await wheel(plusAt, 125);
+      await wheel(plusAt, 100, 4, 30);
+      assert.equal(await pos(page), 3, '+ flips down into workpanel');
+      await dot(page, 5).click();
+      await until(async () => await pos(page) === 5, 'git system page (last page)');
+      await sleep(G_LOCK);
+      const gitAt = await spot('#bgal .gal-sys-page[data-page="git"]');
+      await wheel(gitAt, 125);
       pl = await pill();
-      assert.deepEqual([pl.side, pl.damped, pl.fill, pl.target, pl.text, pl.shift], ['bottom', true, '0%', [], '↓ No page in this direction', -5], '+ bottom: the damped edge pill');
-      await wheel(plusAt, 125, 8, 60);
-      assert.equal(await pos(page), 2, 'no flip, no wrap past +');
+      assert.deepEqual([pl.side, pl.damped, pl.fill, pl.target, pl.text, pl.shift], ['bottom', true, '0%', [], '↓ No page in this direction', -5], 'git bottom: the damped edge pill');
+      await wheel(gitAt, 125, 8, 60);
+      assert.equal(await pos(page), 5, 'no flip, no wrap past git');
       await sleep(G_MICRO + 80);
       assert.equal(await pill(), null);
-      done.push('trailing + bottom: damped micro-bounce only, no flip or wrap');
+      done.push('trailing + flips into system pages; last system page (git) bottom micro-bounces only');
 
       // Terminals and non-doc-frame iframes take their own wheel, while a
       // docked topic's .doc-frame forwards wheel deltas to the gate at the
@@ -1006,21 +1025,25 @@ async function routeTerminal(context) {
       await until(async () => JSON.stringify(await pages(page)) === '[["alpha","beta"]]', 'beta drops at alpha\'s bottom on the sprung page');
       done.push('narrow: spring-loaded hover from the Main Board, the drop lands in a zone');
 
-      // Zero docked pages: the gallery and its gate are inert; the board's
-      // wheel is never taken.
+      // Zero user-docked pages: the always-open narrow gallery stays mounted
+      // on Page 0 (Home) and its bottom gate pulls toward + (pos 0).
       await bar(page, 'alpha').locator('.tpin').click();
       await bar(page, 'beta').locator('.tpin').click();
-      await until(async () => JSON.stringify(await pages(page)) === '[]', 'no docked page');
-      assert.equal(await page.locator('#bgal').isHidden(), true);
+      await until(async () => JSON.stringify(await pages(page)) === '[]', 'no user docked page');
+      assert.equal(await page.locator('#bgal').isHidden(), false, 'narrow gallery stays open with 0 user pages');
+      assert.equal(await pos(page), -1, 'narrow zero-pin rests on Page 0 (Home)');
       await col('end');
       await page.evaluate(() => window.__gal.frames());
       boardAt = await spot('#r-board');
-      await page.evaluate(() => { window.__wheels = []; document.addEventListener('wheel', e => window.__wheels.push(e.defaultPrevented)); });
       await sleep(G_INERTIA + 80);
-      await wheel(boardAt, 125, 6, 40);
-      const inert = await page.evaluate(() => ({ wheels: window.__wheels, pulled: document.querySelectorAll('[data-gal-pull]').length, hidden: document.getElementById('bgal').hidden }));
-      assert.deepEqual(inert, { wheels: [false, false, false, false, false, false], pulled: 0, hidden: true }, 'zero pages: the Page 0 bottom gate stays inert');
-      done.push('narrow Page 0 bottom inert with zero docked pages');
+      await wheel(boardAt, 100);
+      pl = await pill();
+      assert.deepEqual([pl.side, pl.fill, pl.target, pl.text, pl.pulled], ['bottom', '31%', [0], '↓ + (31%)', 'r-board'], 'zero user pages: Page 0 bottom pulls toward +');
+      await wheel(boardAt, 100, 3, 30);
+      assert.equal(await pos(page), 0, 'zero user pages: Page 0 bottom flips to +');
+      await dot(page, -1).click();
+      await until(async () => await pos(page) === -1, 'returned to Page 0');
+      done.push('narrow Page 0 stays open with zero user pages and pulls cleanly to +');
       assert.deepEqual(errors, [], 'no page errors (gate narrow)');
       await context.close();
     }
@@ -1163,8 +1186,8 @@ async function routeTerminal(context) {
       }
       await until(async () => JSON.stringify(await pages(page)) === '[]' && await topic(page, 'alpha').evaluate(n => n.parentNode.id) === 'r-board', 'no docked page left (' + how + ')');
       await page.evaluate(() => window.__gal.frames());
-      const rest = await page.evaluate(() => ({ active: (window.__gal.rec().gallery || {}).active || null, hidden: document.getElementById('bgal').hidden, away: document.documentElement.hasAttribute('data-gal-away') }));
-      assert.deepEqual(rest, { active: null, hidden: true, away: false }, 'nothing shown, the board at home (' + how + ')');
+      const rest = await page.evaluate(() => ({ active: (window.__gal.rec().gallery || {}).active || null, hidden: document.getElementById('bgal').hidden, away: document.documentElement.hasAttribute('data-gal-away'), pos: window.__gal.pos() }));
+      assert.deepEqual(rest, { active: null, hidden: false, away: false, pos: -1 }, 'always-open narrow gallery stays at Home (-1) (' + how + ')');
       // Below the middle of the open topic after beta: beta moves after
       // it, so the drop line shows. The board stands with beta near its
       // top, that topic's lower half in view.
@@ -1197,10 +1220,10 @@ async function routeTerminal(context) {
         return page.evaluate(async () => ({ dots: window.__gal.dots(), pos: window.__gal.pos(), away: document.documentElement.hasAttribute('data-gal-away'), inert: document.getElementById('r-board').inert,
           seen: (await window.__gal.seen([document.querySelector('section.topic[data-topic="beta"]')]))[0], line: !!document.querySelector('.bdrop:not([hidden])') }));
       });
-      assert.deepEqual(during, { dots: ['⌂*', '+'], pos: -1, away: false, inert: false, seen: true, line: false }, 'a board drag keeps the Main Board shown without a flow-reorder drop line (' + how + ')');
+      assert.deepEqual(during, { dots: ['⌂*', '+', 'workpanel', 'ticketmap', 'git'], pos: -1, away: false, inert: false, seen: true, line: false }, 'a board drag keeps the Main Board shown without a flow-reorder drop line (' + how + ')');
       await page.evaluate(() => window.__gal.frames());
       const after = await page.evaluate(() => ({ away: document.documentElement.hasAttribute('data-gal-away'), hidden: document.getElementById('bgal').hidden, pages: window.__gal.pages().length }));
-      assert.deepEqual(after, { away: false, hidden: true, pages: 0 }, 'the drop stays on the board (' + how + ')');
+      assert.deepEqual(after, { away: false, hidden: false, pages: 0 }, 'the drop stays on the board (' + how + ')');
       done.push('narrow: the last page gone while + shows (' + how + '); a board drag keeps the Main Board shown');
       assert.deepEqual(errors, [], 'no page errors (zero pages on +, ' + how + ')');
       await context.close();
@@ -1241,7 +1264,7 @@ async function routeTerminal(context) {
       await context.close();
     }
 
-    // ---- layout modes at real viewports (4-band responsive dock) ----
+    // ---- layout modes at real viewports (always-open 4-panel >=1600, 3-panel <1600) ----
     {
       const context = await browser.newContext({ viewport: { width: 2560, height: 1000 }, locale: 'en-US', reducedMotion: 'reduce' });
       await seed(context, 'livesession', {});
@@ -1249,76 +1272,87 @@ async function routeTerminal(context) {
       await page.evaluate(helpers3);
       const layout = () => page.evaluate(() => {
         const r = document.documentElement, g = document.getElementById('bgal'), b = document.getElementById('bcol').getBoundingClientRect();
-        const gb = g.getBoundingClientRect(), edge = g.querySelector('.bp-edge'), rail = g.querySelector('.gal-rail'), plus = g.querySelector('.gal-plus');
-        const pb = plus.getBoundingClientRect();
+        const gb = g.getBoundingClientRect(), edge = g.querySelector('.bp-edge'), rail = g.querySelector('.gal-rail');
         return { gal: r.getAttribute('data-gal'), pincol: r.hasAttribute('data-pincol'), hidden: g.hidden, cols: getComputedStyle(document.querySelector('.dbody')).gridTemplateColumns.split(' ').length,
           edge: !!edge && getComputedStyle(edge).display !== 'none', railHidden: !rail || rail.hidden || getComputedStyle(rail).display === 'none',
-          plusVisible: !plus.hidden && getComputedStyle(plus).display !== 'none' && pb.width > 0 && pb.height > 0,
-          plusWidth: Math.round(pb.width), galWidth: Math.round(gb.width), boardWidth: Math.round(b.width), right: Math.round(b.right), galLeft: Math.round(gb.left), w: innerWidth };
+          sysActive: g.getAttribute('data-sys-active'), galWidth: Math.round(gb.width), boardWidth: Math.round(b.width), right: Math.round(b.right), galLeft: Math.round(gb.left), w: innerWidth };
       });
       let l = await layout();
-      assert.deepEqual([l.gal, l.pincol, l.hidden, l.railHidden, l.edge, l.plusVisible], ['empty', false, false, true, true, true], '2560 with no page: idle empty slot in Col 3, rail hidden and handle visible');
-      assert(l.galLeft >= l.right, '2560 idle empty slot stands right of the board');
-      assert(l.plusWidth >= l.boardWidth && l.galWidth >= l.boardWidth, '2560 idle .gal-plus spans >= board width: ' + JSON.stringify(l));
+      assert.deepEqual([l.gal, l.pincol, l.hidden, l.railHidden, l.edge, l.sysActive], ['col', true, false, false, true, 'ticketmap'], '2560 with 0 user pins: always-open 4-col gallery defaulting to ticketmap');
+      assert(l.galLeft >= l.right, '2560 gallery stands right of the board');
+      assert(l.galWidth >= 350 && l.galWidth <= 720, '2560 gallery width defaults within 350-720px: ' + JSON.stringify(l));
       const zeroCols = l.cols;
       assert.equal(zeroCols, 3, '2560 already uses 3 grid columns at rest');
-      const plusBox = await center(page.locator('#bgal .gal-plus'));
-      await tab.mouse.move(plusBox.x, plusBox.y);
-      await tab.mouse.wheel(0, 125);
-      await tab.mouse.wheel(0, -125);
-      await page.evaluate(() => window.__gal.frames());
-      assert.equal(await page.evaluate(() => window.__gal3.pill()), null, 'wheeling over idle .gal-plus at 2560 emits no pull pill');
-      assert.equal(await page.evaluate(() => document.querySelectorAll('[data-gal-pull]').length), 0, 'wheeling over idle .gal-plus sets no pull transform');
       await shot(tab, 'layout-2560-zero');
-      // A drag start at 2560 keeps #bgal in Col 3 at the exact same slot width (zero jump) and shows .gal-rail; dropping directly onto .gal-plus docks onto Page 1.
-      const wide = await drag(tab, await grip(bar(page, 'beta')), () => center(page.locator('#bgal .gal-plus')), async () => {
-        await until(() => page.locator('#bgal .gal-rail').isVisible(), 'wide rail on drag start');
-        const p = await center(page.locator('#bgal .gal-plus'));
+      // Dragging a topic from the board onto the active system page overlays drop affordance and docks onto Page 1.
+      const wide = await drag(tab, await grip(bar(page, 'beta')), () => center(page.locator('#bgal .gal-sys-page[data-active]')), async () => {
+        const p = await center(page.locator('#bgal .gal-sys-page[data-active]'));
         await tab.mouse.move(p.x, p.y, { steps: 6 });
-        await until(() => page.evaluate(() => document.querySelector('#bgal .gal-plus').classList.contains('drop')), '.gal-plus lights as drop target');
+        await until(() => page.evaluate(() => document.querySelector('#bgal .gal-sys-page[data-active]').classList.contains('drop')), 'active system page lights as drop target');
         return page.evaluate(() => {
-          const g = document.getElementById('bgal'), rail = g.querySelector('.gal-rail'), plus = g.querySelector('.gal-plus'), edge = g.querySelector('.bp-edge');
-          return { gal: document.documentElement.getAttribute('data-gal'), galWidth: Math.round(g.getBoundingClientRect().width),
-            railHidden: !rail || rail.hidden || getComputedStyle(rail).display === 'none', plusDrop: plus.classList.contains('drop'),
-            edgeHidden: !edge || getComputedStyle(edge).display === 'none' };
+          const g = document.getElementById('bgal'), sys = g.querySelector('.gal-sys-page[data-active]');
+          return { gal: document.documentElement.getAttribute('data-gal'), galWidth: Math.round(g.getBoundingClientRect().width), sysDrop: sys.classList.contains('drop') };
         });
       });
-      assert.deepEqual(wide, { gal: 'drag', galWidth: l.galWidth, railHidden: false, plusDrop: true, edgeHidden: true }, '2560 drag keeps exact Col 3 width with rail shown, handle hidden, and .gal-plus lit');
-      await until(async () => JSON.stringify(await pages(page)) === '[["beta"]]', 'direct drop on .gal-plus docks beta onto Page 1');
+      assert.deepEqual(wide, { gal: 'col', galWidth: l.galWidth, sysDrop: true }, '2560 drag keeps exact Col 3 width and lights active system page as drop target');
+      await until(async () => JSON.stringify(await pages(page)) === '[["beta"]]', 'drop on active system page docks beta onto Page 1');
       l = await layout();
       assert.deepEqual([l.gal, l.pincol, l.hidden, l.railHidden, l.edge, l.cols], ['col', true, false, false, true, zeroCols], '2560 with a page: the gallery column with its handle, zero column-count jump');
       assert(l.galLeft >= l.right, 'the gallery stands right of the board');
-      done.push('2560 idle empty slot (no rail/pull pill, visible handle), zero-jump drag, direct drop onto .gal-plus docks Page 1');
-      // Band 3 (1800px): fused narrow gallery on #bcol, permanently docked rail on left, centered stage.
-      await tab.setViewportSize({ width: 1800, height: 1000 });
-      await until(async () => (await layout()).w === 1800, 'resize 1800');
-      l = await until(async () => { const v = await layout(); return v.gal === 'narrow' ? v : null; }, '1800 Band 3 switches to fused narrow gallery');
-      const shell1800 = await tab.evaluate(() => ({ pincol: document.documentElement.hasAttribute('data-pincol'), railLeft: Math.round(document.getElementById('rail').getBoundingClientRect().left) }));
-      assert.deepEqual([l.gal, l.pincol, shell1800.pincol, shell1800.railLeft], ['narrow', false, false, 0], '1800 Band 3: fused narrow gallery with rail permanently docked at left');
-      await shot(tab, 'layout-1800-page');
-      // Band 1 (1400px): overlay rail, fused narrow gallery.
+      done.push('2560 always-open 4-col gallery (defaults to ticketmap), zero-jump drag onto system page docks Page 1');
+      // 1920px (>= 1600px, rail open, no spare width for a 4th column): back to the
+      // 3-column narrow layout with the left rail docked and the 34px .gal-rail strip.
+      await tab.setViewportSize({ width: 1920, height: 1000 });
+      await until(async () => (await layout()).w === 1920, 'resize 1920');
+      l = await until(async () => { const v = await layout(); return v.gal === 'narrow' ? v : null; }, '1920 falls back to the 3-column narrow layout');
+      const shell1920 = await tab.evaluate(() => ({ pincol: document.documentElement.hasAttribute('data-pincol'), railLeft: Math.round(document.getElementById('rail').getBoundingClientRect().left) }));
+      assert.deepEqual([l.gal, l.pincol, shell1920.pincol, shell1920.railLeft], ['narrow', false, false, 0], '1920 (>=1600, no spare width): 3-column narrow layout with the left rail docked');
+      assert.equal(await page.locator('#bgal .gal-dot.main').count(), 1, '1920 shows the Home ⌂ dot');
+      await shot(tab, 'layout-1920-page');
+      // Collapsing the left rail frees width: 2200px has no spare column with the
+      // rail open (needs 2382px) but does with it collapsed (needs 2094px), so
+      // the collapse promotes narrow -> col and expanding demotes it back.
+      await tab.setViewportSize({ width: 2200, height: 1000 });
+      await until(async () => (await layout()).w === 2200, 'resize 2200');
+      l = await until(async () => { const v = await layout(); return v.gal === 'narrow' ? v : null; }, '2200 with the rail open stays narrow');
+      assert.equal(l.pincol, false, '2200 rail open: no pincol');
+      await tab.evaluate(() => window.WsIdeShell.setCollapsed(true));
+      l = await until(async () => { const v = await layout(); return v.gal === 'col' ? v : null; }, 'collapsing the left rail promotes 2200 to the 4th column');
+      assert.equal(l.pincol, true, '2200 rail collapsed: pincol set');
+      await shot(tab, 'layout-2200-rail-collapsed');
+      await tab.evaluate(() => window.WsIdeShell.setCollapsed(false));
+      l = await until(async () => { const v = await layout(); return v.gal === 'narrow' ? v : null; }, 'expanding the left rail demotes 2200 back to narrow');
+      assert.equal(l.pincol, false, '2200 rail expanded again: no pincol');
+      // 1400px (< 1600px): overlay rail, 3-panel narrow gallery with Home ⌂.
       await tab.setViewportSize({ width: 1400, height: 1000 });
       await until(async () => (await layout()).w === 1400, 'resize 1400');
-      l = await layout();
+      l = await until(async () => { const v = await layout(); return v.gal === 'narrow' ? v : null; }, '1400 switches to narrow');
       assert.deepEqual([l.gal, l.pincol], ['narrow', false], '1400: the narrow rail over the board column');
+      assert.equal(await page.locator('#bgal .gal-dot.main').count(), 1, '1400 shows Home ⌂ dot');
       await shot(tab, 'layout-1400-page');
       assert.deepEqual(errors, []);
       const kept = JSON.parse(await page.evaluate(() => localStorage.getItem('ws.dashboard.cards.livesession')));
       await tab.close();
-      // tabs: narrow at any width.
-      await seed(context, 'livesession', kept, 'tabs');
+      // tabs: narrow at any width (setLayout() defaults to "auto", so apply data-layout="tabs" directly to exercise galMode().tabs).
+      await seed(context, 'livesession', kept);
       ({ tab, page, errors } = await open(context, 'livesession', 2560, 1000));
-      await until(async () => (await layout()).gal === 'narrow' || (await layout()).gal === null, 'tabs layout');
+      await page.evaluate(() => {
+        const grid = document.getElementById('grid');
+        grid.setAttribute('data-layout', 'tabs');
+        document.body.setAttribute('data-dashboard-layout', 'tabs');
+        if (window.WsCards && window.WsCards.relayout) window.WsCards.relayout();
+      });
+      await until(async () => (await layout()).gal === 'narrow', 'tabs layout');
       if (await page.evaluate(() => getComputedStyle(document.getElementById('bcol')).display === 'none')) await page.locator('#tabbar [data-tab="board"]').click();
       l = await until(async () => { const v = await layout(); return v.gal === 'narrow' ? v : null; }, 'tabs at 2560 is narrow');
       assert.equal(l.pincol, false, 'tabs never takes the column');
       await shot(tab, 'layout-2560-tabs');
-      done.push('layout modes: 1400 narrow, 1800 docked-rail + fused narrow, 2560 idle empty slot, tabs narrow at 2560');
+      done.push('layout modes: 1400/1920 narrow, 2200 narrow until the left rail collapses, 2560 4-col always-open, tabs narrow at 2560');
       assert.deepEqual(errors, []);
       await context.close();
     }
 
-    // ---- Band 4 empty dock sizer (.bp-edge): resize, pin/unpin width retention, double-click reset ----
+    // ---- Band 4 gallery width sizer (.bp-edge): --bgal-w 350-720px, persistence, pin/unpin retention, dblclick reset ----
     {
       const emptyShots = process.env.WS_EMPTY_DOCK_CAPTURES;
       if (emptyShots) fs.mkdirSync(emptyShots, { recursive: true });
@@ -1327,8 +1361,8 @@ async function routeTerminal(context) {
         return {
           gal: r.getAttribute('data-gal'),
           pincol: r.hasAttribute('data-pincol'),
-          hasBoardw: r.hasAttribute('data-boardw'),
-          boardwVar: r.style.getPropertyValue('--boardw'),
+          bgalWVar: r.style.getPropertyValue('--bgal-w'),
+          storedW: localStorage.getItem('ws.dashboard.bgal.w'),
           convoW: Math.round(document.getElementById('convo').getBoundingClientRect().width),
           boardW: Math.round(document.getElementById('bcol').getBoundingClientRect().width),
           galW: Math.round(document.getElementById('bgal').getBoundingClientRect().width),
@@ -1341,47 +1375,50 @@ async function routeTerminal(context) {
       const consoleErrors = [];
       tab.on('console', msg => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
       const edgeLoc = page.locator('#bgal .bp-edge');
-      await until(() => edgeLoc.isVisible(), '.bp-edge visible in empty Band 4');
+      await until(() => edgeLoc.isVisible(), '.bp-edge visible in always-open Band 4');
       const before = await measure(page);
-      assert.deepEqual([before.gal, before.pincol, before.edgeDisp], ['empty', false, 'block'], '2560 empty mode shows .bp-edge');
+      assert.deepEqual([before.gal, before.pincol, before.edgeDisp, before.bgalWVar], ['col', true, 'block', '540px'], '2560 always-open mode defaults --bgal-w to 540px');
       if (emptyShots) await tab.screenshot({ path: path.join(emptyShots, 'empty-idle-dark.png') });
 
+      // Drag left by 120px -> widens #bgal from 540px to 660px.
       const from = await center(edgeLoc);
-      await drag(tab, from, () => ({ x: from.x + 240, y: from.y }));
-      await until(() => page.evaluate(() => document.documentElement.hasAttribute('data-boardw')), '--boardw applied after .bp-edge drag');
+      await drag(tab, from, () => ({ x: from.x - 120, y: from.y }));
+      await until(async () => (await measure(page)).bgalWVar !== '540px', '--bgal-w updated after .bp-edge drag');
       const widened = await measure(page);
-      assert.deepEqual([widened.gal, widened.pincol, widened.hasBoardw], ['empty', false, true], 'widening .bp-edge in empty mode stays in Band 4 empty');
-      assert(Math.abs((widened.boardW - before.boardW) - 240) <= 2, `widened #bcol by +240px (${before.boardW} -> ${widened.boardW})`);
+      assert(Math.abs(widened.galW - 660) <= 4, `widened #bgal from 540px -> ~660px (${before.galW} -> ${widened.galW})`);
+      assert.equal(widened.bgalWVar, widened.storedW + 'px', '--bgal-w matches persisted ws.dashboard.bgal.w');
       assert(Math.abs(widened.convoW - before.convoW) <= 2, `kept #convo width stable (${before.convoW} -> ${widened.convoW})`);
-      assert(widened.galW >= 280 && Math.abs((before.galW - widened.galW) - 240) <= 2, `shrank #bgal cleanly down towards PINW_MIN (${before.galW} -> ${widened.galW})`);
-      const persisted = await page.evaluate(() => window.__gal.rec());
-      assert(persisted.bb > before.boardW, 'persisted bb reflects widened board: ' + JSON.stringify(persisted));
-      assert.equal(widened.boardwVar, persisted.bb + 'px', '--boardw matches persisted bb');
       if (emptyShots) await tab.screenshot({ path: path.join(emptyShots, 'empty-widened-dark.png') });
 
-      await bar(page, 'beta').locator('.tpin').click();
-      await until(async () => (await measure(page)).gal === 'col', 'pinning beta switches to col');
-      const pinned = await measure(page);
-      assert(Math.abs(pinned.convoW - widened.convoW) <= 2 && Math.abs(pinned.boardW - widened.boardW) <= 2,
-        `pinning preserves convo+board widths (${JSON.stringify(widened)} -> ${JSON.stringify(pinned)})`);
+      // Clamp max at 720px and min at 350px.
+      const edge2 = await center(edgeLoc);
+      await drag(tab, edge2, () => ({ x: edge2.x - 400, y: edge2.y }));
+      const maxed = await measure(page);
+      assert.equal(maxed.bgalWVar, '720px', '--bgal-w clamps at 720px max');
+      const edge3 = await center(edgeLoc);
+      await drag(tab, edge3, () => ({ x: edge3.x + 600, y: edge3.y }));
+      const minned = await measure(page);
+      assert.equal(minned.bgalWVar, '350px', '--bgal-w clamps at 350px min');
 
+      // Pinning and unpinning preserves --bgal-w.
       await bar(page, 'beta').locator('.tpin').click();
-      await until(async () => (await measure(page)).gal === 'empty', 'unpinning beta returns to empty');
+      await until(async () => JSON.stringify(await pages(page)) === '[["beta"]]', 'pinning beta');
+      const pinned = await measure(page);
+      assert.equal(pinned.bgalWVar, '350px', 'pinning preserves --bgal-w');
+      await bar(page, 'beta').locator('.tpin').click();
+      await until(async () => JSON.stringify(await pages(page)) === '[]', 'unpinning beta');
       const unpinned = await measure(page);
-      assert.deepEqual([unpinned.gal, unpinned.pincol, unpinned.hasBoardw], ['empty', false, true], 'unpinned back to empty retains data-boardw');
-      assert(Math.abs(unpinned.convoW - widened.convoW) <= 2 && Math.abs(unpinned.boardW - widened.boardW) <= 2,
-        `unpinning back to empty retains convo+board widths without crushing (${JSON.stringify(widened)} -> ${JSON.stringify(unpinned)})`);
+      assert.equal(unpinned.bgalWVar, '350px', 'unpinning back to 0 pins preserves --bgal-w');
       if (emptyShots) await tab.screenshot({ path: path.join(emptyShots, 'empty-after-unpin-dark.png') });
 
+      // Double-click resets --bgal-w to default 540px.
       const resetPos = await center(edgeLoc);
       await tab.mouse.dblclick(resetPos.x, resetPos.y);
-      await until(() => page.evaluate(() => !document.documentElement.hasAttribute('data-boardw')), 'dblclick clears --boardw in empty mode');
+      await until(async () => (await measure(page)).bgalWVar === '540px', 'dblclick resets --bgal-w to 540px');
       const reset = await measure(page);
-      assert.deepEqual([reset.gal, reset.hasBoardw, reset.boardwVar], ['empty', false, ''], 'dblclick resets --boardw to default in empty mode');
-      assert(Math.abs(reset.boardW - before.boardW) <= 2, `dblclick restores default #bcol width (${before.boardW} -> ${reset.boardW})`);
-      assert.equal((await page.evaluate(() => window.__gal.rec())).bb, 0, 'dblclick persists bb = 0');
-      assert.deepEqual(errors, [], 'no page errors (empty dock sizer)');
-      assert.deepEqual(consoleErrors, [], 'no console errors (empty dock sizer)');
+      assert.deepEqual([reset.gal, reset.bgalWVar, reset.storedW], ['col', '540px', '540'], 'dblclick resets --bgal-w and persists 540');
+      assert.deepEqual(errors, [], 'no page errors (bgal sizer)');
+      assert.deepEqual(consoleErrors, [], 'no console errors (bgal sizer)');
       await context.close();
 
       if (emptyShots) {
@@ -1389,34 +1426,39 @@ async function routeTerminal(context) {
         await seed(lightCtx, 'livesession', {});
         const light = await open(lightCtx, 'livesession');
         await until(() => light.page.locator('#bgal .bp-edge').isVisible(), 'light .bp-edge visible');
-        const lf = await center(light.page.locator('#bgal .bp-edge'));
-        await drag(light.tab, lf, () => ({ x: lf.x + 240, y: lf.y }));
-        await until(() => light.page.evaluate(() => document.documentElement.hasAttribute('data-boardw')), 'light --boardw applied');
         await light.tab.screenshot({ path: path.join(emptyShots, 'empty-widened-light.png') });
-        assert.deepEqual(light.errors, [], 'no page errors (empty dock sizer light)');
+        assert.deepEqual(light.errors, [], 'no page errors (bgal sizer light)');
         await lightCtx.close();
       }
-      done.push('2560 empty dock sizer (.bp-edge): visible, widens #bcol keeping Band 4 empty, pin/unpin keeps widths, dblclick resets');
+      done.push('2560 .bp-edge sizer: drags --bgal-w across 350-720px, persists globally, retains across pin/unpin, dblclick resets to 540px');
     }
 
-    // ---- Band 3 (1800x1000) with 0 pages: hidden at rest, fused narrow rail on drag ----
+    // ---- 1920x1080 (>= 1600px, left rail open, no spare 4th-column width) with 0 user pages: 3-column narrow, ⌂ Home ----
     {
-      const context = await browser.newContext({ viewport: { width: 1800, height: 1000 }, locale: 'en-US', reducedMotion: 'reduce' });
+      const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, locale: 'en-US', reducedMotion: 'reduce' });
       await seed(context, 'livesession', {});
       const { tab, page, errors } = await open(context, 'livesession');
-      const rest = await page.evaluate(() => ({ gal: document.documentElement.getAttribute('data-gal'), pincol: document.documentElement.hasAttribute('data-pincol'), hidden: document.getElementById('bgal').hidden }));
-      assert.deepEqual(rest, { gal: null, pincol: false, hidden: true }, '1800 Band 3 with 0 pages: #bgal hidden at rest');
+      const rest = await page.evaluate(() => ({ gal: document.documentElement.getAttribute('data-gal'), pincol: document.documentElement.hasAttribute('data-pincol'), hidden: document.getElementById('bgal').hidden, home: document.querySelectorAll('#bgal .gal-dot.main').length, pos: +document.getElementById('bgal').getAttribute('data-pos'), stripW: Math.round(document.querySelector('#bgal .gal-rail').getBoundingClientRect().width) }));
+      assert.deepEqual(rest, { gal: 'narrow', pincol: false, hidden: false, home: 1, pos: -1, stripW: 34 }, '1920 with 0 user pages: 3-column narrow, ⌂ Home active, 34px .gal-rail strip, no pincol');
+      assert.equal(await page.evaluate(() => { const b = document.getElementById('bcol').getBoundingClientRect(); return b.width > 400 && b.height > 300; }), true, '1920 the whiteboard column shows full width on Home');
+      await shot(tab, 'layout-1920-zero');
+      // Ticket Map overlays #bcol from the strip and ⌂ returns to the whiteboard.
+      await page.locator('#bgal .gal-dot.sys[data-sys="ticketmap"]').click();
+      await until(() => page.evaluate(() => document.querySelector('#bgal .gal-sys-page[data-page="ticketmap"]').hasAttribute('data-active')), '1920 ticketmap system page opens');
+      await shot(tab, 'layout-1920-ticketmap');
+      assert.equal(await page.evaluate(() => document.documentElement.getAttribute('data-gal')), 'narrow', '1920 stays narrow with Ticket Map open');
+      await dot(page, -1).click();
+      await until(async () => await pos(page) === -1, '1920 ⌂ returns to the whiteboard');
       const during = await drag(tab, await grip(bar(page, 'beta')), () => center(page.locator('#bgal .gal-dot.empty')), async () => {
-        await until(() => page.locator('#bgal .gal-rail').isVisible(), '1800 drag shows fused narrow rail');
         const p = await center(page.locator('#bgal .gal-dot.empty'));
         await tab.mouse.move(p.x, p.y, { steps: 6 });
-        await until(() => page.evaluate(() => document.querySelector('#bgal .gal-dot.empty').classList.contains('drop')), '1800 + dot lights as drop target');
+        await until(() => page.evaluate(() => document.querySelector('#bgal .gal-dot.empty').classList.contains('drop')), '1920 + dot lights as drop target');
         return page.evaluate(() => ({ gal: document.documentElement.getAttribute('data-gal'), pincol: document.documentElement.hasAttribute('data-pincol'), drop: document.querySelector('#bgal .gal-dot.empty').classList.contains('drop') }));
       });
-      assert.deepEqual(during, { gal: 'narrow', pincol: false, drop: true }, '1800 Band 3 drag uses fused narrow rail and + dot');
-      await until(async () => JSON.stringify(await pages(page)) === '[["beta"]]', '1800 drop onto + dot docks beta onto Page 1');
-      done.push('1800 Band 3 zero pages: hidden at rest, fused narrow rail on drag, drop onto + dot docks');
-      assert.deepEqual(errors, [], 'no page errors (1800 zero pages)');
+      assert.deepEqual(during, { gal: 'narrow', pincol: false, drop: true }, '1920 drag keeps the narrow layout and lights + dot');
+      await until(async () => JSON.stringify(await pages(page)) === '[["beta"]]', '1920 drop onto + dot docks beta onto Page 1');
+      done.push('1920 zero user pages: 3-column narrow (⌂ Home, 34px strip, Ticket Map overlay), drop onto + dot docks');
+      assert.deepEqual(errors, [], 'no page errors (1920 zero pages)');
       await context.close();
     }
 
@@ -1515,15 +1557,17 @@ async function routeTerminal(context) {
         assert.notEqual(colors[0].border, colors[1].border, `${theme}/${width}: active capsule has a primary border`);
         assert.notEqual(colors[0].icon, colors[0].text, `${theme}/${width}: topic state color survives active styling`);
         const gal = await page.evaluate(() => document.documentElement.getAttribute('data-gal'));
-        assert.equal(gal, width === 2560 ? 'col' : 'narrow', `${theme}/${width}: responsive gallery band`);
+        // 4-col needs spare stage width (rail open: 2382px+), not just 1600px.
+        const four = width >= 2382;
+        assert.equal(gal, four ? 'col' : 'narrow', `${theme}/${width}: responsive gallery band`);
         const geometry = await page.evaluate(() => {
           const box = s => { const e = document.querySelector(s), r = e && e.getBoundingClientRect(); return r && { l: r.left, r: r.right, t: r.top, b: r.bottom }; };
           return { viewport: innerWidth, rail: box('.dbody > .rail'), stage: box('.dbody > .dgrid'), gallery: box('#bgal'), capsule: box('#bgal .gal-dot.page.active') };
         });
         assert(geometry.capsule.l >= geometry.gallery.l && geometry.capsule.r <= geometry.gallery.r, `${theme}/${width}: capsule stays inside gallery`);
         assert(geometry.gallery.l >= 0 && geometry.gallery.r <= width + 1, `${theme}/${width}: gallery stays inside viewport`);
-        if (width >= 1600) assert(geometry.rail.r <= geometry.stage.l + 1, `${theme}/${width}: rail does not overlap stage`);
-        if (width === 2560) assert(geometry.stage.r <= geometry.gallery.l + 1, `${theme}/${width}: pinned gallery does not overlap stage`);
+        if (four) assert(geometry.rail.r <= geometry.stage.l + 1, `${theme}/${width}: rail does not overlap stage`);
+        if (four) assert(geometry.stage.r <= geometry.gallery.l + 1, `${theme}/${width}: pinned gallery does not overlap stage`);
         await capsules.nth(1).click();
         await until(async () => await pos(page) === 1, 'icon capsule switches page');
         assert.equal(await capsules.nth(1).getAttribute('aria-current'), 'page');
@@ -1532,7 +1576,7 @@ async function routeTerminal(context) {
         await until(async () => await pos(page) === 0, 'keyboard activates icon capsule');
         if (theme === 'dark' && width === 1920) {
           const overflow = await page.evaluate(() => {
-            const list = document.querySelector('#bgal .gal-dots'), plus = list.lastElementChild, sample = list.querySelectorAll('.gal-dot.page')[1];
+            const list = document.querySelector('#bgal .gal-dots'), plus = list.querySelector('.gal-dot.empty'), sample = list.querySelectorAll('.gal-dot.page')[1];
             const extras = Array.from({ length: 40 }, () => sample.cloneNode(true));
             extras.forEach(e => list.insertBefore(e, plus));
             const scrollable = list.scrollHeight > list.clientHeight;

@@ -352,6 +352,7 @@ func dashboardCommand(args []string) {
 	labels.daemon.Store(daemon)
 	daemon.SetCompanionHolderAlive(companion.IsHolderAlive)
 	daemon.SetCompanionWake(companion.OnUserWake)
+	daemon.SetCompanionAgents(companion.AgentsReadback)
 	companion.Start()
 	execJobsChanged := func() {
 		if d := host.live.Load(); d != nil {

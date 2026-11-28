@@ -895,7 +895,7 @@
     // modal box overwrite the card's laid/cached board height.
     if (n.hasAttribute && n.hasAttribute("data-max")) return freeLaidHeight(n);
     var key = anchorId(n), h = 0;
-    var pageHiddenNow = !!(doc && (doc.hidden || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-animation-paused")))) ||
+    var pageHiddenNow = !!(doc && ((typeof docHidden === "function" ? docHidden() : doc.hidden) || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-animation-paused")))) ||
       (typeof shHidden !== "undefined" && !!shHidden);
     if (pageHiddenNow) {
       if (typeof freeHeightCache !== "undefined") freeHeightCache._skippedHidden = true;
@@ -1733,7 +1733,7 @@
     };
   }
   function anchorVisibleCards() {
-    if ((doc && (doc.hidden || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-animation-paused")))) || (typeof shHidden !== "undefined" && !!shHidden)) {
+    if ((doc && ((typeof docHidden === "function" ? docHidden() : doc.hidden) || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-animation-paused")))) || (typeof shHidden !== "undefined" && !!shHidden)) {
       return [];
     }
     if (!freeActive) {

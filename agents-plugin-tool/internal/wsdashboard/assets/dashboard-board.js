@@ -8,7 +8,7 @@
   // pageHidden tells whether nobody sees the page (a hidden tab, or a frame
   // the shell hides): region updates are held (hiddenRegions) while it
   // holds, and land when it ends (showRegions).
-  function pageHidden() { return doc.hidden || shHidden; }
+  function pageHidden() { return docHidden() || shHidden; }
   function held(withoutBoard) {
     return q("[data-region]").filter(function (el) { return !withoutBoard || el.getAttribute("data-region") !== "board"; }).map(function (el) {
       var name = el.getAttribute("data-region"), p = hiddenRegions[name];
@@ -218,7 +218,7 @@
     }
     if (name === "convlive" || name === "entries") outboxSync();
     if (name === "panels") { drawerSync(); restorePanelReader(el, panelReader); }
-    if (name === "git") gitSwapped();
+    if (name === "git") gpSwapped();
     if (treeFocus && treeFocus.isConnected && doc.activeElement !== treeFocus) treeFocus.focus({ preventScroll: true });
     restoreScroll(scroll);
     if (kept) kept.h.apply();
@@ -858,7 +858,7 @@
       host: dbody || doc.body, mode: galMode, split: grid && grid.classList.contains("live") ? grid : null,
       leading: function (c) { return worktree && c.preview && !(PIN_WIDE && PIN_WIDE.matches); },
       layout: function (s) {
-        var col = s.column && s.pages > 0, mode = s.narrow ? (s.rail ? "narrow" : null) : s.column ? (col ? "col" : "drag") : s.empty ? "empty" : null;
+        var col = !!s.column, mode = s.narrow ? "narrow" : (col ? "col" : null);
         if (col !== root.hasAttribute("data-pincol")) {
           if (col) root.setAttribute("data-pincol", ""); else root.removeAttribute("data-pincol");
           railOpen(false);

@@ -30,6 +30,9 @@
     var G = null, P = [], Bp = [], R = [], gN = [], gI = [], micro = [], lbs = [], cbs = [], soup = [], soupOrder = [], sects = [];
     var edges = [], sims = [], egoEdges = [], hullPoly = {}, hullTop = {}, hovMarked = [];
     var cam = S.cam, W = 0, H = 0, frame = 0, anim = 0, tween = 0, ns = 1, lastK = -1, ready = false, fitted = false;
+    // autoCam is the camera the last automatic fit left; lastMode the dock
+    // or the overlay the viewport was last measured in.
+    var autoCam = null, lastMode = "";
     var stemKey = "", camFor = null, layoutMs = 0, drag = null, lastClick = null, pins = new Map(), pinch = null;
     var hov = null, kwHover = null, kwSet = null, nb = new Set(), stg = 1, soupA = 1, nLabels = 0, nSoup = 0;
     var E = null, pinned = false, egoNext = false, clicking = false, keepCam = false;
@@ -506,7 +509,18 @@
       if (!vp) return;
       var r = vp.getBoundingClientRect();
       if (!r.width) return;
+      var w0 = W, h0 = H, m = tm.isDocked() ? "dock" : "full";
       W = r.width; H = r.height;
+      // Docking or expanding keeps the picture: an untouched fit refits to
+      // the new viewport, a moved camera keeps its center. So does every
+      // docked resize (the gallery width, the bottom sheet opening).
+      if (m !== lastMode || (m === "dock" && (W !== w0 || H !== h0))) {
+        if (lastMode && ready && w0) {
+          if (autoCam && cam.k === autoCam.k && cam.x === autoCam.x && cam.y === autoCam.y) { fit(false); autoCam = { k: cam.k, x: cam.x, y: cam.y }; }
+          else setCam({ k: cam.k, x: cam.x + (W - w0) / 2, y: cam.y + (H - h0) / 2 });
+        }
+        lastMode = m;
+      }
       // The hint yields to the toolbar when they would meet.
       U.hint.hidden = !!E;
       if (!E) {
@@ -989,7 +1003,7 @@
       keepCam = false;
       edgeSync();
       filter();
-      if (!fitted) { fit(false); fitted = true; }
+      if (!fitted) { fit(false); fitted = true; autoCam = { k: cam.k, x: cam.x, y: cam.y }; }
       if (S.sel !== null && G.nodes[S.sel] && !E && camFor !== S.sel) centerOn(S.sel, 0.95, Infinity, 0);
     }
     // hide keeps the camera, the ring and the selection for the next show.

@@ -134,7 +134,7 @@ function makeUsagePayload() {
           const cur = document.querySelector('#rlist .rs.cur');
           const leftItems = [...topLeft.querySelectorAll(':scope > :not(.r-head), :scope > .r-head > *')]
             .map(el => ({ cls: el.className, box: box(el) })).filter(x => x.box);
-          const handles = [...fdoc.querySelectorAll('#drhandle, #ghandle, #thandle, #tkhandles .tk-handle')]
+          const handles = [...fdoc.querySelectorAll('#drhandle, #tkhandles .tk-handle')]
             .map(el => ({ id: el.id || '', cls: el.className, box: box(el) })).filter(x => x.box);
           const shandleBox = box(fdoc.getElementById('shandle'));
           const branch = topLeft.querySelector('.worktree-branch');

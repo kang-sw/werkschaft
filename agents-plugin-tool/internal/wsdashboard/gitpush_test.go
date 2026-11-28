@@ -338,7 +338,7 @@ func TestGitPushRoute(t *testing.T) {
 			}
 		}
 	}
-	gitEvent("two ahead", func(h string) bool { return strings.Contains(h, `<b class="up">↑2</b>`) })
+	gitEvent("two ahead", func(h string) bool { return strings.Contains(h, `data-ahead="2"`) })
 
 	// The push runs git in the handler, which outlasts testClient's 500 ms
 	// on a loaded Windows runner (seen on CI).
@@ -349,7 +349,9 @@ func TestGitPushRoute(t *testing.T) {
 	if got, want := revParse(t, origin, "main"), revParse(t, work, "HEAD"); got != want {
 		t.Fatalf("origin main = %s, want %s", got, want)
 	}
-	gitEvent("in sync", func(h string) bool { return strings.Contains(h, `class="gh ok"`) && !strings.Contains(h, "gh-ab") })
+	gitEvent("in sync", func(h string) bool {
+		return strings.Contains(h, `data-state="ok"`) && strings.Contains(h, `data-ahead="0" data-behind="0"`)
+	})
 
 	code, _, raw := postJSONWith(t, pushClient, route, f.base, "")
 	if code != http.StatusConflict || !strings.Contains(raw, "nothing to push") {

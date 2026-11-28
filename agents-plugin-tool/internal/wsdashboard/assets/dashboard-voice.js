@@ -653,22 +653,55 @@
       return commit(rawText);
     }
 
+    // fail ends the attempt in error (or idle for a user cancel); null for chaining.
+    function fail(gen, err) {
+      if (gen !== generation) return null;
+      releaseRecorderLock(owner);
+      activeBackend = null;
+      if (err && err.code === "cancelled") { setState("idle"); return null; }
+      setState("error", { error: err });
+      if (typeof opts.onError === "function") opts.onError(err);
+      return null;
+    }
+
+    // OS Native alone falls back, and only while the gesture is still held
+    // (state "recording") and nothing was transcribed: when it is unavailable
+    // (not mic-denied, which any recorder would hit), the next available backend
+    // in order takes over. Fallbacks are never native, so each gesture falls back once.
+    var partialSeen = false, startCtx;
+    var UNAVAILABLE = /^(recognizer_unavailable|unavailable|privacy_disabled|language_unavailable|bridge_error)$/;
+    function fallback(backend, gen, err) {
+      if (gen !== generation || backend.id !== "native" || state !== "recording" || partialSeen || !err || !UNAVAILABLE.test(err.code)) return null;
+      for (var i = order.indexOf("native") + 1; i > 0 && i < order.length; i++) {
+        var next = getBackend(order[i]);
+        if (!next || typeof next.available !== "function" || !next.available()) continue;
+        generation++;
+        try { if (backend.cancel) backend.cancel(); } catch (e) {}
+        return begin(next, startCtx, false);
+      }
+      return null;
+    }
+
     function wireBackendCallbacks(backend, gen) {
       if (typeof backend.onPartial === "function") {
         backend.onPartial(function (text) {
+          if (gen === generation) partialSeen = true;
           if (gen !== generation || (state !== "recording" && state !== "transcribing")) return;
           if (typeof opts.onPartial === "function") opts.onPartial(text);
         });
       }
       if (typeof backend.onError === "function") {
         backend.onError(function (err) {
-          if (gen !== generation) return;
+          if (gen !== generation || fallback(backend, gen, err)) return;
           releaseRecorderLock(owner);
           activeBackend = null;
           setState("error", { error: err });
           if (typeof opts.onError === "function") opts.onError(err);
         });
       }
+      if (typeof backend.onAutoFinal === "function") backend.onAutoFinal(function (text) {
+        if (gen === generation && state === "recording") finishResult(gen, backend, { text: text });
+      });
       if (typeof backend.onHidden === "function") {
         backend.onHidden(function () {
           if (gen !== generation) return;
@@ -695,36 +728,33 @@
         return Promise.reject(busyErr);
       }
       discardLast();
+      startCtx = ctx;
+      return begin(backend, ctx, true);
+    }
+
+    // begin starts one backend attempt under a new generation; fresh enters
+    // "recording", a fallback is already there.
+    function begin(backend, ctx, fresh) {
       var gen = ++generation;
+      partialSeen = false;
       activeBackend = backend;
       lastBackend = backend;
       wireBackendCallbacks(backend, gen);
-      setState("recording", { backend: backend.id });
-      var mergedCtx = Object.assign({
-        model: modelForBackend(backend),
-        language: configuredLanguage
-      }, ctx || {});
       var p;
       try {
-        p = Promise.resolve(backend.start(mergedCtx));
+        // In the try so a throwing onStateChange cannot leave the lock held in "recording".
+        if (fresh) setState("recording", { backend: backend.id });
+        p = Promise.resolve(backend.start(Object.assign({ model: modelForBackend(backend), language: configuredLanguage }, ctx || {})));
       } catch (err) {
+        var next = fallback(backend, gen, err);
+        if (next) return next;
         releaseRecorderLock(owner);
         activeBackend = null;
-        setState("error", { error: err });
-        if (typeof opts.onError === "function") opts.onError(err);
+        state = "error";
+        try { setState("error", { error: err }); if (typeof opts.onError === "function") opts.onError(err); } catch (e) {}
         return Promise.reject(err);
       }
-      return p.catch(function (err) {
-        if (gen !== generation) return;
-        releaseRecorderLock(owner);
-        activeBackend = null;
-        if (err && err.code === "cancelled") {
-          setState("idle");
-          return;
-        }
-        setState("error", { error: err });
-        if (typeof opts.onError === "function") opts.onError(err);
-      });
+      return p.catch(function (err) { return fallback(backend, gen, err) || fail(gen, err); });
     }
 
     function stop() {
@@ -736,18 +766,7 @@
       try { p = Promise.resolve(backend.stop()); } catch (err) { p = Promise.reject(err); }
       return p.then(function (result) {
         return finishResult(gen, backend, result);
-      }, function (err) {
-        if (gen !== generation) return null;
-        releaseRecorderLock(owner);
-        activeBackend = null;
-        if (err && err.code === "cancelled") {
-          setState("idle");
-          return null;
-        }
-        setState("error", { error: err });
-        if (typeof opts.onError === "function") opts.onError(err);
-        return null;
-      });
+      }, function (err) { return fail(gen, err); });
     }
 
     function retry() {
@@ -769,18 +788,7 @@
       try { p = Promise.resolve(backend.retry()); } catch (err) { p = Promise.reject(err); }
       return p.then(function (result) {
         return finishResult(gen, backend, result);
-      }, function (err) {
-        if (gen !== generation) return null;
-        releaseRecorderLock(owner);
-        activeBackend = null;
-        if (err && err.code === "cancelled") {
-          setState("idle");
-          return null;
-        }
-        setState("error", { error: err });
-        if (typeof opts.onError === "function") opts.onError(err);
-        return null;
-      });
+      }, function (err) { return fail(gen, err); });
     }
 
     function cancel(options) {
@@ -853,7 +861,7 @@
         errorLabel: pttMod.errorLabel,
         onCancel: function () { controller.cancel({ discardLast: true }); },
         onRetry: function () { controller.retry(); },
-        onDismiss: function () { controller.discardLast(); },
+        onDismiss: function () { controller.cancel({ discardLast: true }); },
         canRetry: function () { return controller.canRetry(); }
       })
       : null;
@@ -890,7 +898,9 @@
       controller.start().catch(function () {});
     }
 
-    function onMicClick() {
+    var micPTT = null;
+    function onMicClick(e) {
+      if (micPTT && micPTT.consumeClick(e)) return;
       var st = controller.getState();
       if (st === "recording") {
         controller.stop();
@@ -952,20 +962,22 @@
       });
     }
 
+    // Pointer press-and-hold on the mic button; click stays for keyboard and the non-idle states.
+    if (pttMod && typeof pttMod.attachMicPointerPTT === "function" && win.addEventListener) {
+      micPTT = pttMod.attachMicPointerPTT({
+        button: btn, window: win, setTimeout: opts.setTimeout, clearTimeout: opts.clearTimeout,
+        canStart: function () { var st = controller.getState(); return (st === "idle" || st === "error") && !!controller.getResolvedBackend(); },
+        onStart: startDictation, onStop: function () { controller.stop(); }
+      });
+    }
+
     function onCapabilitiesRefresh() { controller.refreshCapabilities(); }
 
-    btn.addEventListener("click", onMicClick);
-    doc.addEventListener("keydown", onKeyDown);
-    doc.addEventListener("ws-page-visibility", onPageVisibility);
-    doc.addEventListener("visibilitychange", onPageVisibility);
-    doc.addEventListener("ws-native-speech-hidden", teardownActive);
-    doc.addEventListener("ws-account-changed", onCapabilitiesRefresh);
-    if (win.addEventListener) {
-      win.addEventListener("ws-native-speech-status", onNativeStatusChange);
-      win.addEventListener("ws-voice-capabilities-refresh", onCapabilitiesRefresh);
-      win.addEventListener("pagehide", teardownActive);
-      win.addEventListener("beforeunload", teardownActive);
-    }
+    var wired = [[btn, "click", onMicClick], [doc, "keydown", onKeyDown], [doc, "ws-page-visibility", onPageVisibility],
+      [doc, "visibilitychange", onPageVisibility], [doc, "ws-native-speech-hidden", teardownActive], [doc, "ws-account-changed", onCapabilitiesRefresh]];
+    if (win.addEventListener) wired.push([win, "ws-native-speech-status", onNativeStatusChange], [win, "ws-voice-capabilities-refresh", onCapabilitiesRefresh],
+      [win, "pagehide", teardownActive], [win, "beforeunload", teardownActive]);
+    wired.forEach(function (w) { w[0].addEventListener(w[1], w[2]); });
 
     if (opts.autoDiscover !== false) controller.refreshCapabilities();
 
@@ -973,19 +985,9 @@
       controller: controller, span: spanCtrl, ptt: pttHandle,
       destroy: function () {
         if (pttHandle) pttHandle.destroy();
+        if (micPTT) micPTT.destroy();
         controller.destroy();
-        btn.removeEventListener("click", onMicClick);
-        doc.removeEventListener("keydown", onKeyDown);
-        doc.removeEventListener("ws-page-visibility", onPageVisibility);
-        doc.removeEventListener("visibilitychange", onPageVisibility);
-        doc.removeEventListener("ws-native-speech-hidden", teardownActive);
-        doc.removeEventListener("ws-account-changed", onCapabilitiesRefresh);
-        if (win.removeEventListener) {
-          win.removeEventListener("ws-native-speech-status", onNativeStatusChange);
-          win.removeEventListener("ws-voice-capabilities-refresh", onCapabilitiesRefresh);
-          win.removeEventListener("pagehide", teardownActive);
-          win.removeEventListener("beforeunload", teardownActive);
-        }
+        wired.forEach(function (w) { w[0].removeEventListener(w[1], w[2]); });
       }
     };
   }

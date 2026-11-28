@@ -62,9 +62,18 @@
     var partialCb = null;
     var asyncErrorCb = null;
     var hiddenCb = null;
+    var autoFinalCb = null;
     var sessionActive = false;
     var pendingStop = null;
     var destroyed = false;
+    // Latest partial of the live session: the fallback when a Final arrives
+    // empty (at Stop or unsolicited after a pause).
+    var lastPartial = "";
+    // Rust backstops Stop at 2.5 s; this JS timer is the longer last resort so
+    // the controller can never hang in "transcribing".
+    var stopTimeoutMs = typeof opts.stopTimeoutMs === "number" ? opts.stopTimeoutMs : 4000;
+    var setT = opts.setTimeout || function (fn, ms) { return win.setTimeout ? win.setTimeout(fn, ms) : setTimeout(fn, ms); };
+    var clearT = opts.clearTimeout || function (id) { if (win.clearTimeout) win.clearTimeout(id); else clearTimeout(id); };
 
     function getBridge() {
       if (!isTop) return null;
@@ -115,6 +124,7 @@
       var p = pendingStop;
       pendingStop = null;
       if (!p) return false;
+      if (p.timer != null) clearT(p.timer);
       if (err) p.reject(err);
       else p.resolve({ text: String(text || "") });
       return true;
@@ -158,6 +168,7 @@
       if (t === "hidden") {
         var wasActive = sessionActive || !!pendingStop;
         sessionActive = false;
+        lastPartial = "";
         settleStop(makeVoiceError("cancelled", "window_hidden"));
         if (wasActive && typeof hiddenCb === "function") {
           try { hiddenCb(detail); } catch (e) {}
@@ -167,14 +178,24 @@
       }
       if (t === "partial") {
         if (!sessionActive) return;
+        lastPartial = typeof detail.text === "string" ? detail.text : "";
         if (typeof partialCb === "function") {
-          try { partialCb(typeof detail.text === "string" ? detail.text : ""); } catch (e) {}
+          try { partialCb(lastPartial); } catch (e) {}
         }
         return;
       }
       if (t === "final") {
+        var finalText = typeof detail.text === "string" ? detail.text : "";
+        if (!finalText.trim() && lastPartial) finalText = lastPartial;
+        var live = sessionActive;
         sessionActive = false;
-        settleStop(null, typeof detail.text === "string" ? detail.text : "");
+        lastPartial = "";
+        // No Stop pending: the recognizer finalized on its own (e.g. a pause).
+        // Hand the text to the controller rather than dropping it, which would
+        // leave it "recording" over a dead session and fail the next Stop.
+        if (!settleStop(null, finalText) && live && typeof autoFinalCb === "function") {
+          try { autoFinalCb(finalText); } catch (e) {}
+        }
         return;
       }
       if (t === "error") {
@@ -182,6 +203,7 @@
         var hadStop = settleStop(err);
         var wasSession = sessionActive;
         sessionActive = false;
+        lastPartial = "";
         if (!hadStop && wasSession && typeof asyncErrorCb === "function") {
           try { asyncErrorCb(err); } catch (e) {}
         }
@@ -415,6 +437,7 @@
       onPartial: function (cb) { partialCb = cb; },
       onError: function (cb) { asyncErrorCb = cb; },
       onHidden: function (cb) { hiddenCb = cb; },
+      onAutoFinal: function (cb) { autoFinalCb = cb; },
       hasLastAudio: function () { return false; },
       discardLast: function () {},
       start: function (ctx) {
@@ -431,6 +454,7 @@
           }
           activeOwner = { kind: "top" };
           sessionActive = true;
+          lastPartial = "";
           var sent = bridge.start(loc);
           if (sent === false) {
             activeOwner = null;
@@ -440,6 +464,7 @@
           return Promise.resolve();
         }
         sessionActive = true;
+        lastPartial = "";
         if (!sendToTop({ wsVoiceRelay: true, op: "start", locale: loc })) {
           sessionActive = false;
           return Promise.reject(makeVoiceError("bridge_error", "relay_failed"));
@@ -449,7 +474,22 @@
       stop: function () {
         if (!sessionActive) return Promise.reject(makeVoiceError("not_recording"));
         return new Promise(function (resolve, reject) {
-          pendingStop = { resolve: resolve, reject: reject };
+          pendingStop = { resolve: resolve, reject: reject, timer: null };
+          // Give up on a reply that never comes: settle with what was heard.
+          function abandonStop() {
+            if (!pendingStop) return;
+            sessionActive = false;
+            var heard = lastPartial;
+            lastPartial = "";
+            if (isTop && activeOwner && activeOwner.kind === "top") {
+              activeOwner = null;
+              stopDetachObserver();
+              var b = getBridge();
+              if (b) { try { b.cancel(); } catch (e) {} }
+            }
+            settleStop(null, heard);
+          }
+          pendingStop.timer = setT(abandonStop, stopTimeoutMs);
           if (isTop) {
             var bridge = getBridge();
             if (!bridge) {
@@ -457,7 +497,7 @@
               settleStop(makeVoiceError("unavailable", "desktop_only"));
               return;
             }
-            bridge.stop();
+            if (bridge.stop() === false) abandonStop();
           } else {
             if (!sendToTop({ wsVoiceRelay: true, op: "stop" })) {
               sessionActive = false;
@@ -469,6 +509,7 @@
       cancel: function () {
         var was = sessionActive || !!pendingStop;
         sessionActive = false;
+        lastPartial = "";
         settleStop(makeVoiceError("cancelled"));
         if (!was) return;
         if (isTop) {

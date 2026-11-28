@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -102,6 +103,99 @@ func TestWorktreesRouteAnswersAtOnceThenWithSizes(t *testing.T) {
 	// A fresh size answers the next read at once.
 	if again := getPool(t, f.base+"/s/livesession/worktrees"); again.Sizing || again.Worktrees[1].Size == nil {
 		t.Errorf("a read inside the size TTL = %+v, want cached sizes", again)
+	}
+}
+
+// countWalks replaces the fixture daemon's size walk with a counter over the
+// real walk, before any request is served.
+func countWalks(f *pageFixture) *atomic.Int64 {
+	var n atomic.Int64
+	f.d.sizes.walk = func(path string) int64 {
+		n.Add(1)
+		return dirSize(path)
+	}
+	return &n
+}
+
+// settleWalks gives a walk a lightweight read wrongly started time to run, so a
+// zero count is evidence rather than a race.
+func settleWalks() { time.Sleep(100 * time.Millisecond) }
+
+// TestWorktreesNoSizeStartsNoWalk: ?no_size=1 lists the pool with no size, not
+// sizing, and starts no walk and caches nothing, ?wait=1 notwithstanding; the
+// full read then measures, and the lightweight read answers those sizes while
+// they are fresh, still without a walk, and drops them (without evicting the
+// entry) once past the TTL.
+func TestWorktreesNoSizeStartsNoWalk(t *testing.T) {
+	f, _, _, _ := worktreeFixture(t)
+	walks := countWalks(f)
+
+	for _, q := range []string{"?no_size=1", "?no_size=1&wait=1"} {
+		got := getPool(t, f.base+"/s/livesession/worktrees"+q)
+		if got.Sizing || len(got.Worktrees) != 2 || got.Worktrees[0].Size != nil || got.Worktrees[1].Size != nil {
+			t.Fatalf("GET worktrees%s = %+v, want two unsized worktrees, not sizing", q, got)
+		}
+	}
+	settleWalks()
+	f.d.sizes.mu.Lock()
+	cached := len(f.d.sizes.entries)
+	f.d.sizes.mu.Unlock()
+	if walks.Load() != 0 || cached != 0 {
+		t.Fatalf("lightweight reads started %d walks and cached %d entries, want 0 and 0", walks.Load(), cached)
+	}
+
+	if full := getPool(t, f.base+"/s/livesession/worktrees?wait=1"); full.Sizing || walks.Load() != 2 {
+		t.Fatalf("full read: sizing %v, walks %d, want a finished scan of 2 walks", full.Sizing, walks.Load())
+	}
+	got := getPool(t, f.base+"/s/livesession/worktrees?no_size=1")
+	if got.Sizing || got.Worktrees[0].Size == nil || *got.Worktrees[0].Size != 1500 || got.Worktrees[1].Size == nil || *got.Worktrees[1].Size != 250 {
+		t.Fatalf("lightweight read after a scan = %+v, want the cached 1500 and 250", got)
+	}
+
+	// Past the TTL the figure is not answered, and the read neither
+	// refreshes nor evicts it.
+	f.d.sizes.mu.Lock()
+	for _, e := range f.d.sizes.entries {
+		e.at = time.Now().Add(-2 * worktreeSizeTTL)
+	}
+	f.d.sizes.mu.Unlock()
+	got = getPool(t, f.base+"/s/livesession/worktrees?no_size=1")
+	settleWalks()
+	f.d.sizes.mu.Lock()
+	kept := len(f.d.sizes.entries)
+	f.d.sizes.mu.Unlock()
+	if got.Sizing || got.Worktrees[0].Size != nil || got.Worktrees[1].Size != nil || kept != 2 || walks.Load() != 2 {
+		t.Fatalf("lightweight read of stale sizes = %+v, kept %d, walks %d; want unsized, 2 entries kept, 2 walks", got, kept, walks.Load())
+	}
+}
+
+// TestWorktreeCleanupStartsNoWalk: a cleanup request reads the pool cache-only,
+// so it starts no walk, carries "size: unknown" for what was never measured,
+// and carries a fresh measured size once a scan has run.
+func TestWorktreeCleanupStartsNoWalk(t *testing.T) {
+	f, _, _, _ := worktreeFixture(t)
+	walks := countWalks(f)
+
+	if code, _, raw := postJSON(t, f.base+"/s/livesession/worktrees/cleanup", f.base, ""); code != http.StatusOK {
+		t.Fatalf("cleanup = %d: %s", code, raw)
+	}
+	settleWalks()
+	if walks.Load() != 0 {
+		t.Fatalf("a cold cleanup started %d walks, want 0", walks.Load())
+	}
+	held := f.held(t)
+	if len(held) != 1 || strings.Count(inboxBody(t, held[0].Entry), "  size: unknown") != 2 {
+		t.Fatalf("held = %+v, want one message with both sizes unknown", held)
+	}
+
+	getPool(t, f.base+"/s/livesession/worktrees?wait=1")
+	scanned := walks.Load()
+	if code, _, raw := postJSON(t, f.base+"/s/livesession/worktrees/cleanup", f.base, ""); code != http.StatusOK {
+		t.Fatalf("second cleanup = %d: %s", code, raw)
+	}
+	settleWalks()
+	if walks.Load() != scanned || scanned != 2 {
+		t.Fatalf("walks = %d after the scan and %d after another cleanup, want 2 and 2", scanned, walks.Load())
 	}
 }
 
@@ -234,20 +328,24 @@ func TestByteSize(t *testing.T) {
 	}
 }
 
-// TestWorktreesCardInTheDrawer pins the drawer's pooled-worktree card: on a
-// session page of a daemon that reads pools, after the panels inside the
-// drawer, its cleanup button live with an adapter and disabled
-// with the reason without one; a daemon without a worktree source has no
-// card.
-func TestWorktreesCardInTheDrawer(t *testing.T) {
+// TestWorktreesCardOnTheGitPage pins the Git page's pooled-worktree region:
+// on a session page of a daemon that reads pools, inside the Git page (not
+// the drawer), with the light-list mode, the manual full-scan button, and
+// its cleanup button live with an adapter and disabled with the reason
+// without one; a daemon without a worktree source shows the no-pool line
+// and no list.
+func TestWorktreesCardOnTheGitPage(t *testing.T) {
 	f, _, _, _ := worktreeFixture(t)
 	_, live := get(t, f.base+"/s/livesession?frame=1")
-	panels, card, end := strings.Index(live, `data-region="panels"`), strings.Index(live, `id="p-worktrees"`), strings.Index(live, `<button type="button" class="dr-handle"`)
-	if panels < 0 || card < panels || end < card {
-		t.Fatalf("drawer order: panels %d, worktrees %d, handle %d", panels, card, end)
+	page, card, list := strings.Index(live, `id="gitpage"`), strings.Index(live, `id="wtcard"`), strings.Index(live, `id="wtlist"`)
+	if page < 0 || card < page || list < card {
+		t.Fatalf("git page order: page %d, worktrees %d, list %d", page, card, list)
+	}
+	if strings.Contains(live, `id="p-worktrees"`) {
+		t.Error("the drawer still carries the retired worktrees card")
 	}
 	assertSettingsOwner(t, live, false)
-	for _, want := range []string{`id="wtlist"`, `id="wtcount"`, `<button type="button" class="btn wtclean" id="wtclean" title="ask the session to clean up unused worktrees">Request cleanup</button>`} {
+	for _, want := range []string{`id="wtcount"`, `id="gpwtmode" data-mode="light"`, `id="gpscan"`, `<button type="button" class="btn wtclean" id="wtclean" title="ask the session to clean up unused worktrees">Request cleanup</button>`} {
 		if !strings.Contains(live, want) {
 			t.Errorf("live page lacks %q", want)
 		}
@@ -258,7 +356,7 @@ func TestWorktreesCardInTheDrawer(t *testing.T) {
 	}
 
 	bare := startPageFixture(t)
-	if _, page := get(t, bare.base+"/s/livesession?frame=1"); strings.Contains(page, `id="p-worktrees"`) {
-		t.Errorf("a daemon without a worktree source: worktrees card present")
+	if _, page := get(t, bare.base+"/s/livesession?frame=1"); strings.Contains(page, `id="wtlist"`) || strings.Contains(page, `id="gpscan"`) || !strings.Contains(page, `class="gp-none"`) {
+		t.Errorf("a daemon without a worktree source: a pool list or scan button present, or no no-pool line")
 	}
 }

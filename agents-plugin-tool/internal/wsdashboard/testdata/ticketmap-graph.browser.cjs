@@ -204,19 +204,32 @@ async function newSession(browser, theme, W, H, extra) {
   });
   return s;
 }
-// openC opens the overlay straight into View C (item 1's stored view).
+// openC opens the expanded overlay straight into View C (item 1's stored
+// view, planted before the page loads, so a docked first show is View C
+// too): Ctrl+B shows the gallery's docked map and ⤢ expands it.
 async function openC(s) {
   const page = s.page;
+  await s.context.addInitScript(() => {
+    // A sandboxed frame (a preview) has no storage.
+    try {
+      if (sessionStorage.getItem('tmviewc')) return;
+      sessionStorage.setItem('tmviewc', '1');
+      localStorage.setItem('ws.ticketmap.view', 'C');
+    } catch (_) {}
+  });
   await page.goto(base + '/s/livesession');
   const fr = s.fr = await frameOf(page);
-  await fr.locator('#thandle').waitFor({ state: 'visible' });
+  await fr.locator('#tmdock').waitFor({ state: 'attached' });
   await page.waitForTimeout(300);
-  await fr.evaluate(() => {
-    document.documentElement.setAttribute('data-test-hooks', '');
-    localStorage.setItem('ws.ticketmap.view', 'C');
-  });
-  await fr.locator('#thandle').click();
-  await fr.waitForFunction(() => window.__tmapc && window.__tmapc.stats().W > 0 && document.querySelectorAll('#tmworld .d-tm-cnd').length > 0);
+  await fr.evaluate(() => document.documentElement.setAttribute('data-test-hooks', ''));
+  const shown = () => fr.evaluate(() => { const r = document.querySelector('#tmdock > .d-tm-root'); return !!r && r.getClientRects().length > 0; });
+  if (!(await shown())) {
+    await fr.evaluate(() => document.activeElement && document.activeElement.blur && document.activeElement.blur());
+    await page.keyboard.press('Control+b');
+    await fr.waitForFunction(() => { const r = document.querySelector('#tmdock > .d-tm-root'); return !!r && r.getClientRects().length > 0; });
+  }
+  await fr.locator('#tmexpand').click();
+  await fr.waitForFunction(() => window.__tmapc && !document.getElementById('tmback').hidden && window.__tmapc.stats().W > 0 && document.querySelectorAll('#tmworld .d-tm-cnd').length > 0);
   await raf2(fr);
   s.off = await page.locator('iframe.sframe.on').boundingBox();
   s.vp = await fr.evaluate(() => window.__tmt.vp());

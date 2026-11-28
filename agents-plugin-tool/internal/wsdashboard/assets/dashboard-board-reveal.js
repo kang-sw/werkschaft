@@ -9,7 +9,7 @@
   // tick or per frame.
   var boardRevealRaf = 0;
   function boardRevealHidden() {
-    return !!(doc.hidden || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-animation-paused"))) ||
+    return !!((typeof docHidden === "function" ? docHidden() : doc.hidden) || (doc.documentElement && doc.documentElement.hasAttribute && doc.documentElement.hasAttribute("data-animation-paused"))) ||
       (typeof shHidden !== "undefined" && !!shHidden);
   }
   // boardRevealRemeasure re-reads #bcol's content box and overflow after a

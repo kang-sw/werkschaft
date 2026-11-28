@@ -148,11 +148,11 @@ test("settings panel includes all active companion keys and skips deprecated row
   const shown = sectionEntries("companion").map(entry => entry.key).sort();
   assert.deepEqual(shown, [
     "dashboard.companion_agent_cooldown_seconds", "dashboard.companion_agent_hourly_cap",
-    "dashboard.companion_attachments", "dashboard.companion_director",
+    "dashboard.companion_attachments", "dashboard.companion_body_tier", "dashboard.companion_director",
     "dashboard.companion_enabled", "dashboard.companion_eyes", "dashboard.companion_hair",
     "dashboard.companion_outfit", "dashboard.companion_pack", "dashboard.companion_palette",
     "dashboard.companion_preset", "dashboard.companion_soul", "dashboard.companion_soul_dir",
-    "dashboard.companion_sources"
+    "dashboard.companion_sources", "dashboard.companion_work_tier"
   ]);
   const legacyModal = catalog.filter(spec => spec.surface === "companion-modal");
   assert.deepEqual(legacyModal, [], "retired companion-modal surface has no remaining rows");

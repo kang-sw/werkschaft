@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,6 +54,9 @@ type companionRuntime struct {
 
 	// Test seam: overrides harness/tier resolution when non-nil.
 	resolveLaunch func(role string) (companionLaunchSpec, bool)
+	// configOpts locates the config the companion tier settings and
+	// agents.tier read; zero (the default homes) outside tests.
+	configOpts wsconfig.Options
 	// Test seam: overrides deadline tick interval when > 0.
 	tickInterval time.Duration
 
@@ -780,53 +782,6 @@ func (r *companionRuntime) ensureWorkSession(d *wsdashboard.Daemon) (string, err
 	r.workLaunches++
 	r.mu.Unlock()
 	return st.ID, nil
-}
-
-func (r *companionRuntime) pickLaunchSpec(role string) (companionLaunchSpec, bool) {
-	if r.resolveLaunch != nil {
-		return r.resolveLaunch(role)
-	}
-	if r.agents == nil {
-		return companionLaunchSpec{}, false
-	}
-	tier := companionTierWork
-	if role == mcp.CompanionRoleBody {
-		tier = companionTierBody
-	}
-	regs := r.agents.BackendRegistrations()
-	candidates := make([]string, 0, len(regs))
-	for name := range regs {
-		if wsagent.LeadProfileFor(name, regs) == "" {
-			continue
-		}
-		if why, _ := r.agents.HarnessAvailability("", name); why != "" {
-			continue
-		}
-		candidates = append(candidates, name)
-	}
-	if len(candidates) == 0 {
-		return companionLaunchSpec{}, false
-	}
-	sort.Strings(candidates)
-	backend := candidates[0]
-	for _, preferred := range wsagent.BuiltinHarnessNames() {
-		for _, c := range candidates {
-			if c == preferred {
-				backend = c
-				goto picked
-			}
-		}
-	}
-picked:
-	spec := companionLaunchSpec{Backend: backend}
-	if tiers, err := wsconfig.HarnessTiers(wsconfig.Options{}, backend); err == nil {
-		if slot, ok := tiers[tier]; ok && slot.Model != "" {
-			spec.Model = slot.Model
-			spec.Effort = slot.Effort
-			spec.Provider = slot.Provider
-		}
-	}
-	return spec, true
 }
 
 func (r *companionRuntime) liveDaemon() *wsdashboard.Daemon {
