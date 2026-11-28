@@ -522,3 +522,33 @@ func TestDaemonBridgeCompanionPauseEchoAndDeniedMapping(t *testing.T) {
 		t.Fatalf("PendingApproval did not clear on tab disconnect: %+v", paGone)
 	}
 }
+
+func TestCompanionPhoneConcurrentApprovalPauses(t *testing.T) {
+	var store CompanionPhoneStore
+
+	// Queue two concurrent approval pauses; snapshot exposes the head (FIFO).
+	store.BeginApprovalPause("req-1", "config.tune", "config.tune (key=workflow.lang, value=ko)")
+	store.BeginApprovalPause("req-2", "daemon.curl", "POST /api/example")
+	if pa := store.Snapshot().PendingApproval; pa == nil || pa.RequestID != "req-1" {
+		t.Fatalf("head PendingApproval = %+v, want req-1", pa)
+	}
+
+	// Clearing req-1 promotes req-2 without dropping it.
+	store.EndApprovalPause("req-1")
+	if pa := store.Snapshot().PendingApproval; pa == nil || pa.RequestID != "req-2" || pa.Tool != "daemon.curl" {
+		t.Fatalf("promoted PendingApproval = %+v, want req-2", pa)
+	}
+
+	// Queue req-3 behind req-2, clear req-3 out of order -> req-2 stays head.
+	store.BeginApprovalPause("req-3", "note.write", "note.write (layer=machine)")
+	store.EndApprovalPause("req-3")
+	if pa := store.Snapshot().PendingApproval; pa == nil || pa.RequestID != "req-2" {
+		t.Fatalf("after out-of-order clear PendingApproval = %+v, want req-2", pa)
+	}
+
+	// Clearing the final pending approval restores nil cleanly.
+	store.EndApprovalPause("req-2")
+	if pa := store.Snapshot().PendingApproval; pa != nil {
+		t.Fatalf("after final clear PendingApproval = %+v, want nil", pa)
+	}
+}

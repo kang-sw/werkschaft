@@ -168,26 +168,66 @@ func formatCompanionDeniedError(tool, reason, message string) string {
 	return string(raw)
 }
 
+func clampRunes(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	if max == 1 {
+		return "…"
+	}
+	return string(runes[:max-1]) + "…"
+}
+
+func looksSensitiveFieldName(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for _, needle := range []string{"token", "secret", "password", "passwd", "api_key", "apikey", "credential", "auth", "cookie", "bearer", "private_key"} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 func companionApprovalSummary(name string, args map[string]any) string {
 	var parts []string
+	sensitiveKey := false
 	for _, field := range []string{"key", "scope", "layer", "action", "topic", "id", "slug", "target", "name"} {
 		if raw, ok := args[field]; ok {
 			if s, ok := raw.(string); ok {
 				s = strings.TrimSpace(s)
 				if s != "" {
-					parts = append(parts, field+"="+wsdashboard.RedactCredentials(s))
+					if (field == "key" || field == "name") && looksSensitiveFieldName(s) {
+						sensitiveKey = true
+					}
+					parts = append(parts, field+"="+clampRunes(wsdashboard.RedactCredentials(s), 48))
 				}
 			}
 		}
 	}
+	if rawVal, ok := args["value"]; ok && rawVal != nil {
+		var valStr string
+		switch v := rawVal.(type) {
+		case string:
+			valStr = strings.TrimSpace(v)
+		case bool, float64, int, int64:
+			valStr = fmt.Sprint(v)
+		}
+		if valStr != "" {
+			if sensitiveKey {
+				parts = append(parts, "value=[redacted]")
+			} else {
+				parts = append(parts, "value="+clampRunes(wsdashboard.RedactCredentials(valStr), 48))
+			}
+		}
+	}
 	if len(parts) == 0 {
-		return name
+		return clampRunes(name, 180)
 	}
-	summary := name + " (" + strings.Join(parts, ", ") + ")"
-	if len(summary) > 180 {
-		summary = summary[:180]
-	}
-	return summary
+	return clampRunes(name+" ("+strings.Join(parts, ", ")+")", 180)
 }
 
 // companionWorkApprovalGate enforces the (1750) high-impact confirmation gate

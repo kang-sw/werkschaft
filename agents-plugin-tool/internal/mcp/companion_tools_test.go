@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
@@ -576,5 +577,43 @@ func TestCompanionHiddenFromMailboxCorrespondents(t *testing.T) {
 	}
 	if strings.Contains(txt, wsmailbox.ReplyID(workKey)) || strings.Contains(txt, wsmailbox.ReplyID(bodyKey)) {
 		t.Fatalf("companion reply-ids leaked into mailbox correspondents: %s", txt)
+	}
+}
+
+func TestCompanionApprovalSummaryRuneClampAndRedaction(t *testing.T) {
+	// Non-secret config.tune value appears in the banner summary.
+	got := companionApprovalSummary("config.tune", map[string]any{
+		"key":   "workflow.lang",
+		"scope": "global",
+		"value": "ko",
+	})
+	if !strings.Contains(got, "key=workflow.lang") || !strings.Contains(got, "value=ko") {
+		t.Fatalf("companionApprovalSummary(config.tune) = %q, want key and value", got)
+	}
+
+	// Sensitive key redacts value completely.
+	redacted := companionApprovalSummary("config.tune", map[string]any{
+		"key":   "provider.api_key",
+		"scope": "global",
+		"value": "sk-live-super-secret-value",
+	})
+	if strings.Contains(redacted, "sk-live") || !strings.Contains(redacted, "value=[redacted]") {
+		t.Fatalf("companionApprovalSummary(sensitive) = %q, want redacted value", redacted)
+	}
+
+	// Long multibyte Korean text clamps cleanly by rune count without corrupting UTF-8.
+	longKorean := strings.Repeat("가나다라마바사아자차카타파하", 20)
+	clamped := companionApprovalSummary("wiki.update", map[string]any{
+		"key":    longKorean,
+		"topic":  longKorean,
+		"target": longKorean,
+		"name":   longKorean,
+		"value":  longKorean,
+	})
+	if !utf8.ValidString(clamped) {
+		t.Fatalf("companionApprovalSummary produced invalid UTF-8: %q", clamped)
+	}
+	if utf8.RuneCountInString(clamped) > 180 {
+		t.Fatalf("companionApprovalSummary exceeded 180 runes: %d", utf8.RuneCountInString(clamped))
 	}
 }
