@@ -835,7 +835,7 @@
   function go(href) {
     var u = new URL(href, location.href);
     if (shell) { shOpen(u.href, true); return; }
-    if (compact) {
+    if (typeof compact !== "undefined" && compact) {
       if (u.origin === location.origin && u.pathname === location.pathname && u.search === location.search && u.hash) {
         if (/^#entry=/.test(u.hash) && typeof entryJumpFromHash === "function") entryJumpFromHash(u.hash);
         else location.hash = u.hash;
@@ -1576,7 +1576,7 @@
   function shFrameInit() {
     var sent = {}, queued = null, head = null, headDirty = true, lastHandlesKey = "";
     function send(kind, m) {
-      if (compact) return;
+      if (typeof compact !== "undefined" && compact) return;
       var k = JSON.stringify(m);
       if (sent[kind] === k) return;
       sent[kind] = k;
@@ -1653,10 +1653,10 @@
       if (head) send("head", head);
       send("layout", layout);
     }
-    function queue() { if (!compact && !shHidden && !queued) queued = requestAnimationFrame(post); }
-    function queueHead() { if (compact) return; headDirty = true; queue(); }
-    if (!compact && typeof ideFrameQueueHead !== "undefined") ideFrameQueueHead = queueHead;
-    if (!compact) {
+    function queue() { if ((typeof compact === "undefined" || !compact) && !shHidden && !queued) queued = requestAnimationFrame(post); }
+    function queueHead() { if (typeof compact !== "undefined" && compact) return; headDirty = true; queue(); }
+    if ((typeof compact === "undefined" || !compact) && typeof ideFrameQueueHead !== "undefined") ideFrameQueueHead = queueHead;
+    if (typeof compact === "undefined" || !compact) {
       doc.addEventListener("ws-overview", queue);
       doc.addEventListener("ws-audit", queue);
       doc.addEventListener("ws-stage-fill", queueHead);
@@ -1735,7 +1735,7 @@
         if (shTrackerRev !== null) { var rev = shTrackerRev; shTrackerRev = null; trackerNudge(rev); }
         queue();
       } else if (m.wsShell === "companion-gate") {
-        if (compact) return;
+        if (typeof compact !== "undefined" && compact) return;
         if (m.active && !companionRelay) companionRelay = startCompanionRelay();
         else if (!m.active && companionRelay) { companionRelay.dispose(); companionRelay = null; }
       } else if (m.wsShell === "search") {
@@ -1754,7 +1754,7 @@
       else if (m.wsShell === "daemon-bridge-req") { if (typeof handleDaemonFrameBridgeReq === "function") handleDaemonFrameBridgeReq(m); }
       else if (m.wsShell === "term-list-req" || m.wsShell === "term-attach") hdFrameTermReq(m);
     });
-    if (!compact) {
+    if (typeof compact === "undefined" || !compact) {
       queue();
       if (typeof WsJank !== "undefined" && WsJank) {
         WsJank.setRelay(function (stall) { shPost("jank-stall", { stall: stall }); });
