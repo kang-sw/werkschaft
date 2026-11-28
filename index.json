@@ -439,7 +439,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-28T02:42:01Z"
+        "touched_at": "2026-11-28T02:44:05Z",
+        "impl": {
+          "branch": "impl/develop/wager-uncle-juicy"
+        }
       }
     },
     "261125-feat-ws-meeting-minutes-voice-mode": {
