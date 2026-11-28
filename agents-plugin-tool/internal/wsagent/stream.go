@@ -39,6 +39,13 @@ type lineMapper interface {
 	mapLine(line []byte, replies lineReplies) []Event
 }
 
+// seqLineMapper is an optional lineMapper hook that also takes the line's
+// holder sequence number (0 for a daemon-owned child), so a mapper can tell
+// lines from before a reattached prompt from those after it.
+type seqLineMapper interface {
+	mapLineSeq(line []byte, replies lineReplies, seq uint64) []Event
+}
+
 // replayStateMapper is an optional lineMapper hook called from deliver
 // (serialized with mapLine) before a holder replay marker reaches the runner.
 type replayStateMapper interface {
@@ -151,8 +158,12 @@ func (p *streamProcess) prepareAudit(spec StartSpec, mapper lineMapper) {
 		return
 	}
 	if src, ok := mapper.(auditSource); ok {
-		p.auditTap = spec.audit
-		p.auditHarness, p.auditAdapter = src.newAudit(spec.audit.Session.ID)
+		// A mapper whose backend keeps no audit adapter returns nil and gets
+		// no capture.
+		if harness, adapter := src.newAudit(spec.audit.Session.ID); adapter != nil {
+			p.auditTap = spec.audit
+			p.auditHarness, p.auditAdapter = harness, adapter
+		}
 	}
 }
 
@@ -284,8 +295,8 @@ func (p *streamProcess) feed(line []byte, seq uint64, replay bool) {
 	var evs []Event
 	if m, ok := p.mapper.(*claudeMapper); ok && (replay || p.holder != nil && p.holder.buffered(seq)) {
 		evs = m.mapClaudeLine(line, replies, false)
-	} else if m, ok := p.mapper.(*agyMapper); ok {
-		evs = m.mapAgyLine(line, replies, seq)
+	} else if m, ok := p.mapper.(seqLineMapper); ok {
+		evs = m.mapLineSeq(line, replies, seq)
 	} else {
 		evs = p.mapper.mapLine(line, replies)
 	}
