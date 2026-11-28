@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -50,6 +51,39 @@ func TestLookPathNeverFallsBackToTheProcessPATH(t *testing.T) {
 	}
 	if got, err := LookPath(filepath.Join(dir, "elsewhere"), []string{"PATH="}); err != nil || got != filepath.Join(dir, "elsewhere") {
 		t.Fatalf("a path-qualified name = %q, %v; want it unchanged", got, err)
+	}
+}
+
+// TestLookPathNamesAnUnsetPATH: a non-nil environ with no usable PATH is a
+// session-environment fault, so the error says so instead of blaming the
+// program, while still wrapping exec.ErrNotFound for existing checks.
+func TestLookPathNamesAnUnsetPATH(t *testing.T) {
+	dir := fakeProgram(t, "ws-fake-tool")
+	t.Setenv("PATH", dir)
+	for name, env := range map[string][]string{
+		"empty list":   {},
+		"only WS keys": {"WS_MCP_HARNESS=werk", "HOME=/tmp"},
+		"empty PATH":   {"PATH="},
+		"blank PATH":   {"PATH=  "},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := LookPath("ws-fake-tool", env)
+			if err == nil {
+				t.Fatalf("resolved %q from an environment without PATH", got)
+			}
+			var execErr *exec.Error
+			if !errors.As(err, &execErr) || !errors.Is(err, exec.ErrNotFound) {
+				t.Fatalf("error = %v, want an *exec.Error wrapping exec.ErrNotFound", err)
+			}
+			if !strings.Contains(err.Error(), "PATH is unset or empty") {
+				t.Fatalf("error = %q, want it to say PATH is unset or empty", err)
+			}
+		})
+	}
+	// A populated PATH that lacks the program keeps the plain message.
+	_, err := LookPath("ws-fake-tool", []string{"PATH=" + t.TempDir()})
+	if err == nil || strings.Contains(err.Error(), "unset or empty") {
+		t.Fatalf("populated PATH miss = %v, want the plain not-found error", err)
 	}
 }
 

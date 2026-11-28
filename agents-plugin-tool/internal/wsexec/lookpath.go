@@ -59,8 +59,23 @@ func LookPath(name string, environ []string) (string, error) {
 			return candidate, nil
 		}
 	}
+	if strings.TrimSpace(path) == "" {
+		return "", &exec.Error{Name: name, Err: errPathUnset}
+	}
 	return "", &exec.Error{Name: name, Err: exec.ErrNotFound}
 }
+
+// errPathUnset says the caller environment, not the program, is the problem.
+// It wraps exec.ErrNotFound so errors.Is checks keep matching.
+var errPathUnset = pathUnsetError{}
+
+type pathUnsetError struct{}
+
+func (pathUnsetError) Error() string {
+	return "PATH is unset or empty in the session environment"
+}
+
+func (pathUnsetError) Unwrap() error { return exec.ErrNotFound }
 
 // searchPath shares the resolver's last-entry and platform case rules with
 // the Git cache key. Other environment variables do not select explicit Git.

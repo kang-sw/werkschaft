@@ -316,6 +316,64 @@ func TestReadOnlyWorkerMergeDiffWritesNoObjects(t *testing.T) {
 	}
 }
 
+// werkHelloEnvWorker binds a read-only werk worker whose Env is shaped like
+// the hello a ProcessDurable session publishes (wsagent mcpHello): the WS_*
+// entries plus the daemon's PATH and HOME (the fixed behavior; Started(nil, 0)
+// gave the hello none of them).
+func werkHelloEnvWorker(t *testing.T) *workerFixture {
+	t.Helper()
+	fx := newHostedExecFixture(t, 10*time.Second)
+	env := []string{
+		"WS_MCP_HARNESS=" + wsagent.BackendWerk,
+		wsagent.EnvPermissionLevel + "=" + string(wsagent.PermissionReadOnly),
+		"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(),
+	}
+	worker := NewServerWithOptions(ServerOptions{Root: fx.root, Version: "test", Env: env, Harness: wsagent.BackendWerk, Conversation: "worker", ExecCutover: wsagent.BackendWerk, Exec: func() *execjob.Hosted { return fx.hosted }})
+	key, _ := parseLoginResponse(t, callLogin(t, worker, 900003, fx.root, nil))
+	worker.callerBinding = boundCallers{backends: map[string]string{"worker": wsagent.BackendWerk}}
+	worker.fileWrites = &FileWriteSession{
+		Root: fx.root, Cwd: fx.root, Authority: wsfs.AuthorityReadOnly, LiveAuthority: false,
+		CurrentAuthority: func() wsfs.Authority { return wsfs.AuthorityReadOnly },
+	}
+	worker.recordExecLaunch = func(context.Context, execjob.ModelLaunch) (bool, error) { return false, nil }
+	return &workerFixture{hostedExecFixture: fx, worker: worker, key: key}
+}
+
+// TestWerkReadOnlyWorkerResolvesGitFromHelloEnv pins both halves of the
+// durable-session environment contract: a hello env that carries the
+// daemon's PATH resolves git for git.status and the allowlisted exec.run,
+// and one without PATH fails with a message naming the unset PATH rather than
+// borrowing the test (daemon) process's own.
+func TestWerkReadOnlyWorkerResolvesGitFromHelloEnv(t *testing.T) {
+	t.Run("hello env with PATH", func(t *testing.T) {
+		w := werkHelloEnvWorker(t)
+		gitIn(t, w.root, "add", ".")
+		gitIn(t, w.root, "commit", "-q", "-m", "werk hello commit")
+		if text, failed := w.call("git.status", nil); failed {
+			t.Fatalf("git.status = %s", text)
+		}
+		text, failed := rawCorrelatedToolCall(t, w.worker, "exec.run", "werk-env", map[string]any{
+			"session_key": w.key, "exe": "git", "args": []string{"log", "--oneline", "-n", "1"},
+		})
+		if failed || !strings.Contains(text, "status: exited 0") || !strings.Contains(text, "werk hello commit") {
+			t.Fatalf("exec.run git log = %v %s", failed, text)
+		}
+	})
+	t.Run("hello env without PATH", func(t *testing.T) {
+		// The hello env the bug produced: WS_* entries only. Even the login's
+		// own worktree probe needs git, so the failure shows up there, and it
+		// must name the environment rather than "executable file not found".
+		fx := newHostedExecFixture(t, 10*time.Second)
+		worker := NewServerWithOptions(ServerOptions{Root: fx.root, Version: "test", Harness: wsagent.BackendWerk, Conversation: "worker", ExecCutover: wsagent.BackendWerk,
+			Env:  []string{"WS_MCP_HARNESS=" + wsagent.BackendWerk, wsagent.EnvPermissionLevel + "=" + string(wsagent.PermissionReadOnly)},
+			Exec: func() *execjob.Hosted { return fx.hosted }})
+		resp := callLogin(t, worker, 900004, fx.root, nil)
+		if !strings.Contains(resp, "PATH is unset or empty") || strings.Contains(resp, "not found in $PATH") {
+			t.Fatalf("login without PATH = %s, want a message naming the unset PATH", resp)
+		}
+	})
+}
+
 func TestWerkReadOnlyLeadFailClosedAndWorkerAllowlistParity(t *testing.T) {
 	t.Run("read-only werk lead cannot launch or write exec", func(t *testing.T) {
 		w := newWorkerFixture(t, wsagent.BackendWerk, wsagent.PermissionReadOnly)

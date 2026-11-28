@@ -314,7 +314,8 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	c.events = proc.Events()
 	if durable {
 		c.bindDurableMCP(spec.MCPSession, rec, proc, level)
-		spec.MCPSession.Started(nil, 0)
+		// See startWorker: the daemon's environment is the hosted loop's.
+		spec.MCPSession.Started(environ(), 0)
 	}
 	c.idleAfter = def.IdleTimeout()
 	if attach {
