@@ -154,19 +154,18 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
     const collapsed = await readLayout();
     assert.equal(collapsed.unregInsideRlist, false, 'details.rws-unreg must sit outside #rlist');
     assert.equal(collapsed.unregInsidePanel, true, 'details.rws-unreg must sit inside .rail-session-panel');
-    assert.equal(collapsed.rfootInsidePanel, true, '.rfoot must sit inside .rail-session-panel');
+    assert.equal(collapsed.rfootInsidePanel, false, 'retired .rfoot must be absent from shell .rail-session-panel');
+    assert.equal(collapsed.rfootRect, null, 'retired .rfoot must not render inside shell rail');
     assert.equal(collapsed.slotInsidePanel, false, '#rail-companion-slot must sit outside .rail-session-panel as final sibling');
     assert.ok(Number(collapsed.unregCount) >= 3, `expected >= 3 pending unregistered workspaces, got ${collapsed.unregCount}`);
     assert.ok(collapsed.slotRect.top >= collapsed.panelRect.bottom - 1,
       `slot (${JSON.stringify(collapsed.slotRect)}) must sit below .rail-session-panel (${JSON.stringify(collapsed.panelRect)})`);
     assert.ok(collapsed.slotRect.top >= collapsed.unregRect.bottom - 1,
       `slot (${JSON.stringify(collapsed.slotRect)}) must sit below details.rws-unreg (${JSON.stringify(collapsed.unregRect)})`);
-    assert.ok(collapsed.slotRect.top >= collapsed.rfootRect.bottom - 1,
-      `slot (${JSON.stringify(collapsed.slotRect)}) must sit below .rfoot (${JSON.stringify(collapsed.rfootRect)})`);
     assert.ok(Math.abs(collapsed.slotRect.bottom - collapsed.railRect.bottom) <= 1,
       `slot must be flush to #rail bottom: slot=${JSON.stringify(collapsed.slotRect)} rail=${JSON.stringify(collapsed.railRect)}`);
-    assert.ok(Math.abs(collapsed.slotRect.bottom - collapsed.vh) <= 1,
-      `slot must be flush to viewport bottom (0px gap): slotBottom=${collapsed.slotRect.bottom} vh=${collapsed.vh}`);
+    assert.ok(Math.abs(collapsed.slotRect.bottom - (collapsed.vh - 26)) <= 1,
+      `slot must sit flush above the 26px bottom bar: slotBottom=${collapsed.slotRect.bottom} vh=${collapsed.vh}`);
     assert.equal(collapsed.slotBorderTopWidth, '0px', '#rail-companion-slot must be borderless');
     assert.equal(collapsed.slotBorderBottomWidth, '0px', '#rail-companion-slot must be borderless');
     assert.equal(collapsed.railBg, 'rgba(0, 0, 0, 0)', 'outer .rail must become transparent in rail-slot mode');
@@ -182,8 +181,8 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
 
     await applyPack(vrm0ID);
     const vrm0Collapsed = await readLayout();
-    assert.ok(Math.abs(vrm0Collapsed.slotRect.bottom - vrm0Collapsed.vh) <= 1,
-      `VRM 0.x slot must be flush to viewport bottom: slotBottom=${vrm0Collapsed.slotRect.bottom} vh=${vrm0Collapsed.vh}`);
+    assert.ok(Math.abs(vrm0Collapsed.slotRect.bottom - (vrm0Collapsed.vh - 26)) <= 1,
+      `VRM 0.x slot must sit flush above the 26px bottom bar: slotBottom=${vrm0Collapsed.slotRect.bottom} vh=${vrm0Collapsed.vh}`);
     const vrm0CollapsedFull = shots ? await page.screenshot() : null;
     const vrm0CollapsedCrop = shots ? await page.screenshot({ clip: await railBottomClip() }) : null;
 
@@ -305,21 +304,28 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
     await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
     await page.waitForTimeout(200);
 
-    // 4. Responsive rail width check (Variant D forward-compatibility: 240px and 360px).
-    for (const testW of [240, 360]) {
+    // 4. Responsive rail width check (Variant D splitter range: 220px, 280px, 360px).
+    for (const testW of [220, 280, 360]) {
       await page.evaluate(w => {
-        document.querySelector('.dbody').style.gridTemplateColumns = `${w}px minmax(0, 1fr)`;
+        if (window.WsIdeShell) window.WsIdeShell.setWidth(w);
+        else document.documentElement.style.setProperty('--rail-w', `${w}px`);
       }, testW);
-      await page.waitForTimeout(220);
+      await page.waitForFunction((expectedW) => {
+        const slot = document.getElementById('rail-companion-slot')?.getBoundingClientRect();
+        const hit = document.querySelector('.ws-companion-hit')?.getBoundingClientRect();
+        return !!(slot && hit && Math.abs(slot.width - expectedW) <= 2 && Math.abs(hit.width - slot.width) <= 2);
+      }, testW, { timeout: 3000 });
       const resized = await readLayout();
       assert.ok(Math.abs(resized.slotRect.width - resized.railRect.width) <= 1,
         `#rail-companion-slot must match .rail width (${resized.railRect.width}px), got ${resized.slotRect.width}`);
-      assert.ok(Math.abs(resized.slotRect.width - testW) <= 6,
-        `#rail-companion-slot must resize responsively near ${testW}px, got ${resized.slotRect.width}`);
+      assert.ok(Math.abs(resized.slotRect.width - testW) <= 2,
+        `#rail-companion-slot must resize responsively to ${testW}px, got ${resized.slotRect.width}`);
       assert.ok(Math.abs(resized.hitRect.width - resized.slotRect.width) <= 2,
         `VRM hit must track resized slot width ${resized.slotRect.width}px, got ${resized.hitRect.width}`);
     }
-    await page.evaluate(() => { document.querySelector('.dbody').style.gridTemplateColumns = ''; });
+    await page.evaluate(() => {
+      if (window.WsIdeShell) window.WsIdeShell.setWidth(280);
+    });
     await page.waitForTimeout(220);
 
     // 5. Narrow viewports (< 1600px): 1440x900 (2-col) and 720x900 (1-col) hide VRM & pause WebGL,

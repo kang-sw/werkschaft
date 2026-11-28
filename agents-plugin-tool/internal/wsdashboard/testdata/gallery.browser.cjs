@@ -913,7 +913,20 @@ async function routeTerminal(context) {
       const spot = async sel => { const o = await off(); const p = await page.evaluate(spotIn, [sel, AVOID]); assert(p, 'no wheel spot on ' + sel); return { x: o.x + p.x, y: o.y + p.y }; };
       const wheel = async (at, dy, n = 1, gap = 0) => { await tab.mouse.move(at.x, at.y); for (let i = 0; i < n; i++) { if (i && gap) await sleep(gap); await tab.mouse.wheel(0, dy); } await page.evaluate(() => window.__gal.frames()); };
       const pill = () => page.evaluate(() => window.__gal3.pill());
-      const col = v => page.evaluate(w => { const b = document.getElementById('bcol'); b.scrollTop = w === 'end' ? b.scrollHeight : w; return b.scrollTop; }, v);
+      const col = async v => {
+        if (v !== 'end') return page.evaluate(w => { const b = document.getElementById('bcol'); b.scrollTop = w; return b.scrollTop; }, v);
+        // Under free-canvas virtualization, a shorter viewport (36px topbar + 26px bottom bar)
+        // can leave the trailing card off-window with a 100,000px runway minHeight; jumping to
+        // the last card first mounts it and settles stageH before scrolling to the true bottom.
+        await page.evaluate(() => {
+          const anchor = window.WsBoardAnchor;
+          const list = anchor && anchor.cards ? anchor.cards() : [];
+          const last = list.length ? list[list.length - 1] : null;
+          if (last && anchor && typeof anchor.select === 'function') anchor.select(last, { smooth: false });
+        });
+        await page.evaluate(() => window.__gal.frames());
+        return page.evaluate(() => { const b = document.getElementById('bcol'); b.scrollTop = b.scrollHeight; return b.scrollTop; });
+      };
 
       // Page 0 top: the damped micro-bounce (no page above the Main Board).
       await col(0);
@@ -1281,7 +1294,7 @@ async function routeTerminal(context) {
       await until(async () => (await layout()).w === 1800, 'resize 1800');
       l = await until(async () => { const v = await layout(); return v.gal === 'narrow' ? v : null; }, '1800 Band 3 switches to fused narrow gallery');
       const shell1800 = await tab.evaluate(() => ({ pincol: document.documentElement.hasAttribute('data-pincol'), railLeft: Math.round(document.getElementById('rail').getBoundingClientRect().left) }));
-      assert.deepEqual([l.gal, l.pincol, shell1800.pincol, shell1800.railLeft], ['narrow', false, false, 12], '1800 Band 3: fused narrow gallery with rail permanently docked at left');
+      assert.deepEqual([l.gal, l.pincol, shell1800.pincol, shell1800.railLeft], ['narrow', false, false, 0], '1800 Band 3: fused narrow gallery with rail permanently docked at left');
       await shot(tab, 'layout-1800-page');
       // Band 1 (1400px): overlay rail, fused narrow gallery.
       await tab.setViewportSize({ width: 1400, height: 1000 });

@@ -37,7 +37,8 @@ const key = 'ws.dashboard.workspace-admission.drafts';
       foot:rect(document.querySelector('#rail .rfoot')),cap:rect(document.querySelector('#rail .rcap:not([hidden])'))};
    });
    assert.ok(geometry.toast.left>=geometry.rail.left && geometry.toast.right<=geometry.rail.right);
-   assert.ok(geometry.toast.bottom<=geometry.foot.top+1,'toast above rail foot');
+   if(geometry.foot) assert.ok(geometry.toast.bottom<=geometry.foot.top+1,'toast above rail foot');
+   else assert.ok(geometry.toast.bottom<=geometry.rail.bottom+1,'toast stays inside rail');
    if(geometry.cap) assert.ok(geometry.toast.bottom<=geometry.cap.top+1,'toast above Apply capsule');
   }
   await page.evaluate(()=>document.documentElement.setAttribute('data-theme','dark'));

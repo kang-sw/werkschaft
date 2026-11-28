@@ -987,7 +987,7 @@
         try { ent.el.contentWindow.location.hash = ent.lateHash; } catch (x) { /* unloading */ }
         delete ent.lateHash;
       }
-      if (!ent.settingsSent) { ent.settingsSent = true; shSettings(ent); }
+      if (!ent.settingsSent) { ent.settingsSent = true; shSettings(ent); if (typeof ideRailNotifyFrames === "function") ideRailNotifyFrames(ent); }
       if (shWant === ent) shShow(ent);
       else if (!ent.shownSent && !(shHandoff && shHandoff.ent === ent)) {
         ent.shownSent = true;
@@ -1167,6 +1167,7 @@
     if (ent.cached || !ent.settingsSent) {
       ent.settingsSent = true;
       shSettings(ent);
+      if (typeof ideRailNotifyFrames === "function") ideRailNotifyFrames(ent);
       if (ent.cached) shSend(ent, "theme", { theme: root.getAttribute("data-theme") || "" });
       ent.cached = false;
     }
@@ -1237,8 +1238,10 @@
       shSeq++;
       swap("head", "f" + shSeq, html);
     }
-    if (qs && qs.innerHTML !== (m ? m.qs : "")) qs.innerHTML = m ? m.qs : "";
-    shTop.style.paddingRight = m ? m.pad + "px" : "";
+    if (qs && !(qs.hasAttribute && qs.hasAttribute("data-shell-qs")) && qs.innerHTML !== (m ? m.qs : "")) qs.innerHTML = m ? m.qs : "";
+    var rightW = m && typeof m.pad === "number" && isFinite(m.pad) && m.pad > 0 ? Math.max(0, Math.ceil(m.pad - 8)) : 0;
+    shTop.style.setProperty("--sh-right-w", rightW ? rightW + "px" : "");
+    shTop.style.paddingRight = $("slot-top-right") ? "" : (m ? m.pad + "px" : "");
     var side = m && typeof m.side === "number" && isFinite(m.side) && m.side > 0 ? m.side : 0;
     shTop.style.setProperty("--sh-stage-side", side ? side + "px" : "");
     // Headerless fallback clears stale session controls, not their box.
@@ -1263,6 +1266,8 @@
   function shScroll(ent) {
     var y = Math.max(0, ent.y || 0);
     shTop.style.transform = y ? "translateY(" + -y + "px)" : "";
+    if (y > 2) root.setAttribute("data-fscrolled", "");
+    else root.removeAttribute("data-fscrolled");
     // The rail no longer sits under the header: docked it runs the full
     // height beside it (the framed page's placeholder stays sticky at 12px),
     // and overlaid it is fixed, so it never moves with the page.
@@ -1426,7 +1431,7 @@
             try { ent.el.contentWindow.location.hash = ent.lateHash; } catch (x) { /* unloading */ }
             delete ent.lateHash;
           }
-          if (!ent.settingsSent) { ent.settingsSent = true; shSettings(ent); }
+          if (!ent.settingsSent) { ent.settingsSent = true; shSettings(ent); if (typeof ideRailNotifyFrames === "function") ideRailNotifyFrames(ent); }
           if (on && !ent.shownSent && !(shHandoff && shHandoff.ent === ent)) {
             ent.shownSent = true;
             shSend(ent, "shown", { shown: true });
@@ -1533,7 +1538,7 @@
   // the scroll, and hash routes go up as they change, and the shell's
   // messages come down.
   function shFrameInit() {
-    var sent = {}, queued = null, head = null, headDirty = true;
+    var sent = {}, queued = null, head = null, headDirty = true, lastHandlesKey = "";
     function send(kind, m) {
       var k = JSON.stringify(m);
       if (sent[kind] === k) return;
@@ -1571,14 +1576,28 @@
       queued = null;
       if (shHidden) return;
       // Board/root mutations only need the open-overlay state. Re-measure
-      // the mirrored header when it changes or resizes, not on every post.
+      // the mirrored header when it changes, resizes, or right-end handle
+      // widths (--drhw/--tkhw) change.
+      var handlesKey = (root.style && typeof root.style.getPropertyValue === "function")
+        ? ((root.style.getPropertyValue("--drhw") || "") + "|" + (root.style.getPropertyValue("--tkhw") || ""))
+        : "";
+      if (handlesKey !== lastHandlesKey) {
+        lastHandlesKey = handlesKey;
+        headDirty = true;
+      }
       if (headDirty) {
         headDirty = false;
         var top = doc.querySelector(".dwrap > .top"), h = region("head"), qs = $("qsslot");
         var topCS = top ? getComputedStyle(top) : null;
+        var rootCS = top ? getComputedStyle(root) : null;
+        var hasRGP = !!(rootCS && typeof rootCS.getPropertyValue === "function");
+        var drhw = hasRGP ? (parseFloat(rootCS.getPropertyValue("--drhw")) || 0) : 0;
+        var tkhw = hasRGP ? (parseFloat(rootCS.getPropertyValue("--tkhw")) || 0) : 0;
+        var dpad = hasRGP ? (parseFloat(rootCS.getPropertyValue("--dpad")) || 16) : 16;
+        var handlesW = (drhw > 0 || tkhw > 0) ? Math.ceil(drhw + tkhw + dpad) : 0;
         head = top ? {
           html: h ? h.innerHTML : null, qs: qs ? inline(qs) : "",
-          pad: (parseFloat(topCS.paddingRight) || 0) + Math.max(0, window.innerWidth - root.clientWidth),
+          pad: Math.max((parseFloat(topCS.paddingRight) || 0), handlesW) + Math.max(0, window.innerWidth - root.clientWidth),
           side: Math.round((parseFloat(topCS.marginRight) || 0) * 100) / 100,
           top: top.offsetHeight
         } : null;
@@ -1600,6 +1619,7 @@
     }
     function queue() { if (!shHidden && !queued) queued = requestAnimationFrame(post); }
     function queueHead() { headDirty = true; queue(); }
+    if (typeof ideFrameQueueHead !== "undefined") ideFrameQueueHead = queueHead;
     doc.addEventListener("ws-overview", queue);
     doc.addEventListener("ws-audit", queue);
     doc.addEventListener("ws-stage-fill", queueHead);
@@ -1688,6 +1708,7 @@
         var h = region("head"), chip = h && h.querySelector(".host.hbtn");
         if (chip && WsRail) railPopOpen("sess", chip);
       } else if (m.wsShell === "settings") { setLayout(m.layout); setInput(m.input); if (typeof m.stageFill === "boolean" && typeof setStageFill === "function") setStageFill(m.stageFill); if (typeof m.extraMotion === "boolean" && typeof setExtraMotion === "function") setExtraMotion(m.extraMotion); }
+      else if (m.wsShell === "rail-layout") { if (typeof ideRailApplyFromShell === "function") ideRailApplyFromShell(m.width, m.collapsed); }
       else if (m.wsShell === "theme") setTheme(m.theme, true);
       else if (m.wsShell === "rail-open") { if (typeof tkApi !== "undefined" && tkApi && tkApi.closeStore) tkApi.closeStore(); }
       else if (m.wsShell === "sync") { sent = {}; queueHead(); shPost("title", { title: doc.title }); }
@@ -1731,6 +1752,7 @@
       ent.settingsSent = true;
       ent.shownSent = true;
       shSettings(ent);
+      if (typeof ideRailNotifyFrames === "function") ideRailNotifyFrames(ent);
       // No load event will tell this frame it is the shown one.
       shSend(ent, "shown", { shown: true });
     }

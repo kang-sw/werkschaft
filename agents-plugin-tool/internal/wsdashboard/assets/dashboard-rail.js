@@ -47,11 +47,12 @@
   // the viewed session, or a row menu's session), and the button it hangs
   // from (a row menu's: the row's link; at, where in the row it opened).
   var rp = { P: null, kind: "", ws: "", btn: null }, rpWs = null, rpWt = null, rpLead = null, rpSess = null, rpRow = null, rpUsage = null, rpIds = 0;
-  // The plan usage handle is the header's (the tcen template), shell-owned
-  // like the rail: only the page that holds the rail draws it and opens its
-  // popover; a framed page's header stays an invisible placeholder.
+  // The plan usage handle is shell-owned like the rail: in shell-framed mode
+  // it lives in #shell-bottom; unframed standalone renders keep it in .top.
   var topEl = doc.querySelector(".dwrap > .top");
-  var usageGutter = railEl && topEl && window.WsUsage ? window.WsUsage.mount(doc, topEl, {
+  var botBarEl = $("shell-bottom");
+  var usageHost = (botBarEl && botBarEl.querySelector(".usage-toggle")) ? botBarEl : topEl;
+  var usageGutter = railEl && usageHost && window.WsUsage ? window.WsUsage.mount(doc, usageHost, {
     accountSwitcher: root.hasAttribute("data-sysopen"),
     openSettings: function (href, opener) {
       railPopClose(false);
@@ -72,6 +73,10 @@
       return;
     }
     if (!railEl || !WsRail) return;
+    if (typeof shell !== "undefined" && shell && railWide() && typeof ideRailToggleCollapse === "function") {
+      ideRailToggleCollapse();
+      return;
+    }
     railOpen(!railShown());
   }
   function railOpen(open) {
@@ -81,18 +86,19 @@
       if (typeof shell !== "undefined" && shell && typeof shOn !== "undefined" && shOn) shSend(shOn, "rail-open");
     }
     root.classList.toggle("rail-open", !!open);
-    if (!open && rp.P && rp.kind === "fold") railPopClose(false);
+    if (!open && typeof rp !== "undefined" && rp && rp.P && rp.kind === "fold") railPopClose(false);
     if (memoPad) memoPad.open(!!open, railWide());
-    if (railBtn) railBtn.setAttribute("aria-expanded", String(!!open || railWide()));
+    if (railBtn) railBtn.setAttribute("aria-expanded", String(!!open || (railWide() && !(typeof shell !== "undefined" && shell && typeof ideRailCollapsed !== "undefined" && ideRailCollapsed))));
   }
   function railSettingsMark() {
-    var rail = region("rail");
-    if (!rail) return;
     var settings = shSettingsEntry && new URL(shSettingsEntry.href, location.origin).searchParams;
-    q("[data-scope-entry]", rail).forEach(function (gear) {
-      var active = settings && gear.dataset.scopeEntry === (settings.get("scope") || "global") &&
-        (gear.dataset.settingsTarget || "") === (settings.get("target") || "");
-      gear.setAttribute("aria-current", active ? "page" : "false");
+    [region("rail"), railEl, botBarEl].forEach(function (scope) {
+      if (!scope) return;
+      q("[data-scope-entry]", scope).forEach(function (gear) {
+        var active = settings && gear.dataset.scopeEntry === (settings.get("scope") || "global") &&
+          (gear.dataset.settingsTarget || "") === (settings.get("target") || "");
+        gear.setAttribute("aria-current", active ? "page" : "false");
+      });
     });
   }
   var railScrollRaf = 0, railScrollTarget = null, railScrollBound = null;
@@ -497,12 +503,12 @@
     lines.slice(1).forEach(function (x) { rtoastEl.appendChild(mk("small", "", x)); });
     rtoastEl.className = "rtoast" + (n.reject ? "" : " ok");
     var r = region("rail"), anchor = null;
-    ["admission-feedback", "rcap", "rfoot"].some(function (c) {
-      var el = r && r.querySelector("." + c);
+    ["admission-feedback", "rcap", "rfoot", "rail-companion-slot"].some(function (c) {
+      var el = (r && r.querySelector("." + c)) || (railEl && railEl.querySelector("." + c));
       if (el && !el.hidden && el.offsetHeight) anchor = el;
       return !!anchor;
     });
-    if (anchor) rtoastEl.style.bottom = Math.round(railEl.getBoundingClientRect().bottom - anchor.getBoundingClientRect().top + 8) + "px";
+    rtoastEl.style.bottom = anchor ? Math.round(railEl.getBoundingClientRect().bottom - anchor.getBoundingClientRect().top + 8) + "px" : "8px";
     void rtoastEl.offsetWidth;
     rtoastEl.classList.add("on");
     clearTimeout(rtoastTimer);
@@ -665,6 +671,10 @@
     if (railBtn) railBtn.addEventListener("click", function (e) {
       if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
+      if (typeof shell !== "undefined" && shell && railWide() && typeof ideRailToggleCollapse === "function") {
+        ideRailToggleCollapse();
+        return;
+      }
       railOpen(!railShown());
     });
     if (rscrim) rscrim.addEventListener("click", function () { railOpen(false); });
@@ -690,6 +700,34 @@
         if (usage && usageGutter) { e.preventDefault(); railPopOpen("usage", usage); }
       });
       WsRail.topWatch(topEl);
+    }
+    if (botBarEl) {
+      botBarEl.addEventListener("click", function (e) {
+        var t = e.target;
+        var usage = t.closest && t.closest(".usage-toggle");
+        if (usage && usageGutter) { e.preventDefault(); railPopOpen("usage", usage); return; }
+        var settings = t.closest && t.closest(".settings-toggle");
+        if (settings && gmenu) { e.preventDefault(); railPopOpen("settings", settings); return; }
+        var gear = t.closest && t.closest("[data-scope-entry]");
+        if (gear && root.hasAttribute("data-can-control")) {
+          e.preventDefault();
+          e.stopPropagation();
+          var entry = gear.dataset, scope = entry.scopeEntry;
+          var href = window.WsShell.settingsHref(scope, entry.settingsTarget, entry.settingsWorktree, scope === "session" ? entry.settingsTarget : "");
+          if (shell) shOpenSettings(new URL(href, location.href), gear);
+          else go(href);
+          return;
+        }
+        var home = t.closest && t.closest(".rail-home");
+        if (home) {
+          e.preventDefault();
+          if (!shell) { saveDraft(); if (memoPad) memoPad.remember(); }
+          railOpen(false);
+          go("/");
+          return;
+        }
+      });
+      if (WsRail.botWatch) WsRail.botWatch(botBarEl);
     }
     if (window.WsHoldConfirm) {
       window.WsHoldConfirm.delegate(railEl, ".drstop", {

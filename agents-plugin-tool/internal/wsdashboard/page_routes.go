@@ -254,6 +254,9 @@ func (d *Daemon) handleSessionPage(w http.ResponseWriter, r *http.Request, reply
 	}
 	view.Lang, view.LangPref, view.Theme = lang, pref, requestTheme(r)
 	if !frame {
+		if d.git != nil && view.Project != "" {
+			view.Git = d.git.badge(view.Project)
+		}
 		d.serveShell(w, r, &view, "/s/"+replyID+"?frame=1")
 		return
 	}

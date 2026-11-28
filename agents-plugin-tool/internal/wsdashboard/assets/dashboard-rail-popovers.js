@@ -387,8 +387,8 @@
     if (!rp.P) return null;
     if (rp.btn && rp.btn.isConnected) return rp.btn;
     var r = region("rail"), h = region("head"), found = null;
-    if (rp.kind === "settings") found = r && r.querySelector(".settings-toggle");
-    else if (rp.kind === "usage") found = topEl && topEl.querySelector(".usage-toggle");
+    if (rp.kind === "settings") found = (botBarEl && botBarEl.querySelector(".settings-toggle")) || (railEl && railEl.querySelector(".settings-toggle"));
+    else if (rp.kind === "usage") found = (botBarEl && botBarEl.querySelector(".usage-toggle")) || (topEl && topEl.querySelector(".usage-toggle"));
     else if (rp.kind === "sess") found = h && h.querySelector(".host.hbtn");
     else if (rp.kind === "row" || rp.kind === "confirm") {
       var row = r && WsRail.refind(r, { cls: "rs", attr: "data-rid", val: rp.ws });
@@ -428,6 +428,20 @@
       return;
     }
     var a = b.getBoundingClientRect();
+    var vw = root.clientWidth || window.innerWidth, vh = root.clientHeight || window.innerHeight;
+    if (botBarEl && botBarEl.contains(b)) {
+      var m = 8, gap = 6;
+      var maxH = Math.max(120, Math.floor(a.top - gap - m));
+      el.style.maxHeight = maxH + "px";
+      var w = el.offsetWidth, h = Math.min(el.offsetHeight, maxH);
+      var left = rp.kind === "settings" ? a.left : a.right - w;
+      left = Math.max(m, Math.min(left, vw - w - m));
+      var top = Math.max(m, a.top - gap - h);
+      el.style.top = Math.round(top) + "px";
+      el.style.left = Math.round(left) + "px";
+      return;
+    }
+    el.style.maxHeight = "";
     if (rp.kind === "fold") {
       // the archived/deleted popup is as wide as the rail it hangs from
       var rail = railEl.getBoundingClientRect();
@@ -441,7 +455,7 @@
       var c = (a.left + a.right) / 2;
       a = { top: a.top, bottom: a.bottom, left: c - el.offsetWidth / 2, right: c + el.offsetWidth / 2 };
     }
-    var at = WsRail.popPlace(a, el.offsetWidth, el.offsetHeight, root.clientWidth || window.innerWidth, root.clientHeight || window.innerHeight);
+    var at = WsRail.popPlace(a, el.offsetWidth, el.offsetHeight, vw, vh);
     el.style.top = at.top + "px";
     el.style.left = at.left + "px";
   }
