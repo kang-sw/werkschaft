@@ -9,6 +9,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 81bcf08920b5682c
 sage-review-completeness-reviewed: 81bcf08920b5682c
+completed: 2026-11-28
 ---
 
 # Shared Dashboard Control MCP API (`ws/daemon.*`), Multi-Tab WebSocket Bridge, and Top-Level Shell 1-Click Confirmation Banner
@@ -227,3 +228,11 @@ Implement `ws/daemon.screenshot` with the `(1755)` selection order and return co
 **Decisions:**
 - Accepted raw binary `Content-Type: image/png` on `POST /api/daemon/bridge-reply` with `X-WS-Request-ID`/`X-WS-Nonce`/`X-WS-Tab-ID` headers alongside existing JSON replies so Tier A PNG bytes obey the exact 8 MiB `payload_too_large` cap without ~33% base64 JSON inflation while preserving `SendDaemonBridgeRequest` backwards compatibility.
 - Named the optional Tier B runtime Playwright module configuration `WS_DAEMON_SCREENSHOT_PLAYWRIGHT_MODULE` (plus `DaemonOptions.ScreenshotPlaywrightModule`), strictly separated from test-only `WS_PLAYWRIGHT_MODULE`, and minted an in-memory 30s-TTL loopback-only read-only cookie (`ws_dashboard_screenshot_render`) revoked immediately on return and suppressed from `lanAccessFor` so Tier B never touches live user cookies or LAN tokens.
+
+
+## Resolution (2026-11-28)
+
+Implemented all three phases of ws dashboard control MCP API on impl/develop/oink-grass-giddy and reconciled with develop (d20afed52):
+- Phase 1 (248b35a, 78c499f): Added default-off per-session DashboardControlAccess persistence and gating across wsagent, wsdashboard (/agents/leads, /agents/<id>/settings/dashboard-control, /support/choices, New Session modal, and session popover with restart-pending banner), MCP gating (lead-only, persisted && effective, agy DirectTools, companion-posture refusal, T0 additive), and ws/daemon.curl (loopback GET/HEAD only with credential redaction, forbidden paths, 1-Click local browser confirmation, and SSE confirmation bridge).
+- Phase 2 (20e3740, 7e84886): Added local tab registry (/rail/events focus heartbeat), /api/daemon/bridge-reply nonce/tab/TrustedWrite bridge, ws/daemon.tabs, ws/daemon.dom (bounded structured DOM snapshot with secret redaction), and ws/daemon.ui (semantic action set + click_ref/fill_ref/press_key/scroll with generation staleness guard and 1-Click confirmation for sensitive actions), plus Playwright E2E coverage in TestDaemonControlBrowser.
+- Phase 3 (5220fa6, 80c323a, a36ec1d, 45737b4, 9939050): Added ws/daemon.screenshot with Tier A native Tauri WebView capture bridge (origin/epoch/main-window gated, macOS WKWebView + Windows WebView2, binary image/png bridge-reply with 8 MiB cap), Tier B optional headless Playwright route render (WS_DAEMON_SCREENSHOT_PLAYWRIGHT_MODULE with short-lived loopback-only read-only cookie isolated from live/LAN auth and webcard proxy), and Tier C honest dom_fallback (no html2canvas/foreignObject). Manual desktop WebView probe on live macOS/Windows builds remains noted for release QA; all automated Rust, Go (-race), Playwright, Node, wsflow, and embedded asset checks pass.
