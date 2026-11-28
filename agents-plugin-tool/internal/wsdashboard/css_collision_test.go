@@ -44,6 +44,7 @@ var allowedCSSOverlaps = map[string]string{
 	"wsc-editor dashboard,memo":         "both pages mount the shared capsules.js editor; memo.css scopes its copy under .memo-pad",
 	"rtext dashboard,whiteboard":        "overview clamps the existing whiteboard recap, scoped to data-overview",
 	"row dashboard,whiteboard":          "the docking gallery's split axis (.gal-split.row) never stands inside the whiteboard's .dw rows; the whiteboard scopes its .row under .dw",
+	"sys dashboard,whiteboard":          "the docking gallery's fixed system rail dots (.gal-dot.sys) never stand inside the whiteboard's .evi.sys status indicators",
 	"trecap dashboard,whiteboard":       "overview clamps the existing whiteboard recap, scoped to data-overview",
 	"tnote dashboard,whiteboard":        "overview hides existing whiteboard note fields without changing their state",
 	"tnote-toggle dashboard,whiteboard": "overview fades existing whiteboard head actions, scoped to data-overview",

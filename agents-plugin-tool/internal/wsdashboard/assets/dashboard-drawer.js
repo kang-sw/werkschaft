@@ -59,17 +59,12 @@
       content: el
     });
   }
-  // The todo chip reads "done/total" and the mailbox chip "N unread".
+  // The todo chip reads "done/total".
   panelTab("todo", function (count) {
     var m = /^(\d+)\/(\d+)$/.exec(count), n = m ? +m[2] - +m[1] : 0;
     return n > 0 ? { n: n, title: wsTn("js.drawer.todo", n) } : null;
   });
   panelTab("agenda");
-  panelTab("tickets");
-  panelTab("mailbox", function (count) {
-    var m = /^\D*(\d+)/.exec(count), n = m ? +m[1] : 0;
-    return n > 0 ? { n: n, title: wsT("js.drawer.unread", n) } : null;
-  });
 
   // cardTab registers one of the drawer's own cards (#p-<id>, drcards):
   // no region swap touches them.
@@ -121,70 +116,15 @@
         if (!drBooting) drApply(false);
       }
     }
-    ticketIdeaSync();
     thandleSync();
     drFill(true);
   }
   var drBooting = false;
-  // The ticket map's handle follows the same #p-tickets gate as the idea
-  // section. A map left open over a panels swap that drops the panel stays
-  // usable until it closes.
+  // Phase 1 keeps #thandle live until Phase 2 docks the Ticket Map and retires it.
   function thandleSync() {
     if (!thandle) return;
-    var on = !!$("p-tickets");
+    var on = true;
     if (thandle.hidden === on) { thandle.hidden = !on; if (!drBooting) drRoom(); }
-  }
-  // Ideas belong to this page's demand state, not the live panels region.
-  // Reattach after a panels swap without fetching again or replacing focus
-  // in an unchanged card. A failed read leaves a retry control.
-  var ideaRows = null, ideaLoading = false, ideaError = false;
-  function ticketIdeaSync() {
-    var p = $("p-tickets"), lanes = p && p.querySelector(".lanes");
-    if (!lanes || lanes.querySelector(".d-ticket-ideas")) return;
-    var section = doc.createElement("section"); section.className = "lane d-ticket-ideas";
-    var h = doc.createElement("h4"); h.textContent = wsT("js.drawer.idea");
-    if (ideaRows !== null) {
-      var count = doc.createElement("span"); count.className = "chip"; count.textContent = String(ideaRows.length); h.appendChild(count);
-    }
-    section.appendChild(h);
-    if (ideaRows !== null) {
-      var list = doc.createElement("ul"); list.className = "kcards";
-      ideaRows.forEach(function (t) {
-        var row = doc.createElement("li"); row.className = "kcard";
-        var title = doc.createElement("span"); title.className = "ctitle";
-        var cat = doc.createElement("span"); cat.className = "chip cat"; cat.textContent = t.category;
-        var link = doc.createElement("a"); link.textContent = t.title || t.stem;
-        link.href = "/s/" + rid + "/file?path=" + encodeURIComponent(t.path); link.title = t.path; link.setAttribute("data-wl", "file"); link.setAttribute("data-rel", t.path);
-        if (t.abs) link.setAttribute("data-abs", t.abs);
-        title.appendChild(cat); title.appendChild(link); row.appendChild(title);
-        var stem = doc.createElement("span"); stem.className = "csub"; stem.textContent = t.stem; stem.title = t.stem; row.appendChild(stem);
-        list.appendChild(row);
-      });
-      if (!ideaRows.length) { var empty = doc.createElement("li"); empty.className = "none"; empty.textContent = wsT("js.drawer.idea.empty"); list.appendChild(empty); }
-      section.appendChild(list);
-    } else {
-      var button = doc.createElement("button"); button.type = "button"; button.className = "btn d-ticket-more";
-      button.disabled = ideaLoading;
-      button.textContent = wsT(ideaLoading ? "js.drawer.idea.loading" : ideaError ? "js.drawer.idea.retry" : "js.drawer.idea.more");
-      button.addEventListener("click", ticketIdeaLoad); section.appendChild(button);
-    }
-    lanes.appendChild(section);
-  }
-  function ticketIdeaLoad() {
-    if (ideaLoading || ideaRows !== null) return;
-    ideaLoading = true; ideaError = false;
-    ticketIdeaRedraw();
-    fetch("/s/" + rid + "/tickets/idea", { credentials: "same-origin", cache: "no-store" }).then(function (r) {
-      if (!r.ok) throw new Error("idea tickets");
-      return r.json();
-    }).then(function (data) {
-      ideaRows = data.tickets || []; ideaLoading = false; ticketIdeaRedraw();
-    }).catch(function () { ideaLoading = false; ideaError = true; ticketIdeaRedraw(); });
-  }
-  function ticketIdeaRedraw() {
-    var p = $("p-tickets"), old = p && p.querySelector(".d-ticket-ideas");
-    if (old) old.remove();
-    ticketIdeaSync();
   }
   // Notes are fetched only on a panels opening or an explicit refresh. A wait
   // joins the server's existing worker rather than starting another read.
