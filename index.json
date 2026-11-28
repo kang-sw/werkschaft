@@ -500,26 +500,13 @@
         }
       }
     },
-    "261128-refactor-ws-auditstore-handle-eviction-and-lazy-index": {
-      "registered_at": "2026-11-28T11:39:31Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-28T13:19:39Z",
-        "impl": {
-          "branch": "impl/develop/blob-guy-atom"
-        }
-      }
-    },
     "261128-refactor-ws-daemon-wake-driven-stat-invalidation": {
       "registered_at": "2026-11-28T11:39:20Z",
       "lease": {
         "email": "ki6080@gmail.com",
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
-        "phase": "active",
+        "phase": "closed",
         "touched_at": "2026-11-28T13:19:38Z",
         "impl": {
           "branch": "impl/develop/goon-cost-stray"
