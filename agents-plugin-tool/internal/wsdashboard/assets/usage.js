@@ -318,10 +318,10 @@
             orCol = el("span", "usage-column");
             var locCur = el("span", "usage-current");
             var orTok = (or.totalInputTokens || 0) + (or.totalOutputTokens || 0);
-            locCur.appendChild(el("span", "usage-key", or.totalCostUsd > 0 ? t("keyDay") : t("keyTok")));
+            locCur.appendChild(el("span", "usage-key", or.totalCostUsd > 0 ? t("colCost") : t("keyTok")));
             locCur.appendChild(el("span", "usage-number", or.totalCostUsd > 0 ? formatUsd(or.totalCostUsd) : formatTokens(orTok)));
             orCol.appendChild(locCur);
-            orCol.title = name + ": " + (or.totalCostUsd > 0 ? formatUsd(or.totalCostUsd) : formatTokens(orTok));
+            orCol.title = name + " " + (or.totalCostUsd > 0 ? t("colCost") + ": " + formatUsd(or.totalCostUsd) : t("colTokens") + ": " + formatTokens(orTok));
           }
           if (orCol) {
             orCol.setAttribute("aria-label", orCol.title);

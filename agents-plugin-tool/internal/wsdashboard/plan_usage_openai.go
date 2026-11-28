@@ -162,9 +162,13 @@ func (s *planUsageStore) unifiedCodexOpenAIEntryLocked(now int64, id wscred.Open
 	if latestModelAt > x.AsOf {
 		x.AsOf = latestModelAt
 	}
+	mode := "local"
+	if len(x.Windows) > 0 {
+		mode = "remote"
+	}
 	x.Werk = &werkUsageView{
 		Unified:           true,
-		Mode:              "remote",
+		Mode:              mode,
 		PlanPaused:        id.PlanPaused,
 		TokenFirst:        true,
 		TotalInputTokens:  totalIn,

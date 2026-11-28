@@ -1190,6 +1190,26 @@ test('OpenRouter hybrid card renders balance, key limits, spend and model table;
   assert.ok(restrictedCard.textContent.includes('$0.0025'));
   assert.ok(!restrictedCard.textContent.includes('Key rejected'));
 
+  // Local-only OpenRouter spend must show cumulative Cost label, never mislabelled as daily ("day").
+  env.set({
+    entries: [{
+      harness: 'openrouter',
+      label: 'OpenRouter',
+      asOf: at,
+      openrouter: {
+        totalInputTokens: 4000,
+        totalOutputTokens: 1000,
+        totalCostUsd: 0.42,
+        models: [{ model: 'openai/gpt-4o-mini', inputTokens: 4000, outputTokens: 1000, costUsd: 0.42 }]
+      }
+    }]
+  });
+  env.ticks[0].fn();
+  await flush();
+  assert.equal(env.button.querySelector('.usage-key').textContent, 'Cost');
+  assert.equal(env.button.querySelector('.usage-number').textContent, '$0.42');
+  assert.ok(env.button.querySelector('.usage-column').title.includes('Cost: $0.42'));
+
   // Key rejected status displays cleanly without fabricating balance.
   env.set({
     entries: [{
