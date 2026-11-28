@@ -132,6 +132,19 @@ func (v *TurnSummaryView) TokenText() string {
 	return ""
 }
 
+// TokenValue is the number TokenText formats (exact delta, else the byte
+// estimate, else 0), exposed as data-turn-tok so the page can sum folded turns
+// without parsing localized text.
+func (v *TurnSummaryView) TokenValue() int64 {
+	if v == nil {
+		return 0
+	}
+	if v.AddedTokens > 0 {
+		return v.AddedTokens
+	}
+	return max(v.EstTokens, 0)
+}
+
 // TokenEstimated reports whether TokenText is a render-time byte-estimate fallback.
 func (v *TurnSummaryView) TokenEstimated() bool {
 	return v != nil && v.AddedTokens <= 0 && v.EstTokens > 0
