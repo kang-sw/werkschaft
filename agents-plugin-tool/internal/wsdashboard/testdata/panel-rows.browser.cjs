@@ -224,9 +224,10 @@ for (const address of [base, updates]) {
     // Returning from the injected shell also takes a full event; the next
     // stable-shell update must resume changed-card transport.
     assert.equal((await update('agenda', 'returned shell agenda'))[0].event, 'region'); await waitHash(oldHash);
-    // A panels change no longer lights the drawer handle: the drawer hosts
-    // only the worktree and holder cards.
-    assert.equal(await frame.evaluate(() => document.getElementById('drbody').contains(document.getElementById('r-panels'))), false, 'panels stay out of the drawer');
+    // The drawer's card body is retired (261128): panels live in the
+    // Workpanel and no drawer card body exists to hold them.
+    assert.equal(await frame.evaluate(() => document.getElementById('drbody')), null, 'the retired drawer card body stays gone');
+    assert.equal(await frame.evaluate(() => !!document.getElementById('r-panels').closest('#drawer')), false, 'panels stay out of the drawer');
     assert(await step.evaluate(n => n.open), 'workpanel lifecycle retains nested fold');
 
     const count = events.length;

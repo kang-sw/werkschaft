@@ -84,6 +84,7 @@ type shellPageData struct {
 	Lang, LangPref, Theme string
 	Assets                pageAssetsData
 	SysOpen, OwnHead      bool
+	Holders               bool // the bottom bar's Holders trigger (holdersOffered)
 	RID, Src, Title       string
 	Version               string
 	LAN                   *LANAccess

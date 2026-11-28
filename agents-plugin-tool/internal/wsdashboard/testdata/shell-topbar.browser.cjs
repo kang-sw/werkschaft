@@ -37,7 +37,7 @@ function geometry(page) {
     const items = [...left.querySelectorAll(':scope > :not(.r-head), :scope > .r-head > *')]
       .map(e => ({ cls: e.className, box: box(e) })).filter(i => i.box);
     const fdoc = document.querySelector('.sframe.on').contentDocument;
-    const handles = [...fdoc.querySelectorAll('#drhandle, .tk-handle, .dr-search-handle')].map(box).filter(Boolean);
+    const handles = [...fdoc.querySelectorAll('.tk-handle, .dr-search-handle')].map(box).filter(Boolean);
     const rail = document.querySelector('#rail');
     return { vw: innerWidth, vh: innerHeight, top: box(top), left: box(left), center: box(center), padR: parseFloat(cs.paddingRight), cls: top.className,
       rail: box(rail), railZ: getComputedStyle(rail).zIndex, railbtn: box(document.querySelector('#railbtn')),

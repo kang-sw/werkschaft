@@ -142,14 +142,9 @@ test('#1 drRoom caches --shr so unchanged widths skip root custom-property write
   const src = readAsset(DASH_ASSETS, 'dashboard-drawer.js');
   const fnSrc = extractFunction(src, 'drRoom');
   const writes = [];
-  let dw = 30, sw = 28;
+  let sw = 28;
   const ctx = {
-    drHas: true,
     drRoomW: -1,
-    drGhOff: -1,
-    drFoldW: -1,
-    drFoldGw: -1,
-    drhandle: { getBoundingClientRect: () => ({ width: dw }) },
     shandle: { getBoundingClientRect: () => ({ width: sw }) },
     drheader: { classList: makeClassList() },
     doc: {
@@ -161,24 +156,19 @@ test('#1 drRoom caches --shr so unchanged widths skip root custom-property write
     }
   };
   vm.runInNewContext(fnSrc, ctx);
-  assert.doesNotMatch(fnSrc, /--ghr|ghandle/, 'the git handle retired with the Git page');
+  assert.doesNotMatch(fnSrc, /--ghr|ghandle|drhandle/, 'the git and panels handles retired');
 
+  // Only the search handle hangs at the right edge: --shr is 0 and written once.
   ctx.drRoom();
-  assert.deepEqual(
-    writes.filter(([k]) => k === '--shr' || k === '--ghr'),
-    [['--shr', '36px']]
-  );
+  assert.deepEqual(writes, [['--shr', '0px'], ['--drhw', '28px']]);
 
   writes.length = 0;
   ctx.drRoom();
-  assert.deepEqual(writes, [], 'second call with identical widths must not rewrite --shr');
+  assert.deepEqual(writes, [], 'second call with identical widths must not rewrite --shr or --drhw');
 
-  dw = 42;
+  sw = 35;
   ctx.drRoom();
-  assert.deepEqual(
-    writes.filter(([k]) => k === '--shr' || k === '--ghr'),
-    [['--shr', '48px']]
-  );
+  assert.deepEqual(writes, [['--drhw', '35px']], 'a wider handle rewrites only --drhw');
 
   writes.length = 0;
   ctx.drRoom();
@@ -736,7 +726,7 @@ test('#9a shShow sequences WS handoff via wsHideFrame + hidden-ack, cancels stal
     labelEditing: () => false,
     labelEnd() {},
     shCacheable: () => true,
-    shSettings() {},
+    shSettings() {}, hdNavigated() {},
     shSend(ent, kind, m) {
       sent.push({ rid: ent.f.rid, kind, m });
       if (kind === 'shown' && m.shown === false) hideOrder.push(`postHide:${ent.f.rid}:${m.token}`);

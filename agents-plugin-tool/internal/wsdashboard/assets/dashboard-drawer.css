@@ -1,16 +1,14 @@
-/* ===== drawer: the side panels pulled down from the top =====
+/* ===== drawer: the quick-search sheet pulled down from the top =====
    Fixed over the page on both session pages, so opening it moves nothing
    under it. .dr-in matches .dwrap's width below 1600px and spans the
-   window from it, so the handles (the drawer's, the search handle, the
-   tracker's row) sit at the window's right edge; both sheets are 1280px
-   at most, anchored right under the handles (they may cover the rail's
-   column below 1668px). The clip reveals the sheet from
-   the header's bottom (--drtop) to above the composer, or the viewport
-   bottom without one. The active sheet's opener hides while open; the fold
-   button takes its header slot. The page script sets the clip and sheet
-   heights and --drhw (the handle's width, which follows its icons).
-   .anim animates a click's open or close, never a resize. The sheet shows every present panel as a
-   card in a wrapping grid (below), or the search sheet. */
+   window from it, so the handles (the search handle, the tracker's row) sit
+   at the window's right edge; the sheet is 1280px at most, anchored right
+   under the handles (it may cover the rail's column below 1668px). The clip
+   reveals the sheet from the header's bottom (--drtop) to above the
+   composer, or the viewport bottom without one. The handle hides while the
+   sheet shows; the fold button takes its slot. The page script sets the
+   clip and sheet heights and --drhw (the handle's width). .anim animates a
+   click's open or close, never a resize. */
 :root { --drhw: 0px; --dpad: 16px; }
 .drawer { position: fixed; top: 0; left: 0; right: 0; height: 0; z-index: var(--z-panels); pointer-events: none; }
 .dr-in { position: relative; max-width: 1680px; margin: 0; }
@@ -26,27 +24,6 @@
   .dr-clip { left: auto; width: min(1280px, calc(100% - 2 * var(--dpad))); }
 }
 .dr-sheet { position: absolute; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; background: var(--wb-bg); border-top: 1px solid var(--wb-muted); }
-.dr-body { flex: 1 1 0; min-height: 0; overflow: hidden; padding: 10px; display: flex; gap: 10px; }
-/* the panels drawer's body: the drawer's own cards (drcards) in one grid of
-   cards at least 300px wide, wrapping onto further rows rather than
-   shrinking; the rows share the body's height, each at least 280px, and the
-   body scrolls when they need more. Each card scrolls on its own. One
-   stacked column on a narrow screen, which the body scrolls. The session's
-   todo and agenda panels live in the Workpanel (dashboard-workpanel.css). */
-#drbody { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); grid-auto-rows: minmax(280px, 1fr); overflow: auto; overscroll-behavior: contain; }
-#drbody[hidden] { display: none; }
-.dr-body details.panel { min-width: 0; min-height: 0; box-sizing: border-box; overflow: auto; overscroll-behavior: contain; }
-.dr-body details.panel > summary { position: sticky; top: 0; z-index: 1; cursor: default; }
-/* Wide cards pack densely; the narrow DOM stack keeps its original order. */
-@media (min-width: 760px) {
-  #drbody { grid-auto-flow: dense; }
-  #drbody #p-holders { order: 1; }
-}
-@media (max-width: 759px) {
-  #drbody { display: flex; flex-direction: column; }
-  .dr-body details.panel { flex: none; overflow: hidden; }
-  .dr-body details.panel > summary { position: static; }
-}
 /* Settings uses the rail's fixed, viewport-bounded popover. */
 .settings-pop { width: 300px; }
 .settings-pop:focus { outline: none; }
@@ -59,9 +36,10 @@
 .loginbox button { color: var(--wb-fg); }
 .loginbox .gk { display: grid; place-items: center; height: 20px; }
 .loginbox .gk .i { width: 13px; height: 13px; }
-/* worktree-shaped rows: the holders card below and the Git page's pooled
-   worktrees in its Worktrees popover (dashboard-gitpage.css restyles them
-   there) */
+/* worktree-shaped rows: the Git page's pooled worktrees in its Worktrees
+   popover (dashboard-gitpage.css restyles them there). The holders card that
+   once shared these rows left the drawer for the bottom-bar Holders popup
+   (dashboard-holders.css). */
 .wtlist { display: grid; gap: 8px; }
 .wtsec { display: grid; gap: 2px; }
 .wtgrp { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 800; color: var(--wb-muted-fg); padding: 0 2px; }
@@ -84,27 +62,6 @@
 .wtage, .wtsize { font-size: 11.5px; color: var(--wb-muted-fg); font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
 .wtsize { min-width: 56px; }
 .wtempty { font-size: 12.5px; color: var(--wb-muted-fg); }
-/* the session-holder card: the worktree card's rows, a holder's PID, cause,
-   and restart-safe mark on a second line, its stop button at the end; a
-   failed holder start is a row of its own */
-#hdcount[hidden] { display: none; }
-.hdcard .body { display: flex; flex-direction: column; gap: 8px; }
-.hdrow { grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-areas: "dot name age stop" ". meta meta stop"; row-gap: 1px; }
-.hdrow > .wtdot { grid-area: dot; }
-.hdrow > .wtname { grid-area: name; }
-.hdrow > .wtage { grid-area: age; }
-.hdrow > .hdmeta { grid-area: meta; }
-.hdrow > .hdstop { grid-area: stop; }
-.hdrow.lost { background: color-mix(in srgb, var(--wb-warn) 10%, var(--wb-card)); }
-.hdrow.lost .wtdot { background: var(--wb-warn); opacity: 1; }
-.hdmeta { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: 11.5px; color: var(--wb-muted-fg); font-variant-numeric: tabular-nums; }
-.hdcause { color: color-mix(in srgb, var(--wb-warn-ink) 80%, var(--wb-fg)); }
-.hdunsafe { color: var(--wb-fail); font-weight: 700; cursor: help; }
-.hdstop { height: 26px; padding: 0 10px; font-size: 12px; }
-.hdstop:disabled { opacity: .5; cursor: not-allowed; }
-.hdrow.hdfail { grid-template-areas: "dot msg msg age"; background: color-mix(in srgb, var(--wb-fail) 10%, var(--wb-card)); }
-.hdfail .wtdot { background: var(--wb-fail); opacity: 1; }
-.hdmsg { grid-area: msg; font-size: 12px; color: var(--wb-fail); overflow-wrap: anywhere; }
 .dr-handle { position: absolute; top: 0; right: var(--dpad); height: var(--toph, 36px); padding: 2px 9px 0; border: 0; border-radius: 0 0 8px 8px; pointer-events: auto; cursor: pointer; display: flex; align-items: center; justify-content: flex-end; gap: 7px; background: var(--wb-card); color: var(--wb-muted-fg); box-shadow: var(--wb-shadow-hi); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .dr-handle[hidden] { display: none; }
 .dr-search-handle { right: calc(var(--dpad) + var(--shr, 0px)); width: 35px; padding: 2px 0 0; justify-content: center; }
@@ -119,31 +76,19 @@
 .dr-handle > .i { width: 17px; height: 17px; flex: none; }
 /* Keep slot measurements (and composer clearance) stable while hiding the
    active opener, including from keyboard focus and pointer input. */
-.drawer.open.panels #drhandle, .drawer.open.search #shandle { visibility: hidden; pointer-events: none; }
-/* one hamburger; the dot on its corner says some section has something new */
-.dr-handle .tdot { position: absolute; top: 6px; right: 5px; box-shadow: 0 0 0 1.5px var(--wb-card); }
-.dr-wait { display: none; align-items: center; color: var(--wb-perm-ink); }
-.dr-wait .i { width: 13px; height: 13px; }
-/* an approval is waiting: the closed opener carries the signal */
-.dr-handle.wait { background: color-mix(in srgb, var(--wb-ph-perm) 22%, var(--wb-card)); color: var(--wb-fg); }
-.dr-handle.wait .dr-wait { display: inline-flex; }
-/* the fold button (#drfold): while a sheet shows, it fills the slot its
-   opener occupies while closed, in the handles' shape at that handle's
-   width (--drw for the panels handle, set by the page script; the search
-   handle's fixed 35px), quieter than a handle; a click closes the sheet */
-.dr-fold { position: absolute; top: 0; right: var(--dpad); width: var(--drw, var(--toph, 36px)); height: var(--toph, 36px); padding: 2px 0 0; border: 0; border-radius: 0 0 8px 8px; pointer-events: auto; cursor: pointer; display: flex; align-items: center; justify-content: center; background: var(--wb-card); color: var(--wb-muted-fg); box-shadow: var(--wb-shadow-hi); animation: dr-fold-in .18s ease-out; }
+.drawer.open.search #shandle { visibility: hidden; pointer-events: none; }
+/* the fold button (#drfold): while the sheet shows, it fills the slot the
+   search handle occupies while closed, in its shape and fixed 35px width,
+   quieter than a handle; a click closes the sheet */
+.dr-fold { position: absolute; top: 0; right: var(--dpad); width: 35px; height: var(--toph, 36px); padding: 2px 0 0; border: 0; border-radius: 0 0 8px 8px; pointer-events: auto; cursor: pointer; display: flex; align-items: center; justify-content: center; background: var(--wb-card); color: var(--wb-muted-fg); box-shadow: var(--wb-shadow-hi); animation: dr-fold-in .18s ease-out; }
 .dr-fold[hidden] { display: none; }
 .dr-fold.search { right: calc(var(--dpad) + var(--shr, 0px)); width: 35px; }
 .dr-fold:hover { color: var(--wb-fg); }
 .dr-fold:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: -2px; }
 .dr-fold .li { width: 17px; height: 17px; }
-/* the panels sheet hides the waiting handle and covers the waiting rows: the
-   fold button in its slot carries the handle's approval signal (drawerWait) */
-.drawer.panels .dr-fold.wait { gap: 7px; background: color-mix(in srgb, var(--wb-ph-perm) 22%, var(--wb-card)); color: var(--wb-fg); }
-.drawer.panels .dr-fold.wait .dr-wait { display: inline-flex; }
 @keyframes dr-fold-in { from { opacity: 0; } }
-/* the header keeps every line it wraps to clear of the closed handles and of
-   the tracker's handle row left of them (--drhw covers both handles; --tkhw,
+/* the header keeps every line it wraps to clear of the closed handle and of
+   the tracker's handle row left of it (--drhw is the handle's width; --tkhw,
    set by tracker.js, includes its own 6px gap); tk-room marks a page the
    tracker mounted on */
 .dwrap > .top.dr-room, .dwrap > .top.tk-room { padding-right: calc(var(--drhw) + var(--tkhw, 0px) + 6px); }

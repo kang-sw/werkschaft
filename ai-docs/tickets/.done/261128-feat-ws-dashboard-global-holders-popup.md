@@ -10,6 +10,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 2fba117ed66dfd43
 sage-review-completeness-reviewed: 2fba117ed66dfd43
+completed: 2026-11-28
 ---
 
 # Global Bottom-Bar Holders Monitor, Process-Tree Resource Trace Popup, and Final #p-holders / #drhandle Retirement
@@ -181,6 +182,43 @@ Two sequential phases: Phase 1 delivers the far bottom-right Holders trigger, up
 
 Verification: `cd agents-plugin-tool && go test -count=1 ./internal/wsdashboard/... ./internal/wsi18n/...`, `GOOS=windows go vet ./...`, `node --test agents-plugin-tool/internal/wsdashboard/*.test.js agents-plugin-tool/internal/wsdashboard/testdata/*.test.cjs`, and Playwright verification confirming far-right trigger placement, upward popover mutual exclusion, `data-fdim`, Hold-to-Confirm 1.5s hold & cancel, terminal `Attach` enabled/disabled states, `Ctrl+K` `#shandle` preservation, and `0px` horizontal overflow.
 
+### Result (8c8cfd589) - 2026-11-28
+
+**What landed**
+- The shell's `#botbar` mounts a compact Holders trigger (`#holders-trigger`) at the far right of `.bot-right`, after `.usage-toggle`. It opens the upward `#holders-pop` as rail popover kind `holders`:
+  - placed by `railPopOpen`/`railPopPlace`, right-aligned to the trigger above the bar;
+  - mutually exclusive with the usage popover and `#gmenu`;
+  - `railPopClose` cancels active holds via `WsHoldConfirm.cancelAll()`.
+- Visibility: `view.Holders` and `shellPageData.Holders` are true when `d.holders != nil || d.durableSessionHost() != nil`.
+  - Unframed routes (`/`, `/s/<rid>`, `/w/...` without `?frame=1`) have no Holders surface. The legacy drawer card is gone, so there is nothing to show there (`(1724)` keeps unframed renders safe).
+- `dashboard-holders.js`/`.css` are registered in `pages.go`; `asset_source_test.go` pins them.
+  - One `GET /holders` seeds the badge on shell load (running OS holders, `pid > 0`, excluding `durable.*`); there is no background poll.
+  - It re-reads on popup open and on tab return.
+  - Trigger state is `ok`/`warn`/`zero`, with a breakdown tooltip and an incomplete banner.
+- The popup sections are Needs attention, Running, and Terminals (`GET /s/host0/terminals` plus active-frame orphans via the shell `KINDS` bridge).
+  - Unattached stoppable holders use a 1.5s `WsHoldConfirm` red-fill hold (bar mode). It supports Space/Enter and cancels on leave, blur, tab hide, or Esc. A plain click explains the hold in `#hdnote`.
+  - A live terminal asks inline (`term-yes`/`term-no`, focus moves to confirm, Esc dismisses and then closes); an exited terminal closes at once.
+  - Attach is disabled with a tooltip outside a terminal frame.
+- Retired: `#p-holders`, `#drhandle`, `#drbody`, `#drcards`, `cardTab`/`panelTab`/`drEntries`, `drFill`, `drBadge`/`drSwap`, `DR_OPEN`, the `"panels"` drawer mode, the legacy drawer CSS, and `hdLoad`/`hdDraw`/`hdStop` in `dashboard-git.js`.
+  - Kept: `#drawer`, `#drclip`, `#drsheet`, `#sbody`, `#shandle` (Ctrl+K), `#drfold`, and `#thandle`/`drRoom()`.
+  - Anchor references were audited and rewired, including TicketMap's header room (now `tk-room`).
+- i18n keys were added to all 11 `wsi18n/tables/*.json`.
+- Tests:
+  - `holders-anchor.test.cjs` became `holders-popup.test.cjs`;
+  - new Playwright `holders-popup.browser.cjs` (`TestHoldersPopupBrowser`) covers Dark/Light × Wide 1440/Compact 1180 and the scenarios `warning`, `healthy`, `empty`, `noframe`, `incomplete`;
+  - drawer, topbar, ticketmap, workpanel and confirmation tests were updated.
+
+**Verification**
+- `TestHoldersPopupBrowser`, `TestTicketMapBrowser`, `TestTicketMapDock`, `TestWorkpanelBrowser`, `TestShellTopbarBrowser`, `TestIdeShellPhase3Browser`: pass.
+- `ide-shell-phase3.browser.cjs` read the accent bar from `::after` while the CSS draws it with `::before`. That drift existed at base, and the test now reads `::before`.
+- i18n: 11 tables, valid JSON, 0 duplicate keys, key sets identical to `en`.
+- `go test ./internal/wsi18n/...`: pass. `GOOS=windows go vet ./...`: clean.
+- Node, wsdashboard `*.test.js` + `testdata/*.test.cjs`: 25 failures.
+  - These are the same 25 test names that fail at base `86bdc5eec`; the comparison used a `git archive` export of base `internal/`.
+  - Breakdown: shell-lifecycle (13), board-home-ack (4), composer-multiline `.cfoot` pin, session-load, shell-post-layout, and frontend CustomEvent / `:has()` / transition pins.
+- Go wsdashboard failures that exist at base and are unrelated: TestTickTimesKeepsItsSetsUntilThePageChanges, TestTabLabelCount, TestUserMessageClockAndMinuteRefresh, TestBoardKeepWiring, TestBoardToolbarPlacementAndCounts, TestFilesExplorerInstances, TestConversationPresentationMergePreservesIdentityAndDisclosures, TestSearchDrawerSplitOwnership, TestFreshSessionLoadClient, TestShellSwitchesFramesThroughItsGlue, TestShellPostLayout, TestSessionURLServesTheShellAroundItsFramedPage.
+- Visual comparison: `compared /tmp/claude/hdshots/live-dark-wide-warning.png vs /tmp/claude/hdshots/mockup-dark-wide-warning.png: match` and `compared /tmp/claude/hdshots/live-light-compact-warning.png vs /tmp/claude/hdshots/mockup-light-compact-warning.png: match`. This covers the trigger, the popup frame, the sections, and the hold and confirm controls.
+
 ### Phase 2: Cross-Platform Process-Tree RSS & CPU% Trace (`GET /holders/metrics`) and Expandable 2-Layer Tree UI
 
 1. **Logical Agent Hierarchy Metadata (`wsagent/holder.go`, `wsagent/runner_process.go`, `holders.go`):**
@@ -203,3 +241,73 @@ Verification:
 - `cd agents-plugin-tool && CGO_ENABLED=0 GOOS=windows go vet ./...` and `GOOS=linux go vet ./...`
 - `node --test agents-plugin-tool/internal/wsdashboard/*.test.js agents-plugin-tool/internal/wsdashboard/testdata/*.test.cjs`
 - Playwright verification (Dark & Light × Wide `1440px` & Compact `1180px`) comparing live popup capture against `ai-docs/assets/mockups/261128/global-holders-popup/index.html`: 2-layer lead -> child-agent -> OS subprocess expansion, live sparkline updates without interrupting an active 1.5s Hold-to-Confirm hold, Pause/Resume & close stopping all metric requests, and `0px` horizontal overflow.
+
+### Result (41269621f) - 2026-11-28
+
+**What landed**
+- The backend landed in 8c8cfd589 and the UI in 41269621f.
+- Hierarchy:
+  - `holderSession` gains an additive `parent_reply_id`; `runner_process.go` writes `Label` and `ParentReplyID`.
+  - `workerHolderMatches` passes for legacy and enriched descriptors.
+  - For a running holder whose descriptor lacks the link, `holder_parents.go` (`AgentParentHost`) resolves it from live `d.agents`. `GET /holders` carries it as an additive `parents` map (holder id → parent reply id).
+- Collector: a new package `internal/wsproctree` (not `wsholder`; it is a stand-alone process-table snapshot), all `CGO_ENABLED=0`.
+  - windows: Toolhelp32 + `OpenProcess`/`GetProcessTimes` + `psapi` `WorkingSetSize`.
+  - linux: `/proc/<pid>/stat`.
+  - darwin: one `ps -axo pid=,ppid=,rss=,cputime=,comm=` per sample (`(1744)=a`).
+  - Other OSes report unsupported.
+- `GET /holders/metrics` (`holders_metrics.go`) answers `{ts, interval_ms:1500, supported, holders:{id:{pid, rss, cpu, spark:{rss[],cpu[]}, procs:[…]}}}` with `no-store` and `nosniff`.
+  - Each holder's `rss`/`cpu` aggregates its OS subtree (the holder process and its descendants). Each `procs` entry is per node, capped at 64.
+  - The ring is in memory: 24 points per holder; an ask within 1s reuses the last snapshot; history drops after 30s idle.
+  - Gated to `localViewer` (404 otherwise); GET only (405).
+- UI (`dashboard-holders.js`/`.css`):
+  - Holders nest within a section into a 2-layer tree: lead → spawned agent holders (by `parent_reply_id` or `parents`, cycle-safe) → OS process rows (depth-first by ppid).
+  - Chevrons start open only for holders with spawned holders, as in the mockup, and keep the user's choice across re-renders.
+  - Columns: RSS / CPU / a two-line sparkline (CPU bold, RSS faint).
+  - The strip shows aggregate totals and a live `1.5s trace` pill, with a pause/resume button.
+- Trace loop:
+  - It is a `setTimeout` chain (no `setInterval`) and runs only while the popup is open, the document is visible, and the user hasn't paused. Close, pause, tab hide, or a 404/405/`supported:false` answer stops it, and an unsupported daemon hides the pill and pause.
+  - Cells patch in place by `data-k`, so holds, focus, and expansion survive ticks.
+  - A tick that lacks a rendered holder, or names a new one, re-reads `/holders` once per new difference, at most every 5s.
+- i18n: 13 `js.holders.*` keys were added to all 11 tables.
+
+**Measured darwin `ps` cost (`(1744)`)** — Apple M3 Max, about 969 processes:
+- `BenchmarkSnapshot`: 38.2 ms/op wall (fork+exec+parse), 1.27 MB and 5734 allocs per op.
+- `/usr/bin/time -l ps -axo …`: 0.03 s real, 0.02 s sys, about 3.9 MB peak RSS.
+- At the 1.5s ask period this is roughly 1.5–2.5% of one core, and only while the popup is open, visible and unpaused. With the popup closed there are no spawns or timers.
+
+**Decisions and cosmetic deviations**
+- IDs keep Phase 1's `hd-` prefix (`#hd-agg`, `#hd-pause`, `#hd-trace`) rather than `#hp-*`, and OS rows are `.hd-row.hd-os` rather than `.tn-row.os`.
+- The kind badge heads the meta line, as in the mockup, so names keep the column width.
+- A lead row shows its own OS subtree. Spawned agent holders are separate rows rather than being summed into the lead. As a result the lead's figure is smaller than the mockup's illustrative 612 MB.
+- The aggregate totals wrap under the chips instead of sharing their line.
+
+**Verification**
+- `CGO_ENABLED=0 go test -count=1 ./internal/wsi18n/... ./internal/wsagent/... ./internal/wsholder/... ./internal/wsproctree/...`: all ok.
+- Targeted wsdashboard tests (`TestDashboardAssetSource|TestHolders|TestSessionPagesCarryScriptHooks|TestPanelRows|TestDrawer|TestSearchPalette|TestDashboardConfirmation|TestI18n|TestPagesRender`): ok, including `holders_metrics_test.go` and `holder_parents_test.go`.
+- The full wsdashboard package shows only the base-existing failures listed in Phase 1's Result.
+- `gofmt -l` on the new packages and files: clean. `GOOS=windows go vet ./...` and `GOOS=linux go vet ./...`: clean.
+- `node --test testdata/holders-popup.test.cjs`: 11/11. The full node set (`*.test.js` + `testdata/*.test.cjs`) has 25 failures, the same 25 names as base `86bdc5eec`.
+- i18n: 11 tables × 4330 keys, 0 duplicates, all equal to `en`.
+- `TestHoldersPopupBrowser`: pass, across 9 runs. It covers:
+  - workers nested through both link sources;
+  - chevron open, fold and refold;
+  - OS rows naming their parent;
+  - metric cells, sparkline and totals;
+  - pause stopping reads for 2.2s and resume asking at once;
+  - close stopping reads for 2.2s;
+  - a tick during the 1.5s hold that moves the sparkline and keeps the same held button;
+  - 0px horizontal overflow with the deepest rows open.
+- Visual comparison:
+  - `compared /tmp/claude/hdshots/live-dark-wide-warning.png vs /tmp/claude/hdshots/mockup-dark-wide-warning.png: match`;
+  - `compared /tmp/claude/hdshots/live-light-compact-warning.png vs /tmp/claude/hdshots/mockup-light-compact-warning.png: match`.
+  - The tree, metric columns, sparklines, pill, pause and totals match. The two cosmetic deviations above were noted.
+
+#### Edition (80093231a) - 2026-11-28
+
+Lite code review of `86bdc5eec..41269621f` found 0 Critical, 1 Important and 3 Minor issues.
+- **Important, fixed:** `panel-rows.browser.cjs` still dereferenced the retired `#drbody`. It now asserts that `#drbody` is null and that `#r-panels` sits outside `#drawer`. `TestPanelRowsBrowser` passes.
+- **Minor, fixed:**
+  - Attach drew a missing `#i-link` icon, so the symbol was added to `sprite.svg`.
+  - A re-render during an in-flight holder stop could offer a second stop. `hd.stopping` now keeps the guard per holder, and `holders-popup.test.cjs` covers it (11/11).
+- **Minor, not changed (design-level, follow-up):** a holder whose process is an OS descendant of another holder's process is counted in both holders' subtree totals.
+- After the fixes, `TestHoldersPopupBrowser`, `TestIdeShellPhase3Browser`, `TestPanelRowsBrowser` and `TestTicketMapBrowser` pass.

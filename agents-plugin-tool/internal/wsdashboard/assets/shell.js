@@ -13,8 +13,9 @@
   // own path (history.pushState). The frame streams its own regions from the
   // daemon; the shell streams the rail alone.
   //
-  // Messages between the shell and its frames are UI control only, never
-  // data. Each is an object whose wsShell field names its kind; a receiver
+  // Messages between the shell and its frames are UI control, plus the
+  // few small answers a shell surface needs from its active frame (the
+  // daemon bridge, the orphan terminals). Each is an object whose wsShell field names its kind; a receiver
   // takes one only from its own origin, the shell only from one of its
   // frames and a frame only from its parent (message, below, checks the
   // shape):
@@ -46,6 +47,10 @@
   //                                   address bar takes it
   //     theme   {theme}               the frame's theme was picked
   //     companion-context              the active frame's companion observations
+  //     term-list {seq, orphans}      the frame's terminals whose opening
+  //                                   session is gone (WsTerm.list), for the
+  //                                   shell's Holders popup; seq echoes the
+  //                                   request's
   //   shell to frame
   //     shown   {shown}               the frame was shown or hidden: a
   //                                   hidden one holds its region updates,
@@ -67,6 +72,10 @@
   //     rail-layout {width, collapsed} shell's live docked rail width and
   //                                   collapse state for stage/gallery math
   //     companion-gate {active}       enable or release companion observations
+  //     term-list-req {seq}           list the frame's orphan terminals
+  //                                   (answered by term-list)
+  //     term-attach {term}            open this terminal (a term-list row) as
+  //                                   a card on the frame's page (WsTerm.attach)
   // Frontend-only bound, not a persisted setting or manifest key. Zero keeps
   // the fresh-load path for diagnostics; one destination may be loading.
   var CACHE_LIMIT = 5;
@@ -107,7 +116,10 @@
     "jank-stall": { stall: "record" },
     "jank-minor": { durMs: "number", topInvoker: "string" },
     "daemon-bridge-req": { id: "string", op: "string", params: "record" },
-    "daemon-bridge-res": { id: "string", ok: "boolean", payload: "?record", error: "?string" }
+    "daemon-bridge-res": { id: "string", ok: "boolean", payload: "?record", error: "?string" },
+    "term-list-req": { seq: "number" },
+    "term-list": { seq: "number", orphans: "array" },
+    "term-attach": { term: "record" }
   };
 
   // message returns m when it is a shell message of a known kind whose

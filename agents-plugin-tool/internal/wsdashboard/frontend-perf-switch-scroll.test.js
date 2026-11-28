@@ -681,7 +681,7 @@ test('shell reveals frame early on ready+head without waiting for iframe load an
     q: () => [],
     region: () => null,
     railMarks() {}, railOpen() {}, railShown: () => false, railPopClose() {}, railRenameNew() {}, railSettingsMark() {},
-    railBtn: null,
+    railBtn: null, hdNavigated() {},
     labelEditing: () => false, labelEnd() {},
     setTheme() {},
     swap(name, hash, html) { swaps.push({ name, hash, html }); },

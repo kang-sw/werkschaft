@@ -303,8 +303,11 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 		return errors.New("a durable process requires an authenticated MCP session")
 	}
 	if !durable && c.r.opts.Holders != nil {
-		spec.Holder = &holderChild{host: c.r.opts.Holders, table: &c.r.holders,
-			session: holderSession{Kind: holderKindAgentWorker, Backend: rec.Backend, ReplyID: rec.ReplyID, Cwd: rec.workDir(), Capability: capabilityHash(rec.Capability)}}
+		session := holderSession{Kind: holderKindAgentWorker, Backend: rec.Backend, ReplyID: rec.ReplyID, Cwd: rec.workDir(), Label: rec.Label, Capability: capabilityHash(rec.Capability)}
+		if rec.Parent != nil {
+			session.ParentReplyID = rec.Parent.ReplyID
+		}
+		spec.Holder = &holderChild{host: c.r.opts.Holders, table: &c.r.holders, session: session}
 		if attach {
 			spec.Holder.id, spec.Holder.skipTo = rec.HolderID, rec.HolderSeq
 			spec.Holder.attachReady = make(chan struct{})
