@@ -488,7 +488,17 @@
       "registered_at": "2026-11-28T06:52:51Z"
     },
     "261128-feat-ws-cross-harness-session-switch": {
-      "registered_at": "2026-11-28T10:35:30Z"
+      "registered_at": "2026-11-28T10:35:30Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-28T12:48:21Z",
+        "impl": {
+          "branch": "impl/develop/cross-harness-session-switch"
+        }
+      }
     },
     "261128-refactor-ws-auditstore-handle-eviction-and-lazy-index": {
       "registered_at": "2026-11-28T11:39:31Z"
