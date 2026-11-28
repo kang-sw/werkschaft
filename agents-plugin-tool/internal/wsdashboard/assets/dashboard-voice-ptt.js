@@ -576,6 +576,15 @@
     if (!btn) return;
     var visible = showWhenEligible ? !!isEligible : !!backend;
     btn.hidden = !visible;
+    var slot = btn.parentNode && btn.parentNode.classList && btn.parentNode.classList.contains("cvox-slot")
+      ? btn.parentNode : null;
+    if (slot) {
+      slot.hidden = !visible;
+      var foot = slot.parentNode;
+      if (foot && foot.getAttribute && foot.getAttribute("data-cfoot-empty") === "1") {
+        foot.hidden = !visible;
+      }
+    }
     if (state === "recording") {
       btn.setAttribute("data-state", "recording");
       btn.setAttribute("aria-pressed", "true");
@@ -589,8 +598,8 @@
     } else if (!backend && isEligible && showWhenEligible) {
       btn.setAttribute("data-state", "unconfigured");
       btn.setAttribute("aria-pressed", "false");
-      btn.title = translate("js.voice.start");
-      btn.setAttribute("aria-label", translate("js.voice.start"));
+      btn.title = translate("js.voice.setup");
+      btn.setAttribute("aria-label", translate("js.voice.setup"));
     } else {
       btn.removeAttribute("data-state");
       btn.setAttribute("aria-pressed", "false");
@@ -599,11 +608,35 @@
     }
   }
 
+  function openVoiceSettings(win, opener) {
+    var target = "/settings?section=account&provider=voice";
+    var w = win || (typeof window !== "undefined" ? window : null);
+    if (!w) return false;
+    if (typeof w.wsOpenSettings === "function") {
+      w.wsOpenSettings(target, opener);
+      return true;
+    }
+    var origin = (w.location && w.location.origin) || "";
+    var href = origin ? origin + target : target;
+    var isFramed = false;
+    try { isFramed = !!(w.parent && w.parent !== w); } catch (e) {}
+    if (isFramed && w.parent && typeof w.parent.postMessage === "function") {
+      w.parent.postMessage({ wsShell: "nav", href: href }, origin || "*");
+      return true;
+    }
+    if (w.location) {
+      w.location.href = target;
+      return true;
+    }
+    return false;
+  }
+
   window.WsVoicePTT = {
     DEFAULT_HOLD_MS: DEFAULT_HOLD_MS,
     errorLabel: errorLabel,
     createComposerLock: createComposerLock,
     syncMicButton: syncMicButton,
+    openVoiceSettings: openVoiceSettings,
     trimPrecedingSpacesForPTT: trimPrecedingSpacesForPTT,
     isPopupOpen: isPopupOpen,
     createSpanController: createSpanController,

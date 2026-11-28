@@ -842,6 +842,12 @@
     }
     location.href = u.href;
   }
+  window.wsOpenSettings = function (href, opener) {
+    var u = new URL(href, location.href);
+    if (shell && shOpenSettings(u, opener)) return true;
+    go(u.href);
+    return true;
+  };
   // A plain click on a link the page would load goes through go, but a
   // link to the page's own document (a hash route) and one that opens
   // elsewhere (a target, a download, a modified click).
@@ -910,6 +916,10 @@
     entry.el.remove();
     if (location.pathname === "/settings") history.replaceState(history.state, "", "/");
     railSettingsMark();
+    shFrames.forEach(function (f) {
+      try { f.el.contentWindow.dispatchEvent(new Event("ws-voice-capabilities-refresh")); } catch (x) {}
+    });
+    try { window.dispatchEvent(new Event("ws-voice-capabilities-refresh")); } catch (x) {}
     var focus = entry.focus;
     if (!focus || !focus.isConnected || !focus.getClientRects().length) focus = railBtn;
     if (focus) focus.focus({ preventScroll: true });

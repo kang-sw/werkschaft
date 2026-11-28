@@ -308,12 +308,13 @@ function makeSSEResponse(chunks) {
 
 const flush = () => new Promise(r => setImmediate(r));
 
-test('mic button stays hidden until capabilities report a usable selected backend', async () => {
+test('mic button stays hidden when ineligible, shows unconfigured when eligible without usable backend, and activates once usable', async () => {
   const env = createEnv();
+  let capOk = false;
   let capResponse = { backends: [], selected: null };
   const fakeFetch = async (url) => {
     assert.equal(url, '/api/voice/capabilities');
-    return { ok: true, json: async () => capResponse };
+    return { ok: capOk, json: async () => capResponse };
   };
 
   const handle = env.window.WsVoiceInput.attachComposer({
@@ -323,21 +324,28 @@ test('mic button stays hidden until capabilities report a usable selected backen
   });
 
   await handle.controller.refreshCapabilities();
-  assert.equal(env.btn.hidden, true, 'hidden when no backends exist');
+  assert.equal(env.btn.hidden, true, 'hidden when capabilities request is rejected (non-local / 404)');
+
+  capOk = true;
+  await handle.controller.refreshCapabilities();
+  assert.equal(env.btn.hidden, false, 'visible when eligible even with no backends');
+  assert.equal(env.btn.getAttribute('data-state'), 'unconfigured');
 
   capResponse = {
     backends: [{ id: 'openai_api', kind: 'external', label: 'OpenAI Platform', available: false }],
     selected: null
   };
   await handle.controller.refreshCapabilities();
-  assert.equal(env.btn.hidden, true, 'hidden when selected backend is unavailable (selected: null)');
+  assert.equal(env.btn.hidden, false, 'visible as unconfigured when selected backend is unavailable');
+  assert.equal(env.btn.getAttribute('data-state'), 'unconfigured');
 
   capResponse = {
     backends: [{ id: 'openai_api', kind: 'external', label: 'OpenAI Platform', available: false }],
     selected: { backend: 'openai_api', model: 'gpt-transcribe' }
   };
   await handle.controller.refreshCapabilities();
-  assert.equal(env.btn.hidden, true, 'hidden when selected object names an unavailable backend');
+  assert.equal(env.btn.hidden, false, 'visible as unconfigured when selected object names an unavailable backend');
+  assert.equal(env.btn.getAttribute('data-state'), 'unconfigured');
 
   capResponse = {
     backends: [{ id: 'openai_api', kind: 'external', label: 'OpenAI Platform', available: true, models: [{ id: 'gpt-transcribe', streaming: true, language_field: 'languages' }] }],
@@ -345,6 +353,7 @@ test('mic button stays hidden until capabilities report a usable selected backen
   };
   await handle.controller.refreshCapabilities();
   assert.equal(env.btn.hidden, false, 'visible once selected object names a usable backend');
+  assert.equal(env.btn.getAttribute('data-state'), null, 'clears unconfigured state once usable');
   handle.destroy();
 });
 

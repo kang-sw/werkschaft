@@ -834,7 +834,7 @@
 
     var pttMod = win.WsVoicePTT || null;
     var pttHandle = null;
-    var showWhenEligible = opts.showWhenEligible === true;
+    var showWhenEligible = opts.showWhenEligible !== false;
     var setComposerLock = (pttMod && typeof pttMod.createComposerLock === "function")
       ? pttMod.createComposerLock(composer, ctext, csend, function () { return pttHandle; })
       : function () {};
@@ -901,9 +901,8 @@
         return;
       }
       if (!controller.getResolvedBackend()) {
-        if (typeof opts.onUnconfiguredClick === "function") {
-          opts.onUnconfiguredClick();
-        }
+        if (typeof opts.onUnconfiguredClick === "function") opts.onUnconfiguredClick();
+        else if (pttMod && typeof pttMod.openVoiceSettings === "function") pttMod.openVoiceSettings(win, btn);
         return;
       }
       startDictation();
@@ -953,25 +952,25 @@
       });
     }
 
+    function onCapabilitiesRefresh() { controller.refreshCapabilities(); }
+
     btn.addEventListener("click", onMicClick);
     doc.addEventListener("keydown", onKeyDown);
     doc.addEventListener("ws-page-visibility", onPageVisibility);
     doc.addEventListener("visibilitychange", onPageVisibility);
     doc.addEventListener("ws-native-speech-hidden", teardownActive);
+    doc.addEventListener("ws-account-changed", onCapabilitiesRefresh);
     if (win.addEventListener) {
       win.addEventListener("ws-native-speech-status", onNativeStatusChange);
+      win.addEventListener("ws-voice-capabilities-refresh", onCapabilitiesRefresh);
       win.addEventListener("pagehide", teardownActive);
       win.addEventListener("beforeunload", teardownActive);
     }
 
-    if (opts.autoDiscover !== false) {
-      controller.refreshCapabilities();
-    }
+    if (opts.autoDiscover !== false) controller.refreshCapabilities();
 
     return {
-      controller: controller,
-      span: spanCtrl,
-      ptt: pttHandle,
+      controller: controller, span: spanCtrl, ptt: pttHandle,
       destroy: function () {
         if (pttHandle) pttHandle.destroy();
         controller.destroy();
@@ -980,8 +979,10 @@
         doc.removeEventListener("ws-page-visibility", onPageVisibility);
         doc.removeEventListener("visibilitychange", onPageVisibility);
         doc.removeEventListener("ws-native-speech-hidden", teardownActive);
+        doc.removeEventListener("ws-account-changed", onCapabilitiesRefresh);
         if (win.removeEventListener) {
           win.removeEventListener("ws-native-speech-status", onNativeStatusChange);
+          win.removeEventListener("ws-voice-capabilities-refresh", onCapabilitiesRefresh);
           win.removeEventListener("pagehide", teardownActive);
           win.removeEventListener("beforeunload", teardownActive);
         }
