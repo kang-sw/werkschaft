@@ -39,6 +39,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-animation.js",
 	"dashboard-board.js",
 	"dashboard-board-anchor.js",
+	"dashboard-board-reveal.js",
 	"dashboard-board-dial.js",
 	"dashboard-conversation.js",
 	"dashboard-conv-motion.js",

@@ -640,6 +640,7 @@
         else el.scrollTop = paneScroll[id];
       }
     });
+    if (typeof boardRevealSchedule === "function") boardRevealSchedule(true); // a tab/view switch re-lays out #bcol
     pinConvo();
     if (typeof queueSyncConvoBottom === "function") queueSyncConvoBottom();
     nearTop(); // a conversation shown too short to scroll still loads older entries
