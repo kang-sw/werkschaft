@@ -580,7 +580,7 @@ test('Phase 3 inactive-slot hover preview renders cached age, dims active baseli
   const reset5h = now + 2 * 3600000, reset7d = now + 3 * 86400000;
   const cachedAt = now - 12 * 60000;
   const env = environment(now, 'ko');
-  const accountStatus = {
+  let accountStatus = {
     loopback_peer: true,
     slots: {
       claude: [
@@ -679,5 +679,21 @@ test('Phase 3 inactive-slot hover preview renders cached age, dims active baseli
   personalPill.emit('blur');
   assert.equal(noCacheRow.hidden, true);
   assert.ok(liveCells.every(c => !c.hidden));
+
+  // Background redraw while hovering clears preview so rebuilt pills cannot stick previewState
+  workPill.emit('mouseenter');
+  assert.equal(nodes(pop.el, '.up-pser').filter(n => n.className.includes('is-preview-on')).length, 2);
+  accountStatus = {
+    ...accountStatus,
+    slots: {
+      claude: [
+        { id: 'default', harness: 'claude', label: 'Default', implicit: true, active: false },
+        { id: 'work', harness: 'claude', label: 'Work', config_dir: '/tmp/claude-work', active: true },
+        { id: 'personal', harness: 'claude', label: 'Personal', config_dir: '/tmp/claude-personal', active: false }
+      ]
+    }
+  };
+  env.doc.events['ws-account-changed'](); await flush();
+  assert.equal(nodes(pop.el, '.up-pser').filter(n => n.className.includes('is-preview-on')).length, 0, 'redraw after slot change clears preview');
   pop.close();
 });

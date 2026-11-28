@@ -383,3 +383,70 @@ func TestPlanUsageSlotPreviewsAPIExpiredAndZeroProbe(t *testing.T) {
 		t.Fatalf("slotPreviews read %d files, want 0", previewFileReads.Load())
 	}
 }
+
+func TestPlanUsageQueryDiscardsResultWhenSlotChangesMidProbe(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	slotsFile := filepath.Join(t.TempDir(), "auth", wscred.AccountSlotsFileName)
+	workDir := filepath.Join(t.TempDir(), "codex-work")
+	writeCodexAuth(t, filepath.Join(home, ".codex"), "acct-default")
+	writeCodexAuth(t, workDir, "acct-work")
+
+	slots := wscred.NewAccountSlotRegistry(slotsFile)
+	t.Cleanup(slots.Close)
+	if _, err := slots.AddSlot(wscred.AccountSlot{ID: "work", Harness: "codex", Label: "Work", ConfigDir: workDir}); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	reset5h := now.Add(3 * time.Hour).UnixMilli()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"plan_type": "pro",
+			"rate_limit": map[string]any{
+				"primary_window": map[string]any{"used_percent": 77.0, "limit_window_seconds": 18000, "reset_at": reset5h / 1000},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	s := newTestPlanUsageStore(dir, home, func(string) string { return "" })
+	defer s.close(context.Background())
+	s.now = func() time.Time { return now }
+	s.usageURL = srv.URL
+	s.accountSlots = slots
+	s.seedSlots()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.query(context.Background(), true)
+	}()
+
+	<-started
+	if err := slots.SetActive("codex", "work"); err != nil {
+		t.Fatal(err)
+	}
+	s.invalidateSlots()
+	close(release)
+	<-done
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.gptSlotID != "work" {
+		t.Fatalf("gptSlotID = %q, want work", s.gptSlotID)
+	}
+	if len(s.gpt.Windows) != 0 {
+		t.Fatalf("stale pre-switch probe polluted work slot: %+v", s.gpt)
+	}
+	if !s.lastQuery.IsZero() {
+		t.Fatalf("lastQuery should stay zero when probe result is discarded, got %v", s.lastQuery)
+	}
+	if len(s.codexHist.file.Records) != 0 || len(s.hist.file.Records) != 0 {
+		t.Fatalf("discarded probe must not append history samples")
+	}
+}

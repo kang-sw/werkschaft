@@ -894,10 +894,7 @@ func (s *planUsageStore) slotPreviews(now int64) map[string]map[string]planUsage
 	var out map[string]map[string]planUsageSlotPreview
 	for k, entry := range s.slotSnapshots {
 		activeID := s.activeSlotForHarnessLocked(k.harness)
-		if activeID == "" {
-			activeID = wscred.DefaultAccountSlotID
-		}
-		if k.slotID == activeID {
+		if activeID == "" || k.slotID == activeID {
 			continue
 		}
 		cur := currentUsage(entry, now)

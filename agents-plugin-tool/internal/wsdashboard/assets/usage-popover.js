@@ -446,6 +446,9 @@
       popover.setAttribute("data-cols", String(Math.max(1, activeGroupDefs().length)));
       if (emptyBox) emptyBox.hidden = true;
       if (scroll) scroll.hidden = false;
+      // Pill DOM nodes are rebuilt in drawGroup1, so mouseleave/blur on a replaced
+      // pill will never fire and the previewed slot may have become active or gone.
+      previewState = null;
       drawCharts(now);
       drawGroup1(now);
       drawGroup2();
