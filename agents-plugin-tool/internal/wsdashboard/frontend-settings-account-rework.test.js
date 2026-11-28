@@ -537,13 +537,15 @@ test("Account panel renders 2 purpose groups, inline slot rename validation + AP
   assert.deepEqual(renameCall.body, { harness: "claude", slot_id: "work-1", label: "Team Gamma" });
   assert.equal(getClaudeBlock().querySelector("[data-slot-rename-input]"), null);
   assert.match(getClaudeBlock().textContent, /Team Gamma/);
+  assert.equal(env.doc.activeElement, getClaudeBlock().querySelector('[data-slot-rename="work-1"]'), "Focus returns to Rename button after save");
 
-  // Escape cancels open rename editor cleanly
-  const renameBtn2 = getClaudeBlock().querySelectorAll("[data-slot-id]")[1].querySelectorAll(".acc-row-act button").find(b => b.textContent === "Rename");
+  // Escape cancels open rename editor cleanly and restores focus
+  const renameBtn2 = getClaudeBlock().querySelector('[data-slot-rename="work-1"]');
   renameBtn2.click();
   const inp2 = getClaudeBlock().querySelector("[data-slot-rename-input]");
   inp2.dispatchEvent({ type: "keydown", key: "Escape" });
   assert.equal(getClaudeBlock().querySelector("[data-slot-rename-input]"), null);
+  assert.equal(env.doc.activeElement, getClaudeBlock().querySelector('[data-slot-rename="work-1"]'), "Focus returns to Rename button after Escape");
 
   // OpenAI consent becomes enabled when account is signed in and ready
   statusPayload.openai = { client_id: "cid-1", email: "user@example.test", signed_in: true, plan_enabled: true, background_consent: false };

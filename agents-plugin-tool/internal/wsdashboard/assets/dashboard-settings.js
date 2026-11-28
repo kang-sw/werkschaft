@@ -1867,6 +1867,7 @@ var wsSettingsChoiceLabels = {
       window.addEventListener("pagehide", function () {
         window.parent.document.removeEventListener("ws-openai-consent", account.refreshStatus);
         window.parent.document.removeEventListener("ws-account-changed", account.refreshStatus);
+        if (typeof account.destroy === "function") account.destroy();
         if (voice && typeof voice.destroy === "function") voice.destroy();
       });
       if (activeSection === "account" && requestedProvider) account.focus(requestedProvider);
