@@ -13,8 +13,9 @@ import base64
 from dataclasses import dataclass, field
 import http.cookiejar
 import json
+import math
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import random
 import re
 import shutil
@@ -39,6 +40,8 @@ SSH_BASE_OPTS = (
     "-o", "ConnectTimeout=10",
 )
 
+SCRATCH_LEAF_RE = re.compile(r"^ws-tunnel-smoke-[A-Za-z0-9_-]+$")
+
 
 class SmokeError(RuntimeError):
     """Raised when a smoke precondition or assertion fails."""
@@ -50,12 +53,18 @@ class SmokeContext:
     remote_port: int
     local_port: int
     remote_scratch: str | None = None
+    remote_exe: str | None = None
     remote_pid: int | None = None
+    remote_start_ticks: int | None = None
     token: str | None = None
     tunnel_proc: subprocess.Popen[str] | None = None
     local_tmp: Path | None = None
     cleaned_up: bool = False
     timings: dict[str, float] = field(default_factory=dict)
+
+
+def _has_whitespace_or_control(value: str) -> bool:
+    return any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -98,10 +107,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args.host = args.host.strip()
     if not args.host:
         parser.error("missing target host: pass --host or set WS_WIN_HOST")
+    if args.host.startswith("-") or _has_whitespace_or_control(args.host):
+        parser.error("--host must be a valid SSH target without leading '-' or whitespace/control chars")
+    if args.remote_binary is not None:
+        args.remote_binary = args.remote_binary.strip()
+        if not args.remote_binary or any(ord(ch) < 32 or ord(ch) == 127 for ch in args.remote_binary):
+            parser.error("--remote-binary must be a non-empty path without control characters")
     if args.port < 0 or args.port > 65535:
         parser.error("--port must be between 0 and 65535")
-    if args.timeout <= 0:
-        parser.error("--timeout must be positive")
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        parser.error("--timeout must be finite and positive")
     return args
 
 
@@ -125,6 +140,17 @@ def encode_powershell(script: str) -> str:
     return base64.b64encode(script.encode("utf-16le")).decode("ascii")
 
 
+def validate_scratch_path(scratch: str, expected_nonce: str | None = None) -> str:
+    leaf = PureWindowsPath(scratch.strip().rstrip("\\/")).name
+    if not SCRATCH_LEAF_RE.match(leaf):
+        raise SmokeError(f"unexpected remote scratch path {scratch!r}")
+    if expected_nonce is not None and leaf != f"ws-tunnel-smoke-{expected_nonce}":
+        raise SmokeError(
+            f"remote scratch leaf {leaf!r} does not match expected nonce {expected_nonce!r}"
+        )
+    return scratch.strip()
+
+
 def run_ssh_powershell(
     host: str,
     script: str,
@@ -132,10 +158,14 @@ def run_ssh_powershell(
     timeout: float = 20.0,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    encoded = encode_powershell(script)
+    utf8_prefix = (
+        "$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n"
+    )
+    encoded = encode_powershell(utf8_prefix + script)
     cmd = [
         "ssh",
         *SSH_BASE_OPTS,
+        "--",
         host,
         "powershell",
         "-NoProfile",
@@ -161,7 +191,9 @@ def run_ssh_powershell(
 def build_windows_binary(local_tmp: Path) -> Path:
     go = shutil.which("go")
     if not go:
-        raise SmokeError("go is not on PATH; cannot cross-compile ws-mcp.exe")
+        raise SmokeError(
+            "go is not on PATH; cannot cross-compile ws-mcp.exe (or pass --remote-binary)"
+        )
     if ASSET_GEN_SCRIPT.is_file():
         gen_proc = subprocess.run(
             [sys.executable, str(ASSET_GEN_SCRIPT)],
@@ -209,13 +241,13 @@ def create_remote_scratch(host: str, nonce: str, timeout: float) -> str:
     lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
     if not lines:
         raise SmokeError("remote scratch creation returned empty path")
-    return lines[-1]
+    return validate_scratch_path(lines[-1], expected_nonce=nonce)
 
 
 def scp_to_remote(local_exe: Path, host: str, remote_scratch: str, timeout: float) -> str:
     remote_exe = remote_scratch.rstrip("\\/") + "\\ws-mcp.exe"
     remote_scp_target = remote_exe.replace("\\", "/")
-    cmd = ["scp", *SSH_BASE_OPTS, str(local_exe), f"{host}:{remote_scp_target}"]
+    cmd = ["scp", *SSH_BASE_OPTS, "--", str(local_exe), f"{host}:{remote_scp_target}"]
     proc = subprocess.run(
         cmd,
         capture_output=True,
@@ -237,7 +269,7 @@ def launch_remote_daemon(
     remote_scratch: str,
     remote_port: int,
     timeout: float,
-) -> int:
+) -> tuple[int, int | None]:
     cache_dir = remote_scratch.rstrip("\\/") + "\\cache"
     config_dir = remote_scratch.rstrip("\\/") + "\\config"
     stdout_log = remote_scratch.rstrip("\\/") + "\\daemon-stdout.log"
@@ -245,10 +277,11 @@ def launch_remote_daemon(
     pid_file = remote_scratch.rstrip("\\/") + "\\daemon.pid"
     launch_err = remote_scratch.rstrip("\\/") + "\\launch-error.log"
     launch_ps1 = remote_scratch.rstrip("\\/") + "\\launch.ps1"
+    ps_deadline_s = max(5, int(math.ceil(timeout)))
 
-    # Write a small launcher script inside the scratch dir and invoke it via
-    # Win32_Process.Create so ws-mcp.exe breaks out of OpenSSH's Win32 Job Object
-    # while keeping the outer SSH -EncodedCommand well under cmd.exe's 8191-char limit.
+    # Write a small launcher script inside the scratch dir (UTF-8 BOM for PS 5.1)
+    # and invoke it via Win32_Process.Create so ws-mcp.exe breaks out of OpenSSH's
+    # Win32 Job Object while keeping the outer -EncodedCommand well under cmd.exe limits.
     inner_lines = [
         "$ErrorActionPreference = 'Stop'",
         "try {",
@@ -261,7 +294,9 @@ def launch_remote_daemon(
         f"-RedirectStandardOutput {ps_quote(stdout_log)} "
         f"-RedirectStandardError {ps_quote(stderr_log)} "
         "-PassThru",
-        f"  [System.IO.File]::WriteAllText({ps_quote(pid_file)}, [string]$p.Id)",
+        "  $startTicks = 0",
+        "  try { $startTicks = $p.StartTime.ToFileTimeUtc() } catch {}",
+        f"  [System.IO.File]::WriteAllText({ps_quote(pid_file)}, ([string]$p.Id + \"`n\" + [string]$startTicks))",
         "} catch {",
         f"  [System.IO.File]::WriteAllText({ps_quote(launch_err)}, ($_ | Out-String))",
         "  exit 1",
@@ -271,22 +306,24 @@ def launch_remote_daemon(
     launch_cmd = f'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "{launch_ps1}"'
     outer_script = (
         "$ErrorActionPreference = 'Stop'\n"
-        f"[System.IO.File]::WriteAllText({ps_quote(launch_ps1)}, {inner_ps_literal})\n"
+        f"[System.IO.File]::WriteAllText({ps_quote(launch_ps1)}, {inner_ps_literal}, [System.Text.UTF8Encoding]::new($true))\n"
         "$res = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{\n"
         f"  CommandLine = {ps_quote(launch_cmd)}\n"
         "}\n"
         "if ($res.ReturnValue -ne 0) {\n"
         "  throw ('Win32_Process.Create failed with ReturnValue=' + $res.ReturnValue)\n"
         "}\n"
-        "$deadline = (Get-Date).AddSeconds(10)\n"
+        f"$deadline = (Get-Date).AddSeconds({ps_deadline_s})\n"
         "while ((Get-Date) -lt $deadline) {\n"
         f"  if (Test-Path -LiteralPath {ps_quote(launch_err)}) {{\n"
         f"    throw (Get-Content -LiteralPath {ps_quote(launch_err)} -Raw)\n"
         "  }\n"
         f"  if (Test-Path -LiteralPath {ps_quote(pid_file)}) {{\n"
-        f"    $pidText = (Get-Content -LiteralPath {ps_quote(pid_file)} -Raw).Trim()\n"
-        "    if ($pidText -match '^\\d+$') {\n"
-        "      Write-Output $pidText\n"
+        f"    $rawPid = (Get-Content -LiteralPath {ps_quote(pid_file)} -Raw).Trim()\n"
+        "    $parts = $rawPid -split '\\r?\\n'\n"
+        "    if ($parts.Length -ge 1 -and $parts[0].Trim() -match '^\\d+$') {\n"
+        "      $ticks = if ($parts.Length -ge 2 -and $parts[1].Trim() -match '^\\d+$') { $parts[1].Trim() } else { '0' }\n"
+        "      Write-Output ($parts[0].Trim() + ' ' + $ticks)\n"
         "      exit 0\n"
         "    }\n"
         "  }\n"
@@ -296,9 +333,14 @@ def launch_remote_daemon(
     )
     proc = run_ssh_powershell(host, outer_script, timeout=max(timeout, 15.0))
     lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
-    if not lines or not lines[-1].isdigit():
+    if not lines:
         raise SmokeError(f"failed to parse remote daemon PID from output: {proc.stdout!r}")
-    return int(lines[-1])
+    parts = lines[-1].split()
+    if not parts[0].isdigit():
+        raise SmokeError(f"failed to parse remote daemon PID from output: {proc.stdout!r}")
+    pid = int(parts[0])
+    start_ticks = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() and int(parts[1]) > 0 else None
+    return pid, start_ticks
 
 
 def fetch_remote_startup_diag(host: str, remote_scratch: str) -> str:
@@ -313,7 +355,7 @@ def fetch_remote_startup_diag(host: str, remote_scratch: str) -> str:
             f"if (Test-Path -LiteralPath {ps_quote(path)}) {{\n"
             f"  $c = (Get-Content -LiteralPath {ps_quote(path)} -Raw)\n"
             "  if ($c -and $c.Trim()) {\n"
-            f"    Write-Output ('[{0}] ' + $c.Trim())\n"
+            f"    Write-Output ({ps_quote(f'[{label}] ')} + $c.Trim())\n"
             "  }\n"
             "}"
         )
@@ -331,6 +373,7 @@ def start_ssh_tunnel(host: str, local_port: int, remote_port: int) -> subprocess
         *SSH_BASE_OPTS,
         "-o", "ExitOnForwardFailure=yes",
         "-L", f"127.0.0.1:{local_port}:127.0.0.1:{remote_port}",
+        "--",
         host,
     ]
     return subprocess.Popen(
@@ -341,6 +384,7 @@ def start_ssh_tunnel(host: str, local_port: int, remote_port: int) -> subprocess
         text=True,
         encoding="utf-8",
         errors="replace",
+        start_new_session=(os.name != "nt"),
     )
 
 
@@ -381,6 +425,11 @@ def wait_for_health(
             status, _, data = http_request(url, timeout=min(2.0, timeout))
             if status == 200:
                 payload = json.loads(data.decode("utf-8"))
+                service = payload.get("service")
+                if service != "ws-dashboard":
+                    raise SmokeError(
+                        f"/health service mismatch: expected 'ws-dashboard', got {service!r}"
+                    )
                 pid = payload.get("pid")
                 if pid != expected_pid:
                     raise SmokeError(
@@ -394,7 +443,13 @@ def wait_for_health(
     raise SmokeError(f"timed out waiting for {url} after {timeout:.1f}s ({last_err})")
 
 
-def fetch_remote_endpoint(host: str, remote_scratch: str, timeout: float) -> dict[str, object]:
+def fetch_remote_endpoint(
+    host: str,
+    remote_scratch: str,
+    timeout: float,
+    *,
+    expected_pid: int | None = None,
+) -> dict[str, object]:
     ep_path = remote_scratch.rstrip("\\/") + "\\cache\\dashboard\\endpoint.json"
     script = (
         "$ErrorActionPreference = 'Stop'\n"
@@ -402,16 +457,24 @@ def fetch_remote_endpoint(host: str, remote_scratch: str, timeout: float) -> dic
         "if (-not (Test-Path -LiteralPath $p)) { throw 'endpoint.json missing' }\n"
         "Get-Content -LiteralPath $p -Raw -Encoding UTF8\n"
     )
-    deadline = time.monotonic() + min(timeout, 10.0)
+    deadline = time.monotonic() + timeout
     last_err = ""
     while time.monotonic() < deadline:
         proc = run_ssh_powershell(host, script, timeout=min(timeout, 10.0), check=False)
         if proc.returncode == 0 and proc.stdout.strip():
             data = json.loads(proc.stdout)
             if not isinstance(data, dict) or not data.get("token"):
-                raise SmokeError("remote endpoint.json is missing a non-empty token field")
-            return data
-        last_err = (proc.stderr or proc.stdout or "").strip()
+                last_err = "remote endpoint.json is missing a non-empty token field"
+            elif expected_pid is not None and data.get("pid") != expected_pid:
+                last_err = (
+                    f"remote endpoint.json PID mismatch: expected {expected_pid}, got {data.get('pid')}"
+                )
+            elif not isinstance(data.get("port"), int) or data["port"] <= 0 or data["port"] > 65535:
+                last_err = f"remote endpoint.json has invalid port: {data.get('port')!r}"
+            else:
+                return data
+        else:
+            last_err = (proc.stderr or proc.stdout or "").strip()
         time.sleep(0.2)
     raise SmokeError(f"failed to fetch remote endpoint.json: {last_err}")
 
@@ -605,20 +668,33 @@ try {
   const authErrors = [];
   const wsEvents = [];
 
-  page.on("pageerror", (err) => pageErrors.push(String(err)));
+  function sanitizeUrl(raw) {
+    try {
+      const u = new URL(raw);
+      if (u.searchParams.has("login")) u.searchParams.set("login", "REDACTED");
+      return u.toString();
+    } catch (_) {
+      return String(raw).replace(/([?&]login=)[^&#\s"']*/gi, "$1REDACTED");
+    }
+  }
+  function sanitizeText(raw) {
+    return String(raw).replace(/([?&]login=)[^&#\s"']*/gi, "$1REDACTED");
+  }
+
+  page.on("pageerror", (err) => pageErrors.push(sanitizeText(err)));
   page.on("console", (msg) => {
-    if (msg.type() === "error") consoleErrors.push(msg.text());
+    if (msg.type() === "error") consoleErrors.push(sanitizeText(msg.text()));
   });
   page.on("response", (res) => {
     const status = res.status();
-    if (status >= 500) serverErrors.push({ url: res.url(), status });
-    if (status === 401 || status === 403) authErrors.push({ url: res.url(), status });
+    if (status >= 500) serverErrors.push({ url: sanitizeUrl(res.url()), status });
+    if (status === 401 || status === 403) authErrors.push({ url: sanitizeUrl(res.url()), status });
   });
   page.on("websocket", (ws) => {
-    const rec = { url: ws.url(), framesReceived: 0, error: null, closed: false };
+    const rec = { url: sanitizeUrl(ws.url()), framesReceived: 0, error: null, closed: false };
     wsEvents.push(rec);
     ws.on("framereceived", () => { rec.framesReceived += 1; });
-    ws.on("socketerror", (err) => { rec.error = String(err); });
+    ws.on("socketerror", (err) => { rec.error = sanitizeText(err); });
     ws.on("close", () => { rec.closed = true; });
   });
 
@@ -760,56 +836,107 @@ def cleanup_smoke(ctx: SmokeContext) -> list[str]:
         except (OSError, urllib.error.URLError) as exc:
             warnings.append(f"POST /shutdown failed: {exc}")
 
-    # 2. Terminate local SSH tunnel process.
+    # 2. Terminate local SSH tunnel process (always keep going to remote cleanup).
     if ctx.tunnel_proc is not None:
-        if ctx.tunnel_proc.poll() is None:
-            ctx.tunnel_proc.terminate()
-            try:
-                ctx.tunnel_proc.wait(timeout=5.0)
-            except subprocess.TimeoutExpired:
-                ctx.tunnel_proc.kill()
-                ctx.tunnel_proc.wait(timeout=3.0)
-        for stream in (ctx.tunnel_proc.stdout, ctx.tunnel_proc.stderr):
-            if stream is not None:
+        try:
+            if ctx.tunnel_proc.poll() is None:
+                ctx.tunnel_proc.terminate()
                 try:
-                    stream.close()
-                except OSError:
-                    pass
+                    ctx.tunnel_proc.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    ctx.tunnel_proc.kill()
+                    ctx.tunnel_proc.wait(timeout=3.0)
+        except (OSError, subprocess.SubprocessError) as exc:
+            warnings.append(f"tunnel cleanup error: {exc}")
+        finally:
+            for stream in (ctx.tunnel_proc.stdout, ctx.tunnel_proc.stderr):
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass
 
-    # 3. Over SSH: wait briefly for exact PID to exit, fallback to PID-scoped taskkill,
-    #    then delete ONLY our scratch directory.
+    # 3. Over SSH: verify exact PID identity (StartTime + ExecutablePath/Name) before
+    #    taskkill fallback, fall back to daemon.pid if remote_pid wasn't captured yet,
+    #    and delete ONLY our validated scratch directory.
     if ctx.remote_pid is not None or ctx.remote_scratch:
+        validated_scratch: str | None = None
+        if ctx.remote_scratch:
+            try:
+                validated_scratch = validate_scratch_path(ctx.remote_scratch)
+            except SmokeError as exc:
+                warnings.append(str(exc))
+
         pid_part = ""
-        if ctx.remote_pid is not None:
+        if ctx.remote_pid is not None or validated_scratch is not None:
+            pid_file = (validated_scratch.rstrip("\\/") + "\\daemon.pid") if validated_scratch else ""
+            expected_pid = ctx.remote_pid if ctx.remote_pid is not None else 0
+            expected_ticks = ctx.remote_start_ticks if ctx.remote_start_ticks is not None else 0
+            expected_exe = ctx.remote_exe or ""
+            scratch_for_match = validated_scratch or ""
             pid_part = (
-                f"$targetPid = {ctx.remote_pid}\n"
-                "$deadline = (Get-Date).AddSeconds(5)\n"
-                "while ((Get-Date) -lt $deadline) {\n"
-                "  if (-not (Get-Process -Id $targetPid -ErrorAction SilentlyContinue)) { break }\n"
-                "  Start-Sleep -Milliseconds 150\n"
+                f"$targetPid = {expected_pid}\n"
+                f"$expectedTicks = [int64]{expected_ticks}\n"
+                f"$expectedExe = {ps_quote(expected_exe)}\n"
+                f"$scratchPath = {ps_quote(scratch_for_match)}\n"
+                f"$pidFile = {ps_quote(pid_file)}\n"
+                "if ($targetPid -le 0 -and $pidFile -and (Test-Path -LiteralPath $pidFile)) {\n"
+                "  $rawPid = (Get-Content -LiteralPath $pidFile -Raw -ErrorAction SilentlyContinue)\n"
+                "  if ($rawPid) {\n"
+                "    $parts = $rawPid.Trim() -split '\\r?\\n'\n"
+                "    if ($parts.Length -ge 1 -and $parts[0].Trim() -match '^\\d+$') { $targetPid = [int]$parts[0].Trim() }\n"
+                "    if ($parts.Length -ge 2 -and $parts[1].Trim() -match '^\\d+$') { $expectedTicks = [int64]$parts[1].Trim() }\n"
+                "  }\n"
                 "}\n"
-                "if (Get-Process -Id $targetPid -ErrorAction SilentlyContinue) {\n"
-                "  & taskkill.exe /PID $targetPid /T /F | Out-Null\n"
-                "  Start-Sleep -Milliseconds 250\n"
+                "function Test-SmokeTargetProcess([int]$id, [int64]$ticks, [string]$exePath, [string]$scratch) {\n"
+                "  if ($id -le 0) { return $false }\n"
+                "  $proc = Get-Process -Id $id -ErrorAction SilentlyContinue\n"
+                "  if (-not $proc) { return $false }\n"
+                "  if ($ticks -gt 0) {\n"
+                "    try { if ($proc.StartTime.ToFileTimeUtc() -ne $ticks) { return $false } }\n"
+                "    catch { return $false }\n"
+                "  }\n"
+                "  $cim = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $id) -ErrorAction SilentlyContinue\n"
+                "  if (-not $cim) { return $false }\n"
+                "  if ($cim.Name -ine 'ws-mcp.exe') { return $false }\n"
+                "  if ($exePath -and $cim.ExecutablePath -and ($cim.ExecutablePath -ine $exePath)) { return $false }\n"
+                "  if ($cim.CommandLine -notlike '*dashboard*') { return $false }\n"
+                "  if ($ticks -le 0 -and $scratch -and $cim.ExecutablePath -and ($cim.ExecutablePath -notlike ($scratch + '*'))) { return $false }\n"
+                "  return $true\n"
+                "}\n"
+                "if ($targetPid -gt 0) {\n"
+                "  $deadline = (Get-Date).AddSeconds(5)\n"
+                "  while ((Get-Date) -lt $deadline) {\n"
+                "    if (-not (Test-SmokeTargetProcess $targetPid $expectedTicks $expectedExe $scratchPath)) { break }\n"
+                "    Start-Sleep -Milliseconds 150\n"
+                "  }\n"
+                "  if (Test-SmokeTargetProcess $targetPid $expectedTicks $expectedExe $scratchPath) {\n"
+                "    & taskkill.exe /PID $targetPid /T /F | Out-Null\n"
+                "    Start-Sleep -Milliseconds 250\n"
+                "  }\n"
                 "}\n"
             )
         scratch_part = ""
-        if ctx.remote_scratch:
+        if validated_scratch is not None:
             scratch_part = (
-                f"$scratch = {ps_quote(ctx.remote_scratch)}\n"
+                f"$scratch = {ps_quote(validated_scratch)}\n"
+                "if ((Split-Path -Leaf $scratch) -notmatch '^ws-tunnel-smoke-[A-Za-z0-9_-]+$') {\n"
+                "  throw ('refusing to remove unexpected scratch path: ' + $scratch)\n"
+                "}\n"
                 "for ($i = 0; $i -lt 5; $i++) {\n"
                 "  if (-not (Test-Path -LiteralPath $scratch)) { break }\n"
                 "  try { Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction Stop; break }\n"
                 "  catch { Start-Sleep -Milliseconds 250 }\n"
                 "}\n"
             )
-        try:
-            proc = run_ssh_powershell(ctx.host, pid_part + scratch_part, timeout=20.0, check=False)
-            if proc.returncode != 0:
-                detail = (proc.stderr or proc.stdout or "").strip()
-                warnings.append(f"remote cleanup exited {proc.returncode}: {detail}")
-        except (OSError, subprocess.SubprocessError) as exc:
-            warnings.append(f"remote cleanup error: {exc}")
+        if pid_part or scratch_part:
+            try:
+                proc = run_ssh_powershell(ctx.host, pid_part + scratch_part, timeout=20.0, check=False)
+                if proc.returncode != 0:
+                    detail = (proc.stderr or proc.stdout or "").strip()
+                    warnings.append(f"remote cleanup exited {proc.returncode}: {detail}")
+            except (OSError, subprocess.SubprocessError) as exc:
+                warnings.append(f"remote cleanup error: {exc}")
 
     # 4. Remove local temp build dir.
     if ctx.local_tmp is not None:
@@ -848,9 +975,22 @@ def run_smoke(args: argparse.Namespace) -> dict[str, object]:
         ctx.remote_scratch = create_remote_scratch(ctx.host, nonce, args.timeout)
         if not args.remote_binary:
             remote_exe = scp_to_remote(local_exe, ctx.host, ctx.remote_scratch, args.timeout)
-        ctx.remote_pid = launch_remote_daemon(
+        ctx.remote_exe = remote_exe
+        ctx.remote_pid, ctx.remote_start_ticks = launch_remote_daemon(
             ctx.host, remote_exe, ctx.remote_scratch, ctx.remote_port, args.timeout
         )
+        try:
+            ep = fetch_remote_endpoint(
+                ctx.host, ctx.remote_scratch, args.timeout, expected_pid=ctx.remote_pid
+            )
+        except SmokeError as exc:
+            diag = fetch_remote_startup_diag(ctx.host, ctx.remote_scratch)
+            if diag:
+                raise SmokeError(f"{exc}\nremote logs:\n{diag}") from exc
+            raise
+        ctx.token = str(ep["token"])
+        ctx.remote_port = int(ep["port"])
+
         ctx.tunnel_proc = start_ssh_tunnel(ctx.host, ctx.local_port, ctx.remote_port)
         try:
             health = wait_for_health(ctx.local_port, ctx.remote_pid, ctx.tunnel_proc, args.timeout)
@@ -860,9 +1000,6 @@ def run_smoke(args: argparse.Namespace) -> dict[str, object]:
                 raise SmokeError(f"{exc}\nremote logs:\n{diag}") from exc
             raise
         ctx.timings["startup_s"] = round(time.monotonic() - t_remote, 3)
-
-        ep = fetch_remote_endpoint(ctx.host, ctx.remote_scratch, args.timeout)
-        ctx.token = str(ep["token"])
 
         t_http = time.monotonic()
         http_summary = verify_http_auth_and_pages(ctx.local_port, ctx.token, args.timeout)
@@ -906,11 +1043,15 @@ def run_smoke(args: argparse.Namespace) -> dict[str, object]:
             return {"ok": True, "stopped_by": "signal"}
         raise
     finally:
-        signal.signal(signal.SIGTERM, prev_sigterm)
-        signal.signal(signal.SIGINT, prev_sigint)
-        warnings = cleanup_smoke(ctx)
-        for warning in warnings:
-            print(f"warning: {warning}", file=sys.stderr)
+        try:
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            warnings = cleanup_smoke(ctx)
+            for warning in warnings:
+                print(f"warning: {warning}", file=sys.stderr)
+        finally:
+            signal.signal(signal.SIGTERM, prev_sigterm)
+            signal.signal(signal.SIGINT, prev_sigint)
 
 
 def main(argv: list[str] | None = None) -> int:
