@@ -536,7 +536,17 @@
       }
     },
     "261128-feat-ws-usage-popup-unified-2slot-graph-and-slot-hover-preview": {
-      "registered_at": "2026-11-28T05:07:36Z"
+      "registered_at": "2026-11-28T05:07:36Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-28T05:46:19Z",
+        "impl": {
+          "branch": "impl/develop/rule-chevy-pox"
+        }
+      }
     }
   }
 }
