@@ -4,7 +4,8 @@
 // stored gallery column stops at 720px, so the 900px gallery is the narrow
 // view's overlay over the board column (viewport below 1600px), sized by
 // resizing the viewport until the overlay measures 900px; the 380px gallery
-// is the 1920x1080 column. It checks Ctrl+G's idempotent show, the branch
+// is the 2560x1440 column (the always-open column needs the spare width a
+// 3-column 1920 desktop lacks). It checks Ctrl+G's idempotent show, the branch
 // line, the review pill and its jump to a frontier past the graph's first
 // page (narrow: the graph tab first), the frontier marks, the light
 // worktree list (cache-only, no disk walk) and its manual full scan, the
@@ -94,7 +95,7 @@ async function fitOverlay(page, fr, galW) {
 
 async function newSession(browser, theme, galW, url) {
   const overlay = galW > 720;
-  const context = await browser.newContext({ viewport: overlay ? { width: 1300, height: 1000 } : { width: 1920, height: 1080 }, colorScheme: theme });
+  const context = await browser.newContext({ viewport: overlay ? { width: 1300, height: 1000 } : { width: 2560, height: 1440 }, colorScheme: theme });
   const origin = new URL(url).origin;
   await context.addCookies([{ name: 'ws_dashboard_theme', value: theme, url: origin }]);
   await context.addInitScript(w => {

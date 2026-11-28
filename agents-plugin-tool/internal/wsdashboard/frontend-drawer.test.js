@@ -44,7 +44,9 @@ test('only the active sheet opener hides; closed handle signals remain in place'
   assert.match(css, /\.dr-handle\.wait \.dr-wait \{ display: inline-flex; \}/);
   assert.match(js, /drhandle\.addEventListener\("click", function \(\) \{\s*drSetOpen\(!\(drOpen && drMode === "panels"\), "panels"\)/);
   assert.match(js, /drhandle\.setAttribute\("aria-label", t\)/);
-  assert.match(js, /drBadge \|\| drSwap/);
+  // #r-panels moved to the Workpanel: only a section badge lights the dot.
+  assert.match(js, /d\.classList\.toggle\("on", drBadge\)/);
+  assert.doesNotMatch(js, /drSwap|function drawerSwapped/);
 });
 
 test('the fold button carries the approval wait while the panels sheet hides the handle', () => {
@@ -53,9 +55,10 @@ test('the fold button carries the approval wait while the panels sheet hides the
   const drhandle = labelled(), drfold = labelled();
   let found = [];
   const row = inSource => ({ closest: s => s === '.ag-source' && inSource ? {} : null });
-  const c = vm.createContext({ drhandle, drfold, drOpen: true, drMode: 'panels', wsT: k => k, q: () => found });
-  vm.runInContext(section('  function drTitle()', '  // drawerWait keeps'), c);
-  vm.runInContext(section('  function drawerWait()', '  // A panels change'), c);
+  const c = vm.createContext({ drhandle, drfold, drOpen: true, drMode: 'panels', wsT: k => k, q: () => found, doc: { querySelector: () => null } });
+  vm.runInContext(section('  function drTitle()', '  function drHeaderBottom()'), c);
+  const wp = fs.readFileSync(path.join(__dirname, 'assets/dashboard-workpanel.js'), 'utf8');
+  vm.runInContext(wp.slice(wp.indexOf('  function drawerWait()'), wp.indexOf('  // wpGallery follows')), c);
   const waitLabel = 'js.drawer.fold; js.drawer.waiting';
   for (const [what, rows, want] of [['a waiting row', [row(false)], true], ['the hidden roster alone', [row(true)], false]]) {
     found = rows; c.drawerWait();
@@ -82,7 +85,7 @@ test('closed opener clicks open full sheets and the fold closes back to that ope
   const documentClicks = [], saved = [];
   const c = vm.createContext({ ...nodes, doc: { activeElement: null, addEventListener: (type, fn) => documentClicks.push(fn) },
     drHeaderBottom: () => 48, drMax: () => 812,
-    drTitle() {}, drFill() {}, hdLoad() {}, notesLoad() {}, drDot() {}, drAnnounce() {},
+    drTitle() {}, drFill() {}, hdLoad() {}, drDot() {}, drAnnounce() {},
     wsT: k => k, save: (k, v) => saved.push([k, v]), tkApi: null });
   vm.runInContext(section('  var DR_OPEN =', '  var sbody ='), c);
   c.drHas = true; c.drfold = nodes.drfold;
@@ -110,26 +113,6 @@ test('closed opener clicks open full sheets and the fold closes back to that ope
   assert.ok(saved.every(([key]) => key !== 'ws.dashboard.drawer.h'));
 });
 
-class El {
-  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.className = ''; this.attrs = {}; this.textContent = ''; this.listeners = {}; }
-  get textContent() { return this._textContent; }
-  set textContent(value) { this._textContent = value; this.children = []; }
-  appendChild(el) { el.parent = this; this.children.push(el); return el; }
-  setAttribute(k, v) { this.attrs[k] = v; }
-  getAttribute(k) { return this.attrs[k]; }
-  addEventListener(k, fn) { this.listeners[k] = fn; }
-  querySelector(sel) {
-    for (const el of this.children) {
-      if (sel[0] === '.' ? el.className.split(' ').includes(sel.slice(1)) : el.tagName === sel.toUpperCase()) return el;
-      const nested = el.querySelector(sel); if (nested) return nested;
-    }
-    return null;
-  }
-  remove() { this.parent.children.splice(this.parent.children.indexOf(this), 1); }
-}
-function panel() { const p = new El('details'), lanes = new El('div'); lanes.className = 'lanes'; p.appendChild(lanes); return p; }
-const tick = () => new Promise(resolve => setImmediate(resolve));
-
 test('retired #p-tickets and #p-mailbox drawer tabs and ticketIdeaSync are absent', () => {
   assert.equal(js.includes('panelTab("tickets"'), false);
   assert.equal(js.includes('panelTab("mailbox"'), false);
@@ -138,38 +121,18 @@ test('retired #p-tickets and #p-mailbox drawer tabs and ticketIdeaSync are absen
   assert.equal(css.includes('#p-mailbox'), false);
 });
 
-test('notes load cached snapshot then wait, refresh by POST, and render server layers safely', async () => {
-  const list = new El('div'), button = new El('button'), requests = [], pending = [];
-  const c = vm.createContext({ doc: { createElement: tag => new El(tag) }, rid: 'session',
-    $: id => ({ noteslist: list, notesrefresh: button })[id], wsT: k => k,
-    glRel: () => 'ago', wsI18n: { lang: 'en' },
-    fetch: (url, opts) => { requests.push([url, opts]); return new Promise((resolve, reject) => pending.push({ resolve, reject })); } });
-  vm.runInContext(section('  var notesSeq =', '  // drFill stretches'), c);
-  assert.equal(requests.length, 0);
-  c.notesLoad(false);
-  assert.equal(requests[0][0], '/s/session/notes');
-  assert.equal(requests[0][1].method, 'GET');
-  pending.shift().resolve({ ok: true, json: async () => ({ layers: [], loading: true }) }); await tick();
-  assert.equal(requests[1][0], '/s/session/notes?wait=1');
-  pending.shift().resolve({ ok: true, json: async () => ({ local_only: true, layers: [{ layer: 'repo', notes: [
-    { key: '<unsafe>', value: '<value>', priority: 0, visible: false, written_at: '2026-01-01T00:00:00Z' }
-  ] }, { layer: 'clone', notes: [] }] }) }); await tick();
-  assert.equal(list.querySelector('.notes-key').textContent, '<unsafe>');
-  assert.equal(list.querySelector('.notes-muted').textContent, 'js.notes.muted');
-  assert.ok(list.querySelector('.notes-dim'), 'muted rows use a drawer-scoped state class');
-  assert.ok(list.querySelector('.zero'));
-  const value = list.querySelector('.notes-value');
-  assert.equal(value.textContent, '<value>'); value.listeners.click(); assert.equal(value.getAttribute('aria-expanded'), 'true');
-  assert.ok(list.children.some(el => el.textContent === 'js.notes.local'));
-  assert.equal(button.disabled, false);
-  c.notesRender({ layers: [{ layer: 'machine', error: true, notes: [] }, { layer: 'repo', notes: [] }] });
-  assert.equal(list.children[0].children[1].textContent, 'js.notes.error', 'a broken layer is not shown as empty');
-  assert.equal(list.children[1].children[1].textContent, 'js.notes.empty', 'an unrelated valid layer still renders');
-  button.listeners.click({ preventDefault() {} });
-  assert.equal(requests[2][1].method, 'POST');
-  pending.shift().reject(new Error('offline')); await tick();
-  assert.equal(button.disabled, false);
-  assert.ok(list.children.some(el => el.textContent === 'js.notes.error'));
+test('the retired todo, agenda and notes drawer cards are absent; the holders card stays', () => {
+  for (const gone of ['panelTab(', 'cardTab("notes")', 'notesLoad', 'notesRender', 'noteslist', 'notesrefresh', 'function drawerWait']) {
+    assert.equal(js.includes(gone), false, gone);
+  }
+  assert.match(js, /cardTab\("holders"\);/);
+  assert.equal(js.includes('cardTab("worktrees")'), false, 'the worktree pool is the Git page\'s');
+  assert.match(js, /if \(shown === "panels"\) hdLoad\(\);/);
+  for (const gone of ['.notes-', '.notescard', '#p-notes', '#p-todo', '#p-agenda', '.r-panels']) assert.equal(css.includes(gone), false, gone);
+  const tmpl = fs.readFileSync(path.join(__dirname, 'assets/dashboard.tmpl'), 'utf8');
+  const cards = tmpl.slice(tmpl.indexOf('{{define "drcards"}}'), tmpl.indexOf('{{end}}', tmpl.indexOf('id="p-holders"')) + 7);
+  assert.match(cards, /id="p-holders"/);
+  assert.equal(/id="p-(worktrees|notes|todo|agenda|tickets|mailbox)"/.test(cards), false, 'the holders card is the drawer\'s only card');
 });
 
 test('wide ticket spans suppress the legacy last-row vertical fill', () => {
@@ -183,14 +146,13 @@ test('wide ticket spans suppress the legacy last-row vertical fill', () => {
   assert.ok(cards.every(card => !card.style.gridRow), 'wide cards retain their two-row dense layout');
 });
 
-test('wide grid uses existing breakpoints and dense notes span; narrow remains the DOM stack', () => {
+test('wide grid uses existing breakpoints and dense order; narrow remains the DOM stack', () => {
   assert.match(css, /@media \(min-width: 1600px\)[\s\S]*?width: min\(1280px,/);
-  const wide = css.slice(css.indexOf('@media (min-width: 760px)'), css.indexOf('.notes-refresh'));
+  const wide = css.slice(css.indexOf('@media (min-width: 760px)'), css.indexOf('@media (max-width: 759px)'));
   assert.match(wide, /grid-auto-flow: dense/);
-  for (const [id, order] of [['agenda', 1], ['holders', 2], ['todo', 3], ['notes', 4]]) {
+  for (const [id, order] of [['holders', 1]]) {
     assert.ok(wide.includes(`#drbody #p-${id} { order: ${order};`));
   }
-  assert.match(wide, /#p-notes \{ order: 4; grid-column: span 2;/);
-  assert.equal(css.includes('#p-worktrees'), false, 'the worktree pool moved to the Git page');
+  for (const id of ['worktrees', 'agenda', 'todo', 'notes']) assert.equal(css.includes(`#p-${id}`), false, `the drawer no longer orders #p-${id}`);
   assert.match(css, /@media \(max-width: 759px\) \{\s*#drbody \{ display: flex; flex-direction: column; \}\s*\.dr-body details.panel \{ flex: none; overflow: hidden; \}\s*\.dr-body details.panel > summary \{ position: static; \}/);
 });

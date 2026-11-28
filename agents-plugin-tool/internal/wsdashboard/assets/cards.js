@@ -1049,7 +1049,7 @@
       hd.appendChild(row);
       if (bannerText) {
         var ban = mk("div", "gal-sys-banner");
-        ban.appendChild(mk("span", "gal-sys-bdot" + (id === "workpanel" ? " ok" : "")));
+        ban.appendChild(mk("span", "gal-sys-bdot"));
         ban.appendChild(mk("span", "", bannerText));
         hd.appendChild(ban);
       }
@@ -1077,12 +1077,16 @@
       z.appendChild(mk("p", "gal-sys-zone-desc", desc));
       return z;
     }
-    var wpGrid = mk("div", "gal-sys-wp-grid");
-    wpGrid.appendChild(makeZone("Todo", "Panel", "Session checklist items stay available in the top-right Panels drawer until Track 2C."));
-    wpGrid.appendChild(makeZone("Agenda", "Panel", "Working memory and current milestone notes remain in #drhandle until Track 2C."));
-    wpGrid.appendChild(makeZone("Notes", "4 layers", "Machine, clone, repo, and worktree notes will unify here in gallery-workpanel-design."));
-    wpGrid.appendChild(makeZone("Manuals", "Context", "Project manuals and workflow references will dock alongside session context."));
-    sysPageEls.workpanel = makeScaffold("workpanel", "Track 2C", "scaffold", "Legacy #drhandle stays active until gallery-workpanel-design.", wpGrid, "Open Ticket Map →");
+    // The Workpanel page is one full-fill host: the page's server-rendered
+    // Workpanel (dashboard.tmpl "workpanel", #wproot, holding the panels
+    // region) is adopted into it by dashboard-workpanel.js.
+    var wpPg = mk("div", "gal-page gal-sys-page gal-sys-wppage");
+    wpPg.setAttribute("data-page", "workpanel");
+    wpPg.setAttribute("data-page-panel", "workpanel");
+    var wpDock = mk("div", "wp-dock");
+    wpDock.id = "wpdock";
+    wpPg.appendChild(wpDock);
+    sysPageEls.workpanel = wpPg;
 
     // The Ticket Map page is one full-fill host: the ticket map
     // (dashboard-ticketmap.js) docks its root in it when the page shows,
@@ -1164,10 +1168,14 @@
         b.innerHTML = sysSvg(id);
       }
       seen[k] = true;
-      b.className = "gal-dot sys" + (p === pos ? " active" : "");
+      // The Workpanel slot's approval wait (dashboard-workpanel.js
+      // drawerWait) survives a repaint.
+      var wait = b.classList.contains("wait");
+      b.className = "gal-dot sys" + (p === pos ? " active" : "") + (wait ? " wait" : "");
       b.setAttribute("data-pos", String(p));
       b.setAttribute("data-sys", id);
       var label = SYS_META[id] ? SYS_META[id].title : id;
+      if (wait) label += "; " + wsT("js.drawer.waiting");
       if (window.WsGalPreview) b.removeAttribute("title");
       else b.title = label;
       b.setAttribute("aria-label", label);

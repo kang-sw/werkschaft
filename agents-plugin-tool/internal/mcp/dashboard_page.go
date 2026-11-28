@@ -570,10 +570,10 @@ func docImagePath(root, path string) string {
 	return filepath.Join(root, native)
 }
 
-// servedWhiteboardPanels builds the full page's panels for the served dashboard
-// drawer. #p-tickets and #p-mailbox are retired from the dashboard drawer
-// (tickets live in the always-open #bgal Ticket Map system page), leaving todo
-// and agenda beside the drawer's own cards (worktrees, holders, notes).
+// servedWhiteboardPanels builds the full page's panels for the served
+// dashboard. #p-tickets and #p-mailbox are retired (tickets live in the
+// always-open #bgal Ticket Map system page), leaving todo and agenda, which
+// the gallery's Workpanel system page shows as its working memory.
 func servedWhiteboardPanels(record sessionRecord, key, replyID, lang string, watch func(path string), history func() ([]mailboxHistoryRecord, error), replies func() (wsmailbox.ReplyStore, bool)) []wswhiteboard.Panel {
 	in := whiteboardPanelInput{
 		rec:        record,

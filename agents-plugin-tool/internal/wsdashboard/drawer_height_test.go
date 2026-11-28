@@ -67,7 +67,7 @@ var win = { innerHeight: 1000 }, ctx = {
   drMode: 'panels', drOpen: true, drShown: '', drTop: -500, tkApi: null,
   $: function (id) { return id === 'composer' ? composer : null; }, visible: function () { return composerVisible; },
   wsT: function (s) { return s; }, drTitle: function () {}, drFill: function () {},
-  drFoldShow: function () {}, hdLoad: function () {}, notesLoad: function () {}
+  drFoldShow: function () {}, hdLoad: function () {}
 };
 vm.createContext(ctx);
 vm.runInContext(funcs(dash, ['drHeaderBottom', 'drMax', 'drApply']), ctx);
@@ -174,9 +174,9 @@ var doc = { activeElement: null, addEventListener: function () {} };
 var drawer = el('drawer'), drbody = el('drbody'), sbody = el('sbody'), shandle = el('shandle'), drsheet = el('drsheet'), drclip = el('drclip');
 var drhandle = el('drhandle'), drfold = el('drfold');
 var drheader = {getBoundingClientRect:function(){return {bottom:40};}};
-var drOpen = false, drMode = 'panels', drWant = false, drTop = 40, drShown = '', drHas = true, drSwap = false, DR_OPEN = 'k', DR_SEARCH = 'search', tkApi = null;
+var drOpen = false, drMode = 'panels', drWant = false, drTop = 40, drShown = '', drHas = true, DR_OPEN = 'k', DR_SEARCH = 'search', tkApi = null;
 function drMax() { return 600; }
-function drTitle() {} function drFill() {} function hdLoad() {} function notesLoad() {} function drDot() {} function drAnnounce() {}
+function drTitle() {} function drFill() {} function hdLoad() {} function drDot() {} function drAnnounce() {}
 var stored = {};
 function save(k, v) { stored[k] = v; }
 function wsT(k) { return k; }

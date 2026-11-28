@@ -189,6 +189,8 @@ func (d *Daemon) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 		d.handleTicketIdeas(w, r, replyID)
 	case sub == "tickets/graph":
 		d.handleTicketGraph(w, r, replyID)
+	case sub == "manuals":
+		d.handleManuals(w, r, replyID)
 	case sub == "worktrees":
 		d.handleWorktrees(w, r, replyID)
 	case sub == "review-ledger":

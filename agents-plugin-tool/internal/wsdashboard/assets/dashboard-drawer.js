@@ -3,9 +3,9 @@
   // icon, count, badge, content }: functions read at every sync, content
   // returning the element the entry's card is or null when the entry is
   // absent, and badge (optional) a count for the handle icon or null. The
-  // four panels are the first entries: views onto the one panels region,
-  // read again after each swap, so a later entry registers here without
-  // reworking the frame. The sheet shows every present entry's card at once
+  // entries are the drawer's own cards (drcards); the panels region lives in
+  // the gallery's Workpanel (dashboard-workpanel.js), and a later entry
+  // registers here without reworking the frame. The sheet shows every present entry's card at once
   // and the handle holds one icon per present entry. Open state is this
   // browser's (ws.dashboard.drawer*); height always fills the available room.
   //
@@ -31,31 +31,10 @@
     shandle.title = wsT("js.tk.qs.tip") + " (Ctrl+K)"; shandle.setAttribute("aria-label", shandle.title); shandle.setAttribute("aria-controls", "drsheet");
     shandle.appendChild(luIcon("search")); drhandle.parentNode.insertBefore(shandle, drhandle);
   }
-  var drBadge = false, drSwap = false; // the handle's dot: a section badge, or a panels change while closed
+  // The handle's dot: a section badge. #r-panels lives in the Workpanel
+  // (dashboard-workpanel.js), so a panels change no longer lights it.
+  var drBadge = false;
   function drawerTab(entry) { drEntries.push(entry); }
-  // panelTab registers a panel of the panels region (#p-<id>) as an entry: its
-  // title and count chip come from the panel's own title bar.
-  function panelTab(id, badge) {
-    function el() { var r = region("panels"); return r ? r.querySelector('[id="p-' + id + '"]') : null; }
-    function head() { var p = el(); return p ? p.querySelector("summary") : null; }
-    drawerTab({
-      id: id,
-      title: function () {
-        var h = head();
-        return h ? Array.prototype.filter.call(h.childNodes, function (n) { return n.nodeType === 3; }).map(function (n) { return n.nodeValue; }).join("").trim() : id;
-      },
-      count: function () { var h = head(), c = h && h.querySelector(".chip"); return c ? c.textContent.trim() : ""; },
-      badge: badge,
-      content: el
-    });
-  }
-  // The todo chip reads "done/total".
-  panelTab("todo", function (count) {
-    var m = /^(\d+)\/(\d+)$/.exec(count), n = m ? +m[2] - +m[1] : 0;
-    return n > 0 ? { n: n, title: wsTn("js.drawer.todo", n) } : null;
-  });
-  panelTab("agenda");
-
   // cardTab registers one of the drawer's own cards (#p-<id>, drcards):
   // no region swap touches them.
   function cardTab(id) {
@@ -70,7 +49,6 @@
     });
   }
   cardTab("holders");
-  cardTab("notes");
   // The holders card's nodes (hdLoad, below): set here, ahead of the
   // drawer's first drApply, which a drawer left open calls on load.
   var hdlist = $("hdlist"), hdcount = $("hdcount"), hdnote = $("hdnote"), hdSeq = 0;
@@ -106,62 +84,6 @@
     drFill(true);
   }
   var drBooting = false;
-  // Notes are fetched only on a panels opening or an explicit refresh. A wait
-  // joins the server's existing worker rather than starting another read.
-  var notesSeq = 0;
-  function notesLoad(refresh) {
-    var list = $("noteslist"), button = $("notesrefresh");
-    if (!list) return;
-    var seq = ++notesSeq, url = "/s/" + rid + "/notes";
-    if (button) button.disabled = true;
-    function request(wait) {
-      return fetch(url + (wait ? "?wait=1" : ""), { method: refresh && !wait ? "POST" : "GET", credentials: "same-origin", cache: "no-store" }).then(function (r) {
-        if (!r.ok) throw new Error("notes");
-        return r.json();
-      }).then(function (data) {
-        if (seq !== notesSeq) return;
-        notesRender(data);
-        if (data.loading) return request(true);
-        if (button) button.disabled = false;
-      });
-    }
-    request(false).catch(function () {
-      if (seq !== notesSeq) return;
-      if (button) button.disabled = false;
-      notesRender({ layers: [], error: true });
-    });
-  }
-  function notesRender(data) {
-    var list = $("noteslist"); if (!list) return;
-    list.textContent = "";
-    function line(text, cls, parent) { var el = doc.createElement("div"); el.className = cls; el.textContent = text; (parent || list).appendChild(el); return el; }
-    if (data.local_only) line(wsT("js.notes.local"), "notes-hint");
-    if (data.error) line(wsT("js.notes.error"), "notes-hint");
-    if (data.loading) line(wsT("js.notes.loading"), "notes-hint");
-    var names = { machine: wsT("js.notes.machine"), clone: wsT("js.notes.clone"), repo: wsT("js.notes.repo"), worktree: wsT("js.notes.worktree") };
-    (data.layers || []).forEach(function (layer) {
-      var section = doc.createElement("section"); section.className = "notes-layer"; list.appendChild(section);
-      var rows = layer.notes || [];
-      line((names[layer.layer] || layer.layer) + " · " + rows.length, "notes-heading", section);
-      if (layer.error) line(wsT("js.notes.error"), "notes-hint", section);
-      else if (!rows.length) line(wsT("js.notes.empty"), "notes-hint", section);
-      rows.forEach(function (note) {
-        var row = doc.createElement("div"); row.className = "notes-row" + (note.visible === false ? " notes-dim" : ""); section.appendChild(row);
-        line(String(note.priority), "notes-priority" + (note.priority === 0 ? " zero" : ""), row);
-        var content = doc.createElement("div"); content.className = "notes-content"; row.appendChild(content);
-        var head = doc.createElement("div"); head.className = "notes-row-head"; content.appendChild(head);
-        line(note.key, "notes-key", head);
-        if (note.visible === false) line(wsT("js.notes.muted"), "notes-muted", head);
-        var at = Date.parse(note.written_at);
-        if (isFinite(at)) { var age = line(glRel(at), "notes-age", head); age.title = new Date(at).toLocaleString(wsI18n.lang); }
-        var value = doc.createElement("button"); value.type = "button"; value.className = "notes-value"; value.textContent = note.value; value.setAttribute("aria-expanded", "false");
-        value.addEventListener("click", function () { var expanded = value.getAttribute("aria-expanded") !== "true"; value.setAttribute("aria-expanded", String(expanded)); });
-        content.appendChild(value);
-      });
-    });
-  }
-  var notesRefresh = $("notesrefresh");
-  if (notesRefresh) notesRefresh.addEventListener("click", function (e) { e.preventDefault(); notesLoad(true); });
   // drFill stretches cards into the empty cells of the panels grid's last
   // row: the card directly above each empty cell spans two rows. Cards keep
   // their DOM order (grid-auto-flow: dense would reorder them); a spanning
@@ -206,7 +128,7 @@
   }
   function drDot() {
     var d = drhandle.querySelector(".tdot");
-    if (d) d.classList.toggle("on", drBadge || drSwap);
+    if (d) d.classList.toggle("on", drBadge);
   }
   // drRoom keeps the header and the tracker's handle row clear of the
   // handles: --drhw is their width together (the header's padding and the
@@ -238,6 +160,8 @@
     drfold.hidden = !mode;
     drfold.classList.toggle("search", mode === "search");
   }
+  // drTitle labels the handle and the fold button, with the approval wait
+  // drawerWait (dashboard-workpanel.js) marks on them.
   function drTitle() {
     var t = wsT(drOpen && drMode === "panels" ? "js.drawer.close" : "js.drawer.open"), tip = drhandle.getAttribute("data-tip");
     if (tip) t += " (" + tip + ")";
@@ -250,23 +174,6 @@
     if (drMode === "panels" && drfold.classList.contains("wait")) f += "; " + wsT("js.drawer.waiting");
     drfold.title = f;
     drfold.setAttribute("aria-label", f);
-  }
-  // drawerWait keeps the opener's approval signal current even while hidden;
-  // the fold button mirrors it, since it shows in place of the hidden panels
-  // handle while the sheet covers the waiting rows. The tree region's hidden
-  // compact roster (.ag-source) does not count: it repeats this tree's
-  // running rows and adds linked delegate sessions' agents, whose approvals
-  // are not this session's to wait on.
-  function drawerWait() {
-    if (!drhandle) return;
-    var wait = q("#r-convlive .permwait, #r-tree .phase.permission, #r-tree .brow.perm").some(function (el) { return !el.closest(".ag-source"); });
-    drhandle.classList.toggle("wait", wait);
-    if (drfold) drfold.classList.toggle("wait", wait);
-    drTitle();
-  }
-  // A panels change the drawer is closed over lights the handle's dot.
-  function drawerSwapped() {
-    if (drhandle && !drOpen && drHas) { drSwap = true; drDot(); }
   }
   function drHeaderBottom() {
     return drheader ? Math.max(0, Math.round(drheader.getBoundingClientRect().bottom)) : 0;
@@ -304,7 +211,7 @@
     var shown = drOpen ? drMode : "";
     if (shown !== drShown) {
       drShown = shown;
-      if (shown === "panels") { hdLoad(); notesLoad(false); }
+      if (shown === "panels") hdLoad();
       if (tkApi) { if (shown === "search") tkApi.openSearch(); else tkApi.closeSearch(); }
     }
   }
@@ -325,7 +232,6 @@
     drWant = open && mode === "panels";
     save(DR_OPEN, drWant ? "1" : null);
     save(DR_SEARCH, open && mode === "search" ? "1" : null);
-    if (drWant) { drSwap = false; drDot(); }
     drApply(true);
     // The focused opener hides while its sheet shows: focus moves to the fold
     // button in its slot instead of falling to the body, only while it is
@@ -363,7 +269,6 @@
     drBooting = true;
     drawerSync();
     drBooting = false;
-    drawerWait();
     drhandle.addEventListener("click", function () {
       drSetOpen(!(drOpen && drMode === "panels"), "panels");
     });

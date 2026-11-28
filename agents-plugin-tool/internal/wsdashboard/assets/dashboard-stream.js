@@ -238,6 +238,8 @@
       el.classList.toggle("off", !on);
       el.title = wsT(on ? "js.sse.title.on" : "js.sse.title.off");
     });
+    // The Workpanel's live indicator (dashboard-workpanel.js) follows it.
+    if (typeof wpStreamSync === "function") wpStreamSync(on);
   }
   // openStream opens a live stream (the daemon's sse.go and stream_ws.go)
   // over WebSocket: a browser counts WebSocket connections apart from the six

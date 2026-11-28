@@ -217,7 +217,7 @@
       if (wbBatch && typeof wbUpdateEndBatch === "function") wbUpdateEndBatch();
     }
     if (name === "convlive" || name === "entries") outboxSync();
-    if (name === "panels") { drawerSync(); restorePanelReader(el, panelReader); }
+    if (name === "panels") { drawerSync(); wpSync(); restorePanelReader(el, panelReader); }
     if (name === "git") gpSwapped();
     if (treeFocus && treeFocus.isConnected && doc.activeElement !== treeFocus) treeFocus.focus({ preventScroll: true });
     restoreScroll(scroll);
@@ -232,7 +232,6 @@
     if (pin) (typeof queuePinConvo === "function" ? queuePinConvo() : pinConvo());
     else if (convoRegion && typeof queueSyncConvoBottom === "function") queueSyncConvoBottom();
     if (live && TAB[name]) queueSwapDot(TAB[name]);
-    if (name === "panels") drawerSwapped();
     if (name === "tree" || name === "convlive") drawerWait();
     if (name === "tree") agSwapped();
     if (TL_REGIONS[name]) { delete tlHeld[name]; tlCount(); }
