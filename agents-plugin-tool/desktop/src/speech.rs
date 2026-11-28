@@ -132,6 +132,282 @@ fn sanitize_locale(raw: Option<&str>) -> Option<Option<String>> {
     Some(Some(trimmed.replace('_', "-")))
 }
 
+/// Algorithmic Hangul Jamo (NFD) -> precomposed Hangul Syllable (NFC) normalizer.
+fn normalize_hangul_nfc(s: &str) -> String {
+    if s.is_ascii() {
+        return s.to_owned();
+    }
+    let mut out: Vec<char> = Vec::with_capacity(s.chars().count());
+    for c in s.chars() {
+        let code = c as u32;
+        if (0x1161..=0x1175).contains(&code) {
+            if let Some(&prev) = out.last() {
+                let p = prev as u32;
+                if (0x1100..=0x1112).contains(&p) {
+                    let l = p - 0x1100;
+                    let v = code - 0x1161;
+                    let lv = 0xAC00 + (l * 21 + v) * 28;
+                    if let Some(ch) = char::from_u32(lv) {
+                        *out.last_mut().unwrap() = ch;
+                        continue;
+                    }
+                }
+            }
+        } else if (0x11A8..=0x11C2).contains(&code) {
+            if let Some(&prev) = out.last() {
+                let p = prev as u32;
+                if (0xAC00..=0xD7A3).contains(&p) && (p - 0xAC00) % 28 == 0 {
+                    let t = code - 0x11A8 + 1;
+                    if let Some(ch) = char::from_u32(p + t) {
+                        *out.last_mut().unwrap() = ch;
+                        continue;
+                    }
+                }
+            }
+        }
+        out.push(c);
+    }
+    out.into_iter().collect()
+}
+
+fn is_boundary_punct(c: char) -> bool {
+    matches!(
+        c,
+        '.' | ','
+            | '!'
+            | '?'
+            | ';'
+            | ':'
+            | '"'
+            | '\''
+            | '('
+            | ')'
+            | '['
+            | ']'
+            | '\u{3002}'
+            | '\u{3001}'
+            | '\u{FF0C}'
+            | '\u{FF0E}'
+            | '\u{FF01}'
+            | '\u{FF1F}'
+            | '\u{FF1A}'
+            | '\u{FF1B}'
+            | '\u{2026}'
+            | '\u{300C}'
+            | '\u{300D}'
+            | '\u{300E}'
+            | '\u{300F}'
+            | '\u{201C}'
+            | '\u{201D}'
+            | '\u{2018}'
+            | '\u{2019}'
+    )
+}
+
+fn is_sep_punct_or_ws(c: char) -> bool {
+    c.is_whitespace()
+        || matches!(
+            c,
+            '.' | ','
+                | '!'
+                | '?'
+                | ';'
+                | ':'
+                | '\u{3002}'
+                | '\u{3001}'
+                | '\u{FF0C}'
+                | '\u{FF0E}'
+                | '\u{FF01}'
+                | '\u{FF1F}'
+                | '\u{FF1A}'
+                | '\u{FF1B}'
+                | '\u{2026}'
+        )
+}
+
+fn tokens_with_end(nfc: &str) -> Vec<(String, usize)> {
+    let mut out = Vec::new();
+    let mut start: Option<usize> = None;
+    for (idx, ch) in nfc.char_indices() {
+        if ch.is_whitespace() {
+            if let Some(s) = start.take() {
+                let norm = nfc[s..idx]
+                    .trim_matches(is_boundary_punct)
+                    .to_lowercase();
+                if !norm.is_empty() {
+                    out.push((norm, idx));
+                }
+            }
+        } else if start.is_none() {
+            start = Some(idx);
+        }
+    }
+    if let Some(s) = start {
+        let norm = nfc[s..].trim_matches(is_boundary_punct).to_lowercase();
+        if !norm.is_empty() {
+            out.push((norm, nfc.len()));
+        }
+    }
+    out
+}
+
+fn advance_past_sep(s: &str, pos: usize) -> String {
+    let rest = &s[pos..];
+    rest.trim_start_matches(is_sep_punct_or_ws).to_owned()
+}
+
+fn strip_committed_prefix(committed_joined: &str, raw_next: &str) -> String {
+    let c_nfc = normalize_hangul_nfc(committed_joined);
+    let c_trim = c_nfc.trim();
+    if c_trim.is_empty() {
+        return raw_next.to_owned();
+    }
+    let i_nfc = normalize_hangul_nfc(raw_next);
+    let i_trim = i_nfc.trim_start();
+    if i_trim.is_empty() {
+        return String::new();
+    }
+    let c_tokens = tokens_with_end(c_trim);
+    if c_tokens.is_empty() {
+        return raw_next.to_owned();
+    }
+    let i_tokens = tokens_with_end(i_trim);
+    if i_tokens.len() >= c_tokens.len()
+        && i_tokens
+            .iter()
+            .zip(c_tokens.iter())
+            .all(|(a, b)| a.0 == b.0)
+    {
+        return advance_past_sep(i_trim, i_tokens[c_tokens.len() - 1].1);
+    }
+    let c_core = c_trim.trim_end_matches(is_sep_punct_or_ws);
+    if !c_core.is_empty() && c_core != c_trim && i_trim.starts_with(c_trim) {
+        return advance_past_sep(i_trim, c_trim.len());
+    }
+    if !c_core.is_empty() && i_trim.starts_with(c_core) {
+        let after = &i_trim[c_core.len()..];
+        if after.is_empty() || after.chars().next().is_some_and(is_sep_punct_or_ws) {
+            return advance_past_sep(i_trim, c_core.len());
+        }
+    }
+    raw_next.to_owned()
+}
+
+fn is_disjoint_jump(prev: &str, next: &str) -> bool {
+    let prev_nfc = normalize_hangul_nfc(prev);
+    let next_nfc = normalize_hangul_nfc(next);
+    let prev_trim = prev_nfc.trim();
+    let next_trim = next_nfc.trim();
+    if prev_trim.is_empty() || next_trim.is_empty() {
+        return false;
+    }
+    let prev_chars = prev_trim.chars().count();
+    let next_chars = next_trim.chars().count();
+    let prev_tokens = tokens_with_end(prev_trim);
+    let next_tokens = tokens_with_end(next_trim);
+
+    if prev_chars < 6 && prev_tokens.len() < 2 {
+        return false;
+    }
+    if next_chars * 2 >= prev_chars {
+        return false;
+    }
+
+    let prefix_len = prev_trim
+        .chars()
+        .zip(next_trim.chars())
+        .take_while(|(a, b)| a.to_lowercase().eq(b.to_lowercase()))
+        .count();
+    if prefix_len >= 2 {
+        return false;
+    }
+
+    let prev_lower = prev_trim.to_lowercase();
+    let next_lower = next_trim.to_lowercase();
+    if next_chars >= 3 && prev_lower.contains(&next_lower) {
+        return false;
+    }
+
+    let mut prev_set: Vec<&str> = Vec::new();
+    for (tok, _) in &prev_tokens {
+        if !prev_set.contains(&tok.as_str()) {
+            prev_set.push(tok.as_str());
+        }
+    }
+    let mut next_set: Vec<&str> = Vec::new();
+    for (tok, _) in &next_tokens {
+        if !next_set.contains(&tok.as_str()) {
+            next_set.push(tok.as_str());
+        }
+    }
+    let shared = next_set.iter().filter(|t| prev_set.contains(*t)).count();
+    if shared == 0 {
+        return true;
+    }
+    if shared >= next_set.len() {
+        return false;
+    }
+    let union = prev_set.len() + next_set.len() - shared;
+    prefix_len == 0 && shared * 3 <= union
+}
+
+/// Accumulates pre-pause segments when an OS recognizer resets its partial
+/// buffer across silence pauses while keeping normal in-place refinement intact.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct SpeechAccumulator {
+    committed_segments: Vec<String>,
+    current_partial: String,
+}
+
+impl SpeechAccumulator {
+    fn current_text(&self) -> String {
+        let committed = self.committed_segments.join(" ");
+        let cur = self.current_partial.trim();
+        if committed.is_empty() {
+            return self.current_partial.clone();
+        }
+        if cur.is_empty() {
+            return committed;
+        }
+        format!("{committed} {cur}")
+    }
+
+    fn has_speech(&self) -> bool {
+        !self.committed_segments.is_empty() || !self.current_partial.trim().is_empty()
+    }
+
+    fn apply_incoming(&mut self, raw: &str, promote_empty: bool) -> String {
+        let committed = self.committed_segments.join(" ");
+        let next = if committed.is_empty() {
+            raw.to_owned()
+        } else {
+            strip_committed_prefix(&committed, raw)
+        };
+        if next.trim().is_empty() {
+            if promote_empty && !self.current_partial.trim().is_empty() {
+                self.committed_segments
+                    .push(normalize_hangul_nfc(self.current_partial.trim()));
+                self.current_partial.clear();
+            }
+            return self.current_text();
+        }
+        if is_disjoint_jump(&self.current_partial, &next) {
+            self.committed_segments
+                .push(normalize_hangul_nfc(self.current_partial.trim()));
+        }
+        self.current_partial = next;
+        self.current_text()
+    }
+
+    fn on_partial(&mut self, raw: &str) -> String {
+        self.apply_incoming(raw, true)
+    }
+
+    fn on_final(&mut self, raw: &str) -> String {
+        self.apply_incoming(raw, false)
+    }
+}
+
 /// Pure single-owner recognition session state machine.
 ///
 /// Tracks an active monotonic session id so stale callbacks from a cancelled
@@ -149,11 +425,11 @@ enum SessionPhase {
     Idle,
     Listening {
         id: u64,
-        last_partial: String,
+        acc: SpeechAccumulator,
     },
     Stopping {
         id: u64,
-        last_partial: String,
+        acc: SpeechAccumulator,
     },
 }
 
@@ -178,7 +454,7 @@ impl SessionState {
         let id = self.next_id;
         self.phase = SessionPhase::Listening {
             id,
-            last_partial: String::new(),
+            acc: SpeechAccumulator::default(),
         };
         Ok(id)
     }
@@ -197,16 +473,11 @@ impl SessionState {
 
     pub fn on_partial(&mut self, id: u64, text: String) -> Option<SpeechEvent> {
         match &mut self.phase {
-            SessionPhase::Listening {
-                id: cur,
-                last_partial,
-            }
-            | SessionPhase::Stopping {
-                id: cur,
-                last_partial,
-            } if *cur == id => {
-                *last_partial = text.clone();
-                Some(SpeechEvent::Partial { text })
+            SessionPhase::Listening { id: cur, acc } | SessionPhase::Stopping { id: cur, acc }
+                if *cur == id =>
+            {
+                let accumulated = acc.on_partial(&text);
+                Some(SpeechEvent::Partial { text: accumulated })
             }
             _ => None,
         }
@@ -216,8 +487,12 @@ impl SessionState {
         if !self.is_active(id) {
             return None;
         }
-        self.phase = SessionPhase::Idle;
-        Some(SpeechEvent::Final { text })
+        let mut acc = match std::mem::take(&mut self.phase) {
+            SessionPhase::Listening { acc, .. } | SessionPhase::Stopping { acc, .. } => acc,
+            SessionPhase::Idle => return None,
+        };
+        let final_text = acc.on_final(&text);
+        Some(SpeechEvent::Final { text: final_text })
     }
 
     /// Transitions `Listening -> Stopping` and returns the stop action without
@@ -227,29 +502,32 @@ impl SessionState {
             SessionPhase::Idle => StopAction::Idle,
             SessionPhase::Stopping { .. } => StopAction::AlreadyStopping,
             SessionPhase::Listening { .. } => {
-                let SessionPhase::Listening { id, last_partial } = std::mem::take(&mut self.phase)
-                else {
+                let SessionPhase::Listening { id, acc } = std::mem::take(&mut self.phase) else {
                     unreachable!();
                 };
-                self.phase = SessionPhase::Stopping { id, last_partial };
+                self.phase = SessionPhase::Stopping { id, acc };
                 StopAction::Stop(id)
             }
         }
     }
 
-    /// If session `id` is still in `Stopping`, finishes it with the last seen
+    /// If session `id` is still in `Stopping`, finishes it with the accumulated
     /// partial text so the frontend never stalls waiting for a final event.
     pub fn finish_stopping_with_fallback(&mut self, id: u64) -> Option<SpeechEvent> {
         if !self.is_stopping(id) {
             return None;
         }
-        let SessionPhase::Stopping { last_partial, .. } = std::mem::take(&mut self.phase) else {
+        let SessionPhase::Stopping { acc, .. } = std::mem::take(&mut self.phase) else {
             return None;
         };
-        Some(SpeechEvent::Final { text: last_partial })
+        Some(SpeechEvent::Final {
+            text: acc.current_text(),
+        })
     }
 
     /// Records a fatal error for session `id`, returning to `Idle`.
+    /// If non-cancelled accumulated speech is already present, rescues it into
+    /// `SpeechEvent::Final` so a silence-pause error never wipes spoken text.
     pub fn on_error(
         &mut self,
         id: u64,
@@ -259,9 +537,18 @@ impl SessionState {
         if !self.is_active(id) {
             return None;
         }
-        self.phase = SessionPhase::Idle;
+        let acc = match std::mem::take(&mut self.phase) {
+            SessionPhase::Listening { acc, .. } | SessionPhase::Stopping { acc, .. } => acc,
+            SessionPhase::Idle => return None,
+        };
+        let code_str = code.into();
+        if code_str != "cancelled" && acc.has_speech() {
+            return Some(SpeechEvent::Final {
+                text: acc.current_text(),
+            });
+        }
         Some(SpeechEvent::Error {
-            code: code.into(),
+            code: code_str,
             reason,
         })
     }
@@ -748,5 +1035,197 @@ mod tests {
         assert_eq!(match_supported_locale("ko", &supported), Some("ko-KR"));
         assert_eq!(match_supported_locale("en-GB", &supported), Some("en-US"));
         assert_eq!(match_supported_locale("fr-FR", &supported), None);
+    }
+
+    #[test]
+    fn session_state_accumulates_across_pause_clear_and_disjoint_jump() {
+        let mut s = SessionState::default();
+
+        // 1. Clear-to-empty followed by new phrase and empty final.
+        let id1 = s.start().unwrap();
+        assert_eq!(
+            s.on_partial(id1, "첫 번째 문장입니다".into()),
+            Some(SpeechEvent::Partial {
+                text: "첫 번째 문장입니다".into()
+            })
+        );
+        assert_eq!(
+            s.on_partial(id1, "".into()),
+            Some(SpeechEvent::Partial {
+                text: "첫 번째 문장입니다".into()
+            })
+        );
+        assert_eq!(
+            s.on_partial(id1, "두 번째 문장".into()),
+            Some(SpeechEvent::Partial {
+                text: "첫 번째 문장입니다 두 번째 문장".into()
+            })
+        );
+        assert_eq!(
+            s.on_final(id1, "".into()),
+            Some(SpeechEvent::Final {
+                text: "첫 번째 문장입니다 두 번째 문장".into()
+            })
+        );
+
+        // 2. Guarded disjoint jump without empty frame.
+        let id2 = s.start().unwrap();
+        assert_eq!(
+            s.on_partial(id2, "첫 번째 문장입니다".into()),
+            Some(SpeechEvent::Partial {
+                text: "첫 번째 문장입니다".into()
+            })
+        );
+        assert_eq!(
+            s.on_partial(id2, "두 번째".into()),
+            Some(SpeechEvent::Partial {
+                text: "첫 번째 문장입니다 두 번째".into()
+            })
+        );
+        assert_eq!(
+            s.on_final(id2, "두 번째 문장".into()),
+            Some(SpeechEvent::Final {
+                text: "첫 번째 문장입니다 두 번째 문장".into()
+            })
+        );
+
+        // 3. Fallback when stopping preserves all accumulated segments.
+        let id3 = s.start().unwrap();
+        let _ = s.on_partial(id3, "첫 문장입니다".into());
+        let _ = s.on_partial(id3, "".into());
+        let _ = s.on_partial(id3, "둘째 문장".into());
+        assert_eq!(s.begin_stop(), StopAction::Stop(id3));
+        assert_eq!(
+            s.finish_stopping_with_fallback(id3),
+            Some(SpeechEvent::Final {
+                text: "첫 문장입니다 둘째 문장".into()
+            })
+        );
+    }
+
+    #[test]
+    fn session_state_refines_minor_hangul_and_nfd_in_place_and_dedups_cumulative_reemission() {
+        let mut s = SessionState::default();
+
+        // Short hypothesis and Hangul refinement must NOT false-promote.
+        let id1 = s.start().unwrap();
+        assert_eq!(
+            s.on_partial(id1, "고양이".into()),
+            Some(SpeechEvent::Partial {
+                text: "고양이".into()
+            })
+        );
+        assert_eq!(
+            s.on_partial(id1, "거야 이".into()),
+            Some(SpeechEvent::Partial {
+                text: "거야 이".into()
+            })
+        );
+        assert_eq!(
+            s.on_final(id1, "거야 이".into()),
+            Some(SpeechEvent::Final {
+                text: "거야 이".into()
+            })
+        );
+
+        let id2 = s.start().unwrap();
+        assert_eq!(
+            s.on_partial(id2, "안녕 하세".into()),
+            Some(SpeechEvent::Partial {
+                text: "안녕 하세".into()
+            })
+        );
+        assert_eq!(
+            s.on_partial(id2, "안녕하세요".into()),
+            Some(SpeechEvent::Partial {
+                text: "안녕하세요".into()
+            })
+        );
+        assert_eq!(
+            s.on_final(id2, "안녕하세요".into()),
+            Some(SpeechEvent::Final {
+                text: "안녕하세요".into()
+            })
+        );
+
+        // Transient empty flicker followed by NFD/NFC cumulative re-emission must not duplicate.
+        let nfd_first = "\u{110E}\u{1165}\u{11BA} \u{1107}\u{1165}\u{11AB}\u{110D}\u{1162} \u{1106}\u{116E}\u{11AB}\u{110C}\u{1161}\u{11BC}\u{110B}\u{1175}\u{11B8}\u{1102}\u{1175}\u{1103}\u{1161}";
+        let id3 = s.start().unwrap();
+        assert_eq!(
+            s.on_partial(id3, nfd_first.into()),
+            Some(SpeechEvent::Partial {
+                text: nfd_first.into()
+            })
+        );
+        assert_eq!(
+            s.on_partial(id3, "".into()),
+            Some(SpeechEvent::Partial {
+                text: "첫 번째 문장입니다".into()
+            })
+        );
+        assert_eq!(
+            s.on_partial(id3, "첫 번째 문장입니다 두 번째".into()),
+            Some(SpeechEvent::Partial {
+                text: "첫 번째 문장입니다 두 번째".into()
+            })
+        );
+        assert_eq!(
+            s.on_final(id3, "첫 번째 문장입니다 두 번째".into()),
+            Some(SpeechEvent::Final {
+                text: "첫 번째 문장입니다 두 번째".into()
+            })
+        );
+
+        // Windows-style cumulative partials stay single and clean.
+        let id4 = s.start().unwrap();
+        assert_eq!(
+            s.on_partial(id4, "hello".into()),
+            Some(SpeechEvent::Partial {
+                text: "hello".into()
+            })
+        );
+        assert_eq!(
+            s.on_partial(id4, "hello world".into()),
+            Some(SpeechEvent::Partial {
+                text: "hello world".into()
+            })
+        );
+        assert_eq!(
+            s.on_partial(id4, "hello world again".into()),
+            Some(SpeechEvent::Partial {
+                text: "hello world again".into()
+            })
+        );
+        assert_eq!(
+            s.on_final(id4, "hello world".into()),
+            Some(SpeechEvent::Final {
+                text: "hello world".into()
+            })
+        );
+    }
+
+    #[test]
+    fn session_state_rescues_spoken_text_on_non_cancelled_error() {
+        let mut s = SessionState::default();
+        let id1 = s.start().unwrap();
+        let _ = s.on_partial(id1, "첫 번째 문장입니다".into());
+        let _ = s.on_partial(id1, "".into());
+        let _ = s.on_partial(id1, "두 번째".into());
+        assert_eq!(
+            s.on_error(id1, "recognition_error", Some("No speech detected".into())),
+            Some(SpeechEvent::Final {
+                text: "첫 번째 문장입니다 두 번째".into()
+            })
+        );
+        // Zero-speech error still emits Error (also verifies error rescue returned to idle).
+        let id2 = s.start().expect("returns to idle after error rescue");
+        let _ = s.on_partial(id2, "   ".into());
+        assert_eq!(
+            s.on_error(id2, "recognizer_unavailable", Some("LSR 201".into())),
+            Some(SpeechEvent::Error {
+                code: "recognizer_unavailable".into(),
+                reason: Some("LSR 201".into())
+            })
+        );
     }
 }

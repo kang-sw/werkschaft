@@ -278,6 +278,7 @@
     function setPartial(text) {
       var str = String(text == null ? "" : text);
       if (liveSpan) {
+        if (!str.trim() && liveSpan.textContent && liveSpan.textContent.trim()) return;
         liveSpan.textContent = str;
         var editor = getEditor();
         if (editor && typeof editor.scrollHeight === "number") {
@@ -287,7 +288,10 @@
       }
       if (cap && !cap.hidden) {
         var node = cap.querySelector(".cvox-text");
-        if (node) node.textContent = str;
+        if (node) {
+          if (!str.trim() && node.textContent && node.textContent.trim()) return;
+          node.textContent = str;
+        }
       }
     }
 
