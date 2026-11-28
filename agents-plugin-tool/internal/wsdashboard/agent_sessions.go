@@ -185,8 +185,9 @@ type AgentRecordSnapshot struct {
 	Root               string             `json:"root,omitempty"`
 	Model              string             `json:"model,omitempty"`
 	Effort             string             `json:"effort,omitempty"`
-	Lead               bool               `json:"lead,omitempty"`
-	ClosedAt           string             `json:"closed_at,omitempty"`
+	Lead              bool               `json:"lead,omitempty"`
+	ConvHistoryAccess bool               `json:"conv_history_access,omitempty"`
+	ClosedAt          string             `json:"closed_at,omitempty"`
 	HandedOffAt        string             `json:"handed_off_at,omitempty"`
 	HolderID           string             `json:"holder_id,omitempty"`
 	HostPID            int                `json:"host_pid,omitempty"`
@@ -198,6 +199,13 @@ type AgentRecordSnapshot struct {
 // record lookups without reading agent.json from disk.
 type AgentMetadataHost interface {
 	AgentRecord(replyID string) (AgentRecordSnapshot, bool)
+}
+
+// AgentConvHost is an optional AgentHost that exposes live conversation
+// history access status and lead session revival for conv.* MCP tools.
+type AgentConvHost interface {
+	ConvHistoryAccess(replyID string) bool
+	ReviveLead(replyID string) error
 }
 
 // AccountSlotConversation is an in-memory projection of one open hosted
@@ -259,6 +267,9 @@ type agentSessions struct {
 	// hosted reports whether a live hosted slot currently owns replyID;
 	// hosted sessions merge any external ring appends on explicit rereads.
 	hosted func(replyID string) bool
+	// onNonHostedRead reconciles an unpinned non-hosted session's ring into
+	// the conversation index when ReadSession refreshes it.
+	onNonHostedRead func(replyID string)
 }
 
 func (s agentSessions) ReadSession(reg Registration) (SessionData, bool, error) {
@@ -269,6 +280,8 @@ func (s agentSessions) ReadSession(reg Registration) (SessionData, bool, error) 
 	s.snaps.Invalidate(s.dir, reg.ReplyID)
 	if s.hosted != nil && s.hosted(reg.ReplyID) {
 		wslive.SyncExternalRing(wslive.RingDir(SessionDir(s.dir, reg.ReplyID)))
+	} else if s.onNonHostedRead != nil {
+		s.onNonHostedRead(reg.ReplyID)
 	}
 	if !reg.Agent {
 		s.snaps.snapshotWithoutObserved(s.dir, reg.ReplyID)

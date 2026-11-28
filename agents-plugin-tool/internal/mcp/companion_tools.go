@@ -17,6 +17,8 @@ const (
 	companionPhoneReadTool    = "companion.phone_read"
 	companionPhoneSendTool    = "companion.phone_send"
 	companionPhonePutdownTool = "companion.phone_putdown"
+	companionDelegateWorkTool = "companion.delegate_work"
+	delegationReportTool      = "delegation.report"
 
 	companionRefusalHandsBusy   = "Hands busy holding smartphone — call ws/companion.phone_putdown first to use your laptop."
 	companionRefusalPhoneOnDesk = "Smartphone is on the desk — call ws/companion.phone_pickup first to check or reply."
@@ -37,8 +39,68 @@ type CompanionHost interface {
 	CompanionReleaseOnTurnEnd(owner string) bool
 }
 
+// CompanionDelegationAccepted is the non-blocking acknowledgement returned by
+// ws/companion.delegate_work once the daemon accepts and queues/dispatches a brief.
+type CompanionDelegationAccepted struct {
+	DelegationID string `json:"delegation_id"`
+	Status       string `json:"status"`
+}
+
+// CompanionDelegationReportAck is the acknowledgement returned by
+// ws/delegation.report once the daemon records and forwards Tier-2's report.
+type CompanionDelegationReportAck struct {
+	DelegationID string `json:"delegation_id"`
+	Status       string `json:"status"`
+}
+
+// CompanionDelegationHost bridges ws/companion.delegate_work (Tier-1) and
+// ws/delegation.report (Tier-2) to the daemon's in-memory delegation table.
+type CompanionDelegationHost interface {
+	CompanionDelegateWork(callerKey, brief string) (CompanionDelegationAccepted, error)
+	CompanionDelegationReport(callerKey, delegationID, status, result string, artifacts []string) (CompanionDelegationReportAck, error)
+}
+
 func isCompanionTool(name string) bool {
 	return strings.HasPrefix(name, "companion.")
+}
+
+func isCompanionPhoneTool(name string) bool {
+	switch name {
+	case companionPhonePickupTool, companionPhoneReadTool, companionPhoneSendTool, companionPhonePutdownTool:
+		return true
+	default:
+		return false
+	}
+}
+
+// isCompanionBodyOnlyTool reports tools exclusively available to Tier-1
+// (companion-body) sessions and never visible/reachable by unmarked leads or
+// Tier-2 (companion-work).
+func isCompanionBodyOnlyTool(name string) bool {
+	return isCompanionPhoneTool(name) || name == companionDelegateWorkTool
+}
+
+func isDelegationReportTool(name string) bool {
+	return name == delegationReportTool
+}
+
+func formatStructuredGateError(code, tool, requiredTool, message string) string {
+	payload := struct {
+		Error        string `json:"error"`
+		Tool         string `json:"tool"`
+		RequiredTool string `json:"required_tool,omitempty"`
+		Message      string `json:"message"`
+	}{
+		Error:        code,
+		Tool:         tool,
+		RequiredTool: requiredTool,
+		Message:      message,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return code + ": " + message
+	}
+	return string(raw)
 }
 
 func companionTools() []map[string]any {
@@ -132,42 +194,92 @@ func companionTools() []map[string]any {
 				},
 			},
 		},
+		{
+			"name":        companionDelegateWorkTool,
+			"description": "Hand off a lossless task brief to the hidden companion work brain without blocking. Callable only in laptop posture; returns immediately with a delegation_id while the companion shows laptop work visuals.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_key": stringProperty(sessionKeyPropertyDescription),
+					"brief":       stringProperty("Complete, lossless task brief for the hidden work brain (all needed context, constraints, and references; no length cap)."),
+					"format":      stringProperty(formatPropertyDescription),
+				},
+				"required": []string{"brief"},
+			},
+		},
 	}
 }
 
-func (s *Server) companionOwnerKey(sessionKey string) string {
-	if key := strings.TrimSpace(sessionKey); key != "" {
-		return key
+func delegationTools() []map[string]any {
+	return []map[string]any{
+		{
+			"name":        delegationReportTool,
+			"description": "Report the structured outcome of an active companion work delegation back to the embodied companion persona.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_key":   stringProperty(sessionKeyPropertyDescription),
+					"delegation_id": stringProperty("Identifier of the active delegation being reported."),
+					"status":        enumStringProperty("Outcome status of the delegation.", []string{"done", "partial", "blocked"}),
+					"result":        stringProperty("Complete, lossless technical result for the companion persona (no length cap)."),
+					"artifacts": map[string]any{
+						"type":        "array",
+						"description": "Optional artifact paths or links produced during the delegation.",
+						"items":       map[string]any{"type": "string"},
+					},
+					"format": stringProperty(formatPropertyDescription),
+				},
+				"required": []string{"delegation_id", "status", "result"},
+			},
+		},
 	}
-	if key := strings.TrimSpace(s.conversation); key != "" {
-		return key
+}
+
+func (s *Server) companionDelegationHost() CompanionDelegationHost {
+	if s.companionDelegation != nil {
+		return s.companionDelegation
 	}
-	return "lead"
+	if host, ok := s.companion.(CompanionDelegationHost); ok {
+		return host
+	}
+	return nil
 }
 
 // companionPostureRefusal enforces the strict server-side laptop|phone posture
-// lock for both Server.callTool and Server.callDiscoveryTools.
-func (s *Server) companionPostureRefusal(name, sessionKey string) string {
-	if s.companion == nil {
+// lock for both Server.callTool and Server.callDiscoveryTools, scoped strictly
+// to companion-body sessions ((1740)). Unmarked sessions and companion-work are
+// never posture-locked.
+func (s *Server) companionPostureRefusal(name, sessionKey string, entry sessionEntry, found bool) string {
+	if s.companion == nil || !found || entry.companionRole != CompanionRoleBody {
 		return ""
 	}
-	posture := s.companion.CompanionPosture(s.companionOwnerKey(sessionKey))
+	owner := strings.TrimSpace(sessionKey)
+	if owner == "" {
+		owner = strings.TrimSpace(s.hostedSessionKey())
+	}
+	if owner == "" {
+		return ""
+	}
+	posture := s.companion.CompanionPosture(owner)
+	ns := s.runtimeNamespace()
 	if posture == wsdashboard.CompanionPosturePhone {
-		if isCompanionTool(name) || name == "workflow_state" || name == "call" || name == dashboardIntakeTool || name == dashboardInboxDrainTool {
+		if companionBodyPhonePostureAllows(name) {
 			return ""
 		}
-		return companionRefusalHandsBusy
+		return formatStructuredGateError("posture_locked", name, ns+"/"+companionPhonePutdownTool, namespaceText(companionRefusalHandsBusy, ns))
 	}
 	if name == companionPhoneReadTool || name == companionPhoneSendTool {
-		return companionRefusalPhoneOnDesk
+		return formatStructuredGateError("posture_locked", name, ns+"/"+companionPhonePickupTool, namespaceText(companionRefusalPhoneOnDesk, ns))
 	}
 	return ""
 }
 
 // applyCompanionPhonePiggyback appends "[phone buzz: N unread]" to non-JSON,
-// non-error tool responses whenever unread user phone messages are waiting.
-func (s *Server) applyCompanionPhonePiggyback(resp response, toolName string, jsonFormat bool) response {
-	if jsonFormat || s.companion == nil {
+// non-error tool responses for companion-body sessions only whenever unread
+// user phone messages are waiting ((1740)). Unmarked sessions and companion-work
+// never receive the badge.
+func (s *Server) applyCompanionPhonePiggyback(resp response, toolName string, caller sessionEntry, callerFound bool, jsonFormat bool) response {
+	if jsonFormat || s.companion == nil || !callerFound || caller.companionRole != CompanionRoleBody {
 		return resp
 	}
 	if toolName == companionPhonePickupTool || toolName == companionPhoneReadTool {
@@ -193,12 +305,39 @@ func (s *Server) applyCompanionPhonePiggyback(resp response, toolName string, js
 	return resp
 }
 
-func (s *Server) handleCompanionTool(id json.RawMessage, name string, args map[string]any) response {
+func (s *Server) handleCompanionTool(id json.RawMessage, name string, args map[string]any, callerKey string, caller sessionEntry, callerFound bool) response {
+	if isCompanionBodyOnlyTool(name) && (!callerFound || caller.companionRole != CompanionRoleBody) {
+		return errorResponse(id, -32601, fmt.Sprintf("tool not available in current %s MCP profile: %s", s.runtimeNamespace(), name))
+	}
+	if name == companionDelegateWorkTool {
+		host := s.companionDelegationHost()
+		if host == nil {
+			return toolTextResponse(id, "", errors.New(name+": companion delegation host is not available in this session"))
+		}
+		brief, ok := args["brief"].(string)
+		if !ok || strings.TrimSpace(brief) == "" {
+			return toolTextResponse(id, "", fmt.Errorf("%s: brief must be a non-empty string", name))
+		}
+		owner := strings.TrimSpace(callerKey)
+		if owner == "" {
+			return toolTextResponse(id, "", fmt.Errorf("%s: session_key is required", name))
+		}
+		ack, err := host.CompanionDelegateWork(owner, brief)
+		if err != nil {
+			return toolErrorTextResponse(id, err.Error())
+		}
+		if wantsJSON(args) {
+			return toolJSONResponse(id, ack, nil)
+		}
+		return toolTextResponse(id, fmt.Sprintf("delegation_id: %s\nstatus: %s\n", ack.DelegationID, ack.Status), nil)
+	}
 	if s.companion == nil {
 		return toolTextResponse(id, "", errors.New(name+": companion host is not available in this session"))
 	}
-	sessionKey, _ := args["session_key"].(string)
-	owner := s.companionOwnerKey(sessionKey)
+	owner := strings.TrimSpace(callerKey)
+	if isCompanionPhoneTool(name) && owner == "" {
+		return toolTextResponse(id, "", fmt.Errorf("%s: session_key is required", name))
+	}
 	ttlMS := intFromArgument(args["ttl_ms"], 0)
 
 	switch name {
@@ -277,6 +416,43 @@ func (s *Server) handleCompanionTool(id json.RawMessage, name string, args map[s
 	default:
 		return errorResponse(id, -32602, fmt.Sprintf("unknown companion tool: %s", name))
 	}
+}
+
+func (s *Server) handleDelegationReport(id json.RawMessage, args map[string]any, callerKey string, caller sessionEntry, callerFound bool) response {
+	const name = delegationReportTool
+	if !callerFound || caller.companionRole != CompanionRoleWork {
+		return errorResponse(id, -32601, fmt.Sprintf("tool not available in current %s MCP profile: %s", s.runtimeNamespace(), name))
+	}
+	host := s.companionDelegationHost()
+	if host == nil {
+		return toolTextResponse(id, "", errors.New(name+": companion delegation host is not available in this session"))
+	}
+	delegationID, err := stringArg(name, "delegation_id", args)
+	if err != nil {
+		return toolTextResponse(id, "", err)
+	}
+	status, err := stringArg(name, "status", args)
+	if err != nil {
+		return toolTextResponse(id, "", err)
+	}
+	switch status {
+	case "done", "partial", "blocked":
+	default:
+		return toolTextResponse(id, "", fmt.Errorf("%s: status must be done, partial, or blocked", name))
+	}
+	result, ok := args["result"].(string)
+	if !ok || strings.TrimSpace(result) == "" {
+		return toolTextResponse(id, "", fmt.Errorf("%s: result must be a non-empty string", name))
+	}
+	artifacts := stringList(args["artifacts"])
+	ack, err := host.CompanionDelegationReport(strings.TrimSpace(callerKey), delegationID, status, result, artifacts)
+	if err != nil {
+		return toolErrorTextResponse(id, err.Error())
+	}
+	if wantsJSON(args) {
+		return toolJSONResponse(id, ack, nil)
+	}
+	return toolTextResponse(id, fmt.Sprintf("delegation_id: %s\nstatus: %s\n", ack.DelegationID, ack.Status), nil)
 }
 
 func formatCompanionPhoneRead(header string, res wsdashboard.CompanionPhoneReadResult) string {

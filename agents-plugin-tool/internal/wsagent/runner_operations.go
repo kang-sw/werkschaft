@@ -39,7 +39,8 @@ func (r *Runner) Get(id string) (State, error) {
 	return State{}, errUnknown
 }
 
-// List reads every conversation's state, oldest first.
+// List reads every visible conversation's state, oldest first.
+// Companion-managed sessions (CompanionRole != "") are hidden from the roster.
 func (r *Runner) List() []State {
 	r.mu.Lock()
 	out := make([]State, 0, len(r.convs)+len(r.closed))
@@ -48,10 +49,16 @@ func (r *Runner) List() []State {
 		convs = append(convs, c)
 	}
 	for _, rec := range r.closed {
+		if rec.CompanionRole != "" {
+			continue
+		}
 		out = append(out, r.memoryClosedState(rec))
 	}
 	r.mu.Unlock()
 	for _, c := range convs {
+		if c.record().CompanionRole != "" {
+			continue
+		}
 		out = append(out, c.memoryState())
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -61,6 +68,91 @@ func (r *Runner) List() []State {
 		return out[i].ID < out[j].ID
 	})
 	return out
+}
+
+// IsCompanion reports whether conversation id is a daemon-managed companion
+// session (companion-body or companion-work).
+func (r *Runner) IsCompanion(id string) bool {
+	rec, ok := r.recordOf(id)
+	return ok && rec.CompanionRole != ""
+}
+
+// CompanionRecord returns the persisted record snapshot for conversation id.
+func (r *Runner) CompanionRecord(id string) (Record, bool) {
+	return r.recordOf(id)
+}
+
+// IsConversationLive reports whether conversation id is currently open (not
+// closed and not handed off).
+func (r *Runner) IsConversationLive(id string) bool {
+	r.mu.Lock()
+	c, ok := r.convs[id]
+	r.mu.Unlock()
+	if !ok {
+		return false
+	}
+	c.mu.Lock()
+	live := !c.closed
+	c.mu.Unlock()
+	return live
+}
+
+// HasLiveChildren reports whether conversation parentID currently has any live
+// spawned descendant conversation (running, starting, or holding queued work).
+func (r *Runner) HasLiveChildren(parentID string) bool {
+	if parentID == "" {
+		return false
+	}
+	r.mu.Lock()
+	convs := make([]*conv, 0, len(r.convs))
+	for _, c := range r.convs {
+		convs = append(convs, c)
+	}
+	r.mu.Unlock()
+	type convInfo struct {
+		id       string
+		parentID string
+		active   bool
+	}
+	byID := make(map[string]convInfo, len(convs))
+	for _, c := range convs {
+		c.mu.Lock()
+		pid := ""
+		if c.rec.Parent != nil {
+			pid = c.rec.Parent.ReplyID
+		}
+		info := convInfo{
+			id:       c.rec.ReplyID,
+			parentID: pid,
+			active:   !c.closed && (c.turn || c.proc != nil || c.spawnPending || c.sends > max(c.settled.mark, c.voided)),
+		}
+		c.mu.Unlock()
+		byID[info.id] = info
+	}
+	for _, info := range byID {
+		if !info.active {
+			continue
+		}
+		cur := info.parentID
+		for depth := 0; cur != "" && depth < 8; depth++ {
+			if cur == parentID {
+				return true
+			}
+			p, ok := byID[cur]
+			if !ok {
+				break
+			}
+			cur = p.parentID
+		}
+	}
+	return false
+}
+
+// CompactCompanionIdle requests a non-resuming compaction for a companion
+// session at its idle boundary via the existing hosted-session compaction path.
+func (r *Runner) CompactCompanionIdle(wsKey string) CompactResult {
+	resume := false
+	return r.Compact(wsKey, "", &resume)
 }
 
 // Send holds text as the conversation's next user message. It is submitted
@@ -221,7 +313,7 @@ func (r *Runner) IdleLeads() (idle []IdleLead, kept int) {
 	created := map[string]string{}
 	for _, c := range convs {
 		c.do(func() {
-			if !c.rec.Lead || c.closed || c.proc == nil {
+			if !c.rec.Lead || c.rec.CompanionRole != "" || c.closed || c.proc == nil {
 				return
 			}
 			if !c.sleepable() {
@@ -838,6 +930,16 @@ func (r *Runner) closeOne(id string) (State, error) {
 	return st, nil
 }
 
+// SetDashboardControlAccess toggles a hosted lead conversation's persisted
+// ws/daemon.* dashboard-control opt-in without stopping a running process.
+// Revocation takes effect immediately on server-side MCP dispatch; newly
+// enabling takes effect after the next process start.
+func (r *Runner) SetDashboardControlAccess(id string, enabled bool) (State, error) {
+	return r.act(id, func(c *conv) error {
+		return c.setDashboardControlAccess(enabled)
+	})
+}
+
 // SetSettings changes the conversation's model or effort (nil leaves one
 // unchanged, "" returns it to the harness default). The change applies at
 // the next turn boundary: in-stream when the backend has a control for it,
@@ -856,6 +958,56 @@ func (r *Runner) SetSettings(id string, model, effort *string) (State, error) {
 		c.setSettings(model, effort)
 		return nil
 	})
+}
+
+// SetConvHistoryAccess updates a lead conversation's persisted
+// conv_history_access flag immediately without stopping a running process.
+func (r *Runner) SetConvHistoryAccess(id string, enabled bool) (State, error) {
+	return r.act(id, func(c *conv) error {
+		return c.setConvHistoryAccess(enabled)
+	})
+}
+
+// ConvHistoryAccess reports the live persisted conv_history_access flag for
+// replyID from memory (zero disk I/O). Non-leads and unknown IDs return false.
+func (r *Runner) ConvHistoryAccess(id string) bool {
+	rec, ok := r.RecordByReplyID(id)
+	return ok && rec.Lead && rec.ConvHistoryAccess
+}
+
+// ReviveLead unhides an archived lead or reopens a closed lead. Live leads are
+// a no-op; child/worker sessions and unknown/pruned IDs return a clear error.
+func (r *Runner) ReviveLead(id string) error {
+	r.mu.Lock()
+	c, open := r.convs[id]
+	rec, closed := r.closed[id]
+	parked := r.parked[id]
+	r.mu.Unlock()
+	if !open && parked {
+		if c = r.unpark(id); c != nil {
+			open = true
+		}
+	}
+	switch {
+	case open:
+		rRec := c.record()
+		if !rRec.Lead {
+			return badRequest("revive applies to lead sessions only")
+		}
+		if c.state().Hidden {
+			_, err := r.SetHidden(id, false)
+			return err
+		}
+		return nil
+	case closed:
+		if !rec.Lead {
+			return badRequest("revive applies to lead sessions only")
+		}
+		_, err := r.Reopen(id)
+		return err
+	default:
+		return errUnknown
+	}
 }
 
 // open returns the open conversation id: errClosed for a closed one,

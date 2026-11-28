@@ -293,7 +293,14 @@
         if (jTok && !skipCrumb) WsJank.end(jTok, { event: evName, bytes: rawBytes });
       }
     };
-    return { close: function () { over = true; cleanup(); try { ws.close(); } catch (x) {} } };
+    function send(payload) {
+      if (over || ws.readyState !== WebSocket.OPEN) return false;
+      var raw = typeof payload === "string" ? payload : JSON.stringify(payload);
+      var bytes = typeof TextEncoder === "function" ? new TextEncoder().encode(raw).length : raw.length;
+      if (bytes > 1024) return false;
+      try { ws.send(raw); return true; } catch (x) { return false; }
+    }
+    return { close: function () { over = true; cleanup(); try { ws.close(); } catch (x) {} }, send: send };
   }
   // Immutable tree inputs keep each nested row independent of its children.
   // Slots are private transport comments; materialization removes every slot
@@ -464,6 +471,14 @@
 
   var ASSETS_TRIED = "ws.dashboard.assetsreload";
   var mainStream = null, mainRetry = null, mainProbe = null, mainEpoch = 0, mainPaused = false;
+  // Cold loads and long disconnects (> 60s, e.g. sleep/wake) silently
+  // re-baseline rail attention so stale arrivals never storm; short reconnects
+  // (<= 60s, e.g. daemon swap or delta recovery) preserve seen asks so genuine
+  // new questions arriving during the blip still flag and flash.
+  var RAIL_RECONNECT_GRACE_MS = 60000, railBaselined = false, railDisconnectedAt = null;
+  function railNoteDisconnect() {
+    if (railBaselined && railDisconnectedAt === null) railDisconnectedAt = Date.now();
+  }
   var companionRelay = null, companionStreamReady = !window.WebSocket;
   function companionStream(ready) {
     companionStreamReady = ready;
@@ -473,16 +488,69 @@
     mainEpoch++;
     if (mainRetry !== null) { clearTimeout(mainRetry); mainRetry = null; }
     if (mainProbe) { mainProbe.abort(); mainProbe = null; }
-    if (mainStream) { mainStream.close(); mainStream = null; }
+    if (mainStream) { railNoteDisconnect(); mainStream.close(); mainStream = null; }
   }
   function syncMainStream() {
     // Browser-hidden tabs retain their stream; only cached frames stop it.
     if (shHidden === mainPaused) return;
     mainPaused = shHidden;
-    if (mainPaused) { boardReturnEnd(); stopMainStream(); connected(false); trackerLost(); }
+    if (mainPaused) { railNoteDisconnect(); boardReturnEnd(); stopMainStream(); connected(false); trackerLost(); }
     else { boardReturnShown(); connect(); }
   }
   doc.addEventListener("ws-page-visibility", syncMainStream);
+  // Local shell bridge heartbeat: opts this local top-level shell tab into the
+  // daemon's multi-tab registry over the existing /rail/events WebSocket without
+  // opening a second stream. Every frame stays well within wsMaxFrame (1 KiB).
+  var daemonBridgeEnabled = !!(shell && root.hasAttribute("data-sysopen"));
+  var daemonTabId = "";
+  if (daemonBridgeEnabled) {
+    daemonTabId = (function () {
+      try {
+        if (window.crypto && typeof window.crypto.getRandomValues === "function") {
+          var b = new Uint8Array(8);
+          window.crypto.getRandomValues(b);
+          return "tab-" + Array.prototype.map.call(b, function (n) { return (n < 16 ? "0" : "") + n.toString(16); }).join("");
+        }
+      } catch (_) {}
+      return "tab-" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    })();
+    window.wsDaemonTabId = daemonTabId;
+  }
+  var daemonLastFocusedAt = 0;
+  function sendDaemonHeartbeat(focusedOverride) {
+    if (!daemonBridgeEnabled || !mainStream || typeof mainStream.send !== "function") return;
+    var visible = !pageHidden();
+    var focused = visible && (typeof focusedOverride === "boolean" ? focusedOverride : (typeof doc.hasFocus === "function" ? !!doc.hasFocus() : true));
+    if (focused || (visible && !daemonLastFocusedAt)) daemonLastFocusedAt = Date.now();
+    var activeRoute = String(location.pathname || "/").slice(0, 256);
+    var activeReplyId = String(rid || "").slice(0, 64);
+    var nativeCapture = !!(window.wsDaemonNativeCapture && typeof window.wsDaemonNativeCapture.capture === "function");
+    mainStream.send({
+      event: "tab-heartbeat",
+      tab_id: daemonTabId,
+      visible: visible,
+      focused: focused,
+      last_focused_at: daemonLastFocusedAt,
+      active_route: activeRoute,
+      active_reply_id: activeReplyId,
+      capabilities: { confirm_banner: true, native_capture: nativeCapture }
+    });
+  }
+  if (daemonBridgeEnabled) {
+    window.addEventListener("focus", function () { sendDaemonHeartbeat(true); });
+    window.addEventListener("blur", function () {
+      // Moving focus into a same-origin session iframe blurs window while
+      // document.hasFocus() stays true; defer one tick to distinguish real blur.
+      setTimeout(function () {
+        sendDaemonHeartbeat(typeof doc.hasFocus === "function" ? !!doc.hasFocus() : false);
+      }, 0);
+    });
+    doc.addEventListener("visibilitychange", function () { sendDaemonHeartbeat(); });
+    doc.addEventListener("ws-page-visibility", function () { sendDaemonHeartbeat(); });
+    doc.addEventListener("ws-shell-route", function () { sendDaemonHeartbeat(); });
+    doc.addEventListener("ws-shell-focus", function () { sendDaemonHeartbeat(true); });
+    doc.addEventListener("ws-daemon-native-capture-ready", function () { sendDaemonHeartbeat(); });
+  }
   function connect(withoutBoard) {
     if (!window.WebSocket || shHidden) return;
     if (framed && rid) companionStream(false);
@@ -498,25 +566,44 @@
     // Use its immutable canonical input, never the mounted/staged/pinned DOM.
     var boardHeld = hiddenRegions.board || boardLatest;
     var boardInput = withoutBoard || !boardHeld ? null : (typeof boardHeld.html === "string" ? boardInputFull(boardHeld.html) : boardHeld.html);
-    var railInput = null, treeInput = null, entryInput = null, panelInput = null, railBaseline = true;
+    var railInput = null, treeInput = null, entryInput = null, panelInput = null, railFirst = true;
     // The shell streams the rail alone; a framed session page streams its
     // session without the rail.
     var path = shell ? "/rail/events" : mode === "index" || worktree ? "/events" : "/s/" + rid + "/events";
-    var st = openStream(path + "?h=" + encodeURIComponent(held(withoutBoard)) + (framed && mode !== "index" ? "&frame=1" : "") + (!shell && mode !== "index" ? "&topics=1" : "") + (shell || (!framed && mode !== "index") ? "&railrows=1" : "") + (!shell && !worktree && mode !== "index" ? "&treerows=1&entryrows=1&panelrows=1" : ""), {
-      open: function () { connected(true); },
+    var st = openStream(path + "?h=" + encodeURIComponent(held(withoutBoard)) + (framed && mode !== "index" ? "&frame=1" : "") + (!shell && mode !== "index" ? "&topics=1" : "") + (shell || (!framed && mode !== "index") ? "&railrows=1" : "") + (!shell && !worktree && mode !== "index" ? "&treerows=1&entryrows=1&panelrows=1" : "") + (daemonBridgeEnabled ? "&bridge=1&tab_id=" + encodeURIComponent(daemonTabId) : ""), {
+      open: function () {
+        connected(true);
+        if (daemonBridgeEnabled) sendDaemonHeartbeat();
+      },
       // Reopen with the hashes held now, so a reconnect sends only what
       // changed since.
       drop: function () {
+        railNoteDisconnect();
         if (framed && rid) companionStream(false);
+        if (daemonBridgeEnabled && typeof clearDaemonConfirm === "function") clearDaemonConfirm();
         connected(false);
         trackerLost();
         retry(connect, 3000);
       },
-      events: { assets: onAssets, "openai-consent": onOpenAIConsent, "account-changed": onAccountChanged, companion: onCompanion, "companion-focus": onCompanionFocus, "companion-command": onCompanionCommand, "companion-phone": onCompanionPhone, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, usercmd: onUsercmd, execjobs: onExecJobs, gone: onGone }
+      events: { assets: onAssets, "openai-consent": onOpenAIConsent, "account-changed": onAccountChanged, "daemon-confirm-request": onDaemonConfirmRequest, "daemon-confirm-clear": onDaemonConfirmClear, "daemon-bridge-request": onDaemonBridgeRequest, companion: onCompanion, "companion-focus": onCompanionFocus, "companion-command": onCompanionCommand, "companion-phone": onCompanionPhone, "conv-reveal": onConvReveal, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, usercmd: onUsercmd, execjobs: onExecJobs, gone: onGone }
     });
     mainStream = st;
     function onOpenAIConsent(event) {
       if (!framed && current()) showOpenAIConsent(event);
+    }
+    function onDaemonConfirmRequest(event) {
+      if (!daemonBridgeEnabled || !current() || !event) return;
+      if (typeof showDaemonConfirm === "function") showDaemonConfirm(event);
+      doc.dispatchEvent(new CustomEvent("ws-daemon-confirm-request", { detail: event }));
+    }
+    function onDaemonConfirmClear(event) {
+      if (!daemonBridgeEnabled || !current()) return;
+      if (typeof clearDaemonConfirm === "function") clearDaemonConfirm(event && event.request_id);
+      doc.dispatchEvent(new CustomEvent("ws-daemon-confirm-clear", { detail: event || {} }));
+    }
+    function onDaemonBridgeRequest(event) {
+      if (!daemonBridgeEnabled || !current() || !event) return;
+      doc.dispatchEvent(new CustomEvent("ws-daemon-bridge-request", { detail: event }));
     }
     function onAccountChanged(event) {
       if (!framed && current()) doc.dispatchEvent(new CustomEvent("ws-account-changed", { detail: event }));
@@ -543,6 +630,10 @@
       if (!shell || !current() || !snapshot) return;
       window.wsCompanionPhoneState = snapshot;
       doc.dispatchEvent(new CustomEvent("ws-companion-phone", { detail: snapshot }));
+    }
+    function onConvReveal(ev) {
+      if (!current() || !ev || typeof ev.replyId !== "string" || !ev.replyId) return;
+      if (typeof railReveal === "function") railReveal(ev);
     }
     function onRegion(ev) {
       if (!current() || !ev) return;
@@ -579,6 +670,7 @@
     function onPanelRows(ev) {
       var next = panelInputPatch(panelInput, ev);
       if (!next) {
+        railNoteDisconnect();
         st.close(); connected(false);
         retry(connect, 0);
         return;
@@ -589,6 +681,7 @@
     function onEntryRows(ev) {
       var next = entryInputPatch(entryInput, ev);
       if (!next) {
+        railNoteDisconnect();
         st.close(); connected(false);
         retry(connect, 0);
         return;
@@ -599,6 +692,7 @@
     function onTreeRows(ev) {
       var next = treeInputPatch(treeInput, ev);
       if (!next) {
+        railNoteDisconnect();
         st.close(); connected(false);
         retry(connect, 0);
         return;
@@ -610,6 +704,7 @@
       var next = WsRail && WsRail.rowInputPatch(railInput, ev, doc);
       if (!next) {
         // Close before reopening: the new connection always sends a full rail.
+        railNoteDisconnect();
         st.close(); connected(false);
         retry(connect, 0);
         return;
@@ -622,6 +717,7 @@
       if (!next) {
         // This connection's baseline cannot be trusted. Close it before
         // reopening without the board hash; other regions keep their hashes.
+        railNoteDisconnect();
         st.close();
         connected(false);
         retry(function () { connect(true); }, 0);
@@ -635,7 +731,9 @@
       try {
       if (ev.name === "board" && companionRelay) companionRelay.board(ev.html);
       // Observe even held updates: an ask may open and close while hidden
-      // or during a drag. Reconnect's first full rail silently baselines.
+      // or during a drag. Cold loads and long disconnects (> 60s) baseline
+      // silently; short reconnects compare against pre-disconnect seen asks.
+      var railBaseline = ev.name === "rail" && railFirst && (!railBaselined || (railDisconnectedAt !== null && Date.now() - railDisconnectedAt > RAIL_RECONNECT_GRACE_MS));
       var needCompanionRail = !!(shell && window.WsCompanion && window.WsCompanion.observeRail && (!window.WsCompanion.hasRailObserver || window.WsCompanion.hasRailObserver()));
       var fastRailRows = ev.name === "rail" && railAttention && !railBaseline && !needCompanionRail && !pageHidden() && WsRail && WsRail.rowInputAttentionRows
         ? WsRail.rowInputAttentionRows(ev.html)
@@ -645,7 +743,7 @@
       else if (railFrag) railAttention.observe(q(".rs", railFrag), rid, railBaseline);
       if (railFrag && shell) window.WsCompanion?.observeRail?.(railFrag, rid, railBaseline);
       if (railFrag && railBaseline) apScan(railFrag, "rail", true);
-      if (ev.name === "rail") railBaseline = false;
+      if (ev.name === "rail") { railFirst = false; railBaselined = true; railDisconnectedAt = null; }
       // A hidden tab keeps only each region's newest update and applies none;
       // showing the tab applies them (showRegions). The stream stays open, so
       // the light events (tracker) still arrive and act.
@@ -714,6 +812,7 @@
     // failures keep retrying at that cadence until absence is confirmed or
     // the stream can reopen with the hashes held then.
     function onGone() {
+      railNoteDisconnect();
       st.close();
       if (framed && rid) companionStream(false);
       connected(false);

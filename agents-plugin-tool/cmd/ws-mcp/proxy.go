@@ -71,6 +71,8 @@ type proxyHost struct {
 	agents mcp.AgentHost
 	// ephemeralPool is the daemon's shared lightweight ephemeral harness pool.
 	ephemeralPool *wsagent.EphemeralPool
+	// companion is the daemon's Single-Embodiment Dual-Brain companion runtime.
+	companion mcp.CompanionDelegationHost
 	// exec is the daemon's hosted exec jobs, bound after StartDaemon; nil
 	// keeps every connection on the legacy exec path.
 	exec atomic.Pointer[execjob.Hosted]
@@ -186,6 +188,11 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 		if d := h.live.Load(); d != nil {
 			opts.Live = d
 			opts.Companion = d
+			opts.DaemonControl = d
+			opts.Conv = d
+		}
+		if h.companion != nil {
+			opts.CompanionDelegation = h.companion
 		}
 		if h.agents != nil {
 			if source, ok := h.agents.(mcp.AgentBackendRegistry); ok {
@@ -217,6 +224,8 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 		opts.UserCommandsDiscovery = h.userCommandsFor(hello.Conversation)
 		opts.Conversation = hello.Conversation
 		opts.ExecCutover = hello.ExecCutover
+		opts.DashboardControlAccess = hello.DashboardControlAccess
+		opts.ConvHistoryAccess = hello.ConvHistoryAccess
 		opts.FileWrites = hello.FileWrites
 		opts.RecordExecLaunch = hello.RecordExecLaunch
 		server := mcp.NewServerWithOptions(opts)

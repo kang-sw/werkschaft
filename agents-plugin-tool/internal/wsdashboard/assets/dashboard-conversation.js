@@ -29,6 +29,57 @@
     }
   }
   function resetEntries(box) { box.textContent = ""; box.wsKeys = Object.create(null); }
+  // One completed turn is one summary. The server anchors a completed turn's
+  // summary (data-turn-key = the closing turn entry) at the first folded entry
+  // it can still see, so a newest window or history page that truncates the
+  // turn's head re-anchors it at a later entry. The box keeps the earliest
+  // anchor (the fullest counts) and turns every other row of the turn,
+  // including the closing .turnline footer, into a hidden absorbed marker.
+  function turnSummaryEl(box, tk, except) {
+    var all = box.querySelectorAll("[data-turn-key]");
+    for (var i = 0; i < all.length; i++) {
+      if (all[i] !== except && all[i].getAttribute("data-turn-key") === tk) return all[i];
+    }
+    return null;
+  }
+  function absorbedMarker(n, k) {
+    var m = doc.createElement("span"), at = n.getAttribute("data-at");
+    m.setAttribute("hidden", ""); m.setAttribute("data-entry", k); m.setAttribute("data-turn-absorbed", "1");
+    if (at) m.setAttribute("data-at", at);
+    return m;
+  }
+  // dedupTurn returns the node to merge for incoming n: n itself, or its
+  // absorbed marker when the box already shows the turn elsewhere. It retires
+  // a later anchor or a visible footer the incoming summary supersedes.
+  function dedupTurn(box, have, n, k) {
+    var tk = n.getAttribute("data-turn-key"), cur = have[k], foot;
+    if (tk) {
+      if (cur && cur.getAttribute("data-turn-key") === tk && cur.getAttribute("data-turn-rev") === n.getAttribute("data-turn-rev")) return n;
+      var rival = turnSummaryEl(box, tk, cur);
+      if (rival) {
+        var rk = rival.getAttribute("data-entry");
+        if (rk < k) return absorbedMarker(n, k);
+        var rm = absorbedMarker(rival, rk);
+        box.replaceChild(rm, rival); have[rk] = rm;
+      }
+      foot = have[tk];
+      if (foot && foot.matches(".turnline")) {
+        var mk = absorbedMarker(foot, tk);
+        box.replaceChild(mk, foot); have[tk] = mk;
+      } else if (foot && foot.matches(".turn-with-summary")) {
+        var fl = foot.querySelector(".turnline");
+        if (fl) fl.parentNode.removeChild(fl);
+      }
+    } else if (cur && !cur.hasAttribute("data-turn-absorbed")) {
+      return n;
+    } else if (n.matches(".turnline") && turnSummaryEl(box, k)) {
+      return absorbedMarker(n, k);
+    } else if (n.matches(".turn-with-summary") && turnSummaryEl(box, k)) {
+      var nl = n.querySelector(".turnline");
+      if (nl) nl.parentNode.removeChild(nl);
+    }
+    return n;
+  }
   // mergeEntries inserts each node of src whose name box lacks at its sorted
   // place and returns inserted/replaced nodes, in order. Existing entries
   // stay put unless their mail-wake presentation changes: a hidden mail
@@ -41,6 +92,7 @@
       Array.prototype.slice.call(src.children).forEach(function (n) {
         var k = n.getAttribute("data-entry");
         if (!k) return;
+        n = dedupTurn(box, have, n, k);
         var old = have[k];
         if (old) {
           if (!(changed && changed[k]) &&
@@ -474,12 +526,14 @@
   // entry changed under it (evicted, or the box started over), and its epoch
   // drops a page still in flight, which would no longer join what the box
   // holds.
-  var histBefore = null, histEnd = false, histBusy = false, histEpoch = 0;
-  function histReset() { histBefore = null; histEnd = false; histBusy = false; histEpoch++; emitAuditEvent("ws-history-reset", {}); }
-  function loadHistory() {
-    if (histEnd || histBusy || !window.fetch || !convo || !visible(convo)) return;
+  var histBefore = null, histEnd = false, histBusy = false, histEpoch = 0, histPromise = null;
+  function histReset() { histBefore = null; histEnd = false; histBusy = false; histPromise = null; histEpoch++; emitAuditEvent("ws-history-reset", {}); }
+  function fetchHistoryPage(opts) {
+    opts = opts || {};
+    if (histEnd || !window.fetch || !convo || (!opts.force && !visible(convo))) return Promise.resolve({ end: !!histEnd, skipped: true });
+    if (histBusy) return histPromise || Promise.resolve({ end: !!histEnd, skipped: true });
     var box = entriesBox();
-    if (!box) return;
+    if (!box) return Promise.resolve({ end: true, skipped: true });
     var prevOldest = firstEntryEl(box), prevOldestAt = prevOldest ? prevOldest.getAttribute("data-at") || "" : "";
     if (histBefore === null) {
       histBefore = prevOldest ? prevOldest.getAttribute("data-entry") || "" : "";
@@ -487,12 +541,13 @@
     histBusy = true;
     var epoch = histEpoch;
     var url = "/s/" + rid + "/history?n=50" + (histBefore ? "&before=" + encodeURIComponent(histBefore) : "");
-    fetch(url, { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+    var p = fetch(url, { credentials: "same-origin", cache: "no-store" }).then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     }).then(function (res) {
-      if (epoch !== histEpoch) return;
+      if (epoch !== histEpoch) return { aborted: true, end: !!histEnd };
       histBusy = false;
+      histPromise = null;
       var h = convo.scrollHeight, top = convo.scrollTop;
       var added = mergeEntries(box, frag(res.html || ""));
       added.forEach(sweepOutImgs);
@@ -509,17 +564,160 @@
       if (res.end || !res.before) histEnd = true;
       var nextOldest = firstEntryEl(box), nextOldestAt = nextOldest ? nextOldest.getAttribute("data-at") || "" : "";
       emitAuditEvent("ws-history-page", { prevOldestAt: prevOldestAt, oldestAt: nextOldestAt, end: !!histEnd, empty: !nextOldest });
-      nearTop();
+      if (!opts.skipNearTop) nearTop();
+      return { added: added, end: !!histEnd };
     }, function () {
       // A failed fetch (daemon replaced, network) is retried on the next
       // scroll to the top, after a pause.
-      if (epoch === histEpoch) setTimeout(function () { if (epoch === histEpoch) histBusy = false; }, 3000);
+      if (epoch === histEpoch) {
+        histPromise = null;
+        setTimeout(function () { if (epoch === histEpoch) histBusy = false; }, 3000);
+      }
+      return { error: true, end: !!histEnd };
     });
+    histPromise = p;
+    return p;
   }
+  function loadHistory() { fetchHistoryPage(); }
   // nearTop loads older entries when the conversation is scrolled to (or
   // too short to scroll away from) its top.
   function nearTop() { if (convo && visible(convo) && convo.scrollTop < 160) loadHistory(); }
   if (convo) convo.addEventListener("scroll", nearTop);
+
+  // --- #entry=<key> jump: paginate up to 5 pages, highlight, or show notice --
+  var ENTRY_JUMP_MAX_PAGES = 5, ENTRY_FLASH_MS = 1800, ENTRY_NOTICE_MS = 4500;
+  var entryJumpEpoch = 0, entryJumpPending = "", entryNoticeEl = null, entryNoticeTimer = 0;
+  function parseEntryHash(h) {
+    var raw = String(h || "");
+    if (raw.charAt(0) === "#") raw = raw.slice(1);
+    var m = /(?:^|&)entry=([^&]+)/.exec(raw);
+    if (!m) return "";
+    try { return decodeURIComponent(m[1]).trim(); } catch (_) { return m[1].trim(); }
+  }
+  function entryJumpNotice(text) {
+    if (!convo) return;
+    if (!entryNoticeEl || !entryNoticeEl.isConnected) {
+      var wrap = doc.createElement("div");
+      wrap.className = "conv-entry-notice-wrap";
+      var pill = doc.createElement("div");
+      pill.className = "conv-entry-notice";
+      pill.setAttribute("role", "status");
+      pill.setAttribute("aria-live", "polite");
+      pill.hidden = true;
+      wrap.appendChild(pill);
+      convo.insertBefore(wrap, convo.firstChild);
+      entryNoticeEl = pill;
+    }
+    entryNoticeEl.textContent = text;
+    entryNoticeEl.hidden = false;
+    if (entryNoticeTimer) clearTimeout(entryNoticeTimer);
+    entryNoticeTimer = setTimeout(function () {
+      entryNoticeTimer = 0;
+      if (entryNoticeEl) entryNoticeEl.hidden = true;
+    }, ENTRY_NOTICE_MS);
+  }
+  function entryJumpRevealTarget(box, el, key) {
+    var target = el;
+    if (el.getAttribute && el.getAttribute("data-wb-folded") === "1") {
+      var turns = box.querySelectorAll("[data-conv-turn][data-replies]");
+      for (var i = 0; i < turns.length; i++) {
+        var ids = (turns[i].getAttribute("data-replies") || "").split(" ");
+        var idx = ids.indexOf(key);
+        if (idx >= 0) {
+          turns[i].open = true;
+          var clones = turns[i].querySelectorAll("[data-wb-clone]");
+          var exact = null;
+          for (var c = 0; c < clones.length; c++) {
+            if (clones[c].getAttribute && clones[c].getAttribute("data-wb-clone-entry") === key) { exact = clones[c]; break; }
+          }
+          target = exact || clones[idx] || clones[0] || turns[i];
+          break;
+        }
+      }
+    }
+    for (var p = target; p && p !== box; p = p.parentNode) {
+      if (p.tagName === "DETAILS") p.open = true;
+    }
+    return target;
+  }
+  function entryJumpFlash(target) {
+    if (!target || !target.classList) return;
+    target.classList.remove("conv-entry-flash");
+    void target.offsetWidth;
+    target.classList.add("conv-entry-flash");
+    clearTimeout(target.wsEntryFlashTimer);
+    target.wsEntryFlashTimer = setTimeout(function () {
+      target.classList.remove("conv-entry-flash");
+    }, ENTRY_FLASH_MS);
+  }
+  function entryJumpTo(key) {
+    if (!key || !convo) return Promise.resolve(false);
+    if (typeof shHidden !== "undefined" && shHidden) {
+      entryJumpPending = key;
+      return Promise.resolve(false);
+    }
+    entryJumpPending = "";
+    if (grid && typeof tabShown === "function" && !tabShown("convo")) {
+      if (typeof setTab === "function") setTab("convo");
+      if (typeof setCtab === "function") setCtab("convo");
+    }
+    var epoch = ++entryJumpEpoch;
+    var pages = 0;
+    function finishFound(box, el) {
+      if (epoch !== entryJumpEpoch) return false;
+      // Flush any pending async whiteboard-only fold before revealing/flashing
+      // so newly paginated replies are already cloned into their turn drawer.
+      if (typeof wbOnlyOn === "function" && wbOnlyOn() && typeof wbFoldSync === "function") wbFoldSync();
+      var target = entryJumpRevealTarget(box, el, key);
+      stick = false;
+      if (typeof queueSyncConvoBottom === "function") queueSyncConvoBottom();
+      if (typeof target.scrollIntoView === "function") {
+        target.scrollIntoView({ block: "center", behavior: typeof reducedMotion === "function" && reducedMotion() ? "instant" : "smooth" });
+      }
+      entryJumpFlash(target);
+      return true;
+    }
+    function step() {
+      if (epoch !== entryJumpEpoch) return Promise.resolve(false);
+      var box = entriesBox();
+      if (!box) return Promise.resolve(false);
+      var hit = entryKeys(box)[key];
+      if (hit) return Promise.resolve(finishFound(box, hit));
+      if (histEnd || pages >= ENTRY_JUMP_MAX_PAGES || !window.fetch) {
+        entryJumpNotice(wsT("js.conv.entry.not_found"));
+        return Promise.resolve(false);
+      }
+      var wait = histBusy && histPromise ? histPromise : null;
+      if (wait) {
+        return wait.then(function () { return step(); });
+      }
+      pages++;
+      return fetchHistoryPage({ force: true, skipNearTop: true }).then(function (res) {
+        if (epoch !== entryJumpEpoch) return false;
+        if (res && (res.aborted || res.error || res.skipped)) {
+          entryJumpNotice(wsT("js.conv.entry.not_found"));
+          return false;
+        }
+        return step();
+      });
+    }
+    return step();
+  }
+  function entryJumpFromHash(h) {
+    var key = parseEntryHash(h !== undefined ? h : location.hash);
+    if (!key) return Promise.resolve(false);
+    return entryJumpTo(key);
+  }
+  function entryJumpRunPending() {
+    if (!entryJumpPending) return;
+    var key = entryJumpPending;
+    entryJumpPending = "";
+    entryJumpTo(key);
+  }
+  if (typeof window !== "undefined") {
+    window.wsEntryJumpFromHash = entryJumpFromHash;
+    window.addEventListener("hashchange", function () { entryJumpFromHash(); });
+  }
 
   // --- chat jump arrow (top-left of #convo) --------------------------------
   // Single arrow that jumps to the user's most recent own message not

@@ -48,7 +48,7 @@
 }
 .stage-well-bg {
   position: fixed;
-  top: calc(var(--toph, 36px) + var(--account-banner-space, 0px));
+  top: calc(var(--toph, 36px) + var(--account-banner-space, 0px) + var(--daemon-confirm-space, 0px));
   left: var(--well-left, 6px);
   right: var(--well-right, 6px);
   bottom: var(--botbar-h, 26px);
@@ -60,7 +60,7 @@
 }
 
 /* Frames end above the 26px bottom status bar (and already start at
-   --account-banner-space via dashboard-account-consent.css); whole-page-
+   --account-banner-space + --daemon-confirm-space via the banner CSS); whole-page-
    scrolling frames clip to the stage well rectangle while scrolled so content
    never paints over the top chrome band or well margins (decision 1721). */
 :root[data-shell] .frames {
@@ -715,8 +715,12 @@
   :root[data-frame] .dbody > .rail-ph {
     margin: calc(-1 * var(--topgap, 12px)) 0 0 0;
   }
-  :root[data-shell][data-account-banner] .dwrap .dbody > .rail {
-    margin-block-start: calc(-1 * var(--account-banner-space, 0px));
+  :root[data-shell] .daemon-confirm-banner {
+    margin-inline-start: calc(var(--rail-reserve, 288px) + var(--sh-stage-side, 0px));
+  }
+  :root[data-shell][data-account-banner] .dwrap .dbody > .rail,
+  :root[data-shell][data-daemon-confirm] .dwrap .dbody > .rail {
+    margin-block-start: calc(-1 * (var(--account-banner-space, 0px) + var(--daemon-confirm-space, 0px)));
   }
   :root[data-shell] .dbody > .rail[data-companion-dock="rail-slot"] {
     margin-bottom: 0;
@@ -742,7 +746,7 @@
   :root[data-shell]:not([data-rail-collapsed="true"]) .rail-splitter {
     display: block;
     position: fixed;
-    top: calc(var(--toph, 36px) + var(--account-banner-space, 0px) + 8px);
+    top: calc(var(--toph, 36px) + var(--account-banner-space, 0px) + var(--daemon-confirm-space, 0px) + 8px);
     bottom: calc(var(--botbar-h, 26px) + 8px);
     left: calc(var(--rail-w, 280px) - 4px);
     width: 8px;

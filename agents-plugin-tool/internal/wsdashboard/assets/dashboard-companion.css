@@ -200,10 +200,16 @@
 
 /* Pure-VRM left-rail bust dock (>= 1600px): borderless transparent WebGL canvas
    anchored over #rail-companion-slot with a soft bottom dissolve fade. */
-.ws-companion[data-dock="rail-slot"] .ws-companion-character {
+.ws-companion[data-dock="rail-slot"] .ws-companion-character,
+.ws-companion[data-dock="rail-slot"] .ws-companion-character:active {
   cursor: pointer;
 }
-.ws-companion[data-dock="rail-slot"] .ws-companion-character:active {
+.ws-companion[data-dock="rail-slot"] .ws-companion-hit[data-area="character"] .ws-companion-character,
+.ws-companion[data-dock="rail-slot"] .ws-companion-hit[data-area="character"] .ws-companion-character:active {
+  cursor: default;
+}
+.ws-companion[data-dock="rail-slot"] .ws-companion-hit[data-area="messenger"] .ws-companion-character,
+.ws-companion[data-dock="rail-slot"] .ws-companion-hit[data-area="messenger"] .ws-companion-character:active {
   cursor: pointer;
 }
 .ws-companion[data-dock="rail-slot"] .ws-companion-resize {

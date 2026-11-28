@@ -118,23 +118,25 @@ test("a session with no toggle is OFF even with a stored on", () => {
 });
 
 test("a stored on session starts ON and folds replies into drawers", () => {
-  const { ctx, box, btn } = load({ stored: "on" });
-  const n = populate(box);
-  ctx.api.wbFoldSync();
-  assert.equal(ctx.api.wbOnlyOn(), true);
-  assert.equal(btn.getAttribute("aria-pressed"), "true");
-  for (const [reply, turn, text] of [[n.r1, n.tool, "tool reply"], [n.r2, n.plain, "plain reply"]]) {
-    assert.equal(reply.hasAttribute("data-wb-folded"), true, "original stays in place, hidden");
-    assert.ok(box.querySelectorAll(".msg").includes(reply));
-    const clones = turn.querySelector("[data-conv-turn-drawer]").children;
-    assert.equal(clones.length, 1);
-    assert.equal(clones[0].hasAttribute("data-wb-clone"), true);
-    assert.equal(clones[0].hasAttribute("data-entry"), false, "clones never carry an entry key");
-    assert.equal(clones[0].children[0].attrs.text, text);
+  for (const stored of ["on", "1"]) {
+    const { ctx, box, btn } = load({ stored });
+    const n = populate(box);
+    ctx.api.wbFoldSync();
+    assert.equal(ctx.api.wbOnlyOn(), true, "stored=" + stored + " starts ON");
+    assert.equal(btn.getAttribute("aria-pressed"), "true");
+    for (const [reply, turn, text] of [[n.r1, n.tool, "tool reply"], [n.r2, n.plain, "plain reply"]]) {
+      assert.equal(reply.hasAttribute("data-wb-folded"), true, "original stays in place, hidden");
+      assert.ok(box.querySelectorAll(".msg").includes(reply));
+      const clones = turn.querySelector("[data-conv-turn-drawer]").children;
+      assert.equal(clones.length, 1);
+      assert.equal(clones[0].hasAttribute("data-wb-clone"), true);
+      assert.equal(clones[0].hasAttribute("data-entry"), false, "clones never carry an entry key");
+      assert.equal(clones[0].children[0].attrs.text, text);
+    }
+    assert.equal(n.plain.hidden, false, "the plain summary shows while ON");
+    assert.equal(n.turnline.hasAttribute("data-wb-folded"), true, "its turnline hides");
+    assert.equal(n.tool.querySelector("[data-conv-turn-folded]").hidden, false, "the tool turn names the folded replies");
   }
-  assert.equal(n.plain.hidden, false, "the plain summary shows while ON");
-  assert.equal(n.turnline.hasAttribute("data-wb-folded"), true, "its turnline hides");
-  assert.equal(n.tool.querySelector("[data-conv-turn-folded]").hidden, false, "the tool turn names the folded replies");
 });
 
 test("toggling is persisted per session, scroll-locked, and reversible", () => {

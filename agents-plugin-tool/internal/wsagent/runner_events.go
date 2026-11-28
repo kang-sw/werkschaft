@@ -28,6 +28,9 @@ func (c *conv) handle(ev Event) {
 			c.lineOpen = 0
 		}
 	}
+	if !quiet && !c.replaying && (ev.TurnStart || ev.Live != nil || ev.ToolBoundary) {
+		c.notifyCompanionActivity()
+	}
 	switch {
 	case ev.LineEnd:
 		c.lineEnd(ev.Seq)
@@ -134,6 +137,9 @@ func (c *conv) handle(ev Event) {
 		c.setStatus(func() { c.lastErr = ev.Fatal.Error() })
 		fmt.Fprintf(c.r.opts.Log, "agent %s: %v\n", c.rec.ReplyID, ev.Fatal)
 		c.stopProcess("")
+		if !c.closed && !c.quitting && c.rec.CompanionRole != "" && c.r.opts.OnCompanionClose != nil {
+			c.r.opts.OnCompanionClose(c.rec.CompanionRole, c.rec.ReplyID, c.rec.WSKey, "crash")
+		}
 	case ev.TurnStart:
 		c.summaryStart(ev)
 		if quiet && c.rec.Parent != nil && ev.Seq <= c.rec.TurnStartSeq {
@@ -849,6 +855,9 @@ func (c *conv) processExited() {
 		}
 	})
 	c.processEnded()
+	if !c.closed && !c.quitting && c.rec.CompanionRole != "" && c.r.opts.OnCompanionClose != nil {
+		c.r.opts.OnCompanionClose(c.rec.CompanionRole, c.rec.ReplyID, c.rec.WSKey, "crash")
+	}
 	if !c.closed && !c.quitting {
 		c.releaseHeld()
 	}
@@ -945,7 +954,7 @@ func (c *conv) processEnded() {
 	c.checkAction(false)
 	hadBackgroundTasks := c.bgTasks != 0
 	c.setStatus(func() {
-		c.activeMode, c.bgTasks = "", 0
+		c.activeMode, c.bgTasks, c.dashboardControlEffective = "", 0, false
 		c.background, c.monitors = nil, nil
 	})
 	c.clearProcessMCP()
@@ -1311,6 +1320,25 @@ func (c *conv) checkModelSetting(model *string) error {
 	return nil
 }
 
+func (c *conv) setDashboardControlAccess(enabled bool) error {
+	if !c.rec.Lead {
+		return badRequest("dashboard_control_access applies to a lead session only")
+	}
+	if c.r.isChildRecord(c.record()) {
+		return &requestError{status: http.StatusForbidden, msg: "child session settings are fixed at spawn"}
+	}
+	if c.record().DashboardControlAccess == enabled {
+		return nil
+	}
+	if err := c.update(func(rec *Record) {
+		rec.DashboardControlAccess = enabled
+	}); err != nil {
+		return err
+	}
+	c.changed(false)
+	return nil
+}
+
 func (c *conv) setSettings(model, effort *string) {
 	c.update(func(rec *Record) {
 		if model != nil && *model != rec.Model {
@@ -1325,6 +1353,27 @@ func (c *conv) setSettings(model, effort *string) {
 	if !c.turn {
 		c.applySettings()
 	}
+}
+
+// setConvHistoryAccess persists the lead's conv_history_access flag without
+// stopping or restarting a running process (decision 1640).
+func (c *conv) setConvHistoryAccess(enabled bool) error {
+	if !c.record().Lead {
+		return &requestError{status: http.StatusForbidden, msg: "conv_history_access applies to lead sessions only"}
+	}
+	changed := false
+	if err := c.update(func(rec *Record) {
+		if rec.ConvHistoryAccess != enabled {
+			rec.ConvHistoryAccess = enabled
+			changed = true
+		}
+	}); err != nil {
+		return err
+	}
+	if changed {
+		c.r.notify(c.rec.ReplyID, c.rec.Root)
+	}
+	return nil
 }
 
 // applySettings carries changed settings to the process at a turn
@@ -1482,6 +1531,32 @@ func (c *conv) finishClose() {
 	}
 	c.signalSettled()
 	c.watched()
+	if c.rec.CompanionRole != "" && c.r.opts.OnCompanionClose != nil {
+		c.r.opts.OnCompanionClose(c.rec.CompanionRole, c.rec.ReplyID, c.rec.WSKey, "close")
+	}
+}
+
+func (c *conv) notifyCompanionActivity() {
+	fn := c.r.opts.OnCompanionActivity
+	if fn == nil {
+		return
+	}
+	if c.rec.CompanionRole != "" {
+		fn(c.rec.CompanionRole, c.rec.ReplyID, c.rec.WSKey)
+		return
+	}
+	parent := c.rec.Parent
+	for depth := 0; parent != nil && depth < 8; depth++ {
+		prec, ok := c.r.recordOf(parent.ReplyID)
+		if !ok {
+			break
+		}
+		if prec.CompanionRole != "" {
+			fn(prec.CompanionRole, prec.ReplyID, prec.WSKey)
+			return
+		}
+		parent = prec.Parent
+	}
 }
 
 // harnessReported resolves the backend's catalog profile at the version

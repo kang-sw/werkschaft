@@ -413,6 +413,17 @@ check("pi sends a level too", R.leadBody("/w/r", { harness: "pi", level: "workdi
 check("granted full is acknowledged", R.leadBody("/w/r", { harness: "claude", level: "full", ack: true }), { root: "/w/r", harness: "claude", plugin_isolation: "default", permission_level: "full", permission_full_ack: true });
 check("full without the grant is not", R.leadBody("/w/r", { harness: "claude", level: "full", ack: "yes" }), { root: "/w/r", harness: "claude", plugin_isolation: "default", permission_level: "full" });
 check("no ack for a lower level", R.leadBody("/w/r", { harness: "claude", level: "read-only", ack: true }), { root: "/w/r", harness: "claude", plugin_isolation: "default", permission_level: "read-only" });
+check("dashboard control opt-in emitted only when explicitly true", [
+  R.leadBody("/w/r", { harness: "claude", dashboardControl: false }),
+  R.leadBody("/w/r", { harness: "claude", dashboardControl: "yes" }),
+  R.leadBody("/w/r", { harness: "claude", dashboardControl: true }),
+  R.leadBody("/w/r", { harness: "claude", level: "read-only", dashboardControl: true })
+], [
+  { root: "/w/r", harness: "claude", plugin_isolation: "default" },
+  { root: "/w/r", harness: "claude", plugin_isolation: "default" },
+  { root: "/w/r", harness: "claude", plugin_isolation: "default", dashboard_control_access: true },
+  { root: "/w/r", harness: "claude", plugin_isolation: "default", permission_level: "read-only", dashboard_control_access: true }
+]);
 
 // reviveRoute: a known move of a named session, its id escaped.
 check("takeover route", R.reviveRoute("takeover", "a b"), "/agents/a%20b/takeover");

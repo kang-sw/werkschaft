@@ -6,6 +6,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 803f58ac64ccfb66
 sage-review-completeness-reviewed: 803f58ac64ccfb66
+completed: 2026-11-28
 ---
 
 # Conversation History Search MCP API (`conv.*`) and Per-Session Permission / Whiteboard-Only Toggles
@@ -157,6 +158,24 @@ Implement the complete backend data, indexing, HTTP settings, and MCP tool layer
 5. **Verification**:
    - Go unit & integration tests (including `-race`) covering: Record T0 unknown-field round-trip, `decodePermissionRequest` allowlist acceptance and null rejection, `tools/list` + `agy` `DirectTools` opt-in/opt-out, immediate revoke block at `callTool`, incremental FTS5 insert + ring-eviction deletion + external-receiver-write and re-commit idempotency + backfill (including the `indexing: partial` marker) + 7-day prune cleanup via both prune paths, enable-before-restart callable-but-unlisted, all 5 `conv.*` tools (pagination, byte caps, prefix ambiguity, workspace scoping, child reading, lead-only revive errors, `conv-reveal` event emission), and `GOOS=windows go vet ./...`.
 
+### Result (959ab51) - 2026-11-28
+
+- **Landed (`d2388c2`, `959ab51`)**:
+  - **Session metadata & HTTP settings (`wsagent`, `wsdashboard/proxy.go`)**: Added `ConvHistoryAccess` and `MCPConvHistoryAccess` (both `omitempty`) to `wsagent.Record` preserving T0 unknown-field round-trip, projected `conv_history_access` and `conv_history_access_effective` onto `wsagent.State`, bound start-time `ConvHistoryAccess` onto the trusted MCP bearer token / `ProxyHello.ConvHistoryAccess` (`json:"-"`), derived durable-lead rejoin effective access from `rec.Lead && rec.ConvHistoryAccess`, added `conv_history_access` to `/agents/leads`, `/agents/leads/permission`, `/agents/<id>/settings`, and `/agents/<id>/settings/permission` (including both strict `decodePermissionRequest` allowlists and child 403 refusal), and persisted live toggles via `wsmeta` without stopping the running process.
+  - **Ring observer & Type 4 SQLite FTS5 index (`wslive`, `internal/wsconvidx`, `wsdashboard`)**: Added `wslive.RegisterRingObserver` (called outside `rm.mu` with added records and evicted names across `appendRingEntries`, `appendRingNamed`, and `SyncExternalRing`) plus `ReadRingRecords`; implemented sibling held-handle `conv-index.sqlite` (`wsconvidx.Store`, FTS5, `EXCLUSIVE`/`WAL`/`NORMAL`/`wal_autocheckpoint=0`/`busy_timeout=100`, 30s idle + shutdown checkpoint, 0600 Unix / owner-ACL Windows perms, 64 KiB UTF-8 rune-safe clipping, order-independent eviction tombstones + compaction, per-session high-water mark, lazy/background backfill, UTF-8 rune-safe FTS query tokenization and snippet rendering); wired daemon ownership, non-hosted first-touch reconcile without repeated disk scans, and prune cleanup in `PruneRegistrations` / `PruneRegistrationsFor` and `/meta/sessions/<id>` delete.
+  - **Per-session MCP gating & five `conv.*` tools (`internal/mcp`, `cmd/ws-mcp/proxy.go`, `wsdashboard/conv_host.go`, `wsdashboard/conv_reveal.go`, `wsdashboard/sse.go`, `agents-plugin*/runtime.json`)**: Added `conv.sessions`, `conv.search`, `conv.history`, `conv.read`, and `conv.reveal` behind `mcp.ConvHost`; gated `tools/list` and `agy` `DirectTools` on the process start-time snapshot while enforcing live persisted `ConvHistoryAccess` on both `callTool` and `callDiscoveryTools` (immediate block on revoke; callable by name while unlisted when enabled before restart per `(1643)`); wired `conv.reveal` lead-only revive and `conv-reveal` WS hub broadcasts on `regionRail`.
+- **Verification**:
+  - `go test -race ./internal/wsconvidx/... ./internal/wslive/...` — PASS
+  - `go test -race -count=1 -run "TestRecordConvHistoryAccess|TestConvHistoryAccess|TestPermissionStore" ./internal/wsagent/...` — PASS
+  - `go test -race -count=1 -run "TestDaemonConvHost" ./internal/wsdashboard/...` — PASS
+  - `go test -race -run "TestConv|TestServerInventory|TestExecCutover|TestLeadOnly" ./internal/mcp/...` — PASS
+  - `GOOS=windows go vet ./...` — PASS
+  - `python3 -m unittest agents-plugin-wsflow/tests/test_wsflow_runtime_contract.py` — PASS (3 tests)
+  - `code-review-lite` pass (`9f3b48ed-01-conv-history-phase1.md`): fixed 1 Critical, 4 Important, and 5 of 6 Minor findings; remaining Minor (notifying ring observers on partial-batch append I/O failure) deferred as benign under ring write-error semantics.
+- **Decisions**:
+  - Stored the FTS5 index in a sibling held-handle SQLite DB (`conv-index.sqlite`) under the daemon state directory instead of `metadata.sqlite` so FTS5 writes and checkpoints do not contend with `wsmeta` record transactions and can be cleanly rebuilt/migrated independently (T0).
+  - Updated `agents-plugin/runtime.json` and `agents-plugin-wsflow/runtime.json` `tool_list` inventories with the five new `conv.*` tools to satisfy the wsflow runtime contract test.
+
 ### Phase 2: Dashboard UI Toggles (New Session Modal & Session Popover) and `conv.reveal` Highlight / Entry Jump
 
 Builds on Phase 1's landed `conv_history_access` API and `conv-reveal` WS event:
@@ -177,3 +196,26 @@ Builds on Phase 1's landed `conv_history_access` API and `conv-reveal` WS event:
 4. **i18n & Verification**:
    - Sync all new strings across all 11 locale tables (`agents-plugin-tool/internal/wsi18n/tables/*.json`) and run `go test ./internal/wsi18n/...`.
    - Update/add Node unit tests (`new-session.test.js`, `testdata/lead-popover.test.cjs`, `testdata/permission-controls.test.cjs`) and Playwright Chromium browser tests covering: New Session modal both toggles + `localStorage` seeding, existing-session popover toggle + restart-needed badge + `지금 중지`, `conv-reveal` rail pulse + badge click + `#entry=<key>` pagination & flash plus the not-found-within-5-pages notice, plus dark/light screenshot QA and `GOOS=windows go vet`.
+
+### Result (f7054b8) - 2026-11-28
+
+- **Landed (`a22baee`, `f7054b8`)**:
+  - **New Session modal (`dashboard-new-session.js`, `dashboard-new-session.css`, `dashboard-whiteboard-only.js`, `rail.js`)**: Added two borderless tonal switches in `.ns-foot` (`.ns-foot-opts`), preserving the 22px label / 44px Model+Effort geometry and `.ns-cta`/`.ns-label-in` order: `data-wb-only-switch="1"` (persists `whiteboardOnly` in `ws.dashboard.newSession` only when enabled, seeds `ws.dashboard.whiteboardFirst.<id>="1"` on `201` before navigating, with `wbStored()` accepting `"on"` and `"1"`) and `data-conv-history-switch="1"` (serializes explicit boolean `conv_history_access`, never `null`, via `WsRail.leadBody`).
+  - **Existing-session popover (`dashboard-leads.js`, `dashboard-rail.css`)**: Added lead-only (`st.lead && !st.is_child`) `data-conv-history-toggle="1"` switch posting `{ conv_history_access }` to plain `/agents/<id>/settings` without stopping the running process; renders inline `data-conv-restart-banner="1"` with `data-conv-stop-now="1"` whenever `st.process && conv_history_access !== conv_history_access_effective`; wired `convStopNow` through `WsHoldConfirm` (`mode: "bar"`) and `canClickStop(st)` so idle safe stops post `{ safe_only: true }` while unsafe stops require 1.5s hold-to-confirm before posting `{}`.
+  - **`conv-reveal` & `#entry=<key>` jump (`dashboard-stream.js`, `dashboard-rail.js`, `dashboard-conversation.js`, `dashboard-lifecycle.js`, `dashboard-rail.css`, `dashboard-conversation.css`)**: Routed `conv-reveal` through the existing WS stream (`openStream`); `railReveal` expands collapsed workspace/parent rows, pulses `.conv-reveal-pulse` (compositor-only `::after` opacity animation) and mounts a clickable `.conv-reveal-jump` badge surviving rail swaps for 12s, navigating immediately only when `focus === true` on a visible/focused tab; `#entry=<key>` paginates `/s/<rid>/history?n=50&before=...` up to 5 pages (250 entries) with scroll compensation, flushes `wbFoldSync()` synchronously and matches `[data-wb-clone-entry]` to open folded drawers cleanly, highlights via compositor-only `.conv-entry-flash::after` opacity keyframes, and shows an inline `.conv-entry-notice` without moving scroll when absent beyond 5 pages.
+  - **i18n & Tests (`internal/wsi18n/tables/*.json`, `new-session.test.js`, `testdata/lead-popover.test.cjs`, `testdata/permission-controls.test.cjs`, `testdata/whiteboard-only.test.cjs`, `testdata/conv-reveal.test.cjs`, `testdata/new-session-modal.browser.cjs`, `conv_history_ui_test.go`, `testdata/conv-history-ui.browser.cjs`)**: Synced 8 new keys across all 11 locale tables (`4007` keys each), added Node unit/contract tests and Playwright Chromium dark/light browser tests, and kept all edited files below the 2,000-line guard (max `dashboard-lifecycle.js` 1954 lines).
+- **Verification**:
+  - `go test -race -count=1 ./internal/wsi18n/...` — PASS
+  - `WS_PLAYWRIGHT_MODULE=... go test -v -count=1 -run "TestConvHistoryUIBrowser|TestNewSessionModalBrowser|TestConvRevealClientContracts|TestDaemonConvHost" ./internal/wsdashboard/...` — PASS (dark & light Chromium QA screenshots visually verified)
+  - `WS_PLAYWRIGHT_MODULE=... go test -v -count=1 -run "TestPermissionUIBrowser" ./internal/wsdashboard/...` — PASS
+  - `GOOS=windows go vet ./...` — PASS
+  - `node --test new-session.test.js` (17/17), `node testdata/lead-popover.test.cjs`, `node testdata/permission-controls.test.cjs`, `node --test testdata/whiteboard-only.test.cjs` (6/6), `node --test testdata/conv-reveal.test.cjs` (6/6) — all PASS
+  - `code-review-lite` pass (`21c3a628-01-findings.md`): fixed 1 Critical (synchronous `wbFoldSync()` flush + `data-wb-clone-entry` matching), 2 code Important (`convStopNow` `WsHoldConfirm` + `safe_only: true`, `.conv-entry-flash::after` compositor-only opacity animation), 1 test-coverage Important (added regression tests and executed full verification), and 1 Minor (`opacity: .9` hover on `.conv-reveal-jump`).
+- **Decisions**:
+  - Adapted to current code layout where New Session modal logic (`rpLeadMake`) lives in `dashboard-new-session.js` (split out of `dashboard-leads.js`) rather than `dashboard-leads.js`.
+  - Omitted `whiteboardOnly` from saved `ws.dashboard.newSession` JSON when `false` to preserve backwards-compatible default storage shape.
+
+
+## Resolution (2026-11-28)
+
+Completed Phase 1 (backend SQLite FTS5 conversation index, per-session opt-in conv_history_access gating, and 5 conv.* MCP tools) and Phase 2 (New Session modal toggles, existing-session popover conv_history_access toggle with hold-guarded Stop now banner, conv-reveal WS rail highlight + Jump badge + #entry=<key> 5-page pagination and flash, 11-locale i18n parity, and Go/Node/Playwright verification).

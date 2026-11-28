@@ -78,13 +78,16 @@ function fixture(harness, choices = legacy, delayed = false, translate = k => k)
   const effort = nodes.find(n => n.attrs['data-effort-knob']);
   const modeCaps = nodes.find(n => n.cls.includes('ns-native-cap'));
   const modeNote = nodes.find(n => n.cls === 'ns-adv-note spdesc' && n.parentNode && n.parentNode.cls === 'ns-foot');
+  const footOpts = nodes.find(n => n.cls === 'ns-foot-opts' && n.parentNode && n.parentNode.cls === 'ns-foot');
   const start = nodes.find(n => n.cls.includes('ns-cta') && n.tag === 'button');
   const startLbl = nodes.find(n => n.cls === 'ns-cta-lbl');
   const isoSw = nodes.find(n => n.attrs['data-iso-switch']);
+  const wbSw = nodes.find(n => n.attrs['data-wb-only-switch']);
+  const convSw = nodes.find(n => n.attrs['data-conv-history-switch']);
   return { p, nodes, events, requests, storage, pick, harnessGroup,
     terms: nodes.find(n => n.cls === 'spnote spterms'),
     choicesReady() { answerChoices(); },
-    model, modelList, effort, modeCaps, modeNote, isoSw,
+    model, modelList, effort, modeCaps, modeNote, footOpts, isoSw, wbSw, convSw,
     modelOptions() { return modelList.children.filter(li => !li.cls.includes('none')).map(li => li.attrs['data-val']); },
     pickModel(val) {
       model.value = val;
@@ -190,13 +193,17 @@ const harnessNames = f => f.harnessGroup.children.map(n => n.attrs['data-harness
   f.pickModel('custom-model');
   f.pickEffort('deep');
   f.pickMode('plan');
-  assert.equal(f.modeNote.textContent, 'plan', 'custom permission names do not acquire Claude descriptions');
+  assert.equal(f.modeNote.hidden, true, 'custom permission names without descriptions hide the footer note instead of echoing raw mode');
+  assert.equal(f.modeNote.textContent, '');
   assert.equal(f.modeNote.classList.contains('warn'), false);
+  const footChildren = f.modeNote.parentNode.children;
+  assert(footChildren.indexOf(f.modeNote) < footChildren.indexOf(f.footOpts), 'pNativeNote precedes .ns-foot-opts in .ns-foot');
   f.isoSw.listeners.click();
   f.start.listeners.click();
   assert.deepEqual(JSON.parse(JSON.stringify(f.requests[0].body)), {
     root: '/repo', harness: 'custom', plugin_isolation: 'isolated',
-    model: 'custom-model', effort: 'deep', permission_mode: 'plan'
+    model: 'custom-model', effort: 'deep', permission_mode: 'plan',
+    conv_history_access: false
   });
   const rows = f.newRows('custom', { mode: 'plan' });
   rows.disable(true);
@@ -213,9 +220,11 @@ const harnessNames = f => f.harnessGroup.children.map(n => n.attrs['data-harness
   assert.equal(f.effort.attrs['aria-disabled'], 'true', 'absent effort choices do not enable a control');
   // Even stale values on unsupported controls never enter the request.
   f.p.mode = 'plan'; f.p.model = ''; f.p.effort = '';
+  f.convSw.listeners.click();
   f.start.listeners.click();
   assert.deepEqual(JSON.parse(JSON.stringify(f.requests[0].body)), {
-    root: '/repo', harness: 'plain', plugin_isolation: 'default'
+    root: '/repo', harness: 'plain', plugin_isolation: 'default',
+    conv_history_access: true
   });
   const rows = f.newRows('plain', {});
   rows.disable(true); rows.disable(false);
@@ -255,6 +264,14 @@ const harnessNames = f => f.harnessGroup.children.map(n => n.attrs['data-harness
   assert.equal(f.p.harness, 'claude');
   assert.deepEqual(f.modeNames(), ['auto', 'default', 'acceptEdits', 'plan', 'dontAsk', 'bypassPermissions']);
   assert.equal(f.checkedMode(), 'auto');
+  assert.equal(f.modeNote.hidden, false);
+  assert.equal(f.modeNote.textContent, 'js.lead.mode.auto');
+  assert.equal(f.modeNote.classList.contains('warn'), false);
+  f.pickMode('bypassPermissions');
+  assert.equal(f.modeNote.hidden, false);
+  assert.equal(f.modeNote.textContent, 'js.lead.mode.bypass');
+  assert.equal(f.modeNote.classList.contains('warn'), true);
+  f.pickMode('auto');
   f.start.listeners.click();
   assert.equal(f.requests[0].body.harness, 'claude');
   assert.equal(f.requests[0].body.plugin_isolation, 'default');

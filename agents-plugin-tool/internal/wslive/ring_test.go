@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -964,5 +965,76 @@ func TestRingUnpinnedPagingMixedStoreEnforcesHistoryCap(t *testing.T) {
 				return straddle.Records[len(straddle.Records)-1].Text
 			}(),
 			straddle.End)
+	}
+}
+
+// TestRingObserverEvictionAndSyncExternal verifies that RegisterRingObserver
+// reports added records and evicted entry names past RingHistoryCap for both
+// AppendRing and SyncExternalRing, and unregisters cleanly.
+func TestRingObserverEvictionAndSyncExternal(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ring")
+	base := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
+
+	var (
+		mu      sync.Mutex
+		added   []string
+		evicted []string
+	)
+	unsub := RegisterRingObserver(func(ringDir string, add []RingRecord, ev []string) {
+		if filepath.Clean(ringDir) != filepath.Clean(dir) {
+			return
+		}
+		mu.Lock()
+		for _, r := range add {
+			added = append(added, r.Name)
+		}
+		evicted = append(evicted, ev...)
+		mu.Unlock()
+	})
+	defer unsub()
+
+	unpin := PinRing(dir)
+	defer func() { _ = unpin() }()
+
+	// Push RingHistoryCap + 5 entries in one batch -> oldest 5 must be reported as evicted.
+	entries := make([]RingEntry, 0, RingHistoryCap+5)
+	for i := 0; i < RingHistoryCap+5; i++ {
+		entries = append(entries, RingEntry{
+			ringStamp: base.Add(time.Duration(i) * time.Millisecond),
+			Kind:      RingUser,
+			Text:      fmt.Sprintf("ev-%d", i),
+		})
+	}
+	if err := AppendRing(dir, entries); err != nil {
+		t.Fatalf("AppendRing: %v", err)
+	}
+	mu.Lock()
+	gotAdded, gotEvicted := len(added), len(evicted)
+	mu.Unlock()
+	if gotAdded != RingHistoryCap+5 {
+		t.Fatalf("observer added = %d, want %d", gotAdded, RingHistoryCap+5)
+	}
+	if gotEvicted != 5 {
+		t.Fatalf("observer evicted = %d, want 5", gotEvicted)
+	}
+
+	// Write 2 newer legacy .json files externally and call SyncExternalRing ->
+	// observer must report 2 added and 2 newly evicted.
+	for i := 0; i < 2; i++ {
+		name := base.Add(time.Duration(RingHistoryCap+10+i)*time.Millisecond).Format(ringStampLayout) + fmt.Sprintf("-ee%02x.json", i)
+		raw := []byte(fmt.Sprintf(`{"kind":"user","text":"sync-%d"}`, i))
+		if err := writeLegacyRingRaw(dir, name, raw); err != nil {
+			t.Fatalf("writeLegacyRingRaw: %v", err)
+		}
+	}
+	SyncExternalRing(dir)
+	mu.Lock()
+	gotAdded, gotEvicted = len(added), len(evicted)
+	mu.Unlock()
+	if gotAdded != RingHistoryCap+7 {
+		t.Fatalf("post-sync observer added = %d, want %d", gotAdded, RingHistoryCap+7)
+	}
+	if gotEvicted != 7 {
+		t.Fatalf("post-sync observer evicted = %d, want 7", gotEvicted)
 	}
 }

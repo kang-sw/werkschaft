@@ -106,6 +106,9 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	if refusal := s.hostedSessionKeyRule(params.Name, params.Arguments); refusal != "" {
 		return toolErrorTextResponse(req.ID, refusal)
 	}
+	var sublead *subleadBoard
+	var caller sessionEntry
+	var callerFound bool
 	// Central mailbox piggyback wrapper (Decision: one interception point):
 	// every reply this call produces gets a chance at an unread-mail badge,
 	// regardless of which case below built it. See mailbox_tools.go.
@@ -119,7 +122,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			if keyStr != "" {
 				resp = s.applyMailboxPiggyback(resp, keyStr, jsonFormat)
 			}
-			resp = s.applyCompanionPhonePiggyback(resp, params.Name, jsonFormat)
+			resp = s.applyCompanionPhonePiggyback(resp, params.Name, caller, callerFound, jsonFormat)
 		}()
 	}
 	s.observeHarness("tools.call.meta", detectHarnessFromMeta(params.Meta))
@@ -165,10 +168,10 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	// dashboard.intake alone resolves its key from the intake cache
 	// (intakeSession), so its call rate reads no key.json; a removed key
 	// still passes here for up to intakeRecheck, for that tool only.
-	var sublead *subleadBoard
-	var caller sessionEntry
-	var callerFound bool
 	callerKey, _ := params.Arguments["session_key"].(string)
+	if strings.TrimSpace(callerKey) == "" {
+		callerKey = s.hostedSessionKey()
+	}
 	if keyStr := callerKey; strings.TrimSpace(keyStr) != "" {
 		lookup := s.lookupSession
 		if params.Name == dashboardIntakeTool {
@@ -189,7 +192,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 				onBoard["session_key"] = sublead.boardKey
 				params.Arguments = onBoard
 			}
-			if entry.isTopLevelLead() {
+			if entry.isTopLevelLead() && entry.companionRole == "" {
 				// Registers the session on the dashboard, or keeps it off.
 				s.dashboardTouch(keyStr, entry.root, false)
 				// A worktree/clone mailbox identity registers at the first
@@ -204,6 +207,11 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 					}()
 				}
 			}
+		}
+	}
+	if !callerFound {
+		if refusal := s.companionMarkerAllowsTool(sessionEntry{}, params.Name); refusal != "" {
+			return errorResponse(req.ID, -32601, refusal)
 		}
 	}
 
@@ -225,12 +233,20 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		return errorResponse(req.ID, -32601, fmt.Sprintf("tool not available in current %s MCP profile: %s", s.runtimeNamespace(), params.Name))
 	}
 
+	// Companion capability gates: posture lock for companion-body ((1740)) and
+	// high-impact confirmation gate for companion-work ((1750)).
+	if refusal := s.companionPostureRefusal(params.Name, callerKey, caller, callerFound); refusal != "" {
+		return toolErrorTextResponse(req.ID, refusal)
+	}
+	if refusal := s.companionWorkApprovalRefusal(caller, callerFound, params.Name, params.Arguments); refusal != "" {
+		return toolErrorTextResponse(req.ID, refusal)
+	}
+	if refusal := s.convAccessRefusal(params.Name); refusal != "" {
+		return toolErrorTextResponse(req.ID, refusal)
+	}
 	// Central argument precheck: refuse a call that misses a required
 	// property or carries an undeclared top-level argument before any handler
 	// runs, naming every problem and the tool's own schema at once.
-	if refusal := s.companionPostureRefusal(params.Name, callerKey); refusal != "" {
-		return toolErrorTextResponse(req.ID, refusal)
-	}
 	if refusal, ok := s.precheckToolArguments(params.Name, params.Arguments); !ok {
 		return toolErrorTextResponse(req.ID, refusal)
 	}
@@ -1697,8 +1713,15 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	case "agent.spawn", "agent.interrupt", "agent.list", "agent.tiers":
 		return s.handleAgentTool(ctx, req.ID, params.Name, params.Arguments)
 	case companionSpeakTool, companionFaceTool, companionMotionTool,
-		companionPhonePickupTool, companionPhoneReadTool, companionPhoneSendTool, companionPhonePutdownTool:
-		return s.handleCompanionTool(req.ID, params.Name, params.Arguments)
+		companionPhonePickupTool, companionPhoneReadTool, companionPhoneSendTool, companionPhonePutdownTool,
+		companionDelegateWorkTool:
+		return s.handleCompanionTool(req.ID, params.Name, params.Arguments, callerKey, caller, callerFound)
+	case delegationReportTool:
+		return s.handleDelegationReport(req.ID, params.Arguments, callerKey, caller, callerFound)
+	case daemonCurlTool, daemonTabsTool, daemonDOMTool, daemonUITool, daemonScreenshotTool:
+		return s.handleDaemonTool(ctx, req.ID, params.Name, params.Arguments)
+	case convSessionsTool, convSearchTool, convHistoryTool, convReadTool, convRevealTool:
+		return s.handleConvTool(ctx, req.ID, params.Name, params.Arguments, params.Meta)
 	case "mailbox.send":
 		return s.handleMailboxSend(req.ID, params.Arguments)
 	case "mailbox.recv":

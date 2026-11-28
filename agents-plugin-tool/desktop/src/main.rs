@@ -5,6 +5,7 @@ compile_error!("Werkschaft supports macOS and Windows");
 
 #[cfg(any(windows, test))]
 mod accelerator;
+mod capture;
 mod chrome;
 mod close;
 mod daemon;
@@ -26,6 +27,7 @@ mod shell;
 mod shell_log;
 #[cfg(windows)]
 mod snap;
+mod speech;
 #[cfg(windows)]
 mod strip;
 #[cfg(any(windows, test))]
@@ -34,6 +36,8 @@ mod tray;
 mod updates;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+mod windows_speech;
 mod zoom;
 
 use std::sync::{
@@ -84,6 +88,9 @@ fn build_webview(
         .disable_drag_drop_handler()
         .devtools(true)
         .on_page_load(move |window, payload| {
+            if main && payload.event() == tauri::webview::PageLoadEvent::Started {
+                speech::teardown(window.app_handle(), "navigation");
+            }
             if payload.event() == tauri::webview::PageLoadEvent::Finished {
                 let _ = window.set_zoom(window.state::<Zoom>().current());
                 let pin = notice.pinned_url();
@@ -95,6 +102,8 @@ fn build_webview(
                     updates::inject(&window, payload.url());
                     notice.show_refusal(&window);
                     notify::inject(&window, payload.url());
+                    capture::inject(&window, payload.url());
+                    speech::inject(&window, payload.url());
                     #[cfg(windows)]
                     strip::inject_theme_bridge(
                         &window,
@@ -338,6 +347,7 @@ fn menu_action(window: WebviewWindow, state: &Arc<Connection>, id: &str) {
         "copy_login" => state.copy_login_link(window),
         #[cfg(windows)]
         "minimize" => {
+            speech::teardown(window.app_handle(), "minimized");
             let _ = window.minimize();
         }
         "devtools" | "devtools_f12" => {
@@ -431,6 +441,8 @@ fn main() {
             }
             install_menu(app.handle())?;
             notify::manage(app.handle(), setup_state.clone());
+            capture::manage(app.handle(), setup_state.clone());
+            speech::manage(app.handle(), setup_state.clone());
             let tray_state = setup_state.clone();
             tray::install(app.handle(), move |app| restore_main(app, &tray_state))?;
             updates::Controller::start(app.handle(), setup_state.clone());
@@ -448,6 +460,7 @@ fn main() {
                 event: WindowEvent::CloseRequested { api, .. },
                 ..
             } if close::checks_draft(&label) => {
+                speech::teardown(app, "tray");
                 if let Some(window) = chrome::get(app, &label) {
                     api.prevent_close();
                     #[cfg(target_os = "macos")]
@@ -456,9 +469,18 @@ fn main() {
                     let _ = window.hide();
                 }
             }
+            RunEvent::WindowEvent {
+                label,
+                event: WindowEvent::Resized(_),
+                ..
+            } if close::checks_draft(&label) => {
+                if let Some(window) = chrome::get(app, &label) {
+                    speech::on_window_resized(app, &window);
+                }
+            }
             RunEvent::ExitRequested { code, api, .. } => {
                 match close::exit_request(code, state.rebuilding.load(Ordering::Acquire)) {
-                    close::ExitRequest::Proceed => (),
+                    close::ExitRequest::Proceed => speech::shutdown(app),
                     close::ExitRequest::Prevent => api.prevent_exit(),
                     close::ExitRequest::Close => {
                         api.prevent_exit();
@@ -466,7 +488,10 @@ fn main() {
                     }
                 }
             }
-            RunEvent::Exit => app.state::<Zoom>().finish(),
+            RunEvent::Exit => {
+                speech::shutdown(app);
+                app.state::<Zoom>().finish();
+            }
             #[cfg(target_os = "macos")]
             RunEvent::Reopen {
                 has_visible_windows,
@@ -498,7 +523,10 @@ fn main() {
                 label,
                 event: WindowEvent::Destroyed,
                 ..
-            } if close::checks_draft(&label) => state.main_window_closed(),
+            } if close::checks_draft(&label) => {
+                speech::shutdown(app);
+                state.main_window_closed();
+            }
             _ => (),
         });
 }

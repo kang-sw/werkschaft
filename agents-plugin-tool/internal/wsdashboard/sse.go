@@ -573,6 +573,13 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 		defer cancelSide()
 		parts = append(parts, part)
 	}
+	var bridgeStream *daemonBridgeStream
+	if upgrade && localViewer(r) && src.key.kind == regionRail {
+		bridgeOptIn := r.URL.Query().Get("bridge") == "1"
+		initialTabID := r.URL.Query().Get("tab_id")
+		bridgeStream = d.daemonBridge.newStream(initialTabID, display != "0", bridgeOptIn)
+		defer bridgeStream.close()
+	}
 
 	run := func(sink streamSink) {
 		// sentRev is the tracker revision this stream last sent; the
@@ -647,6 +654,25 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 			}
 			commandSeq = seq
 			return sink.event(companionCommandEvent, payload) == nil && sink.flush() == nil
+		}
+		var revealWake <-chan struct{}
+		var revealSeq uint64
+		if src.key.kind == regionRail {
+			revealSeq, revealWake = d.convReveals.current()
+		}
+		sendReveal := func() bool {
+			seq, payloads, wake := d.convReveals.since(revealSeq)
+			revealWake = wake
+			if seq == revealSeq || len(payloads) == 0 {
+				return true
+			}
+			revealSeq = seq
+			for _, payload := range payloads {
+				if sink.event(convRevealEvent, payload) != nil {
+					return false
+				}
+			}
+			return sink.flush() == nil
 		}
 		var phoneWake <-chan struct{}
 		var phoneSeq uint64
@@ -747,6 +773,10 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 		if len(parts) > 0 {
 			sideWake = parts[0].sub.ch
 		}
+		var bridgePush <-chan bridgePushEvent
+		if bridgeStream != nil {
+			bridgePush = bridgeStream.pushCh
+		}
 		refresh := time.NewTicker(d.refreshInterval)
 		defer refresh.Stop()
 		keepAlive := time.NewTicker(d.keepAlive)
@@ -759,6 +789,11 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 				return
 			case <-d.stop:
 				return
+			case ev := <-bridgePush:
+				if sink.event(ev.Event, ev.Data) != nil || sink.flush() != nil {
+					return
+				}
+				continue
 			case <-consentWake:
 				if !sendConsent() {
 					return
@@ -771,6 +806,11 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 				continue
 			case <-commandWake:
 				if !sendCommand() {
+					return
+				}
+				continue
+			case <-revealWake:
+				if !sendReveal() {
 					return
 				}
 				continue
@@ -837,10 +877,14 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 		}
 	}
 	if upgrade {
+		var onFrame func(string)
+		if bridgeStream != nil {
+			onFrame = bridgeStream.handleFrame
+		}
 		if optIn {
-			d.serveWebSocket(w, r, run, watch)
+			d.serveWebSocketWithFrame(w, r, run, watch, onFrame)
 		} else {
-			d.serveWebSocket(w, r, run)
+			d.serveWebSocketWithFrame(w, r, run, nil, onFrame)
 		}
 		return
 	}

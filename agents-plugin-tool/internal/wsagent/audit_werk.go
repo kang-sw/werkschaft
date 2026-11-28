@@ -122,9 +122,10 @@ func (a *werkAudit) mapLine(raw []byte, at time.Time) (bool, []auditEvent, []aud
 }
 
 // request advances the chain for a line that names its response and returns
-// the chain's current meta; nil for a line of no response.
+// the chain's current meta; nil for a line of no response or an out-of-band
+// compaction summary call.
 func (a *werkAudit) request(l werk.Line) map[string]any {
-	if l.Response == "" {
+	if l.Response == "" || l.Compaction {
 		return nil
 	}
 	if l.T == werk.LineUsage {

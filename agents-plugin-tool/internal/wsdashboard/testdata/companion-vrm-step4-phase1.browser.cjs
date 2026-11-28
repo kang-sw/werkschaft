@@ -162,7 +162,20 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
       // 1. Live direct click on VRM character -> cosmetic glass knock ripple + startle, NEVER opens messenger!
       const charBox = await page.locator('.ws-companion-character').boundingBox();
       assert.ok(charBox && charBox.width > 120 && charBox.height > 120, `${entry.tag}: character hit box visible`);
-      await page.mouse.click(charBox.x + charBox.width * 0.45, charBox.y + charBox.height * 0.46);
+      const stageBbox = await page.evaluate(() => window.WsCompanion?.debugStage?.()?.projectedBounds || null);
+      assert.ok(stageBbox && stageBbox.width > 20 && stageBbox.height > 20 && stageBbox.width < charBox.width,
+        `${entry.tag}: projectedBounds must tightly enclose character inside stage (got ${JSON.stringify(stageBbox)} vs slot ${JSON.stringify(charBox)})`);
+      const knockX = charBox.x + stageBbox.x + stageBbox.width * 0.5;
+      const knockY = charBox.y + stageBbox.y + stageBbox.height * 0.5;
+      await page.mouse.move(knockX, knockY);
+      const insideHover = await page.evaluate(() => ({
+        area: document.querySelector('.ws-companion-hit')?.dataset.area || '',
+        cursor: getComputedStyle(document.querySelector('.ws-companion-character')).cursor
+      }));
+      assert.equal(insideHover.area, 'character', `${entry.tag}: hovering inside character bbox must set data-area=character`);
+      assert.equal(insideHover.cursor, 'default', `${entry.tag}: hovering inside character bbox must keep default cursor`);
+
+      await page.mouse.click(knockX, knockY);
       await page.waitForTimeout(160);
       const afterSingleKnock = await page.evaluate(() => ({
         messengerOpen: window.WsCompanionMessenger.isOpen(),
@@ -173,6 +186,36 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
       assert.equal(afterSingleKnock.messengerOpen, false, `${entry.tag}: direct VRM click must NEVER open messenger`);
       assert.equal(afterSingleKnock.co.knockActive, true, `${entry.tag}: direct VRM click must activate knock choreography`);
       assert.ok(afterSingleKnock.rings >= 1 && afterSingleKnock.words >= 1, `${entry.tag}: knock ripple rings & word must render`);
+
+      // Expanded messenger toggle outside character bbox:
+      // hover cursor -> pointer, click opens once, click again closes once, drag >6px ignored.
+      const bgX = stageBbox.x >= 20 ? charBox.x + stageBbox.x * 0.5 : charBox.x + stageBbox.x + stageBbox.width + 14;
+      const bgY = charBox.y + charBox.height * 0.5;
+      await page.mouse.move(bgX, bgY);
+      const outsideHover = await page.evaluate(() => ({
+        area: document.querySelector('.ws-companion-hit')?.dataset.area || '',
+        cursor: getComputedStyle(document.querySelector('.ws-companion-character')).cursor
+      }));
+      assert.equal(outsideHover.area, 'messenger', `${entry.tag}: hovering outside character bbox must set data-area=messenger`);
+      assert.equal(outsideHover.cursor, 'pointer', `${entry.tag}: hovering outside character bbox must show pointer cursor`);
+
+      await page.mouse.click(bgX, bgY);
+      await page.waitForTimeout(160);
+      assert.equal(await page.evaluate(() => window.WsCompanionMessenger.isOpen()), true,
+        `${entry.tag}: clicking stage outside character bbox must open messenger`);
+      await page.mouse.click(bgX, bgY);
+      await page.waitForTimeout(160);
+      assert.equal(await page.evaluate(() => window.WsCompanionMessenger.isOpen()), false,
+        `${entry.tag}: clicking stage outside character bbox again must close messenger cleanly`);
+
+      // Drag > 6px outside bbox must NOT toggle messenger.
+      await page.mouse.move(bgX, bgY);
+      await page.mouse.down();
+      await page.mouse.move(bgX + 18, bgY + 10);
+      await page.mouse.up();
+      await page.waitForTimeout(160);
+      assert.equal(await page.evaluate(() => window.WsCompanionMessenger.isOpen()), false,
+        `${entry.tag}: dragging >6px outside character bbox must NOT toggle messenger`);
 
       if (shots) {
         // Sheet 1 panel 1: Awake cosmetic knock startle + live glass ripple.

@@ -497,7 +497,10 @@
     let mounted = false, disposed = false, paused = false, contextLost = false;
     let container = null, canvasWrap = null, canvas = null, dissolveGrid = null, fxCanvas = null, fxCtx = null, overlay = null;
     let runtime = null, renderer = null, scene = null, camera = null, vrm = null, coLead = null;
-    let isVrm0 = false, lookTarget = null, headPosVec = null, projHeadVec = null, handPosVec = null, handMidVec = null, mixer = null, activeVrmaAction = null, activeVrmaKey = "";
+    let isVrm0 = false, lookTarget = null, headPosVec = null, projHeadVec = null, handPosVec = null, handMidVec = null, projMeshBox = null, projCornerVec = null, mixer = null, activeVrmaAction = null, activeVrmaKey = "";
+    const CHAR_BOUNDS_TTL_MS = 120;
+    const cachedCharBounds = { x: 0, y: 0, width: 0, height: 0 };
+    let hasCachedCharBounds = false, charBoundsDirty = true, lastCharBoundsAt = -Infinity;
     let vrmaClips = new Map(), vrmaLoading = new Set(), vrmaFailed = new Set();
     let width = LOGICAL_W, height = LOGICAL_H, dpr = 1;
     let cachedModel = null; // { key, buffer } retained across WebGL context loss
@@ -546,6 +549,9 @@
         try { runtime.VRMUtils.deepDispose(vrm.scene); } catch (_) { /* ignore */ }
       }
       vrm = null;
+      hasCachedCharBounds = false;
+      charBoundsDirty = true;
+      lastCharBoundsAt = -Infinity;
       boneRotations.clear();
     }
 
@@ -569,6 +575,8 @@
       projHeadVec = null;
       handPosVec = null;
       handMidVec = null;
+      projMeshBox = null;
+      projCornerVec = null;
     }
 
     function initSceneAndRenderer(rt) {
@@ -581,6 +589,8 @@
       projHeadVec = new THREE.Vector3();
       handPosVec = new THREE.Vector3();
       handMidVec = new THREE.Vector3();
+      projMeshBox = typeof THREE.Box3 === "function" ? new THREE.Box3() : null;
+      projCornerVec = typeof THREE.Vector3 === "function" ? new THREE.Vector3() : null;
       scene.add(lookTarget);
 
       renderer = new THREE.WebGLRenderer({
@@ -812,6 +822,8 @@
       // computing THREE.Box3 skinned bounds so autoFrameBust measures the posed avatar.
       applyImmediateStandPose(loaded, isVrm0);
       autoFrameBust(loaded);
+      charBoundsDirty = true;
+      lastCharBoundsAt = -Infinity;
 
       setOverlay("");
       renderTick(0.016, gaze, null, activeBeatMeta);
@@ -1159,8 +1171,114 @@
         }
       }
       renderer.render(scene, camera);
+      if (charBoundsDirty) updateCharacterBounds(performance.now());
       renderDizzyFxOverlay(coState);
       framesRendered++;
+    }
+
+    // Project posed vrm.scene character meshes ONLY (laptopGroup and phoneGroup live
+    // directly under scene, never vrm.scene) into canvas CSS pixels [0..w, 0..h].
+    function updateCharacterBounds(nowMs) {
+      lastCharBoundsAt = nowMs;
+      charBoundsDirty = false;
+      if (disposed || !vrm?.scene || !camera || !projMeshBox || !projCornerVec || typeof projCornerVec.project !== "function") {
+        hasCachedCharBounds = false;
+        return false;
+      }
+      const w = Math.max(64, Math.round(width));
+      const h = Math.max(64, Math.round(height));
+      if (w <= 0 || h <= 0) {
+        hasCachedCharBounds = false;
+        return false;
+      }
+      vrm.scene.updateMatrixWorld?.(true);
+      camera.updateMatrixWorld?.();
+
+      let uMinX = Infinity, uMinY = Infinity, uMaxX = -Infinity, uMaxY = -Infinity;
+      let anyVisible = false;
+
+      vrm.scene.traverse(obj => {
+        if (!obj || !obj.isMesh || obj.visible === false || !obj.geometry) return;
+        if (obj.isSkinnedMesh && typeof obj.computeBoundingBox === "function") {
+          obj.computeBoundingBox();
+          if (!obj.boundingBox || obj.boundingBox.isEmpty()) return;
+          projMeshBox.copy(obj.boundingBox).applyMatrix4(obj.matrixWorld);
+        } else {
+          if (!obj.geometry.boundingBox && typeof obj.geometry.computeBoundingBox === "function") {
+            obj.geometry.computeBoundingBox();
+          }
+          if (!obj.geometry.boundingBox || obj.geometry.boundingBox.isEmpty()) return;
+          projMeshBox.copy(obj.geometry.boundingBox).applyMatrix4(obj.matrixWorld);
+        }
+        const min = projMeshBox.min, max = projMeshBox.max;
+        if (!Number.isFinite(min.x) || !Number.isFinite(min.y) || !Number.isFinite(min.z) ||
+            !Number.isFinite(max.x) || !Number.isFinite(max.y) || !Number.isFinite(max.z)) {
+          return;
+        }
+
+        let mMinX = Infinity, mMinY = Infinity, mMaxX = -Infinity, mMaxY = -Infinity;
+        let projectedCount = 0;
+        for (let i = 0; i < 8; i++) {
+          projCornerVec.set(
+            (i & 1) ? max.x : min.x,
+            (i & 2) ? max.y : min.y,
+            (i & 4) ? max.z : min.z
+          ).project(camera);
+          if (!Number.isFinite(projCornerVec.x) || !Number.isFinite(projCornerVec.y) || !Number.isFinite(projCornerVec.z)) continue;
+          if (projCornerVec.z < -1 || projCornerVec.z > 1) continue;
+          const sx = (projCornerVec.x * 0.5 + 0.5) * w;
+          const sy = (-projCornerVec.y * 0.5 + 0.5) * h;
+          if (sx < mMinX) mMinX = sx;
+          if (sx > mMaxX) mMaxX = sx;
+          if (sy < mMinY) mMinY = sy;
+          if (sy > mMaxY) mMaxY = sy;
+          projectedCount++;
+        }
+        if (!projectedCount || mMaxX <= 0 || mMinX >= w || mMaxY <= 0 || mMinY >= h) return;
+
+        const cMinX = mMinX < 0 ? 0 : mMinX;
+        const cMaxX = mMaxX > w ? w : mMaxX;
+        const cMinY = mMinY < 0 ? 0 : mMinY;
+        const cMaxY = mMaxY > h ? h : mMaxY;
+        if (cMaxX <= cMinX || cMaxY <= cMinY) return;
+
+        if (cMinX < uMinX) uMinX = cMinX;
+        if (cMaxX > uMaxX) uMaxX = cMaxX;
+        if (cMinY < uMinY) uMinY = cMinY;
+        if (cMaxY > uMaxY) uMaxY = cMaxY;
+        anyVisible = true;
+      });
+
+      if (!anyVisible || uMaxX <= uMinX || uMaxY <= uMinY) {
+        hasCachedCharBounds = false;
+        return false;
+      }
+
+      const x1 = C.clamp(Math.floor(uMinX), 0, w);
+      const y1 = C.clamp(Math.floor(uMinY), 0, h);
+      const x2 = C.clamp(Math.ceil(uMaxX), 0, w);
+      const y2 = C.clamp(Math.ceil(uMaxY), 0, h);
+      if (x2 <= x1 || y2 <= y1) {
+        hasCachedCharBounds = false;
+        return false;
+      }
+      cachedCharBounds.x = x1;
+      cachedCharBounds.y = y1;
+      cachedCharBounds.width = x2 - x1;
+      cachedCharBounds.height = y2 - y1;
+      hasCachedCharBounds = true;
+      return true;
+    }
+
+    function getCharacterBounds() {
+      if (disposed || !vrm || !camera) return null;
+      const nowMs = performance.now();
+      if (charBoundsDirty || lastCharBoundsAt === -Infinity || nowMs - lastCharBoundsAt >= CHAR_BOUNDS_TTL_MS) {
+        updateCharacterBounds(nowMs);
+      }
+      return hasCachedCharBounds
+        ? { x: cachedCharBounds.x, y: cachedCharBounds.y, width: cachedCharBounds.width, height: cachedCharBounds.height }
+        : null;
     }
 
     async function mount(targetContainer, mountOptions = {}) {
@@ -1387,7 +1505,10 @@
         const nextAspect = width / Math.max(1, height);
         if (vrm && Math.abs(nextAspect - prevAspect) > 0.01) autoFrameBust(vrm);
         else if (vrm && coLead) coLead.layoutProp(cameraFraming, camera);
+        charBoundsDirty = true;
+        lastCharBoundsAt = -Infinity;
       },
+      getCharacterBounds,
       pause() { paused = true; },
       resume() { paused = false; },
       isContextLost() { return contextLost; },
@@ -1407,6 +1528,7 @@
           activeVrmaKey,
           surprisedStrategy: exprCtrl.surprisedStrategy,
           framing: { ...cameraFraming },
+          projectedBounds: getCharacterBounds(),
           coLead: coLead ? coLead.debugState() : null,
           contextLost,
           paused,

@@ -553,7 +553,11 @@ func (s *planUsageStore) codexFiveHourHistoryView(entries []planUsageEntry, now 
 	}
 	var filtered []planUsageEntry
 	for _, e := range entries {
-		if !s.harnesses.separateFiveHour(e.Harness) {
+		histHarness := e.Harness
+		if histHarness == codexOpenAIUnifiedHarness {
+			histHarness = "codex"
+		}
+		if !s.harnesses.separateFiveHour(histHarness) {
 			continue
 		}
 		var windows []planUsageWindow
@@ -564,6 +568,7 @@ func (s *planUsageStore) codexFiveHourHistoryView(entries []planUsageEntry, now 
 		}
 		if len(windows) > 0 {
 			copyEntry := e
+			copyEntry.Harness = histHarness
 			copyEntry.Windows = windows
 			filtered = append(filtered, copyEntry)
 		}
@@ -637,13 +642,17 @@ func projectPlanUsageHistory(records []planUsageHistoryRecord, entries []planUsa
 	type group struct{ harness, grp, kind string }
 	current := map[group][]planUsageSample{}
 	for _, e := range entries {
+		h := e.Harness
+		if h == codexOpenAIUnifiedHarness {
+			h = "codex"
+		}
 		for _, w := range e.Windows {
 			at := w.AsOf
 			if at == 0 {
 				at = e.AsOf
 			}
-			g := group{e.Harness, e.Group, w.Kind}
-			current[g] = append(current[g], planUsageSample{Harness: e.Harness, Group: e.Group, Kind: w.Kind, Source: e.Source, ResetsAt: w.ResetsAt, AsOf: at, Percent: w.Percent})
+			g := group{h, e.Group, w.Kind}
+			current[g] = append(current[g], planUsageSample{Harness: h, Group: e.Group, Kind: w.Kind, Source: e.Source, ResetsAt: w.ResetsAt, AsOf: at, Percent: w.Percent})
 		}
 	}
 	series := map[group][]int{}

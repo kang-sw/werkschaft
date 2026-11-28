@@ -37,6 +37,11 @@ const ProviderOpenRouter ProviderID = "openrouter"
 // ProviderOpenAI uses Sign in with ChatGPT for the local builtin harness.
 const ProviderOpenAI ProviderID = "openai"
 
+// ProviderOpenRouterVoice is the dedicated OpenRouter API key scoped strictly
+// to voice transcription, separate from ProviderOpenRouter so configuring the
+// top-level LLM key never silently enables paid voice transcription.
+const ProviderOpenRouterVoice ProviderID = "openrouter_voice"
+
 // ProviderOpenAIAPI is the OpenAI Platform API key (distinct from ProviderOpenAI
 // ChatGPT Plan OAuth), scoped strictly to voice transcription.
 const ProviderOpenAIAPI ProviderID = "openai_api"
@@ -81,6 +86,7 @@ type Provider struct {
 var providers = []Provider{
 	{ID: ProviderOpenRouter, Name: "OpenRouter", Kind: KindAPIKey, BaseURL: "https://openrouter.ai/api/v1", KeyPrefix: "sk-or-", EnvKeys: []string{"OPENROUTER_API_KEY"}},
 	{ID: ProviderOpenAI, Name: "OpenAI", Kind: KindSIWC, BaseURL: openAIResource},
+	{ID: ProviderOpenRouterVoice, Name: "OpenRouter (Voice)", Kind: KindAPIKey, BaseURL: "https://openrouter.ai/api/v1", KeyPrefix: "sk-or-", EnvKeys: []string{"OPENROUTER_API_KEY"}, VoiceOnly: true},
 	{ID: ProviderOpenAIAPI, Name: "OpenAI Platform", Kind: KindAPIKey, BaseURL: "https://api.openai.com/v1", KeyPrefix: "sk-", EnvKeys: []string{"OPENAI_API_KEY"}, VoiceOnly: true},
 	{ID: ProviderGroq, Name: "Groq", Kind: KindAPIKey, BaseURL: "https://api.groq.com/openai/v1", KeyPrefix: "gsk_", EnvKeys: []string{"GROQ_API_KEY"}, VoiceOnly: true},
 }

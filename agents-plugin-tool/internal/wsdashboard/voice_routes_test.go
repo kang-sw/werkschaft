@@ -20,9 +20,10 @@ import (
 )
 
 const (
-	voiceFixtureOpenAIKey = "sk-proj-fixture-voice-1111"
-	voiceFixtureGroqKey   = "gsk_fixture_voice_key_2222"
-	voiceFixtureORKey     = "sk-or-v1-fixture-voice-3333"
+	voiceFixtureOpenAIKey  = "sk-proj-fixture-voice-1111"
+	voiceFixtureGroqKey    = "gsk_fixture_voice_key_2222"
+	voiceFixtureORKey      = "sk-or-v1-fixture-top-3333"
+	voiceFixtureORVoiceKey = "sk-or-v1-fixture-voice-4444"
 )
 
 func voiceMultipartRequest(t *testing.T, urlPath string, fields map[string]string, filename, contentType string, audio []byte) *http.Request {
@@ -172,7 +173,11 @@ func TestAccountVoiceKeysGroupingAndMasking(t *testing.T) {
 	store := &accountTestStore{Store: wscred.NewStore(filepath.Join(t.TempDir(), "auth", wscred.FileName))}
 	d.credentials = store
 
-	w := requestAccount(t, d, http.MethodPost, "key", `{"op":"set","provider":"openai_api","key":"`+voiceFixtureOpenAIKey+`"}`)
+	w := requestAccount(t, d, http.MethodPost, "key", `{"op":"set","provider":"openrouter_voice","key":"`+voiceFixtureORVoiceKey+`"}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"masked":"sk-or-...4444"`) || strings.Contains(w.Body.String(), voiceFixtureORVoiceKey) {
+		t.Fatalf("set openrouter_voice = %d %s", w.Code, w.Body.String())
+	}
+	w = requestAccount(t, d, http.MethodPost, "key", `{"op":"set","provider":"openai_api","key":"`+voiceFixtureOpenAIKey+`"}`)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"masked":"sk-...1111"`) || strings.Contains(w.Body.String(), voiceFixtureOpenAIKey) {
 		t.Fatalf("set openai_api = %d %s", w.Code, w.Body.String())
 	}
@@ -192,14 +197,20 @@ func TestAccountVoiceKeysGroupingAndMasking(t *testing.T) {
 	if len(st.LocalKeys) != 0 {
 		t.Fatalf("voice keys leaked into local_keys: %+v", st.LocalKeys)
 	}
-	if len(st.VoiceKeys) != 2 || st.VoiceKeys[0].Provider != wscred.ProviderOpenAIAPI || !st.VoiceKeys[0].Configured ||
-		st.VoiceKeys[1].Provider != wscred.ProviderGroq || !st.VoiceKeys[1].Configured {
+	if len(st.VoiceKeys) != 3 ||
+		st.VoiceKeys[0].Provider != wscred.ProviderOpenRouterVoice || !st.VoiceKeys[0].Configured ||
+		st.VoiceKeys[1].Provider != wscred.ProviderOpenAIAPI || !st.VoiceKeys[1].Configured ||
+		st.VoiceKeys[2].Provider != wscred.ProviderGroq || !st.VoiceKeys[2].Configured {
 		t.Fatalf("voice_keys = %+v", st.VoiceKeys)
 	}
 
 	w = requestAccount(t, d, http.MethodPost, "key", `{"op":"remove","provider":"groq"}`)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"configured":false`) {
 		t.Fatalf("remove groq = %d %s", w.Code, w.Body.String())
+	}
+	w = requestAccount(t, d, http.MethodPost, "key", `{"op":"remove","provider":"openrouter_voice"}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"configured":false`) {
+		t.Fatalf("remove openrouter_voice = %d %s", w.Code, w.Body.String())
 	}
 }
 
@@ -381,7 +392,7 @@ func TestVoiceTranscribeGroqOpenRouterAndLocalEndpoint(t *testing.T) {
 	if _, err := store.Apply(wscred.Change{Op: wscred.OpSet, Provider: wscred.ProviderGroq, APIKey: wscred.NewSecret(voiceFixtureGroqKey)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Apply(wscred.Change{Op: wscred.OpSet, Provider: wscred.ProviderOpenRouter, APIKey: wscred.NewSecret(voiceFixtureORKey)}); err != nil {
+	if _, err := store.Apply(wscred.Change{Op: wscred.OpSet, Provider: wscred.ProviderOpenRouterVoice, APIKey: wscred.NewSecret(voiceFixtureORVoiceKey)}); err != nil {
 		t.Fatal(err)
 	}
 	opts := wsconfig.Options{ConfigHome: configHome}
@@ -411,13 +422,13 @@ func TestVoiceTranscribeGroqOpenRouterAndLocalEndpoint(t *testing.T) {
 		t.Fatalf("groq: code=%d auth=%q model=%q stream=%q fmt=%q lang=%q body=%s", w.Code, lastAuth, lastModel, lastStream, lastRespFmt, lastLang, w.Body.String())
 	}
 
-	// OpenRouter: final-only json, omitted language when empty.
+	// OpenRouter: final-only json, omitted language when empty, uses dedicated voice key.
 	req2 := voiceMultipartRequest(t, voicePrefix+"transcribe", map[string]string{
 		"backend": "openrouter",
 	}, "a.webm", "audio/webm", []byte("WEBM"))
 	req2.AddCookie(authCookie(t, d))
 	w2 := authServe(d, req2)
-	if w2.Code != http.StatusOK || lastAuth != "Bearer "+voiceFixtureORKey || lastStream != "" || lastRespFmt != "json" || lastLang != "" {
+	if w2.Code != http.StatusOK || lastAuth != "Bearer "+voiceFixtureORVoiceKey || lastStream != "" || lastRespFmt != "json" || lastLang != "" {
 		t.Fatalf("openrouter: code=%d auth=%q stream=%q fmt=%q lang=%q body=%s", w2.Code, lastAuth, lastStream, lastRespFmt, lastLang, w2.Body.String())
 	}
 
@@ -579,5 +590,194 @@ func TestVoiceTranscribeBackendOverrideModelDefault(t *testing.T) {
 				t.Fatalf("upstream model = %q, want %q", gotModel, tc.wantModel)
 			}
 		})
+	}
+}
+
+func TestVoiceCapabilitiesOrderNativeAndOpenRouterSharedKeyRules(t *testing.T) {
+	var lastAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"text":"ok"}`)
+	}))
+	defer srv.Close()
+
+	d := authFixture(t)
+	store := wscred.NewStore(filepath.Join(t.TempDir(), "auth", wscred.FileName))
+	if _, err := store.Apply(wscred.Change{Op: wscred.OpSet, Provider: wscred.ProviderOpenRouter, APIKey: wscred.NewSecret(voiceFixtureORKey)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(wscred.Change{Op: wscred.OpSet, Provider: wscred.ProviderGroq, APIKey: wscred.NewSecret(voiceFixtureGroqKey)}); err != nil {
+		t.Fatal(err)
+	}
+	d.credentials = store
+	d.voiceBaseURLs = map[wscred.ProviderID]string{
+		wscred.ProviderOpenRouter: srv.URL,
+		wscred.ProviderGroq:       srv.URL,
+	}
+
+	getCaps := func() voiceCapabilitiesResponse {
+		t.Helper()
+		req := authRequest(http.MethodGet, voicePrefix+"capabilities", "")
+		req.AddCookie(authCookie(t, d))
+		w := authServe(d, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("capabilities status = %d (%s)", w.Code, w.Body.String())
+		}
+		if strings.Contains(w.Body.String(), voiceFixtureORKey) || strings.Contains(w.Body.String(), voiceFixtureORVoiceKey) {
+			t.Fatalf("capabilities leaked secret: %s", w.Body.String())
+		}
+		var resp voiceCapabilitiesResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	findBackend := func(resp voiceCapabilitiesResponse, id string) (VoiceBackendCapability, bool) {
+		for _, b := range resp.Backends {
+			if b.ID == id {
+				return b, true
+			}
+		}
+		return VoiceBackendCapability{}, false
+	}
+	transcribeOR := func() *httptest.ResponseRecorder {
+		t.Helper()
+		lastAuth = ""
+		req := voiceMultipartRequest(t, voicePrefix+"transcribe", map[string]string{"backend": "openrouter"}, "a.webm", "audio/webm", []byte("WEBM"))
+		req.AddCookie(authCookie(t, d))
+		return authServe(d, req)
+	}
+
+	// 1) Fresh default: effective order is ["native"], native entry is kind:"native",
+	//    and top OpenRouter LLM key alone does NOT enable OpenRouter voice STT.
+	d.voiceConfig = func() voiceSettings { return voiceSettings{} }
+	resp := getCaps()
+	if len(resp.Order) != 1 || resp.Order[0] != "native" {
+		t.Fatalf("default order = %v, want [native]", resp.Order)
+	}
+	if resp.Selected != nil {
+		t.Fatalf("default selected = %+v, want nil", resp.Selected)
+	}
+	if resp.OpenRouterSharedKey {
+		t.Fatalf("default openrouter_shared_key = true, want false")
+	}
+	nat, ok := findBackend(resp, "native")
+	if !ok || nat.Kind != "native" || nat.Available {
+		t.Fatalf("native backend = %+v (ok=%v)", nat, ok)
+	}
+	orCap, ok := findBackend(resp, "openrouter")
+	if !ok || orCap.Available || orCap.Reason != "api_key_missing" {
+		t.Fatalf("openrouter with top key only = %+v, want unavailable", orCap)
+	}
+	w := transcribeOR()
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `"backend_unconfigured"`) || strings.Contains(w.Body.String(), voiceFixtureORKey) {
+		t.Fatalf("transcribe openrouter with top key only = %d %s", w.Code, w.Body.String())
+	}
+
+	// 2) Legacy migration: unset order + unset shared toggle + voice_backend=openrouter
+	//    keeps working by reusing top OpenRouter key.
+	d.voiceConfig = func() voiceSettings { return voiceSettings{Backend: "openrouter"} }
+	resp = getCaps()
+	if len(resp.Order) != 1 || resp.Order[0] != "openrouter" {
+		t.Fatalf("legacy order = %v, want [openrouter]", resp.Order)
+	}
+	if !resp.OpenRouterSharedKey {
+		t.Fatalf("legacy openrouter_shared_key = false, want true")
+	}
+	if orCap, _ = findBackend(resp, "openrouter"); !orCap.Available {
+		t.Fatalf("legacy openrouter = %+v, want available", orCap)
+	}
+	if resp.Selected == nil || resp.Selected.Backend != "openrouter" {
+		t.Fatalf("legacy selected = %+v, want openrouter", resp.Selected)
+	}
+	w = transcribeOR()
+	if w.Code != http.StatusOK || lastAuth != "Bearer "+voiceFixtureORKey {
+		t.Fatalf("legacy openrouter transcribe = %d auth=%q body=%s", w.Code, lastAuth, w.Body.String())
+	}
+
+	// 3) Explicit shared=false NEVER falls through to legacy voice_backend=openrouter.
+	d.voiceConfig = func() voiceSettings {
+		return voiceSettings{Backend: "openrouter", OpenRouterSharedKey: false, OpenRouterSharedSet: true}
+	}
+	resp = getCaps()
+	if resp.OpenRouterSharedKey {
+		t.Fatalf("explicit false openrouter_shared_key = true, want false")
+	}
+	if orCap, _ = findBackend(resp, "openrouter"); orCap.Available {
+		t.Fatalf("explicit false openrouter = %+v, want unavailable", orCap)
+	}
+	if resp.Selected != nil {
+		t.Fatalf("explicit false selected = %+v, want nil", resp.Selected)
+	}
+	w = transcribeOR()
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `"backend_unconfigured"`) {
+		t.Fatalf("explicit false transcribe = %d %s", w.Code, w.Body.String())
+	}
+
+	// 4) Stored order with shared toggle ON + top key enables openrouter and skips native for selected.
+	d.voiceConfig = func() voiceSettings {
+		return voiceSettings{
+			BackendOrder:        "native openrouter groq native",
+			OpenRouterSharedKey: true,
+			OpenRouterSharedSet: true,
+		}
+	}
+	resp = getCaps()
+	wantOrder := []string{"native", "openrouter", "groq"}
+	if strings.Join(resp.Order, ",") != strings.Join(wantOrder, ",") {
+		t.Fatalf("deduped order = %v, want %v", resp.Order, wantOrder)
+	}
+	if resp.Selected == nil || resp.Selected.Backend != "openrouter" || resp.Selected.Model != "openai/whisper-1" {
+		t.Fatalf("order selected = %+v, want openrouter/openai/whisper-1", resp.Selected)
+	}
+	w = transcribeOR()
+	if w.Code != http.StatusOK || lastAuth != "Bearer "+voiceFixtureORKey {
+		t.Fatalf("shared ON transcribe = %d auth=%q", w.Code, lastAuth)
+	}
+
+	// 5) Dedicated openrouter_voice key enables openrouter when shared toggle is OFF
+	//    and transcribe uses the dedicated key, never the top key.
+	if _, err := store.Apply(wscred.Change{Op: wscred.OpSet, Provider: wscred.ProviderOpenRouterVoice, APIKey: wscred.NewSecret(voiceFixtureORVoiceKey)}); err != nil {
+		t.Fatal(err)
+	}
+	d.voiceConfig = func() voiceSettings {
+		return voiceSettings{
+			BackendOrder:        "native groq openrouter",
+			OpenRouterSharedKey: false,
+			OpenRouterSharedSet: true,
+		}
+	}
+	resp = getCaps()
+	if orCap, _ = findBackend(resp, "openrouter"); !orCap.Available {
+		t.Fatalf("dedicated key openrouter = %+v, want available", orCap)
+	}
+	if resp.Selected == nil || resp.Selected.Backend != "groq" {
+		t.Fatalf("order [native groq openrouter] selected = %+v, want groq", resp.Selected)
+	}
+	w = transcribeOR()
+	if w.Code != http.StatusOK || lastAuth != "Bearer "+voiceFixtureORVoiceKey {
+		t.Fatalf("dedicated key transcribe = %d auth=%q, want dedicated key", w.Code, lastAuth)
+	}
+
+	// 6) When shared toggle is ON and both keys exist, top key is used.
+	d.voiceConfig = func() voiceSettings {
+		return voiceSettings{
+			BackendOrder:        "openrouter",
+			OpenRouterSharedKey: true,
+			OpenRouterSharedSet: true,
+		}
+	}
+	w = transcribeOR()
+	if w.Code != http.StatusOK || lastAuth != "Bearer "+voiceFixtureORKey {
+		t.Fatalf("shared ON with both keys transcribe = %d auth=%q, want top key", w.Code, lastAuth)
+	}
+
+	// 7) Native backend rejected by POST /api/voice/transcribe (client-only).
+	reqNative := voiceMultipartRequest(t, voicePrefix+"transcribe", map[string]string{"backend": "native"}, "a.webm", "audio/webm", []byte("WEBM"))
+	reqNative.AddCookie(authCookie(t, d))
+	wNative := authServe(d, reqNative)
+	if wNative.Code != http.StatusBadRequest || !strings.Contains(wNative.Body.String(), `"unknown_backend"`) {
+		t.Fatalf("transcribe native = %d %s", wNative.Code, wNative.Body.String())
 	}
 }

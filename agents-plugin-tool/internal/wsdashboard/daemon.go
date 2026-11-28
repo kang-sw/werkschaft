@@ -3,6 +3,7 @@ package wsdashboard
 import (
 	"errors"
 	"github.com/gofrs/flock"
+	"github.com/kang-sw/devenv/internal/wsconvidx"
 	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsmeta"
 	"io"
@@ -190,6 +191,11 @@ type DaemonOptions struct {
 	// returns wsmeta.ErrCutoverUnsupported, so deferred legacy stores load
 	// from legacy JSON files instead.
 	OnLegacyFallback func()
+	// ScreenshotPlaywrightModule optionally configures a runtime Playwright
+	// module path for ws/daemon.screenshot Tier B headless route rendering
+	// (distinct from test-only WS_PLAYWRIGHT_MODULE; empty falls back to
+	// WS_DAEMON_SCREENSHOT_PLAYWRIGHT_MODULE or Tier C dom_fallback).
+	ScreenshotPlaywrightModule string
 
 	// bindHost overrides the address the daemon binds, so a test runs LAN
 	// mode on loopback; empty derives it from LAN.
@@ -299,8 +305,28 @@ type Daemon struct {
 	boardExportMaxBytes int64
 	// companionCommands broadcasts agent-director commands to rail streams.
 	companionCommands companionCommandHub
+	// convReveals broadcasts conv.reveal highlight/jump events to rail streams.
+	convReveals convRevealHub
+	// convIdx is the daemon's held Type 4 SQLite FTS5 conversation index
+	// (conv_host.go), opened under dashboard.lock and closed before unlock.
+	convIdx                 *wsconvidx.Store
+	stopRingObserver        func()
+	convDeltaMu             sync.Mutex
+	convDeltaQueue          []convRingDelta
+	convDeltaWake           chan struct{}
+	convDeltaFlush          chan chan struct{}
+	convDeltaStop           chan struct{}
+	convDeltaDone           chan struct{}
+	convBackfillOnce        sync.Once
+	convBackfillMu          sync.Mutex
+	convBackfillInFlight    map[string]struct{}
+	convNonHostedReconciled map[string]bool
+	convBackfillWG          sync.WaitGroup
 	// companionPhone holds the in-memory 4-state embodiment & phone messenger store.
 	companionPhone CompanionPhoneStore
+	// companionWake, when bound by cmd/ws-mcp, wakes the Tier-1 companion burst
+	// session on incoming user messages or release with unread inbox.
+	companionWake atomic.Pointer[func(reason string)]
 	// director is the companion agent director (companion_director.go).
 	director      companionDirector
 	agents        AgentHost
@@ -514,6 +540,16 @@ type Daemon struct {
 	metaMu     sync.RWMutex
 	metaClosed bool
 	metaWG     sync.WaitGroup
+
+	// daemonBridge holds local-viewer shell tab heartbeats, per-tab push
+	// channels, and pending 1-click confirmations / bridge replies (daemon_bridge.go).
+	daemonBridge                  daemonBridge
+	daemonConfirmTimeout          time.Duration
+	daemonCurlTimeout             time.Duration
+	screenshotAuth                screenshotAuthState
+	screenshotPlaywrightModule    string
+	daemonScreenshotNativeTimeout time.Duration
+	daemonScreenshotRenderTimeout time.Duration
 
 	closeOnce sync.Once
 	stop      chan struct{}

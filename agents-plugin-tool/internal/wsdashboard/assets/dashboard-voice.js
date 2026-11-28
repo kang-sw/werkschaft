@@ -1,5 +1,6 @@
 // Common provider-agnostic voice input interface (window.WsVoiceInput) and
-// composer push-to-talk integration.
+// composer integration. Inline span & Spacebar PTT live in dashboard-voice-ptt.js;
+// OS native bridge adapter & frame relay live in dashboard-voice-native.js.
 (function () {
   "use strict";
 
@@ -301,7 +302,6 @@
       hasLastAudio: function () { return !!lastAudio; },
       discardLast: function () { lastAudio = null; },
       start: function (ctx) {
-        // Discard any previous recording as soon as a new recording starts.
         lastAudio = null;
         cancelled = false;
         recordedChunks = [];
@@ -429,8 +429,9 @@
     };
   }
 
-  // Provider-agnostic registry & controller factory.
+  // Provider-agnostic registry & optional post-processing hook.
   var registry = Object.create(null);
+  var globalPostProcess = null;
 
   function registerBackend(backend) {
     if (!backend || typeof backend.id !== "string" || !backend.id) {
@@ -452,36 +453,90 @@
     return Object.keys(registry).map(function (k) { return registry[k]; });
   }
 
+  function setPostProcess(fn) {
+    globalPostProcess = typeof fn === "function" ? fn : null;
+  }
+
+  function getPostProcess() {
+    return globalPostProcess;
+  }
+
+  // Walk the effective order left-to-right and pick the first backend available
+  // in the current environment; fall back to legacy selected ID when order is empty.
+  function resolveOrder(order, fallbackId) {
+    if (Array.isArray(order) && order.length) {
+      for (var i = 0; i < order.length; i++) {
+        var b = getBackend(order[i]);
+        if (b && typeof b.available === "function" && b.available()) return b;
+      }
+      return null;
+    }
+    if (fallbackId) {
+      var legacy = getBackend(fallbackId);
+      if (legacy && typeof legacy.available === "function" && legacy.available()) return legacy;
+    }
+    return null;
+  }
+
+  function normalizeCapabilities(data, eligible) {
+    var list = Array.isArray(data && data.backends) ? data.backends : [];
+    var rawSelected = data && data.selected ? data.selected : null;
+    var selectedId = "";
+    var model = "";
+    var language = "";
+    if (rawSelected && typeof rawSelected === "object") {
+      if (typeof rawSelected.backend === "string") selectedId = rawSelected.backend;
+      if (typeof rawSelected.model === "string") model = rawSelected.model;
+      if (typeof rawSelected.language === "string") language = rawSelected.language;
+    } else if (typeof rawSelected === "string") {
+      selectedId = rawSelected;
+      if (data && typeof data.model === "string") model = data.model;
+      if (data && typeof data.language === "string") language = data.language;
+    }
+    if (data && typeof data.language === "string" && data.language) language = data.language;
+    var legacyBackend = (data && typeof data.legacy_backend === "string" && data.legacy_backend) || selectedId || "";
+    var legacyModel = (data && typeof data.legacy_model === "string" && data.legacy_model) || model || "";
+    var order = Array.isArray(data && data.order)
+      ? data.order.filter(function (id) { return typeof id === "string" && id.length > 0; })
+      : (selectedId ? [selectedId] : []);
+    var resolved = resolveOrder(order, selectedId);
+    return {
+      eligible: !!eligible,
+      backends: list,
+      order: order,
+      selected: resolved ? resolved.id : null,
+      rawSelected: rawSelected,
+      legacyBackend: legacyBackend,
+      legacyModel: legacyModel,
+      model: model,
+      language: language,
+      openrouterSharedKey: !!(data && data.openrouter_shared_key)
+    };
+  }
+
   function discoverCapabilities(opts) {
     opts = opts || {};
     var fetchFn = opts.fetch || window.fetch;
     if (typeof fetchFn !== "function") {
-      return Promise.resolve({ backends: [], selected: null });
+      return Promise.resolve(normalizeCapabilities(null, false));
     }
     return fetchFn("/api/voice/capabilities", {
       method: "GET",
       credentials: "same-origin",
       cache: "no-store"
     }).then(function (res) {
-      if (!res.ok) return { backends: [], selected: null };
-      return res.json().catch(function () { return { backends: [], selected: null }; });
+      if (!res || !res.ok) return { ok: false, data: null };
+      return res.json().then(function (data) {
+        return { ok: true, data: data };
+      }, function () {
+        return { ok: true, data: {} };
+      });
     }, function () {
-      return { backends: [], selected: null };
-    }).then(function (data) {
-      var list = Array.isArray(data && data.backends) ? data.backends : [];
-      var rawSelected = data && data.selected ? data.selected : null;
-      var selected = null;
-      var model = "";
-      var language = "";
-      if (rawSelected && typeof rawSelected === "object") {
-        if (typeof rawSelected.backend === "string" && rawSelected.backend) selected = rawSelected.backend;
-        if (typeof rawSelected.model === "string") model = rawSelected.model;
-        if (typeof rawSelected.language === "string") language = rawSelected.language;
-      } else if (typeof rawSelected === "string" && rawSelected) {
-        selected = rawSelected;
-        if (data && typeof data.model === "string") model = data.model;
-        if (data && typeof data.language === "string") language = data.language;
-      }
+      return { ok: false, data: null };
+    }).then(function (res) {
+      if (!res.ok) return normalizeCapabilities(null, false);
+      var data = res.data || {};
+      var list = Array.isArray(data.backends) ? data.backends : [];
       var externalIDs = Object.create(null);
       for (var i = 0; i < list.length; i++) {
         var b = list[i];
@@ -491,26 +546,12 @@
           registerBackend(createExternalBackend(b, opts));
         }
       }
-      // Drop stale daemon external backends no longer reported by capabilities.
       listBackends().forEach(function (existing) {
         if (existing.kind === "external" && !externalIDs[existing.id]) {
           unregisterBackend(existing.id);
         }
       });
-      var resolvedSelected = null;
-      if (selected) {
-        var chosen = getBackend(selected);
-        if (chosen && typeof chosen.available === "function" && chosen.available()) {
-          resolvedSelected = selected;
-        }
-      }
-      return {
-        backends: list,
-        selected: resolvedSelected,
-        rawSelected: rawSelected,
-        model: model,
-        language: language
-      };
+      return normalizeCapabilities(data, true);
     });
   }
 
@@ -518,9 +559,13 @@
     opts = opts || {};
     var owner = {};
     var state = "idle";
-    var selectedId = null;
-    var configuredModel = "";
+    var eligible = false;
+    var order = [];
+    var fallbackSelectedId = null;
+    var legacyBackend = "";
+    var legacyModel = "";
     var configuredLanguage = "";
+    var lastCaps = null;
     var activeBackend = null;
     var lastBackend = null;
     var generation = 0;
@@ -530,24 +575,42 @@
       if (typeof opts.onStateChange === "function") opts.onStateChange(state, detail || {});
     }
 
-    function selectedBackend() {
-      var b = selectedId ? getBackend(selectedId) : null;
-      if (!b || typeof b.available !== "function" || !b.available()) return null;
-      return b;
+    function resolvedBackend() {
+      return resolveOrder(order, fallbackSelectedId);
+    }
+
+    function modelForBackend(backend) {
+      if (!backend) return "";
+      if (legacyBackend && backend.id === legacyBackend) return legacyModel || "";
+      return "";
     }
 
     function setCapabilities(caps) {
+      var hasExplicitEligible = !!(caps && typeof caps.eligible === "boolean");
       var sel = caps && caps.selected ? caps.selected : null;
+      var selId = "";
+      var selModel = "";
+      var selLang = "";
       if (sel && typeof sel === "object") {
-        selectedId = typeof sel.backend === "string" && sel.backend ? sel.backend : null;
-        configuredModel = (typeof sel.model === "string" ? sel.model : "") || (caps && caps.model) || "";
-        configuredLanguage = (typeof sel.language === "string" ? sel.language : "") || (caps && caps.language) || "";
-      } else {
-        selectedId = typeof sel === "string" && sel ? sel : null;
-        configuredModel = (caps && caps.model) || "";
-        configuredLanguage = (caps && caps.language) || "";
+        if (typeof sel.backend === "string") selId = sel.backend;
+        if (typeof sel.model === "string") selModel = sel.model;
+        if (typeof sel.language === "string") selLang = sel.language;
+      } else if (typeof sel === "string") {
+        selId = sel;
       }
-      if (typeof opts.onCapabilities === "function") opts.onCapabilities(caps, selectedBackend());
+      order = Array.isArray(caps && caps.order)
+        ? caps.order.filter(function (id) { return typeof id === "string" && id.length > 0; })
+        : (selId ? [selId] : []);
+      fallbackSelectedId = selId || null;
+      legacyBackend = (caps && typeof caps.legacyBackend === "string" && caps.legacyBackend) ||
+        (caps && typeof caps.legacy_backend === "string" && caps.legacy_backend) || selId || "";
+      legacyModel = (caps && typeof caps.legacyModel === "string" && caps.legacyModel) ||
+        (caps && typeof caps.legacy_model === "string" && caps.legacy_model) ||
+        selModel || (caps && caps.model) || "";
+      configuredLanguage = selLang || (caps && caps.language) || "";
+      eligible = hasExplicitEligible ? !!caps.eligible : !!(selId || order.length);
+      lastCaps = caps || null;
+      if (typeof opts.onCapabilities === "function") opts.onCapabilities(caps, resolvedBackend(), eligible);
     }
 
     function refreshCapabilities() {
@@ -564,11 +627,65 @@
       lastBackend = null;
     }
 
+    function finishResult(gen, backend, result) {
+      if (gen !== generation) return null;
+      var rawText = result && typeof result.text === "string" ? result.text : "";
+      var pp = typeof opts.postProcess === "function" ? opts.postProcess : globalPostProcess;
+      function commit(finalText) {
+        if (gen !== generation) return null;
+        releaseRecorderLock(owner);
+        activeBackend = null;
+        discardLast();
+        setState("idle");
+        if (typeof opts.onFinal === "function") opts.onFinal(finalText);
+        return { text: finalText };
+      }
+      if (pp && rawText) {
+        setState("refining", { backend: backend.id });
+        return Promise.resolve().then(function () {
+          return pp(rawText, { backend: backend.id });
+        }).then(function (refined) {
+          return commit(typeof refined === "string" ? refined : rawText);
+        }, function () {
+          return commit(rawText);
+        });
+      }
+      return commit(rawText);
+    }
+
+    function wireBackendCallbacks(backend, gen) {
+      if (typeof backend.onPartial === "function") {
+        backend.onPartial(function (text) {
+          if (gen !== generation || (state !== "recording" && state !== "transcribing")) return;
+          if (typeof opts.onPartial === "function") opts.onPartial(text);
+        });
+      }
+      if (typeof backend.onError === "function") {
+        backend.onError(function (err) {
+          if (gen !== generation) return;
+          releaseRecorderLock(owner);
+          activeBackend = null;
+          setState("error", { error: err });
+          if (typeof opts.onError === "function") opts.onError(err);
+        });
+      }
+      if (typeof backend.onHidden === "function") {
+        backend.onHidden(function () {
+          if (gen !== generation) return;
+          generation++;
+          releaseRecorderLock(owner);
+          activeBackend = null;
+          discardLast();
+          if (state !== "idle") setState("idle", { cancelled: true, hidden: true });
+        });
+      }
+    }
+
     function start(ctx) {
-      if (state === "recording" || state === "transcribing") {
+      if (state === "recording" || state === "transcribing" || state === "refining") {
         return Promise.reject(voiceError("recorder_busy"));
       }
-      var backend = selectedBackend();
+      var backend = resolvedBackend();
       if (!backend) {
         return Promise.reject(voiceError("backend_unavailable"));
       }
@@ -581,15 +698,12 @@
       var gen = ++generation;
       activeBackend = backend;
       lastBackend = backend;
-      if (typeof backend.onPartial === "function") {
-        backend.onPartial(function (text) {
-          if (gen !== generation || (state !== "recording" && state !== "transcribing")) return;
-          if (typeof opts.onPartial === "function") opts.onPartial(text);
-        });
-      }
+      wireBackendCallbacks(backend, gen);
       setState("recording", { backend: backend.id });
-      var mergedCtx = Object.assign({ model: configuredModel, language: configuredLanguage }, ctx || {});
-      // Synchronously invoke backend.start so getUserMedia stays inside the user gesture.
+      var mergedCtx = Object.assign({
+        model: modelForBackend(backend),
+        language: configuredLanguage
+      }, ctx || {});
       var p;
       try {
         p = Promise.resolve(backend.start(mergedCtx));
@@ -621,14 +735,7 @@
       var p;
       try { p = Promise.resolve(backend.stop()); } catch (err) { p = Promise.reject(err); }
       return p.then(function (result) {
-        if (gen !== generation) return null;
-        releaseRecorderLock(owner);
-        activeBackend = null;
-        discardLast();
-        setState("idle");
-        var text = result && typeof result.text === "string" ? result.text : "";
-        if (typeof opts.onFinal === "function") opts.onFinal(text);
-        return result;
+        return finishResult(gen, backend, result);
       }, function (err) {
         if (gen !== generation) return null;
         releaseRecorderLock(owner);
@@ -644,7 +751,7 @@
     }
 
     function retry() {
-      if (state === "recording" || state === "transcribing") return Promise.resolve(null);
+      if (state === "recording" || state === "transcribing" || state === "refining") return Promise.resolve(null);
       var backend = lastBackend;
       if (!backend || typeof backend.retry !== "function" || (typeof backend.hasLastAudio === "function" && !backend.hasLastAudio())) {
         return Promise.resolve(null);
@@ -656,24 +763,12 @@
       }
       var gen = ++generation;
       activeBackend = backend;
-      if (typeof backend.onPartial === "function") {
-        backend.onPartial(function (text) {
-          if (gen !== generation || state !== "transcribing") return;
-          if (typeof opts.onPartial === "function") opts.onPartial(text);
-        });
-      }
+      wireBackendCallbacks(backend, gen);
       setState("transcribing", { backend: backend.id, retry: true });
       var p;
       try { p = Promise.resolve(backend.retry()); } catch (err) { p = Promise.reject(err); }
       return p.then(function (result) {
-        if (gen !== generation) return null;
-        releaseRecorderLock(owner);
-        activeBackend = null;
-        discardLast();
-        setState("idle");
-        var text = result && typeof result.text === "string" ? result.text : "";
-        if (typeof opts.onFinal === "function") opts.onFinal(text);
-        return result;
+        return finishResult(gen, backend, result);
       }, function (err) {
         if (gen !== generation) return null;
         releaseRecorderLock(owner);
@@ -708,7 +803,11 @@
 
     return {
       getState: function () { return state; },
-      getSelectedBackend: selectedBackend,
+      isEligible: function () { return !!eligible; },
+      getResolvedBackend: resolvedBackend,
+      getSelectedBackend: resolvedBackend,
+      getCapabilities: function () { return lastCaps; },
+      getOrder: function () { return order.slice(); },
       setCapabilities: setCapabilities,
       refreshCapabilities: refreshCapabilities,
       start: start,
@@ -721,19 +820,10 @@
     };
   }
 
-  function errorLabel(err) {
-    var code = (err && err.code) || "";
-    if (code === "mic_denied" || code === "mic_unavailable") return translate("js.voice.err.mic");
-    if (code === "recorder_busy") return translate("js.voice.err.busy");
-    if (code === "upstream_timeout") return translate("js.voice.err.timeout");
-    if (code === "provider_auth_failed") return translate("js.voice.err.auth");
-    if (code === "audio_too_large") return translate("js.voice.err.too_large");
-    return translate("js.voice.err.failed");
-  }
-
   function attachComposer(opts) {
     opts = opts || {};
     var doc = opts.document || document;
+    var win = opts.window || window;
     var root = doc.documentElement;
     var composer = opts.composer || doc.getElementById("composer");
     var ctext = opts.ctext || doc.getElementById("ctext");
@@ -742,189 +832,63 @@
     var cap = opts.capsule || doc.getElementById("cvox-cap");
     if (!composer || !ctext || !btn || !cap) return null;
 
-    var caretStart = 0;
-    var caretEnd = 0;
-    var locked = false;
-    var prevCtextDisabled = false;
-    var prevCsendDisabled = false;
-
-    function captureCaret() {
-      var start = typeof ctext.selectionStart === "number" ? ctext.selectionStart : (ctext.value || "").length;
-      var end = typeof ctext.selectionEnd === "number" ? ctext.selectionEnd : start;
-      caretStart = Math.max(0, Math.min((ctext.value || "").length, start));
-      caretEnd = Math.max(caretStart, Math.min((ctext.value || "").length, end));
-    }
-
-    function positionCapsule() {
-      var field = cap.parentNode;
-      var anchor = null;
-      if (ctext.wsc && typeof ctext.wsc.anchor === "function") {
-        try { anchor = ctext.wsc.anchor(caretStart); } catch (e) { anchor = null; }
-      }
-      var fieldRect = field && typeof field.getBoundingClientRect === "function"
-        ? field.getBoundingClientRect()
-        : { left: 0, top: 0, width: 320, height: 40 };
-      var left = 8;
-      var top = 4;
-      if (anchor && typeof anchor.x === "number") {
-        left = Math.max(4, Math.round(anchor.x - fieldRect.left));
-        if (fieldRect.width > 80) left = Math.min(left, Math.max(4, Math.round(fieldRect.width - 140)));
-        if (typeof anchor.bottom === "number") {
-          top = Math.max(2, Math.round(anchor.bottom - fieldRect.top + 4));
-        }
-      }
-      cap.style.left = left + "px";
-      cap.style.top = top + "px";
-      cap.setAttribute("data-caret", String(caretStart));
-    }
-
-    function setComposerLock(next) {
-      if (locked === next) return;
-      locked = next;
-      if (next) {
-        prevCtextDisabled = !!ctext.disabled;
-        prevCsendDisabled = !!(csend && csend.disabled);
-        composer.setAttribute("data-voice-locked", "1");
-        ctext.disabled = true;
-        if (ctext.wsc && ctext.wsc.editor) {
-          ctext.wsc.editor.setAttribute("contenteditable", "false");
-          ctext.wsc.editor.setAttribute("aria-disabled", "true");
-        }
-        if (csend) csend.disabled = true;
+    var pttMod = win.WsVoicePTT || null;
+    var pttHandle = null;
+    var showWhenEligible = opts.showWhenEligible !== false;
+    var setComposerLock = (pttMod && typeof pttMod.createComposerLock === "function")
+      ? pttMod.createComposerLock(composer, ctext, csend, function () { return pttHandle; })
+      : function () {};
+    var syncButton = function (state, backend, isEligible) {
+      if (pttMod && typeof pttMod.syncMicButton === "function") {
+        pttMod.syncMicButton(btn, state, backend, isEligible, showWhenEligible);
       } else {
-        composer.removeAttribute("data-voice-locked");
-        ctext.disabled = prevCtextDisabled;
-        if (ctext.wsc && ctext.wsc.editor) {
-          ctext.wsc.editor.setAttribute("contenteditable", prevCtextDisabled ? "false" : "true");
-          ctext.wsc.editor.setAttribute("aria-disabled", String(prevCtextDisabled));
-        }
-        if (csend) csend.disabled = prevCsendDisabled;
+        btn.hidden = !(showWhenEligible ? !!isEligible : !!backend);
       }
-    }
-
-    function insertFinalText(text) {
-      if (!text) return;
-      var val = String(ctext.value || "");
-      var a = Math.max(0, Math.min(val.length, caretStart));
-      var b = Math.max(a, Math.min(val.length, caretEnd));
-      if (typeof ctext.setRangeText === "function") {
-        ctext.setRangeText(text, a, b, "end");
-      } else {
-        ctext.value = val.slice(0, a) + text + val.slice(b);
-        if (typeof ctext.setSelectionRange === "function") {
-          ctext.setSelectionRange(a + text.length, a + text.length);
-        }
-      }
-      if (typeof Event === "function" && typeof ctext.dispatchEvent === "function") {
-        ctext.dispatchEvent(new Event("input", { bubbles: true }));
-      }
-      if (typeof ctext.focus === "function") ctext.focus();
-    }
-
-    function renderCapsule(state, text, err) {
-      cap.textContent = "";
-      if (state === "idle") {
-        cap.hidden = true;
-        cap.removeAttribute("data-state");
-        return;
-      }
-      cap.hidden = false;
-      cap.setAttribute("data-state", state);
-      positionCapsule();
-      var dot = doc.createElement("span");
-      dot.className = "cvox-dot";
-      dot.setAttribute("aria-hidden", "true");
-      cap.appendChild(dot);
-
-      var span = doc.createElement("span");
-      span.className = "cvox-text";
-      if (state === "recording") span.textContent = text || translate("js.voice.recording");
-      else if (state === "transcribing") span.textContent = text || translate("js.voice.transcribing");
-      else if (state === "error") span.textContent = errorLabel(err);
-      cap.appendChild(span);
-
-      var acts = doc.createElement("span");
-      acts.className = "cvox-acts";
-      if (state === "recording" || state === "transcribing") {
-        var cancelBtn = doc.createElement("button");
-        cancelBtn.type = "button";
-        cancelBtn.className = "cvox-btn cvox-muted";
-        cancelBtn.setAttribute("data-voice-action", "cancel");
-        cancelBtn.textContent = translate("js.voice.cancel");
-        cancelBtn.addEventListener("click", function () { controller.cancel({ discardLast: true }); });
-        acts.appendChild(cancelBtn);
-      } else if (state === "error") {
-        if (controller.canRetry()) {
-          var resendBtn = doc.createElement("button");
-          resendBtn.type = "button";
-          resendBtn.className = "cvox-btn";
-          resendBtn.setAttribute("data-voice-action", "resend");
-          resendBtn.textContent = translate("js.voice.resend");
-          resendBtn.addEventListener("click", function () { controller.retry(); });
-          acts.appendChild(resendBtn);
-        }
-        var dismissBtn = doc.createElement("button");
-        dismissBtn.type = "button";
-        dismissBtn.className = "cvox-btn cvox-muted";
-        dismissBtn.setAttribute("data-voice-action", "dismiss");
-        dismissBtn.textContent = translate("js.voice.dismiss");
-        dismissBtn.addEventListener("click", function () {
-          controller.discardLast();
-          renderCapsule("idle", "");
-        });
-        acts.appendChild(dismissBtn);
-      }
-      cap.appendChild(acts);
-    }
-
-    function syncButton(state, available) {
-      btn.hidden = !available;
-      if (state === "recording") {
-        btn.setAttribute("data-state", "recording");
-        btn.setAttribute("aria-pressed", "true");
-        btn.title = translate("js.voice.stop");
-        btn.setAttribute("aria-label", translate("js.voice.stop"));
-      } else if (state === "transcribing") {
-        btn.setAttribute("data-state", "transcribing");
-        btn.setAttribute("aria-pressed", "true");
-        btn.title = translate("js.voice.transcribing");
-        btn.setAttribute("aria-label", translate("js.voice.transcribing"));
-      } else {
-        btn.removeAttribute("data-state");
-        btn.setAttribute("aria-pressed", "false");
-        btn.title = translate("js.voice.start");
-        btn.setAttribute("aria-label", translate("js.voice.start"));
-      }
-    }
+    };
+    var spanCtrl = (pttMod && typeof pttMod.createSpanController === "function")
+      ? pttMod.createSpanController({
+        document: doc,
+        ctext: ctext,
+        capsule: cap,
+        errorLabel: pttMod.errorLabel,
+        onCancel: function () { controller.cancel({ discardLast: true }); },
+        onRetry: function () { controller.retry(); },
+        onDismiss: function () { controller.discardLast(); },
+        canRetry: function () { return controller.canRetry(); }
+      })
+      : null;
 
     var controller = createController(Object.assign({}, opts, {
-      onCapabilities: function (caps, backend) {
-        syncButton(controller.getState(), !!backend);
+      onCapabilities: function (caps, backend, isEligible) {
+        syncButton(controller.getState(), backend, isEligible);
       },
       onStateChange: function (next, detail) {
-        var active = next === "recording" || next === "transcribing";
+        var active = next === "recording" || next === "transcribing" || next === "refining";
         setComposerLock(active);
-        syncButton(next, !!controller.getSelectedBackend());
-        if (next === "recording") renderCapsule("recording", "");
-        else if (next === "transcribing") renderCapsule("transcribing", "");
-        else if (next === "error") renderCapsule("error", "", detail && detail.error);
-        else renderCapsule("idle", "");
+        syncButton(next, controller.getResolvedBackend(), controller.isEligible());
+        if (!spanCtrl) return;
+        if (next === "recording") spanCtrl.beginListening();
+        else if (next === "transcribing" || next === "refining") spanCtrl.setRefining();
+        else if (next === "error") spanCtrl.showError(detail && detail.error);
+        else spanCtrl.reset();
       },
       onPartial: function (partialText) {
-        if (cap.hidden) return;
-        var node = cap.querySelector(".cvox-text");
-        if (node) node.textContent = partialText;
+        if (spanCtrl) spanCtrl.setPartial(partialText);
       },
       onFinal: function (finalText) {
         setComposerLock(false);
-        renderCapsule("idle", "");
-        insertFinalText(finalText);
+        if (spanCtrl) spanCtrl.commitFinal(finalText);
       },
       onError: function (err) {
         setComposerLock(false);
-        renderCapsule("error", "", err);
+        if (spanCtrl) spanCtrl.showError(err);
       }
     }));
+
+    function startDictation() {
+      if (spanCtrl) spanCtrl.captureCaret();
+      controller.start().catch(function () {});
+    }
 
     function onMicClick() {
       var st = controller.getState();
@@ -932,19 +896,24 @@
         controller.stop();
         return;
       }
-      if (st === "transcribing") {
+      if (st === "transcribing" || st === "refining") {
         controller.cancel({ discardLast: false });
         return;
       }
-      captureCaret();
-      controller.start().catch(function () {});
+      if (!controller.getResolvedBackend()) {
+        if (typeof opts.onUnconfiguredClick === "function") opts.onUnconfiguredClick();
+        else if (pttMod && typeof pttMod.openVoiceSettings === "function") pttMod.openVoiceSettings(win, btn);
+        return;
+      }
+      startDictation();
     }
 
     function onKeyDown(e) {
       if (!e || e.key !== "Escape") return;
       var st = controller.getState();
-      if (st === "recording" || st === "transcribing") {
+      if (st === "recording" || st === "transcribing" || st === "refining") {
         if (typeof e.preventDefault === "function") e.preventDefault();
+        if (pttHandle) pttHandle.disarm();
         controller.cancel({ discardLast: true });
       }
     }
@@ -953,46 +922,69 @@
       return !!(doc.hidden || (root && typeof root.hasAttribute === "function" && root.hasAttribute("data-animation-paused")));
     }
 
-    function onPageVisibility() {
-      if (isPageHidden()) {
-        // Foreground interaction only: cancel active recording, release mic,
-        // drop composer lock & capsule, and discard in-memory last recording.
-        controller.cancel({ discardLast: true });
-        setComposerLock(false);
-        renderCapsule("idle", "");
-      }
-    }
-
-    function onUnload() {
+    function teardownActive() {
+      if (pttHandle) pttHandle.disarm();
       controller.cancel({ discardLast: true });
       setComposerLock(false);
-      renderCapsule("idle", "");
+      if (spanCtrl) spanCtrl.reset();
     }
+
+    function onPageVisibility() {
+      if (isPageHidden()) teardownActive();
+    }
+
+    function onNativeStatusChange() {
+      syncButton(controller.getState(), controller.getResolvedBackend(), controller.isEligible());
+    }
+
+    if (win.WsVoicePTT && typeof win.WsVoicePTT.attachSpacebarPTT === "function") {
+      pttHandle = win.WsVoicePTT.attachSpacebarPTT({
+        document: doc,
+        window: win,
+        ctext: ctext,
+        controller: controller,
+        holdMs: opts.holdMs,
+        setTimeout: opts.setTimeout,
+        clearTimeout: opts.clearTimeout,
+        onStartPTT: startDictation,
+        onStopPTT: function () { controller.stop(); },
+        onHoldingChange: opts.onHoldingChange
+      });
+    }
+
+    function onCapabilitiesRefresh() { controller.refreshCapabilities(); }
 
     btn.addEventListener("click", onMicClick);
     doc.addEventListener("keydown", onKeyDown);
     doc.addEventListener("ws-page-visibility", onPageVisibility);
     doc.addEventListener("visibilitychange", onPageVisibility);
-    if (window.addEventListener) {
-      window.addEventListener("pagehide", onUnload);
-      window.addEventListener("beforeunload", onUnload);
+    doc.addEventListener("ws-native-speech-hidden", teardownActive);
+    doc.addEventListener("ws-account-changed", onCapabilitiesRefresh);
+    if (win.addEventListener) {
+      win.addEventListener("ws-native-speech-status", onNativeStatusChange);
+      win.addEventListener("ws-voice-capabilities-refresh", onCapabilitiesRefresh);
+      win.addEventListener("pagehide", teardownActive);
+      win.addEventListener("beforeunload", teardownActive);
     }
 
-    if (opts.autoDiscover !== false) {
-      controller.refreshCapabilities();
-    }
+    if (opts.autoDiscover !== false) controller.refreshCapabilities();
 
     return {
-      controller: controller,
+      controller: controller, span: spanCtrl, ptt: pttHandle,
       destroy: function () {
+        if (pttHandle) pttHandle.destroy();
         controller.destroy();
         btn.removeEventListener("click", onMicClick);
         doc.removeEventListener("keydown", onKeyDown);
         doc.removeEventListener("ws-page-visibility", onPageVisibility);
         doc.removeEventListener("visibilitychange", onPageVisibility);
-        if (window.removeEventListener) {
-          window.removeEventListener("pagehide", onUnload);
-          window.removeEventListener("beforeunload", onUnload);
+        doc.removeEventListener("ws-native-speech-hidden", teardownActive);
+        doc.removeEventListener("ws-account-changed", onCapabilitiesRefresh);
+        if (win.removeEventListener) {
+          win.removeEventListener("ws-native-speech-status", onNativeStatusChange);
+          win.removeEventListener("ws-voice-capabilities-refresh", onCapabilitiesRefresh);
+          win.removeEventListener("pagehide", teardownActive);
+          win.removeEventListener("beforeunload", teardownActive);
         }
       }
     };
@@ -1004,13 +996,16 @@
     getBackend: getBackend,
     listBackends: listBackends,
     discoverCapabilities: discoverCapabilities,
+    resolveOrder: resolveOrder,
     createController: createController,
     createExternalBackend: createExternalBackend,
     attachComposer: attachComposer,
     selectRecorderCodec: selectRecorderCodec,
     extensionForMime: extensionForMime,
     encodeWavPCM16: encodeWavPCM16,
-    hasActiveRecorderLock: hasActiveRecorderLock
+    hasActiveRecorderLock: hasActiveRecorderLock,
+    setPostProcess: setPostProcess,
+    getPostProcess: getPostProcess
   };
 
   if (typeof document !== "undefined" && document.getElementById && document.getElementById("cvox")) {

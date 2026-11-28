@@ -1125,3 +1125,270 @@ test('Phase 3 topbar switcher supports claude slots and renders agy as single-sl
   assert.ok(warnBadge.className.includes('warn'));
   pop.close();
 });
+
+test('OpenRouter hybrid card renders balance, key limits, spend and model table; creditsRestricted stays valid', async () => {
+  const at = Date.UTC(2026, 10, 28, 12, 0);
+  const env = environment(at, 'en');
+  env.set({
+    entries: [{
+      harness: 'openrouter',
+      label: 'OpenRouter',
+      asOf: at,
+      openrouter: {
+        balance: 18.75,
+        totalCredits: 25.0,
+        totalUsage: 6.25,
+        limit: 10.0,
+        limitRemaining: 3.75,
+        usageDaily: 1.25,
+        usageWeekly: 4.5,
+        usageMonthly: 6.25,
+        totalInputTokens: 12000,
+        totalOutputTokens: 3000,
+        totalCostUsd: 0.42,
+        models: [
+          { model: 'anthropic/claude-sonnet-4', inputTokens: 10000, outputTokens: 2500, costUsd: 0.38 },
+          { model: 'openai/gpt-4o-mini', inputTokens: 2000, outputTokens: 500, costUsd: 0.04 }
+        ]
+      }
+    }]
+  });
+  const mounted = env.window.WsUsage.mount(env.doc, env.top);
+  await flush();
+  assert.equal(groups(env.button).length, 1);
+  assert.equal(env.button.querySelector('.hb').attributes['data-h'], 'openrouter');
+  assert.equal(env.button.querySelector('.usage-key').textContent, 'bal');
+  assert.equal(env.button.querySelector('.usage-number').textContent, '$18.75');
+  assert.equal(env.button.querySelector('.usage-pace').textContent, '$1.25');
+
+  const pop = mounted.makePopover(() => {}, () => {});
+  pop.open();
+  await flush();
+  const card = nodes(pop.el, '.usage-metric-card').find(c => c.attributes['data-harness'] === 'openrouter');
+  assert.ok(card);
+  for (const text of ['OpenRouter', 'Balance', '$18.75', '$6.25 / $25.00 used', 'Key limit', '$10.00', '$3.75 remaining', 'Today', '$1.25', '7-day', '$4.50', 'Monthly', 'anthropic/claude-sonnet-4', '12.5k', '$0.38']) {
+    assert.ok(card.textContent.includes(text), text);
+  }
+  assert.ok(!card.textContent.includes('Key rejected'));
+
+  // Restricted /credits (401/403) must omit balance and explain restriction without marking key rejected.
+  env.set({
+    entries: [{
+      harness: 'openrouter',
+      label: 'OpenRouter',
+      asOf: at,
+      openrouter: {
+        creditsRestricted: true,
+        limit: 10.0,
+        limitRemaining: 6.5,
+        usageDaily: 0.5,
+        models: [{ model: 'openai/gpt-4o-mini', inputTokens: 500, outputTokens: 200, costUsd: 0.0025 }]
+      }
+    }]
+  });
+  env.ticks[0].fn();
+  await flush();
+  assert.equal(env.button.querySelector('.usage-key').textContent, 'rem');
+  assert.equal(env.button.querySelector('.usage-number').textContent, '$6.50');
+  const restrictedCard = nodes(pop.el, '.usage-metric-card')[0];
+  assert.ok(restrictedCard.textContent.includes('Account balance unavailable for this key'));
+  assert.ok(restrictedCard.textContent.includes('$6.50 remaining'));
+  assert.ok(restrictedCard.textContent.includes('$0.0025'));
+  assert.ok(!restrictedCard.textContent.includes('Key rejected'));
+
+  // Local-only OpenRouter spend must show cumulative Cost label, never mislabelled as daily ("day").
+  env.set({
+    entries: [{
+      harness: 'openrouter',
+      label: 'OpenRouter',
+      asOf: at,
+      openrouter: {
+        totalInputTokens: 4000,
+        totalOutputTokens: 1000,
+        totalCostUsd: 0.42,
+        models: [{ model: 'openai/gpt-4o-mini', inputTokens: 4000, outputTokens: 1000, costUsd: 0.42 }]
+      }
+    }]
+  });
+  env.ticks[0].fn();
+  await flush();
+  assert.equal(env.button.querySelector('.usage-key').textContent, 'Cost');
+  assert.equal(env.button.querySelector('.usage-number').textContent, '$0.42');
+  assert.ok(env.button.querySelector('.usage-column').title.includes('Cost: $0.42'));
+
+  // Key rejected status displays cleanly without fabricating balance.
+  env.set({
+    entries: [{
+      harness: 'openrouter',
+      label: 'OpenRouter',
+      status: 'key rejected',
+      openrouter: { models: [] }
+    }]
+  });
+  env.ticks[0].fn();
+  await flush();
+  assert.ok(env.button.textContent.includes('Key rejected'));
+  const rejectedCard = nodes(pop.el, '.usage-metric-card')[0];
+  assert.ok(rejectedCard.textContent.includes('Key rejected'));
+  pop.close();
+});
+
+test('unified codex_openai card projects codex history and renders token-first werk per-model rows', async () => {
+  const start = Date.UTC(2026, 10, 28, 8, 0), duration = 5 * 3600000, at = start + 0.4 * duration;
+  const reset5h = start + duration, resetWk = start + 5 * 86400000;
+  const env = environment(at, 'en');
+  env.set({
+    entries: [{
+      harness: 'codex_openai',
+      label: 'Codex / OpenAI',
+      accountLabel: 'al***@example.com',
+      plan: 'plus',
+      source: 'codex-wham',
+      asOf: at,
+      windows: [
+        { kind: 'five_hour', percent: 45, asOf: at, resetsAt: reset5h },
+        { kind: 'seven_day', percent: 30, asOf: at, resetsAt: resetWk }
+      ],
+      werk: {
+        mode: 'unified',
+        tokenFirst: true,
+        totalInputTokens: 8400,
+        totalOutputTokens: 1600,
+        estimatedCostUsd: 0.12,
+        models: [
+          { model: 'gpt-5.4-codex', inputTokens: 8400, outputTokens: 1600, costUsd: 0.12 }
+        ]
+      }
+    }],
+    codexFiveHourHistory: {
+      schema_version: 1,
+      status: 'ok',
+      samples: [
+        { harness: 'codex', kind: 'five_hour', source: 'codex-wham', resetsAt: reset5h, asOf: start + 0.2 * duration, percent: 20 },
+        { harness: 'codex', kind: 'five_hour', source: 'codex-wham', resetsAt: reset5h, asOf: at, percent: 45 }
+      ]
+    },
+    history: {
+      schema_version: 1,
+      status: 'ok',
+      samples: [
+        { harness: 'codex', kind: 'seven_day', source: 'codex-wham', resetsAt: resetWk, asOf: at - 600000, percent: 25 },
+        { harness: 'codex', kind: 'seven_day', source: 'codex-wham', resetsAt: resetWk, asOf: at, percent: 30 }
+      ]
+    }
+  });
+  const mounted = env.window.WsUsage.mount(env.doc, env.top);
+  await flush();
+  assert.equal(groups(env.button).length, 1);
+  assert.equal(env.button.querySelector('.hb').attributes['data-h'], 'codex_openai');
+  assert.equal(env.button.querySelector('.usage-columns').children.length, 2);
+
+  const pop = mounted.makePopover(() => {}, () => {});
+  pop.open();
+  await flush();
+  const sections = nodes(pop.el, '.usage-account');
+  assert.equal(sections.length, 1);
+  assert.equal(sections[0].querySelector('.usage-heading').textContent, 'Codex / OpenAI');
+  assert.equal(sections[0].querySelector('.usage-acct-label').textContent, 'al***@example.com');
+  const charts = nodes(sections[0], '.usage-chart');
+  assert.equal(charts.length, 2);
+  assert.ok(nodes(charts[0], '.usage-actual').length >= 1, 'codex_openai 5h chart projects codex history');
+  assert.ok(nodes(charts[1], '.usage-actual').length >= 1, 'codex_openai 7d chart projects codex history');
+
+  const detail = nodes(pop.el, '.usage-metric-card').find(c => c.attributes['data-harness'] === 'codex_openai');
+  assert.ok(detail);
+  for (const text of ['10k', '8.4k in · 1.6k out', 'Est. cost', 'Est. $0.12', 'gpt-5.4-codex']) {
+    assert.ok(detail.textContent.includes(text), text);
+  }
+  pop.close();
+});
+
+test('mismatched codex and werk_openai stay separate with local fallback reasons and localize across all 11 locales', async () => {
+  const at = Date.UTC(2026, 10, 28, 12, 0), reset = at + 3 * 3600000;
+  const locales = fs.readdirSync(__dirname + '/../wsi18n/tables').map(name => name.replace('.json', ''));
+  assert.equal(locales.length, 11);
+  for (const reason of ['consent_required', 'missing_claim', 'auth_rejected', 'plan_paused', 'plan_disabled']) {
+    const env = environment(at, 'en');
+    env.set({
+      entries: [
+        { harness: 'codex', asOf: at, windows: [{ kind: 'five_hour', percent: 33, asOf: at, resetsAt: reset }] },
+        {
+          harness: 'werk_openai',
+          label: 'Werk (OpenAI)',
+          accountLabel: 'bo***@corp.io',
+          asOf: at,
+          werk: {
+            mode: 'local',
+            tokenFirst: true,
+            fallbackReason: reason,
+            planPaused: reason === 'plan_paused',
+            totalInputTokens: 4500,
+            totalOutputTokens: 500,
+            models: [{ model: 'gpt-5.4', inputTokens: 4500, outputTokens: 500, costUsd: 0 }]
+          }
+        }
+      ]
+    });
+    const mounted = env.window.WsUsage.mount(env.doc, env.top);
+    await flush();
+    assert.equal(groups(env.button).length, 2);
+    assert.deepEqual(groups(env.button).map(g => g.querySelector('.hb').attributes['data-h']), ['codex', 'werk_openai']);
+    assert.equal(groups(env.button)[1].querySelector('.usage-number').textContent, '5k');
+    const pop = mounted.makePopover(() => {}, () => {});
+    pop.open();
+    await flush();
+    assert.equal(nodes(pop.el, '.usage-account').length, 1, 'codex stays in quota grid');
+    const werkCard = nodes(pop.el, '.usage-metric-card').find(c => c.attributes['data-harness'] === 'werk_openai');
+    assert.ok(werkCard);
+    assert.equal(werkCard.querySelector('.usage-acct-label').textContent, 'bo***@corp.io');
+    assert.ok(werkCard.textContent.includes('gpt-5.4'));
+    assert.ok(werkCard.textContent.includes('5k'));
+    assert.ok(werkCard.querySelector('.usage-metric-note').textContent.length > 5, reason);
+    pop.close();
+  }
+
+  for (const locale of locales) {
+    const env = environment(at, locale);
+    env.set({
+      entries: [
+        {
+          harness: 'openrouter',
+          asOf: at,
+          openrouter: {
+            balance: 12.5,
+            totalCredits: 20,
+            totalUsage: 7.5,
+            limit: 10,
+            limitRemaining: 5,
+            usageDaily: 1,
+            usageWeekly: 3,
+            usageMonthly: 7.5,
+            creditsRestricted: true,
+            models: [{ model: 'openai/gpt-4o-mini', inputTokens: 1000, outputTokens: 200, costUsd: 0.01 }]
+          }
+        },
+        {
+          harness: 'werk_openai',
+          accountLabel: 'bo***@corp.io',
+          asOf: at,
+          werk: {
+            mode: 'local',
+            tokenFirst: true,
+            fallbackReason: 'consent_required',
+            totalInputTokens: 2000,
+            totalOutputTokens: 500,
+            estimatedCostUsd: 0.05,
+            models: [{ model: 'gpt-5.4', inputTokens: 2000, outputTokens: 500, costUsd: 0.05 }]
+          }
+        }
+      ]
+    });
+    const mounted = env.window.WsUsage.mount(env.doc, env.top);
+    await flush();
+    const pop = mounted.makePopover(() => {}, () => {});
+    pop.open();
+    await flush();
+    assert.doesNotMatch(pop.el.textContent, /js\.usage\./, locale);
+    pop.close();
+  }
+});

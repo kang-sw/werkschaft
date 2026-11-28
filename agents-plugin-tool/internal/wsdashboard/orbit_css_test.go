@@ -63,10 +63,10 @@ func TestRailUnreadAttentionCSS(t *testing.T) {
 	css := mustAsset(t, "dashboard.css")
 	for _, want := range []string{
 		"background: linear-gradient(90deg, var(--wb-accent-policy) 0%, color-mix(in srgb, var(--wb-accent-policy) 68%, transparent) 60%, color-mix(in srgb, var(--wb-accent-policy) 18%, transparent) 100%);",
-		"animation: attn-breathe 1s ease-in-out infinite;",
-		"animation: attn-breathe-ring 1s ease-in-out infinite;",
-		".rail .rs.attn.attn-flash::before { animation: attn-flash .38s ease-in-out 3, attn-breathe 1s ease-in-out 1.14s infinite; }",
-		".rail .rs.attn.attn-flash .hb::after { animation: attn-flash-ring .38s ease-in-out 3, attn-breathe-ring 1s ease-in-out 1.14s infinite; }",
+		"animation: attn-breathe 1s ease-in-out var(--attn-breathe-delay, 0s) infinite;",
+		"animation: attn-breathe-ring 1s ease-in-out var(--attn-breathe-delay, 0s) infinite;",
+		".rail .rs.attn.attn-flash::before { animation: attn-flash .38s ease-in-out calc(-1 * var(--attn-t, 0s)) 3, attn-breathe 1s ease-in-out calc(1.14s - var(--attn-t, 0s)) infinite; }",
+		".rail .rs.attn.attn-flash .hb::after { animation: attn-flash-ring .38s ease-in-out calc(-1 * var(--attn-t, 0s)) 3, attn-breathe-ring 1s ease-in-out calc(1.14s - var(--attn-t, 0s)) infinite; }",
 		"@keyframes attn-flash { 0%, 100% { opacity: .04; } 50% { opacity: .44; } }",
 		"@keyframes attn-breathe { 0%, 100% { opacity: .04; } 50% { opacity: .28; } }",
 		".rail .rs.attn::before { animation: none !important; opacity: .16; }",
@@ -81,18 +81,22 @@ func TestRailUnreadAttentionCSS(t *testing.T) {
 // TestRailSelectedNeonOutlineCSS pins the Variant D tonal fill + left accent bar
 // on the currently selected rail session row (.rail .rs.cur, per decision (1709)=a),
 // replacing the retired neon box-shadow glow without shifting layout or colliding
-// with .attn pseudo-element animations.
+// with .attn (::before) or .conv-reveal-pulse (::after) pseudo-element animations.
 func TestRailSelectedNeonOutlineCSS(t *testing.T) {
 	css := mustAsset(t, "dashboard.css")
 	for _, want := range []string{
 		".rail .rs.cur {",
 		"background: color-mix(in srgb, var(--wb-primary) 13%, transparent);",
-		".rail .rs.cur:not(.rdkid)::after {",
+		".rail .rs.cur:not(.attn)::before {",
 		"width: 2.5px;",
 		"background: var(--wb-primary);",
+		".rail .rs.conv-reveal-pulse::after {",
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("dashboard.css lacks %q", want)
 		}
+	}
+	if strings.Contains(css, ".rail .rs.cur:not(.rdkid)::after") {
+		t.Error("dashboard.css must not place .rs.cur left accent bar on ::after where .conv-reveal-pulse::after collides")
 	}
 }

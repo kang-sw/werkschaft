@@ -289,6 +289,7 @@
     let size = 96, vrmHeight = 240, dpr = 1, vw = 0, vh = 0, dirty = true;
     let frameElement = null, frameInput = null, frameBox = null;
     let home = { x: 60, y: 96 }, arrived = false, custom = null, drag = null, suppressClick = false;
+    let vrmPointer = null, lastVrmPointer = null, hitArea = "";
     let companionHover = false;
     const wideMq = typeof window.matchMedia === "function" ? window.matchMedia("(min-width: 1600px)") : null;
     const physics = { swing: 0, swingVel: 0 };
@@ -598,6 +599,62 @@
 
     function packsChanged() { requestPack(true); }
 
+    function setHitArea(area) {
+      const next = area || "";
+      if (hitArea === next) return;
+      hitArea = next;
+      if (next) hit.dataset.area = next;
+      else hit.removeAttribute("data-area");
+    }
+
+    function hitTestVrmPoint(clientX, clientY) {
+      if (!isVrm() || !vrmRailVisible || hit.hidden) return null;
+      if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+      const bx = Number.isFinite(bodyBox.x) ? bodyBox.x : home.x - size / 2;
+      const by = Number.isFinite(bodyBox.y) ? bodyBox.y : home.y - vrmHeight;
+      const lx = clientX - bx;
+      const ly = clientY - by;
+      const bounds = rig?.getCharacterBounds?.();
+      if (!bounds || !Number.isFinite(bounds.x) || !Number.isFinite(bounds.y) ||
+          !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height) ||
+          bounds.width <= 0 || bounds.height <= 0) {
+        return "messenger";
+      }
+      const inside = lx >= bounds.x && lx <= bounds.x + bounds.width &&
+        ly >= bounds.y && ly <= bounds.y + bounds.height;
+      return inside ? "character" : "messenger";
+    }
+
+    function isCharacterSurfaceTarget(el) {
+      return !!(el && (el === character || character.contains(el) || el === hit));
+    }
+
+    function trackVrmPointerMove(event) {
+      if (!vrmPointer || (Number.isFinite(vrmPointer.id) && event.pointerId !== vrmPointer.id)) return;
+      if (!vrmPointer.moved && Math.hypot(event.clientX - vrmPointer.startX, event.clientY - vrmPointer.startY) > 6) {
+        vrmPointer.moved = true;
+      }
+    }
+
+    function finishVrmPointerUp(event) {
+      if (!vrmPointer || (Number.isFinite(vrmPointer.id) && event.pointerId !== vrmPointer.id)) return;
+      const endX = Number.isFinite(event.clientX) ? event.clientX : vrmPointer.startX;
+      const endY = Number.isFinite(event.clientY) ? event.clientY : vrmPointer.startY;
+      const dist = Math.hypot(endX - vrmPointer.startX, endY - vrmPointer.startY);
+      lastVrmPointer = {
+        moved: vrmPointer.moved || dist > 6,
+        downArea: vrmPointer.downArea,
+        button: vrmPointer.button
+      };
+      vrmPointer = null;
+    }
+
+    function cancelVrmPointer(event) {
+      if (!vrmPointer || (Number.isFinite(vrmPointer.id) && event.pointerId !== vrmPointer.id)) return;
+      vrmPointer = null;
+      lastVrmPointer = { moved: true, downArea: null, button: 0 };
+    }
+
     function isCompanionTarget(el) {
       return !!(el && el !== node && node.contains(el));
     }
@@ -632,6 +689,9 @@
     function hideVrmForNarrow() {
       clearRailDock();
       vrmRailVisible = false;
+      vrmPointer = null;
+      lastVrmPointer = null;
+      setHitArea("");
       node.dataset.dock = "hidden";
       node.dataset.avoiding = "0";
       hit.hidden = true;
@@ -725,6 +785,7 @@
         return;
       }
       node.dataset.avoiding = "0";
+      setHitArea("");
       const slotEl = rail?.querySelector("#rail-companion-slot");
       if (slotEl && !slotEl.hidden) slotEl.hidden = true;
       const rect = rail?.getBoundingClientRect();
@@ -1243,20 +1304,34 @@
       if (isCompanionTarget(event.target)) setCompanionHover(true);
     }, { ...options, passive: true });
     node.addEventListener("pointerout", event => {
-      if (!isCompanionTarget(event.relatedTarget)) setCompanionHover(false);
+      if (!isCompanionTarget(event.relatedTarget)) {
+        setCompanionHover(false);
+        setHitArea("");
+      }
     }, { ...options, passive: true });
     doc.addEventListener("pointermove", event => {
       cursorSeen = true;
       cursor.x = event.clientX;
       cursor.y = event.clientY;
+      trackVrmPointerMove(event);
       setCompanionHover(isCompanionTarget(event.target));
       if (isVrm() && vrmRailVisible) {
+        if (isCharacterSurfaceTarget(event.target)) {
+          setHitArea(hitTestVrmPoint(event.clientX, event.clientY));
+        } else {
+          setHitArea("");
+        }
         markVrmActivity();
         schedule();
+      } else {
+        setHitArea("");
       }
     }, { ...options, passive: true });
+    doc.addEventListener("pointerup", finishVrmPointerUp, { ...options, passive: true });
+    doc.addEventListener("pointercancel", cancelVrmPointer, { ...options, passive: true });
     doc.documentElement?.addEventListener?.("pointerleave", () => {
       setCompanionHover(false);
+      setHitArea("");
     }, { ...options, passive: true });
 
     function returnHome() {
@@ -1270,11 +1345,27 @@
       if (event.button !== 0) return;
       controls.close();
       suppressClick = false;
-      if (isVrm() && home.rail) return;
+      if (isVrm() && home.rail) {
+        vrmPointer = {
+          id: event.pointerId,
+          button: event.button,
+          startX: event.clientX,
+          startY: event.clientY,
+          moved: false,
+          downArea: hitTestVrmPoint(event.clientX, event.clientY)
+        };
+        lastVrmPointer = null;
+        return;
+      }
       drag = { id: event.pointerId, startX: event.clientX, startY: event.clientY, x: position.x, y: position.y, lastX: event.clientX };
       character.setPointerCapture(event.pointerId);
     }, options);
     character.addEventListener("pointermove", event => {
+      if (isVrm() && home.rail) {
+        trackVrmPointerMove(event);
+        setHitArea(hitTestVrmPoint(event.clientX, event.clientY));
+        return;
+      }
       if (drag?.id !== event.pointerId) return;
       const dx = event.clientX - drag.startX, dy = event.clientY - drag.startY;
       if (!drag.moving) {
@@ -1293,6 +1384,11 @@
       drag.lastX = event.clientX;
     }, options);
     function drop(event) {
+      if (isVrm() && home.rail) {
+        if (event.type === "pointerup") finishVrmPointerUp(event);
+        else cancelVrmPointer(event);
+        return;
+      }
       if (drag?.id !== event.pointerId) return;
       if (drag.moving) {
         suppressClick = true;
@@ -1313,9 +1409,23 @@
     }
     for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) character.addEventListener(name, drop, options);
     character.addEventListener("click", event => {
+      const ptr = lastVrmPointer;
+      lastVrmPointer = null;
       if (!suppressClick) {
         markVrmActivity();
         if (isVrm() && home.rail) {
+          if (event?.button !== undefined && event.button !== 0) return;
+          if (ptr && (ptr.moved || ptr.button !== 0)) return;
+          const hasCoords = Number.isFinite(event?.clientX) && Number.isFinite(event?.clientY) &&
+            (event.clientX !== 0 || event.clientY !== 0 || !!ptr);
+          const area = ptr ? ptr.downArea : (hasCoords ? hitTestVrmPoint(event.clientX, event.clientY) : "character");
+          if (area === "messenger") {
+            controls.close();
+            window.WsCompanionMessenger?.toggle?.(chatBtn);
+            schedule();
+            return;
+          }
+          if (area !== "character") return;
           // Pure cosmetic glass knock: NEVER opens the messenger popup or menu.
           const co = rig?.getCoLeadState?.();
           const isSleepy = beat?.expression === "idle_doze" || co?.mode === "sleepy" || co?.sleepyWeight > 0.35 ||
@@ -1347,6 +1457,13 @@
           return typeof hit.getBoundingClientRect === "function" ? hit.getBoundingClientRect() : null;
         },
         getChatButton() { return chatBtn; },
+        isToggleTarget(target, event) {
+          if (!isVrm() || !vrmRailVisible || hit.hidden) return false;
+          if (!isCharacterSurfaceTarget(target)) return false;
+          const x = event?.clientX, y = event?.clientY;
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+          return hitTestVrmPoint(x, y) === "messenger";
+        },
         openSettings: openSettings || null,
         onOpenChange(isOpen) {
           chatBtn.setAttribute("aria-expanded", isOpen ? "true" : "false");
@@ -1388,7 +1505,7 @@
           unreadClient: latestPhoneSnap?.unreadClient || 0,
           messengerOpen: !!window.WsCompanionMessenger?.isOpen?.(),
           vrm: rig?.debugState?.() || null,
-          projectedBounds: null
+          projectedBounds: isVrm() ? (rig?.getCharacterBounds?.() || null) : null
         };
       },
       dispose() {

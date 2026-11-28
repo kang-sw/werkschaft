@@ -1,0 +1,93 @@
+/* Top-level shell 1-click confirmation banner for mutating ws/daemon.* calls.
+   Dedicated slot independent of [data-openai-consent] / :root[data-account-banner];
+   both stack cleanly in .dwrap and sum their offsets for .frames and docked .rail. */
+.daemon-confirm-banner {
+  display: flex;
+  flex-wrap: wrap;
+  flex: none;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 0 12px 8px;
+  padding: 9px 10px 9px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-warn) 10%, var(--wb-card));
+  box-shadow: inset 3px 0 var(--wb-warn), inset 0 0 0 1px color-mix(in srgb, var(--wb-warn) 30%, transparent), var(--wb-shadow-hi);
+  color: var(--wb-fg);
+  font-size: 12px;
+}
+.daemon-confirm-banner[hidden] { display: none; }
+:root[data-daemon-confirm] { --daemon-confirm-space: calc(var(--daemon-confirm-height, 0px) + 8px); }
+:root[data-shell] .frames {
+  inset-block-start: calc(var(--account-banner-space, 0px) + var(--daemon-confirm-space, 0px));
+}
+:root[data-shell]:not([data-fdim]) .daemon-confirm-banner { pointer-events: auto; }
+@media (min-width: 1600px) {
+  .daemon-confirm-banner { margin-inline-start: calc(348px + var(--sh-stage-side, 0px)); }
+  :root[data-account-banner] .dwrap .dbody > .rail,
+  :root[data-daemon-confirm] .dwrap .dbody > .rail {
+    margin-block-start: calc(-1 * (var(--toph) + var(--account-banner-space, 0px) + var(--daemon-confirm-space, 0px)));
+  }
+}
+.daemon-confirm-copy { flex: 1 1 420px; min-width: 0; }
+.daemon-confirm-hd { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.daemon-confirm-hd strong { font-size: 13px; color: var(--wb-fg); }
+.daemon-confirm-badge {
+  font: 700 11px var(--wb-mono);
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--wb-warn) 16%, var(--wb-card));
+  color: var(--wb-fg);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.daemon-confirm-timer {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--wb-muted-fg);
+  font-variant-numeric: tabular-nums;
+}
+.daemon-confirm-summary {
+  margin: 3px 0 0;
+  line-height: 1.45;
+  color: var(--wb-muted-fg);
+  overflow-wrap: anywhere;
+}
+.daemon-confirm-error {
+  margin: 4px 0 0;
+  color: var(--wb-fail);
+  font-weight: 600;
+}
+.daemon-confirm-controls {
+  margin-inline-start: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.daemon-confirm-controls .btn {
+  min-height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--wb-muted);
+  color: var(--wb-fg);
+  font: 700 11.5px var(--wb-sans);
+  cursor: pointer;
+}
+.daemon-confirm-controls .btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-fg) 10%, var(--wb-muted));
+}
+.daemon-confirm-controls .btn:focus-visible {
+  outline: 1.5px solid var(--wb-primary);
+  outline-offset: 1px;
+}
+.daemon-confirm-controls .btn.pri {
+  background: var(--wb-primary);
+  color: var(--wb-primary-fg);
+}
+.daemon-confirm-controls .btn.pri:hover:not(:disabled) { filter: brightness(1.06); }
+.daemon-confirm-controls .btn:disabled { opacity: .48; cursor: not-allowed; }
+.daemon-confirm-controls .daemon-confirm-close { padding: 0; width: 28px; font-size: 16px; }

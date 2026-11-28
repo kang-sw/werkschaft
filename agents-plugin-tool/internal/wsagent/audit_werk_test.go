@@ -242,3 +242,24 @@ func TestWerkAuditMasksCredentialsInSystemLines(t *testing.T) {
 		}
 	}
 }
+
+func TestWerkAuditCompactionUsageDoesNotAdvanceRequestChain(t *testing.T) {
+	a := newWerkAudit("s1")
+	at := time.Unix(1_700_000_000, 0)
+	_, _, evs1 := a.mapLine([]byte(werkLineJSON(werk.Line{T: werk.LineUsage, Response: "resp_turn_1", Model: "gpt-5.4", InputTokens: 500, OutputTokens: 100})), at)
+	if len(evs1) != 1 {
+		t.Fatalf("turn 1 usage events: %d", len(evs1))
+	}
+	_, _, compEvs := a.mapLine([]byte(werkLineJSON(werk.Line{T: werk.LineUsage, Compaction: true, Response: "resp_compact_1", Model: "gpt-5.4", InputTokens: 200, OutputTokens: 50})), at.Add(time.Second))
+	if len(compEvs) != 1 {
+		t.Fatalf("compaction usage events: %d", len(compEvs))
+	}
+	if _, hasReq := compEvs[0].ev.Meta["request"]; hasReq {
+		t.Fatalf("compaction usage must not attach main request chain meta: %+v", compEvs[0].ev.Meta)
+	}
+	_, _, evs2 := a.mapLine([]byte(werkLineJSON(werk.Line{T: werk.LineUsage, Response: "resp_turn_2", Model: "gpt-5.4", InputTokens: 300, OutputTokens: 80})), at.Add(2*time.Second))
+	reqMeta, _ := evs2[0].ev.Meta["request"].(map[string]any)
+	if reqMeta["prev_id"] != "resp_turn_1" {
+		t.Fatalf("expected turn 2 prev_id=resp_turn_1 (not compaction response), got %+v", reqMeta)
+	}
+}

@@ -72,6 +72,18 @@ type Record struct {
 	// WSKey is a lead key, Root its canonical git root, and the fields
 	// below apply.
 	Lead bool `json:"lead,omitempty"`
+	// ConvHistoryAccess opts this lead session into the conv.* conversation
+	// history MCP tools. Additive top-level member (T0).
+	ConvHistoryAccess bool `json:"conv_history_access,omitempty"`
+	// CompanionRole marks a daemon-managed companion hosted session
+	// ("companion-body" or "companion-work"). Companion sessions stay unlisted
+	// from the session rail, roster, idle-lead sleep list, and mail
+	// correspondents. Additive top-level member on Record (T0).
+	CompanionRole string `json:"companion_role,omitempty"`
+	// CompanionSystemPrompt is the system instruction text composed for a
+	// companion hosted session in place of the standard lead workflow manual.
+	// Additive top-level member on Record (T0).
+	CompanionSystemPrompt string `json:"companion_system_prompt,omitempty"`
 	// QuotaContinuation is a hosted lead's persisted post-usage-limit resume
 	// state. Additive top-level member on Record; preserved as unknown by
 	// older daemons (T0).
@@ -98,6 +110,11 @@ type Record struct {
 	// Retained name check: the persisted Record member older daemons wrote
 	// (TestAgyBypassScopeAndLegacyRecordRewrite).
 	AgyBypass bool `json:"agy_bypass,omitempty"`
+	// DashboardControlAccess opts a hosted lead session into the shared
+	// ws/daemon.* dashboard-control MCP surface (default false). Additive
+	// top-level member on Record; preserved as unknown by older daemons (T0).
+	// Stored only in Record, never in wsdashboard.Registration.
+	DashboardControlAccess bool `json:"dashboard_control_access,omitempty"`
 	// PluginIsolation selects the lead's plugin loadout across restarts.
 	PluginIsolation string `json:"plugin_isolation,omitempty"`
 	// PluginWarning records a bundled-plugin fallback warning, if any.
@@ -231,10 +248,15 @@ type Record struct {
 	// loaded, whatever is selected now); MCPHolder the holder the token was
 	// drawn for, so a token a later start (by a daemon that keeps the
 	// members without knowing them) left behind is told from a live one.
-	MCPToken  string            `json:"mcp_token_secret,omitempty"`
-	MCPURL    string            `json:"mcp_url,omitempty"`
-	MCPEnv    map[string]string `json:"mcp_env,omitempty"`
-	MCPHolder string            `json:"mcp_holder_id,omitempty"`
+	MCPToken             string            `json:"mcp_token_secret,omitempty"`
+	MCPURL               string            `json:"mcp_url,omitempty"`
+	MCPEnv               map[string]string `json:"mcp_env,omitempty"`
+	MCPHolder            string            `json:"mcp_holder_id,omitempty"`
+	MCPConvHistoryAccess bool              `json:"mcp_conv_history_access,omitempty"`
+	// MCPDashboardControl snapshots DashboardControlAccess at the launch that
+	// drew MCPToken so a daemon restart rejoining the running process keeps
+	// the exact attach-time effective state. Cleared by forgetMCP. Additive (T0).
+	MCPDashboardControl bool `json:"mcp_dashboard_control,omitempty"`
 
 	// ActiveMs is the accumulated duration of closed child turns.
 	ActiveMs     int64           `json:"active_ms,omitempty"`
@@ -1105,8 +1127,8 @@ func registration(rec Record, now time.Time) wsdashboard.Registration {
 	if rec.Lead {
 		// A lead session is an ordinary dashboard session: it has a session
 		// record (its board, mail, and contacts are read as any lead's) and
-		// is always listed. Only the writer of this row differs.
-		reg.Agent, reg.Unlisted = false, false
+		// is listed unless it carries a daemon-managed CompanionRole marker.
+		reg.Agent, reg.Unlisted = false, rec.CompanionRole != ""
 		reg.Hosted, reg.HostPID = true, rec.HostPID
 	}
 	if rec.Parent != nil {

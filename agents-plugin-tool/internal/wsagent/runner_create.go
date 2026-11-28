@@ -56,8 +56,12 @@ func endedError(rec Record) error {
 // the profile's value (the harness default when it has none).
 type LeadOptions struct {
 	// HireRequestID and HireLabel are set only by CreateHireLead, never HTTP.
-	HireRequestID   string
-	HireLabel       string
+	HireRequestID string
+	HireLabel     string
+	// CompanionRole and CompanionSystemPrompt are set only by internal daemon
+	// companion session launch ("companion-body" or "companion-work"), never HTTP.
+	CompanionRole         string
+	CompanionSystemPrompt string
 	Model           string
 	Provider        string
 	Effort          string
@@ -66,10 +70,13 @@ type LeadOptions struct {
 	// AccountSlotID selects the harness account slot for the new lead (empty
 	// uses the harness's active default slot). Additive T0 field.
 	AccountSlotID string
+	// ConvHistoryAccess opts the new lead into conv.* MCP tools. Additive T0.
+	ConvHistoryAccess bool
 	// Common intent is transient; selection is stored separately from Record.
-	PermissionLevel   PermissionLevel
-	PermissionFullAck bool
-	permissionUser    bool // set by the trusted control owner, never request JSON
+	PermissionLevel        PermissionLevel
+	PermissionFullAck      bool
+	permissionUser         bool // set by the trusted control owner, never request JSON
+	DashboardControlAccess bool
 }
 
 // leadPluginIsolation supplies the additive field's legacy default.
@@ -259,7 +266,18 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		defer releaseDurableCreation()
 	}
 	var key string
-	if lead != nil {
+	if lead != nil && lead.CompanionRole != "" {
+		cks, ok := r.opts.LeadKeys.(CompanionLeadKeyStore)
+		if !ok {
+			return State{}, badRequest("companion lead sessions require a companion-capable key store")
+		}
+		if gitRoot, gitErr := r.opts.LeadKeys.LeadRoot(root); gitErr == nil && gitRoot != "" {
+			root = gitRoot
+		}
+		if key, err = cks.MintCompanionLead(root, lead.CompanionRole); err != nil {
+			return State{}, fmt.Errorf("mint the companion session key: %w", err)
+		}
+	} else if lead != nil {
 		// A lead key lives at the canonical git root, which is then the
 		// session's root: its registration and session record must agree.
 		if root, err = r.opts.LeadKeys.LeadRoot(root); err != nil {
@@ -299,6 +317,15 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 	}
 	if lead != nil {
 		rec.Lead = true
+		rec.ConvHistoryAccess = lead.ConvHistoryAccess
+		rec.DashboardControlAccess = lead.DashboardControlAccess
+		if lead.CompanionRole != "" {
+			rec.Listed = false
+			rec.ConvHistoryAccess = false
+			rec.DashboardControlAccess = false
+			rec.CompanionRole = lead.CompanionRole
+			rec.CompanionSystemPrompt = lead.CompanionSystemPrompt
+		}
 		if lead.Provider != "" {
 			rec.Provider = lead.Provider
 		}
@@ -366,7 +393,7 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		return State{}, err
 	}
 	var seed []wslive.SlashCommand
-	if rec.Lead {
+	if rec.Lead && rec.CompanionRole == "" {
 		// A new lead offers its playbook commands before its process
 		// first reports the harness's own.
 		seed = r.withPlaybookCommands(rec, r.lastCommands(rec))

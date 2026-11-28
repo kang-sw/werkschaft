@@ -58,12 +58,20 @@ func wsOriginAllowed(r *http.Request) bool {
 // returns, then closes the connection and waits for its read loop to end.
 // The caller has checked the Origin and that w can be hijacked.
 func (d *Daemon) serveWebSocket(w http.ResponseWriter, r *http.Request, run func(streamSink), watches ...func(bool) func()) {
+	var watch func(bool) func()
+	if len(watches) > 0 {
+		watch = watches[0]
+	}
+	d.serveWebSocketWithFrame(w, r, run, watch, nil)
+}
+
+func (d *Daemon) serveWebSocketWithFrame(w http.ResponseWriter, r *http.Request, run func(streamSink), watch func(bool) func(), onFrame func(string)) {
 	window := wsReadWindow * d.keepAlive
 	websocket.Server{Handler: func(ws *websocket.Conn) {
 		ws.MaxPayloadBytes = wsMaxFrame
-		sink := &wsSink{ws: ws, done: make(chan struct{})}
-		if len(watches) > 0 {
-			sink.visibility = &displayWatch{acquire: watches[0]}
+		sink := &wsSink{ws: ws, done: make(chan struct{}), onFrame: onFrame}
+		if watch != nil {
+			sink.visibility = &displayWatch{acquire: watch}
 			sink.visibility.set(r.URL.Query().Get("display") == "1")
 			defer sink.visibility.close()
 		}
@@ -82,6 +90,7 @@ type wsSink struct {
 	ws         *websocket.Conn
 	done       chan struct{}
 	visibility *displayWatch
+	onFrame    func(string)
 }
 
 // displayWatch serializes visibility transitions with disconnect cleanup.
@@ -137,6 +146,9 @@ func (s *wsSink) read(window time.Duration) {
 			if json.Unmarshal([]byte(frame), &message) == nil && message.Event == "visibility" && message.Visible != nil {
 				s.visibility.set(*message.Visible)
 			}
+		}
+		if s.onFrame != nil {
+			s.onFrame(frame)
 		}
 	}
 }

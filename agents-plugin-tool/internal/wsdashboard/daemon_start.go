@@ -201,9 +201,10 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		clipboard:       opts.clipboard,
 		hireWake:        make(chan struct{}, 1),
 		hireDone:        make(chan struct{}),
-		meta:            metaStore,
-		metaSnap:        metaSnap,
-		stop:            make(chan struct{}),
+		meta:                       metaStore,
+		metaSnap:                   metaSnap,
+		screenshotPlaywrightModule: opts.ScreenshotPlaywrightModule,
+		stop:                       make(chan struct{}),
 		done:            make(chan struct{}),
 		endpoint: Endpoint{
 			SchemaVersion: endpointSchemaVersion,
@@ -249,6 +250,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		}
 		d.planUsage.explicitHome = opts.Home
 		d.planUsage.accountSlots = d.accountSlots
+		d.planUsage.credentials = d.credentials
 		d.planUsage.resolveAgy = opts.AgyCommand
 		d.planUsage.onAgyChange = d.accountChanged
 		d.planUsage.harnesses = opts.Harnesses
@@ -321,7 +323,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		}
 	}
 	if opts.Sessions != nil {
-		d.source = agentSessions{inner: opts.Sessions, dir: opts.Dir, now: time.Now, snaps: d.snapshots, hosted: d.live.hasOwner}
+		d.source = agentSessions{inner: opts.Sessions, dir: opts.Dir, now: time.Now, snaps: d.snapshots, hosted: d.live.hasOwner, onNonHostedRead: d.reconcileNonHostedOnRead}
 		if ms, ok := d.source.(BoardMockupSource); ok {
 			ms.SetMockupEvictor(d.getMockupLRU().EvictBoard)
 		}
@@ -342,6 +344,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		d.index = NewIndex(idxOpts)
 	}
 	d.openAudit(logw)
+	d.openConvIndex(logw)
 	d.server = &http.Server{Handler: d.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	accepting := make(chan struct{})
 	// Bind runner/support/hiring hooks onto the single daemon-owned SQLite
@@ -385,6 +388,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 			d.agents.Close()
 		}
 		d.closeAudit()
+		d.closeConvIndex()
 		_ = wslive.UnpinRingsUnder(filepath.Join(d.dir, sessionsDirName))
 		if metaStore != nil {
 			_ = metaStore.Close()

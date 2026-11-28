@@ -507,6 +507,9 @@ func (s *Server) publishReplyEntry(store *wsmailbox.ReplyStore, callerSessionKey
 	wsmailbox.ReapReplyEntries(store, mailboxNow())
 	entry := store.Entries[replyID]
 	entry.LastSeen = nowStr
+	if callerEntry, ok := s.sessions.lookup(callerSessionKey); ok && callerEntry.companionRole != "" {
+		entry.Hidden = true
+	}
 	// A caller that does not know its harness (the dashboard daemon
 	// claiming mail for a session it hosts) keeps the recorded one.
 	if harness != "" {
@@ -516,6 +519,11 @@ func (s *Server) publishReplyEntry(store *wsmailbox.ReplyStore, callerSessionKey
 	for _, c := range contacts {
 		if c.Address == "" || c.Address == wsmailbox.ReplyIDPrefix+replyID || (ownNamed != "" && c.Address == ownNamed) {
 			continue
+		}
+		if peerID, ok := strings.CutPrefix(c.Address, wsmailbox.ReplyIDPrefix); ok {
+			if s.sessions.isCompanionReplyID(peerID) || store.Entries[peerID].Hidden {
+				continue
+			}
 		}
 		rec := wsmailbox.Contact{LastExchange: nowStr, Harness: c.Harness, Cwd: c.Cwd}
 		if peerID, ok := strings.CutPrefix(c.Address, wsmailbox.ReplyIDPrefix); ok {

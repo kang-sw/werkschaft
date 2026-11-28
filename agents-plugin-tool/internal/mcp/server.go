@@ -62,9 +62,14 @@ type Server struct {
 	// tracker is this process's tracker host (tracker_host.go).
 	tracker trackerLink
 	// agents is the dashboard daemon's runner.
-	agents          AgentHost
-	companion       CompanionHost
-	ephemeralPool   *wsagent.EphemeralPool
+	agents                    AgentHost
+	companion                 CompanionHost
+	companionDelegation       CompanionDelegationHost
+	daemonControl             DaemonControlHost
+	dashboardControlEffective bool
+	conv                      ConvHost
+	convHistoryListed         bool
+	ephemeralPool             *wsagent.EphemeralPool
 	stopWorkerWatch func()
 	workerRowKeys   struct {
 		mu   sync.Mutex

@@ -45,7 +45,7 @@ func TestIdeShellPhase1Assets(t *testing.T) {
 	for _, want := range []string{
 		".rail .rs.cur {",
 		"background: color-mix(in srgb, var(--wb-primary) 13%, transparent);",
-		".rail .rs.cur:not(.rdkid)::after {",
+		".rail .rs.cur:not(.attn)::before {",
 		"width: 2.5px;",
 		"background: var(--wb-primary);",
 	} {
@@ -476,4 +476,50 @@ check("topFit steps to level 2 (.tch) when top-left overflows", [R.topFit(tightT
 
 process.stdout.write(bad.join("\n"));
 `)
+}
+
+// TestIdeShellDaemonConfirmOverlayCSS pins shell-mode overrides for the 1-click
+// daemon confirmation banner ([data-daemon-confirm]): dashboard-ide-shell.css
+// loads after dashboard-daemon-confirm.css, keeps the non-shell fallback intact,
+// aligns .daemon-confirm-banner to --rail-reserve, includes --daemon-confirm-space
+// in .stage-well-bg and .rail-splitter top offsets, and omits --toph from
+// docked .rail margin-block-start under :root[data-shell].
+func TestIdeShellDaemonConfirmOverlayCSS(t *testing.T) {
+	indexOf := func(name string) int {
+		for i, f := range dashboardStyleFiles {
+			if f == name {
+				return i
+			}
+		}
+		return -1
+	}
+	confirmIdx := indexOf("dashboard-daemon-confirm.css")
+	shellIdx := indexOf("dashboard-ide-shell.css")
+	if confirmIdx < 0 || shellIdx <= confirmIdx {
+		t.Fatalf("dashboardStyleFiles must load dashboard-ide-shell.css (%d) after dashboard-daemon-confirm.css (%d)", shellIdx, confirmIdx)
+	}
+
+	shellCSS := mustAsset(t, "dashboard-ide-shell.css")
+	for _, want := range []string{
+		"top: calc(var(--toph, 36px) + var(--account-banner-space, 0px) + var(--daemon-confirm-space, 0px));",
+		"top: calc(var(--toph, 36px) + var(--account-banner-space, 0px) + var(--daemon-confirm-space, 0px) + 8px);",
+		":root[data-shell] .daemon-confirm-banner {",
+		"margin-inline-start: calc(var(--rail-reserve, 288px) + var(--sh-stage-side, 0px));",
+		":root[data-shell][data-account-banner] .dwrap .dbody > .rail,\n  :root[data-shell][data-daemon-confirm] .dwrap .dbody > .rail {",
+		"margin-block-start: calc(-1 * (var(--account-banner-space, 0px) + var(--daemon-confirm-space, 0px)));",
+	} {
+		if !strings.Contains(shellCSS, want) {
+			t.Errorf("dashboard-ide-shell.css lacks daemon-confirm shell rule %q", want)
+		}
+	}
+
+	confirmCSS := mustAsset(t, "dashboard-daemon-confirm.css")
+	for _, want := range []string{
+		".daemon-confirm-banner { margin-inline-start: calc(348px + var(--sh-stage-side, 0px)); }",
+		":root[data-daemon-confirm] .dwrap .dbody > .rail {\n    margin-block-start: calc(-1 * (var(--toph) + var(--account-banner-space, 0px) + var(--daemon-confirm-space, 0px)));",
+	} {
+		if !strings.Contains(confirmCSS, want) {
+			t.Errorf("dashboard-daemon-confirm.css non-shell fallback changed unexpectedly; lacks %q", want)
+		}
+	}
 }

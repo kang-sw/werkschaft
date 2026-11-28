@@ -76,6 +76,25 @@ type ServerOptions struct {
 	// phone messenger host. When nil and Live implements CompanionHost,
 	// NewServerWithOptions binds Live automatically.
 	Companion CompanionHost
+	// CompanionDelegation bridges ws/companion.delegate_work and
+	// ws/delegation.report to the daemon's in-memory delegation runtime.
+	CompanionDelegation CompanionDelegationHost
+	// DaemonControl is the dashboard daemon's local loopback curl and multi-tab
+	// confirmation bridge host. When nil and Live implements DaemonControlHost,
+	// NewServerWithOptions binds Live automatically.
+	DaemonControl DaemonControlHost
+	// DashboardControlAccess snapshots whether this hosted lead opted into
+	// ws/daemon.* at MCP token attach (ProxyHello.DashboardControlAccess).
+	// Honored only when Conversation is set.
+	DashboardControlAccess bool
+	// Conv is the dashboard daemon's conversation history search/read/reveal
+	// host. When nil and Live implements ConvHost, NewServerWithOptions binds
+	// Live automatically.
+	Conv ConvHost
+	// ConvHistoryAccess is the process start-time snapshot of the bound hosted
+	// lead's conv_history_access flag (wsdashboard.ProxyHello.ConvHistoryAccess),
+	// gating whether conv.* tools appear in tools/list and agy DirectTools.
+	ConvHistoryAccess bool
 	// EphemeralPool is the dashboard daemon's shared lightweight ephemeral
 	// harness pool used by opt-in dynamic tier routing on agent.spawn. Nil
 	// leaves dynamic tier routing inert (static fallback).
@@ -252,12 +271,27 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 			s.companion = host
 		}
 	}
+	s.companionDelegation = opts.CompanionDelegation
+	s.daemonControl = opts.DaemonControl
+	if s.daemonControl == nil && opts.Live != nil {
+		if host, ok := opts.Live.(DaemonControlHost); ok {
+			s.daemonControl = host
+		}
+	}
+	s.conv = opts.Conv
+	if s.conv == nil && opts.Live != nil {
+		if host, ok := opts.Live.(ConvHost); ok {
+			s.conv = host
+		}
+	}
 	s.ephemeralPool = opts.EphemeralPool
 	s.exec, s.conversation = opts.Exec, opts.Conversation
 	s.cron = opts.Cron
 	s.userCommands, s.userCommandsDiscovery = opts.UserCommands, opts.UserCommandsDiscovery
 	if s.conversation != "" {
 		s.execCutover = opts.ExecCutover
+		s.dashboardControlEffective = opts.DashboardControlAccess
+		s.convHistoryListed = opts.ConvHistoryAccess
 		s.recordExecLaunch = opts.RecordExecLaunch
 		if opts.FileWrites != nil {
 			binding := *opts.FileWrites
@@ -415,6 +449,13 @@ func (s *Server) resolveHostedSession() string {
 		return ""
 	}
 	key := strings.TrimSpace(s.getenv(envHostedSessionKey))
+	// A daemon-authenticated HTTP MCP connection (durable or external) already
+	// bound s.conversation from its per-session token; when its key's reply-id
+	// matches that authenticated conversation, honor it directly even when the
+	// durable process has no separate OS harness PID (OwnerPID == 0).
+	if s.conversation != "" && key != "" && wsmailbox.ReplyID(key) == s.conversation {
+		return key
+	}
 	row := strings.TrimSpace(s.getenv(envHostedSessionRow))
 	harness := s.harnessPID()
 	if key == "" || row == "" || harness <= 0 {

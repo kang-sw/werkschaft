@@ -215,6 +215,13 @@ func (m *werkMapper) group() string { return "t" + strconv.Itoa(m.turn) + "/" + 
 // items and before its tool calls, so the response counter moves here and the
 // calls that follow belong to it.
 func (m *werkMapper) usage(l werk.Line) []Event {
+	if l.Compaction {
+		if l.CostUSD != nil {
+			m.cost += *l.CostUSD
+			m.hasCost = true
+		}
+		return nil
+	}
 	m.resp++
 	if l.CostUSD != nil {
 		m.cost += *l.CostUSD

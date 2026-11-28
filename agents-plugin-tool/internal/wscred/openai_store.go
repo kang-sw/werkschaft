@@ -23,6 +23,7 @@ type openAIAccount struct {
 	Issuer       string    `json:"issuer"`
 	Subject      string    `json:"subject"`
 	Email        string    `json:"email"`
+	AccountID    string    `json:"account_id,omitempty"`
 	IDToken      string    `json:"id_token"`
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token"`
@@ -30,6 +31,16 @@ type openAIAccount struct {
 	ExpiresAt    time.Time `json:"expires_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	Consent      *bool     `json:"background_consent"`
+}
+
+func (a openAIAccount) resolvedAccountID() string {
+	if id := strings.TrimSpace(a.AccountID); id != "" {
+		return id
+	}
+	if id := extractChatGPTAccountIDFromJWT(a.IDToken); id != "" {
+		return id
+	}
+	return extractChatGPTAccountIDFromJWT(a.AccessToken)
 }
 
 func (a openAIAccount) planEnabled() bool { return slices.Contains(a.Scopes, openAIPlanScope) }
@@ -126,7 +137,13 @@ func (s *Store) SignInOpenAIWithCallbacks(ctx context.Context, selection OpenAIS
 	if err != nil {
 		return err
 	}
-	account := openAIAccount{ClientID: clientID, Issuer: identity.Issuer, Subject: identity.Subject, IDToken: tokens.IDToken}
+	account := openAIAccount{
+		ClientID:  clientID,
+		Issuer:    identity.Issuer,
+		Subject:   identity.Subject,
+		AccountID: identity.AccountID,
+		IDToken:   tokens.IDToken,
+	}
 	if identity.EmailVerified {
 		account.Email = identity.Email
 	}
@@ -423,7 +440,7 @@ func (s *Store) refreshOpenAI(ctx context.Context, account openAIAccount) (Crede
 			return Credential{}, err
 		}
 		next := account.withoutAccess()
-		next.IDToken, next.Scopes, next.UpdatedAt = "", nil, s.now().UTC()
+		next.IDToken, next.AccountID, next.Scopes, next.UpdatedAt = "", "", nil, s.now().UTC()
 		if err := s.persistOpenAIRefresh(next); err != nil {
 			return Credential{}, err
 		}
@@ -438,6 +455,9 @@ func (s *Store) refreshOpenAI(ctx context.Context, account openAIAccount) (Crede
 	next, err := account.withGrant(tokens, s.now())
 	if err != nil {
 		return Credential{}, err
+	}
+	if next.AccountID == "" && tokens.AccessToken != "" {
+		next.AccountID = extractChatGPTAccountIDFromJWT(tokens.AccessToken)
 	}
 	if err := s.persistOpenAIRefresh(next); err != nil {
 		return Credential{}, err

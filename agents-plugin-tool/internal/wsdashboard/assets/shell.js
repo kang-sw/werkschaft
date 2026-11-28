@@ -105,7 +105,9 @@
     "rail-open": {},
     sync: {},
     "jank-stall": { stall: "record" },
-    "jank-minor": { durMs: "number", topInvoker: "string" }
+    "jank-minor": { durMs: "number", topInvoker: "string" },
+    "daemon-bridge-req": { id: "string", op: "string", params: "record" },
+    "daemon-bridge-res": { id: "string", ok: "boolean", payload: "?record", error: "?string" }
   };
 
   // message returns m when it is a shell message of a known kind whose

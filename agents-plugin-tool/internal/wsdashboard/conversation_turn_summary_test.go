@@ -385,6 +385,45 @@ func TestTurnSummaryEntryCacheInvalidatesAcrossLifecycleAndFrameRender(t *testin
 	}
 }
 
+// A turn's summary is anchored at the first folded entry the window still
+// holds, so a newest window or history page that truncates the turn's head
+// re-anchors it at a later entry with smaller counts. Its identity must stay
+// the closing turn entry (data-turn-key) across every such truncation so the
+// page can keep exactly one node per turn.
+func TestTurnSummaryTurnKeyStaysStableWhenWindowTruncatesTurnHead(t *testing.T) {
+	ring := []wslive.RingRecord{
+		ringRecord(1, wslive.RingEntry{Kind: wslive.RingMail, Direction: wslive.MailRecv, Peer: "w1", Title: "a"}),
+		ringRecord(2, wslive.RingEntry{Kind: wslive.RingMail, Direction: wslive.MailRecv, Peer: "w2", Title: "b"}),
+		ringRecord(3, wslive.RingEntry{Kind: wslive.RingMail, Direction: wslive.MailSent, Peer: "w1", Title: "c"}),
+		ringRecord(4, wslive.RingEntry{Kind: wslive.RingTools, Tools: &wslive.ToolSummary{
+			Calls: 1, DurationMs: 500, InBytes: 400, OutBytes: 800,
+			Batches: []wslive.ToolBatch{{Names: []string{"Read"}, Calls: 1, DurationMs: 500}},
+		}}),
+		ringRecord(5, wslive.RingEntry{Kind: wslive.RingTurn, Done: 1, DurationMs: 27_000, AddedTokens: 2_000, Reason: "completed"}),
+	}
+	turnKey := ring[4].Name
+	for cut := 0; cut <= 3; cut++ {
+		entries := stdhtml.UnescapeString(string(renderIdleHistory(t, ring[cut:], "en")[regionEntries].HTML))
+		if got := strings.Count(entries, `data-turn-key="`+turnKey+`"`); got != 1 {
+			t.Fatalf("cut=%d: want exactly one summary carrying data-turn-key=%q, got %d:\n%s", cut, turnKey, got, entries)
+		}
+		wantAnchor := `data-entry="` + ring[cut].Name + `" data-key="turn-` + ring[cut].Name + `" data-turn-key="` + turnKey + `"`
+		if !strings.Contains(entries, wantAnchor) {
+			t.Errorf("cut=%d: summary must anchor at first surviving folded entry with the stable turn key; want %q:\n%s", cut, wantAnchor, entries)
+		}
+		// The closing turn never renders a visible footer next to a summary.
+		if strings.Contains(entries, `data-entry="`+turnKey+`" data-key="turn-`+turnKey+`"`) {
+			t.Errorf("cut=%d: closing turn must be absorbed, not a visible footer:\n%s", cut, entries)
+		}
+	}
+	// Only the closing turn left in the window: no summary exists to carry the
+	// key (the page's mergeEntries keeps the turn hidden if it already shows one).
+	tail := stdhtml.UnescapeString(string(renderIdleHistory(t, ring[4:], "en")[regionEntries].HTML))
+	if strings.Contains(tail, `data-turn-key=`) {
+		t.Errorf("a window holding only the closing turn has no folded entries to summarize:\n%s", tail)
+	}
+}
+
 func TestTurnSummaryFoldedMailOnlyOpenBurstUnlinkedWakeAndBatchTokens(t *testing.T) {
 	// 1. Completed mail-only turn (0 tools + 2 mails) in KO: renders "메일 2건"
 	// and keeps exact AddedTokens without double-counting MailBytes().
