@@ -101,7 +101,7 @@ async function until(check, message) {
             const order = await topic.evaluate(t => {
               const items = t.querySelector('.wbupdate-items');
               const ib = items.getBoundingClientRect();
-              const others = [...t.querySelectorAll('.wbupdate-rows > .wbupdate-row, .wbupdate-rows > .wbupdate-panel-wrap')];
+              const others = [...t.querySelectorAll('.wbupdate-rows > .wbupdate-row, .wbupdate-rows > .wbupdate-panel-wrap, .wbupdate-rows > .wbupdate-log-well')];
               return others.map(o => ({
                 dom: !!(o.compareDocumentPosition(items) & Node.DOCUMENT_POSITION_FOLLOWING),
                 visual: o.getBoundingClientRect().bottom <= ib.top + 0.5,
@@ -129,8 +129,9 @@ async function until(check, message) {
         assert.equal(await fresh.locator('.wbupdate-panel-body strong').count(), 1, 'fresh panel preview renders safe Markdown emphasis');
         assert.equal(await fresh.locator('.wbeffect-fallback, script, img, iframe, canvas, style, pre.mermaid').count(), 0, 'a fresh effects card has no fallback or heavy/unsafe embeds');
         assert.equal(await fresh.locator('.wbupdate-panel-body svg, .wbupdate-log svg').count(), 0, 'fresh preview and log emit no inline svg');
-        assert.equal(await fresh.locator('.wbupdate-log strong').count(), 0, 'log rows remain plain literal text');
-        assert((await fresh.locator('.wbupdate-log .wbupdate-text').allTextContents()).includes(update.payload), 'newly arriving hostile log remains exact literal text');
+        assert.equal(await fresh.locator('.wbupdate-log-well .wbupdate-log').count(), 1, 'fresh log row renders inside soft tonal log well');
+        assert.equal(await fresh.locator('.wbupdate-log strong').count(), 1, 'fresh log row renders safe inline Markdown emphasis');
+        assert((await fresh.locator('.wbupdate-log .wbupdate-text').allTextContents()).some(s => s.includes('<img src=x onerror="window.effectsAttack=1"><script>window.effectsAttack=1</script>') && s.includes(update.marker) && s.includes('plain text')), 'newly arriving hostile log escapes raw HTML while keeping safe inline Markdown');
         assert.equal(await page.evaluate(() => typeof window.effectsAttack), 'undefined', 'new effects payload never executes');
       }
       // Draft restore is an async IndexedDB read; the live frame's #grid stays
@@ -165,10 +166,11 @@ async function until(check, message) {
         assert.equal(await effect().locator('.wbeffect-details, .wbeffect-values').count(), 0, 'saved-change diagnostics are absent');
         await groupedItems(effect());
         const values = await effect().locator('.wbupdate-log .wbupdate-text').allTextContents();
-        assert(values.some(s => s.includes('<img src=x onerror="window.effectsAttack=1">') && s.includes('**plain text**')), 'valid log stays literal, including HTML and Markdown syntax');
+        assert(values.some(s => s.includes('<img src=x onerror="window.effectsAttack=1">') && s.includes('plain text')), 'saved log escapes HTML while rendering inline Markdown');
         assert.equal(await effect().locator('script, img, iframe, canvas, style, pre.mermaid').count(), 0, 'effects never execute or emit heavy/unsafe embeds');
         assert.equal(await effect().locator('.wbupdate-panel-body svg, .wbupdate-log svg').count(), 0, 'saved preview and log emit no inline svg');
-        assert.equal(await effect().locator('.wbupdate-log strong').count(), 0, 'saved log rows never render Markdown');
+        assert.equal(await effect().locator('.wbupdate-log-well .wbupdate-log').count(), 1, 'saved log row renders inside soft tonal log well');
+        assert.equal(await effect().locator('.wbupdate-log strong').count(), 1, 'saved log row renders safe inline Markdown emphasis');
         assert.equal(await page.evaluate(() => typeof window.effectsAttack), 'undefined', 'saved effects payload never executes');
         assert((await effect().textContent()).includes('Panel recap only'), 'panel has a recap');
         assert((await effect().locator('.wbupdate-panel-body').textContent()).includes('PANEL-PAYLOAD-ONLY'), 'panel body shows bounded preview');
