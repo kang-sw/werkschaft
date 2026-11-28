@@ -748,7 +748,7 @@ test('postProcess hook transitions listening -> refining -> atomic span replacem
   handle2.destroy();
 });
 
-test('Spacebar 0.5s PTT: owner single-space trim rule, repeat suppression, short tap, preconditions, and release after lock-induced blur', async () => {
+test('Spacebar 1.0s PTT: owner single-space trim rule, repeat suppression, short tap, preconditions, and release after lock-induced blur', async () => {
   const env = makeVoiceEnv();
   const trim = (v, c) => ({ ...env.window.WsVoicePTT.trimPrecedingSpacesForPTT(v, c) });
 
@@ -786,19 +786,19 @@ test('Spacebar 0.5s PTT: owner single-space trim rule, repeat suppression, short
   env.ctext.value = ' ';
   env.ctext.selectionStart = env.ctext.selectionEnd = 1;
   env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', target: env.editor }));
-  timers.advance(600);
+  timers.advance(1100);
   assert.equal(startCount, 0, 'unconfigured user typing is untouched');
 
   // Enable backend.
   handle.controller.setCapabilities({ eligible: true, order: ['native'] });
 
-  // 2. Short tap (< 500ms) -> does not start dictation, keeps normal space.
+  // 2. Short tap (< 1000ms) -> does not start dictation, keeps normal space.
   env.ctext.value = '안녕 ';
   env.ctext.selectionStart = env.ctext.selectionEnd = 3;
   env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', target: env.editor }));
   timers.advance(300);
   env.doc.dispatchEvent(new FakeEvent('keyup', { key: ' ', code: 'Space' }));
-  timers.advance(300);
+  timers.advance(1100);
   assert.equal(startCount, 0, 'short tap types normal space without starting dictation');
   assert.equal(env.ctext.value, '안녕 ');
 
@@ -810,7 +810,7 @@ test('Spacebar 0.5s PTT: owner single-space trim rule, repeat suppression, short
   env.setPopupOpen(true);
   env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', target: env.editor }));
   env.setPopupOpen(false);
-  timers.advance(600);
+  timers.advance(1100);
   assert.equal(startCount, 0, 'IME, modifiers, and open menus must never trigger PTT');
 
   // 4. Full hold at start of empty composer: initial space trimmed to "", repeat prevented, lock-induced blur ignored, doc keyup stops & commits.
@@ -829,7 +829,9 @@ test('Spacebar 0.5s PTT: owner single-space trim rule, repeat suppression, short
   env.editor.dispatchEvent(repEv);
   assert.equal(repEv.defaultPrevented, true, 'key-repeat spaces suppressed while holding');
 
-  timers.advance(500);
+  timers.advance(999);
+  assert.equal(startCount, 0, 'not yet at the 1000ms hold threshold');
+  timers.advance(1);
   await flush();
   assert.equal(startCount, 1);
   assert.equal(stopCount, 0, 'lock-induced blur must NOT count as PTT release');
@@ -849,7 +851,7 @@ test('Spacebar 0.5s PTT: owner single-space trim rule, repeat suppression, short
   env.ctext.value = '안녕  ';
   env.ctext.selectionStart = env.ctext.selectionEnd = 4;
   env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', target: env.editor }));
-  timers.advance(500);
+  timers.advance(1000);
   await flush();
   assert.equal(env.ctext.value, '안녕 ', 'consecutive spaces after text collapse to exactly 1 space');
   env.doc.dispatchEvent(new FakeEvent('keyup', { key: ' ', code: 'Space' }));
@@ -858,6 +860,655 @@ test('Spacebar 0.5s PTT: owner single-space trim rule, repeat suppression, short
   assert.equal(env.ctext.value, '안녕 말하기', 'dictated text separates cleanly with 1 space');
 
   handle.destroy();
+});
+
+// Models production wiring: WsCapsules attaches first, so its editor listeners
+// run before PTT's, stop propagation of the real key event, and re-dispatch a
+// synthetic copy on ctext (bubbling up to document). PTT then listens on both
+// ctext and the editor, so one physical press reaches it twice.
+function makeCapsulesForwardingPTT(opts = {}) {
+  const env = makeVoiceEnv();
+  const timers = makeFakeTimers();
+  const counts = { start: 0, stop: 0 };
+  env.window.WsVoiceInput.registerBackend(opts.backend || {
+    id: 'native', label: 'OS Native', kind: 'native',
+    available: () => true,
+    start: () => { counts.start++; return Promise.resolve(); },
+    stop: () => { counts.stop++; return Promise.resolve({ text: '말하기' }); },
+    cancel: () => {}
+  });
+  ['keydown', 'keyup'].forEach((type) => {
+    env.editor.addEventListener(type, (e) => {
+      if (e.defaultPrevented) return;
+      const fwd = new FakeEvent(type, {
+        key: e.key, code: e.code, keyCode: e.keyCode, repeat: e.repeat,
+        isComposing: !!e.isComposing, target: env.ctext
+      });
+      env.ctext.dispatchEvent(fwd);
+      env.doc.dispatchEvent(fwd);
+      if (fwd.defaultPrevented) e.preventDefault();
+    });
+  });
+  const handle = env.window.WsVoiceInput.attachComposer({
+    document: env.doc,
+    window: env.window,
+    autoDiscover: false,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout
+  });
+  (opts.extraBackends || []).forEach((b) => env.window.WsVoiceInput.registerBackend(b));
+  handle.controller.setCapabilities({ eligible: true, order: opts.order || ['native'] });
+  env.ctext.value = opts.value == null ? '안녕 ' : opts.value;
+  env.ctext.selectionStart = env.ctext.selectionEnd = env.ctext.value.length;
+  const down = (init) => env.editor.dispatchEvent(new FakeEvent('keydown', { key: ' ', code: 'Space', keyCode: 32, target: env.editor, ...(init || {}) }));
+  const up = () => env.editor.dispatchEvent(new FakeEvent('keyup', { key: ' ', code: 'Space', keyCode: 32, target: env.editor }));
+  return { env, timers, counts, handle, down, up };
+}
+
+test('PTT with capsules key forwarding: short Space taps never trigger via an orphaned timer', async () => {
+  for (const gap of [400, 600, 900]) {
+    const t = makeCapsulesForwardingPTT();
+    t.down();
+    assert.equal(t.timers.pendingCount(), 1, 'one press arms exactly one timer despite double delivery');
+    t.timers.advance(100);
+    t.up();
+    assert.equal(t.timers.pendingCount(), 0, 'keyup clears the only timer');
+    t.timers.advance(gap - 100);
+    t.down();
+    t.timers.advance(80);
+    t.up();
+    t.timers.advance(3000);
+    await flush();
+    assert.equal(t.counts.start, 0, `two short taps ${gap}ms apart must not start PTT`);
+    assert.equal(t.handle.controller.getState(), 'idle');
+    t.handle.destroy();
+  }
+
+  // Second press held, but still under the threshold when the first press's
+  // (orphaned) timer would have fired.
+  const t = makeCapsulesForwardingPTT();
+  t.down();
+  t.timers.advance(100);
+  t.up();
+  t.timers.advance(320);
+  t.down();
+  t.timers.advance(700);
+  await flush();
+  assert.equal(t.counts.start, 0, 'second press at 700ms hold must not start from the first press timer');
+  t.up();
+  t.timers.advance(3000);
+  await flush();
+  assert.equal(t.counts.start, 0);
+  t.handle.destroy();
+});
+
+test('PTT with capsules key forwarding: a 1000ms hold starts once and stops cleanly on keyup', async () => {
+  const t = makeCapsulesForwardingPTT({ value: '' });
+  t.down();
+  t.down({ repeat: true });
+  t.timers.advance(999);
+  await flush();
+  assert.equal(t.counts.start, 0);
+  t.timers.advance(1);
+  await flush();
+  assert.equal(t.counts.start, 1, 'PTT starts exactly once at 1000ms');
+  assert.equal(t.handle.controller.getState(), 'recording');
+  assert.equal(t.timers.pendingCount(), 0, 'no second timer left to disarm the active hold');
+  assert.equal(t.handle.ptt.isActive(), true, 'active hold survives the sibling listener');
+
+  t.up();
+  await flush();
+  await flush();
+  assert.equal(t.counts.stop, 1, 'keyup stops PTT exactly once');
+  assert.equal(t.env.ctext.value, '말하기');
+  assert.equal(t.handle.ptt.isArmed(), false);
+  t.handle.destroy();
+});
+
+test('PTT with capsules key forwarding: a 600ms hold does not trigger PTT', async () => {
+  const t = makeCapsulesForwardingPTT();
+  t.down();
+  t.timers.advance(600);
+  t.up();
+  t.timers.advance(3000);
+  await flush();
+  assert.equal(t.counts.start, 0);
+  assert.equal(t.counts.stop, 0);
+  t.handle.destroy();
+});
+
+test('PTT with capsules key forwarding: keyup on the editor alone still releases when forwarding is skipped', async () => {
+  const t = makeCapsulesForwardingPTT({ value: '' });
+  t.down();
+  t.timers.advance(1000);
+  await flush();
+  assert.equal(t.counts.start, 1);
+  // capsules skips forwarding when the real keyup is already defaultPrevented.
+  t.env.editor.dispatchEvent(new FakeEvent('keyup', { key: ' ', code: 'Space', keyCode: 32, target: t.env.editor, defaultPrevented: true }));
+  await flush();
+  await flush();
+  assert.equal(t.counts.stop, 1, 'editor keyup releases without the forwarded copy');
+  t.handle.destroy();
+});
+
+test('PTT with capsules key forwarding: composing Space, input, and pointer events disarm a pending arm', async () => {
+  const t = makeCapsulesForwardingPTT();
+  const disarmed = async (why, act) => {
+    t.down();
+    assert.equal(t.handle.ptt.isArmed(), true, why + ': armed first');
+    act();
+    assert.equal(t.handle.ptt.isArmed(), false, why + ': disarmed');
+    assert.equal(t.timers.pendingCount(), 0, why + ': no timer left');
+    t.timers.advance(3000);
+    await flush();
+    assert.equal(t.counts.start, 0, why + ': no PTT');
+    t.up();
+  };
+  const fire = (target, type, init) => target.dispatchEvent(new FakeEvent(type, { target, ...(init || {}) }));
+
+  await disarmed('isComposing Space', () => t.down({ isComposing: true }));
+  await disarmed('keyCode 229 Space', () => t.down({ keyCode: 229 }));
+  await disarmed('compositionstart', () => fire(t.env.editor, 'compositionstart'));
+  fire(t.env.editor, 'compositionend');
+  await disarmed('beforeinput (editor)', () => fire(t.env.editor, 'beforeinput', { inputType: 'insertText', data: 'a' }));
+  await disarmed('input (ctext)', () => fire(t.env.ctext, 'input', { inputType: 'insertText', data: 'a' }));
+  await disarmed('pointerdown', () => fire(t.env.editor, 'pointerdown'));
+  await disarmed('mousedown', () => fire(t.env.ctext, 'mousedown'));
+
+  // Composing Space never arms in the first place (IME not lost by forwarding).
+  t.down({ isComposing: true, keyCode: 229 });
+  assert.equal(t.handle.ptt.isArmed(), false);
+  assert.equal(t.timers.pendingCount(), 0);
+  t.up();
+
+  // The arming Space's own typed character is not a disarm trigger, whether it
+  // arrives as a native InputEvent (data " ") or as capsules' data-less input
+  // after ctext.value already contains the new space.
+  t.env.ctext.value = '안녕';
+  t.env.ctext.selectionStart = t.env.ctext.selectionEnd = 2;
+  t.down();
+  fire(t.env.editor, 'beforeinput', { inputType: 'insertText', data: ' ' });
+  t.env.ctext.value = '안녕 ';
+  fire(t.env.ctext, 'input');
+  fire(t.env.editor, 'input', { inputType: 'insertText', data: ' ' });
+  assert.equal(t.handle.ptt.isArmed(), true, 'own Space insertion keeps the hold armed');
+  t.timers.advance(1000);
+  await flush();
+  assert.equal(t.counts.start, 1);
+  t.up();
+  await flush();
+  await flush();
+  assert.equal(t.counts.stop, 1);
+  t.handle.destroy();
+});
+
+test('PTT recovers after any failed start or error state: next 1000ms hold starts and stops cleanly', async () => {
+  // Root cause being pinned: a failed start leaves controller state "error",
+  // and PTT used to arm only from "idle" (mic click may start from "error").
+  const modes = ['reject', 'throw', 'backend-onError', 'start-then-stop-reject'];
+  for (const mode of modes) {
+    let behavior = mode;
+    let errCb = null;
+    const counts = { start: 0, stop: 0 };
+    const backend = {
+      id: 'native', label: 'OS Native', kind: 'native',
+      available: () => true,
+      onError: (cb) => { errCb = cb; },
+      start: () => {
+        counts.start++;
+        if (behavior === 'reject') return Promise.reject(Object.assign(new Error('denied'), { code: 'mic_denied' }));
+        if (behavior === 'throw') throw Object.assign(new Error('boom'), { code: 'mic_unavailable' });
+        return Promise.resolve();
+      },
+      stop: () => {
+        counts.stop++;
+        if (behavior === 'start-then-stop-reject') return Promise.reject(Object.assign(new Error('x'), { code: 'upstream_error' }));
+        return Promise.resolve({ text: '말하기' });
+      },
+      cancel: () => {}
+    };
+    const t = makeCapsulesForwardingPTT({ value: '', backend });
+
+    // Attempt 1: hold until PTT fires; the start fails (or recording dies).
+    t.down();
+    t.timers.advance(1000);
+    await flush();
+    if (mode === 'backend-onError') {
+      assert.equal(t.handle.controller.getState(), 'recording');
+      errCb({ code: 'mic_unavailable' });
+    }
+    if (mode === 'start-then-stop-reject') {
+      assert.equal(t.handle.controller.getState(), 'recording');
+      t.up();
+      await flush();
+      await flush();
+    } else {
+      t.up();
+      await flush();
+    }
+    assert.equal(t.handle.controller.getState(), 'error', `${mode}: controller is in error state`);
+    assert.equal(t.handle.ptt.isArmed(), false, `${mode}: no armed/active hold left behind`);
+    assert.equal(t.handle.ptt.isActive(), false);
+    assert.equal(t.env.ctext.disabled, false, `${mode}: composer unlocked after failure`);
+    const startsBefore = counts.start;
+    const stopsBefore = counts.stop;
+
+    // Attempt 2: backend now healthy; a fresh 1000ms hold must work.
+    behavior = 'ok';
+    t.down();
+    assert.equal(t.handle.ptt.isArmed(), true, `${mode}: Space arms from error state`);
+    t.timers.advance(999);
+    await flush();
+    assert.equal(counts.start, startsBefore, `${mode}: not before 1000ms`);
+    t.timers.advance(1);
+    await flush();
+    assert.equal(counts.start, startsBefore + 1, `${mode}: PTT starts after recovery`);
+    assert.equal(t.handle.controller.getState(), 'recording');
+    t.up();
+    await flush();
+    await flush();
+    assert.equal(counts.stop, stopsBefore + 1, `${mode}: keyup stops PTT once`);
+    assert.equal(t.handle.controller.getState(), 'idle');
+    assert.equal(t.env.ctext.value, '말하기');
+    t.handle.destroy();
+  }
+});
+
+test('PTT drops a stale active hold (lost keyup, failed recording) so the next press can arm', async () => {
+  let errCb = null;
+  const counts = { start: 0 };
+  const backend = {
+    id: 'native', label: 'OS Native', kind: 'native', available: () => true,
+    onError: (cb) => { errCb = cb; },
+    start: () => { counts.start++; return Promise.resolve(); },
+    stop: () => Promise.resolve({ text: 'x' }),
+    cancel: () => {}
+  };
+  const t = makeCapsulesForwardingPTT({ value: '', backend });
+  t.down();
+  t.timers.advance(1000);
+  await flush();
+  assert.equal(counts.start, 1);
+  errCb({ code: 'mic_unavailable' }); // recording dies while Space is still held
+  assert.equal(t.handle.controller.getState(), 'error');
+  // keyup never arrives; the user presses Space again.
+  t.down();
+  assert.equal(t.handle.ptt.isArmed(), true, 'stale hold replaced by a fresh arm');
+  assert.equal(t.handle.ptt.isActive(), false);
+  t.timers.advance(1000);
+  await flush();
+  assert.equal(counts.start, 2);
+  t.up();
+  await flush();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'idle');
+  t.handle.destroy();
+});
+
+// OS Native -> next backend fallback on unavailability.
+function makeFallbackEnv(nativeMode, opts = {}) {
+  const log = [];
+  let nativeErr = null, nativePartial = null;
+  const native = {
+    id: 'native', label: 'OS Native', kind: 'native', available: () => true,
+    onError: (cb) => { nativeErr = cb; },
+    onPartial: (cb) => { nativePartial = cb; },
+    start: () => {
+      log.push('native.start');
+      if (nativeMode.reject) return Promise.reject(Object.assign(new Error('n'), { code: nativeMode.reject }));
+      if (nativeMode.throw) throw Object.assign(new Error('n'), { code: nativeMode.throw });
+      return Promise.resolve();
+    },
+    stop: () => { log.push('native.stop'); return Promise.resolve({ text: 'native-text' }); },
+    cancel: () => { log.push('native.cancel'); }
+  };
+  const router = {
+    id: 'openrouter', label: 'OpenRouter', kind: 'external', available: () => opts.routerAvailable !== false,
+    start: () => { log.push('router.start'); return Promise.resolve(); },
+    stop: () => { log.push('router.stop'); return Promise.resolve({ text: '말하기' }); },
+    cancel: () => { log.push('router.cancel'); }
+  };
+  const t = makeCapsulesForwardingPTT({ value: '', backend: native, extraBackends: [router], order: opts.order || ['native', 'openrouter'] });
+  return Object.assign(t, { log, fireNativeError: (c) => nativeErr({ code: c }), nativePartial: (x) => nativePartial(x) });
+}
+
+test('native unavailable on start rejection or throw falls back to the next backend; Space keyup stops the fallback', async () => {
+  for (const mode of [{ reject: 'recognizer_unavailable' }, { throw: 'bridge_error' }, { reject: 'unavailable' }, { reject: 'privacy_disabled' }, { reject: 'language_unavailable' }]) {
+    const t = makeFallbackEnv(mode);
+    t.down();
+    t.timers.advance(1000);
+    await flush();
+    assert.deepEqual(t.log, ['native.start', 'native.cancel', 'router.start'], JSON.stringify(mode));
+    assert.equal(t.handle.controller.getState(), 'recording', 'the held gesture keeps recording on the fallback');
+    t.up();
+    await flush(); await flush();
+    assert.deepEqual(t.log.slice(3), ['router.stop'], 'keyup stops the fallback backend once');
+    assert.equal(t.handle.controller.getState(), 'idle');
+    assert.equal(t.env.ctext.value, '말하기');
+    assert.equal(t.env.ctext.disabled, false);
+    t.handle.destroy();
+  }
+});
+
+test('an early async native onError (LSR 201 after start resolved) falls back, also from the mic button', async () => {
+  const t = makeFallbackEnv({});
+  t.env.btn.click();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'recording');
+  t.fireNativeError('recognizer_unavailable');
+  await flush();
+  assert.deepEqual(t.log, ['native.start', 'native.cancel', 'router.start']);
+  assert.equal(t.handle.controller.getState(), 'recording');
+  t.fireNativeError('recognizer_unavailable'); // a late duplicate from the released native attempt is ignored
+  assert.equal(t.handle.controller.getState(), 'recording');
+  t.env.btn.click();
+  await flush(); await flush();
+  assert.deepEqual(t.log.slice(3), ['router.stop']);
+  assert.equal(t.env.ctext.value, '말하기');
+  t.handle.destroy();
+});
+
+test('native fallback is refused for mic errors, after a transcript, after release, with no next backend, and never loops', async () => {
+  // mic_denied: any recorder would hit the same microphone.
+  for (const mode of [{ reject: 'mic_denied' }, { reject: 'mic_unavailable' }, { reject: 'permission_denied' }, { reject: 'cancelled' }]) {
+    const t = makeFallbackEnv(mode);
+    t.env.btn.click();
+    await flush();
+    assert.equal(t.log.includes('router.start'), false, JSON.stringify(mode));
+    assert.equal(t.handle.controller.getState(), mode.reject === 'cancelled' ? 'idle' : 'error');
+    t.handle.destroy();
+  }
+  // Transcript already received.
+  let t = makeFallbackEnv({});
+  t.env.btn.click(); await flush();
+  t.nativePartial('hel');
+  t.fireNativeError('recognizer_unavailable');
+  assert.equal(t.handle.controller.getState(), 'error');
+  assert.equal(t.log.includes('router.start'), false);
+  t.handle.destroy();
+  // Released before the error arrived: the gesture is over, no surprise recording.
+  t = makeFallbackEnv({});
+  t.env.btn.click(); await flush();
+  t.env.btn.click(); // stop -> transcribing
+  t.fireNativeError('recognizer_unavailable');
+  assert.equal(t.log.includes('router.start'), false);
+  assert.equal(t.handle.controller.getState(), 'error');
+  t.handle.destroy();
+  // Fallback backend unavailable or absent from the order: error with the unavailable label.
+  for (const o of [{ routerAvailable: false }, { order: ['native'] }]) {
+    t = makeFallbackEnv({ reject: 'recognizer_unavailable' }, o);
+    t.env.btn.click(); await flush();
+    assert.equal(t.handle.controller.getState(), 'error');
+    assert.equal(t.log.includes('router.start'), false);
+    assert.equal(t.env.cap.querySelector('.cvox-text').textContent, 'js.voice.err.unavailable');
+    t.handle.destroy();
+  }
+  // A failing fallback ends in error and never falls back again.
+  t = makeFallbackEnv({ reject: 'recognizer_unavailable' });
+  t.env.window.WsVoiceInput.getBackend('openrouter').start = () => { t.log.push('router.start'); return Promise.reject(Object.assign(new Error('r'), { code: 'unavailable' })); };
+  t.env.btn.click(); await flush(); await flush();
+  assert.equal(t.log.filter((x) => x === 'router.start').length, 1);
+  assert.equal(t.log.filter((x) => x === 'native.start').length, 1);
+  assert.equal(t.handle.controller.getState(), 'error');
+  t.handle.destroy();
+});
+
+test('dictation commit normalizes the leading space to exactly one (or none at composer/line start) for mic button and Space hold', async () => {
+  // [value before the gesture, dictated text, expected composer value]
+  const cases = [
+    ['안녕', '하세요', '안녕 하세요'],
+    ['안녕 ', '하세요', '안녕 하세요'],
+    ['안녕   ', '하세요', '안녕 하세요'],
+    ['안녕\t ', '하세요', '안녕 하세요'],
+    ['', '하세요', '하세요'],
+    ['   ', '하세요', '하세요'],
+    ['첫줄\n', '둘째', '첫줄\n둘째'],
+    ['첫줄\n   ', '둘째', '첫줄\n둘째'],
+    ['안녕', '  하세요  ', '안녕 하세요'],
+  ];
+  for (const via of ['mic', 'space']) {
+    for (const [before, said, want] of cases) {
+      const t = makeCapsulesForwardingPTT({
+        value: before,
+        backend: {
+          id: 'native', label: 'OS Native', kind: 'native', available: () => true,
+          start: () => Promise.resolve(), stop: () => Promise.resolve({ text: said }), cancel: () => {}
+        }
+      });
+      if (via === 'mic') {
+        t.env.btn.click();
+        await flush();
+        t.env.btn.click();
+      } else {
+        // The arming Space types one more space before the hold timer fires.
+        t.env.ctext.value = before + ' ';
+        t.env.ctext.selectionStart = t.env.ctext.selectionEnd = t.env.ctext.value.length;
+        t.down();
+        t.timers.advance(1000);
+        await flush();
+        t.up();
+      }
+      await flush();
+      await flush();
+      assert.equal(t.env.ctext.value, want, `${via}: ${JSON.stringify(before)} + ${JSON.stringify(said)}`);
+      assert.equal(t.handle.controller.getState(), 'idle');
+      t.handle.destroy();
+    }
+  }
+  // A blank dictation leaves the composer exactly as it was.
+  const blank = makeCapsulesForwardingPTT({
+    value: '안녕   ',
+    backend: { id: 'native', label: 'OS Native', kind: 'native', available: () => true, start: () => Promise.resolve(), stop: () => Promise.resolve({ text: '  ' }), cancel: () => {} }
+  });
+  blank.env.btn.click(); await flush(); blank.env.btn.click(); await flush(); await flush();
+  assert.equal(blank.env.ctext.value, '안녕   ');
+  blank.handle.destroy();
+});
+
+test('macOS LSR 201 (recognizer_unavailable) shows the unavailable label, not the generic failure', async () => {
+  const label = makeVoiceEnv().window.WsVoicePTT.errorLabel;
+  for (const code of ['recognizer_unavailable', 'unavailable', 'privacy_disabled', 'language_unavailable']) {
+    assert.equal(label({ code }), 'js.voice.err.unavailable', code);
+  }
+  assert.equal(label({ code: 'something_else' }), 'js.voice.err.failed');
+  assert.equal(label({ code: 'mic_denied' }), 'js.voice.err.mic');
+  const t = makeCapsulesForwardingPTT({
+    value: '',
+    backend: {
+      id: 'native', label: 'OS Native', kind: 'native', available: () => true,
+      start: () => Promise.reject(Object.assign(new Error('201'), { code: 'recognizer_unavailable' })),
+      stop: () => Promise.resolve({ text: '' }), cancel: () => {}
+    }
+  });
+  t.env.btn.click();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'error');
+  assert.equal(t.env.cap.querySelector('.cvox-text').textContent, 'js.voice.err.unavailable');
+  t.handle.destroy();
+});
+
+// #cvox pointer press-and-hold PTT.
+function pointerEnv(extra = {}) {
+  const log = [];
+  const backend = {
+    id: 'native', label: 'OS Native', kind: 'native', available: () => true,
+    start: () => { log.push('start'); return extra.startReject ? Promise.reject(Object.assign(new Error('x'), { code: extra.startReject })) : Promise.resolve(); },
+    stop: () => { log.push('stop'); return Promise.resolve({ text: '말하기' }); },
+    cancel: () => { log.push('cancel'); }
+  };
+  const t = makeCapsulesForwardingPTT({ value: '', backend, extraBackends: extra.extraBackends, order: extra.order });
+  const press = (init) => {
+    const e = new FakeEvent('pointerdown', { button: 0, pointerId: 1, isPrimary: true, pointerType: 'mouse', ...(init || {}) });
+    t.env.btn.dispatchEvent(e);
+    return e;
+  };
+  const release = (type = 'pointerup', target = t.env.window, init) => target.dispatchEvent(new FakeEvent(type, { pointerId: 1, ...(init || {}) }));
+  const click = (detail) => t.env.btn.dispatchEvent(new FakeEvent('click', { detail }));
+  return Object.assign(t, { log, press, release, click });
+}
+
+test('mic button pointer press starts immediately; release anywhere stops once; the trailing click does not restart', async () => {
+  for (const where of ['button', 'window']) {
+    const t = pointerEnv();
+    const e = t.press();
+    assert.equal(e.defaultPrevented, true, 'pointerdown must not steal focus from the composer');
+    await flush();
+    assert.deepEqual(t.log, ['start'], 'no 1s hold delay on the button');
+    assert.equal(t.handle.controller.getState(), 'recording');
+    t.release('pointerup', where === 'button' ? t.env.btn : t.env.window);
+    if (where === 'button') t.env.window.dispatchEvent(new FakeEvent('pointerup', { pointerId: 1 })); // bubbles to window in a browser
+    await flush(); await flush();
+    assert.deepEqual(t.log, ['start', 'stop']);
+    assert.equal(t.env.ctext.value, '말하기');
+    t.click(1); // the click the browser synthesizes after a press released on the button
+    await flush();
+    assert.deepEqual(t.log, ['start', 'stop'], 'the trailing click must not start again');
+    assert.equal(t.handle.controller.getState(), 'idle');
+    t.timers.advance(0);
+    t.click(1); // a later, separate click is an ordinary click again
+    await flush();
+    assert.deepEqual(t.log, ['start', 'stop', 'start']);
+    t.handle.destroy();
+  }
+});
+
+test('mic button pointercancel and window blur stop cleanly; unrelated pointers are ignored', async () => {
+  for (const kind of ['pointercancel', 'blur']) {
+    const t = pointerEnv();
+    t.press();
+    await flush();
+    t.release('pointerup', t.env.window, { pointerId: 9 });
+    assert.equal(t.handle.controller.getState(), 'recording', 'another pointer cannot end this hold');
+    t.release(kind);
+    await flush(); await flush();
+    assert.deepEqual(t.log, ['start', 'stop'], kind);
+    assert.equal(t.handle.controller.getState(), 'idle');
+    t.release('pointerup'); // a duplicate release never stops twice
+    await flush();
+    assert.deepEqual(t.log, ['start', 'stop']);
+    t.handle.destroy();
+  }
+});
+
+test('mic button ignores right/middle presses and non-primary pointers; keyboard click still toggles', async () => {
+  const t = pointerEnv();
+  assert.equal(t.press({ button: 2 }).defaultPrevented, false);
+  t.press({ button: 1 });
+  t.press({ isPrimary: false });
+  await flush();
+  assert.deepEqual(t.log, []);
+  assert.equal(t.handle.controller.getState(), 'idle');
+  t.click(0); // Enter/Space on the focused button
+  await flush();
+  assert.deepEqual(t.log, ['start']);
+  t.click(0);
+  await flush(); await flush();
+  assert.deepEqual(t.log, ['start', 'stop']);
+  // A pointer press while already recording keeps click-to-stop behaviour.
+  t.click(0); await flush();
+  const e = t.press();
+  assert.equal(e.defaultPrevented, false);
+  t.release();
+  t.click(1);
+  await flush(); await flush();
+  assert.deepEqual(t.log, ['start', 'stop', 'start', 'stop']);
+  t.handle.destroy();
+});
+
+test('mic button press starts cleanly from the error state', async () => {
+  const t = pointerEnv({ startReject: 'mic_denied' });
+  t.press();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'error');
+  t.release();
+  await flush();
+  t.timers.advance(0);
+  t.env.window.WsVoiceInput.getBackend('native').start = () => { t.log.push('start2'); return Promise.resolve(); };
+  t.press();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'recording');
+  assert.equal(t.log.filter((x) => x === 'start2').length, 1);
+  t.release();
+  await flush(); await flush();
+  assert.equal(t.handle.controller.getState(), 'idle');
+  assert.equal(t.env.ctext.value, '말하기');
+  t.handle.destroy();
+});
+
+test('mic button hold on a native that falls back: pointerup stops the fallback backend', async () => {
+  const log = [];
+  const router = {
+    id: 'openrouter', label: 'OpenRouter', kind: 'external', available: () => true,
+    start: () => { log.push('router.start'); return Promise.resolve(); },
+    stop: () => { log.push('router.stop'); return Promise.resolve({ text: '폴백' }); },
+    cancel: () => { log.push('router.cancel'); }
+  };
+  const t = pointerEnv({ startReject: 'recognizer_unavailable', extraBackends: [router], order: ['native', 'openrouter'] });
+  t.press();
+  await flush(); await flush();
+  assert.deepEqual(t.log, ['start', 'cancel']);
+  assert.deepEqual(log, ['router.start']);
+  assert.equal(t.handle.controller.getState(), 'recording');
+  t.release();
+  await flush(); await flush();
+  assert.deepEqual(log, ['router.start', 'router.stop']);
+  assert.equal(t.env.ctext.value, '폴백');
+  t.click(1);
+  await flush();
+  assert.deepEqual(log, ['router.start', 'router.stop'], 'trailing click must not restart the fallback');
+  t.handle.destroy();
+});
+
+test('destroy during a held press stops the dictation and drops the listeners', async () => {
+  const t = pointerEnv();
+  t.press();
+  await flush();
+  t.handle.destroy();
+  await flush();
+  assert.equal(t.log.includes('stop') || t.log.includes('cancel'), true);
+  t.press();
+  await flush();
+  assert.equal(t.log.filter((x) => x === 'start').length, 1, 'destroyed handle no longer reacts to the pointer');
+});
+
+test('dismissing the error capsule returns the controller to idle', async () => {
+  const t = makeCapsulesForwardingPTT({
+    value: '',
+    backend: {
+      id: 'native', label: 'OS Native', kind: 'native', available: () => true,
+      start: () => Promise.reject(Object.assign(new Error('d'), { code: 'mic_denied' })),
+      stop: () => Promise.resolve({ text: '' }), cancel: () => {}
+    }
+  });
+  t.env.btn.click();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'error');
+  const dismiss = t.env.cap.querySelector('[data-voice-action="dismiss"]');
+  assert.ok(dismiss, 'error capsule offers a dismiss action');
+  dismiss.click();
+  assert.equal(t.handle.controller.getState(), 'idle');
+  t.handle.destroy();
+});
+
+test('PTT detach removes every added listener and cancels pending arm', async () => {
+  const t = makeCapsulesForwardingPTT();
+  const names = ['keydown', 'keyup', 'blur', 'compositionstart', 'compositionend', 'mousedown', 'pointerdown', 'beforeinput', 'input'];
+  const before = (el) => names.map((n) => (el.listeners.get(n) || []).length);
+  const baseEditor = before(t.env.editor);
+  assert.ok(baseEditor.some((n) => n > 0));
+  t.down();
+  assert.equal(t.timers.pendingCount(), 1);
+  t.handle.destroy();
+  assert.equal(t.timers.pendingCount(), 0, 'destroy clears the pending timer');
+  for (const el of [t.env.ctext, t.env.editor]) {
+    for (const n of names) {
+      const left = (el.listeners.get(n) || []).length;
+      // Only the capsules-forwarding stub (keydown/keyup on editor) may remain.
+      const allowed = el === t.env.editor && (n === 'keydown' || n === 'keyup') ? 1 : 0;
+      assert.equal(left, allowed, `${n} listener cleanup on ${el.id || el.className}`);
+    }
+  }
+  assert.equal((t.env.doc.dispatchEvent(new FakeEvent('keyup', { key: ' ', code: 'Space' })), t.counts.stop), 0);
 });
 
 test('fallback #cvox-cap capsule activates when WsCapsules is absent', async () => {

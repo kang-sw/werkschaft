@@ -76,7 +76,12 @@
   );
 }
 
-/* Seamless 26px global bottom status bar (3-column grid: 1fr auto 1fr). */
+/* Seamless 26px global bottom status bar (3-column grid). With no #talert the
+   middle cell is empty, so the side cells size to content and the usage pill
+   may use all the free middle space instead of being capped at half the bar
+   (rail.js botWatch still collapses it to .bu when it genuinely does not fit).
+   A visible #talert restores the symmetric 1fr auto 1fr grid that keeps it
+   centred on the viewport. */
 .shell-bottom {
   position: fixed;
   left: 0;
@@ -85,7 +90,7 @@
   height: var(--botbar-h, 26px);
   z-index: 46;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) minmax(0, auto);
   align-items: center;
   column-gap: 8px;
   padding: 0 8px;
@@ -109,6 +114,9 @@
   opacity: calc(1 - var(--fdim, 0.55));
   pointer-events: none;
   z-index: 1;
+}
+.shell-bottom:has(.talert:not([hidden])) {
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
 }
 .shell-bottom .bot-left {
   grid-column: 1;

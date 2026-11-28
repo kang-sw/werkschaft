@@ -322,6 +322,84 @@ function assertInViewportUpward(label, pop, anchor, vw, vh) {
         assert.equal(await page.locator('#shell-bottom').evaluate(el => el.classList.contains('bu')), false, 'widening restores full usage toggle');
       }
 
+      // 2b. A wide multi-provider usage pill (~560px) is wider than half of a
+      //     1100px bar but fits in the free middle space: it must stay expanded.
+      //     It collapses to .bu only when the bar is genuinely too narrow or a
+      //     visible #talert takes the middle.
+      if (theme === 'dark') {
+        await page.setViewportSize({ width: 1100, height: 800 });
+        await page.waitForTimeout(160);
+        const pillW = await page.evaluate(target => {
+          const t = document.querySelector('#slot-bot-right .usage-toggle');
+          const bar = document.getElementById('shell-bottom');
+          bar.classList.remove('bu');
+          const filler = document.createElement('span');
+          filler.id = 'wide-pill-filler';
+          filler.style.cssText = 'display:inline-block;height:1px;width:0';
+          t.insertBefore(filler, t.firstChild);
+          const natural = t.getBoundingClientRect().width;
+          filler.style.width = Math.max(0, target - natural) + 'px';
+          return t.getBoundingClientRect().width;
+        }, 560);
+        await page.waitForTimeout(200);
+        const wide = await page.evaluate(() => {
+          const bar = document.getElementById('shell-bottom');
+          const right = document.getElementById('slot-bot-right').getBoundingClientRect();
+          const left = document.getElementById('slot-bot-left').getBoundingClientRect();
+          const t = document.querySelector('#slot-bot-right .usage-toggle').getBoundingClientRect();
+          return { bu: bar.classList.contains('bu'), toggleW: t.width, rightW: right.width, barW: bar.getBoundingClientRect().width, leftRight: left.right, toggleLeft: t.left, overflow: document.documentElement.scrollWidth - window.innerWidth };
+        });
+        assert.ok(pillW >= 540 && wide.toggleW >= 540 && wide.toggleW > wide.barW / 2, `1100px: pill ~560px (${wide.toggleW}) is wider than half the bar (${wide.barW / 2})`);
+        assert.equal(wide.bu, false, `1100px: ~560px usage pill stays expanded in free middle space (${JSON.stringify(wide)})`);
+        assert.ok(wide.leftRight <= wide.toggleLeft + 0.5, `1100px: bot-left (${wide.leftRight}) does not collide with usage pill (${wide.toggleLeft})`);
+        assert.ok(wide.overflow <= 0, '1100px: 0px horizontal overflow with expanded wide pill');
+
+        await page.setViewportSize({ width: 520, height: 800 });
+        await page.waitForTimeout(220);
+        const narrow = await page.evaluate(() => {
+          const bar = document.getElementById('shell-bottom');
+          const left = document.getElementById('slot-bot-left');
+          const right = document.getElementById('slot-bot-right').getBoundingClientRect();
+          const t = document.querySelector('#slot-bot-right .usage-toggle').getBoundingClientRect();
+          return { bu: bar.classList.contains('bu'), toggleLeft: t.left, toggleRight: t.right, rightLeft: right.left, rightRight: right.right, leftClipped: left.scrollWidth > left.clientWidth + 1, overflow: document.documentElement.scrollWidth - window.innerWidth };
+        });
+        assert.equal(narrow.bu, true, `520px: genuinely too narrow bar collapses to .bu (${JSON.stringify(narrow)})`);
+        assert.ok(narrow.toggleLeft >= narrow.rightLeft - 0.5 && narrow.toggleRight <= narrow.rightRight + 0.5, '520px: collapsed handle stays inside the right cell');
+        assert.equal(narrow.leftClipped, false, '520px: bot-left is not clipped by collapsed usage');
+        assert.ok(narrow.overflow <= 0, '520px: 0px horizontal overflow');
+
+        // Visible wide #talert takes the middle at 1100px: pill cannot keep full width.
+        await page.setViewportSize({ width: 1100, height: 800 });
+        await page.evaluate(() => {
+          const el = document.getElementById('talert');
+          el.textContent = 'Approval waiting for a long-running tool call needing attention';
+          el.hidden = false;
+        });
+        await page.waitForTimeout(220);
+        const withAlert = await page.evaluate(() => {
+          const bar = document.getElementById('shell-bottom');
+          const center = document.getElementById('slot-bot-center').getBoundingClientRect();
+          const right = document.getElementById('slot-bot-right').getBoundingClientRect();
+          const t = document.querySelector('#slot-bot-right .usage-toggle').getBoundingClientRect();
+          return { bu: bar.classList.contains('bu'), centerRight: center.right, toggleLeft: t.left, rightLeft: right.left, overflow: document.documentElement.scrollWidth - window.innerWidth };
+        });
+        assert.equal(withAlert.bu, true, `1100px + wide #talert: pill collapses instead of overlapping (${JSON.stringify(withAlert)})`);
+        assert.ok(withAlert.centerRight <= withAlert.toggleLeft + 0.5, '1100px + #talert: alert does not overlap collapsed handle');
+        assert.ok(withAlert.overflow <= 0, '1100px + #talert: 0px overflow');
+
+        // Clearing the alert frees the middle again: the full pill returns.
+        await page.evaluate(() => {
+          const el = document.getElementById('talert');
+          el.textContent = '';
+          el.hidden = true;
+        });
+        await page.waitForTimeout(220);
+        assert.equal(await page.locator('#shell-bottom').evaluate(el => el.classList.contains('bu')), false, '1100px: pill expands again once #talert clears');
+        await page.evaluate(() => { const f = document.getElementById('wide-pill-filler'); if (f) f.remove(); });
+        await page.setViewportSize({ width: 1920, height: 1080 });
+        await page.waitForTimeout(200);
+      }
+
       // 3. data-fdim modal dimming & click-blocking per (1722).
       await page.setViewportSize({ width: 1440, height: 900 });
       await page.waitForTimeout(160);

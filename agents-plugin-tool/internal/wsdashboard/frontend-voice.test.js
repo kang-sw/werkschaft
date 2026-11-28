@@ -502,8 +502,9 @@ test('push-to-talk calls getUserMedia synchronously, streams SSE preview in inli
   await flush();
   await flush();
 
-  assert.equal(env.ctext.lastSetRangeText.replacement, 'hello voice!');
-  assert.equal(env.ctext.lastSetRangeText.start, 7);
+  // The commit swallows the typed space before the caret and re-adds exactly one.
+  assert.equal(env.ctext.lastSetRangeText.replacement, ' hello voice!');
+  assert.equal(env.ctext.lastSetRangeText.start, 6);
   assert.equal(env.ctext.lastSetRangeText.end, 7);
   assert.equal(env.ctext.value, 'prefix hello voice!suffix');
   assert.equal(inputEvents, 1);
@@ -556,7 +557,7 @@ test('non-streaming JSON response inserts final text at captured caret', async (
   await flush();
   await flush();
 
-  assert.equal(env.ctext.value, 'aXYZc');
+  assert.equal(env.ctext.value, 'a XYZc', 'dictation after text on the line gets exactly one separating space');
   assert.equal(env.composer.hasAttribute('data-voice-locked'), false);
   handle.destroy();
 });

@@ -83,14 +83,93 @@ test('pane scroll bookkeeping uses observer visibility instead of geometry probe
   assert.equal(context.scrollState().length, 0);
 });
 
+// The page-visibility section of dashboard.js under a stub window: topDoc is
+// the shell's top document (same-origin), listeners collects what the section
+// registers on window, and swaps counts showRegions flushes of held regions.
+function visibilityHarness(opts = {}) {
+  const attrs = new Set(), events = [], listeners = {}, frames = [], flushes = [];
+  const topDoc = { hidden: opts.topHidden === true };
+  const win = { addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); } };
+  win.top = opts.noTop ? win : { document: topDoc };
+  const context = {
+    shHidden: false, hiddenRegions: opts.held ? { board: { hash: '1', html: '' } } : {},
+    doc: { hidden: opts.childHidden === true, addEventListener() {}, dispatchEvent(e) { events.push(e.type); } },
+    root: { hasAttribute: key => attrs.has(key), toggleAttribute(key, value) { if (value) attrs.add(key); else attrs.delete(key); } },
+    CustomEvent: class { constructor(type) { this.type = type; } },
+    window: win,
+    requestAnimationFrame(fn) { frames.push(fn); return frames.length; },
+    showRegions() { if (context.pageHidden()) return; flushes.push(false); context.hiddenRegions = {}; }
+  };
+  vm.createContext(context);
+  vm.runInContext(section(read(__dirname + '/assets/dashboard.js'), '  function docHidden()', '  // --- browser storage:') +
+    '\n' + section(read(__dirname + '/assets/dashboard-board.js'), '  function pageHidden()', '\n').replace(/\n$/, ''), context);
+  return { context, attrs, events, listeners, frames, flushes, topDoc, fire: type => (listeners[type] || []).forEach(fn => fn({})) };
+}
+
+test('a stale child document.hidden does not hold a shown frame hidden while the top document is visible', () => {
+  const h = visibilityHarness({ childHidden: true, held: true });
+  const c = h.context;
+  assert.equal(c.docHidden(), false, 'top visible, frame shown: the stale child flag is overridden');
+  assert.equal(c.pageHidden(), false);
+  assert.equal(h.attrs.has('data-animation-paused'), false, 'initial sync does not pause an active, shown frame');
+  c.showRegions();
+  assert.deepEqual(h.flushes, [false]);
+  assert.deepEqual(c.hiddenRegions, {}, 'held regions flush');
+});
+
+test('a hidden top window, a hidden shell frame or a standalone page still suspends', () => {
+  let h = visibilityHarness({ childHidden: true, topHidden: true });
+  assert.equal(h.context.pageHidden(), true, 'genuinely hidden window');
+  assert.equal(h.attrs.has('data-animation-paused'), true);
+  h = visibilityHarness({ childHidden: true });
+  h.context.shHidden = true;
+  assert.equal(h.context.pageHidden(), true, 'frame hidden by the shell');
+  h = visibilityHarness({ childHidden: true, noTop: true });
+  assert.equal(h.context.pageHidden(), true, 'a standalone page has no top to overrule it');
+  h = visibilityHarness({ childHidden: false });
+  h.context.shHidden = true; h.context.syncPageVisibility();
+  assert.equal(h.attrs.has('data-animation-paused'), true);
+  h = visibilityHarness({ childHidden: true });
+  Object.defineProperty(h.context.window, 'top', { get() { throw new Error('cross-origin'); } });
+  assert.equal(h.context.docHidden(), true, 'an unreadable top leaves the frame state in force');
+});
+
+test('focus, pageshow and resize recover a stale pause and flush held regions, cheaply when nothing changed', () => {
+  const h = visibilityHarness({ held: true, topHidden: true, childHidden: true });
+  const c = h.context;
+  assert.equal(h.attrs.has('data-animation-paused'), true);
+  h.fire('focus');
+  assert.deepEqual(h.flushes, [], 'still hidden: nothing flushes');
+  const before = h.events.length;
+  h.fire('focus');
+  assert.equal(h.events.length, before, 'an unchanged state sends no visibility event');
+  h.topDoc.hidden = false;
+  h.fire('focus');
+  assert.equal(h.attrs.has('data-animation-paused'), false, 'focus clears the stale pause');
+  assert.deepEqual(h.flushes, [false], 'and flushes held regions');
+  assert.equal(h.events.length, before + 1);
+  for (const type of ['pageshow', 'resize']) {
+    h.topDoc.hidden = true; c.syncPageVisibility(); c.hiddenRegions = { board: { hash: '2', html: '' } };
+    h.flushes.length = 0; h.topDoc.hidden = false;
+    h.fire(type);
+    if (type === 'resize') { assert.equal(h.frames.length, 1, 'resize coalesces to one frame'); h.fire('resize'); assert.equal(h.frames.length, 1); h.frames.shift()(); }
+    assert.equal(h.attrs.has('data-animation-paused'), false, type);
+    assert.deepEqual(h.flushes, [false], type + ' flushes held regions');
+    assert.deepEqual(c.hiddenRegions, {});
+  }
+  h.fire('resize'); h.frames.shift()(); h.fire('focus');
+  assert.deepEqual(h.flushes, [false], 'with nothing held, nothing flushes');
+});
+
 test('native and shell visibility keep pause state and notify each lifecycle transition', () => {
   const attrs = new Set(), events = [], context = {
     shHidden: false, doc: { hidden: false, addEventListener() {}, dispatchEvent(e) { events.push(e.type); } },
     root: { hasAttribute: key => attrs.has(key), toggleAttribute(key, value) { if (value) attrs.add(key); else attrs.delete(key); } },
-    CustomEvent: class { constructor(type) { this.type = type; } }
+    CustomEvent: class { constructor(type) { this.type = type; } },
+    window: { addEventListener() {} }
   };
   vm.createContext(context);
-  vm.runInContext(section(read(__dirname + '/assets/dashboard.js'), '  function syncPageVisibility()', '  // --- browser storage:'), context);
+  vm.runInContext(section(read(__dirname + '/assets/dashboard.js'), '  function docHidden()', '  // --- browser storage:'), context);
   context.shHidden = true; context.syncPageVisibility(); context.syncPageVisibility();
   assert.equal(attrs.has('data-animation-paused'), true); assert.equal(events.length, 3);
   context.shHidden = false; context.doc.hidden = true; context.syncPageVisibility();

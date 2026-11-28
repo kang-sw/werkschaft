@@ -690,6 +690,7 @@ test('#9a shShow sequences WS handoff via wsHideFrame + hidden-ack, cancels stal
     'var shShowGen = 0, shHandoff = null, SH_HIDE_ACK_MS = 80;',
     extractFunction(lcSrc, 'shClearHandoff'),
     extractFunction(lcSrc, 'shFinishHandoff'),
+    extractFunction(lcSrc, 'shNudge'),
     extractFunction(lcSrc, 'shDrop'),
     extractFunction(lcSrc, 'shPrune'),
     extractFunction(lcSrc, 'shShow')
