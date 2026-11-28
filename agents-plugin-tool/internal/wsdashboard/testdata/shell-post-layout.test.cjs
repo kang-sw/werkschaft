@@ -75,4 +75,60 @@ assert.deepEqual(Array.from(c.reads), ['style', 'width', 'height'], 'resize refr
 const headerObserver = c.observers.find(o => o.nodes.some(([n]) => n === c.header));
 run('reads = []; header.innerHTML = "new header";'); headerObserver.fn([]); run('flush();');
 assert.equal(run('posts.filter(function (p) { return p[0] === "head"; }).slice(-1)[0][1].html'), 'new header');
+
+// Regression: shFrameInit must support compact absent, false, and true without ReferenceError.
+for (const mode of ['absent', false, true]) {
+  const ctx = vm.createContext({ console });
+  const decl = mode === 'absent' ? '' : `var compact = ${JSON.stringify(mode)};`;
+  vm.runInContext(`
+    ${decl}
+    var posts = [], frames = new Map(), seq = 0, observers = [], winListeners = {}, attrs = {};
+    var shHidden = false, shTrackerRev = null, ideFrameQueueHead = null, companionRelay = null, relayStarts = 0;
+    var header = { innerHTML: "head", offsetHeight: 40 };
+    var root = { clientWidth: 1180, hasAttribute: function (k) { return k in attrs; }, setAttribute: function (k) { attrs[k] = ""; }, removeAttribute: function (k) { delete attrs[k]; } };
+    function getComputedStyle() { return { paddingRight: "12px", backgroundColor: "rgba(0,0,0,.5)" }; }
+    function requestAnimationFrame(fn) { var id = ++seq; frames.set(id, fn); return id; }
+    function cancelAnimationFrame(id) { frames.delete(id); }
+    function flush() { var batch = Array.from(frames.values()); frames.clear(); batch.forEach(function (fn) { fn(); }); }
+    function MutationObserver(fn) { this.fn = fn; this.nodes = []; this.observe = function (n, options) { this.nodes.push([n, options]); }; observers.push(this); }
+    function ResizeObserver() { this.observe = function () {}; }
+    var window = { innerWidth: 1200, MutationObserver: MutationObserver, ResizeObserver: ResizeObserver, scrollY: 0, parent: {},
+      WsShell: { alpha: function () { return .5; }, message: function (d) { return d; } },
+      addEventListener: function (k, fn) { (winListeners[k] = winListeners[k] || []).push(fn); } };
+    var doc = { body: {}, title: "title", querySelector: function () { return header; }, addEventListener: function () {} };
+    var location = { origin: "http://localhost", hash: "" }, history = {};
+    function region() { return header; }
+    function $() { return null; }
+    function q() { return []; }
+    function syncPageVisibility() {}
+    function shUnstage() {}
+    function showRegions() {}
+    function mountFramesPaced() {}
+    function tickTimes() {}
+    function startCompanionRelay() { relayStarts++; return { dispose: function () {} }; }
+    function shPost(kind, m) { posts.push([kind, m]); }
+  ` + init + '\nshFrameInit(); flush();', ctx);
+  if (mode === true) {
+    assert.deepEqual(Array.from(ctx.posts, p => p[0]), [], 'compact=true skips initial shell frame posts');
+    assert.equal(ctx.observers.length, 0, 'compact=true skips layout/header observers');
+    assert.equal(ctx.ideFrameQueueHead, null, 'compact=true does not bind ideFrameQueueHead');
+    vm.runInContext(`
+      winListeners.message.forEach(function (fn) { fn({ source: window.parent, origin: location.origin, data: { wsShell: "companion-gate", active: true } }); });
+      winListeners.message.forEach(function (fn) { fn({ source: window.parent, origin: location.origin, data: { wsShell: "shown", shown: true } }); });
+      flush();
+    `, ctx);
+    assert.equal(ctx.relayStarts, 0, 'compact=true ignores companion-gate');
+    assert.deepEqual(Array.from(ctx.posts, p => p[0]), [], 'compact=true skips head/layout posts on shown');
+  } else {
+    assert.ok(ctx.posts.some(p => p[0] === 'ready') && ctx.posts.some(p => p[0] === 'head') && ctx.posts.some(p => p[0] === 'layout'),
+      `compact=${String(mode)} posts initial ready/head/layout`);
+    assert.ok(ctx.observers.length > 0, `compact=${String(mode)} attaches observers`);
+    assert.equal(typeof ctx.ideFrameQueueHead, 'function', `compact=${String(mode)} sets ideFrameQueueHead`);
+    vm.runInContext(`
+      winListeners.message.forEach(function (fn) { fn({ source: window.parent, origin: location.origin, data: { wsShell: "companion-gate", active: true } }); });
+    `, ctx);
+    assert.equal(ctx.relayStarts, 1, `compact=${String(mode)} honors companion-gate`);
+  }
+}
+
 console.log('shell post layout: cached header, closed-overlay fast path, frame coalescing and open/close geometry passed');
