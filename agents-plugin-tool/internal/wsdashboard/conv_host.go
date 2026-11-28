@@ -837,6 +837,9 @@ func (d *Daemon) ConvSearch(ctx context.Context, req ConvSearchRequest) (ConvSea
 	if d == nil || d.convIdx == nil {
 		return ConvSearchResponse{}, errors.New("conversation index is unavailable")
 	}
+	if req.SessionID != "" && !ValidReplyID(req.SessionID) {
+		return ConvSearchResponse{}, fmt.Errorf("invalid session_id %q", req.SessionID)
+	}
 	statusFilter := strings.ToLower(strings.TrimSpace(req.Status))
 	if statusFilter == "" {
 		statusFilter = "all"

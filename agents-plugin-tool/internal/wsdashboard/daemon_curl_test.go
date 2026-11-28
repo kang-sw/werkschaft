@@ -141,6 +141,10 @@ func TestDaemonCurlValidationForbiddenPathsAndRedaction(t *testing.T) {
 		"", "health", "//127.0.0.1/health", "http://127.0.0.1/health",
 		"https://example.com/", "/health?a=1", "/health#frag",
 		"/a/../settings", "/a/%2e%2e/settings", `/a\b`, "/health\r\nX: 1",
+		// Double-encoded paths must be rejected up front: a second decode would
+		// otherwise resolve them to forbidden routes or traversal.
+		"/%2573ettings", "/%2561uth/status", "/%2561uth/link",
+		"/a/%252e%252e/settings", "/%2561pi/daemon/bridge-reply",
 	} {
 		_, err := f.d.DaemonCurl(context.Background(), DaemonCurlRequest{Method: "GET", Path: p})
 		dce, ok := IsDaemonControlError(err)
@@ -206,6 +210,17 @@ func TestDaemonCurlValidationForbiddenPathsAndRedaction(t *testing.T) {
 		ProxyHTTPPath,
 		MetaAgentRecordPath,
 		"/agents/by-token/secret-tok",
+		"/api/account",
+		"/api/account/status",
+		"/api/account/slots/sign-in/status",
+		"/api/account/key",
+		"/API/Account/status",
+		"/%61pi/account/status",
+		"/api/config/snapshot",
+		"/api/config/set",
+		"/debug/pprof",
+		"/debug/pprof/",
+		"/debug/pprof/goroutine",
 	}
 	for _, p := range forbidden {
 		for _, method := range []string{"GET", "HEAD", "POST", "DELETE"} {

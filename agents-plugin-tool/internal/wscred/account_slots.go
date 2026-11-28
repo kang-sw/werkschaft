@@ -396,6 +396,8 @@ type AccountSlotRegistry struct {
 	closed    bool
 	doc       accountSlotsDocument
 	onChange  func()
+
+	writeStep func(credentialWriteStep) // test checkpoint during replacement
 }
 
 // NewAccountSlotRegistry returns a registry backed by path. No disk I/O happens
@@ -514,24 +516,33 @@ func (r *AccountSlotRegistry) prepareWriteLocked() error {
 	return nil
 }
 
-func (r *AccountSlotRegistry) writeLocked(next accountSlotsDocument) error {
+// writeLocked persists next. published reports whether the replacement became
+// the committed generation, which can hold even when err is non-nil (a failed
+// post-publish scrub of the retiring generation); callers must notify observers
+// on published, not on err == nil.
+func (r *AccountSlotRegistry) writeLocked(next accountSlotsDocument) (published bool, err error) {
 	if r.path == "" {
 		r.doc = next
 		r.revision.Add(1)
 		r.syncDenyDirsLocked()
-		return nil
+		return true, nil
 	}
 	raw, err := next.encode()
 	if err != nil {
-		return err
+		return false, err
 	}
-	published, err := writePrivateFile(r.path, raw, replaceCredentialFile, nil)
+	published, err = writePrivateFile(r.path, raw, replaceCredentialFile, r.writeStep)
 	if published {
 		r.doc = next
 		r.revision.Add(1)
 		r.syncDenyDirsLocked()
 	}
-	return err
+	if err != nil {
+		// A failed write can leave a .retiring or .staged generation behind;
+		// recover again before the next write instead of wedging it on EEXIST.
+		r.recovered = false
+	}
+	return published, err
 }
 
 func implicitDefaultSlot(harness string) AccountSlot {
@@ -693,10 +704,10 @@ func (r *AccountSlotRegistry) AddSlot(slot AccountSlot) (AccountSlot, error) {
 	}
 	next := r.doc.clone()
 	next.slots = append(next.slots, slot)
-	err := r.writeLocked(next)
+	published, err := r.writeLocked(next)
 	cb := r.onChange
 	r.mu.Unlock()
-	if err == nil && cb != nil {
+	if published && cb != nil {
 		cb()
 	}
 	return slot, err
@@ -738,10 +749,10 @@ func (r *AccountSlotRegistry) SetActive(harness, slotID string) error {
 	} else {
 		next.active[harness] = id
 	}
-	err := r.writeLocked(next)
+	published, err := r.writeLocked(next)
 	cb := r.onChange
 	r.mu.Unlock()
-	if err == nil && cb != nil {
+	if published && cb != nil {
 		cb()
 	}
 	return err
@@ -780,10 +791,10 @@ func (r *AccountSlotRegistry) RemoveSlot(harness, slotID string) error {
 	if next.active[harness] == id {
 		delete(next.active, harness)
 	}
-	err := r.writeLocked(next)
+	published, err := r.writeLocked(next)
 	cb := r.onChange
 	r.mu.Unlock()
-	if err == nil && cb != nil {
+	if published && cb != nil {
 		cb()
 	}
 	return err
@@ -818,10 +829,10 @@ func (r *AccountSlotRegistry) UpdateSlotLabel(harness, slotID, label string) err
 		r.mu.Unlock()
 		return ErrAccountSlotNotFound
 	}
-	err := r.writeLocked(next)
+	published, err := r.writeLocked(next)
 	cb := r.onChange
 	r.mu.Unlock()
-	if err == nil && cb != nil {
+	if published && cb != nil {
 		cb()
 	}
 	return err

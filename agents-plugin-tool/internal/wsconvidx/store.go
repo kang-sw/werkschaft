@@ -525,6 +525,8 @@ type SessionStat struct {
 func (s *Store) SessionStats(ctx context.Context, sessionIDs []string) (map[string]SessionStat, error) {
 	out := map[string]SessionStat{}
 	err := s.read(ctx, func(db *sql.DB) error {
+		// s.read may retry the closure; drop rows from a failed attempt.
+		clear(out)
 		var rows *sql.Rows
 		var qerr error
 		if len(sessionIDs) == 0 {
