@@ -37,8 +37,11 @@
   // ============================================================================
 
   const DEG = Math.PI / 180;
+  const BASE_FOV = 26;
   const LOGICAL_W = 240;
   const LOGICAL_H = 280;
+  const ROAM_AABB_PADDING = 32;
+  const DEFAULT_BLEED_PADDING = Object.freeze({ top: 48, right: 48, bottom: 24, left: 24 });
 
   const VRM_EXPRESSIONS = Object.freeze({
     idle: {},
@@ -497,12 +500,23 @@
     let mounted = false, disposed = false, paused = false, contextLost = false;
     let container = null, canvasWrap = null, canvas = null, dissolveGrid = null, fxCanvas = null, fxCtx = null, overlay = null;
     let runtime = null, renderer = null, scene = null, camera = null, vrm = null, coLead = null;
-    let isVrm0 = false, lookTarget = null, headPosVec = null, projHeadVec = null, handPosVec = null, handMidVec = null, projMeshBox = null, projCornerVec = null, mixer = null, activeVrmaAction = null, activeVrmaKey = "";
+    let isVrm0 = false, lookTarget = null, headPosVec = null, projHeadVec = null, handPosVec = null, handMidVec = null, projMeshBox = null, projCornerVec = null, raycaster = null, rayNdcVec = null, mixer = null, activeVrmaAction = null, activeVrmaKey = "";
     const CHAR_BOUNDS_TTL_MS = 120;
-    const cachedCharBounds = { x: 0, y: 0, width: 0, height: 0 };
+    const cachedCharBounds = { x: 0, y: 0, width: 0, height: 0, viewportX: 0, viewportY: 0 };
     let hasCachedCharBounds = false, charBoundsDirty = true, lastCharBoundsAt = -Infinity;
     let vrmaClips = new Map(), vrmaLoading = new Set(), vrmaFailed = new Set();
     let width = LOGICAL_W, height = LOGICAL_H, dpr = 1;
+    let overlayMode = false;
+    let viewport = { width: LOGICAL_W, height: LOGICAL_H, dpr: 1 };
+    let anchorRect = { left: 0, top: 0, width: LOGICAL_W, height: LOGICAL_H, right: LOGICAL_W, bottom: LOGICAL_H };
+    let renderMode = "docked"; // "docked" | "bleed" | "roam"
+    let bleedPadding = { ...DEFAULT_BLEED_PADDING };
+    let activeScissorRect = { left: 0, top: 0, width: LOGICAL_W, height: LOGICAL_H };
+    let prevScissorRect = null;
+    let needsFullClear = true;
+    let viewportResizeCount = 0, anchorUpdateCount = 0, shrinkClearCount = 0;
+    let lastBotbarH = 0, lastTopbarH = 0;
+    let cachedChromeBounds = null;
     let cachedModel = null; // { key, buffer } retained across WebGL context loss
     let modelFetchPromise = null, loadEpoch = 0;
     let modelFetchCount = 0, framesRendered = 0;
@@ -577,12 +591,121 @@
       handMidVec = null;
       projMeshBox = null;
       projCornerVec = null;
+      raycaster = null;
+      rayNdcVec = null;
+      prevScissorRect = null;
+      needsFullClear = true;
+    }
+
+    function normalizeAnchorRect(rect) {
+      const w = Math.max(1, Number.isFinite(rect?.width) && rect.width > 0 ? rect.width : width);
+      const h = Math.max(1, Number.isFinite(rect?.height) && rect.height > 0 ? rect.height : height);
+      const left = Number.isFinite(rect?.left) ? rect.left : 0;
+      const top = Number.isFinite(rect?.top) ? rect.top : 0;
+      return { left, top, width: w, height: h, right: left + w, bottom: top + h };
+    }
+
+    function refreshChromeBounds() {
+      const b = C.vrmOverlayMath.readChromeBounds(container, overlayMode, viewport, width, height);
+      lastTopbarH = b.topbarH;
+      lastBotbarH = b.botbarH;
+      cachedChromeBounds = b;
+      return b;
+    }
+
+    function readChromeBounds() {
+      if (cachedChromeBounds &&
+          cachedChromeBounds.vw === Math.max(1, Math.round(overlayMode ? viewport.width : width)) &&
+          cachedChromeBounds.vh === Math.max(1, Math.round(overlayMode ? viewport.height : height))) {
+        return cachedChromeBounds;
+      }
+      return refreshChromeBounds();
+    }
+
+    function syncSlotStyleVars() {
+      if (!container) return;
+      container.dataset.renderMode = renderMode;
+      container.dataset.overlay = overlayMode ? "1" : "0";
+      const style = container.style;
+      if (!style || typeof style.setProperty !== "function") return;
+      const slotL = Math.round(anchorRect.left);
+      const slotT = Math.round(anchorRect.top);
+      const slotW = Math.max(1, Math.round(anchorRect.width));
+      const slotH = Math.max(1, Math.round(anchorRect.height));
+      // Subtle 7% bottom-rim fade in docked mode only (never dissolves laptop/phone).
+      const rimPct = Math.min(8, Math.max(6, Math.round((Math.max(10, Math.round(slotH * 0.07)) / slotH) * 100)));
+      const fadeStartPct = 100 - rimPct;
+      const fadeMidPct = Math.round(fadeStartPct + rimPct * 0.55);
+      style.setProperty("--vrm-slot-left", slotL + "px");
+      style.setProperty("--vrm-slot-top", slotT + "px");
+      style.setProperty("--vrm-slot-width", slotW + "px");
+      style.setProperty("--vrm-slot-height", slotH + "px");
+      style.setProperty("--vrm-fade-start", fadeStartPct + "%");
+      style.setProperty("--vrm-fade-mid", fadeMidPct + "%");
+      style.setProperty("--vrm-fade-end", "100%");
+    }
+
+    function applyAsymmetricProjection(rect) {
+      if (!camera) return null;
+      const f = C.vrmOverlayMath.computeAsymmetricFrustum(anchorRect, rect, camera.near || 0.08, camera.far || 25, BASE_FOV);
+      camera.fov = BASE_FOV;
+      camera.aspect = Math.max(0.45, anchorRect.width / Math.max(1, anchorRect.height));
+      if (camera.projectionMatrix && typeof camera.projectionMatrix.makePerspective === "function") {
+        camera.projectionMatrix.makePerspective(f.left, f.right, f.top, f.bottom, f.near, f.far);
+        if (camera.projectionMatrixInverse && typeof camera.projectionMatrixInverse.copy === "function") {
+          camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+        }
+      } else if (typeof camera.updateProjectionMatrix === "function") {
+        camera.updateProjectionMatrix();
+      }
+      return f;
+    }
+
+    function applyCanonicalSlotProjection() {
+      if (!camera) return;
+      camera.fov = BASE_FOV;
+      camera.aspect = Math.max(0.45, anchorRect.width / Math.max(1, anchorRect.height));
+      if (typeof camera.updateProjectionMatrix === "function") camera.updateProjectionMatrix();
+    }
+
+    function computeActiveScissorRect() {
+      const bounds = readChromeBounds();
+      if (!overlayMode) {
+        return { rect: { left: 0, top: 0, width: bounds.vw, height: bounds.vh }, bounds };
+      }
+      const { clampRectToChrome, projectRootsToViewportRect } = C.vrmOverlayMath;
+      if (renderMode === "bleed") {
+        return {
+          rect: clampRectToChrome({
+            left: anchorRect.left - bleedPadding.left,
+            top: anchorRect.top - bleedPadding.top,
+            width: anchorRect.width + bleedPadding.left + bleedPadding.right,
+            height: anchorRect.height + bleedPadding.top + bleedPadding.bottom
+          }, bounds),
+          bounds
+        };
+      }
+      if (renderMode === "roam") {
+        const roots = [];
+        if (vrm?.scene) roots.push(vrm.scene);
+        const props = coLead?.getPropObjects?.();
+        if (Array.isArray(props)) for (const p of props) if (p) roots.push(p);
+        const union = projectRootsToViewportRect(roots, bounds, camera, projMeshBox, projCornerVec, applyAsymmetricProjection, ROAM_AABB_PADDING);
+        const fallback = {
+          left: anchorRect.left - ROAM_AABB_PADDING,
+          top: anchorRect.top - ROAM_AABB_PADDING,
+          width: anchorRect.width + ROAM_AABB_PADDING * 2,
+          height: anchorRect.height + ROAM_AABB_PADDING * 2
+        };
+        return { rect: clampRectToChrome(union || fallback, bounds), bounds };
+      }
+      return { rect: clampRectToChrome(anchorRect, bounds), bounds };
     }
 
     function initSceneAndRenderer(rt) {
       const { THREE } = rt;
       scene = new THREE.Scene();
-      camera = new THREE.PerspectiveCamera(26, width / Math.max(1, height), 0.08, 25);
+      camera = new THREE.PerspectiveCamera(BASE_FOV, anchorRect.width / Math.max(1, anchorRect.height), 0.08, 25);
       camera.position.set(0, 1.38, 1.85);
       lookTarget = new THREE.Object3D();
       headPosVec = new THREE.Vector3();
@@ -591,6 +714,8 @@
       handMidVec = new THREE.Vector3();
       projMeshBox = typeof THREE.Box3 === "function" ? new THREE.Box3() : null;
       projCornerVec = typeof THREE.Vector3 === "function" ? new THREE.Vector3() : null;
+      raycaster = typeof THREE.Raycaster === "function" ? new THREE.Raycaster() : null;
+      rayNdcVec = typeof THREE.Vector2 === "function" ? new THREE.Vector2() : null;
       scene.add(lookTarget);
 
       renderer = new THREE.WebGLRenderer({
@@ -615,6 +740,7 @@
 
       if (typeof C.createVrmCoLead === "function") {
         coLead = C.createVrmCoLead({ THREE, scene, camera });
+        coLead.setBreakoutState?.(renderMode);
         if (pendingInitialRid) coLead.syncInitialSession(pendingInitialRid);
         if (pendingSessionSwitch) {
           coLead.onSessionSwitch(pendingSessionSwitch.rid, pendingSessionSwitch.meta);
@@ -627,14 +753,15 @@
         if (pendingGesture) { coLead.triggerGesture(pendingGesture); pendingGesture = ""; }
       }
 
-      applyResize();
+      applyViewportResize(true);
     }
 
     function syncFxCanvasSize() {
       if (!fxCanvas) return;
-      const clampedDpr = Math.min(Math.max(dpr || 1, 1), 2);
-      const w = Math.max(64, Math.round(width));
-      const h = Math.max(64, Math.round(height));
+      const activeDpr = overlayMode ? viewport.dpr : dpr;
+      const clampedDpr = Math.min(Math.max(activeDpr || 1, 1), 2);
+      const w = Math.max(64, Math.round(overlayMode ? viewport.width : width));
+      const h = Math.max(64, Math.round(overlayMode ? viewport.height : height));
       const pxW = Math.round(w * clampedDpr);
       const pxH = Math.round(h * clampedDpr);
       if (fxCanvas.width !== pxW || fxCanvas.height !== pxH) {
@@ -643,16 +770,21 @@
       }
     }
 
-    function applyResize() {
+    function applyViewportResize(force = false) {
       syncFxCanvasSize();
+      syncSlotStyleVars();
+      refreshChromeBounds();
       if (!renderer || !camera) return;
-      const clampedDpr = Math.min(Math.max(dpr || 1, 1), 2);
-      const w = Math.max(64, Math.round(width));
-      const h = Math.max(64, Math.round(height));
+      const activeDpr = overlayMode ? viewport.dpr : dpr;
+      const clampedDpr = Math.min(Math.max(activeDpr || 1, 1), 2);
+      const w = Math.max(64, Math.round(overlayMode ? viewport.width : width));
+      const h = Math.max(64, Math.round(overlayMode ? viewport.height : height));
       renderer.setPixelRatio(clampedDpr);
       renderer.setSize(w, h, false);
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
+      viewportResizeCount++;
+      prevScissorRect = null;
+      needsFullClear = true;
+      applyCanonicalSlotProjection();
     }
 
     function applyImmediateStandPose(loadedVrm, vrm0Flag) {
@@ -764,8 +896,10 @@
       const headroomRatio = 0.12;
       const visibleBustSpan = Math.max(bustSpan * 2.1, topY - waistY);
       const minFrameForHeight = visibleBustSpan / (1 - headroomRatio);
-      const aspect = Math.max(0.45, camera.aspect || (width / Math.max(1, height)));
-      const minFrameForWidth = upperWidth / aspect;
+      const slotAspect = Math.max(0.45, anchorRect.width / Math.max(1, anchorRect.height));
+      camera.fov = BASE_FOV;
+      camera.aspect = slotAspect;
+      const minFrameForWidth = upperWidth / slotAspect;
       const frameHeight = Math.max(minFrameForHeight, minFrameForWidth);
       const frameTopY = topY + frameHeight * headroomRatio;
       const frameBottomY = frameTopY - frameHeight;
@@ -937,9 +1071,13 @@
       syncFxCanvasSize();
       if (fxCanvas.hidden) fxCanvas.hidden = false;
 
-      const clampedDpr = Math.min(Math.max(dpr || 1, 1), 2);
-      const w = Math.max(64, Math.round(width));
-      const h = Math.max(64, Math.round(height));
+      const activeDpr = overlayMode ? viewport.dpr : dpr;
+      const clampedDpr = Math.min(Math.max(activeDpr || 1, 1), 2);
+      const R = activeScissorRect || { left: 0, top: 0, width: Math.max(64, Math.round(width)), height: Math.max(64, Math.round(height)) };
+      const fullW = Math.max(64, Math.round(overlayMode ? viewport.width : width));
+      const fullH = Math.max(64, Math.round(overlayMode ? viewport.height : height));
+      const w = Math.max(64, Math.round(R.width));
+      const h = Math.max(64, Math.round(R.height));
       let headX = w * 0.5;
       let headY = h * 0.42;
       let headRadius = Math.min(w, h) * 0.19;
@@ -950,7 +1088,6 @@
         const bustSpan = Math.max(0.18, cameraFraming.bustSpan || 0.27);
         projHeadVec.set(cameraFraming.centerX || 0, cameraFraming.headY || 1.45, cameraFraming.headZ || 0);
         if (headNode) headNode.getWorldPosition(headPosVec ? (headPosVec.copy(projHeadVec), projHeadVec) : projHeadVec);
-        // Aim near upper face / temple level (slightly above neck-to-head pivot).
         projHeadVec.y += bustSpan * 0.24;
         const worldY = projHeadVec.y;
         const worldX = projHeadVec.x;
@@ -960,14 +1097,12 @@
           headX = (projHeadVec.x * 0.5 + 0.5) * w;
           headY = (-projHeadVec.y * 0.5 + 0.5) * h;
         }
-        // Estimate projected head radius in CSS px for proportionate halo & spiral sizing.
         projHeadVec.set(worldX, worldY + bustSpan * 0.42, worldZ).project(camera);
         if (Number.isFinite(projHeadVec.y)) {
           const topPx = (-projHeadVec.y * 0.5 + 0.5) * h;
           const est = Math.abs(headY - topPx);
           if (Number.isFinite(est) && est > 12) headRadius = est;
         }
-        // Project crown top (using Box3 hair/ear topY when available) so orbiting stars float cleanly above hair!
         const crownWorldY = Math.max(worldY + bustSpan * 0.58, (cameraFraming.topY || 0) - bustSpan * 0.08);
         projHeadVec.set(worldX, crownWorldY, worldZ).project(camera);
         if (Number.isFinite(projHeadVec.y)) {
@@ -976,7 +1111,11 @@
       }
 
       fxCtx.setTransform?.(clampedDpr, 0, 0, clampedDpr, 0, 0);
-      fxCtx.clearRect?.(0, 0, w, h);
+      fxCtx.clearRect?.(0, 0, fullW, fullH);
+      fxCtx.save?.();
+      if (overlayMode && (R.left || R.top)) {
+        fxCtx.translate?.(R.left, R.top);
+      }
       if (hasDizzy) {
         C.vrmDizzyFx.drawDizzyFx(fxCtx, {
           width: w,
@@ -986,7 +1125,8 @@
           headRadius,
           crownY,
           alpha: dizzyAlpha,
-          time: Number.isFinite(coState.dizzyTime) ? coState.dizzyTime : elapsed
+          time: Number.isFinite(coState.dizzyTime) ? coState.dizzyTime : elapsed,
+          skipClear: overlayMode
         });
       }
       if (hasAction) {
@@ -1002,6 +1142,7 @@
           time: elapsed
         });
       }
+      fxCtx.restore?.();
     }
 
     function readDocRid() {
@@ -1170,14 +1311,37 @@
           coLead.syncPhoneToHand(handPosVec);
         }
       }
+      const { rect: R, bounds } = computeActiveScissorRect();
+      activeScissorRect = R;
+      if (overlayMode) {
+        if (needsFullClear) {
+          renderer.setScissorTest?.(false);
+          renderer.setViewport?.(0, 0, bounds.vw, bounds.vh);
+          renderer.clear?.(true, true, true);
+          needsFullClear = false;
+        } else if (prevScissorRect && !C.vrmOverlayMath.rectContains(R, prevScissorRect)) {
+          const pvy = Math.max(0, bounds.vh - (prevScissorRect.top + prevScissorRect.height));
+          renderer.setScissorTest?.(true);
+          renderer.setScissor?.(prevScissorRect.left, pvy, prevScissorRect.width, prevScissorRect.height);
+          renderer.setViewport?.(prevScissorRect.left, pvy, prevScissorRect.width, prevScissorRect.height);
+          renderer.clear?.(true, true, true);
+          shrinkClearCount++;
+        }
+        const rvy = Math.max(0, bounds.vh - (R.top + R.height));
+        renderer.setScissorTest?.(true);
+        renderer.setScissor?.(R.left, rvy, R.width, R.height);
+        renderer.setViewport?.(R.left, rvy, R.width, R.height);
+        applyAsymmetricProjection(R);
+        prevScissorRect = { left: R.left, top: R.top, width: R.width, height: R.height };
+      }
       renderer.render(scene, camera);
-      if (charBoundsDirty) updateCharacterBounds(performance.now());
+      if (charBoundsDirty || renderMode === "roam") updateCharacterBounds(performance.now());
       renderDizzyFxOverlay(coState);
       framesRendered++;
     }
 
     // Project posed vrm.scene character meshes ONLY (laptopGroup and phoneGroup live
-    // directly under scene, never vrm.scene) into canvas CSS pixels [0..w, 0..h].
+    // directly under scene, never vrm.scene) into active viewport rect R.
     function updateCharacterBounds(nowMs) {
       lastCharBoundsAt = nowMs;
       charBoundsDirty = false;
@@ -1185,12 +1349,14 @@
         hasCachedCharBounds = false;
         return false;
       }
-      const w = Math.max(64, Math.round(width));
-      const h = Math.max(64, Math.round(height));
+      const R = activeScissorRect || { left: 0, top: 0, width: Math.max(64, Math.round(width)), height: Math.max(64, Math.round(height)) };
+      const w = Math.max(1, Math.round(R.width));
+      const h = Math.max(1, Math.round(R.height));
       if (w <= 0 || h <= 0) {
         hasCachedCharBounds = false;
         return false;
       }
+      if (overlayMode) applyAsymmetricProjection(R);
       vrm.scene.updateMatrixWorld?.(true);
       camera.updateMatrixWorld?.();
 
@@ -1262,8 +1428,12 @@
         hasCachedCharBounds = false;
         return false;
       }
-      cachedCharBounds.x = x1;
-      cachedCharBounds.y = y1;
+      const vpX = R.left + x1;
+      const vpY = R.top + y1;
+      cachedCharBounds.viewportX = vpX;
+      cachedCharBounds.viewportY = vpY;
+      cachedCharBounds.x = overlayMode ? Math.round(vpX - anchorRect.left) : x1;
+      cachedCharBounds.y = overlayMode ? Math.round(vpY - anchorRect.top) : y1;
       cachedCharBounds.width = x2 - x1;
       cachedCharBounds.height = y2 - y1;
       hasCachedCharBounds = true;
@@ -1277,17 +1447,73 @@
         updateCharacterBounds(nowMs);
       }
       return hasCachedCharBounds
-        ? { x: cachedCharBounds.x, y: cachedCharBounds.y, width: cachedCharBounds.width, height: cachedCharBounds.height }
+        ? {
+            x: cachedCharBounds.x,
+            y: cachedCharBounds.y,
+            width: cachedCharBounds.width,
+            height: cachedCharBounds.height,
+            viewportX: cachedCharBounds.viewportX,
+            viewportY: cachedCharBounds.viewportY
+          }
         : null;
+    }
+
+    function raycastAt(clientX, clientY) {
+      if (disposed || !vrm?.scene || !camera || !Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+        return { hit: false, area: "none", clientX, clientY };
+      }
+      const R = activeScissorRect || anchorRect;
+      if (clientX < R.left || clientX > R.left + R.width || clientY < R.top || clientY > R.top + R.height) {
+        return { hit: false, area: "outside", clientX, clientY };
+      }
+      if (raycaster && rayNdcVec && typeof raycaster.setFromCamera === "function" && typeof raycaster.intersectObject === "function") {
+        if (overlayMode) applyAsymmetricProjection(R);
+        vrm.scene.updateMatrixWorld?.(true);
+        camera.updateMatrixWorld?.();
+        const ndcX = ((clientX - R.left) / Math.max(1, R.width)) * 2 - 1;
+        const ndcY = -(((clientY - R.top) / Math.max(1, R.height)) * 2 - 1);
+        rayNdcVec.set(ndcX, ndcY);
+        raycaster.setFromCamera(rayNdcVec, camera);
+        const hits = raycaster.intersectObject(vrm.scene, true);
+        if (Array.isArray(hits) && hits.length > 0) {
+          return { hit: true, area: "character", distance: hits[0].distance ?? 0, objectName: hits[0].object?.name || "", clientX, clientY };
+        }
+        return { hit: false, area: "messenger", clientX, clientY };
+      }
+      const bounds = getCharacterBounds();
+      if (bounds) {
+        const inside = clientX >= bounds.viewportX && clientX <= bounds.viewportX + bounds.width &&
+          clientY >= bounds.viewportY && clientY <= bounds.viewportY + bounds.height;
+        return { hit: inside, area: inside ? "character" : "messenger", clientX, clientY };
+      }
+      return { hit: false, area: "messenger", clientX, clientY };
     }
 
     async function mount(targetContainer, mountOptions = {}) {
       if (disposed || mounted) return;
       mounted = true;
       container = targetContainer;
-      if (Number.isFinite(mountOptions.width)) width = mountOptions.width;
-      if (Number.isFinite(mountOptions.height)) height = mountOptions.height;
-      if (Number.isFinite(mountOptions.dpr)) dpr = mountOptions.dpr;
+      if (mountOptions.viewport && Number.isFinite(mountOptions.viewport.width) && Number.isFinite(mountOptions.viewport.height)) {
+        overlayMode = true;
+        viewport = {
+          width: Math.max(64, Math.round(mountOptions.viewport.width)),
+          height: Math.max(64, Math.round(mountOptions.viewport.height)),
+          dpr: Math.min(Math.max(Number.isFinite(mountOptions.viewport.dpr) ? mountOptions.viewport.dpr : (mountOptions.dpr || 1), 1), 2)
+        };
+        dpr = viewport.dpr;
+        anchorRect = normalizeAnchorRect(mountOptions.anchorRect || { left: 0, top: 0, width: mountOptions.width, height: mountOptions.height });
+        width = anchorRect.width;
+        height = anchorRect.height;
+      } else {
+        overlayMode = false;
+        if (Number.isFinite(mountOptions.width)) width = mountOptions.width;
+        if (Number.isFinite(mountOptions.height)) height = mountOptions.height;
+        if (Number.isFinite(mountOptions.dpr)) dpr = mountOptions.dpr;
+        viewport = { width, height, dpr: Math.min(Math.max(dpr || 1, 1), 2) };
+        anchorRect = normalizeAnchorRect({ left: 0, top: 0, width, height });
+      }
+      activeScissorRect = { left: anchorRect.left, top: anchorRect.top, width: anchorRect.width, height: anchorRect.height };
+      syncSlotStyleVars();
 
       const doc = container.ownerDocument || document;
       canvasWrap = doc.createElement("div");
@@ -1496,12 +1722,110 @@
         pendingPhoneState = snap || null;
         return coLead ? coLead.setPhoneState(snap) : null;
       },
+      setViewport(vw, vh, nextDpr) {
+        const nextW = Number.isFinite(vw) && vw > 0 ? Math.max(64, Math.round(vw)) : viewport.width;
+        const nextH = Number.isFinite(vh) && vh > 0 ? Math.max(64, Math.round(vh)) : viewport.height;
+        const clampedDpr = Number.isFinite(nextDpr) && nextDpr > 0 ? Math.min(Math.max(nextDpr, 1), 2) : viewport.dpr;
+        const changed = !overlayMode || nextW !== viewport.width || nextH !== viewport.height || clampedDpr !== viewport.dpr;
+        overlayMode = true;
+        viewport = { width: nextW, height: nextH, dpr: clampedDpr };
+        dpr = clampedDpr;
+        if (changed) {
+          applyViewportResize();
+          charBoundsDirty = true;
+          lastCharBoundsAt = -Infinity;
+        }
+        return changed;
+      },
+      setAnchorRect(rect) {
+        if (!rect || !Number.isFinite(rect.width) || !Number.isFinite(rect.height) || rect.width <= 0 || rect.height <= 0) {
+          return false;
+        }
+        const prevAspect = anchorRect.width / Math.max(1, anchorRect.height);
+        const next = normalizeAnchorRect(rect);
+        const changed = Math.abs(next.left - anchorRect.left) > 0.5 ||
+          Math.abs(next.top - anchorRect.top) > 0.5 ||
+          Math.abs(next.width - anchorRect.width) > 0.5 ||
+          Math.abs(next.height - anchorRect.height) > 0.5;
+        anchorRect = next;
+        width = next.width;
+        height = next.height;
+        syncSlotStyleVars();
+        refreshChromeBounds();
+        if (changed) {
+          anchorUpdateCount++;
+          const nextAspect = anchorRect.width / Math.max(1, anchorRect.height);
+          if (vrm && Math.abs(nextAspect - prevAspect) > 0.01) {
+            autoFrameBust(vrm);
+          } else if (vrm && coLead) {
+            applyCanonicalSlotProjection();
+            coLead.layoutProp(cameraFraming, camera);
+          }
+          charBoundsDirty = true;
+          lastCharBoundsAt = -Infinity;
+        }
+        return changed;
+      },
+      setRenderMode(mode) {
+        const next = mode === "bleed" || mode === "roam" ? mode : "docked";
+        if (renderMode === next) return renderMode;
+        renderMode = next;
+        syncSlotStyleVars();
+        refreshChromeBounds();
+        coLead?.setBreakoutState?.(renderMode);
+        charBoundsDirty = true;
+        lastCharBoundsAt = -Infinity;
+        return renderMode;
+      },
+      setBleedPadding(pad) {
+        if (typeof pad === "number" && Number.isFinite(pad)) {
+          const v = Math.max(0, Math.round(pad));
+          bleedPadding = { top: v, right: v, bottom: v, left: v };
+        } else if (pad && typeof pad === "object") {
+          bleedPadding = {
+            top: Number.isFinite(pad.top) ? Math.max(0, Math.round(pad.top)) : bleedPadding.top,
+            right: Number.isFinite(pad.right) ? Math.max(0, Math.round(pad.right)) : bleedPadding.right,
+            bottom: Number.isFinite(pad.bottom) ? Math.max(0, Math.round(pad.bottom)) : bleedPadding.bottom,
+            left: Number.isFinite(pad.left) ? Math.max(0, Math.round(pad.left)) : bleedPadding.left
+          };
+        }
+        return { ...bleedPadding };
+      },
+      getRenderMetrics() {
+        return {
+          overlayMode,
+          mode: renderMode,
+          viewport: { ...viewport },
+          anchorRect: { ...anchorRect },
+          scissorRect: { ...activeScissorRect },
+          prevScissorRect: prevScissorRect ? { ...prevScissorRect } : null,
+          bleedPadding: { ...bleedPadding },
+          viewportResizeCount,
+          anchorUpdateCount,
+          shrinkClearCount,
+          topbarHeight: lastTopbarH,
+          botbarHeight: lastBotbarH
+        };
+      },
+      raycastAt,
       resize(w, h, nextDpr) {
+        if (overlayMode) {
+          if (Number.isFinite(nextDpr) && nextDpr > 0 && Math.min(Math.max(nextDpr, 1), 2) !== viewport.dpr) {
+            rigApi.setViewport(viewport.width, viewport.height, nextDpr);
+          }
+          if (Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0) {
+            rigApi.setAnchorRect({ left: anchorRect.left, top: anchorRect.top, width: w, height: h });
+          }
+          return;
+        }
         const prevAspect = width / Math.max(1, height);
         if (Number.isFinite(w) && w > 0) width = w;
         if (Number.isFinite(h) && h > 0) height = h;
         if (Number.isFinite(nextDpr) && nextDpr > 0) dpr = nextDpr;
-        applyResize();
+        viewport = { width, height, dpr: Math.min(Math.max(dpr || 1, 1), 2) };
+        anchorRect = normalizeAnchorRect({ left: 0, top: 0, width, height });
+        activeScissorRect = { left: 0, top: 0, width: anchorRect.width, height: anchorRect.height };
+        applyViewportResize();
         const nextAspect = width / Math.max(1, height);
         if (vrm && Math.abs(nextAspect - prevAspect) > 0.01) autoFrameBust(vrm);
         else if (vrm && coLead) coLead.layoutProp(cameraFraming, camera);
@@ -1529,6 +1853,7 @@
           surprisedStrategy: exprCtrl.surprisedStrategy,
           framing: { ...cameraFraming },
           projectedBounds: getCharacterBounds(),
+          renderMetrics: rigApi.getRenderMetrics(),
           coLead: coLead ? coLead.debugState() : null,
           contextLost,
           paused,
@@ -1572,6 +1897,10 @@
     triggerKnock(opts) { return activeVrmRig?.triggerKnock?.(opts) ?? null; },
     triggerGesture(name) { return activeVrmRig?.triggerGesture?.(name) ?? false; },
     setPhoneState(snap) { return activeVrmRig?.setPhoneState?.(snap) ?? null; },
+    setVrmRenderMode(mode) { return activeVrmRig?.setRenderMode?.(mode) ?? "docked"; },
+    setVrmBleedPadding(pad) { return activeVrmRig?.setBleedPadding?.(pad) ?? null; },
+    getVrmRenderMetrics() { return activeVrmRig?.getRenderMetrics?.() ?? null; },
+    raycastVrmAt(x, y) { return activeVrmRig?.raycastAt?.(x, y) ?? null; },
     VrmExpressionController,
     resolveVrmScenario: resolveScenario,
     vrmMath: { conjugateVrm0Euler, conjugateVrm0Quat }

@@ -15,7 +15,7 @@ function loadCompanion(globals = {}) {
     ...globals
   });
   context.window = context.window || {};
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-colead", "vrm", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-fx", "vrm-props", "vrm-pose", "vrm-colead", "vrm", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return { C: context.window.WsCompanion, context };
@@ -1779,4 +1779,141 @@ test("Step 3: 2D anime dizzy FX layout clamps safely inside rail bounds and draw
     assert.equal(fxCanvas.hidden, true, `VRM ${metaVer}: returning to typing must hide .ws-companion-vrm-fx canvas`);
     rig.dispose();
   }
+});
+
+test("Phase 1 overlay: modular contracts, pixel-continuous asymmetric frustum, zero-resize anchor updates, shrink-clear, and raycastAt", async () => {
+  const { C } = loadCompanion();
+  assert.equal(typeof C.vrmDizzyFx?.drawDizzyFx, "function", "vrm-fx module exported");
+  assert.equal(typeof C.vrmOverlayMath?.computeAsymmetricFrustum, "function", "vrmOverlayMath exported");
+  assert.equal(typeof C.vrmCoLeadProps?.createCoLeadProps, "function", "vrm-props module exported");
+  assert.equal(typeof C.vrmCoLeadPose?.computeCoLeadTargets, "function", "vrm-pose module exported");
+  assert.equal(typeof C.createVrmCoLead, "function", "vrm-colead module exported");
+  assert.equal(typeof C.vrmCoLeadMath?.computeCoLeadTargets, "function", "vrmCoLeadMath preserved");
+
+  // 1. Pixel-continuity theorem: a 3D view-space point projects to the exact same viewport pixel
+  //    whether rendered in docked, bleed, or full-viewport roam frustums.
+  const anchor = { left: 0, top: 694, width: 280, height: 240 };
+  const rects = [
+    anchor,
+    { left: 0, top: 646, width: 328, height: 288 },
+    { left: 0, top: 36, width: 1680, height: 898 }
+  ];
+  const vx = 0.08, vy = -0.05, vz = -1.85;
+  const projectedPixels = rects.map(r => {
+    const f = C.vrmOverlayMath.computeAsymmetricFrustum(anchor, r, 0.08, 25, 26);
+    const ndcX = (2 * f.near * vx / (-vz) - (f.right + f.left)) / (f.right - f.left);
+    const ndcY = (2 * f.near * vy / (-vz) - (f.top + f.bottom)) / (f.top - f.bottom);
+    return {
+      x: r.left + (ndcX * 0.5 + 0.5) * r.width,
+      y: r.top + (-ndcY * 0.5 + 0.5) * r.height
+    };
+  });
+  for (let i = 1; i < projectedPixels.length; i++) {
+    assert.ok(Math.abs(projectedPixels[i].x - projectedPixels[0].x) < 1e-9, `pixel X drifted for rect ${i}`);
+    assert.ok(Math.abs(projectedPixels[i].y - projectedPixels[0].y) < 1e-9, `pixel Y drifted for rect ${i}`);
+  }
+
+  // 2. Zero-resize backing store + 3-mode scissor + shrink-clear + .shell-bottom clamp + raycastAt.
+  let setSizeCalls = 0;
+  const scissorCalls = [];
+  const clearCalls = [];
+  const fakeThree = makeFakeVrmRuntime("1");
+  const OrigRenderer = fakeThree.runtime.THREE.WebGLRenderer;
+  fakeThree.runtime.THREE.WebGLRenderer = class extends OrigRenderer {
+    setSize(w, h, updateStyle) { setSizeCalls++; super.setSize(w, h, updateStyle); }
+    setScissorTest(flag) { this._scissorTest = !!flag; }
+    setScissor(x, y, w, h) { scissorCalls.push({ x, y, w, h }); this._lastScissor = { x, y, w, h }; }
+    setViewport(x, y, w, h) { this._lastViewport = { x, y, w, h }; }
+    clear() { clearCalls.push(this._lastScissor ? { ...this._lastScissor, test: this._scissorTest } : { full: true }); }
+  };
+  fakeThree.runtime.THREE.Vector2 = class { constructor(x = 0, y = 0) { this.x = x; this.y = y; } set(x, y) { this.x = x; this.y = y; return this; } };
+  fakeThree.runtime.THREE.Raycaster = class {
+    setFromCamera(ndc) { this._ndc = { x: ndc.x, y: ndc.y }; }
+    intersectObject() {
+      return Math.abs(this._ndc.x) < 0.35 && Math.abs(this._ndc.y) < 0.35
+        ? [{ distance: 1.5, object: { name: "body" } }]
+        : [];
+    }
+  };
+  const OrigCam = fakeThree.runtime.THREE.PerspectiveCamera;
+  fakeThree.runtime.THREE.PerspectiveCamera = class extends OrigCam {
+    constructor(fov, aspect, near, far) {
+      super(fov, aspect, near, far);
+      this.projectionMatrix = { makePerspective(l, r, t, b, n, f) { this.frustum = { l, r, t, b, n, f }; return this; } };
+      this.projectionMatrixInverse = { copy() { return this; }, invert() { return this; } };
+    }
+  };
+
+  const botBar = { getBoundingClientRect: () => ({ left: 0, top: 934, width: 1680, height: 26 }) };
+  const topBar = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 1680, height: 36 }) };
+  const doc = {
+    documentElement: { dataset: { rid: "s1" }, getAttribute: () => "s1" },
+    createElement: tag => makeFakeElement(tag, doc),
+    querySelector: sel => sel === ".shell-bottom" ? botBar : (sel.includes(".top") ? topBar : null),
+    addEventListener() {}
+  };
+  const { C: C2 } = loadCompanion({
+    document: doc,
+    window: { innerWidth: 1680, innerHeight: 960, devicePixelRatio: 2, addEventListener() {} },
+    fetch: async () => ({ ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer })
+  });
+  C2.vrmRuntimeLoader = async () => fakeThree.runtime;
+
+  const container = makeFakeElement("div", doc);
+  const rig = C2.makeVrmRig({ id: "vrm-overlay-1", rev: "r1", renderer: "vrm", modelFile: "a.vrm", manifest: {}, expressionMap: {}, animations: {} });
+  await rig.mount(container, {
+    width: 280, height: 240, dpr: 2,
+    viewport: { width: 1680, height: 960, dpr: 2 },
+    anchorRect: { left: 0, top: 694, width: 280, height: 240 }
+  });
+  const initialSetSize = setSizeCalls;
+  assert.equal(rig.getRenderMetrics().viewportResizeCount, 1);
+
+  // Rail width drags (220px -> 360px -> 280px) must trigger ZERO renderer.setSize calls!
+  for (const w of [220, 360, 280]) {
+    rig.setAnchorRect({ left: 0, top: 694, width: w, height: 240 });
+    rig.view("stand", null, "idle", []).render(0.05, { x: 0, y: 0 }, null, {});
+  }
+  assert.equal(setSizeCalls, initialSetSize, "rail width drags must never reallocate WebGL backing store");
+  assert.equal(rig.getRenderMetrics().viewportResizeCount, 1);
+  assert.ok(rig.getRenderMetrics().anchorUpdateCount >= 3);
+
+  // docked -> bleed (clamped above .shell-bottom at 934px) -> roam -> docked (triggers shrink-clear!).
+  rig.setRenderMode("bleed");
+  rig.setBleedPadding({ top: 48, right: 48, bottom: 48, left: 24 });
+  rig.view("stand", null, "idle", []).render(0.10, { x: 0, y: 0 }, null, {});
+  const bleedMetrics = rig.getRenderMetrics();
+  assert.equal(bleedMetrics.mode, "bleed");
+  assert.equal(container.dataset.renderMode, "bleed");
+  assert.ok(bleedMetrics.scissorRect.top + bleedMetrics.scissorRect.height <= 960 - 26,
+    `bleed scissor bottom must clamp above .shell-bottom: ${JSON.stringify(bleedMetrics.scissorRect)}`);
+  assert.equal(bleedMetrics.scissorRect.width, 280 + 48);
+  assert.equal(rig.getCoLeadState().breakoutActive, true);
+
+  rig.setRenderMode("roam");
+  rig.view("stand", null, "idle", []).render(0.15, { x: 0, y: 0 }, null, {});
+  assert.equal(rig.getRenderMetrics().mode, "roam");
+  assert.ok(rig.getRenderMetrics().scissorRect.top + rig.getRenderMetrics().scissorRect.height <= 934);
+
+  const shrinkBefore = rig.getRenderMetrics().shrinkClearCount;
+  rig.setRenderMode("docked");
+  rig.view("stand", null, "idle", []).render(0.20, { x: 0, y: 0 }, null, {});
+  const dockedMetrics = rig.getRenderMetrics();
+  assert.equal(dockedMetrics.mode, "docked");
+  assert.equal(container.dataset.renderMode, "docked");
+  assert.ok(dockedMetrics.shrinkClearCount > shrinkBefore, "shrinking from roam/bleed back to docked must clear prevR");
+  assert.equal(rig.getCoLeadState().breakoutActive, false);
+
+  // raycastAt hits character center, misses edge, and reports outside beyond active scissor.
+  const centerRay = rig.raycastAt(140, 694 + 120);
+  assert.equal(centerRay.hit, true);
+  assert.equal(centerRay.area, "character");
+  const edgeRay = rig.raycastAt(10, 694 + 10);
+  assert.equal(edgeRay.hit, false);
+  assert.equal(edgeRay.area, "messenger");
+  const outsideRay = rig.raycastAt(900, 200);
+  assert.equal(outsideRay.hit, false);
+  assert.equal(outsideRay.area, "outside");
+
+  rig.dispose();
 });

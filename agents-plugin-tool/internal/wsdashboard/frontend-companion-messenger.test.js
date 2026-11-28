@@ -144,7 +144,7 @@ function loadCompanionWithMessenger(globals = {}) {
   });
   // Keep globalThis aliases consistent with browser window.
   context.globalThis = context;
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-colead", "vrm", "stage", "messenger"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-fx", "vrm-props", "vrm-pose", "vrm-colead", "vrm", "stage", "messenger"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return { C: context.window.WsCompanion, M: context.window.WsCompanionMessenger, context };
