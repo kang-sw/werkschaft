@@ -94,6 +94,23 @@ With `261127-feat-ws-companion-layered-agents-and-naming`, `261128-feat-ws-compa
    - Node unit tests: `node --test agents-plugin-tool/internal/wsdashboard/frontend-companion*.test.js` covering modular contracts, asymmetric frustum pixel continuity, shrink-clear invariant, and `setViewport` vs `setAnchorRect` zero-resize invariants.
    - Playwright browser tests (`TestCompanionVrm*`, with local `WS_VRM0_SAMPLE` & `WS_VRM1_SAMPLE` when present) verifying zero WebGL resize/context-loss across rail drags (`220px <-> 360px`), `.rail-splitter` hit-testability at `--rail-w`, `[data-fdim]` inertness, `docked -> bleed -> roam -> docked` zero-ghost-pixel transitions, and `.shell-bottom` clamping.
 
+### Result (a22f84d75) - 2026-11-28
+
+- **Commits on `impl/develop/companion-visual-polish-1769`:**
+  - `c06095ff6` — Ticket creation & `ready/` promotion (Sage design + completeness reviews passed).
+  - `3b6f65734` — Phase 1 implementation: 4-module `colead.js` split (`dashboard-companion-vrm-fx.js` 486L, `dashboard-companion-vrm-props.js` 863L, `dashboard-companion-vrm-pose.js` 510L, `dashboard-companion-vrm-colead.js` 981L), shell fixed transparent WebGL overlay (`.ws-companion-stage-overlay`), `setViewport`/`setAnchorRect` zero-resize backing store, pixel-continuous asymmetric frustum projection, 3-mode scissor (`docked`/`bleed`/`roam`) with shrink-clear invariant and `.shell-bottom` clamping, docked-only subtle bottom-rim mask, Variant D `.rail-splitter` 4px trim, `[data-fdim]` modal inertness, knock FX unclipped ripples, roam hit-box tracking + `raycastAt`, and `60/30/6/0` adaptive FPS tiers.
+  - `a22f84d75` — `code-review-lite` (`claude.medium`) follow-up fixes: strict WebGL `glOps` shrink-clear ordering assertions (`clear(prevR)` before `render(R)`), stage-level unit tests for 4px splitter trim, `60 -> 30 -> 6fps` tier transitions, roam hit-box tracking, and roam `raycastAt` click behavior; lazy `0x0` 2D FX canvas backing store while hidden; single-pass roam primary character bounds reuse; zero-alloc `getRenderMode()`; `.ws-companion-menu` modal-dim inertness; tightened non-vacuous `.rail-splitter` + `elementFromPoint` `[data-fdim]` browser assertions.
+- **Line counts & deviations:**
+  - All 4 modularized Co-Lead files and CSS are cleanly `<1000L` (`vrm-fx.js` 486L, `vrm-props.js` 863L, `vrm-pose.js` 510L, `vrm-colead.js` 981L, `dashboard-companion.css` 372L).
+  - Pre-existing `dashboard-companion-vrm.js` (1,932L) and `dashboard-companion-stage.js` (1,657L) were already over 1,000L prior to Phase 1; `vrmOverlayMath` was placed in `dashboard-companion-vrm-fx.js` to avoid growing `vrm.js` further without adding an extra bundle fragment.
+  - Deferred to Phase 3 (`code-review-lite` minor note): near-plane corner clipping in `projectRootsToViewportRect` (`z < -1 || z > 1`) when a bounding box straddles the camera plane during close-up roam choreography.
+- **Verification:**
+  - `python3 agents-plugin-tool/scripts/generate-package-assets.py --check`: PASS.
+  - `node --test agents-plugin-tool/internal/wsdashboard/frontend-companion*.test.js`: 94/94 PASS (426ms).
+  - `go test -race -count=1 -run 'TestCompanion|TestAssets|TestDevAssets|TestDashboardAssetSourceAssembly' ./internal/wsdashboard`: PASS (97.3s).
+  - `GOOS=windows go vet ./...`: PASS.
+  - Real-VRM 0.x (`6493143135142452442.vrm`) & VRM 1.0 (`AvatarSample_M2.vrm`) Playwright suite (`go test -count=1 -v ./internal/wsdashboard -run '^TestCompanionVrm'`): ALL 6/6 PASS (178.9s) — `TestCompanionVrmAssetBundleAndRoute`, `TestCompanionVrmBrowser` (`activeFps: 27.04`, `idleFps: 5.46`, `hiddenFrames: 0`, `switchCycles: 10`), `TestCompanionVrmRailDockBrowser`, `TestCompanionVrmCoLeadBrowser`, `TestCompanionVrmSwapDizzyBrowser`, `TestCompanionVrmStep4Phase1Browser`.
+
 ### Phase 2: Camera Framing Calibration (`220–360px`), 30-Bone Finger Curls, VRM 0.x/1.0-Invariant Palm Phone Grip, Prop Geometry/Texture Polish & Theme-Adaptive Studio Lighting
 
 1. **Camera framing calibration (`220px–360px`):** Tune `autoFrameBust` and `layoutProp` across narrow (`220px`), default (`280px`), and wide (`360px`) rail widths for both VRM 0.x and VRM 1.0 avatars so `headroomRatio` stays within `10–14%`, head/hair/shoulders stay unclipped horizontally, and laptop top stays within `14–19%` from slot bottom and `>= 20%` below chin.
