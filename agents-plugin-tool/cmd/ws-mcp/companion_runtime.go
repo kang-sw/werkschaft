@@ -233,6 +233,7 @@ func (r *companionRuntime) OnUserWake(reason string) {
 	if _, acquired := phone.AcquireOnWake(bodyKey); !acquired {
 		return
 	}
+	d.CompanionResetBurst(bodyKey)
 	unread := phone.UnreadAgentCount()
 	oldestUnreadID := phone.OldestUnreadID()
 	if unread <= 0 {
@@ -353,15 +354,14 @@ func (r *companionRuntime) handleCompanionTurnEnd(role, replyID, wsKey, status, 
 		if failed {
 			phone.RecordWakeFailure()
 		}
-		// Turn-end failsafe: reset burst counter and release any unclosed
-		// Embodiment Lease (settling to laptop_work if a delegation is in
-		// flight, and triggering unread re-wake if messages remain and not
-		// unavailable). Even when Tier-1 already released its lease cleanly via
-		// phone_putdown before TurnEnd settled, a user message may have arrived
-		// while the turn was running (suppressed to avoid preempting the turn);
-		// trigger an unread re-wake here if unread messages remain and no queued
-		// turn is pending.
-		d.CompanionResetBurst(wsKey)
+		// Turn-end failsafe: CompanionForceRelease resets the burst counter and
+		// releases any unclosed Embodiment Lease (settling to laptop_work if a
+		// delegation is in flight, and triggering unread re-wake if messages
+		// remain and not unavailable). Even when Tier-1 already released its
+		// lease cleanly via phone_putdown before TurnEnd settled, a user message
+		// may have arrived while the turn was running (suppressed to avoid
+		// preempting the turn); trigger an unread re-wake here if unread
+		// messages remain and no queued turn is pending.
 		released := d.CompanionForceRelease(wsKey)
 		if !released && !stillPending && phone.UnreadAgentCount() > 0 && !phone.Snapshot().Unavailable {
 			go r.OnUserWake("release-unread")
@@ -626,7 +626,9 @@ func (r *companionRuntime) deliverReportToBody(delegationID, status, result stri
 	}
 	// Acquire lease in laptop posture when free (does not preempt if Tier-1 is
 	// mid-turn or holding the phone — Runner.Deliver queues behind an active turn).
-	d.CompanionPhone().AcquireOnWake(bodyKey)
+	if _, acquired := d.CompanionPhone().AcquireOnWake(bodyKey); acquired {
+		d.CompanionResetBurst(bodyKey)
+	}
 	wakeCtx := d.BuildCompanionWakeEnvelope(context.Background(), wsdashboard.CompanionWakeEnvelopeInput{
 		Trigger:    "delegation-report",
 		ProjectKey: companionProjectKey(r.launchRoot(d)),

@@ -29,6 +29,7 @@ const (
 
 	companionKnockRoute     = "/api/companion/knock"
 	companionKnockBodyLimit = 4 << 10
+	companionKnockMaxCount  = 99
 
 	companionRecallDefaultLimit = 10
 	companionRecallMaxLimit     = 30
@@ -101,7 +102,15 @@ type companionActWaiter struct {
 type companionActHub struct {
 	mu       sync.Mutex
 	waiters  map[*companionActWaiter]struct{}
+	changed  chan struct{}
 	newTimer func(d time.Duration) (<-chan time.Time, func())
+}
+
+func (h *companionActHub) notifyChangedLocked() {
+	if h.changed != nil {
+		close(h.changed)
+		h.changed = nil
+	}
 }
 
 func (h *companionActHub) register() *companionActWaiter {
@@ -114,6 +123,7 @@ func (h *companionActHub) register() *companionActWaiter {
 		h.waiters = make(map[*companionActWaiter]struct{})
 	}
 	h.waiters[w] = struct{}{}
+	h.notifyChangedLocked()
 	h.mu.Unlock()
 	return w
 }
@@ -124,6 +134,7 @@ func (h *companionActHub) unregister(w *companionActWaiter) {
 	}
 	h.mu.Lock()
 	delete(h.waiters, w)
+	h.notifyChangedLocked()
 	h.mu.Unlock()
 }
 
@@ -156,6 +167,15 @@ func (h *companionActHub) waiterCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.waiters)
+}
+
+func (h *companionActHub) waiterWatch() (int, <-chan struct{}) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.changed == nil {
+		h.changed = make(chan struct{})
+	}
+	return len(h.waiters), h.changed
 }
 
 func (h *companionActHub) startTimer(d time.Duration) (<-chan time.Time, func()) {
@@ -232,6 +252,13 @@ func (d *Daemon) SetCompanionActTimer(fn func(d time.Duration) (<-chan time.Time
 // ws/companion.act calls (for deterministic synchronization in tests).
 func (d *Daemon) CompanionActWaiterCount() int {
 	return d.companionAct.waiterCount()
+}
+
+// CompanionActWaiterWatch returns the current blocked act waiter count along
+// with a channel closed on the next register or unregister transition (for
+// zero-sleep deterministic test synchronization).
+func (d *Daemon) CompanionActWaiterWatch() (int, <-chan struct{}) {
+	return d.companionAct.waiterWatch()
 }
 
 // CompanionConsumeBurstCall records one counted Tier-1 burst tool call for
@@ -543,16 +570,27 @@ func (d *Daemon) registerCompanionKnockRoute(mux *http.ServeMux) {
 	mux.HandleFunc(companionKnockRoute, d.handleCompanionKnock)
 }
 
+func normalizeCompanionKnockKind(kind string) string {
+	switch strings.TrimSpace(kind) {
+	case "annoyed_tap":
+		return "annoyed_tap"
+	case "wakeup_jolt":
+		return "wakeup_jolt"
+	default:
+		return "knock_startle"
+	}
+}
+
 func (d *Daemon) handleCompanionKnock(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "private, no-store")
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	local, own := TrustedWrite(r)
 	if !local {
 		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	if !own {
@@ -571,13 +609,12 @@ func (d *Daemon) handleCompanionKnock(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	kind := strings.TrimSpace(body.Kind)
-	if kind == "" {
-		kind = "knock_startle"
-	}
+	kind := normalizeCompanionKnockKind(body.Kind)
 	count := body.Count
 	if count <= 0 {
 		count = 1
+	} else if count > companionKnockMaxCount {
+		count = companionKnockMaxCount
 	}
 
 	ev := CompanionKnockEvent{
