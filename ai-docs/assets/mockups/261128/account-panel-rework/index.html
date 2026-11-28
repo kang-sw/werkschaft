@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>설정 → 계정 재구성 목업</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<header class="sim" aria-label="목업 컨트롤">
+  <span class="sim-tag">MOCK</span>
+  <div class="sim-group"><span class="sim-lbl">테마</span>
+    <div class="seg2" id="simTheme"><button data-theme="light" aria-pressed="true">Light</button><button data-theme="dark" aria-pressed="false">Dark</button></div></div>
+  <div class="sim-group"><span class="sim-lbl">시나리오</span>
+    <div class="seg2" id="simScn">
+      <button data-scn="multi" aria-pressed="true">다중 계정 (기본)</button>
+      <button data-scn="empty" aria-pressed="false">초기 미설정</button>
+      <button data-scn="flows" aria-pressed="false">OAuth · 디바이스 인증 열림</button></div></div>
+  <span class="grow"></span>
+  <span class="sim-lbl">힌트: 삭제는 1.5초 길게 누르기 · 코드에 “bad” 입력 시 오류 상태</span>
+</header>
+<main class="stage">
+  <div class="shell">
+    <nav class="nav" aria-label="설정">
+      <h2>설정</h2>
+      <div class="lbl">일반</div>
+      <button class="inert" disabled>알림</button>
+      <button class="inert" disabled>에이전트</button>
+      <div class="lbl">계정 · 인증</div>
+      <button id="navAccount" data-section="account" aria-current="page">계정<span class="path">?section=account</span></button>
+      <button id="navVoice" data-section="voice">음성<span class="path">?section=voice</span></button>
+      <div class="lbl">시스템</div>
+      <button class="inert" disabled>정보</button>
+    </nav>
+    <section class="pane" id="pane" aria-live="polite"></section>
+  </div>
+</main>
+<div class="toast" id="toast" hidden></div>
+<script src="./mock-api.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>
