@@ -1212,6 +1212,16 @@
   // handles). The head region's wrapper lays out as its items (display:
   // contents), so they are measured in its place.
   function topOver(top, win) {
+    var left = top.querySelector(":scope > .top-left");
+    if (left) {
+      if (left.scrollWidth > left.clientWidth + 0.5) return true;
+      var lbox = left.getBoundingClientRect(), lend = lbox.right, lover = false;
+      Array.prototype.forEach.call(left.querySelectorAll(":scope > :not(.r-head), :scope > .r-head > *"), function (el) {
+        var r = el.getBoundingClientRect();
+        if (r.width > 0 && r.right > lend + 0.5) lover = true;
+      });
+      return lover;
+    }
     var box = top.getBoundingClientRect(), end = box.right - (parseFloat(win.getComputedStyle(top).paddingRight) || 0), over = false;
     Array.prototype.forEach.call(top.querySelectorAll(":scope > :not(.r-head), :scope > .r-head > *"), function (el) {
       var r = el.getBoundingClientRect();
@@ -1249,8 +1259,9 @@
     var fit = function () { topFit(top, win); };
     var inSlot = function (rec) { var n = rec.target; n = n && n.nodeType !== 1 ? n.parentNode : n; return !!(n && n.closest && n.closest(".qsslot")); };
     if (win.ResizeObserver) {
-      var ro = new win.ResizeObserver(fit), slot = top.querySelector(".qsslot");
+      var ro = new win.ResizeObserver(fit), slot = top.querySelector(".qsslot"), left = top.querySelector(":scope > .top-left");
       ro.observe(top);
+      if (left) ro.observe(left);
       if (slot) ro.observe(slot); // its search handle is a strip item
     }
     if (win.MutationObserver) new win.MutationObserver(function (recs) { if (!recs.every(inSlot)) fit(); }).observe(top, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["hidden"] });

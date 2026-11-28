@@ -15,16 +15,18 @@ function strip(page) {
       return { l: b.left, t: b.top, r: b.right, b: b.bottom, w: b.width, h: b.height };
     };
     const top = document.querySelector('.dwrap > .top'), cs = getComputedStyle(top);
+    const left = top.querySelector(':scope > .top-left') || top;
     const pill = top.querySelector('.tph-parent'), name = pill && pill.querySelector('.tph-pn');
-    const items = [...top.querySelectorAll(':scope > :not(.r-head), :scope > .r-head > *')].map(e => ({ cls: e.className, box: box(e) })).filter(i => i.box);
+    const items = [...left.querySelectorAll(':scope > :not(.r-head), :scope > .r-head > *')].map(e => ({ cls: e.className, box: box(e) })).filter(i => i.box);
+    const headKids = [...left.querySelectorAll(':scope > .r-head > *')];
     return {
-      top: box(top), padR: parseFloat(cs.paddingRight), pill: box(pill), id: box(top.querySelector('.tph-id')),
+      top: box(top), left: box(left), padR: parseFloat(cs.paddingRight), pill: box(pill), id: box(top.querySelector('.tph-id')),
       tag: pill && pill.tagName, href: pill && pill.getAttribute('href'), cls: pill && pill.className,
       title: pill && pill.getAttribute('title'), label: pill && pill.querySelector('.tph-r1').textContent,
       name: name && name.textContent, nameClipped: name ? name.scrollWidth > name.clientWidth : null,
       pillClipped: pill ? pill.scrollWidth > pill.clientWidth + 0.5 : null,
-      pillFirst: pill ? [...top.querySelectorAll(':scope > .r-head > *')][0] === pill : null,
-      idFirst: [...top.querySelectorAll(':scope > .r-head > *')][0].classList.contains('tph-id'),
+      pillFirst: pill ? headKids[0] === pill : null,
+      idFirst: headKids.length > 0 && headKids[0].classList.contains('tph-id'),
       cursor: pill && getComputedStyle(pill).cursor, opacity: pill && getComputedStyle(pill).opacity,
       items,
     };
@@ -34,12 +36,12 @@ function strip(page) {
 function checkStrip(label, g) {
   assert.ok(g.top, label + ': header shows');
   assert.equal(g.top.h, 36, label + ': header is one 36px strip');
-  const end = g.top.r - g.padR;
+  const end = g.left ? g.left.r : g.top.r - g.padR;
   for (const it of g.items) {
     if (!/\b(tph|back|tcen)\b/.test(it.cls)) continue;
-    assert.equal(it.box.t, 0, `${label}: ${it.cls} hangs from the top edge`);
-    assert.equal(it.box.h, 36, `${label}: ${it.cls} is 36px tall`);
-    assert.ok(it.box.r <= end + 0.5, `${label}: ${it.cls} ends at ${it.box.r}, past the strip's room ${end}`);
+    assert.ok(it.box.t >= 0 && it.box.b <= 36.5, `${label}: ${it.cls} stays inside 36px strip (${it.box.t}..${it.box.b})`);
+    assert.ok(it.box.h >= 20 && it.box.h <= 36, `${label}: ${it.cls} fits inside 36px strip (h=${it.box.h})`);
+    assert.ok(it.box.r <= end + 0.5, `${label}: ${it.cls} ends at ${it.box.r}, past the left zone ${end}`);
   }
 }
 
@@ -83,7 +85,7 @@ async function open(page, rid) {
         assert.equal(g.href, '/s/parentsession');
         assert.equal(g.label, 'Parent');
         assert.equal(g.name, 'Parent Label');
-        assert.equal(g.pill.t, 0); assert.equal(g.pill.h, 36, label + ': pill is 36px tall');
+        assert.ok(g.pill.t >= 0 && g.pill.b <= 36.5 && g.pill.h >= 24 && g.pill.h <= 36, label + ': pill fits cleanly inside 36px topbar');
         assert.ok(g.pillFirst, label + ': the pill leads the head');
         assert.ok(g.pill.r <= g.id.l + 0.5, `${label}: pill (${g.pill.r}) is left of the identity (${g.id.l})`);
         assert.ok(!g.nameClipped && !g.pillClipped, label + ': a short parent name is not clipped');

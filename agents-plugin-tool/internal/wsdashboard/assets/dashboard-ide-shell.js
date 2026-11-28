@@ -91,6 +91,11 @@
   }
 
   if (shell) {
+    var ideQsKbd = $("tkqs-kbd"), ideQsBtn = $("tkqs");
+    var ideIsMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || "");
+    if (ideQsKbd && ideIsMac) ideQsKbd.textContent = "\u2318K";
+    if (ideQsBtn && ideIsMac && ideQsBtn.title) ideQsBtn.title = ideQsBtn.title.replace("(Ctrl+K)", "(\u2318K)");
+
     window.WsIdeShell = {
       min: IDE_RAIL_MIN,
       max: IDE_RAIL_MAX,

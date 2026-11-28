@@ -73,7 +73,7 @@
       return;
     }
     if (!railEl || !WsRail) return;
-    if (shell && railWide() && typeof ideRailToggleCollapse === "function") {
+    if (typeof shell !== "undefined" && shell && railWide() && typeof ideRailToggleCollapse === "function") {
       ideRailToggleCollapse();
       return;
     }
@@ -86,9 +86,9 @@
       if (typeof shell !== "undefined" && shell && typeof shOn !== "undefined" && shOn) shSend(shOn, "rail-open");
     }
     root.classList.toggle("rail-open", !!open);
-    if (!open && rp.P && rp.kind === "fold") railPopClose(false);
+    if (!open && typeof rp !== "undefined" && rp && rp.P && rp.kind === "fold") railPopClose(false);
     if (memoPad) memoPad.open(!!open, railWide());
-    if (railBtn) railBtn.setAttribute("aria-expanded", String(!!open || (railWide() && !(shell && typeof ideRailCollapsed !== "undefined" && ideRailCollapsed))));
+    if (railBtn) railBtn.setAttribute("aria-expanded", String(!!open || (railWide() && !(typeof shell !== "undefined" && shell && typeof ideRailCollapsed !== "undefined" && ideRailCollapsed))));
   }
   function railSettingsMark() {
     var settings = shSettingsEntry && new URL(shSettingsEntry.href, location.origin).searchParams;
@@ -584,7 +584,7 @@
     if (railBtn) railBtn.addEventListener("click", function (e) {
       if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
-      if (shell && railWide() && typeof ideRailToggleCollapse === "function") {
+      if (typeof shell !== "undefined" && shell && railWide() && typeof ideRailToggleCollapse === "function") {
         ideRailToggleCollapse();
         return;
       }

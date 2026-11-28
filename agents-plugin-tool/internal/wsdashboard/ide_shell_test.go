@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/kang-sw/devenv/internal/wslive"
 )
 
 // TestIdeShellPhase1Assets pins the Variant D outer chrome, inset stage well,
@@ -79,7 +81,7 @@ func TestIdeShellPhase1Assets(t *testing.T) {
 func TestIdeShellPhase2AssetsAndUnframedFallback(t *testing.T) {
 	css := mustAsset(t, "dashboard-ide-shell.css")
 	for _, want := range []string{
-		"grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);",
+		"grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);",
 		"z-index: 46;",
 		":root[data-shell][data-fdim] .shell-bottom,",
 		":root[data-shell][data-fdim] .shell-bottom::after {",
@@ -355,6 +357,122 @@ fApi.apply(999, false);
 check("framed page clamps out-of-range width to 360px", fProps["--rail-w"], "360px");
 fApi.apply(50, false);
 check("framed page clamps low width to 220px", fProps["--rail-w"], "220px");
+
+process.stdout.write(bad.join("\n"));
+`)
+}
+
+// TestIdeShellPhase3AssetsAndTopbarJS pins the Phase 3 3-column 36px IDE topbar
+// CSS/markup, Top-Right click-through, centered search pill, .worktree-branch
+// conditional telemetry, Phase 2 minor polishes (#memo-pad clearance and #talert
+// narrow cap), and WsRail.topOver support for .top-left.
+func TestIdeShellPhase3AssetsAndTopbarJS(t *testing.T) {
+	css := mustAsset(t, "dashboard-ide-shell.css")
+	for _, want := range []string{
+		"grid-template-columns: minmax(0, 1fr) auto minmax(var(--sh-right-w, 0px), 1fr);",
+		":root[data-shell] .dwrap > .top > .top-left {",
+		":root[data-shell] .dwrap > .top > .top-center {",
+		":root[data-shell] .dwrap > .top > .top-right {",
+		"pointer-events: none;",
+		":root[data-shell] .dwrap > .top.tmeas .tph-id {",
+		":root[data-frame] .dr-search-handle,",
+		"max-width: min(100%, 44vw);",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("dashboard-ide-shell.css lacks Phase 3 rule %q", want)
+		}
+	}
+
+	memoCSS := mustAsset(t, "memo.css")
+	if !strings.Contains(memoCSS, ":root[data-shell] .memo-pad { bottom: calc(var(--botbar-h, 26px) + 12px); }") {
+		t.Errorf("memo.css lacks shell bottom-bar clearance for .memo-pad")
+	}
+
+	tmpl := mustAsset(t, "dashboard.tmpl")
+	for _, want := range []string{
+		`<div class="top-left" id="slot-top-left">`,
+		`<div class="top-center" id="slot-top-center">`,
+		`<div class="top-right" id="slot-top-right" aria-hidden="true"></div>`,
+		`class="qsslot" id="qsslot" data-shell-qs="1"`,
+		`id="tkqs-kbd"`,
+		`class="tph tph-branch"`,
+		`class="worktree-branch"`,
+	} {
+		if !strings.Contains(tmpl, want) {
+			t.Errorf("dashboard.tmpl lacks Phase 3 markup %q", want)
+		}
+	}
+
+	// Verify git-backed vs non-git session header rendering: .worktree-branch
+	// appears only when Git.Branch is non-empty, and never on non-session index.
+	gitView := SessionView{
+		Lang:    "en",
+		ReplyID: "gitsess",
+		Label:   "Git Lead",
+		Git:     &GitBadge{State: gitOK, Repo: wslive.Repo{Branch: "impl/develop/test"}},
+		Harness: "claude",
+		Adapter: true,
+	}
+	gitRegions, err := renderSessionRegions(gitView, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head := string(gitRegions[regionHead].HTML); !strings.Contains(head, `class="worktree-branch"`) || !strings.Contains(head, `impl/develop/test`) {
+		t.Errorf("git-backed session header must render .worktree-branch with branch name, got: %s", head)
+	}
+
+	nonGitView := SessionView{
+		Lang:    "en",
+		ReplyID: "plainsess",
+		Label:   "Plain Lead",
+		Harness: "claude",
+		Adapter: true,
+	}
+	nonGitRegions, err := renderSessionRegions(nonGitView, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head := string(nonGitRegions[regionHead].HTML); strings.Contains(head, `class="worktree-branch"`) {
+		t.Errorf("non-git session header must omit .worktree-branch, got: %s", head)
+	}
+
+	// Verify WsRail.topOver measures :scope > .top-left when present.
+	railJS, _ := json.Marshal(mustAsset(t, "rail.js"))
+	runNode(t, "phase 3 topOver measures top-left", "var RAIL_JS = "+string(railJS)+";\n"+`
+var bad = [];
+function check(what, got, want) {
+  if (JSON.stringify(got) !== JSON.stringify(want)) {
+    bad.push(what + ": got " + JSON.stringify(got) + ", want " + JSON.stringify(want));
+  }
+}
+var rw = {};
+new Function("window", "module", RAIL_JS)(rw, undefined);
+var R = rw.WsRail;
+
+function makeTop(leftW, scrollW, childRight) {
+  var classes = new Set();
+  var left = {
+    clientWidth: leftW,
+    scrollWidth: scrollW,
+    getBoundingClientRect: function () { return { left: 0, right: leftW, width: leftW }; },
+    querySelectorAll: function () { return [{ getBoundingClientRect: function () { return { left: 0, right: childRight, width: childRight }; } }]; }
+  };
+  return {
+    classes: classes,
+    classList: {
+      add: function () { Array.prototype.forEach.call(arguments, function (c) { classes.add(c); }); },
+      remove: function () { Array.prototype.forEach.call(arguments, function (c) { classes.delete(c); }); },
+      contains: function (c) { return classes.has(c); }
+    },
+    querySelector: function (sel) { return sel === ":scope > .top-left" ? left : null; }
+  };
+}
+
+var fitsTop = makeTop(400, 260, 260);
+check("topFit keeps level 0 when top-left fits", [R.topFit(fitsTop, {}), fitsTop.classList.contains("tch")], [0, false]);
+
+var tightTop = makeTop(200, 320, 320);
+check("topFit steps to level 2 (.tch) when top-left overflows", [R.topFit(tightTop, {}), tightTop.classList.contains("tch")], [2, true]);
 
 process.stdout.write(bad.join("\n"));
 `)

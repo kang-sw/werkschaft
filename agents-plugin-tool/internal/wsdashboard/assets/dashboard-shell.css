@@ -38,11 +38,12 @@
    the background behind the frame, and the page's panels paint their own. */
 :root[data-frame], :root[data-frame] body, :root[data-frame] .dash { background: transparent; }
 :root[data-shell] .dwrap > .top > *, :root[data-shell] #rail { pointer-events: auto; }
-:root[data-shell] .dwrap > .top > .tcen { pointer-events: none; }
-:root[data-shell] .dwrap > .top > .tcen > * { pointer-events: auto; }
-:root[data-shell][data-fdim] .dwrap > .top > *, :root[data-shell][data-fdim] .dwrap > .top > .tcen > *, :root[data-shell][data-fdim] #rail { pointer-events: none; }
+:root[data-shell] .dwrap > .top > .tcen, :root[data-shell] .dwrap > .top > .top-left, :root[data-shell] .dwrap > .top > .top-center, :root[data-shell] .dwrap > .top > .top-right { pointer-events: none; }
+:root[data-shell] .dwrap > .top > .tcen > *, :root[data-shell] .dwrap > .top > .top-left > :not(.r-head), :root[data-shell] .dwrap > .top > .top-left > .r-head > *, :root[data-shell] .dwrap > .top > .top-center > * { pointer-events: auto; }
+:root[data-shell][data-fdim] .dwrap > .top > *, :root[data-shell][data-fdim] .dwrap > .top > .tcen > *, :root[data-shell][data-fdim] .dwrap > .top > .top-left > :not(.r-head), :root[data-shell][data-fdim] .dwrap > .top > .top-left > .r-head > *, :root[data-shell][data-fdim] .dwrap > .top > .top-center > *, :root[data-shell][data-fdim] #rail { pointer-events: none; }
 .rail[data-premark] > .r-rail { visibility: hidden; }
-:root[data-shell] .dwrap > .top.sh-own > :not(.back):not(.tcen) { display: none; }
+:root[data-shell] .dwrap > .top.sh-own > :not(.back):not(.tcen):not(.top-left):not(.top-center):not(.top-right) { display: none; }
+:root[data-shell] .dwrap > .top.sh-own .top-left > :not(.back) { display: none; }
 :root[data-frame] .dwrap > .top > * { visibility: hidden; }
 .ixmain { min-width: 0; max-width: 1080px; }
 body.tk-paged .ixmain { display: none; }

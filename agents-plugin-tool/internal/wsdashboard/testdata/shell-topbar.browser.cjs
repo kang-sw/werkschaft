@@ -32,13 +32,16 @@ function geometry(page) {
       return { l: b.left, t: b.top, r: b.right, b: b.bottom, w: b.width, h: b.height };
     };
     const top = document.querySelector('.dwrap > .top'), cs = getComputedStyle(top);
-    const items = [...top.querySelectorAll(':scope > :not(.r-head), :scope > .r-head > *')]
+    const left = top.querySelector(':scope > .top-left') || top;
+    const center = top.querySelector(':scope > .top-center');
+    const items = [...left.querySelectorAll(':scope > :not(.r-head), :scope > .r-head > *')]
       .map(e => ({ cls: e.className, box: box(e) })).filter(i => i.box);
     const fdoc = document.querySelector('.sframe.on').contentDocument;
-    const handles = [...fdoc.querySelectorAll('#drhandle, .tk-handle, #ghandle, .dr-search-handle')].map(box).filter(Boolean);
+    const handles = [...fdoc.querySelectorAll('#drhandle, .tk-handle, #ghandle, #thandle, .dr-search-handle')].map(box).filter(Boolean);
     const rail = document.querySelector('#rail');
-    return { vw: innerWidth, vh: innerHeight, top: box(top), padR: parseFloat(cs.paddingRight), cls: top.className,
+    return { vw: innerWidth, vh: innerHeight, top: box(top), left: box(left), center: box(center), padR: parseFloat(cs.paddingRight), cls: top.className,
       rail: box(rail), railZ: getComputedStyle(rail).zIndex, railbtn: box(document.querySelector('#railbtn')),
+      search: box(document.querySelector('#qsslot #tkqs')),
       usage: box(document.querySelector('.usage-toggle')), host: box(document.querySelector('.top .host.sse')),
       items, handles, open: document.documentElement.classList.contains('rail-open') };
   });
@@ -48,13 +51,18 @@ function checkStrip(label, g) {
   assert.ok(g.top, label + ': header shows');
   assert.equal(g.top.t, 0, label + ': header hangs from the top edge');
   assert.equal(g.top.h, 36, label + ': header is one 36px strip');
-  const end = g.top.r - g.padR;
+  const end = g.left ? g.left.r : g.top.r - g.padR;
   for (const it of g.items) {
     if (!/\b(tph|back|tcen)\b/.test(it.cls)) continue;
-    assert.equal(it.box.t, 0, `${label}: ${it.cls} hangs from the top edge`);
-    assert.equal(it.box.h, 36, `${label}: ${it.cls} is 36px tall`);
-    assert.ok(it.box.r <= end + 0.5, `${label}: ${it.cls} ends at ${it.box.r}, past the strip's room ${end}`);
+    assert.ok(it.box.t >= 0 && it.box.b <= 36.5, `${label}: ${it.cls} stays inside 36px strip (${it.box.t}..${it.box.b})`);
+    assert.ok(it.box.h >= 20 && it.box.h <= 36, `${label}: ${it.cls} fits inside 36px strip (h=${it.box.h})`);
+    assert.ok(it.box.r <= end + 0.5, `${label}: ${it.cls} ends at ${it.box.r}, past left zone ${end}`);
+    if (g.search) assert.ok(it.box.r <= g.search.l + 0.5, `${label}: ${it.cls} (${it.box.r}) collides with centered search at ${g.search.l}`);
     for (const h of g.handles) assert.ok(it.box.r <= h.l + 0.5, `${label}: ${it.cls} (${it.box.r}) collides with a right-end handle at ${h.l}`);
+  }
+  if (g.search) {
+    assert.ok(g.search.t >= 0 && g.search.b <= 36.5, `${label}: centered search stays inside 36px strip`);
+    for (const h of g.handles) assert.ok(g.search.r <= h.l + 0.5, `${label}: centered search (${g.search.r}) collides with right-end handle at ${h.l}`);
   }
 }
 
@@ -98,14 +106,17 @@ function checkStrip(label, g) {
       await page.locator('.usage-number').first().waitFor();
       await page.waitForTimeout(300);
 
-      // Wide: the Variant D docked rail sits flush on the left below the 36px
-      // topbar and ends above the 26px bottom bar; the strip keeps to the stage column right of it.
+      // Wide: the Variant D topbar spans full width (0..vw) while the docked rail
+      // sits flush on the left below the 36px topbar and ends above the 26px bottom bar;
+      // #railbtn stays visible in Top-Left to toggle wide collapse.
       let g = await geometry(page);
       checkStrip(`${theme}/1920`, g);
       assert.deepEqual([g.rail.l, g.rail.t, g.rail.b], [0, 36, g.vh - 26], `${theme}/1920: rail spans flush left between 36px topbar and 26px bottom bar`);
       assert.equal(g.rail.w, 280, `${theme}/1920: default rail width is 280px`);
-      assert.ok(g.top.l >= g.rail.r + 8 - 0.5, `${theme}/1920: header starts right of the rail (${g.top.l} vs ${g.rail.r})`);
-      assert.equal(g.railbtn, null, `${theme}/1920: rail button hides beside the docked rail`);
+      assert.equal(Math.round(g.top.l), 0, `${theme}/1920: full-width topbar starts at x=0`);
+      assert.equal(Math.round(g.top.w), g.vw, `${theme}/1920: full-width topbar spans viewport`);
+      assert.ok(g.railbtn && g.railbtn.w === 26 && g.railbtn.h === 26, `${theme}/1920: rail toggle button sits in Top-Left`);
+      assert.ok(g.search && Math.abs((g.search.l + g.search.r) / 2 - g.vw / 2) <= 2, `${theme}/1920: search pill is centered at vw/2`);
       assert.equal(await page.locator('#shell-bottom').evaluate(el => el.classList.contains('bu')), false, `${theme}/1920: plan usage shows in full in bottom bar`);
       // The badge mark and its stale clock stay clear of the columns inside the bottom bar.
       const marks = await page.evaluate(() => [...document.querySelectorAll('#shell-bottom .usage-harness')].map(h => {
@@ -140,18 +151,18 @@ function checkStrip(label, g) {
         await page.waitForTimeout(100);
         g = await geometry(page);
         checkStrip('dark/1800/narrow', g);
-        assert.equal(g.railbtn, null, 'dark/1800/narrow: rail stays docked, button hidden');
+        assert.ok(g.railbtn && g.railbtn.w === 26, 'dark/1800/narrow: rail stays docked, collapse button stays in Top-Left');
         assert.equal(g.rail.l, 0, 'dark/1800/narrow: rail stays docked flush at left edge');
         assert.notEqual(g.railZ, '45', 'dark/1800/narrow: rail is not an overlay');
         await page.evaluate(() => document.documentElement.removeAttribute('data-gal'));
 
-        // Narrow: the rail button hangs at the stage's top-left; the open
+        // Narrow: the rail button sits at Top-Left inside the 36px bar; the open
         // rail and its scrim cover the strip.
         await page.setViewportSize({ width: 1280, height: 900 });
         await page.waitForTimeout(200);
         g = await geometry(page);
         checkStrip('dark/1280', g);
-        assert.deepEqual([g.railbtn.l, g.railbtn.t, g.railbtn.w, g.railbtn.h], [16, 0, 36, 36], 'dark/1280: rail button is a 36px handle at the top-left');
+        assert.deepEqual([Math.round(g.railbtn.l), Math.round(g.railbtn.t), Math.round(g.railbtn.w), Math.round(g.railbtn.h)], [8, 5, 26, 26], 'dark/1280: rail button is a 26px flat handle inside the 36px top-left');
         await shot(page, 'dark-narrow');
         await shot(page, 'dark-narrow-strip', { clip: { x: 0, y: 0, width: 1280, height: 60 } });
         await page.locator('#railbtn').click();
