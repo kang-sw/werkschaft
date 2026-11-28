@@ -187,6 +187,8 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		pprof:           opts.Pprof,
 		buildTime:       opts.BuildTime,
 		contentHash:     opts.ContentHash,
+		executable:      opts.Executable,
+		sessionPruneEvery: opts.sessionPruneEvery,
 		proxy:           opts.Proxy,
 		openSystem:      opts.openSystem,
 		hostFiles:       opts.hostFiles,
@@ -439,6 +441,17 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		d.pokeHires()
 	}
 	go d.web.run(webSweepEvery)
+	// Background cache GC: asynchronous, after startup, then slowly.
+	if _, ok := cacheRootOf(opts.Dir); ok {
+		cfg := CacheGCConfigFromEnv(os.Getenv)
+		if opts.CacheGC != nil {
+			cfg = *opts.CacheGC
+		}
+		if cfg.Enabled {
+			d.gcDone = make(chan struct{})
+			go d.cacheGCLoop(cfg)
+		}
+	}
 	// The holder scans start only now, under the single-instance lock: a
 	// predecessor has let go of its holders before this daemon attaches.
 	if d.holders != nil {

@@ -250,6 +250,11 @@ type DaemonOptions struct {
 	harnessAuthCmd func(harness string) (string, []string, error)
 	// harnessAuthTimeout overrides the single-account harness auth timeout in tests.
 	harnessAuthTimeout time.Duration
+	// CacheGC overrides the cache GC bounds; nil reads the WS_CACHE_GC*
+	// environment once at start (CacheGCConfigFromEnv).
+	CacheGC *CacheGCConfig
+	// sessionPruneEvery overrides the hourly registration prune tick in tests.
+	sessionPruneEvery time.Duration
 }
 
 // MailWaker receives the daemon's mailbox wake signals (DaemonOptions.MailWake).
@@ -371,7 +376,7 @@ type Daemon struct {
 	credentials       credentialStore
 	accountSlots      *wscred.AccountSlotRegistry
 	accountSignIn     accountSignIn
-	slotSignIn         accountSlotSignIn
+	slotSignIn        accountSlotSignIn
 	slotAuthPreflight  func(harness, configDir string) error
 	slotLoginCmd       func(harness string, mode wscred.SlotLoginMode) (string, []string, error)
 	slotSignInTimeout  time.Duration
@@ -468,6 +473,12 @@ type Daemon struct {
 	// contentHash is the executable hash it reports; empty is unknown.
 	buildTime   int64
 	contentHash string
+	// executable is DaemonOptions.Executable, the build the cache GC pins.
+	// gcDone is closed when cacheGCLoop returns; nil when the loop is off.
+	// sessionPruneEvery overrides the hourly registration prune tick in tests.
+	executable        string
+	gcDone            chan struct{}
+	sessionPruneEvery time.Duration
 	// openSystem opens a system-open route's target (systemOpen).
 	openSystem func(target string) error
 	// hostFiles is the host the file browser's host route acts on
