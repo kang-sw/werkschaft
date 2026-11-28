@@ -613,6 +613,42 @@ Can start immediately; touches no `(1769)=a` frontend file.
    - `go test -race ./internal/mcp -run 'TestCompanion'` (act schema unchanged apart from the description; free-form custom key passes through).
    - `GOOS=windows go vet ./...` and `GOOS=windows go test -c ./internal/wsdashboard` (compile check of the Windows pinned write path and the junction test).
 
+### Result (a1f0aab88) - 2026-11-28
+
+Phase 1 (Go backend) landed as specified, with the deviations and decisions below.
+
+- **Windows pinned write path (deviation, stronger than D10):**
+  - Writes are fully handle-relative: `NtCreateFile` with `RootDirectory` + `OBJ_DONT_REPARSE`, a reparse-attribute check on every handle, and `wsstate.RetryRenameFileAt` / POSIX delete by handle.
+  - The ticket's `AtomicReplaceFile` + identity comparison is not used, so the D10 "accepted residual" check-to-use window no longer exists.
+  - The junction test (`companion_pack_clip_routes_windows_test.go`) is compile-checked here and runs only on a Windows runner.
+- **Write ordering:**
+  - The next pack (Rev, catalog, clips) is rebuilt from memory before the first file operation. A rebuild failure answers 409 with disk and snapshot untouched.
+  - Rewritten files keep `pack.json`'s permission bits (unix).
+  - On a failed `pack.json` replace, a previous clip copy that had loaded is restored. A previous copy that never loaded (invalid or over budget) was already replaced and is reported as gone in the error message.
+- **Duplicate raw keys:** the loader keeps the first `actions` element with a key. PUT replaces the first and drops the shadowed duplicates; DELETE removes every element with the key.
+- **Authored detection:** an install also treats a pack as authored when `calibration` or `props` is present but malformed, because the raw bytes are preserved.
+- **Warnings:** each `clipWarnings` line is capped at 160 runes and the list at 32 lines, because warnings embed manifest-controlled text. Phase 2 must render them as text.
+- **Accepted limit (drift scope):** the on-disk drift check covers `pack.json` only. A hand edit to a clip or flat asset since the last scan is not detected; the Studio write publishes a Rev hashed from the in-memory bytes, and the next reload re-hashes disk. Revision stability holds for the Studio-only flow.
+- **Prompt:**
+  - ACTIONS is omitted when the catalog is nil and rendered as `(none)` when empty.
+  - Hand-made packs (`Origin == nil`) and `Kind: "local"` packs contribute lines; remote-sourced packs contribute none.
+  - Rune budgets: `companionCoreEnvelopeMaxRunes = 3600`, `CompanionEnvelopeMaxRunes = 6800`.
+  - The preamble now names ACTIONS, which is 9 runes longer. Under a scaled `TotalRunes`, SOUL/MOOD/RECALL therefore shrink by up to 9 runes compared with before. This is inherent to the mandated preamble change, and the existing exact-output scaling tests pass.
+- **import-vrma:** `&replace=1` resets `expose_to_agent` to false unless `&expose=1` is set (sage minor #2).
+- **File-op budget:** a first single-clip save traces 16 ops (read=1, mkdir=1) and a steady-state save traces 14 (rename=2). No directory is listed.
+- **Revision:** a clipless Rev is unchanged, pinned by the golden `98cef2ef6ba4d80a768880e3640f789f`, which equals the legacy formula.
+- **Verification:** all of the following passed.
+  - `go test -race ./internal/wsdashboard -run 'TestCompanion(Pack|Clip|Action|Soul|Wake|BuildCompanion)'`
+  - `go test -race ./internal/wsdashboard -run 'Companion|Ambient|Soul|Wake|Envelope'`
+  - `go test -race ./internal/mcp -run TestCompanion`
+  - `go vet ./...`, `GOOS=windows go vet ./...` and `GOOS=windows go test -c ./internal/wsdashboard`
+  - No embedded assets changed, so `generate-package-assets.py --check` was not needed.
+  - The daemon-envelope ACTIONS test was mutation-checked: dropping `Actions:` from `BuildCompanionWakeEnvelope` fails it.
+- **Code review (claude.medium):** CONCERN with no Critical findings.
+  - Both Important items were fixed: the daemon envelope and pack-switch test, and the rebuild moved before any write.
+  - Minor fixes: duplicate keys, warning cap, reserved-presence authored, mode preservation, tighter key-refusal assertions, no `t.Fatal` off the test goroutine, a check for leftover `pack.json` temp files, an unauthored-local-pack-still-replaceable test, and old-binary citations in release-compatibility row 18.
+  - The remaining minors are recorded above (drift scope, Windows deviation, preamble runes).
+
 ### Phase 2: Isolated Studio Bundle, `/companion/studio` Control-Rig UI, Runtime Clip Resolver, Settings Entry & Real-VRM QA
 
 Depends on Phase 1's Result **and** on `(1769)=a` (`261128-feat-ws-companion-visual-polish-and-metafiction-overlay`) being merged to develop.
