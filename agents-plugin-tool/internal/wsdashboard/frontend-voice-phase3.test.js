@@ -870,7 +870,7 @@ function makeCapsulesForwardingPTT(opts = {}) {
   const env = makeVoiceEnv();
   const timers = makeFakeTimers();
   const counts = { start: 0, stop: 0 };
-  env.window.WsVoiceInput.registerBackend({
+  env.window.WsVoiceInput.registerBackend(opts.backend || {
     id: 'native', label: 'OS Native', kind: 'native',
     available: () => true,
     start: () => { counts.start++; return Promise.resolve(); },
@@ -1038,6 +1038,128 @@ test('PTT with capsules key forwarding: composing Space, input, and pointer even
   await flush();
   await flush();
   assert.equal(t.counts.stop, 1);
+  t.handle.destroy();
+});
+
+test('PTT recovers after any failed start or error state: next 1000ms hold starts and stops cleanly', async () => {
+  // Root cause being pinned: a failed start leaves controller state "error",
+  // and PTT used to arm only from "idle" (mic click may start from "error").
+  const modes = ['reject', 'throw', 'backend-onError', 'start-then-stop-reject'];
+  for (const mode of modes) {
+    let behavior = mode;
+    let errCb = null;
+    const counts = { start: 0, stop: 0 };
+    const backend = {
+      id: 'native', label: 'OS Native', kind: 'native',
+      available: () => true,
+      onError: (cb) => { errCb = cb; },
+      start: () => {
+        counts.start++;
+        if (behavior === 'reject') return Promise.reject(Object.assign(new Error('denied'), { code: 'mic_denied' }));
+        if (behavior === 'throw') throw Object.assign(new Error('boom'), { code: 'mic_unavailable' });
+        return Promise.resolve();
+      },
+      stop: () => {
+        counts.stop++;
+        if (behavior === 'start-then-stop-reject') return Promise.reject(Object.assign(new Error('x'), { code: 'upstream_error' }));
+        return Promise.resolve({ text: '말하기' });
+      },
+      cancel: () => {}
+    };
+    const t = makeCapsulesForwardingPTT({ value: '', backend });
+
+    // Attempt 1: hold until PTT fires; the start fails (or recording dies).
+    t.down();
+    t.timers.advance(1000);
+    await flush();
+    if (mode === 'backend-onError') {
+      assert.equal(t.handle.controller.getState(), 'recording');
+      errCb({ code: 'mic_unavailable' });
+    }
+    if (mode === 'start-then-stop-reject') {
+      assert.equal(t.handle.controller.getState(), 'recording');
+      t.up();
+      await flush();
+      await flush();
+    } else {
+      t.up();
+      await flush();
+    }
+    assert.equal(t.handle.controller.getState(), 'error', `${mode}: controller is in error state`);
+    assert.equal(t.handle.ptt.isArmed(), false, `${mode}: no armed/active hold left behind`);
+    assert.equal(t.handle.ptt.isActive(), false);
+    assert.equal(t.env.ctext.disabled, false, `${mode}: composer unlocked after failure`);
+    const startsBefore = counts.start;
+    const stopsBefore = counts.stop;
+
+    // Attempt 2: backend now healthy; a fresh 1000ms hold must work.
+    behavior = 'ok';
+    t.down();
+    assert.equal(t.handle.ptt.isArmed(), true, `${mode}: Space arms from error state`);
+    t.timers.advance(999);
+    await flush();
+    assert.equal(counts.start, startsBefore, `${mode}: not before 1000ms`);
+    t.timers.advance(1);
+    await flush();
+    assert.equal(counts.start, startsBefore + 1, `${mode}: PTT starts after recovery`);
+    assert.equal(t.handle.controller.getState(), 'recording');
+    t.up();
+    await flush();
+    await flush();
+    assert.equal(counts.stop, stopsBefore + 1, `${mode}: keyup stops PTT once`);
+    assert.equal(t.handle.controller.getState(), 'idle');
+    assert.equal(t.env.ctext.value, '말하기');
+    t.handle.destroy();
+  }
+});
+
+test('PTT drops a stale active hold (lost keyup, failed recording) so the next press can arm', async () => {
+  let errCb = null;
+  const counts = { start: 0 };
+  const backend = {
+    id: 'native', label: 'OS Native', kind: 'native', available: () => true,
+    onError: (cb) => { errCb = cb; },
+    start: () => { counts.start++; return Promise.resolve(); },
+    stop: () => Promise.resolve({ text: 'x' }),
+    cancel: () => {}
+  };
+  const t = makeCapsulesForwardingPTT({ value: '', backend });
+  t.down();
+  t.timers.advance(1000);
+  await flush();
+  assert.equal(counts.start, 1);
+  errCb({ code: 'mic_unavailable' }); // recording dies while Space is still held
+  assert.equal(t.handle.controller.getState(), 'error');
+  // keyup never arrives; the user presses Space again.
+  t.down();
+  assert.equal(t.handle.ptt.isArmed(), true, 'stale hold replaced by a fresh arm');
+  assert.equal(t.handle.ptt.isActive(), false);
+  t.timers.advance(1000);
+  await flush();
+  assert.equal(counts.start, 2);
+  t.up();
+  await flush();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'idle');
+  t.handle.destroy();
+});
+
+test('dismissing the error capsule returns the controller to idle', async () => {
+  const t = makeCapsulesForwardingPTT({
+    value: '',
+    backend: {
+      id: 'native', label: 'OS Native', kind: 'native', available: () => true,
+      start: () => Promise.reject(Object.assign(new Error('d'), { code: 'mic_denied' })),
+      stop: () => Promise.resolve({ text: '' }), cancel: () => {}
+    }
+  });
+  t.env.btn.click();
+  await flush();
+  assert.equal(t.handle.controller.getState(), 'error');
+  const dismiss = t.env.cap.querySelector('[data-voice-action="dismiss"]');
+  assert.ok(dismiss, 'error capsule offers a dismiss action');
+  dismiss.click();
+  assert.equal(t.handle.controller.getState(), 'idle');
   t.handle.destroy();
 });
 

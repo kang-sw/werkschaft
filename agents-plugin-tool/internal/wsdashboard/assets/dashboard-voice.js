@@ -699,19 +699,20 @@
       activeBackend = backend;
       lastBackend = backend;
       wireBackendCallbacks(backend, gen);
-      setState("recording", { backend: backend.id });
       var mergedCtx = Object.assign({
         model: modelForBackend(backend),
         language: configuredLanguage
       }, ctx || {});
       var p;
       try {
+        // In the try so a throwing onStateChange cannot leave the lock held in "recording".
+        setState("recording", { backend: backend.id });
         p = Promise.resolve(backend.start(mergedCtx));
       } catch (err) {
         releaseRecorderLock(owner);
         activeBackend = null;
-        setState("error", { error: err });
-        if (typeof opts.onError === "function") opts.onError(err);
+        state = "error";
+        try { setState("error", { error: err }); if (typeof opts.onError === "function") opts.onError(err); } catch (e) {}
         return Promise.reject(err);
       }
       return p.catch(function (err) {
@@ -853,7 +854,7 @@
         errorLabel: pttMod.errorLabel,
         onCancel: function () { controller.cancel({ discardLast: true }); },
         onRetry: function () { controller.retry(); },
-        onDismiss: function () { controller.discardLast(); },
+        onDismiss: function () { controller.cancel({ discardLast: true }); },
         canRetry: function () { return controller.canRetry(); }
       })
       : null;

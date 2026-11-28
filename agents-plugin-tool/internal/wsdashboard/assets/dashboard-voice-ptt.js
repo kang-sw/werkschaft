@@ -396,6 +396,17 @@
       if (wasArmed) onHoldingChange(false);
     }
 
+    // Controller.start() accepts "idle" and "error" (a failed attempt leaves
+    // "error" until something resets it); PTT must not be stricter than the
+    // mic button or one failure locks Space out for good.
+    function canStartFrom(state) {
+      return state === "idle" || state === "error";
+    }
+
+    function isLiveState(state) {
+      return state === "recording" || state === "transcribing" || state === "refining";
+    }
+
     function disarmPending() {
       if (armed && !active) disarm();
     }
@@ -460,7 +471,11 @@
       }
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
       if (isPopupOpen(ctext, doc)) return;
-      if (!controller || controller.getState() !== "idle") return;
+      if (!controller) return;
+      // A hold whose recording failed (error/idle) or was cancelled underneath
+      // it is stale: drop it so a fresh press can arm even if its keyup was lost.
+      if (armed && active && !isLiveState(controller.getState())) disarm();
+      if (!canStartFrom(controller.getState())) return;
       if (!controller.getResolvedBackend || !controller.getResolvedBackend()) return;
       // Duplicate delivery of the same press (or a press while recording).
       if (armed) return;
@@ -478,18 +493,26 @@
         if (token !== armToken) return;
         timer = null;
         if (!armed) return;
-        if (!controller || controller.getState() !== "idle" || !controller.getResolvedBackend()) {
+        if (!controller || !canStartFrom(controller.getState()) || !controller.getResolvedBackend()) {
           disarm();
           return;
         }
         active = true;
         onHoldingChange(false);
-        var caret = typeof ctext.selectionStart === "number" ? ctext.selectionStart : String(ctext.value || "").length;
-        var trimmed = trimPrecedingSpacesForPTT(ctext.value || "", caret);
-        if (trimmed.changed) {
-          applyRangeEdit(ctext, trimmed.start, trimmed.end, trimmed.replacement);
+        try {
+          var caret = typeof ctext.selectionStart === "number" ? ctext.selectionStart : String(ctext.value || "").length;
+          var trimmed = trimPrecedingSpacesForPTT(ctext.value || "", caret);
+          if (trimmed.changed) {
+            applyRangeEdit(ctext, trimmed.start, trimmed.end, trimmed.replacement);
+          }
+          onStartPTT();
+        } catch (err) {
+          disarm();
+          return;
         }
-        onStartPTT();
+        // start() refused synchronously (e.g. recorder busy): nothing is
+        // recording, so do not leave a phantom active hold behind.
+        if (token === armToken && !isLiveState(controller.getState())) disarm();
       }, holdMs);
     }
 
