@@ -508,6 +508,9 @@
     },
     "261128-feat-ws-dashboard-control-mcp-api": {
       "registered_at": "2026-11-28T01:51:40Z"
+    },
+    "261128-feat-ws-dashboard-ide-shell-overhaul": {
+      "registered_at": "2026-11-28T01:59:43Z"
     }
   }
 }
