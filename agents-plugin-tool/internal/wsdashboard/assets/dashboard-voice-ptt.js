@@ -180,8 +180,18 @@
           top = Math.max(2, Math.round(anchor.bottom - fieldRect.top + 4));
         }
       }
-      cap.style.left = left + "px";
-      cap.style.top = top + "px";
+      if (opts.floating) {
+        var view = doc.defaultView || window;
+        var maxX = Math.max(4, (view.innerWidth || 320) - 180);
+        var maxY = Math.max(4, (view.innerHeight || 240) - 44);
+        var baseLeft = anchor && typeof anchor.x === "number" ? anchor.x : fieldRect.left;
+        var baseTop = anchor && typeof anchor.bottom === "number" ? anchor.bottom + 4 : fieldRect.bottom + 4;
+        cap.style.left = Math.max(4, Math.min(Math.round(baseLeft), maxX)) + "px";
+        cap.style.top = Math.max(4, Math.min(Math.round(baseTop), maxY)) + "px";
+      } else {
+        cap.style.left = left + "px";
+        cap.style.top = top + "px";
+      }
       cap.setAttribute("data-caret", String(caretStart));
     }
 
@@ -616,16 +626,18 @@
     boundTargets.forEach(function (target) {
       boundHandlers.forEach(function (h) { target.addEventListener(h[0], h[1]); });
     });
-    if (doc && doc.addEventListener) {
+    if (!opts.globalEvents && doc && doc.addEventListener) {
       doc.addEventListener("keyup", onDocKeyUp);
     }
-    if (win && win.addEventListener) {
+    if (!opts.globalEvents && win && win.addEventListener) {
       win.addEventListener("blur", onWindowBlur);
     }
 
     return {
       isArmed: function () { return armed; },
       isActive: function () { return active; },
+      handleDocumentKeyUp: onDocKeyUp,
+      handleWindowBlur: onWindowBlur,
       disarm: disarm,
       beginLockBlurGuard: beginLockBlurGuard,
       endLockBlurGuard: endLockBlurGuard,
@@ -635,10 +647,10 @@
           if (typeof target.removeEventListener !== "function") return;
           boundHandlers.forEach(function (h) { target.removeEventListener(h[0], h[1]); });
         });
-        if (doc && doc.removeEventListener) {
+        if (!opts.globalEvents && doc && doc.removeEventListener) {
           doc.removeEventListener("keyup", onDocKeyUp);
         }
-        if (win && win.removeEventListener) {
+        if (!opts.globalEvents && win && win.removeEventListener) {
           win.removeEventListener("blur", onWindowBlur);
         }
       }

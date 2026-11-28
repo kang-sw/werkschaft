@@ -243,6 +243,7 @@
     if (window.WsInput) {
       var inst = window.WsInput.attach(note, {
         keymap: "newline-only",
+        voice: true,
         features: {
           markdown: true,
           capsules: true,

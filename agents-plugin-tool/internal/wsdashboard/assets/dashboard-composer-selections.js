@@ -161,6 +161,7 @@
       if (window.WsInput) {
         window.WsInput.attach(mnote, {
           keymap: "newline-only",
+          voice: true,
           features: {
             markdown: true,
             capsules: true,

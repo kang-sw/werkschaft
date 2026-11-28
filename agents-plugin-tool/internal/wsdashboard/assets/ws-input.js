@@ -156,6 +156,24 @@
   };
 
   var instances = [];
+  var voiceQueue = [];
+
+  function attachVoice(api) {
+    if (!api || !api.features || !api.features.voice) return;
+    if (window.WsVoiceInput && typeof window.WsVoiceInput.attachField === "function") {
+      api.voice = window.WsVoiceInput.attachField(api.field, api);
+      return;
+    }
+    if (voiceQueue.indexOf(api) < 0) voiceQueue.push(api);
+  }
+
+  function flushVoice() {
+    voiceQueue.slice().forEach(function (api) {
+      var i = voiceQueue.indexOf(api);
+      if (i >= 0) voiceQueue.splice(i, 1);
+      if (api && !api.destroyed) attachVoice(api);
+    });
+  }
 
   function mergeFeatures(raw) {
     var out = {};
@@ -205,7 +223,9 @@
       ownsField = true;
     }
 
-    var features = mergeFeatures(opts.features);
+    var rawFeatures = Object.assign({}, opts.features || {});
+    if (Object.prototype.hasOwnProperty.call(opts, "voice")) rawFeatures.voice = opts.voice;
+    var features = mergeFeatures(rawFeatures);
     var providers = opts.providers || {};
     var draftAdapter = opts.draftAdapter || null;
     var attachmentHandler = opts.attachmentHandler || null;
@@ -558,6 +578,8 @@
 
     var api = {
       field: field,
+      voice: null,
+      destroyed: false,
       target: target,
       editor: wsc ? wsc.editor : field,
       wsc: wsc,
@@ -607,7 +629,13 @@
         opts = Object.assign({}, opts, nextOpts);
         if (nextOpts.features) {
           var prevFeatures = features;
-          features = mergeFeatures(Object.assign({}, prevFeatures, nextOpts.features));
+          var changedFeatures = Object.assign({}, prevFeatures, nextOpts.features);
+          if (Object.prototype.hasOwnProperty.call(nextOpts, "voice")) changedFeatures.voice = nextOpts.voice;
+          features = mergeFeatures(changedFeatures);
+          api.features = features;
+        }
+        if (!nextOpts.features && Object.prototype.hasOwnProperty.call(nextOpts, "voice")) {
+          features = mergeFeatures(Object.assign({}, features, { voice: nextOpts.voice }));
           api.features = features;
         }
         if (nextOpts.providers) providers = Object.assign({}, providers, nextOpts.providers);
@@ -618,10 +646,16 @@
         attachTopicPopup();
         attachSlashPopup();
         syncMarkdown();
+        if (features.voice && !api.voice) attachVoice(api);
+        if (!features.voice && api.voice) { api.voice.destroy(); api.voice = null; }
       },
       destroy: function () {
         if (destroyed) return;
         destroyed = true;
+        api.destroyed = true;
+        var voiceIndex = voiceQueue.indexOf(api);
+        if (voiceIndex >= 0) voiceQueue.splice(voiceIndex, 1);
+        if (api.voice) { api.voice.destroy(); api.voice = null; }
         if (typeof field.removeEventListener === "function") {
           field.removeEventListener("input", onInput);
           field.removeEventListener("compositionstart", onCompStart);
@@ -665,6 +699,7 @@
     if (field.value) reconcileMarkdown();
 
     instances.push(api);
+    attachVoice(api);
     return api;
   }
 
@@ -703,6 +738,7 @@
     attach: attach,
     get: get,
     sweep: sweep,
+    flushVoice: flushVoice,
     DEFAULTS: DEFAULTS,
     indentLines: indentLines,
     listContinuation: listContinuation,
