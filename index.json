@@ -560,6 +560,9 @@
           "branch": "impl/develop/baked-yam-perch"
         }
       }
+    },
+    "261128-feat-ws-settings-account-rework-and-voice-section-split": {
+      "registered_at": "2026-11-28T03:40:30Z"
     }
   }
 }
