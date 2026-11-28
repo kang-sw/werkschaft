@@ -49,7 +49,9 @@
   var hd = {
     P: null, list: null, err: "", seq: 0, at: 0, busy: false,
     host: [], orphans: [], tseq: 0, oseq: 0, frame: false,
-    confirm: "", closing: {}, dirty: false, hold: null,
+    // closing/stopping: terminal closes and holder stops in flight, by id,
+    // so a re-render's fresh button cannot send a second one
+    confirm: "", closing: {}, stopping: {}, dirty: false, hold: null,
     // the trace: its last answer, whether the daemon serves it (null until
     // an answer says), the pending timer, and the read in flight
     mx: null, mxOK: null, mseq: 0, timer: 0, mxBusy: false, paused: false, ms: HD_TRACE_MIN,
@@ -302,11 +304,16 @@
   }
   function hdStop(b) {
     var id = b.getAttribute("data-id");
-    if (!id || b.disabled) return;
+    if (!id || b.disabled || hd.stopping[id]) return;
     b.disabled = true;
+    hd.stopping[id] = true;
     hdNote("");
     post("/holders/" + encodeURIComponent(id) + "/stop", {}, function (ok, res) {
+      delete hd.stopping[id];
       b.disabled = false;
+      // a re-render during the stop drew a fresh, disabled button
+      var cur = hd.P && hd.P.list.querySelector('button[data-act="holder-stop"][data-id="' + CSS.escape(id) + '"]');
+      if (cur) cur.disabled = false;
       if (!ok) { hdNote(wsT("js.hd.stopfail", res), true); return; }
       hdNote(wsT("js.holders.stopped", hdLabelOf(id)));
       hdFetch();
@@ -502,6 +509,7 @@
       b.setAttribute("data-hold-mode", "bar");
       b.setAttribute("data-act", "holder-stop");
       b.setAttribute("data-id", h.id);
+      if (hd.stopping[h.id]) b.disabled = true;
     }
     if (durable) return node;
     var box = node.appendChild(mk("div", "hd-kids"));

@@ -235,8 +235,17 @@ test('the hold confirms a stop, a short press explains it, and a render waits fo
   H.onConfirm(b2, true);
   assert.deepEqual(h.posts.map(p => p.url), ['/holders/h-lost/stop']);
   assert.equal(b2.disabled, true);
+  // A render while the stop is in flight draws a fresh button that keeps
+  // the guard: holding it again sends no second stop.
+  h.ctx.hdRender();
+  const b3 = P.list.querySelector('.hd-hold');
+  assert.notEqual(b3, b2);
+  assert.equal(b3.disabled, true, 'a re-rendered Stop stays off while its stop is in flight');
+  H.onConfirm(b3, true);
+  assert.equal(h.posts.length, 1, 'one stop per holder in flight');
   const before = h.fetches.length;
   h.posts[0].cb(true, '');
+  assert.equal(b3.disabled, false, 'the answer re-enables the current button');
   assert.equal(P.note.textContent, 'js.holders.stopped(exec-x)');
   assert.equal(h.fetches.length, before + 2, 'a stop re-reads the holders and terminals');
 
