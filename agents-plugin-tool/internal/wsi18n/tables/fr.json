@@ -583,6 +583,8 @@
   "js.dc.confirm.failed": "Impossible d’envoyer votre décision. Réessayez.",
   "js.dc.confirm.title": "Approuver l’action de contrôle du tableau de bord",
   "js.dc.desc": "Autorise ce lead à appeler les outils ws/daemon.* (les actions modificatrices nécessitent toujours une confirmation en 1 clic).",
+  "js.dc.guide.dismiss": "Fermer la mise en évidence",
+  "js.dc.guide.monitor_stop": "Suivi du guide actif · Arrêter",
   "js.dc.off": "Désactivé",
   "js.dc.on": "Activé",
   "js.dc.pending.badge": "Redémarrage requis",

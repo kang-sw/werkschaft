@@ -69,7 +69,10 @@ type Server struct {
 	companionBurstCounts      map[string]int
 	daemonControl             DaemonControlHost
 	dashboardControlEffective bool
-	conv                      ConvHost
+	// dashboardGuideEffective grants a daemon-side manual render for a
+	// companion-body the guide subset of ws/daemon.* only.
+	dashboardGuideEffective bool
+	conv                    ConvHost
 	convHistoryListed         bool
 	ephemeralPool             *wsagent.EphemeralPool
 	stopWorkerWatch func()

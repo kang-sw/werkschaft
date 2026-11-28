@@ -583,6 +583,8 @@
   "js.dc.confirm.failed": "Could not send your decision. Try again.",
   "js.dc.confirm.title": "Approve dashboard control action",
   "js.dc.desc": "Allow this lead to call ws/daemon.* dashboard control tools (mutating actions still require 1-click approval).",
+  "js.dc.guide.dismiss": "Dismiss highlight",
+  "js.dc.guide.monitor_stop": "Guide monitoring · Stop",
   "js.dc.off": "Off",
   "js.dc.on": "On",
   "js.dc.pending.badge": "Restart needed",

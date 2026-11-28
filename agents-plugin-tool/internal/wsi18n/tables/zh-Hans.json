@@ -583,6 +583,8 @@
   "js.dc.confirm.failed": "无法发送你的决定，请重试。",
   "js.dc.confirm.title": "批准仪表板控制操作",
   "js.dc.desc": "允许此主导会话调用 ws/daemon.* 仪表板控制工具（修改类操作仍需一键确认）。",
+  "js.dc.guide.dismiss": "关闭高亮",
+  "js.dc.guide.monitor_stop": "正在监视引导 · 停止",
   "js.dc.off": "关",
   "js.dc.on": "开",
   "js.dc.pending.badge": "需要重启",

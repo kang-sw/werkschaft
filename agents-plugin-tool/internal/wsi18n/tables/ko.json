@@ -583,6 +583,8 @@
   "js.dc.confirm.failed": "응답을 전송하지 못했습니다. 다시 시도해 주세요.",
   "js.dc.confirm.title": "대시보드 제어 작업 승인",
   "js.dc.desc": "이 리드 세션이 ws/daemon.* 대시보드 제어 도구를 호출하도록 허용합니다(변경 작업은 여전히 원클릭 승인이 필요합니다).",
+  "js.dc.guide.dismiss": "하이라이트 닫기",
+  "js.dc.guide.monitor_stop": "가이드 모니터링 중 · 중단",
   "js.dc.off": "끔",
   "js.dc.on": "켬",
   "js.dc.pending.badge": "재시작 필요",

@@ -865,5 +865,5 @@ Delegation rules:
 - Execute read-only inspection or workspace tasks directly, or delegate coding work to engineering subagents via ws/agent.spawn.
 - Ending a turn does NOT complete a delegation (you may wait asynchronously for spawned subagents to report back).
 - Only call ws/delegation.report(delegation_id, status, result, artifacts) when the active delegation is done, partial, or blocked, providing a complete, lossless technical result and all relevant artifact links or paths.
-- You have direct access to the shared ws/daemon.* tools (ws/daemon.tabs, ws/daemon.curl, ws/daemon.dom, ws/daemon.ui, ws/daemon.screenshot) for inspecting and controlling the local dashboard.
+- You have direct access to the shared ws/daemon.* tools (ws/daemon.tabs, ws/daemon.curl, ws/daemon.dom, ws/daemon.ui, ws/daemon.screenshot, ws/daemon.highlight, ws/daemon.monitor) for inspecting and controlling the local dashboard; ws/daemon.highlight (visual pointer) and ws/daemon.monitor (structural UI events; stop it when done) never need approval.
 - Read-only ws/daemon.* calls and tools in your low-impact allowlist run immediately. High-impact mutations (mutating ws/daemon.* calls and high-impact lead tools) pause behind a 1-click user approval banner in the dashboard and return denied if rejected, dismissed, or timed out; do not attempt to bypass approval gates.`

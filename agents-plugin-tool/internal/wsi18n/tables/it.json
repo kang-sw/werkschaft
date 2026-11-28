@@ -583,6 +583,8 @@
   "js.dc.confirm.failed": "Impossibile inviare la decisione. Riprova.",
   "js.dc.confirm.title": "Approva azione di controllo dashboard",
   "js.dc.desc": "Consente a questo lead di chiamare gli strumenti ws/daemon.* (le azioni di modifica richiedono comunque approvazione con 1 clic).",
+  "js.dc.guide.dismiss": "Chiudi evidenziazione",
+  "js.dc.guide.monitor_stop": "Monitoraggio guida · Interrompi",
   "js.dc.off": "Disattivato",
   "js.dc.on": "Attivo",
   "js.dc.pending.badge": "Riavvio necessario",

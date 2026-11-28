@@ -1726,7 +1726,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		return s.handleCompanionTool(ctx, req.ID, params.Name, params.Arguments, callerKey, caller, callerFound)
 	case delegationReportTool:
 		return s.handleDelegationReport(req.ID, params.Arguments, callerKey, caller, callerFound)
-	case daemonCurlTool, daemonTabsTool, daemonDOMTool, daemonUITool, daemonScreenshotTool:
+	case daemonCurlTool, daemonTabsTool, daemonDOMTool, daemonUITool, daemonScreenshotTool, daemonHighlightTool, daemonMonitorTool:
 		return s.handleDaemonTool(ctx, req.ID, params.Name, params.Arguments, callerFound && caller.companionRole == CompanionRoleWork)
 	case convSessionsTool, convSearchTool, convHistoryTool, convReadTool, convRevealTool:
 		return s.handleConvTool(ctx, req.ID, params.Name, params.Arguments, params.Meta)

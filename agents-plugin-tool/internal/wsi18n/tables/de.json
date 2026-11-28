@@ -583,6 +583,8 @@
   "js.dc.confirm.failed": "Entscheidung konnte nicht gesendet werden. Erneut versuchen.",
   "js.dc.confirm.title": "Dashboard-Steuerungsaktion genehmigen",
   "js.dc.desc": "Erlaubt diesem Lead den Aufruf von ws/daemon.*-Dashboard-Steuerungstools (ändernde Aktionen erfordern weiterhin eine 1-Klick-Bestätigung).",
+  "js.dc.guide.dismiss": "Hervorhebung schließen",
+  "js.dc.guide.monitor_stop": "Guide-Überwachung aktiv · Stoppen",
   "js.dc.off": "Aus",
   "js.dc.on": "Ein",
   "js.dc.pending.badge": "Neustart nötig",

@@ -583,6 +583,8 @@
   "js.dc.confirm.failed": "No se pudo enviar tu decisión. Inténtalo de nuevo.",
   "js.dc.confirm.title": "Aprobar acción de control del panel",
   "js.dc.desc": "Permite que este líder llame a las herramientas de control ws/daemon.* (las acciones con cambios siguen requiriendo aprobación con 1 clic).",
+  "js.dc.guide.dismiss": "Cerrar resaltado",
+  "js.dc.guide.monitor_stop": "Supervisión de la guía · Detener",
   "js.dc.off": "Desactivado",
   "js.dc.on": "Activado",
   "js.dc.pending.badge": "Requiere reinicio",

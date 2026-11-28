@@ -583,6 +583,8 @@
   "js.dc.confirm.failed": "回答を送信できませんでした。もう一度お試しください。",
   "js.dc.confirm.title": "ダッシュボード制御操作の承認",
   "js.dc.desc": "このリードセッションに ws/daemon.* ダッシュボード制御ツールの呼び出しを許可します（変更操作には1クリック承認が必要です）。",
+  "js.dc.guide.dismiss": "ハイライトを閉じる",
+  "js.dc.guide.monitor_stop": "ガイド監視中 · 停止",
   "js.dc.off": "オフ",
   "js.dc.on": "オン",
   "js.dc.pending.badge": "再起動が必要",

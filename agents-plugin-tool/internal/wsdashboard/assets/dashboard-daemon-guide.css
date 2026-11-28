@@ -1,0 +1,119 @@
+/* Daemon interactive guide overlay (dashboard-daemon-guide.js): one fixed
+   shell-level layer above frames and popovers. Motion is transform/opacity
+   only, and the pulse runs a finite number of iterations so a static
+   highlight paints no frames. */
+.dg-layer {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--z-modal, 70) + 4);
+  pointer-events: none;
+  contain: layout style;
+}
+.dg-spot {
+  position: fixed;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  border-radius: 10px;
+  pointer-events: none;
+  will-change: transform;
+  box-shadow: 0 0 0 2px var(--wb-primary), 0 0 0 6px color-mix(in srgb, var(--wb-primary) 22%, transparent);
+}
+.dg-spot[hidden], .dg-card[hidden] { display: none; }
+.dg-spot[data-style="spotlight"] {
+  box-shadow: 0 0 0 2px var(--wb-primary), 0 0 0 100vmax rgb(0 0 0 / 36%);
+}
+.dg-spot[data-style="ring"] {
+  box-shadow: 0 0 0 2px var(--wb-primary), 0 0 0 5px color-mix(in srgb, var(--wb-primary) 18%, transparent);
+}
+.dg-spot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: 0 0 0 2px var(--wb-primary);
+  opacity: 0;
+  pointer-events: none;
+}
+.dg-spot[data-anim]::after { animation: dg-pulse 1100ms cubic-bezier(.2, .7, .3, 1) 2; }
+.dg-spot[data-anim][data-style="pulse"]::after { animation-iteration-count: 5; }
+@keyframes dg-pulse {
+  0% { opacity: .9; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.12); }
+}
+.dg-card {
+  position: fixed;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: min(300px, calc(100vw - 16px));
+  padding: 8px 6px 8px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--wb-card);
+  color: var(--wb-fg);
+  box-shadow: var(--wb-shadow-hi), inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 34%, var(--wb-line));
+  font: 500 12.5px/1.45 var(--wb-sans);
+  pointer-events: auto;
+  cursor: pointer;
+  will-change: transform;
+}
+.dg-card[data-empty] { padding: 4px; }
+.dg-card[data-empty] .dg-card-text { display: none; }
+.dg-card-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dg-card-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--wb-muted-fg);
+  font: 600 15px/1 var(--wb-sans);
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+.dg-card-close:hover { background: var(--wb-muted); color: var(--wb-fg); }
+.dg-card-close:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 1px; }
+.dg-chip {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--wb-card);
+  color: var(--wb-fg);
+  box-shadow: var(--wb-shadow-hi), inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 34%, var(--wb-line));
+  font: 600 12px/1 var(--wb-sans);
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+.dg-chip:hover { background: color-mix(in srgb, var(--wb-primary) 10%, var(--wb-card)); }
+.dg-chip:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 2px; }
+.dg-chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--wb-primary);
+}
+@media (prefers-reduced-motion: reduce) {
+  .dg-spot[data-anim]::after { animation: none; }
+}
