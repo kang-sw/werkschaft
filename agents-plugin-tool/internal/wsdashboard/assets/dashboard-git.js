@@ -338,7 +338,7 @@
         gitDraw(v);
         end(true, "");
       });
-    }, function () { if (seq === gSeq) end(false, wsT("js.post.unreachable")); });
+    }).catch(function () { if (seq === gSeq) end(false, wsT("js.post.unreachable")); });
   }
   // gitFail says a failed read on the message line; the graph keeps its
   // working-tree row as it was.

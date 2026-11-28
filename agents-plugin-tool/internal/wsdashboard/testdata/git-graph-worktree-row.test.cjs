@@ -6,8 +6,8 @@
 // (on HEAD's column, on a stub lane when a lane from above holds that
 // column, alone at the top when HEAD is unborn or not loaded), the row on
 // an empty log, the status signature (no-op, in-place patch, redraw), the
-// "300+" count of a cut group, and the row's open path never reading
-// gl.commits.
+// "300+" count of a cut group, the row's open path never reading
+// gl.commits, and gitLoad(done) answering every caller exactly once.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
@@ -231,4 +231,53 @@ test('opening the row opens the working tree and never reads gl.commits', () => 
   const r = new El('div', 'glr'); r.setAttribute('data-i', '0');
   ctx.glOpenRow(r);
   assert.deepEqual(calls.open, ['aaa']);
+});
+
+// gitLoad(done): every queued done hears exactly once — a superseded read by
+// the newer read's end — and a failure anywhere (the fetch, the body, the
+// draw, an HTTP refusal) still answers false, so Refresh never stays busy.
+function loadCtx(answers) {
+  const fails = [], drawn = [];
+  const ctx = vm.createContext({
+    rid: 'r1', gSeq: 0, gDone: [], window: { fetch: true },
+    wsT: k => k, gitFail: m => fails.push(m),
+    gitDraw: v => { if (v.boom) throw new Error('boom'); drawn.push(v); },
+    fetch: () => answers.shift()(),
+  });
+  vm.runInContext(fn(git, 'gitLoad'), ctx);
+  return { ctx, fails, drawn };
+}
+const answer = (ok, body, status) => () => Promise.resolve({ ok, status: status || 200, text: () => (body instanceof Error ? Promise.reject(body) : Promise.resolve(body)) });
+const flush = () => new Promise(r => setTimeout(r, 0));
+
+test('gitLoad answers every done once, a superseded one by the newer read', async () => {
+  let release;
+  const slow = () => new Promise(r => { release = () => r({ ok: true, status: 200, text: () => Promise.resolve('{"a":1}') }); });
+  const { ctx, drawn } = loadCtx([slow, answer(true, '{"b":2}')]);
+  const heard = [];
+  ctx.gitLoad((ok, err) => heard.push(['first', ok, err]));
+  ctx.gitLoad((ok, err) => heard.push(['second', ok, err]));
+  await flush();
+  assert.deepEqual(heard, [['first', true, ''], ['second', true, '']]);
+  release(); await flush();
+  assert.equal(heard.length, 2, 'the stale read answers nobody again');
+  assert.deepEqual(drawn.map(v => JSON.stringify(v)), ['{"b":2}']);
+});
+
+test('gitLoad answers false once when the fetch, the body, the draw, or the server fails', async () => {
+  const cases = [
+    ['fetch', () => Promise.reject(new Error('down')), 'js.post.unreachable'],
+    ['body', answer(true, new Error('cut')), 'js.post.unreachable'],
+    ['draw', answer(true, '{"boom":1}'), 'js.post.unreachable'],
+    ['http', answer(false, 'no repo\n', 409), 'no repo'],
+    ['json', answer(true, '{'), 'malformed answer'],
+  ];
+  for (const [name, a, want] of cases) {
+    const { ctx, fails } = loadCtx([a]);
+    const heard = [];
+    ctx.gitLoad((ok, err) => heard.push([ok, err]));
+    await flush();
+    assert.deepEqual(heard, [[false, want]], name);
+    assert.deepEqual(fails, [want], name);
+  }
 });
