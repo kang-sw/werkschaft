@@ -156,6 +156,10 @@
   background: var(--wb-muted-fg);
 }
 
+.ws-cm-status-dot[data-state="unavailable"] {
+  background: var(--wb-danger, #e05252);
+}
+
 .ws-cm-status-dot[data-state="facedown"] {
   background: #e57399;
 }

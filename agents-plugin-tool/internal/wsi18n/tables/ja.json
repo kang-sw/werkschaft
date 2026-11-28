@@ -525,6 +525,7 @@
   "js.companion.messenger.status.laptop": "ノートPCで作業中・メッセージでスマホ通知",
   "js.companion.messenger.status.phone": "片手でスマホを確認中",
   "js.companion.messenger.status.sleepy": "うとうと中… ガラスをノックして起こせます",
+  "js.companion.messenger.status.unavailable": "コンパニオンは一時的に応答できません — メッセージを送って再試行してください",
   "js.companion.messenger.status.work": "ノートPCでリクエストを処理中",
   "js.companion.messenger.tier1_empty": "Tier-1 の要約はまだありません。",
   "js.companion.messenger.tier1_reset": "リセット",

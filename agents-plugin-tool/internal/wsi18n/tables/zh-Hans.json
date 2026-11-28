@@ -525,6 +525,7 @@
   "js.companion.messenger.status.laptop": "笔记本工作中 · 发消息提醒手机",
   "js.companion.messenger.status.phone": "单手查看手机中",
   "js.companion.messenger.status.sleepy": "打瞌睡中… 敲敲玻璃叫醒",
+  "js.companion.messenger.status.unavailable": "伴侣暂时不可用 — 发送消息即可重试",
   "js.companion.messenger.status.work": "正在笔记本上处理请求",
   "js.companion.messenger.tier1_empty": "暂无 Tier-1 摘要记录。",
   "js.companion.messenger.tier1_reset": "重置",

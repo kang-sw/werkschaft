@@ -525,6 +525,7 @@
   "js.companion.messenger.status.laptop": "Working on laptop · send a message to ping phone",
   "js.companion.messenger.status.phone": "Checking smartphone with one hand",
   "js.companion.messenger.status.sleepy": "Dozing off… knock the glass to wake up",
+  "js.companion.messenger.status.unavailable": "Companion is temporarily unavailable — send a message to retry",
   "js.companion.messenger.status.work": "Handling your request on laptop",
   "js.companion.messenger.tier1_empty": "No Tier-1 summary entries yet.",
   "js.companion.messenger.tier1_reset": "Reset",

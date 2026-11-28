@@ -525,6 +525,7 @@
   "js.companion.messenger.status.laptop": "Arbeitet am Laptop · Nachricht weckt das Handy",
   "js.companion.messenger.status.phone": "Prüft Smartphone mit einer Hand",
   "js.companion.messenger.status.sleepy": "Döst vor sich hin… ans Glas klopfen zum Wecken",
+  "js.companion.messenger.status.unavailable": "Begleiter vorübergehend nicht erreichbar — Nachricht senden zum erneuten Versuch",
   "js.companion.messenger.status.work": "Bearbeitet Anfrage am Laptop",
   "js.companion.messenger.tier1_empty": "Noch keine Tier-1-Zusammenfassungen.",
   "js.companion.messenger.tier1_reset": "Zurücksetzen",

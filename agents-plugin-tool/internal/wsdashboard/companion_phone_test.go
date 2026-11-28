@@ -310,3 +310,154 @@ func TestCompanionPhoneHTTPRoutes(t *testing.T) {
 		t.Fatalf("reset-summary status=%d summaries=%v", rec.Code, d.companionPhone.Snapshot().Tier1Summary)
 	}
 }
+
+func TestCompanionPhoneStoreForceReleaseDeadlinesAndHolderLiveness(t *testing.T) {
+	now := time.Date(2026, 11, 28, 10, 0, 0, 0, time.UTC)
+	alive := map[string]bool{"tier1-a": true, "tier1-b": true}
+	store := &CompanionPhoneStore{
+		now:         func() time.Time { return now },
+		holderAlive: func(h string) bool { return alive[h] },
+	}
+
+	// AcquireOnWake acquires in laptop posture without prematurely showing laptop_work.
+	snap, ok := store.AcquireOnWake("tier1-a")
+	if !ok {
+		t.Fatal("AcquireOnWake(tier1-a) = false, want true")
+	}
+	if snap.State != CompanionStateLaptopAmbient || snap.Posture != CompanionPostureLaptop || snap.LeaseOwner != "tier1-a" {
+		t.Fatalf("snap after AcquireOnWake = %+v", snap)
+	}
+	if !store.EmbodimentLeaseActive() {
+		t.Fatal("EmbodimentLeaseActive() = false after AcquireOnWake")
+	}
+
+	// Live holder blocks another Tier-1 key even in laptop posture (CAS check).
+	if _, _, err := store.PhonePickup("tier1-b"); !errors.Is(err, ErrCompanionPhoneHeldByOther) {
+		t.Fatalf("PhonePickup by live-blocked tier1-b err = %v, want ErrCompanionPhoneHeldByOther", err)
+	}
+	if _, _, err := store.PhonePutdown("tier1-b", CompanionPutdownNormal, CompanionPutdownNextAmbient); !errors.Is(err, ErrCompanionPhoneHeldByOther) {
+		t.Fatalf("PhonePutdown by live-blocked tier1-b err = %v, want ErrCompanionPhoneHeldByOther", err)
+	}
+
+	// Once old holder dies, CAS acquire by relaunched tier1-b succeeds immediately.
+	alive["tier1-a"] = false
+	if _, _, err := store.PhonePickup("tier1-b"); err != nil {
+		t.Fatalf("PhonePickup after old holder died = %v, want nil", err)
+	}
+	if got := store.Snapshot().LeaseOwner; got != "tier1-b" {
+		t.Fatalf("LeaseOwner = %q, want tier1-b", got)
+	}
+
+	// Sliding 5m idle deadline: renew shifts it; expiry releases lease and reports unread.
+	now = now.Add(CompanionLeaseIdleTimeout - time.Second)
+	if _, expired, _, _ := store.ExpireIfPastDeadline(now, false); expired {
+		t.Fatal("expired before idle deadline")
+	}
+	if !store.RenewLease("tier1-b") {
+		t.Fatal("RenewLease(tier1-b) = false")
+	}
+	now = now.Add(CompanionLeaseIdleTimeout - time.Second)
+	if _, expired, _, _ := store.ExpireIfPastDeadline(now, false); expired {
+		t.Fatal("expired before renewed idle deadline")
+	}
+	if _, _, err := store.EnqueueUserMessage("ping during hold"); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	now = now.Add(2 * time.Second)
+	snap, leaseExpired, delegExpired, hasUnread := store.ExpireIfPastDeadline(now, false)
+	if !leaseExpired || delegExpired || !hasUnread {
+		t.Fatalf("ExpireIfPastDeadline(idle) = (lease=%v, deleg=%v, unread=%v), want (true, false, true)", leaseExpired, delegExpired, hasUnread)
+	}
+	if snap.State != CompanionStateLaptopAmbient || snap.Posture != CompanionPostureLaptop || snap.LeaseOwner != "" {
+		t.Fatalf("snap after idle expiry = %+v", snap)
+	}
+
+	// Delegation in flight: putdown(normal, ambient) settles to laptop_work with lease held;
+	// ForceRelease clears holder so relaunched Tier-1 can acquire while laptop_work continues.
+	if _, _, err := store.PhonePickup("tier1-b"); err != nil {
+		t.Fatalf("pickup: %v", err)
+	}
+	store.SetDelegationInFlight(true)
+	snap, changed, err := store.PhonePutdown("tier1-b", CompanionPutdownNormal, CompanionPutdownNextAmbient)
+	if err != nil || !changed {
+		t.Fatalf("PhonePutdown during delegation = (%+v, %v, %v)", snap, changed, err)
+	}
+	if snap.State != CompanionStateLaptopWork || snap.Posture != CompanionPostureLaptop || !snap.DelegationInFlight || !store.EmbodimentLeaseActive() {
+		t.Fatalf("snap after putdown during delegation = %+v", snap)
+	}
+	snap, changed, _ = store.ForceRelease("tier1-b")
+	if !changed || snap.LeaseOwner != "" || snap.State != CompanionStateLaptopWork || !snap.DelegationInFlight {
+		t.Fatalf("snap after ForceRelease during delegation = (%+v, %v)", snap, changed)
+	}
+	// Relaunched Tier-1 can pick up phone while delegation stays in flight.
+	alive["tier1-c"] = true
+	if _, _, err := store.PhonePickup("tier1-c"); err != nil {
+		t.Fatalf("relaunched pickup during delegation: %v", err)
+	}
+	if _, _, err := store.PhonePutdown("tier1-c", CompanionPutdownNormal, CompanionPutdownNextAmbient); err != nil {
+		t.Fatalf("putdown tier1-c: %v", err)
+	}
+
+	// In-flight 30m deadline does NOT expire when Tier-2 has live children; expires once children finish.
+	now = now.Add(CompanionLeaseDelegationTimeout + time.Second)
+	if _, leaseExpired, delegExpired, _ := store.ExpireIfPastDeadline(now, true); leaseExpired || delegExpired {
+		t.Fatalf("in-flight deadline expired while Tier-2 has live children")
+	}
+	now = now.Add(CompanionLeaseDelegationTimeout + time.Second)
+	snap, leaseExpired, delegExpired, _ = store.ExpireIfPastDeadline(now, false)
+	if !leaseExpired || !delegExpired || snap.DelegationInFlight || snap.State != CompanionStateLaptopAmbient {
+		t.Fatalf("in-flight deadline expiry = (lease=%v, deleg=%v, snap=%+v)", leaseExpired, delegExpired, snap)
+	}
+
+	// Wake failure bound: 3 consecutive failures enter unavailable; next user message resets it.
+	for i := 1; i < CompanionWakeMaxRetries; i++ {
+		if snap, unavail := store.RecordWakeFailure(); unavail || snap.Unavailable {
+			t.Fatalf("failure %d entered unavailable early: %+v", i, snap)
+		}
+	}
+	if snap, unavail := store.RecordWakeFailure(); !unavail || !snap.Unavailable {
+		t.Fatalf("failure %d did not enter unavailable: (%v, %+v)", CompanionWakeMaxRetries, unavail, snap)
+	}
+	if _, snap, err := store.EnqueueUserMessage("retry now"); err != nil || snap.Unavailable {
+		t.Fatalf("EnqueueUserMessage did not clear unavailable: err=%v snap=%+v", err, snap)
+	}
+}
+
+func TestCompanionForceReleaseTriggersUnreadRewakeAndDirectorSummaryBackfeed(t *testing.T) {
+	d := &Daemon{}
+	wakes := make(chan string, 4)
+	d.SetCompanionWake(func(reason string) {
+		wakes <- reason
+	})
+
+	if _, err := d.CompanionPhonePickup("tier1-key"); err != nil {
+		t.Fatalf("pickup: %v", err)
+	}
+	if _, err := d.CompanionPhoneSend("tier1-key", "Checking tests!", "happy"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if _, _, err := d.companionPhone.EnqueueUserMessage("one more thing"); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if !d.CompanionForceRelease("tier1-key") {
+		t.Fatal("CompanionForceRelease = false, want true")
+	}
+	select {
+	case reason := <-wakes:
+		if reason != "release-unread" {
+			t.Fatalf("wake reason = %q, want release-unread", reason)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for release-unread wake callback")
+	}
+
+	// Ambient director digest receives 1-line recent_messenger summary backfeed ((1730)=a).
+	summary := d.companionPhone.LatestSummary()
+	if summary == "" {
+		t.Fatal("expected non-empty LatestSummary after phone release")
+	}
+	digest := companionDigest(companionCall{phase: "idle"}, nil, summary)
+	if !strings.Contains(digest, "recent_messenger: ") || !strings.Contains(digest, "Checking tests!") {
+		t.Fatalf("companionDigest missing recent_messenger backfeed:\n%s", digest)
+	}
+}

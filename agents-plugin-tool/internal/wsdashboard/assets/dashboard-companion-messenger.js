@@ -147,6 +147,13 @@
         typing: t("js.companion.messenger.typing.work", "Working on laptop…")
       };
     }
+    if (snap?.unavailable) {
+      return {
+        dot: "unavailable",
+        subtitle: t("js.companion.messenger.status.unavailable", "Companion is temporarily unavailable — send a message to retry"),
+        typing: ""
+      };
+    }
     if (st === "laptop_sleepy") {
       return {
         dot: "sleepy",
