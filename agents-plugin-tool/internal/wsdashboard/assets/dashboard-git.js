@@ -672,9 +672,11 @@
   // glTrim drops the rows past the first page (the page hid): the next
   // showing reads the log again from page one anyway.
   function glTrim() {
-    if (!gl.page || gl.commits.length <= gl.page) return;
+    // Always cancel an in-flight read or frontier walk, even before the
+    // first page landed, so nothing reads while the page is hidden.
     gl.seq++;
     gl.busy = false;
+    if (!gl.page || gl.commits.length <= gl.page) return;
     gl.commits = gl.commits.slice(0, gl.page);
     gl.more = gl.page;
     glDraw();

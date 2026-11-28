@@ -397,13 +397,13 @@ func TestGitDrawerRoutes(t *testing.T) {
 }
 
 // TestGitPanelCompactActionsAndCleanState pins the git panel's look: the
-// fetch, pull, and push buttons are chip-sized, and a clean tree shows a
-// quiet empty state centred in the change list's room instead of a list
-// line.
+// fetch, pull, and push buttons are the Git page's chip-sized strip
+// actions, and a clean tree shows a quiet empty state centred in the
+// change list's room instead of a list line.
 func TestGitPanelCompactActionsAndCleanState(t *testing.T) {
 	css, js := mustAsset(t, "dashboard.css"), mustAsset(t, "dashboard.js")
 	for _, want := range []string{
-		".gact { height: 20px; padding: 0 9px; gap: 3px; font-size: 12px; }",
+		".gp-page .gact { display: inline-flex; align-items: center; gap: 4px; width: auto; height: 24px; padding: 0 8px;",
 		".gfiles.clean { align-content: center; justify-items: center; }",
 	} {
 		if !strings.Contains(css, want) {
