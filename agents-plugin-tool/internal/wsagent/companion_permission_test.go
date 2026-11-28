@@ -114,23 +114,27 @@ func TestAgyCompanionPermissionRequestsAreSettledNotParked(t *testing.T) {
 
 // TestCompanionApprovalNeverParkedWithoutAnswerer: even when the process
 // cannot be answered, a live companion request is dropped rather than parked
-// where no page can ever answer it.
+// where no page can ever answer it, and approvalFailed stops the process.
 func TestCompanionApprovalNeverParkedWithoutAnswerer(t *testing.T) {
 	h, id, _ := startAgyCompanion(t, companionRoleBody)
 	c := h.runner.conv(id)
-	var parked int
+	var (
+		parked  int
+		lastErr string
+		hasProc bool
+	)
 	c.do(func() {
 		// A process with no approval controls: nothing can answer.
 		mute := struct{ Process }{c.proc}
-		orig := c.proc
 		c.proc = mute
-		defer func() { c.proc = orig }()
 		c.addApproval(ApprovalRequest{ID: "ws-call", Tool: "mcp_ws_call"}, false)
 		c.addApproval(ApprovalRequest{ID: "shell", Tool: agyCommandTool}, false)
 		parked = len(c.approvals)
+		lastErr = c.lastErr
+		hasProc = c.proc != nil
 	})
-	if parked != 0 {
-		t.Fatalf("companion approvals parked: %d", parked)
+	if parked != 0 || hasProc || lastErr != errNoApprovalAnswer.Error() {
+		t.Fatalf("companion without answerer: parked=%d hasProc=%v lastErr=%q want %q", parked, hasProc, lastErr, errNoApprovalAnswer.Error())
 	}
 }
 
@@ -210,5 +214,154 @@ func TestCompanionExecApprovalRefusedNotParked(t *testing.T) {
 	}
 	if n := pendingApprovals(h, id); n != 0 {
 		t.Fatalf("companion exec approval parked: %d", n)
+	}
+}
+
+// TestCompanionReplayApprovalSettledAtReplayDone verifies that prompts parked
+// on a hidden companion session during replay or quiet handling are settled by
+// companionApprovalAllows at replayDone without falling through to agyBypass,
+// while daemon-owned execAnswers entries are skipped.
+func TestCompanionReplayApprovalSettledAtReplayDone(t *testing.T) {
+	h, id, _ := startAgyCompanion(t, companionRoleBody)
+	c := h.runner.conv(id)
+	spy := &approvalSpy{}
+	execCh := make(chan execAnswer, 1)
+	var (
+		duringReplay         int
+		answeredDuringReplay int
+		afterReplay          []ApprovalRequest
+		execKept             bool
+	)
+	c.do(func() {
+		spy.Process, c.proc = c.proc, spy
+		defer func() { c.proc = spy.Process }()
+
+		// Even with AgyBypass set on the record, allowAgyBypassPending must
+		// delegate to settleCompanionPending rather than auto-allowing shell.
+		c.update(func(rec *Record) {
+			rec.AgyBypass = true
+			rec.PermissionMode = "default"
+		})
+
+		c.replaying = true
+		c.addApproval(ApprovalRequest{ID: "replayed-ws", Tool: "mcp_ws_call"}, false)
+		c.addApproval(ApprovalRequest{ID: "replayed-shell", Tool: agyCommandTool, Kind: "execute"}, false)
+		c.replaying = false
+		c.addApproval(ApprovalRequest{ID: "quiet-read", Tool: "view_file", Kind: "read"}, true)
+
+		if c.execAnswers == nil {
+			c.execAnswers = map[string]chan execAnswer{}
+		}
+		c.execAnswers["exec-wait"] = execCh
+		c.approvals = append(c.approvals, ApprovalRequest{ID: "exec-wait", Tool: "exec_shell"})
+
+		c.replaying = true
+		c.allowAgyBypassPending()
+		duringReplay = len(c.approvals)
+		answeredDuringReplay = len(spy.answered)
+
+		c.replayDone(false)
+		afterReplay = append([]ApprovalRequest(nil), c.approvals...)
+		_, execKept = c.execAnswers["exec-wait"]
+	})
+
+	if duringReplay != 4 || answeredDuringReplay != 0 {
+		t.Fatalf("mid-replay: parked=%d answered=%d want 4, 0", duringReplay, answeredDuringReplay)
+	}
+	if len(spy.answered) != 3 {
+		t.Fatalf("answered=%+v want 3 (exec-wait must be skipped)", spy.answered)
+	}
+	want := map[string]bool{
+		"replayed-ws":    true,
+		"replayed-shell": false,
+		"quiet-read":     true,
+	}
+	for i, req := range spy.answered {
+		exp, ok := want[req.ID]
+		if !ok {
+			t.Fatalf("unexpected answered request %+v", req)
+		}
+		if spy.allowed[i] != exp {
+			t.Fatalf("request %s allowed=%v want %v", req.ID, spy.allowed[i], exp)
+		}
+		delete(want, req.ID)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing answered requests: %v", want)
+	}
+	if len(afterReplay) != 1 || afterReplay[0].ID != "exec-wait" || !execKept {
+		t.Fatalf("after replayDone approvals=%+v execKept=%v want only exec-wait", afterReplay, execKept)
+	}
+}
+
+// noAnswerSpy is a Process whose approval answerer returns errNoApprovalAnswer.
+type noAnswerSpy struct {
+	Process
+}
+
+func (s *noAnswerSpy) AnswerApproval(ApprovalRequest, bool, string) error {
+	return errNoApprovalAnswer
+}
+
+// TestCompanionReplayUnanswerableApprovalFailsClosed verifies Critical #2:
+// an unanswerable replayed companion prompt (either no answerer or
+// errNoApprovalAnswer) drops all parked non-exec approvals, calls
+// approvalFailed(errNoApprovalAnswer) setting lastErr, and stops the process,
+// while leaving daemon-owned execAnswers intact.
+func TestCompanionReplayUnanswerableApprovalFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		wrap func(Process) Process
+	}{
+		{
+			name: "no_answerer",
+			wrap: func(p Process) Process { return struct{ Process }{p} },
+		},
+		{
+			name: "errNoApprovalAnswer",
+			wrap: func(p Process) Process { return &noAnswerSpy{Process: p} },
+		},
+		{
+			name: "nil_proc",
+			wrap: func(p Process) Process { _ = p.Close(); return nil },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, id, _ := startAgyCompanion(t, companionRoleBody)
+			c := h.runner.conv(id)
+			execCh := make(chan execAnswer, 1)
+			var (
+				afterReplay []ApprovalRequest
+				execKept    bool
+				hasProc     bool
+				lastErr     string
+			)
+			c.do(func() {
+				c.proc = tc.wrap(c.proc)
+				c.replaying = true
+				c.addApproval(ApprovalRequest{ID: "replayed-1", Tool: "mcp_ws_call"}, false)
+				c.addApproval(ApprovalRequest{ID: "replayed-2", Tool: agyCommandTool}, false)
+				if c.execAnswers == nil {
+					c.execAnswers = map[string]chan execAnswer{}
+				}
+				c.execAnswers["exec-wait"] = execCh
+				c.approvals = append(c.approvals, ApprovalRequest{ID: "exec-wait", Tool: "exec_shell"})
+
+				c.replayDone(false)
+				afterReplay = append([]ApprovalRequest(nil), c.approvals...)
+				_, execKept = c.execAnswers["exec-wait"]
+				hasProc = c.proc != nil
+				lastErr = c.lastErr
+			})
+			if len(afterReplay) != 1 || afterReplay[0].ID != "exec-wait" || !execKept {
+				t.Fatalf("%s: approvals=%+v execKept=%v want only exec-wait", tc.name, afterReplay, execKept)
+			}
+			if hasProc {
+				t.Fatalf("%s: process still running after unanswerable replayed approval", tc.name)
+			}
+			if lastErr != errNoApprovalAnswer.Error() {
+				t.Fatalf("%s: lastErr=%q want %q", tc.name, lastErr, errNoApprovalAnswer.Error())
+			}
+		})
 	}
 }
