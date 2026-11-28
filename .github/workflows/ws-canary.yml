@@ -68,7 +68,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
         with:
-          fetch-depth: ${{ inputs.mode == 'prerelease' && 0 || 1 }}
+          fetch-depth: ${{ inputs.mode != 'prerelease' && 1 || 0 }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
