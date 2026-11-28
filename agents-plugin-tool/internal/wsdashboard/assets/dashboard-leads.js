@@ -514,21 +514,23 @@
     return R;
   }
 
-  // The spawn popover for one worktree or plain folder: the target as one
-  // read-only line (workspace, branch, path), the harness, the permission
-  // level, and the option rows. Start spawns the session and opens its
-  // page; the first message is sent from that page's composer. A refused or
-  // failed spawn shows in the popover's error line and keeps it open.
-  // The level starts at the default (today's behaviour: the legacy route
-  // with the native mode, under Advanced, no level sent). A picked level
-  // decides the native mode; Start re-reads the daemon's support, and
-  // "full" first opens the warning, whose grant alone carries
-  // permission_full_ack. A re-read that finds no support sends nothing and
-  // says so (P.dropped): the user may then start on a native mode by hand.
-  // A daemon that refuses the selection route (P.refused) is shown, and
-  // Start becomes a re-check; nothing is resent on the legacy route.
+  // The spawn modal for one worktree or plain folder (v3 hybrid layout):
+  // header with inline searchable Named Tier pill + close button, hero Start
+  // CTA with live launch summary, full-width Harness segmented bar, matched
+  // side-by-side Model combobox + horizontal Effort drag knob, and a quiet
+  // recessed tonal footer band holding permission capsules (with collapsed
+  // Advanced native modes) and plugin isolation toggle.
+  // Start spawns the session and opens its page; a refused or failed spawn
+  // shows in the modal's error line and keeps it open.
+  // A picked permission level decides the native mode; Start re-reads the
+  // daemon's support, and "full" first opens the warning, whose grant alone
+  // carries permission_full_ack. A re-read that finds no support sends nothing
+  // and says so (P.dropped): the user may then start on a native mode by hand.
+  // A daemon that refuses the selection route (P.refused) is shown, and Start
+  // becomes a re-check; nothing is resent on the legacy route.
+  var LEAD_DANGER_MODE = { bypassPermissions: 1, "danger-full-access": 1 };
   function rpLeadMake() {
-    var P = { gen: 0, busy: false, root: "", harness: "claude", iso: "default", level: "", dropped: "", refused: 0 };
+    var P = { gen: 0, busy: false, loading: false, root: "", harness: "claude", model: "", effort: "", mode: "", iso: "default", level: "", dropped: "", refused: 0, statusText: "" };
     var settingsKey = "ws.dashboard.newSession", saved = {}, picks = Object.create(null);
     function readSettings() {
       try {
@@ -540,36 +542,77 @@
       var v = picks[k];
       return v && typeof v === "object" && !Array.isArray(v) ? v : {};
     }
+    function defaultMode(k) {
+      var modes = leadModes(k);
+      return k === "claude" && modes.indexOf("auto") >= 0 ? "auto" : modes[0] || "";
+    }
+    function setValues(k, v) {
+      var modes = leadModes(k);
+      P.model = v.model || "";
+      P.effort = v.effort || "";
+      P.mode = modes.indexOf(v.mode) >= 0 ? v.mode : defaultMode(k);
+    }
     function showPick(k) {
       var v = pick(k), models = leadModels(k, "", true), model = leadModelKey(v.model, v.provider), efforts = leadEfforts(k);
-      rows.set(k, { model: models.indexOf(model) >= 0 ? model : "", effort: efforts.indexOf(v.effort) >= 0 ? v.effort : "", mode: v.mode });
+      setValues(k, { model: models.indexOf(model) >= 0 ? model : "", effort: efforts.indexOf(v.effort) >= 0 ? v.effort : "", mode: v.mode });
       P.iso = v.iso === "isolated" ? "isolated" : "default";
       permDraw();
     }
+    function modelOff() {
+      return P.busy || P.loading || off(P.harness) || (!leadModels(P.harness, "", true).length && !P.model);
+    }
+    function effortOff() {
+      return P.busy || P.loading || off(P.harness) || (!leadEfforts(P.harness).length && !P.effort);
+    }
+    function freeMode() {
+      var modes = leadModes(P.harness);
+      if (off(P.harness) || !modes.length) return "";
+      return modes.indexOf(P.mode) >= 0 ? P.mode : defaultMode(P.harness);
+    }
     function currentPick() {
-      var chosen = leadModelPick(rows.model.disabled ? "" : rows.model.value);
-      chosen.mode = rows.free();
-      chosen.effort = rows.effort.disabled ? "" : rows.effort.value;
+      var chosen = leadModelPick(modelOff() ? "" : P.model);
+      chosen.mode = freeMode();
+      chosen.effort = effortOff() ? "" : P.effort;
       chosen.iso = P.iso;
       return chosen;
     }
     var el = P.el = rpPop(wsT("js.lead.title"));
-    el.appendChild(mk("div", "sphd", wsT("js.lead.title")));
-    var loc = el.appendChild(mk("div", "sploc"));
-    var tierPick = leadTierPicker(el.appendChild(mk("div", "sptiers")), tierUsable, applyTier);
-    var hsec = el.appendChild(mk("div", "spsec"));
-    var seg = hsec.appendChild(mk("div", "spseg"));
+    if (el.classList && el.classList.add) el.classList.add("ns-modal");
+    else if (el.classList) el.classList.toggle("ns-modal", true);
+    var xBtn = el.appendChild(rpBtn("ns-x", "×"));
+    xBtn.setAttribute("aria-label", wsT("js.lead.ns.close"));
+    xBtn.title = wsT("js.lead.ns.close");
+
+    // Header (title + location) and inline searchable Named Tier pill
+    var hd = el.appendChild(mk("div", "ns-hd"));
+    hd.appendChild(mk("h1", "sphd", wsT("js.lead.title")));
+    var loc = hd.appendChild(mk("div", "sploc ns-loc"));
+    var tierBox = el.appendChild(mk("div", "ns-tier ns-cb sptiers"));
+    var tierPick = leadTierPicker(tierBox, tierUsable, applyTier);
+
+    // Hero Start CTA with live summary, danger badge/hint, and error line
+    var ctaW = el.appendChild(mk("div", "ns-cta-w"));
+    var start = ctaW.appendChild(rpBtn("ns-cta pbtn go", ""));
+    var startLbl = start.appendChild(mk("span", "ns-cta-lbl", wsT("js.lead.start")));
+    var startWarn = start.appendChild(mk("span", "ns-cta-warn", wsT("js.lead.ns.danger.badge")));
+    startWarn.hidden = true;
+    var startSum = start.appendChild(mk("span", "ns-cta-sum"));
+    var ctaHint = ctaW.appendChild(mk("p", "ns-ctahint"));
+    ctaHint.hidden = true;
+    var err = ctaW.appendChild(mk("p", "spnote err"));
+    err.setAttribute("aria-live", "polite");
+    err.hidden = true;
+
+    // Full-width Harness segmented bar + agy terms notice
+    var hsec = el.appendChild(mk("div", "ns-har spsec"));
+    hsec.appendChild(mk("div", "ns-lbl", wsT("js.sup.harness")));
+    var seg = hsec.appendChild(mk("div", "ns-hs spseg"));
     seg.setAttribute("role", "radiogroup");
     seg.setAttribute("aria-label", wsT("js.sup.harness"));
-    // agy's terms: a hosted agy lead is still created, with this warning
-    // shown while agy is the picked harness (it never disables Start).
     var hwarn = hsec.appendChild(mk("p", "spnote spterms", wsT("js.lead.agy.terms")));
     hwarn.setAttribute("role", "note");
     hwarn.hidden = true;
     var hbtn = Object.create(null), harnessSig = "";
-    // harnessButtons draws the harness segment from the latest list; unless
-    // keep, a harness the list no longer offers moves to the first one that
-    // can start (keep leaves it, and Start stays refused).
     function harnessButtons(keep) {
       var hs = leadHarnesses(), sig = hs.map(function (h) { return h.harness; }).join("\n");
       if (harnessSig !== sig) {
@@ -577,7 +620,8 @@
         seg.textContent = "";
         hbtn = Object.create(null);
         hs.forEach(function (h) {
-          var k = h.harness, b = hbtn[k] = rpBtn("", permHarness(k));
+          var k = h.harness, b = hbtn[k] = rpBtn("", "");
+          b.appendChild(mk("b", null, permHarness(k)));
           b.setAttribute("role", "radio");
           b.setAttribute("data-harness", k);
           seg.appendChild(b);
@@ -587,54 +631,141 @@
         P.harness = hs.filter(function (h) { return !off(h.harness); }).map(function (h) { return h.harness; })[0] || hs[0].harness;
       }
     }
-    // The permission level: its segment, what the pick asks for and how
-    // this harness carries it, or why no level can be picked here.
-    var psec = el.appendChild(mk("div", "spsec pmsec"));
-    psec.appendChild(mk("div", "splbl", wsT("js.perm.title")));
+
+    // Matched Model (editable combobox) + Effort (horizontal drag knob) row
+    var modSec = el.appendChild(mk("div", "ns-mod"));
+    var modLbl = modSec.appendChild(mk("div", "ns-lbl"));
+    modLbl.appendChild(mk("span", "ns-l", wsT("js.sup.model")));
+    var modelTag = modLbl.appendChild(mk("span", "ns-tag", wsT("js.lead.ns.model.custom")));
+    modelTag.hidden = true;
+    var modelBox = modSec.appendChild(mk("div", "ns-cb"));
+    var modelCombo = nsCombo(modelBox, {
+      ariaLabel: wsT("js.sup.model"),
+      inputAttr: ["data-model-input", "1"],
+      items: function () {
+        var entries = leadModelEntries(P.harness, "", true);
+        var a = entries.map(function (m) {
+          var id = String(m.id), key = leadModelKey(id, m.provider);
+          var disp = m.display_name && m.display_name !== id ? m.display_name : "";
+          var prov = P.harness === "werk" && m.provider ? (m.provider === "openai" ? "OpenAI" : m.provider) : "";
+          return { val: key, label: key, sub: [disp, prov].filter(Boolean).join(" · ") };
+        });
+        if (P.harness !== "werk" && a.length) a.unshift({ val: "", label: wsT("js.sup.default"), manual: true });
+        return a;
+      },
+      current: function () { return P.model; },
+      pick: function (it) {
+        if (it.val !== P.model) { P.model = it.val; tierPick.manual(); }
+        edited();
+      },
+      free: function (text) {
+        var v = String(text || "").trim();
+        if (v !== P.model) { P.model = v; tierPick.manual(); }
+        if (!P.busy) setErr("");
+        drawModelTag();
+        drawCta();
+        tierPick.draw();
+      },
+      onBlur: function () { edited(); }
+    });
+    var modelNote = modSec.appendChild(mk("p", "ns-note spdesc"));
+    modelNote.id = rpId();
+    modelNote.hidden = true;
+    modelCombo.input.setAttribute("aria-describedby", modelNote.id);
+
+    var effSec = el.appendChild(mk("div", "ns-eff"));
+    var effLbl = effSec.appendChild(mk("div", "ns-lbl"));
+    var effL = effLbl.appendChild(mk("span", "ns-l", wsT("js.sup.effort")));
+    var effVal = effL.appendChild(mk("span", "ns-v"));
+    var effRst = effLbl.appendChild(rpBtn("ns-rst", wsT("js.sup.default")));
+    effRst.hidden = true;
+    var effKnobEl = effSec.appendChild(mk("div", "knob ns-knob"));
+    var effNote = effSec.appendChild(mk("p", "ns-note spdesc"));
+    effNote.hidden = true;
+    var effortKnob = nsEffortKnob(effKnobEl, function (val) {
+      if (val !== P.effort) { P.effort = val; tierPick.manual(); }
+      edited();
+    }, function (shown, offNow) {
+      effVal.textContent = offNow ? "" : (shown || wsT("js.sup.default"));
+    });
+
+    // Quiet recessed tonal footer band: Permission capsules + Advanced + Isolation switch
+    var foot = el.appendChild(mk("div", "ns-foot"));
+    var footMain = foot.appendChild(mk("div", "ns-foot-main"));
+    var psec = footMain.appendChild(mk("div", "ns-fg pmsec"));
+    var pLbl = psec.appendChild(mk("span", "ns-fl", wsT("js.perm.title")));
     var pseg = permSeg(psec, function (level) {
       if (P.busy || P.level === level) return;
       P.level = level;
       P.refused = 0;
       edited();
     });
-    var pwhat = psec.appendChild(mk("p", "pmwhat")), pmap = psec.appendChild(mk("p", "pmmap")), poff = psec.appendChild(mk("p", "pmoff"));
-    var opts = el.appendChild(mk("div", "spopts"));
-    var adv = el.appendChild(mk("details", "pmadv")), advSum = adv.appendChild(mk("summary", null, wsT("js.perm.adv")));
-    var advOwn = advSum.appendChild(mk("span", "pmown", wsT("js.perm.adv.owned")));
-    var rows = leadRows(opts, edited, adv, true);
-    // Plugin isolation: which plugins the hosted session loads. The pick goes
-    // out as plugin_isolation.
-    var isec = el.appendChild(mk("div", "spsec"));
-    isec.appendChild(mk("div", "splbl", wsT("js.lead.iso")));
-    var iseg = isec.appendChild(mk("div", "spseg"));
-    iseg.setAttribute("role", "radiogroup");
-    iseg.setAttribute("aria-label", wsT("js.lead.iso"));
-    var ibtn = { "default": rpBtn("", wsT("js.lead.iso.default")), isolated: rpBtn("", wsT("js.lead.iso.isolated")) };
-    Object.keys(ibtn).forEach(function (k) { ibtn[k].setAttribute("role", "radio"); ibtn[k].setAttribute("data-iso", k); iseg.appendChild(ibtn[k]); });
-    var idesc = isec.appendChild(mk("p", "spdesc"));
-    var pfine = el.appendChild(mk("p", "pmfine", wsT("js.perm.fine.intent")));
-    var perr = el.appendChild(mk("p", "pmerr")), perrHd = perr.appendChild(mk("b"));
+    if (pseg.el.classList) pseg.el.classList.toggle("ns-cap", true);
+    var pNativeCap = psec.appendChild(mk("span", "ns-cap ns-native-cap"));
+    pNativeCap.setAttribute("role", "radiogroup");
+    pNativeCap.setAttribute("aria-label", wsT("js.lead.mode"));
+    pNativeCap.hidden = true;
+    var pmap = psec.appendChild(mk("span", "ns-map pmmap"));
+    pmap.hidden = true;
+    var poff = psec.appendChild(mk("span", "ns-offnote pmoff"));
+    poff.hidden = true;
+
+    var isoSw = footMain.appendChild(rpBtn("ns-sw", ""));
+    isoSw.setAttribute("role", "switch");
+    isoSw.setAttribute("data-iso-switch", "1");
+    isoSw.setAttribute("aria-label", wsT("js.lead.iso"));
+    isoSw.setAttribute("aria-checked", "false");
+    isoSw.appendChild(mk("i"));
+    var isoLbl = isoSw.appendChild(mk("span", null, wsT("js.lead.iso") + " · " + wsT("js.lead.iso.default")));
+
+    var pNativeNote = foot.appendChild(mk("p", "ns-adv-note spdesc"));
+    pNativeNote.hidden = true;
+    var pfine = foot.appendChild(mk("p", "ns-fine pmfine", wsT("js.perm.fine.intent")));
+    pfine.hidden = true;
+    var perr = foot.appendChild(mk("p", "pmerr")), perrHd = perr.appendChild(mk("b"));
     perr.appendChild(mk("span", null, wsT("js.perm.refused.create")));
-    var err = el.appendChild(mk("p", "spnote err"));
-    err.setAttribute("aria-live", "polite");
-    var row = el.appendChild(mk("div", "sprow"));
-    var status = row.appendChild(mk("span", "spnote"));
-    var cancel = row.appendChild(rpBtn("pbtn", wsT("js.rail.cancel")));
-    var start = row.appendChild(rpBtn("pbtn go", wsT("js.lead.start")));
-    function setErr(text) { err.textContent = text || ""; err.hidden = !text; }
-    // A named tier is usable when its harness can start here and the form
-    // can carry its model and effort (those fields are off on a harness
-    // that lists none).
-    function tierUsable(t) {
-      return !!t.harness && !!hbtn[t.harness] && !off(t.harness) && (!t.model || leadModels(t.harness).length > 0) && (!t.effort || leadEfforts(t.harness).length > 0);
+    perr.hidden = true;
+
+    var adv = foot.appendChild(mk("details", "ns-adv pmadv"));
+    adv.hidden = true;
+    var advSum = adv.appendChild(mk("summary"));
+    var advAr = advSum.appendChild(mk("span", "ns-ar", "▸"));
+    advAr.setAttribute("aria-hidden", "true");
+    advSum.appendChild(mk("span", null, wsT("js.perm.adv")));
+    var advOwn = advSum.appendChild(mk("span", "pmown", wsT("js.perm.adv.owned")));
+    advOwn.hidden = true;
+    var advBody = adv.appendChild(mk("div", "ns-adv-body"));
+    var advCap = advBody.appendChild(mk("span", "ns-cap ns-adv-cap"));
+    advCap.setAttribute("role", "radiogroup");
+    advCap.setAttribute("aria-label", wsT("js.lead.mode"));
+    var advNote = advBody.appendChild(mk("p", "ns-adv-note spdesc"));
+    advNote.hidden = true;
+
+    function fillCaps(box, modes, cur, dis, onPick) {
+      var sig = modes.join("\n");
+      if (box.wsSig !== sig) {
+        box.wsSig = sig;
+        box.textContent = "";
+        modes.forEach(function (m) {
+          var b = box.appendChild(rpBtn(LEAD_DANGER_MODE[m] ? "dng" : "", m));
+          b.setAttribute("role", "radio");
+          b.setAttribute("data-mode", m);
+          b.addEventListener("click", function () { if (!b.disabled) onPick(m); });
+        });
+      }
+      Array.prototype.forEach.call(box.children, function (b) {
+        var m = b.getAttribute("data-mode");
+        b.setAttribute("aria-checked", String(m === cur));
+        b.disabled = !!dis;
+      });
     }
-    // applyTier fills harness, model, and effort from a picked named tier.
-    // The permission level, native mode, and plugin isolation stay the
-    // user's: a level the new harness does not offer shows as dropped (not
-    // sent), and one picked while support is unknown stays visible.
+    function setErr(text) { err.textContent = text || ""; err.hidden = !text; }
+    function tierUsable(t) {
+      return !!t.harness && !!hbtn[t.harness] && !off(t.harness) && (!t.model || leadModels(t.harness, "", true).length > 0) && (!t.effort || leadEfforts(t.harness).length > 0);
+    }
     function applyTier(t) {
       if (P.busy || P.loading) return;
-      var mode = rows.free();
+      var mode = freeMode();
       if (t.harness !== P.harness) {
         picks[P.harness] = currentPick();
         P.harness = t.harness;
@@ -642,23 +773,14 @@
         P.refused = 0;
         mode = pick(t.harness).mode;
       }
-      rows.set(P.harness, { model: leadModelKey(t.model, t.provider) || "", effort: t.effort || "", mode: mode });
+      setValues(P.harness, { model: leadModelKey(t.model, t.provider) || "", effort: t.effort || "", mode: mode });
       edited();
     }
-    // tierAgrees is whether the fields carry the picked named tier (true in
-    // manual selection): its harness, model, and effort as applyTier set
-    // them.
     function tierAgrees() {
       var t = tierPick.name && tierPick.current();
       if (!tierPick.name) return true;
-      return !!t && P.harness === t.harness && rows.model.value === (leadModelKey(t.model, t.provider) || "") && rows.effort.value === (t.effort || "");
+      return !!t && P.harness === t.harness && P.model === (leadModelKey(t.model, t.provider) || "") && P.effort === (t.effort || "");
     }
-    // reapplyTier puts the still-picked named tier back into the fields
-    // after something redrew them (a refreshed choices list drops a model
-    // or effort its catalog does not list, which applyTier had added). A
-    // tier the refreshed list no longer offers, or that cannot be picked
-    // now, returns the form to manual selection instead. True when the
-    // fields carry the picked tier afterwards.
     function reapplyTier() {
       if (!tierPick.name) return false;
       var t = tierPick.current();
@@ -670,37 +792,113 @@
       var h = supHarness(k);
       return !hbtn[k] || (!!h && (h.lead === true ? h.available !== true : h.available === false));
     }
-    // dropped is the level a re-read found unsupported (or that the daemon
-    // no longer offers): it is not sent, and the form says so.
     function dropped() {
       var levels = permLevels(P.harness);
       return P.dropped || (P.level && levels && levels.indexOf(P.level) < 0 ? P.level : "");
     }
+    function drawModelTag() {
+      var known = leadModels(P.harness, "", true);
+      modelTag.hidden = !(P.model && known.indexOf(P.model) < 0);
+    }
+    function drawModelAndEffort() {
+      var h = supHarness(P.harness), efforts = leadEfforts(P.harness);
+      modelCombo.input.placeholder = wsT(P.harness === "werk" ? "js.lead.ns.model.required" : "js.lead.ns.model.placeholder");
+      modelCombo.setDisabled(modelOff());
+      modelCombo.sync(false);
+      drawModelTag();
+      var notice = h && h.model_notice || "";
+      if (modelNote.textContent !== notice) modelNote.textContent = notice;
+      modelNote.hidden = !notice;
+      var effDisabled = effortOff();
+      effortKnob.set(efforts, P.effort, effDisabled);
+      var noEff = !efforts.length && !P.effort;
+      effRst.hidden = effDisabled || !P.effort;
+      effNote.hidden = !noEff;
+      if (noEff) effNote.textContent = wsT("js.sup.noefforts");
+    }
+    function dangerNow() {
+      var levels = permLevels(P.harness), supported = !!(levels && levels.length), gone = dropped(), level = gone ? "" : P.level;
+      var modes = leadModes(P.harness), mode = freeMode();
+      if (supported && !gone && level === "full") return "level";
+      if (modes.length > 0 && !level && !!LEAD_DANGER_MODE[mode]) return "native";
+      return "";
+    }
+    function drawCta() {
+      var levels = permLevels(P.harness), supported = !!(levels && levels.length), gone = dropped(), level = gone ? "" : P.level;
+      var modes = leadModes(P.harness), danger = dangerNow();
+      var missingModel = P.harness === "werk" && !P.model && !P.loading;
+      start.disabled = P.busy || P.loading || off(P.harness) || (P.harness === "werk" && !P.model);
+      if (start.classList) start.classList.toggle("danger", !!danger);
+      startLbl.textContent = P.busy && P.statusText ? P.statusText : wsT(P.refused ? "js.perm.recheck" : gone ? (modes.length ? "js.perm.start.native" : "js.perm.start.plain") : (supported && level === "full") ? "js.perm.start.full" : "js.lead.start");
+      startWarn.hidden = !danger;
+      var hasEff = leadEfforts(P.harness).length > 0 || !!P.effort;
+      var parts = [permHarness(P.harness), P.model || wsT("js.sup.default"), hasEff ? (P.effort || wsT("js.sup.default")) : null].filter(Boolean);
+      startSum.textContent = parts.join(" · ");
+      var hint = danger === "level" ? wsT("js.lead.ns.danger.confirm") : danger === "native" ? wsT("js.lead.ns.danger.bypass") : missingModel ? wsT("js.lead.ns.model.need", permHarness(P.harness)) : "";
+      ctaHint.textContent = hint;
+      ctaHint.hidden = !hint;
+      if (ctaHint.classList) ctaHint.classList.toggle("danger", !!danger);
+    }
     function permDraw() {
-      var levels = permLevels(P.harness), supported = !!(levels && levels.length), modes = leadModes(P.harness).length > 0;
-      var gone = dropped(), level = gone ? "" : P.level;
+      var levels = permLevels(P.harness), supported = !!(levels && levels.length), modes = leadModes(P.harness);
+      var gone = dropped(), level = gone ? "" : P.level, unavail = off(P.harness);
       // A level picked before support became unknown stays visible.
       var show = !gone && (supported || (!levels && !!P.level));
+      pLbl.textContent = wsT(show ? "js.perm.title" : "js.lead.mode");
       pseg.el.hidden = !show;
       if (show) pseg.set([""].concat(supported ? levels : PERM_LEVELS), level, "", P.busy || !supported);
-      var offText = gone ? wsT("js.perm.off.again", wsT(PERM_LABEL[gone])) : show ? "" : !levels ? wsT("js.perm.checking") : modes ? wsT("js.perm.off.create") : wsT("js.perm.off.plain", permHarness(P.harness));
+      var offText = gone ? wsT("js.perm.off.again", wsT(PERM_LABEL[gone])) : show ? "" : !levels ? wsT("js.perm.checking") : modes.length ? wsT("js.perm.off.create") : wsT("js.perm.off.plain", permHarness(P.harness));
       poff.textContent = offText;
       poff.hidden = !offText;
-      pwhat.textContent = show ? wsT(PERM_WHAT[level]) : "";
-      pwhat.hidden = !show;
       var mapped = level && PERM_NATIVE[P.harness] ? PERM_NATIVE[P.harness][level] || "" : "";
-      if (show) permMap(pmap, P.harness, level, level ? mapped : rows.free(), false);
-      else pmap.hidden = true;
-      var owned = show && modes ? mapped : "";
-      rows.own(owned, owned ? wsT("js.perm.adv.owned.note", wsT(PERM_LABEL[level])) : "");
+      var modeNow = freeMode();
+      if (show && modes.length) {
+        var shownMode = level ? mapped : modeNow;
+        pmap.textContent = "";
+        if (shownMode) {
+          pmap.appendChild(mk("span", null, "→"));
+          pmap.appendChild(mk("code", null, shownMode));
+          pmap.title = wsT(PERM_WHAT[level]);
+          pmap.hidden = false;
+        } else pmap.hidden = true;
+      } else pmap.hidden = true;
+      var owned = show && modes.length ? mapped : "";
+      var showNativeInline = (!supported || !!gone) && modes.length > 0 && !show;
+      pNativeCap.hidden = !showNativeInline;
+      if (showNativeInline) {
+        fillCaps(pNativeCap, modes, modeNow, P.busy || unavail, function (m) {
+          if (P.mode === m) return;
+          P.mode = m;
+          edited();
+        });
+        var claudeInline = P.harness === "claude";
+        var inlineNote = (claudeInline && LEAD_MODE_NOTE[modeNow] ? wsT(LEAD_MODE_NOTE[modeNow]) : modeNow) + (gone ? " " + wsT("js.perm.native.own") : "");
+        pNativeNote.textContent = inlineNote;
+        pNativeNote.hidden = !inlineNote;
+        if (pNativeNote.classList) pNativeNote.classList.toggle("warn", !!LEAD_DANGER_MODE[modeNow]);
+      } else {
+        pNativeNote.hidden = true;
+      }
+      var showAdv = supported && !gone && modes.length > 0;
+      adv.hidden = !showAdv;
       advOwn.hidden = !owned;
-      rows.inline(!supported || !!gone);
-      adv.hidden = !(supported && !gone && modes);
-      pfine.hidden = !supported;
-      rows.mark(gone && modes ? wsT("js.perm.native.own") : "");
+      if (showAdv) {
+        var shownAdvMode = owned || modeNow;
+        fillCaps(advCap, modes, shownAdvMode, P.busy || unavail || !!owned, function (m) {
+          if (P.mode === m) return;
+          P.mode = m;
+          edited();
+        });
+        var claude = P.harness === "claude";
+        var noteText = owned ? wsT("js.perm.adv.owned.note", wsT(PERM_LABEL[level])) : (claude && LEAD_MODE_NOTE[modeNow] ? wsT(LEAD_MODE_NOTE[modeNow]) : modeNow);
+        advNote.textContent = noteText;
+        advNote.hidden = !noteText;
+        if (advNote.classList) advNote.classList.toggle("warn", !owned && !!LEAD_DANGER_MODE[modeNow]);
+      }
+      pfine.hidden = !supported || !!gone;
       perr.hidden = !P.refused;
       perrHd.textContent = P.refused ? wsT("js.perm.refused", P.refused) : "";
-      start.textContent = wsT(P.refused ? "js.perm.recheck" : gone ? (modes ? "js.perm.start.native" : "js.perm.start.plain") : level === "full" ? "js.perm.start.full" : "js.lead.start");
+      drawCta();
     }
     function sync() {
       Object.keys(hbtn).forEach(function (k) {
@@ -710,18 +908,19 @@
         hbtn[k].title = off(k) ? wsT("js.sup.unavail", k, h && h.error || "") : "";
       });
       hwarn.hidden = P.harness !== "agy";
-      Object.keys(ibtn).forEach(function (k) { ibtn[k].setAttribute("aria-checked", String(P.iso === k)); });
-      idesc.textContent = wsT(P.iso === "isolated" ? "js.lead.iso.isolated.hint" : "js.lead.iso.default.hint");
-      start.disabled = P.busy || P.loading || off(P.harness) || (P.harness === "werk" && !rows.model.value);
+      var isolated = P.iso === "isolated";
+      isoSw.setAttribute("aria-checked", String(isolated));
+      isoSw.disabled = P.busy;
+      isoLbl.textContent = wsT("js.lead.iso") + " · " + wsT(isolated ? "js.lead.iso.isolated" : "js.lead.iso.default");
+      isoSw.title = wsT(isolated ? "js.lead.iso.isolated.hint" : "js.lead.iso.default.hint");
+      drawModelAndEffort();
       tierPick.busy = P.busy || !!P.loading;
       tierPick.draw();
+      if (el.classList) el.classList.toggle("ns-has-tiers", !tierBox.hidden);
+      drawCta();
     }
-    // edited drops an earlier spawn's error once the form changed; a hand
-    // edit of the model or effort returns the named tier to manual.
-    function edited(sel) {
-      if (sel && (sel === rows.model || sel === rows.effort)) tierPick.manual();
+    function edited() {
       if (!P.busy) setErr("");
-      rows.notes(P.harness);
       permDraw();
       sync();
       railPopPlace();
@@ -757,36 +956,28 @@
       }
       launch(launchSnap(level, false));
     }
-    // launchSnap is the spawn request the form shows now: level (none: the
-    // legacy route, as before), ack (the full warning's grant), and the pick
-    // stored for the harness once the spawn succeeds.
     function launchSnap(level, ack) {
       var chosen = currentPick();
       return {
         harness: P.harness,
         chosen: chosen,
-        form: { harness: P.harness, model: chosen.model, provider: chosen.provider, effort: rows.effort.disabled ? "" : rows.effort.value, mode: level ? "" : rows.mode.disabled ? "" : rows.mode.value, isolation: P.iso, level: level, ack: ack }
+        form: { harness: P.harness, model: chosen.model, provider: chosen.provider, effort: effortOff() ? "" : P.effort, mode: level ? "" : freeMode(), isolation: P.iso, level: level, ack: ack }
       };
     }
-    // launch spawns exactly snap's request.
     function launch(snap) {
       notifAsk();
       var gen = P.gen, chosenHarness = snap.harness, chosen = snap.chosen, form = snap.form, level = form.level;
       P.busy = true;
+      P.statusText = wsT(level ? "js.perm.checking" : "js.lead.starting");
       setErr("");
-      status.textContent = wsT(level ? "js.perm.checking" : "js.lead.starting");
       permDraw();
       sync();
       if (!level) { post(gen, chosenHarness, chosen, "/agents/leads", form); return; }
       permPreflight(chosenHarness, level, function (ok) {
-        if (!rpLive(P, gen)) { P.busy = false; return; }
+        if (!rpLive(P, gen)) { P.busy = false; P.statusText = ""; return; }
         if (!ok) {
           P.busy = false;
-          status.textContent = "";
-          // The refusal is about the snapshot: the live form lost the level
-          // only while it still shows the snapshot's harness. A form a
-          // refresh moved elsewhere keeps its own level; the refusal shows
-          // as an error instead.
+          P.statusText = "";
           if (P.harness === chosenHarness) P.dropped = level;
           else setErr(wsT("js.perm.unsent"));
           permDraw();
@@ -794,7 +985,8 @@
           railPopPlace();
           return;
         }
-        status.textContent = wsT("js.lead.starting");
+        P.statusText = wsT("js.lead.starting");
+        drawCta();
         post(gen, chosenHarness, chosen, "/agents/leads/permission", form);
       });
     }
@@ -802,7 +994,7 @@
       var perm = !!form.level;
       railPost(route, WsRail.leadBody(P.root, form), function (st, v, s) {
         P.busy = false;
-        status.textContent = "";
+        P.statusText = "";
         sync();
         if (st === 201 && v.id) {
           var stored = readSettings(), byHarness = stored.harnesses;
@@ -816,8 +1008,6 @@
           go("/s/" + encodeURIComponent(String(v.id)));
           return;
         }
-        // A daemon without the selection route created nothing: say so and
-        // offer a re-check; the legacy route is never tried instead.
         if (perm && permRefused(st)) {
           if (supChoices) supChoices.wsEpoch = -1;
           if (!rpLive(P, gen)) { toast(wsT("js.perm.refused", st)); return; }
@@ -832,20 +1022,16 @@
         setErr(leadErr(st, s));
         sync();
         railPopPlace();
-        // A spawn answers at once (the process starts on the first send), so
-        // a request still open after 20s fails instead of staying busy.
       }, 20000);
     }
-    // recheck re-reads the daemon's support after a refusal; it sends
-    // nothing. Support back clears the refusal, none drops the level.
     function recheck() {
       var gen = P.gen, level = P.level;
       P.busy = true;
-      status.textContent = wsT("js.perm.checking");
+      P.statusText = wsT("js.perm.checking");
       sync();
       permPreflight(P.harness, level, function (ok) {
         P.busy = false;
-        status.textContent = "";
+        P.statusText = "";
         if (!rpLive(P, gen)) return;
         P.refused = 0;
         if (!ok) P.dropped = level;
@@ -854,16 +1040,19 @@
         railPopPlace();
       });
     }
-    iseg.addEventListener("click", function (e) { var b = e.target.closest && e.target.closest("[data-iso]"); if (b) { P.iso = b.getAttribute("data-iso"); sync(); } });
+    isoSw.addEventListener("click", function () { if (P.busy) return; P.iso = P.iso === "isolated" ? "default" : "isolated"; sync(); });
     seg.addEventListener("click", function (e) { var b = e.target.closest && e.target.closest("[data-harness]"); if (b && !b.disabled) setHarness(b.getAttribute("data-harness")); });
-    cancel.addEventListener("click", function () { railPopClose(true); });
+    effRst.addEventListener("click", function () { if (P.busy || P.loading || !P.effort) return; P.effort = ""; tierPick.manual(); edited(); });
+    xBtn.addEventListener("click", function () { railPopClose(true); });
     start.addEventListener("click", submit);
     P.open = function (key, label, btn) {
       var gen = ++P.gen, name = btn.getAttribute("data-name") || label, branch = btn.getAttribute("data-branch") || "";
       P.busy = false;
+      P.statusText = "";
       P.root = key;
       P.level = P.dropped = "";
       P.refused = 0;
+      adv.open = false;
       saved = readSettings();
       picks = Object.create(null);
       if (saved.harnesses && typeof saved.harnesses === "object" && !Array.isArray(saved.harnesses)) {
@@ -880,10 +1069,9 @@
       if (branch) { loc.appendChild(gIcon("branch")); loc.appendChild(mk("b", null, branch)); }
       loc.appendChild(mk("code", null, key)).title = key;
       setErr("");
-      status.textContent = "";
       tierPick.reset();
       harnessButtons();
-      rows.set(P.harness, { model: "", effort: "", mode: "" });
+      setValues(P.harness, { model: "", effort: "", mode: "" });
       permDraw();
       sync();
       leadChoices(function () {
@@ -898,33 +1086,25 @@
         if (rpLive(P, gen)) choicesArrived();
       }, function () { return rpLive(P, gen); });
     };
-    // choicesArrived shows a newer choices list over a form the user may
-    // have edited. A re-read never changes the form on its own: the harness,
-    // model, and effort stay as shown (a value the new list lacks is kept as
-    // an extra option, as applyTier adds one), and a harness no longer
-    // offered stays for Start to refuse. Only a still-picked named tier
-    // re-applies its values (or, gone, returns the form to manual), so the
-    // tier note and the fields agree.
     function choicesArrived() {
-      var shown = { model: rows.model.value, effort: rows.effort.value, mode: rows.free() };
+      var shown = { model: P.model, effort: P.effort, mode: freeMode() };
       picks[P.harness] = currentPick();
       harnessButtons(true);
-      rows.set(P.harness, shown);
+      setValues(P.harness, shown);
       permDraw();
       reapplyTier();
       sync();
       railPopPlace();
     }
-    // permSync redraws the level after the live stream dropped (support is
-    // unknown until a new read) and re-reads the choices once it is back.
     P.permSync = function (read) {
       var gen = P.gen, live = function () { return rpLive(P, gen) && !P.loading; };
       var arrived = function () { if (live()) choicesArrived(); };
       if (live()) { permDraw(); sync(); railPopPlace(); }
       if (read) leadChoices(arrived, arrived, live);
     };
-    P.focus = function () { (hbtn[P.harness] && !hbtn[P.harness].disabled ? hbtn[P.harness] : cancel).focus(); };
-    P.close = function () { permFullDrop(); };
+    P.back = function () { return tierPick.close() || modelCombo.close(); };
+    P.focus = function () { (hbtn[P.harness] && !hbtn[P.harness].disabled ? hbtn[P.harness] : xBtn).focus(); };
+    P.close = function () { tierPick.close(); modelCombo.close(); permFullDrop(); };
     return P;
   }
 

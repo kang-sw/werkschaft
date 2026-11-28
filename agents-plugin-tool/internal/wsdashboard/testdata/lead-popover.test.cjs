@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { readAssetSource } = require('./asset-source.cjs');
 const vm = require('node:vm');
 const source = readAssetSource('wsdashboard', 'dashboard.js');
+const tierPickerSrc = readAssetSource('wsdashboard', 'dashboard-tier-picker.js');
 const maker = source.match(/  var LEAD_MODES = [\s\S]*?\n  function rpLeadMake\(\) \{[\s\S]*?\n  \}\n/);
 assert(maker, 'production lead choices, rows and popover maker exist');
 const rail = readAssetSource('wsdashboard', 'rail.js');
@@ -14,11 +15,13 @@ const legacy = [
 function fixture(harness, choices = legacy, delayed = false, translate = k => k) {
   const nodes = [], events = [], requests = [], storage = {};
   function mk(tag, cls, text) {
-    const n = { tag, cls, textContent: text || '', value: '', hidden: false, disabled: false,
-      attrs: {}, children: [], listeners: {},
+    const n = { tag, cls: cls || '', textContent: text || '', value: '', hidden: false, disabled: false,
+      attrs: {}, children: [], listeners: {}, style: {},
       appendChild(child) { child.parentNode = this; this.children.push(child); return child; },
       setAttribute(k, v) { this.attrs[k] = String(v); },
       getAttribute(k) { return this.attrs[k] || ''; },
+      removeAttribute(k) { delete this.attrs[k]; },
+      toggleAttribute(k, on) { if (on) this.attrs[k] = ''; else delete this.attrs[k]; },
       addEventListener(k, fn) { this.listeners[k] = fn; },
       focus() { events.push('focus'); } };
     Object.defineProperty(n, 'textContent', {
@@ -26,9 +29,11 @@ function fixture(harness, choices = legacy, delayed = false, translate = k => k)
       set(value) { this.text = value; this.children = []; }
     });
     n.textContent = text || '';
-    const classes = new Set((cls || '').split(' '));
+    const classes = new Set((cls || '').split(' ').filter(Boolean));
     n.classList = {
       toggle(k, on) { if (on) classes.add(k); else classes.delete(k); },
+      add(k) { classes.add(k); },
+      remove(k) { classes.delete(k); },
       contains(k) { return classes.has(k); }
     };
     nodes.push(n);
@@ -52,7 +57,7 @@ function fixture(harness, choices = legacy, delayed = false, translate = k => k)
   });
   vm.runInContext(rail, ctx);
   ctx.WsRail = ctx.window.WsRail;
-  vm.runInContext(source.match(/\n  function supHarness\(name\) \{[\s\S]*?\n  \}\n/)[0] + source.match(/\n  function leadTierPicker\([\s\S]*?\n  \}\n/)[0] + maker[0], ctx);
+  vm.runInContext(source.match(/\n  function supHarness\(name\) \{[\s\S]*?\n  \}\n/)[0] + tierPickerSrc + maker[0], ctx);
   const p = active = ctx.rpLeadMake();
   p.open('/repo', 'repo', mk('button'));
   p.el.hidden = false;
@@ -63,14 +68,43 @@ function fixture(harness, choices = legacy, delayed = false, translate = k => k)
     harnessGroup.listeners.click({ target: { closest: () => button } });
   }
   if (harness) pick(harness);
-  const selects = nodes.filter(n => n.tag === 'select' && !n.attrs['data-tier-picker']);
+  const model = nodes.find(n => n.attrs['data-model-input']);
+  const modelList = model.parentNode.parentNode.children[1];
+  const effort = nodes.find(n => n.attrs['data-effort-knob']);
+  const modeCaps = nodes.find(n => n.cls.includes('ns-native-cap'));
+  const modeNote = nodes.find(n => n.cls === 'ns-adv-note spdesc' && n.parentNode && n.parentNode.cls === 'ns-foot');
+  const start = nodes.find(n => n.cls.includes('ns-cta') && n.tag === 'button');
+  const startLbl = nodes.find(n => n.cls === 'ns-cta-lbl');
+  const isoSw = nodes.find(n => n.attrs['data-iso-switch']);
   return { p, nodes, events, requests, storage, pick, harnessGroup,
     terms: nodes.find(n => n.cls === 'spnote spterms'),
     choicesReady() { answerChoices(); },
-    model: selects[0], mode: selects[1], effort: selects[2],
+    model, modelList, effort, modeCaps, modeNote, isoSw,
+    modelOptions() { return modelList.children.filter(li => !li.cls.includes('none')).map(li => li.attrs['data-val']); },
+    pickModel(val) {
+      model.value = val;
+      model.listeners.input();
+    },
+    pickEffort(val) {
+      const dots = effort.children[0].children.filter(d => d.cls.includes('kdot'));
+      const idx = dots.findIndex(d => d.attrs['data-effort'] === val);
+      assert(idx >= 0, 'effort dot exists: ' + val);
+      effort.listeners.keydown({ key: 'Home', preventDefault() {} });
+      for (let i = 0; i < idx; i++) effort.listeners.keydown({ key: 'ArrowRight', preventDefault() {} });
+    },
+    modeNames() { return modeCaps.hidden ? [] : modeCaps.children.map(b => b.attrs['data-mode']); },
+    checkedMode() {
+      if (modeCaps.hidden) return '';
+      const b = modeCaps.children.find(c => c.attrs['aria-checked'] === 'true');
+      return b ? b.attrs['data-mode'] : '';
+    },
+    pickMode(m) {
+      const b = modeCaps.children.find(c => c.attrs['data-mode'] === m);
+      assert(b, 'mode capsule exists: ' + m);
+      b.listeners.click();
+    },
     newRows(key, values) { const rows = ctx.leadRows(mk('div'), () => {}); rows.set(key, values); return rows; },
-    start: nodes.find(n => n.tag === 'button' && n.textContent === translate('js.lead.start')),
-    status: nodes.find(n => n.tag === 'span' && n.cls === 'spnote'),
+    start, status: startLbl,
     error: nodes.find(n => n.cls === 'spnote err'),
     dismiss() { active = null; p.el.hidden = true; } };
 }
@@ -91,7 +125,7 @@ for (const harness of ['claude']) {
   assert.equal(f.p.el.hidden, true);
   assert.equal(f.p.busy, false);
   assert.equal(f.start.disabled, false);
-  assert.equal(f.status.textContent, '');
+  assert.equal(f.status.textContent, 'js.lead.start');
   assert.deepEqual(f.events, ['close', 'rail-close', 'draft', 'rename-intent', ['navigate', '/s/new%2Fsession']]);
   assert.deepEqual(JSON.parse(f.storage['ws.dashboard.renameNew']), { id: 'new/session', at: 12345 },
     'successful creation hands the raw session ID and timestamp to post-navigation rename');
@@ -103,7 +137,7 @@ for (const harness of ['claude']) {
     assert.equal(e.p.el.hidden, false);
     assert.equal(e.p.busy, false);
     assert.equal(e.start.disabled, false);
-    assert.equal(e.status.textContent, '');
+    assert.equal(e.status.textContent, 'js.lead.start');
     assert.equal(e.error.textContent, 'launch failed');
     assert.deepEqual(e.events, []);
     assert.deepEqual(e.storage, {}, 'failed creation must not schedule rename');
@@ -128,7 +162,7 @@ for (const provider of ['openrouter', 'local/desk']) {
   assert.equal(note.hidden, false);
   assert.equal(note.textContent, remedy);
   assert.equal(f.model.disabled, false);
-  assert.deepEqual(f.model.children.slice(1).map(n => n.value),
+  assert.deepEqual(f.modelOptions(),
     [provider === 'openrouter' ? 'vendor/model' : provider + ' vendor/model']);
 }
 // Lead-marked descriptors replace, rather than extend, the fixed buttons.
@@ -138,7 +172,6 @@ const unavailable = { harness: 'missing', profile: '', lead: true, available: fa
   error: 'not installed', permission_modes: ['review'] };
 const noPermission = { harness: 'plain', profile: '', lead: true, available: true };
 const harnessNames = f => f.harnessGroup.children.map(n => n.attrs['data-harness']);
-const optionNames = sel => sel.children.map(n => n.value);
 {
   const f = fixture(null, [...legacy, unavailable, custom, noPermission]);
   assert.deepEqual(harnessNames(f), ['missing', 'custom', 'plain']);
@@ -146,19 +179,15 @@ const optionNames = sel => sel.children.map(n => n.value);
   assert.equal(f.harnessGroup.children[0].disabled, true);
   f.pick('missing');
   assert.equal(f.p.harness, 'custom', 'unavailable lead cannot be selected');
-  assert.deepEqual(optionNames(f.mode), ['review', 'auto', 'plan']);
-  assert.equal(f.mode.value, 'review', 'custom default is its first choice, not Claude auto');
-  assert.equal(f.mode.disabled, false);
-  f.model.value = 'custom-model';
-  f.effort.value = 'deep';
-  f.mode.value = 'plan';
-  f.mode.listeners.change();
-  const note = f.nodes.find(n => n.id === f.mode.attrs['aria-describedby']);
-  assert.equal(note.textContent, 'plan', 'custom permission names do not acquire Claude descriptions');
-  assert.equal(note.classList.contains('warn'), false);
-  const iso = f.nodes.find(n => n.attrs['data-iso'] === 'isolated');
-  f.nodes.find(n => n.listeners.click && n.attrs['aria-label'] === 'js.lead.iso')
-    .listeners.click({ target: { closest: () => iso } });
+  assert.deepEqual(f.modeNames(), ['review', 'auto', 'plan']);
+  assert.equal(f.checkedMode(), 'review', 'custom default is its first choice, not Claude auto');
+  assert.equal(f.modeCaps.children.every(b => !b.disabled), true);
+  f.pickModel('custom-model');
+  f.pickEffort('deep');
+  f.pickMode('plan');
+  assert.equal(f.modeNote.textContent, 'plan', 'custom permission names do not acquire Claude descriptions');
+  assert.equal(f.modeNote.classList.contains('warn'), false);
+  f.isoSw.listeners.click();
   f.start.listeners.click();
   assert.deepEqual(JSON.parse(JSON.stringify(f.requests[0].body)), {
     root: '/repo', harness: 'custom', plugin_isolation: 'isolated',
@@ -173,13 +202,12 @@ const optionNames = sel => sel.children.map(n => n.value);
 {
   const f = fixture(null, [custom, noPermission]);
   f.pick('plain');
-  assert.equal(f.mode.disabled, true);
-  assert.equal(f.mode.parentNode.classList.contains('off'), true);
-  assert.deepEqual(optionNames(f.mode), []);
+  assert.equal(f.modeCaps.hidden, true);
+  assert.deepEqual(f.modeNames(), []);
   assert.equal(f.model.disabled, true, 'absent model choices do not enable a control');
-  assert.equal(f.effort.disabled, true, 'absent effort choices do not enable a control');
+  assert.equal(f.effort.attrs['aria-disabled'], 'true', 'absent effort choices do not enable a control');
   // Even stale values on unsupported controls never enter the request.
-  f.mode.value = 'plan'; f.model.value = 'old-model'; f.effort.value = 'deep';
+  f.p.mode = 'plan'; f.p.model = ''; f.p.effort = '';
   f.start.listeners.click();
   assert.deepEqual(JSON.parse(JSON.stringify(f.requests[0].body)), {
     root: '/repo', harness: 'plain', plugin_isolation: 'default'
@@ -191,12 +219,12 @@ const optionNames = sel => sel.children.map(n => n.value);
 {
   const f = fixture(null, [{ ...noPermission, harness: 'constructor' }]);
   assert.equal(f.p.harness, 'constructor', 'backend names do not inherit object properties');
-  assert.equal(f.effort.disabled, true);
+  assert.equal(f.effort.attrs['aria-disabled'], 'true');
 }
 {
   const f = fixture(null, [unavailable]);
   assert.equal(f.start.disabled, true);
-  assert.equal(f.mode.disabled, true);
+  assert.equal(f.modeCaps.children.every(b => b.disabled), true);
   f.start.listeners.click();
   assert.equal(f.requests.length, 0, 'no launch when every admitted lead is unavailable');
   f.p.focus();
@@ -204,7 +232,7 @@ const optionNames = sel => sel.children.map(n => n.value);
 }
 {
   const f = fixture(null, [{ harness: 'claude', lead: true, available: true }]);
-  assert.equal(f.mode.disabled, true, 'descriptor permission absence also applies to Claude');
+  assert.equal(f.modeCaps.hidden, true, 'descriptor permission absence also applies to Claude');
 }
 {
   const modes = ['default', 'auto', 'plan'];
@@ -212,16 +240,16 @@ const optionNames = sel => sel.children.map(n => n.value);
     ...(h.harness === 'claude' ? { permission_modes: modes } : {}) })));
   assert.deepEqual(harnessNames(f), ['claude']);
   assert.equal(f.p.harness, 'claude');
-  assert.deepEqual(optionNames(f.mode), modes, 'Claude also renders only descriptor modes');
-  assert.equal(f.mode.value, 'auto', 'Claude retains its existing initial mode');
+  assert.deepEqual(f.modeNames(), modes, 'Claude also renders only descriptor modes');
+  assert.equal(f.checkedMode(), 'auto', 'Claude retains its existing initial mode');
   assert(!harnessNames(f).includes('pi'), 'a legacy lead descriptor does not offer Pi');
 }
 {
   const f = fixture(null, [...legacy, { ...custom, lead: false }]);
   assert.deepEqual(harnessNames(f), ['claude'], 'an older daemon still offers Claude');
   assert.equal(f.p.harness, 'claude');
-  assert.deepEqual(optionNames(f.mode), ['auto', 'default', 'acceptEdits', 'plan', 'dontAsk', 'bypassPermissions']);
-  assert.equal(f.mode.value, 'auto');
+  assert.deepEqual(f.modeNames(), ['auto', 'default', 'acceptEdits', 'plan', 'dontAsk', 'bypassPermissions']);
+  assert.equal(f.checkedMode(), 'auto');
   f.start.listeners.click();
   assert.equal(f.requests[0].body.harness, 'claude');
   assert.equal(f.requests[0].body.plugin_isolation, 'default');
@@ -236,8 +264,8 @@ const optionNames = sel => sel.children.map(n => n.value);
   f.choicesReady();
   assert.deepEqual(harnessNames(f), ['custom'], 'async choices replace fallback buttons');
   assert.equal(f.p.harness, 'custom');
-  assert.deepEqual(optionNames(f.mode), ['review', 'auto', 'plan']);
-  assert.equal(f.mode.value, 'review', 'a newly selected backend does not inherit the fallback mode');
+  assert.deepEqual(f.modeNames(), ['review', 'auto', 'plan']);
+  assert.equal(f.checkedMode(), 'review', 'a newly selected backend does not inherit the fallback mode');
 }
 // railPost itself: a request that never answers ends once, at the timeout,
 // with the timeout text, and aborts the fetch; a late answer is ignored.

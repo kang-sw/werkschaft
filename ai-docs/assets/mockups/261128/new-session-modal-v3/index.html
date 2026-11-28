@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>새 세션 모달 v2 — 3가지 셔플</title>
+<style>
+:root {
+  --bg:#0e1014; --s1:#15181f; --s2:#1c2029; --s3:#242936; --well:#101319;
+  --fg:#e7e7e4; --mut:#a2a6ad; --dim:#7b808a; --pri:#7aa2ff; --onpri:#0d1c3b;
+  --line:color-mix(in srgb,#e7e7e4 14%,transparent); --wash:color-mix(in srgb,#e7e7e4 6%,transparent);
+  --warn:#e0a85a; --danger:#e8695c; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+* { box-sizing:border-box; }
+html,body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.45 -apple-system,"Apple SD Gothic Neo","Noto Sans KR",system-ui,sans-serif; }
+body { padding:10px; }
+[hidden] { display:none !important; }
+button { font:inherit; color:inherit; }
+
+/* preview bar (quiet) */
+.pv { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; padding:6px 4px 12px; font-size:12px; color:var(--dim); }
+.pv .g { display:flex; align-items:center; gap:6px; }
+.seg { display:inline-flex; background:var(--s2); border-radius:999px; padding:2px; gap:2px; flex-wrap:wrap; max-width:100%; }
+.seg button { border:0; background:transparent; color:var(--mut); padding:4px 11px; border-radius:999px; cursor:pointer; white-space:nowrap; }
+.seg button:hover:not(:disabled) { background:var(--wash); color:var(--fg); }
+.seg button[aria-checked="true"] { background:var(--s3); color:var(--fg); box-shadow:0 0 0 1.5px color-mix(in srgb,var(--pri) 50%,transparent); }
+.seg button:disabled { opacity:.4; cursor:default; }
+
+.stage { background:#08090c; border-radius:14px; padding:16px; display:flex; justify-content:center; }
+.modal { width:100%; max-width:860px; background:var(--s1); border-radius:16px; padding:20px; box-shadow:0 18px 50px rgba(0,0,0,.55); position:relative;
+  display:grid; gap:18px 22px; grid-template-columns:minmax(0,1fr) minmax(0,1fr); }
+.stage.narrow .modal { max-width:400px; grid-template-columns:minmax(0,1fr); padding:16px; }
+
+/* shared parts */
+.x { position:absolute; top:14px; right:14px; width:30px; height:30px; border:0; border-radius:50%; background:transparent; color:var(--mut); font-size:19px; line-height:1; cursor:pointer; z-index:3; }
+.x:hover { background:var(--wash); color:var(--fg); }
+.hd { grid-area:hd; padding-right:34px; min-width:0; }
+.hd h1 { margin:0; font-size:18px; font-weight:800; letter-spacing:-.01em; }
+.loc { margin-top:3px; color:var(--dim); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.loc b { color:var(--mut); font-weight:600; }
+.loc code { font:11.5px var(--mono); }
+.lbl { font-size:12px; font-weight:700; color:var(--mut); margin-bottom:8px; display:flex; align-items:baseline; gap:8px; }
+.lbl .v { margin-left:auto; font:500 12px var(--mono); color:var(--pri); }
+.lbl .rst { border:0; background:transparent; color:var(--dim); font-size:11.5px; cursor:pointer; padding:0; text-decoration:underline; }
+.badge { font:600 10.5px/1 -apple-system,system-ui,sans-serif; color:var(--warn); background:color-mix(in srgb,var(--warn) 14%,transparent); padding:3px 7px; border-radius:999px; }
+
+/* hero CTA */
+.cta-w { grid-area:cta; min-width:0; }
+.cta { display:flex; align-items:center; gap:12px; width:100%; border:0; cursor:pointer; background:var(--pri); color:var(--onpri); border-radius:14px; padding:16px 20px; text-align:left;
+  box-shadow:0 6px 22px color-mix(in srgb,var(--pri) 32%,transparent); transition:filter .12s, transform .06s; }
+.cta:hover { filter:brightness(1.07); } .cta:active { transform:translateY(1px); }
+.cta .big { font-size:20px; font-weight:800; letter-spacing:-.01em; }
+.cta .sum { margin-left:auto; font:600 13px var(--mono); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; opacity:.85; }
+.cta.danger { background:var(--danger); color:#2b0b07; box-shadow:0 6px 22px color-mix(in srgb,var(--danger) 32%,transparent); }
+.cta .warnb { font:700 11px/1 -apple-system,system-ui,sans-serif; background:rgba(43,11,7,.22); padding:4px 8px; border-radius:999px; }
+.cta.dis { opacity:.5; }
+.ctahint { margin:7px 4px 0; font-size:11.5px; color:var(--dim); }
+.ctahint.danger { color:var(--danger); }
+
+/* combobox */
+.cb { position:relative; }
+.cb .in { display:flex; align-items:center; background:var(--s2); border-radius:12px; transition:box-shadow .1s; }
+.cb .in:hover { background:var(--s3); }
+.cb .in:focus-within { background:var(--s2); box-shadow:0 0 0 1.5px var(--pri); }
+.cb input { flex:1; min-width:0; border:0; background:transparent; color:var(--fg); font:14px var(--mono); padding:11px 12px; outline:none; }
+.cb input::placeholder { color:var(--dim); font-family:inherit; }
+.cb .tg { border:0; background:transparent; color:var(--dim); padding:0 12px; align-self:stretch; cursor:pointer; font-size:11px; }
+.tag { font:600 10.5px/1 -apple-system,system-ui,sans-serif; color:var(--pri); background:color-mix(in srgb,var(--pri) 14%,transparent); padding:3px 7px; border-radius:999px; margin-right:2px; }
+.cb ul { position:absolute; z-index:30; left:0; right:0; top:calc(100% + 4px); margin:0; padding:5px; list-style:none; max-height:200px; overflow:auto; background:var(--s3); border-radius:12px; box-shadow:0 14px 34px rgba(0,0,0,.6), 0 0 0 1px var(--line); }
+.cb li { padding:7px 10px; border-radius:8px; cursor:pointer; font:13px var(--mono); display:flex; gap:10px; align-items:baseline; }
+.cb li.hi, .cb li:hover { background:var(--wash); }
+.cb li[aria-selected="true"] { color:var(--pri); }
+.cb li small { margin-left:auto; color:var(--dim); font:11px -apple-system,system-ui,sans-serif; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cb li.none { color:var(--dim); cursor:default; font-family:inherit; }
+.cb li i { color:var(--mut); font-family:inherit; }
+.tier { grid-area:tier; min-width:0; }
+.tier .in { background:var(--s2); border-radius:999px; }
+.tier .tl { font:700 11.5px -apple-system,system-ui,sans-serif; color:var(--dim); padding-left:14px; white-space:nowrap; }
+.tier input { font:13px -apple-system,"Apple SD Gothic Neo",system-ui,sans-serif; padding:9px 8px; }
+.tier input.set { font-family:var(--mono); color:var(--pri); }
+
+/* harness */
+.har { grid-area:har; min-width:0; }
+.hs { display:grid; gap:8px; }
+.hs button { border:0; cursor:pointer; text-align:left; background:var(--s2); color:var(--mut); border-radius:12px; padding:12px 14px; display:flex; flex-direction:column; gap:2px; transition:background .1s; }
+.hs button:hover { background:var(--s3); color:var(--fg); }
+.hs button b { font-size:15px; font-weight:700; }
+.hs button small { font-size:11px; color:var(--dim); }
+.hs button[aria-checked="true"] { background:color-mix(in srgb,var(--pri) 16%,var(--s2)); color:var(--fg); box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--pri) 70%,transparent); }
+.hs button[aria-checked="true"] small { color:var(--pri); }
+.warn { margin:10px 0 0; padding:9px 12px; border-radius:12px; font-size:12px; background:color-mix(in srgb,var(--warn) 12%,var(--s1)); color:color-mix(in srgb,var(--warn) 85%,var(--fg)); }
+
+.mod { grid-area:mod; min-width:0; }
+.eff { grid-area:eff; min-width:0; }
+.eff .note, .mod .note { margin:7px 2px 0; font-size:11.5px; color:var(--dim); }
+
+/* knob (tracker chat) */
+.knob { padding:4px 9px 0; outline:none; touch-action:none; cursor:pointer; border-radius:8px; background:var(--s2); padding:12px 16px 6px; border-radius:12px; }
+.knob:focus-visible { box-shadow:0 0 0 1.5px var(--pri); }
+.knob[data-off] { opacity:.4; pointer-events:none; }
+.ktrack { position:relative; height:18px; margin:0 2px; }
+.ktrack::before { content:""; position:absolute; left:0; right:0; top:8px; height:2px; border-radius:1px; background:var(--line); }
+.kdot { position:absolute; top:4px; width:10px; height:10px; margin-left:-5px; border-radius:50%; background:var(--s2); box-shadow:inset 0 0 0 1.5px var(--dim); }
+.kdot.on { box-shadow:inset 0 0 0 1.5px var(--pri); }
+.kthumb { position:absolute; top:1px; width:16px; height:16px; margin-left:-8px; border-radius:50%; background:var(--pri); box-shadow:0 0 0 3px color-mix(in srgb,var(--pri) 22%,transparent); transition:left .08s; pointer-events:none; }
+.kends { position:relative; height:16px; margin:3px 2px 0; font:11px var(--mono); color:var(--dim); }
+.kends span { position:absolute; transform:translateX(-50%); white-space:nowrap; }
+.kends span:first-child { transform:none; } .kends span:last-child { transform:translateX(-100%); }
+.kends span.on { color:var(--pri); }
+
+/* quiet foot */
+.foot { grid-area:foot; min-width:0; background:var(--well); border-radius:12px; padding:10px 12px; display:flex; flex-wrap:wrap; gap:10px 20px; align-items:center; color:var(--dim); font-size:12px; }
+.fg { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; min-width:0; }
+.fg > .fl { color:var(--dim); font-weight:600; }
+.cap { display:inline-flex; flex-wrap:wrap; gap:3px; }
+.cap button { border:0; background:var(--wash); color:var(--dim); padding:3px 9px; border-radius:999px; cursor:pointer; font-size:11.5px; }
+.cap button:hover:not(:disabled) { color:var(--fg); }
+.cap button[aria-checked="true"] { background:var(--s3); color:var(--fg); }
+.cap button.dng[aria-checked="true"] { background:color-mix(in srgb,var(--danger) 22%,var(--s2)); color:var(--danger); }
+.map { font:11px var(--mono); color:var(--dim); }
+details.adv { width:100%; }
+details.adv summary { cursor:pointer; color:var(--dim); font-size:11.5px; list-style:none; }
+details.adv summary::-webkit-details-marker { display:none; }
+details.adv[open] summary .ar { display:inline-block; transform:rotate(90deg); }
+details.adv .cap { margin-top:6px; }
+.sw { display:inline-flex; align-items:center; gap:7px; cursor:pointer; background:none; border:0; padding:0; color:var(--dim); font-size:12px; }
+.sw i { width:28px; height:16px; border-radius:999px; background:var(--s3); position:relative; transition:background .12s; }
+.sw i::after { content:""; position:absolute; top:2px; left:2px; width:12px; height:12px; border-radius:50%; background:var(--mut); transition:left .12s, background .12s; }
+.sw[aria-checked="true"] { color:var(--fg); }
+.sw[aria-checked="true"] i { background:color-mix(in srgb,var(--pri) 45%,var(--s3)); }
+.sw[aria-checked="true"] i::after { left:14px; background:var(--pri); }
+.offnote { font-size:11.5px; }
+
+/* ===== v3 hybrid: 안 C top/middle + 안 A recessed footer ===== */
+.modal { gap:20px 22px; grid-template-columns:minmax(0,5fr) minmax(0,4fr);
+  grid-template-areas:"hd tier" "cta cta" "har har" "mod eff" "foot foot"; }
+.hd { align-self:center; padding-right:0; }
+.tier { margin-right:38px; align-self:center; }
+.hs { display:flex; background:var(--s2); border-radius:999px; padding:3px; gap:2px; }
+.hs button { flex:1; align-items:center; text-align:center; background:transparent; padding:9px 6px; border-radius:999px; }
+.hs button small { display:none; }
+.hs button[aria-checked="true"] { background:var(--s3); box-shadow:0 0 0 1.5px color-mix(in srgb,var(--pri) 60%,transparent); }
+.cta { padding:20px 22px; }
+.foot { background:var(--well); }
+
+/* matched model / effort row: identical label rows and identical 44px wells */
+.mod .lbl, .eff .lbl { display:flex; align-items:center; justify-content:space-between; min-height:20px; margin-bottom:8px; }
+.lbl .l { display:flex; align-items:baseline; gap:8px; }
+.lbl .v { margin-left:0; }
+.mod .cb .in, .knob { height:44px; border-radius:12px; background:var(--s2); }
+.knob { display:flex; align-items:center; padding:0 18px; }
+.knob .ktrack { width:100%; margin:0; }
+.cb input { padding:0 12px; height:100%; }
+.eff .note { margin-top:6px; }
+.tier .in { min-height:38px; }
+.tier input { height:auto; padding:9px 8px; }
+
+.narrow .modal { grid-template-columns:minmax(0,1fr); gap:16px; grid-template-areas:"hd" "tier" "cta" "har" "mod" "eff" "foot"; }
+.narrow .tier { margin-right:0; }
+.narrow .hs { flex-wrap:wrap; border-radius:18px; }
+.narrow .hs button { flex:1 1 40%; }
+.narrow .hd { padding-right:34px; }
+
+</style>
+</head>
+<body>
+
+<div class="pv">
+  <div class="g">창
+    <div class="seg" role="radiogroup" id="pvV">
+      <button role="radio" data-v="wide" aria-checked="true">넓은 창 (2컬럼)</button>
+      <button role="radio" data-v="narrow" aria-checked="false">좁은 창 (1컬럼)</button>
+    </div>
+  </div>
+  <div class="g">공통 권한
+    <div class="seg" role="radiogroup" id="pvP">
+      <button role="radio" data-v="0" aria-checked="true">미지원</button>
+      <button role="radio" data-v="1" aria-checked="false">지원</button>
+    </div>
+  </div>
+</div>
+
+<div class="stage" id="stage">
+<div class="modal" id="modal" role="dialog" aria-label="새 세션">
+  <button class="x" aria-label="닫기" title="닫기 (바깥 클릭·Esc도 닫힘)">×</button>
+
+  <div class="hd">
+    <h1>새 세션</h1>
+    <div class="loc"><span>devenv</span> · <b>develop</b> · <code>/Users/kang-sw/devenv</code></div>
+  </div>
+
+  <div class="cta-w">
+    <button class="cta" id="cta"><span class="big" id="ctaLbl">시작하기</span><span class="sum" id="ctaSum"></span></button>
+    <p class="ctahint" id="ctaHint" hidden></p>
+  </div>
+
+  <div class="tier cb" id="tier">
+    <div class="in"><span class="tl">티어</span><input id="tierIn" autocomplete="off" spellcheck="false" placeholder="수동 (항목별로 선택)" role="combobox" aria-expanded="false" aria-label="이름 있는 티어"><button class="tg" tabindex="-1" aria-hidden="true">▾</button></div>
+    <ul role="listbox" hidden></ul>
+  </div>
+
+  <div class="har">
+    <div class="lbl">하네스</div>
+    <div class="hs" id="hs" role="radiogroup" aria-label="하네스"></div>
+    <p class="warn" id="agyWarn" role="note" hidden>ws 같은 서드파티 앱으로 agy를 쓰면 Antigravity 계정이 정지될 수 있습니다. Google 약관은 다른 소프트웨어를 통한 사용을 지원하지 않습니다.</p>
+  </div>
+
+  <div class="mod">
+    <div class="lbl"><span class="l">모델</span><span class="tag" id="modelTag" hidden>직접 입력</span></div>
+    <div class="cb" id="model">
+      <div class="in"><input id="modelIn" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-label="모델"><button class="tg" tabindex="-1" aria-hidden="true">▾</button></div>
+      <ul role="listbox" hidden></ul>
+    </div>
+  </div>
+
+  <div class="eff">
+    <div class="lbl"><span class="l">노력<span class="v" id="effV"></span></span><button class="rst" id="effRst" hidden>기본값</button></div>
+    <div class="knob" id="knob" role="slider" tabindex="0" aria-label="노력 수준"></div>
+    <p class="note" id="effNote" hidden></p>
+  </div>
+
+  <div class="foot">
+    <div class="fg" id="pg">
+      <span class="fl">권한</span>
+      <span class="cap" id="pcap" role="radiogroup" aria-label="권한"></span>
+      <span class="map" id="pmap" hidden></span>
+      <span class="offnote" id="poff" hidden></span>
+    </div>
+    <details class="adv" id="padv" hidden>
+      <summary><span class="ar">▸</span> 고급 <span id="pown"></span></summary>
+      <span class="cap" id="padvSeg" role="radiogroup" aria-label="네이티브 권한 모드"></span>
+    </details>
+    <button class="sw" id="iso" role="switch" aria-checked="false" title="격리: 번들된 ws/wsflow만 로드합니다. 기본: 설치된 사본을 대체하고 다른 플러그인은 유지합니다."><i></i><span id="isoL">플러그인 격리</span></button>
+  </div>
+</div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  function el(tag, cls, txt) { var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
+
+  var LEVELS = ["read-only", "workdir-write", "full"];
+  var LV = { "": "기본", "read-only": "읽기 전용", "workdir-write": "폴더 쓰기", full: "전체" };
+  var NATIVE = { claude: { "read-only": "plan", "workdir-write": "acceptEdits", full: "bypassPermissions" }, codex: { "read-only": "read-only", "workdir-write": "workspace-write", full: "danger-full-access" } };
+  var DANGER_MODE = { bypassPermissions: 1, "danger-full-access": 1 };
+  var H = {
+    claude: { label: "Claude", sub: "Anthropic", models: [["claude-opus-5-5", "Opus 5.5"], ["claude-sonnet-5-5", "Sonnet 5.5"], ["claude-haiku-5-5", "Haiku 5.5"]], efforts: ["low", "medium", "high", "xhigh", "max"], modes: ["auto", "default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"], dmode: "auto" },
+    codex:  { label: "codex", sub: "OpenAI", models: [["gpt-5.5-codex", ""], ["gpt-5.5-codex-mini", ""]], efforts: ["low", "medium", "high", "xhigh"], modes: ["read-only", "workspace-write", "danger-full-access"], dmode: "workspace-write" },
+    agy:    { label: "agy", sub: "Antigravity", models: [["gemini-4-neon", ""], ["gemini-4-flash", ""], ["gemini-4-pro", ""]], efforts: ["low", "medium", "high"], modes: ["bypass"], dmode: "bypass" },
+    werk:   { label: "werk", sub: "OpenRouter 외", models: [["anthropic/claude-sonnet-5-5", "openrouter"], ["google/gemini-4-pro", "openrouter"], ["openai gpt-5.5", "openai"]], efforts: [], modes: [], dmode: "", modelRequired: true }
+  };
+  var ORDER = ["claude", "codex", "agy", "werk"];
+  var TIERS = [
+    { name: "deep", harness: "claude", model: "claude-opus-5-5", effort: "max" },
+    { name: "work", harness: "claude", model: "claude-sonnet-5-5", effort: "high" },
+    { name: "quick", harness: "claude", model: "claude-haiku-5-5", effort: "low" },
+    { name: "agy-lead", harness: "agy", model: "gemini-4-neon", effort: "high" },
+    { name: "codex-review", harness: "codex", model: "gpt-5.5-codex", effort: "xhigh" },
+    { name: "werk-cheap", harness: "werk", model: "google/gemini-4-pro", effort: "" }
+  ];
+  var S = { harness: "agy", model: "gemini-4-neon", effort: "high", level: "", mode: "bypass", iso: false, tier: "agy-lead", support: false };
+  var picks = {};
+  function eff() { return H[S.harness].efforts; }
+
+  // preview bar
+  var stage = $("stage"), modal = $("modal");
+  function setChecked(root, v) { [].forEach.call(root.querySelectorAll("button[data-v]"), function (b) { b.setAttribute("aria-checked", String(b.getAttribute("data-v") === v)); }); }
+  function seg(root, cb) { root.addEventListener("click", function (e) { var b = e.target.closest("button[data-v]"); if (!b) return; setChecked(root, b.getAttribute("data-v")); cb(b.getAttribute("data-v")); }); }
+  seg($("pvV"), function (v) { stage.classList.toggle("narrow", v === "narrow"); drawKnob(); });
+  seg($("pvP"), function (v) { S.support = v === "1"; if (!S.support) S.level = ""; drawPerm(); drawCta(); });
+
+  // combobox
+  function combo(root, o) {
+    var input = root.querySelector("input"), ul = root.querySelector("ul"), hi = -1, items = [], open = false;
+    function list() {
+      var q = input.dataset.f === "1" ? input.value.trim().toLowerCase() : "";
+      items = o.items().filter(function (it) { return !q || (it.val + " " + it.label + " " + (it.sub || "")).toLowerCase().indexOf(q) >= 0; });
+      ul.textContent = "";
+      if (!items.length) ul.appendChild(el("li", "none", "일치하는 항목 없음"));
+      items.forEach(function (it, i) {
+        var li = el("li", i === hi ? "hi" : ""); li.setAttribute("role", "option"); li.setAttribute("aria-selected", String(it.val === o.current()));
+        li.appendChild(it.manual ? el("i", null, it.label) : el("span", null, it.label));
+        if (it.sub) li.appendChild(el("small", null, it.sub));
+        li.addEventListener("mousedown", function (e) { e.preventDefault(); choose(it); });
+        ul.appendChild(li);
+      });
+    }
+    function show(v) { open = v; ul.hidden = !v; input.setAttribute("aria-expanded", String(v)); if (v) list(); }
+    function choose(it) { show(false); input.dataset.f = "0"; o.pick(it); input.blur(); }
+    input.addEventListener("focus", function () { input.dataset.f = "0"; input.select(); show(true); });
+    input.addEventListener("blur", function () { show(false); o.blur(input.value); });
+    input.addEventListener("input", function () { input.dataset.f = "1"; hi = -1; if (o.free) o.free(input.value); show(true); });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); if (!open) show(true); if (items.length) { hi = hi < 0 ? (e.key === "ArrowDown" ? 0 : items.length - 1) : (hi + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length; list(); var h = ul.querySelector(".hi"); if (h) h.scrollIntoView({ block: "nearest" }); } }
+      else if (e.key === "Enter") { e.preventDefault(); if (open && hi >= 0 && items[hi]) choose(items[hi]); else input.blur(); }
+      else if (e.key === "Escape") { e.stopPropagation(); show(false); input.blur(); }
+    });
+    root.querySelector(".tg").addEventListener("mousedown", function (e) { e.preventDefault(); if (open) show(false); else input.focus(); });
+    return { sync: function () { if (document.activeElement !== input) input.value = o.value(); } };
+  }
+  var tierC = combo($("tier"), {
+    items: function () {
+      var a = [{ val: "", label: "수동 (항목별로 선택)", manual: true }];
+      TIERS.forEach(function (t) { a.push({ val: t.name, label: t.name, sub: t.harness + " · " + (t.model || "기본") + (t.effort ? " · " + t.effort : "") }); });
+      return a;
+    },
+    current: function () { return S.tier; }, value: function () { return S.tier; },
+    pick: function (it) { if (!it.val) S.tier = ""; else applyTier(TIERS.filter(function (t) { return t.name === it.val; })[0]); drawAll(); },
+    blur: function () { drawTier(); }
+  });
+  var modelC = combo($("model"), {
+    items: function () {
+      var a = H[S.harness].models.map(function (m) { return { val: m[0], label: m[0], sub: m[1] }; });
+      if (!H[S.harness].modelRequired) a.unshift({ val: "", label: "기본값 (하네스 설정)", manual: true });
+      return a;
+    },
+    current: function () { return S.model; }, value: function () { return S.model; },
+    pick: function (it) { setModel(it.val); },
+    free: function (v) { setModel(v.trim(), true); },
+    blur: function () { drawLight(); }
+  });
+  function setModel(v, typing) { if (v !== S.model) { S.model = v; S.tier = ""; } if (typing) { drawTier(); drawCta(); drawModelTag(); } else drawLight(); }
+  function applyTier(t) {
+    if (t.harness !== S.harness) { picks[S.harness] = { model: S.model, effort: S.effort, mode: S.mode }; S.harness = t.harness; S.mode = (picks[t.harness] || {}).mode || H[t.harness].dmode; }
+    S.model = t.model; S.effort = t.effort; S.tier = t.name;
+  }
+
+  // harness
+  function drawHarness() {
+    var root = $("hs"); root.textContent = "";
+    ORDER.forEach(function (k) {
+      var b = el("button"); b.setAttribute("role", "radio"); b.setAttribute("aria-checked", String(S.harness === k));
+      b.appendChild(el("b", null, H[k].label)); b.appendChild(el("small", null, H[k].sub));
+      b.addEventListener("click", function () {
+        if (S.harness === k) return;
+        picks[S.harness] = { model: S.model, effort: S.effort, mode: S.mode };
+        S.harness = k; S.tier = ""; S.level = "";
+        var p = picks[k] || {};
+        S.model = p.model != null ? p.model : (H[k].models[0] ? H[k].models[0][0] : "");
+        S.effort = p.effort != null ? p.effort : (H[k].efforts.indexOf("high") >= 0 ? "high" : "");
+        S.mode = p.mode != null ? p.mode : H[k].dmode;
+        drawAll();
+      });
+      root.appendChild(b);
+    });
+    $("agyWarn").hidden = S.harness !== "agy";
+  }
+
+  // knob — same mechanics as supKnob (dashboard-selection.js)
+  var knob = $("knob");
+  function pct(i, n) { return n < 2 ? 50 : i / (n - 1) * 100; }
+  function drawKnob(pv) {
+    var lv = eff(), at = pv != null ? pv : lv.indexOf(S.effort), off = !lv.length;
+    knob.textContent = ""; knob.toggleAttribute("data-off", off);
+    knob.setAttribute("aria-valuemin", "0"); knob.setAttribute("aria-valuemax", String(Math.max(0, lv.length - 1)));
+    knob.setAttribute("aria-valuenow", String(Math.max(at, 0))); knob.setAttribute("aria-valuetext", lv[at] || "기본값");
+    var tr = el("div", "ktrack"); knob.appendChild(tr);
+    if (!off) {
+      lv.forEach(function (l, i) { var d = el("span", "kdot" + (i === at ? " on" : "")); d.style.left = pct(i, lv.length) + "%"; d.title = l; tr.appendChild(d); });
+      if (at >= 0) { var th = el("span", "kthumb"); th.style.left = pct(at, lv.length) + "%"; tr.appendChild(th); }
+    }
+    var cur = at >= 0 ? lv[at] : "";
+    $("effV").textContent = off ? "" : (cur || "기본값");
+    $("effRst").hidden = off || !S.effort;
+    var n = $("effNote"); n.hidden = !off;
+    if (off) n.textContent = S.harness + "는 노력 수준을 지원하지 않습니다.";
+    knob.title = off ? "" : lv.join(" · ") + " — 드래그하거나 눌러서 고르세요";
+  }
+  var drag = null;
+  function idxAt(x) { var r = knob.querySelector(".ktrack").getBoundingClientRect(); return Math.round(Math.max(0, Math.min(1, (x - r.left) / (r.width || 1))) * (eff().length - 1)); }
+  function setEffort(i) { var v = eff()[i]; if (v !== S.effort) { S.effort = v; S.tier = ""; } drawLight(); }
+  knob.addEventListener("pointerdown", function (e) { if (e.button || !eff().length) return; drag = { i: idxAt(e.clientX) }; try { knob.setPointerCapture(e.pointerId); } catch (x) {} drawKnob(drag.i); e.preventDefault(); knob.focus({ preventScroll: true }); });
+  knob.addEventListener("pointermove", function (e) { if (!drag) return; var i = idxAt(e.clientX); if (i !== drag.i) { drag.i = i; drawKnob(i); } });
+  knob.addEventListener("pointerup", function () { if (!drag) return; var i = drag.i; drag = null; setEffort(i); });
+  knob.addEventListener("pointercancel", function () { drag = null; drawKnob(); });
+  knob.addEventListener("keydown", function (e) {
+    var n = eff().length, cur = eff().indexOf(S.effort), i = cur;
+    if (e.key === "ArrowRight" || e.key === "ArrowUp") i = Math.min(n - 1, cur + 1);
+    else if (e.key === "ArrowLeft" || e.key === "ArrowDown") i = cur < 0 ? 0 : Math.max(0, cur - 1);
+    else if (e.key === "Home") i = 0; else if (e.key === "End") i = n - 1; else return;
+    e.preventDefault(); if (i !== cur) setEffort(i);
+  });
+  $("effRst").addEventListener("click", function () { S.effort = ""; S.tier = ""; drawLight(); });
+
+  // permission
+  function capFill(root, items, cur, pick, dis) {
+    root.textContent = "";
+    items.forEach(function (it) {
+      var b = el("button", it.dng ? "dng" : "", it.label); b.setAttribute("role", "radio"); b.setAttribute("aria-checked", String(it.val === cur)); b.disabled = !!dis;
+      b.addEventListener("click", function () { pick(it.val); }); root.appendChild(b);
+    });
+  }
+  function drawPerm() {
+    var h = H[S.harness], native = h.modes.length > 0;
+    $("poff").hidden = true; $("pmap").hidden = true; $("padv").hidden = true; $("pcap").hidden = false;
+    if (S.support) {
+      capFill($("pcap"), [""].concat(LEVELS).map(function (l) { return { val: l, label: LV[l], dng: l === "full" }; }), S.level, function (v) { S.level = v; drawPerm(); drawCta(); });
+      var m = S.level && NATIVE[S.harness] ? NATIVE[S.harness][S.level] || "" : "";
+      if (native) {
+        $("pmap").hidden = false; $("pmap").textContent = "→ " + (S.level ? (m || "매핑 없음") : S.mode);
+        $("padv").hidden = false; $("pown").textContent = S.level && m ? "· 수준이 결정" : "";
+        capFill($("padvSeg"), h.modes.map(function (x) { return { val: x, label: x, dng: !!DANGER_MODE[x] }; }), S.level && m ? m : S.mode, function (v) { S.mode = v; S.level = ""; drawPerm(); drawCta(); }, !!(S.level && m));
+      }
+    } else if (native) {
+      capFill($("pcap"), h.modes.map(function (x) { return { val: x, label: x, dng: !!DANGER_MODE[x] }; }), S.mode, function (v) { S.mode = v; drawCta(); drawPerm(); });
+    } else {
+      $("pcap").hidden = true; $("poff").hidden = false; $("poff").textContent = h.label + "는 권한 설정이 없습니다";
+    }
+    $("pg").querySelector(".fl").textContent = S.support ? "권한 수준" : "권한 모드";
+  }
+
+  // cta + misc
+  function dangerNow() { return (S.support && S.level === "full") || (!S.support && !!DANGER_MODE[S.mode] && H[S.harness].modes.length > 0); }
+  function drawCta() {
+    var cta = $("cta"), d = dangerNow(), missing = S.harness === "werk" && !S.model;
+    cta.classList.toggle("danger", d); cta.classList.toggle("dis", missing);
+    var parts = [S.harness, S.model || "기본", eff().length ? (S.effort || "기본") : null].filter(function (x) { return x != null; });
+    var sum = $("ctaSum"); sum.textContent = "";
+    sum.textContent = parts.join(" · ");
+    if (d) { var w = el("span", "warnb", "전체 권한"); sum.parentNode.insertBefore(w, sum); }
+    var old = cta.querySelectorAll(".warnb"); for (var i = 0; i < old.length - (d ? 1 : 0); i++) old[i].remove();
+    var hint = $("ctaHint"), msg = "";
+    if (d) msg = S.support ? "시작 전에 한 번 더 확인합니다." : "확인 없이 실행하는 모드입니다.";
+    else if (missing) msg = "werk는 모델을 골라야 시작할 수 있습니다.";
+    hint.hidden = !msg; hint.textContent = msg; hint.classList.toggle("danger", d);
+  }
+  function drawTier() { var i = $("tierIn"); i.classList.toggle("set", !!S.tier); tierC.sync(); }
+  function drawModelTag() { var known = H[S.harness].models.some(function (m) { return m[0] === S.model; }); $("modelTag").hidden = !(S.model && !known); }
+  function drawModel() { $("modelIn").placeholder = H[S.harness].modelRequired ? "모델 입력 또는 선택 (필수)" : "기본값 — 입력하거나 선택"; modelC.sync(); drawModelTag(); }
+  $("iso").addEventListener("click", function () { S.iso = !S.iso; drawIso(); });
+  function drawIso() { $("iso").setAttribute("aria-checked", String(S.iso)); $("isoL").textContent = S.iso ? "플러그인 격리 켜짐" : "플러그인 격리"; }
+  $("cta").addEventListener("click", function () { var t = $("ctaLbl"); t.textContent = "시작하는 중…"; setTimeout(function () { t.textContent = "시작하기"; }, 900); });
+  function drawLight() { drawTier(); drawModel(); drawKnob(); drawPerm(); drawCta(); }
+  function drawAll() { drawHarness(); drawIso(); drawLight(); }
+  drawAll();
+  // optional deep link for review: #narrow,perm,full,adv  (window, common-permission, 전체 level, 고급 open)
+  (location.hash || "").slice(1).split(",").forEach(function (k) {
+    var map = { wide: "pvV", narrow: "pvV", perm: "pvP" };
+    if (map[k]) { var b = $(map[k]).querySelector('[data-v="' + (k === "perm" ? "1" : k) + '"]'); if (b) b.click(); }
+    else if (k === "full" && S.support) { S.level = "full"; drawPerm(); drawCta(); }
+    else if (k === "adv") $("padv").open = true;
+  });
+})();
+</script>
+</body>
+</html>
