@@ -303,6 +303,7 @@
         return WsInput.attach(inputEl, {
           // Messenger chat convention: Enter sends, Shift+Enter adds a line.
           keymap: () => "enter-send",
+          voice: true,
           features: {
             markdown: true,
             capsules: true,
@@ -845,6 +846,7 @@
       }
 
       doc.addEventListener("keydown", event => {
+        if (event.defaultPrevented) return;
         if (event.key === "Escape" && openState && !pinned) {
           event.preventDefault();
           close();

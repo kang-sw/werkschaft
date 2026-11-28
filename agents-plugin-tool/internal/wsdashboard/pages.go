@@ -99,6 +99,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-lifecycle.js",
 	"dashboard-voice-ptt.js",
 	"dashboard-voice.js",
+	"dashboard-voice-field.js",
 	"dashboard-voice-native.js",
 }
 

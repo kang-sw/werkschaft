@@ -161,6 +161,7 @@
       if (window.WsInput) {
         window.WsInput.attach(mnote, {
           keymap: "newline-only",
+          voice: true,
           features: {
             markdown: true,
             capsules: true,
@@ -215,6 +216,8 @@
       // Saving on blur must not replace the chip DOM under an in-flight
       // pointer press (notably its remove button), or steal the new focus.
       mbtn.addEventListener("focusout", function (e) {
+        // The voice lock disables mnote, which blurs it without the user leaving the note.
+        if (mnote.getAttribute("data-voice-locked") === "1") return;
         if (mpend && mpend.edit && !mbtn.contains(e.relatedTarget)) addMention(true);
       });
       doc.body.appendChild(mbtn);

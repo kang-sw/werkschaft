@@ -309,6 +309,7 @@
       if (win && win.WsInput) {
         var reasonInst = win.WsInput.attach(input, {
           keymap: "newline-only",
+          voice: true,
           features: {
             markdown: true,
             capsules: true,

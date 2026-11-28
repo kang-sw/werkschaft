@@ -74,6 +74,7 @@
       if (window.WsInput) {
         var inst = window.WsInput.attach(area, {
           keymap: "enter-save",
+          voice: true,
           features: {
             markdown: true,
             capsules: true,
