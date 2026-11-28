@@ -24,6 +24,7 @@ const PINS = {
 };
 
 const MAX_GZIP_BYTES = 300 * 1024; // 300 KiB hard acceptance gate
+const MAX_STUDIO_GZIP_BYTES = 360 * 1024; // 360 KiB hard acceptance gate for studio runtime
 
 const ENTRY_SOURCE = [
   "export * as THREE from 'three';",
@@ -33,10 +34,21 @@ const ENTRY_SOURCE = [
   "",
 ].join("\n");
 
+const STUDIO_ENTRY_SOURCE = [
+  "export * as THREE from 'three';",
+  "export { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';",
+  "export { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';",
+  "export { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';",
+  "export { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';",
+  "export { VRMAnimationLoaderPlugin, createVRMAnimationClip } from '@pixiv/three-vrm-animation';",
+  "",
+].join("\n");
+
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoToolRoot = path.resolve(scriptDir, "..");
 const assetsDir = path.join(repoToolRoot, "internal", "wsdashboard", "assets");
 const outBundle = path.join(assetsDir, "companion-vrm-runtime.mjs");
+const outStudioBundle = path.join(assetsDir, "companion-rig-studio-runtime.mjs");
 const licenseDir = path.join(assetsDir, "vrm-runtime");
 
 function parseArgs(argv) {
@@ -86,7 +98,9 @@ function main() {
     verifyPinnedVersions(pkgDir);
 
     const entryFile = path.join(pkgDir, "ws-vrm-entry.mjs");
+    const studioEntryFile = path.join(pkgDir, "ws-vrm-studio-entry.mjs");
     fs.writeFileSync(entryFile, ENTRY_SOURCE);
+    fs.writeFileSync(studioEntryFile, STUDIO_ENTRY_SOURCE);
 
     const esbuildBin = path.join(
       pkgDir,
@@ -94,22 +108,36 @@ function main() {
       ".bin",
       process.platform === "win32" ? "esbuild.cmd" : "esbuild"
     );
-    execFileSync(
-      esbuildBin,
-      [
-        entryFile,
-        "--bundle",
-        "--format=esm",
-        "--minify",
-        "--target=es2022",
-        "--legal-comments=none",
-        `--outfile=${outBundle}`,
-      ],
-      { cwd: pkgDir, stdio: "inherit" }
-    );
+    const buildBundle = (inFile, outFile, maxGzipBytes) => {
+      execFileSync(
+        esbuildBin,
+        [
+          inFile,
+          "--bundle",
+          "--format=esm",
+          "--minify",
+          "--target=es2022",
+          "--legal-comments=none",
+          `--outfile=${outFile}`,
+        ],
+        { cwd: pkgDir, stdio: "inherit" }
+      );
+      const raw = fs.readFileSync(outFile);
+      const gz = zlib.gzipSync(raw, { level: 9 });
+      console.log(
+        `Built ${path.relative(repoToolRoot, outFile)}: ${raw.length} bytes raw, ${gz.length} bytes gzip (limit ${maxGzipBytes})`
+      );
+      if (gz.length > maxGzipBytes) {
+        throw new Error(`Gzipped bundle ${path.basename(outFile)} (${gz.length} bytes) exceeds ${maxGzipBytes} bytes limit`);
+      }
+    };
+
+    buildBundle(entryFile, outBundle, MAX_GZIP_BYTES);
+    buildBundle(studioEntryFile, outStudioBundle, MAX_STUDIO_GZIP_BYTES);
 
     if (!createdTemp) {
       fs.rmSync(entryFile, { force: true });
+      fs.rmSync(studioEntryFile, { force: true });
     }
 
     fs.mkdirSync(licenseDir, { recursive: true });
@@ -121,15 +149,6 @@ function main() {
     for (const [pkg, destName] of licenseCopies) {
       const src = path.join(pkgDir, "node_modules", ...pkg.split("/"), "LICENSE");
       fs.copyFileSync(src, path.join(licenseDir, destName));
-    }
-
-    const raw = fs.readFileSync(outBundle);
-    const gz = zlib.gzipSync(raw, { level: 9 });
-    console.log(
-      `Built ${path.relative(repoToolRoot, outBundle)}: ${raw.length} bytes raw, ${gz.length} bytes gzip (limit ${MAX_GZIP_BYTES})`
-    );
-    if (gz.length > MAX_GZIP_BYTES) {
-      throw new Error(`Gzipped bundle ${gz.length} bytes exceeds ${MAX_GZIP_BYTES} bytes limit`);
     }
   } finally {
     if (createdTemp && pkgDir) {

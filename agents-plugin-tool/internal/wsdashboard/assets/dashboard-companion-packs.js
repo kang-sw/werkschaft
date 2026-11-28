@@ -10,6 +10,8 @@
   function raster(file) { return typeof file === "string" && /^[a-z\d][a-z\d._-]{0,127}\.(webp|png)$/i.test(file) && !file.includes(".."); }
   function vrmModel(file) { return typeof file === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\.vrm$/.test(file) && !file.includes(".."); }
   function vrmaFile(file) { return typeof file === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\.vrma$/.test(file) && !file.includes(".."); }
+  function clipRelFile(file) { return typeof file === "string" && /^clips\/[a-z][a-z0-9_]{0,31}\.(clip\.json|vrma)$/.test(file); }
+  function clipKeyId(key) { return typeof key === "string" && /^[a-z][a-z0-9_]{0,31}$/.test(key); }
 
   // Match the server's known raster fields. Extension keys may contain raster
   // names as ordinary text and never imply extra asset requests.
@@ -76,6 +78,46 @@
     }
     const expressionMap = manifest.expressionMap && typeof manifest.expressionMap === "object" && !Array.isArray(manifest.expressionMap)
       ? manifest.expressionMap : Object.create(null);
+    const normalizeEntry = (raw, keyFallback) => {
+      if (!raw || typeof raw !== "object") return null;
+      const key = clipKeyId(raw.key) ? raw.key : (clipKeyId(keyFallback) ? keyFallback : "");
+      if (!key) return null;
+      const kind = raw.kind === "vrma" ? "vrma" : "clip";
+      const file = clipRelFile(raw.file) ? raw.file : ("clips/" + key + (kind === "vrma" ? ".vrma" : ".clip.json"));
+      const entry = {
+        key,
+        kind,
+        file,
+        description: typeof raw.description === "string" ? raw.description : "",
+        expression: typeof raw.expression === "string" ? raw.expression : "",
+        prop: typeof raw.prop === "string" ? raw.prop : "",
+        expose: raw.expose_to_agent === true,
+        loop: typeof raw.loop === "boolean" ? raw.loop : undefined,
+        duration_s: Number.isFinite(raw.duration_s) ? raw.duration_s : undefined
+      };
+      return entry;
+    };
+    const sentinels = Object.create(null);
+    if (manifest.sentinels && typeof manifest.sentinels === "object" && !Array.isArray(manifest.sentinels)) {
+      for (const [key, raw] of Object.entries(manifest.sentinels)) {
+        const entry = normalizeEntry(raw, key);
+        if (entry) sentinels[key] = entry;
+      }
+    }
+    const actions = [];
+    const actionMap = Object.create(null);
+    if (Array.isArray(manifest.actions)) {
+      for (const raw of manifest.actions) {
+        const entry = normalizeEntry(raw, "");
+        if (entry && !Object.hasOwn(actionMap, entry.key)) {
+          actions.push(entry);
+          actionMap[entry.key] = entry;
+        }
+      }
+    }
+    const calibration = manifest.calibration && typeof manifest.calibration === "object" && !Array.isArray(manifest.calibration)
+      ? manifest.calibration : null;
+    const clipWarnings = Array.isArray(info.clipWarnings) ? info.clipWarnings.slice() : [];
     return {
       id: info.id,
       rev: info.rev,
@@ -85,8 +127,50 @@
       modelUrl: path + "/assets/" + encodeURIComponent(manifest.model) + rev,
       expressionMap,
       animations,
+      sentinels,
+      actions,
+      actionMap,
+      calibration,
+      clipWarnings,
       bitmaps: new Map()
     };
+  }
+
+  // fetchPackClip fetches a clip file (.clip.json or .vrma) from /clips/<basename>
+  // keyed on pack.rev, with one 409 stale-revision retry matching fetchPackAsset.
+  async function fetchPackClip(pack, file, signal) {
+    const basename = String(file || "").replace(/^clips\//, "");
+    const clipPath = base + "/" + encodeURIComponent(pack.id) + "/clips/" + encodeURIComponent(basename);
+    let rev = pack.rev || "";
+    const urlFor = r => clipPath + "?rev=" + encodeURIComponent(r);
+    let response = await fetch(urlFor(rev), { signal, credentials: "same-origin" });
+    if (response.status === 409) {
+      let nextRev = response.headers?.get?.("X-Companion-Current-Rev") || "";
+      try {
+        const catalogResp = await fetch(base, { signal, credentials: "same-origin" });
+        if (catalogResp.ok) {
+          const catalog = await catalogResp.json();
+          const info = Array.isArray(catalog?.packs) ? catalog.packs.find(p => p.id === pack.id) : null;
+          if (info?.rev) nextRev = info.rev;
+        }
+      } catch (err) {
+        if (signal?.aborted) throw err;
+      }
+      if (nextRev && nextRev !== rev) {
+        rev = nextRev;
+        pack.rev = nextRev;
+        response = await fetch(urlFor(rev), { signal, credentials: "same-origin" });
+      }
+    }
+    if (!response.ok) {
+      const error = new Error("Companion clip request failed");
+      error.status = response.status;
+      throw error;
+    }
+    if (basename.endsWith(".clip.json")) {
+      return { json: await response.json(), rev };
+    }
+    return { buffer: await response.arrayBuffer(), rev };
   }
 
   // fetchPackAsset fetches a binary VRM/VRMA asset keyed on pack.rev. On a
@@ -264,5 +348,5 @@
     };
   }
 
-  window.WsCompanion = { own, packLoader, fetchPackAsset };
+  window.WsCompanion = Object.assign(window.WsCompanion || {}, { own, packLoader, fetchPackAsset, fetchPackClip });
 })();
