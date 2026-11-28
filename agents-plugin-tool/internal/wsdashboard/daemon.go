@@ -364,6 +364,9 @@ type Daemon struct {
 	// companionBrainReplyID holds the active Brain replyID atomically for
 	// lock-free Puppeteer direct observation (companion_director.go).
 	companionBrainReplyID atomic.Pointer[string]
+	// companionPuppeteerTier, when bound by cmd/ws-mcp, resolves Puppeteer's
+	// harness/model/effort/provider from dashboard.companion_body_tier.
+	companionPuppeteerTier atomic.Pointer[func() (CompanionPuppeteerTier, error)]
 	// companionBrainStates broadcasts companion-brain-state transitions to rail streams.
 	companionBrainStates companionBrainStateHub
 	// director is the companion agent director (companion_director.go).

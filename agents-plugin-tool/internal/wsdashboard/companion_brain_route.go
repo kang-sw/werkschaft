@@ -135,6 +135,9 @@ func (d *Daemon) SetCompanionBrainReplyID(rid string) {
 	if prevPtr != nil {
 		prev = *prevPtr
 	}
+	if rid != prev {
+		d.director.resetBrainFor(rid)
+	}
 	if rid != "" && rid != prev {
 		d.PublishCompanionBrainState("handoff", rid)
 	}

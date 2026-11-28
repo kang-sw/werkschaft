@@ -77,3 +77,19 @@ func (r *companionRuntime) pickLaunchSpec(role string) (companionLaunchSpec, boo
 	}
 	return companionLaunchSpec{Backend: res.Harness, Model: res.Model, Effort: res.Effort, Provider: res.Provider}, true
 }
+
+// PuppeteerTier resolves dashboard.companion_body_tier (default small) for the
+// lightweight cosmetic Puppeteer event bus in internal/wsdashboard without
+// introducing an import cycle with internal/wsagent.
+func (r *companionRuntime) PuppeteerTier() (wsdashboard.CompanionPuppeteerTier, error) {
+	spec, ok := r.pickLaunchSpec(mcp.CompanionRoleBody)
+	if !ok {
+		return wsdashboard.CompanionPuppeteerTier{}, fmt.Errorf("no available harness backend for companion puppeteer")
+	}
+	return wsdashboard.CompanionPuppeteerTier{
+		Harness:  spec.Backend,
+		Model:    spec.Model,
+		Effort:   spec.Effort,
+		Provider: spec.Provider,
+	}, nil
+}

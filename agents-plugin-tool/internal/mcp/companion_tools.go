@@ -551,15 +551,18 @@ func (s *Server) handleCompanionTool(ctx context.Context, id json.RawMessage, na
 		if hasDelay {
 			delayMS = intFromArgument(rawDelay, 0)
 		}
+		cosmeticOnly, _ := args["cosmetic_only"].(bool)
 		req := wsdashboard.CompanionActRequest{
-			SessionID:  "*",
-			Expression: strings.TrimSpace(stringValue(args["expression"])),
-			Gesture:    strings.TrimSpace(stringValue(args["gesture"])),
-			Prop:       strings.TrimSpace(stringValue(args["prop"])),
-			FX:         strings.TrimSpace(stringValue(args["fx"])),
-			Speech:     strings.TrimSpace(speech),
-			DelayMS:    delayMS,
-			HasDelay:   hasDelay,
+			SessionID:    "*",
+			Expression:   strings.TrimSpace(stringValue(args["expression"])),
+			Gesture:      strings.TrimSpace(stringValue(args["gesture"])),
+			Prop:         strings.TrimSpace(stringValue(args["prop"])),
+			FX:           strings.TrimSpace(stringValue(args["fx"])),
+			Speech:       strings.TrimSpace(speech),
+			DelayMS:      delayMS,
+			HasDelay:     hasDelay,
+			CosmeticOnly: cosmeticOnly,
+			Priority:     strings.TrimSpace(stringValue(args["priority"])),
 		}
 		waitCtx, cancel := mergeDone(ctx, s.drainContext())
 		defer cancel()

@@ -54,8 +54,14 @@ func TestCompanionCommandReachesOnlyRailStreams(t *testing.T) {
 		t.Fatal("publish refused")
 	}
 	got := commands(rail)
-	want := CompanionCommand{SessionID: "livesession", Expression: "happy", Quip: "<b>ok</b>", TTLms: 4000}
-	if len(got) != 1 || got[0] != want {
+	if len(got) != 1 {
+		t.Fatalf("rail commands = %+v, want 1 command", got)
+	}
+	if got[0].Seq <= 0 {
+		t.Fatalf("rail command missing monotonic seq: %+v", got[0])
+	}
+	want := CompanionCommand{Seq: got[0].Seq, SessionID: "livesession", Expression: "happy", Quip: "<b>ok</b>", TTLms: 4000}
+	if got[0] != want {
 		t.Fatalf("rail commands = %+v, want [%+v]", got, want)
 	}
 	if got := commands(page); len(got) != 0 {

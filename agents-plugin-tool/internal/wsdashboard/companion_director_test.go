@@ -537,7 +537,10 @@ func TestCompanionDirectorPublishes(t *testing.T) {
 				t.Fatal(err)
 			}
 			// The default pack holds no expressions or gestures: those drop.
-			want := CompanionCommand{SessionID: "livesession", Scenario: "celebrate_done", FX: "sparkle", Quip: "Done!", TTLms: 3000}
+			if cmd.Seq <= 0 {
+				t.Fatalf("published command missing monotonic seq: %+v", cmd)
+			}
+			want := CompanionCommand{Seq: cmd.Seq, Priority: companionPriorityNormal, Source: "puppeteer", SessionID: "livesession", Scenario: "celebrate_done", FX: "sparkle", Quip: "Done!", TTLms: 3000}
 			if cmd != want {
 				t.Fatalf("published %+v, want %+v", cmd, want)
 			}
