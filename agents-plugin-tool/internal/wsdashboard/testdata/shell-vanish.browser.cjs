@@ -54,11 +54,14 @@ async function run(name, type) {
       await page.waitForTimeout(400);
       const tag = `${name}/${theme}`;
       const rail = await page.locator('#rail').boundingBox();
-      const px = Math.round(rail.x + rail.width / 2), py = Math.round(rail.y + rail.height - 40), gx = Math.max(1, Math.round(rail.x / 2));
-      // The gutter left of the rail is bare page background; the rail's own
-      // surface differs from it.
-      const calm = { rail: await pixel(page, px, py), gutter: await pixel(page, gx, py) };
-      check(!same(calm.rail, calm.gutter), `${tag}: rail surface differs from the page background at rest`);
+      const px = Math.round(rail.x + rail.width / 2), py = Math.round(rail.y + rail.height - 40);
+      // Variant D docks the rail flush at x=0 on continuous outer chrome; compare
+      // against the inset stage well just right of the rail (outside the 1300px
+      // stage grid at 1920px). An opaque iframe would wipe the rail to the same
+      // background as the well.
+      const wx = Math.round(rail.x + rail.width + 24);
+      const calm = { rail: await pixel(page, px, py), well: await pixel(page, wx, py) };
+      check(!same(calm.rail, calm.well), `${tag}: rail chrome differs from the inset stage well at rest (${calm.rail} vs ${calm.well})`);
       await shot(page, `${name}-${theme}-normal`);
 
       const frame = page.frames().find(f => f !== page.mainFrame());
@@ -67,8 +70,8 @@ async function run(name, type) {
       await dlg.waitFor({ state: 'visible' });
       await page.waitForFunction(() => document.documentElement.hasAttribute('data-fdim'), null, { timeout: 5000 });
       await page.waitForTimeout(100);
-      const during = { rail: await pixel(page, px, py), gutter: await pixel(page, gx, py) };
-      check(!same(during.rail, during.gutter), `${tag}: rail stays rail-colored while the dialog is open (${during.rail} vs ${during.gutter})`);
+      const during = { rail: await pixel(page, px, py), well: await pixel(page, wx, py) };
+      check(!same(during.rail, during.well), `${tag}: rail stays distinct from stage well while the dialog is open (${during.rail} vs ${during.well})`);
       await shot(page, `${name}-${theme}-dialog`);
 
       // Hold the frame's layout report back, as a slow page would, so the
@@ -81,8 +84,8 @@ async function run(name, type) {
       await dlg.locator('.pbtn:not(.danger)').click();
       await dlg.waitFor({ state: 'detached' });
       check(await page.evaluate(() => document.documentElement.hasAttribute('data-fdim')), `${tag}: shell still holds data-fdim just after close`);
-      const after = { rail: await pixel(page, px, py), gutter: await pixel(page, gx, py) };
-      check(!same(after.rail, after.gutter), `${tag}: rail stays rail-colored just after close (${after.rail} vs ${after.gutter})`);
+      const after = { rail: await pixel(page, px, py), well: await pixel(page, wx, py) };
+      check(!same(after.rail, after.well) && same(after.rail, calm.rail), `${tag}: rail stays rail-colored just after close (${after.rail} vs ${after.well}, calm ${calm.rail})`);
       await shot(page, `${name}-${theme}-after-close`);
       await frame.evaluate(() => { window.__lateRaf = false; });
       await page.waitForFunction(() => !document.documentElement.hasAttribute('data-fdim'), null, { timeout: 5000 });
@@ -95,7 +98,7 @@ async function run(name, type) {
       const ov = await pixel(page, px, py);
       const lum = c => c[0] + c[1] + c[2];
       check(lum(ov) < lum(calm.rail) * 0.6, `${tag}: rail is darker in the overview (${ov} vs ${calm.rail} at rest)`);
-      check(!same(ov, await pixel(page, gx, py)) || lum(calm.rail) < 30, `${tag}: rail stays distinct from the gutter in the overview`);
+      check(!same(ov, await pixel(page, wx, py)) || lum(calm.rail) < 60, `${tag}: rail stays distinct from the stage well in the overview`);
       await shot(page, `${name}-${theme}-overview`);
       await context.close();
       console.log(`shell vanish ${tag}: PASS`);
