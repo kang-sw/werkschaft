@@ -42,6 +42,23 @@ type werkLoop struct {
 	agent           *werk.Agent
 }
 
+type openAIAccountPinKey struct{}
+
+func withOpenAIAccountPin(ctx context.Context, clientID string) context.Context {
+	if clientID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, openAIAccountPinKey{}, clientID)
+}
+
+func openAIAccountPin(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	id, _ := ctx.Value(openAIAccountPinKey{}).(string)
+	return id
+}
+
 func (b WerkBackend) startLoop(ctx context.Context, spec StartSpec) (Process, error) {
 	if err := validateWerkStart(spec); err != nil {
 		return nil, err
@@ -51,7 +68,15 @@ func (b WerkBackend) startLoop(ctx context.Context, spec StartSpec) (Process, er
 		return nil, err
 	}
 	spec.modelContextWindow = func(model string) int64 { return b.providerContextWindow(spec.Provider, model) }
-	return startWerkLoop(ctx, spec, endpoint)
+	var wrapTurn func(context.Context) context.Context
+	if spec.Provider == string(wscred.ProviderOpenAI) {
+		if source, ok := b.credentials.(interface{ ActiveOpenAIAccount() string }); ok {
+			wrapTurn = func(tctx context.Context) context.Context {
+				return withOpenAIAccountPin(tctx, source.ActiveOpenAIAccount())
+			}
+		}
+	}
+	return startWerkLoopWithTurnHook(ctx, spec, endpoint, wrapTurn)
 }
 
 func (b WerkBackend) loopResponder() (*werk.Client, error) { return b.loopResponderFor("") }
@@ -75,6 +100,12 @@ func (b WerkBackend) loopResponderFor(id string) (*werk.Client, error) {
 	}
 	if provider.ID == wscred.ProviderOpenAI {
 		if source, ok := b.credentials.(interface {
+			BeginOpenAIPlanRequestFor(context.Context, string, bool) (wscred.OpenAIPlanRequest, error)
+		}); ok {
+			client.PlanToken = func(ctx context.Context) (wscred.OpenAIPlanRequest, error) {
+				return source.BeginOpenAIPlanRequestFor(ctx, openAIAccountPin(ctx), !werk.InteractiveTurn(ctx))
+			}
+		} else if source, ok := b.credentials.(interface {
 			BeginOpenAIPlanRequest(context.Context, bool) (wscred.OpenAIPlanRequest, error)
 		}); ok {
 			client.PlanToken = func(ctx context.Context) (wscred.OpenAIPlanRequest, error) {
@@ -87,6 +118,9 @@ func (b WerkBackend) loopResponderFor(id string) (*werk.Client, error) {
 
 func (b WerkBackend) providerToken(ctx context.Context, provider wscred.Provider, background bool) (string, error) {
 	request := wscred.Request{Provider: provider.ID, AgentSession: true, Background: background}
+	if provider.ID == wscred.ProviderOpenAI {
+		request.OpenAIAccount = openAIAccountPin(ctx)
+	}
 	if provider.Dialect != "" {
 		request.BaseURL = provider.BaseURL
 	}
@@ -118,6 +152,10 @@ func validateWerkStart(spec StartSpec) error {
 }
 
 func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder) (*werkLoop, error) {
+	return startWerkLoopWithTurnHook(ctx, spec, endpoint, nil)
+}
+
+func startWerkLoopWithTurnHook(ctx context.Context, spec StartSpec, endpoint werk.Responder, wrapTurn func(context.Context) context.Context) (*werkLoop, error) {
 	if err := validateWerkStart(spec); err != nil {
 		return nil, err
 	}
@@ -168,8 +206,9 @@ func startWerkLoop(ctx context.Context, spec StartSpec, endpoint werk.Responder)
 		Effort:       spec.Effort,
 		Instructions: instructions,
 		Endpoint:     endpoint,
-		SummarySecrets: p.secrets,
-		Emit:         p.emit,
+		SummarySecrets:  p.secrets,
+		Emit:            p.emit,
+		WrapTurnContext: wrapTurn,
 	}
 	if !spec.Ephemeral {
 		cfg.Dir = spec.Dir

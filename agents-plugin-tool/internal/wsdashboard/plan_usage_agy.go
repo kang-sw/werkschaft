@@ -239,10 +239,16 @@ func (s *planUsageStore) refreshAgy() {
 }
 
 func (s *planUsageStore) probeAgy(parentCtx context.Context, resolve func() (string, []string, error)) {
+	s.agyProbeMu.Lock()
+	defer s.agyProbeMu.Unlock()
 	defer func() {
 		s.mu.Lock()
 		s.agyProbing = false
+		onChange := s.onAgyChange
 		s.mu.Unlock()
+		if onChange != nil {
+			onChange()
+		}
 	}()
 	if parentCtx.Err() != nil {
 		return
@@ -280,6 +286,7 @@ func (s *planUsageStore) probeAgy(parentCtx context.Context, resolve func() (str
 	case agyOutcomeOK:
 		s.agyGroups = groups
 		s.agyStatus = ""
+		s.agyAuthHold = false
 		s.saveAgyLocked()
 		var samples []planUsageSample
 		for _, g := range groups {
@@ -295,6 +302,104 @@ func (s *planUsageStore) probeAgy(parentCtx context.Context, resolve func() (str
 	default:
 		s.agyStatus = "usage unavailable"
 	}
+}
+
+// agyAuthState returns an in-memory snapshot of agy's single-account auth and
+// probe latches without performing any disk or subprocess I/O (D17).
+func (s *planUsageStore) agyAuthState() harnessAuthSnapshot {
+	if s == nil {
+		return harnessAuthSnapshot{Harness: "agy", Label: "Antigravity", SingleSlot: true}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return harnessAuthSnapshot{
+		Harness:      "agy",
+		Label:        "Antigravity",
+		SingleSlot:   true,
+		Available:    s.resolveAgy != nil,
+		Probed:       s.agyProbed,
+		Probing:      s.agyProbing,
+		AuthRequired: s.agyAuthHold || s.agyStatus == agyStatusSignInRequired,
+		BilledLatch:  s.agyBilledLatch,
+		Status:       s.agyStatus,
+	}
+}
+
+// clearAgyAuthHoldAndReverify clears the daemon-lifetime agyAuthHold latch
+// without requiring a daemon restart (D17, superseding 261119 D13 in part),
+// preserves agyBilledLatch, and triggers one serialized, timeout-bounded
+// re-verify probe.
+func (s *planUsageStore) clearAgyAuthHoldAndReverify() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	if s.closed || s.resolveAgy == nil {
+		s.mu.Unlock()
+		return false
+	}
+	s.agyAuthHold = false
+	if s.agyStatus == agyStatusSignInRequired {
+		s.agyStatus = ""
+	}
+	// Reset debounce only for this explicit user-initiated re-verify;
+	// agyBilledLatch is intentionally preserved.
+	s.agyLastProbe = time.Time{}
+	s.mu.Unlock()
+	s.refreshAgy()
+	return true
+}
+
+// refreshAgySerialized runs a sequence of agy probe actions strictly one at a
+// time under agyProbeMu so multi-target probes never fan out concurrently
+// while honoring the store's debounce and timeout bounds (Phase 3 D15).
+func (s *planUsageStore) refreshAgySerialized(ctx context.Context, steps ...func(context.Context)) {
+	if s == nil || len(steps) == 0 {
+		return
+	}
+	if ctx == nil {
+		ctx = s.lifetimeCtx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+	}
+	s.agyProbeMu.Lock()
+	defer s.agyProbeMu.Unlock()
+	for _, step := range steps {
+		if ctx.Err() != nil {
+			return
+		}
+		if step != nil {
+			step(ctx)
+		}
+	}
+}
+
+func (s *planUsageStore) harnessAuthProviders() []harnessAuthProvider {
+	if s == nil {
+		return nil
+	}
+	return []harnessAuthProvider{{
+		harness: "agy",
+		label:   "Antigravity",
+		state:   s.agyAuthState,
+		resolveCmd: func() (string, []string, []string, error) {
+			s.mu.Lock()
+			resolve := s.resolveAgy
+			baseEnv := s.agyEnv
+			s.mu.Unlock()
+			if resolve == nil {
+				return "", nil, nil, errHarnessAuthCLIUnavailable
+			}
+			prog, pre, err := resolve()
+			if err != nil || strings.TrimSpace(prog) == "" {
+				return "", nil, nil, errHarnessAuthCLIUnavailable
+			}
+			args := append(slices.Clone(pre), "-p", "/usage", "--output-format", "json")
+			return prog, args, agyCommandEnv(baseEnv), nil
+		},
+		clearHoldAndReverify: s.clearAgyAuthHoldAndReverify,
+	}}
 }
 
 type agyProbeOutcome int

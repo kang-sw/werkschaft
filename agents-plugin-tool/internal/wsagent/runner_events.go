@@ -168,6 +168,21 @@ func (c *conv) handle(ev Event) {
 		c.endTurn(ev.TurnError, quiet)
 		c.live.summaryNaturalEnd = false
 		c.live.summarySource, c.summaryReason, c.summaryGap = "", "", false
+		if !quiet && !c.replaying && c.slot2aVerifyPending {
+			c.slot2aVerifyPending = false
+			turnErrVal := ev.TurnErrorVal
+			if turnErrVal == nil && ev.TurnError != "" {
+				turnErrVal = errors.New(ev.TurnError)
+			}
+			if turnErrVal != nil && !c.slot2aFallbackRetried && c.isSlot2aTurnRejection(turnErrVal) {
+				c.slot2aFallbackRetried = true
+				if err := c.fallbackSlot2aTo2b(turnErrVal); err != nil {
+					fmt.Fprintf(c.r.opts.Log, "agent %s: slot 2b fallback after turn rejection failed: %v\n", c.rec.ReplyID, err)
+				}
+			} else {
+				c.slot2aFallbackRetried = false
+			}
+		}
 	case ev.ModelActivity != nil:
 		if !quiet {
 			c.onModelActivity(*ev.ModelActivity, ev.ModelContent)

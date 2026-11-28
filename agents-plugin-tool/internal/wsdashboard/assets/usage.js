@@ -121,8 +121,11 @@
     return { grid: grid, labels: labels };
   }
   var chartSerial = 0;
-  window.WsUsage = { sorted: sorted, level: level, age: age, active: active, trend: trend, weeklyAxis: weeklyAxis, mount: function (doc, host) {
+  window.WsUsage = { sorted: sorted, level: level, age: age, active: active, trend: trend, weeklyAxis: weeklyAxis, mount: function (doc, host, opts) {
+    var switcherOn = !!(opts && opts.accountSwitcher);
+    var openSettings = opts && typeof opts.openSettings === "function" ? opts.openSettings : null;
     var data = { entries: [], warnPercent: 80, critPercent: 95 }, pending = null, forceQueued = false, popover = null, shown = false, place = function () {}, followUps = [], resetTimer = null;
+    var accountData = null, accountPending = null, switchBusy = false, switchNote = null, guideConv = null;
     function el(tag, cls, text) {
       var n = doc.createElement(tag); n.className = cls || "";
       if (text !== undefined) n.textContent = text;
@@ -149,7 +152,15 @@
       historyRecorded: "js.usage.historyrecorded", historyEarlier: "js.usage.historyearlier",
       currentOnly: "js.usage.currentonly", noObservation: "js.usage.noobservation", notLoggedIn: "js.usage.notloggedin",
       observed: "js.usage.observed", ideal: "js.usage.ideal", latest: "js.usage.latest", estimated: "js.usage.estimated",
-      key5h: "js.usage.key5h", keyWeekly: "js.usage.keyweekly"
+      key5h: "js.usage.key5h", keyWeekly: "js.usage.keyweekly",
+      accounts: "js.usage.accounts", manageAccounts: "js.usage.manage_accounts", defaultSlot: "js.usage.default_slot",
+      activeSessions: "js.usage.active_sessions", queuedSlot: "js.usage.queued_slot",
+      switchNow: "js.usage.switch_now", switchBoundary: "js.usage.switch_boundary",
+      switchConfirm: "js.usage.switch_confirm", switchedImmediate: "js.usage.switched_immediate",
+      switchedDefault: "js.usage.switched_default", switchedDefaultOnly: "js.usage.switched_default_only",
+      switchedQueued: "js.usage.switched_queued", switchedNow: "js.usage.switched_now",
+      switchFailed: "js.usage.switch_failed", cancel: "js.usage.cancel", werkOpenai: "js.usage.werk_openai",
+      singleAccount: "js.usage.single_account"
     };
     function t(key) { return window.wsT.apply(null, [keys[key]].concat(Array.prototype.slice.call(arguments, 1))); }
     function locale() { return window.wsI18n.lang; }
@@ -591,6 +602,237 @@
         return window.setTimeout(function () { if (shown && !doc.hidden) refresh(false); }, ms);
       });
     }
+    function fetchAccountStatus() {
+      if (!switcherOn) return Promise.resolve();
+      if (accountPending) return accountPending;
+      accountPending = window.fetch("/api/account/status", { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+        if (!r.ok) return null;
+        return r.json();
+      }).then(function (next) {
+        accountData = next && typeof next === "object" && typeof next.loopback_peer === "boolean" ? next : null;
+        drawAccounts();
+      }).catch(function () {
+        accountData = null;
+        drawAccounts();
+      }).then(function () {
+        accountPending = null;
+      });
+      return accountPending;
+    }
+    function slotDisplayLabel(harness, slotId) {
+      if (!slotId || slotId === "default") return t("defaultSlot");
+      var list = accountData && accountData.slots && accountData.slots[harness];
+      if (Array.isArray(list)) {
+        for (var i = 0; i < list.length; i++) {
+          if (list[i].id === slotId) return list[i].label || list[i].id;
+        }
+      }
+      return slotId;
+    }
+    function postAccountSwitch(path, body, onSuccess) {
+      if (switchBusy) return;
+      switchBusy = true;
+      switchNote = null;
+      drawAccounts();
+      window.fetch("/api/account/" + path, {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      }).then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (res) {
+          if (!r.ok) throw new Error(res.error || "switch_failed");
+          return res;
+        });
+      }).then(function (res) {
+        guideConv = null;
+        switchNote = { text: onSuccess(res), tone: "ok" };
+        return Promise.all([fetchAccountStatus(), refresh(false)]);
+      }).catch(function () {
+        switchNote = { text: t("switchFailed"), tone: "fail" };
+      }).then(function () {
+        switchBusy = false;
+        drawAccounts();
+      });
+    }
+    function drawAccounts() {
+      if (!switcherOn || !popover || !shown) return;
+      var box = popover.querySelector(".usage-accounts");
+      if (!box) return;
+      box.textContent = "";
+      var head = el("div", "usage-accounts-head");
+      head.appendChild(el("span", "usage-accounts-title", t("accounts")));
+      var manage = el("a", "usage-manage-link", t("manageAccounts"));
+      manage.href = "/settings?section=account";
+      if (openSettings) {
+        manage.addEventListener("click", function (e) {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button) return;
+          e.preventDefault();
+          openSettings("/settings?section=account", manage);
+        });
+      }
+      head.appendChild(manage);
+      box.appendChild(head);
+      if (!accountData) { place(); return; }
+
+      var oaList = Array.isArray(accountData.openai_accounts) ? accountData.openai_accounts : [];
+      if (oaList.length) {
+        var oaRow = el("div", "usage-slot-row");
+        oaRow.setAttribute("data-slot-harness", "werk");
+        var oaLabel = el("span", "usage-slot-harness");
+        oaLabel.appendChild(icon({ harness: "werk" }, true));
+        oaLabel.appendChild(el("span", "", t("werkOpenai")));
+        oaRow.appendChild(oaLabel);
+        var oaChips = el("div", "usage-slot-chips");
+        oaList.forEach(function (acc) {
+          var chip = el("button", "usage-slot-chip", acc.email || acc.client_id);
+          chip.type = "button";
+          chip.setAttribute("aria-pressed", String(!!acc.active));
+          chip.disabled = switchBusy || (!acc.active && (!acc.signed_in || !acc.plan_enabled));
+          chip.addEventListener("click", function () {
+            if (acc.active || chip.disabled) return;
+            postAccountSwitch("openai/switch", { client_id: acc.client_id }, function () {
+              return t("switchedImmediate");
+            });
+          });
+          oaChips.appendChild(chip);
+        });
+        oaRow.appendChild(oaChips);
+        box.appendChild(oaRow);
+      }
+
+      var slotsMap = accountData.slots && typeof accountData.slots === "object" ? accountData.slots : {};
+      var harnesses = Object.keys(slotsMap).sort();
+      harnesses.forEach(function (harness) {
+        var list = Array.isArray(slotsMap[harness]) ? slotsMap[harness] : [];
+        if (!list.length) return;
+        var row = el("div", "usage-slot-row");
+        row.setAttribute("data-slot-harness", harness);
+        var hLabel = el("span", "usage-slot-harness");
+        hLabel.appendChild(icon({ harness: harness }, true));
+        hLabel.appendChild(el("span", "", entryName({ harness: harness })));
+        row.appendChild(hLabel);
+        var chips = el("div", "usage-slot-chips");
+        list.forEach(function (slot) {
+          var labelText = slot.id === "default" ? t("defaultSlot") : (slot.label || slot.id);
+          var chip = el("button", "usage-slot-chip", labelText);
+          chip.type = "button";
+          chip.setAttribute("data-slot-id", slot.id);
+          chip.setAttribute("aria-pressed", String(!!slot.active));
+          chip.disabled = switchBusy;
+          chip.addEventListener("click", function () {
+            if (slot.active || chip.disabled) return;
+            postAccountSwitch("slots/switch", { harness: harness, slot_id: slot.id }, function (res) {
+              return res && res.queued_count > 0 ? t("switchedDefault", res.queued_count) : t("switchedDefaultOnly");
+            });
+          });
+          chips.appendChild(chip);
+        });
+        row.appendChild(chips);
+        box.appendChild(row);
+      });
+
+      var singleAuths = Array.isArray(accountData.harness_auth) ? accountData.harness_auth.filter(function (item) {
+        return item && item.single_slot && (item.available || item.probed || item.auth_required);
+      }) : [];
+      singleAuths.forEach(function (item) {
+        var row = el("div", "usage-slot-row usage-slot-readonly");
+        row.setAttribute("data-slot-harness", item.harness);
+        row.setAttribute("data-readonly-slot", "1");
+        var hLabel = el("span", "usage-slot-harness");
+        hLabel.appendChild(icon({ harness: item.harness }, true));
+        hLabel.appendChild(el("span", "", item.label || entryName({ harness: item.harness })));
+        row.appendChild(hLabel);
+        var badgeText = item.auth_required ? t("signInRequired") : t("singleAccount");
+        var badge = el("span", "usage-slot-readonly-badge" + (item.auth_required ? " warn" : ""), badgeText);
+        row.appendChild(badge);
+        box.appendChild(row);
+      });
+
+      var convs = Array.isArray(accountData.conversations) ? accountData.conversations.filter(function (c) {
+        var list = slotsMap[c.backend];
+        return Array.isArray(list) && (list.length > 1 || !!c.pending_account_slot);
+      }) : [];
+      if (convs.length) {
+        var cList = el("div", "usage-conv-list");
+        cList.appendChild(el("div", "usage-conv-label", t("activeSessions")));
+        convs.forEach(function (conv) {
+          var cRow = el("div", "usage-conv-row");
+          cRow.setAttribute("data-conv-id", conv.id);
+          var titleText = conv.label || conv.id;
+          var titleEl = el("span", "usage-conv-title", titleText);
+          titleEl.title = titleText;
+          cRow.appendChild(titleEl);
+          cRow.appendChild(el("span", "usage-conv-badge", slotDisplayLabel(conv.backend, conv.account_slot_id)));
+          if (conv.pending_account_slot) {
+            cRow.appendChild(el("span", "usage-conv-badge queued", t("queuedSlot", slotDisplayLabel(conv.backend, conv.pending_account_slot))));
+          }
+          var actions = el("div", "usage-conv-actions");
+          if (conv.pending_account_slot) {
+            var applyNow = el("button", "usage-act-btn pri", t("switchNow"));
+            applyNow.type = "button";
+            applyNow.disabled = switchBusy;
+            applyNow.addEventListener("click", function () {
+              postAccountSwitch("slots/switch", { conversation_id: conv.id, slot_id: conv.pending_account_slot, mode: "now" }, function () {
+                return t("switchedNow");
+              });
+            });
+            actions.appendChild(applyNow);
+          } else {
+            (slotsMap[conv.backend] || []).forEach(function (slot) {
+              var curSlot = conv.account_slot_id || "default";
+              if (slot.id === curSlot) return;
+              var slotLabel = slot.id === "default" ? t("defaultSlot") : (slot.label || slot.id);
+              var pick = el("button", "usage-act-btn", slotLabel);
+              pick.type = "button";
+              pick.disabled = switchBusy;
+              pick.addEventListener("click", function () {
+                guideConv = { convId: conv.id, harness: conv.backend, slotId: slot.id, slotLabel: slotLabel, convTitle: titleText };
+                drawAccounts();
+              });
+              actions.appendChild(pick);
+            });
+          }
+          cRow.appendChild(actions);
+          if (guideConv && guideConv.convId === conv.id) {
+            var guide = el("div", "usage-conv-guide");
+            guide.appendChild(el("span", "usage-conv-guide-text", t("switchConfirm", guideConv.slotLabel, guideConv.convTitle)));
+            var nowBtn = el("button", "usage-act-btn pri", t("switchNow"));
+            nowBtn.type = "button";
+            nowBtn.disabled = switchBusy;
+            nowBtn.addEventListener("click", function () {
+              postAccountSwitch("slots/switch", { conversation_id: conv.id, slot_id: guideConv.slotId, mode: "now" }, function () {
+                return t("switchedNow");
+              });
+            });
+            var queueBtn = el("button", "usage-act-btn", t("switchBoundary"));
+            queueBtn.type = "button";
+            queueBtn.disabled = switchBusy;
+            queueBtn.addEventListener("click", function () {
+              postAccountSwitch("slots/switch", { conversation_id: conv.id, slot_id: guideConv.slotId, mode: "queue" }, function () {
+                return t("switchedQueued");
+              });
+            });
+            var cancelBtn = el("button", "usage-act-btn", t("cancel"));
+            cancelBtn.type = "button";
+            cancelBtn.disabled = switchBusy;
+            cancelBtn.addEventListener("click", function () { guideConv = null; drawAccounts(); });
+            guide.appendChild(nowBtn);
+            guide.appendChild(queueBtn);
+            guide.appendChild(cancelBtn);
+            cRow.appendChild(guide);
+          }
+          cList.appendChild(cRow);
+        });
+        box.appendChild(cList);
+      }
+
+      if (switchNote && switchNote.text) {
+        box.appendChild(el("p", "usage-accounts-note " + (switchNote.tone || ""), switchNote.text));
+      }
+      place();
+    }
     function makePopover(onPlace, onClose) {
       place = onPlace;
       var box = el("div", "rpop usage-pop"); box.hidden = true; box.tabIndex = -1;
@@ -610,14 +852,22 @@
         key.appendChild(swatch); key.appendChild(el("span", "", t(item[1]))); legend.appendChild(key);
       });
       help.appendChild(legend);
-      box.appendChild(el("div", "usage-details")); popover = box;
-      return { el: box, open: function () { shown = true; drawPopover(); refresh(true); }, close: function () { shown = false; clearFollowUps(); }, focus: function () { box.focus(); } };
+      box.appendChild(el("div", "usage-details"));
+      if (switcherOn) box.appendChild(el("div", "usage-accounts"));
+      popover = box;
+      return { el: box, open: function () { shown = true; switchNote = null; guideConv = null; drawPopover(); drawAccounts(); refresh(true); if (switcherOn) fetchAccountStatus(); }, close: function () { shown = false; guideConv = null; clearFollowUps(); }, focus: function () { box.focus(); } };
     }
     refresh(false);
     // Only connected, visible pages trigger periodic queries. The daemon
     // coalesces viewers and does no background polling with no page open.
     window.setInterval(function () { if (!doc.hidden) { drawFooter(); drawPopover(); refresh(false); } }, 300000);
     doc.addEventListener("visibilitychange", function () { if (!doc.hidden) refresh(false); });
+    if (switcherOn) {
+      doc.addEventListener("ws-account-changed", function () {
+        if (shown) { fetchAccountStatus(); refresh(false); }
+        else refresh(false);
+      });
+    }
     return { sync: drawFooter, makePopover: makePopover };
   } };
 })(window);

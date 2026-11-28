@@ -770,6 +770,23 @@ func (c *conv) compactIdle() bool {
 	if (strings.HasPrefix(c.compactNote, restartRestoreMarker) || strings.HasPrefix(c.compactNote, compactionRestoreMarker)) && !c.r.startupReady() {
 		return true
 	}
+	if c.accountSlotBoundaryPending {
+		c.accountSlotBoundaryPending = false
+		if c.hasPendingAccountSlot() && !c.r.durableProcess(c.rec.Backend) {
+			if !c.rec.Lead && !c.compactResume {
+				if err := c.retireAndCommitPendingSlot(); err != nil {
+					c.setStatus(func() { c.lastErr = "account slot switch: " + err.Error() })
+				}
+				return false
+			}
+			if err := c.coldRestartPendingAccountSlot("compact_boundary"); err != nil {
+				c.setStatus(func() { c.lastErr = "account slot switch: " + err.Error() })
+				c.compactResume, c.compactResumeInternal = false, false
+				return false
+			}
+			goto postCompact
+		}
+	}
 	if c.compactNote == "" && c.compactUsageFresh {
 		c.refreshCompaction()
 		if c.aboveCompactHard() {
@@ -786,7 +803,8 @@ func (c *conv) compactIdle() bool {
 			}
 			defer release()
 		}
-		if c.proc == nil {
+		pendingAccountSwitch := !c.r.durableProcess(c.rec.Backend) && c.hasPendingAccountSlot()
+		if c.proc == nil && !pendingAccountSwitch {
 			c.compactPending = nil
 			if !c.rec.Lead && c.rec.PendingCompaction != nil {
 				c.update(func(rec *Record) { rec.PendingCompaction = nil })
@@ -796,7 +814,7 @@ func (c *conv) compactIdle() bool {
 			return false
 		}
 		c.compactPending = nil
-		if req.stage1 {
+		if req.stage1 && c.proc != nil {
 			if err := c.sendStandalonePrompt(false, func() error { return c.proc.Send(stage1CompactionPrompt()) }); err != nil {
 				if checkout, ok := releasedInput(err); ok {
 					req.err = err
@@ -815,6 +833,24 @@ func (c *conv) compactIdle() bool {
 				c.compactInternalTurn = true
 				c.beginTurn(false)
 				return true
+			}
+		}
+		if pendingAccountSwitch {
+			if !c.rec.Lead && !req.resume {
+				// Worker finished natural turn-end compaction with resume=false:
+				// retire the process and commit the pending account slot before
+				// going idle so the next wake spawns with the new slot's env (D6).
+				if err := c.retireAndCommitPendingSlot(); err != nil {
+					req.err = err
+					c.setStatus(func() { c.lastErr = "account slot switch: " + err.Error() })
+				}
+				c.releaseHeld()
+				return false
+			}
+			// Block c.proc reuse even in native compaction mode by routing
+			// through rotateExternalSession (retire -> commit slot -> respawn).
+			if req.lead == nil {
+				req.lead = emptyWorkerSummary()
 			}
 		}
 		c.compactResume, c.compactCommand = req.resume, true
@@ -1222,6 +1258,11 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 		// commitAuditCheckpoint succeed, so a failed rotation rolls back cleanly.
 		fresh := c.record()
 		fresh.SessionID, fresh.SessionFile = "", ""
+		pendingSlot := c.pendingAccountSlot()
+		if pendingSlot != "" {
+			fresh.AccountSlotID = storedAccountSlotID(pendingSlot)
+			fresh.PendingAccountSlotID = ""
+		}
 		noteBefore := c.compactNote
 		start := c.startLead
 		if !rec.Lead {
@@ -1265,11 +1306,17 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 			c.compactNote = checkpoint
 		}
 		pending := pendingCompactionFromState(c.compactNote, c.compactResume, c.compactResumeInternal, trigger)
+		c.accountSlotBoundaryPending = false
+		c.slot2aVerifyPending = false
 		c.update(func(rec *Record) {
 			sends := rec.Sends
 			saved := clonePendingCompaction(pending)
 			saved.RotatedAfterSends = &sends
 			rec.SessionID, rec.SessionFile = "", ""
+			if pendingSlot != "" {
+				rec.AccountSlotID = storedAccountSlotID(pendingSlot)
+				rec.PendingAccountSlotID = ""
+			}
 			rec.PendingCompaction = saved
 			if !rec.Lead && rec.InitialPrompt == "" && initialPrompt != "" {
 				rec.InitialPrompt = initialPrompt
@@ -1278,6 +1325,10 @@ func (c *conv) rotateExternalSession(req *compactRequest, trigger string) (bool,
 				}
 			}
 		})
+		if pendingSlot != "" {
+			c.changed(false)
+			c.watched()
+		}
 		return nil
 	})
 	if err != nil {
@@ -1590,6 +1641,11 @@ func (c *conv) compactEvent(ev wslive.Event) {
 		c.compactAdvised, c.compactM1Issued, c.compactM2Issued, c.compactHardIssued, c.compactUsageFresh = false, false, false, false, false
 		c.queueRestore(RestoreCompaction)
 		c.appendRestoreInstructions()
+		if !c.compactRotated && !c.replaying && !c.r.durableProcess(c.rec.Backend) && c.hasPendingAccountSlot() {
+			// Never tear down mid-turn during native auto-compaction; defer the
+			// cold-restart commit until endTurn -> compactIdle() (D6).
+			c.accountSlotBoundaryPending = true
+		}
 		if !c.rec.Lead && !c.r.durableProcess(c.rec.Backend) && c.compactResume && !c.replaying && c.rec.PendingCompaction != nil {
 			c.persistWorkerPendingCompaction(compactStageCompleted, 0)
 		}

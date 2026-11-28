@@ -585,6 +585,9 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 		// sentUserRev is the user commands' revision this stream last sent (see
 		// userCommandRev); only a page on this machine is sent one.
 		sentUserRev := ""
+		// sentAccountRev tracks account/slot mutations; initialized to the
+		// current revision so connect sends no unsolicited event.
+		sentAccountRev := d.accountRev.Load()
 		localStream := localViewer(r)
 		// The assets identity goes first, before any region of a new
 		// daemon's markup reaches a page that may run an old script.
@@ -706,6 +709,15 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 						return false
 					}
 					sentUserRev = rev
+					sent = true
+				}
+			}
+			if localStream && (src.key.kind == regionRail || !framedRequest(r)) {
+				if rev := d.accountRev.Load(); rev != sentAccountRev {
+					if sink.event("account-changed", fmt.Appendf(nil, `{"rev":%d}`, rev)) != nil {
+						return false
+					}
+					sentAccountRev = rev
 					sent = true
 				}
 			}

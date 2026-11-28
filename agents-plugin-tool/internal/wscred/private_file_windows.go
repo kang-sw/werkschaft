@@ -34,9 +34,30 @@ func restrictFile(_ *os.File, name string) error {
 		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
 }
 
-// restrictDir leaves the directory's ACL alone: the requirement is the
-// file's, and the user's profile directory already excludes other users.
+// restrictDir leaves the credential parent directory's ACL alone: the
+// requirement is the file's, and the user's profile directory already excludes
+// other users.
 func restrictDir(string) error { return nil }
+
+// RestrictPrivateDir applies a protected owner-only DACL (inheritable to files
+// and subdirectories created inside) to a dedicated private directory such as
+// a per-slot harness home.
+func RestrictPrivateDir(dir string) error {
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return err
+	}
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;OICI;FA;;;" + user.User.Sid.String() + ")")
+	if err != nil {
+		return err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return err
+	}
+	return windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+}
 
 func openCredentialFile(path string, write, follow bool) (*os.File, error) {
 	if follow {

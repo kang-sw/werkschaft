@@ -94,13 +94,14 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	var cutover bool
 	leadSubagent := c.r.leadSubagentPolicy(rec)
 	spec := StartSpec{
-		Root:         rec.Root,
-		Dir:          c.dir,
-		Profile:      def,
-		Model:        rec.Model,
-		Provider:     rec.Provider,
-		Effort:       rec.Effort,
-		SessionID:    rec.SessionID,
+		Root:             rec.Root,
+		Dir:              c.dir,
+		Profile:          def,
+		Model:            rec.Model,
+		Provider:         rec.Provider,
+		Effort:           rec.Effort,
+		AccountConfigDir: c.r.resolveAccountSlotConfigDir(rec.Backend, rec.AccountSlotID),
+		SessionID:        rec.SessionID,
 		Cwd:          rec.Cwd,
 		SessionFile:  rec.SessionFile,
 		Instructions: instructions,

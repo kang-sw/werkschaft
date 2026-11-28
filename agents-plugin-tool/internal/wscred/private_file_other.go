@@ -19,6 +19,10 @@ func restrictFile(f *os.File, _ string) error { return f.Chmod(0o600) }
 // earlier run or the user created it wider.
 func restrictDir(dir string) error { return os.Chmod(dir, 0o700) }
 
+// RestrictPrivateDir ensures a dedicated private directory such as a per-slot
+// harness home is owner-only (0700 on POSIX).
+func RestrictPrivateDir(dir string) error { return os.Chmod(dir, 0o700) }
+
 func replaceCredentialFile(staged, current string) error {
 	return wsstate.AtomicReplaceFile(staged, current)
 }

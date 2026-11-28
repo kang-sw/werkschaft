@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsaudit"
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsstate"
@@ -41,6 +42,32 @@ func NewRunner(opts Options) *Runner {
 	}
 	if opts.Alive == nil {
 		opts.Alive = wsstate.ProcessAlive
+	}
+	if opts.AccountSlots != nil && opts.Backends != nil {
+		var cloned map[string]BackendRegistration
+		for name, reg := range opts.Backends {
+			binder, ok := reg.Backend.(slotHomeBinder)
+			if !ok {
+				continue
+			}
+			harness := name
+			slots := opts.AccountSlots
+			explicitHome := opts.ExplicitHome
+			bound := binder.withSlotHomeResolver(func() string {
+				return wscred.ResolveHarnessHomeFromRegistry(slots, harness, "", explicitHome, nil)
+			})
+			if cloned == nil {
+				cloned = make(map[string]BackendRegistration, len(opts.Backends))
+				for k, v := range opts.Backends {
+					cloned[k] = v
+				}
+			}
+			reg.Backend = bound
+			cloned[name] = reg
+		}
+		if cloned != nil {
+			opts.Backends = cloned
+		}
 	}
 	r := &Runner{opts: opts, versions: loadHarnessVersions(opts.Dir, opts.Log), convs: map[string]*conv{}, closed: map[string]Record{}, quit: make(chan struct{}), scanned: make(chan struct{}), rejoined: make(chan struct{}), startupLoaded: make(chan struct{}), notify: func(string, string) {}}
 	r.awake = newKeepAwake(opts)

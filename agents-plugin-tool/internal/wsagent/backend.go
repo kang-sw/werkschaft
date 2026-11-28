@@ -81,6 +81,13 @@ type StartSpec struct {
 	// Env is the environment the child starts from; the backend removes the
 	// harness variables an inherited parent session leaves behind.
 	Env []string
+	// AccountSlotID is the harness account slot bound to this process launch
+	// (empty normalizes to the implicit default slot). Additive T0 field.
+	AccountSlotID string
+	// AccountConfigDir is the resolved isolated config home for this launch
+	// (e.g., CODEX_HOME or CLAUDE_CONFIG_DIR). Empty uses the harness's
+	// inherited environment or default home. Additive T0 field.
+	AccountConfigDir string
 	// Lead is set for a lead conversation (Profile.Lead): user settings stay
 	// active, while the daemon supplies its ws-mcp and workflow manual.
 	Lead *LeadSpec
@@ -516,6 +523,7 @@ type Event struct {
 	// candidate; an empty value clears a candidate after later model output.
 	TurnEnd            bool
 	TurnError          string
+	TurnErrorVal       error
 	TurnReason         string
 	ModelFailure       string
 	ModelFailureUpdate *string

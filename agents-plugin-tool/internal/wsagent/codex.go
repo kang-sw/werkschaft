@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsharnessenv"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
@@ -26,6 +27,9 @@ import (
 type CodexBackend struct {
 	// Command is the Codex executable; empty looks up "codex" on PATH.
 	Command string
+	// ResolveCodexHome returns the active slot's resolved CODEX_HOME for
+	// model-cache lookups. Nil falls back to the D10 default resolver.
+	ResolveCodexHome func() string
 }
 
 func (b CodexBackend) registration() (string, BackendRegistration) {
@@ -79,15 +83,19 @@ func (b CodexBackend) Executable() string {
 	return "codex"
 }
 
-// codexChoices holds model/list from the last opened process, stamped when
-// it arrived. A fresh report takes precedence over the session-less cache
-// file listing, and a newer one replaces it; one older than choicesTTL
-// answers nothing, so an updated CLI shows through the file again.
-var codexChoices struct {
-	sync.Mutex
+type codexChoiceEntry struct {
 	models  []ModelChoice
 	efforts []string
 	at      time.Time
+}
+
+// codexChoices holds model/list from the last opened process per resolved
+// CODEX_HOME, stamped when it arrived. A fresh report takes precedence over
+// that slot's cache file listing, and a newer one replaces it; one older than
+// choicesTTL answers nothing, so an updated CLI shows through the file again.
+var codexChoices struct {
+	sync.Mutex
+	byHome map[string]codexChoiceEntry
 }
 
 func (b CodexBackend) Choices(context.Context) ([]ModelChoice, []string, error) {
@@ -95,14 +103,18 @@ func (b CodexBackend) Choices(context.Context) ([]ModelChoice, []string, error) 
 }
 
 // codexEnv removes parent-session identities, but keeps the harness-owned
-// CODEX_HOME and authentication. The HTTP MCP bearer exists only in the
-// child's environment, never in argv, the thread config, or its transcript.
+// CODEX_HOME and authentication. When spec.AccountConfigDir is set, it binds
+// CODEX_HOME to that isolated slot directory. The HTTP MCP bearer exists only
+// in the child's environment, never in argv, the thread config, or its transcript.
 func codexEnv(spec StartSpec) []string {
 	set := map[string]string{}
 	if spec.Lead != nil {
 		for name, value := range spec.Lead.Env {
 			set[name] = value
 		}
+	}
+	if dir := strings.TrimSpace(spec.AccountConfigDir); dir != "" {
+		set["CODEX_HOME"] = filepath.Clean(dir)
 	}
 	if spec.MCPSession != nil {
 		set[EnvMCPSessionToken] = spec.MCPSession.Token
@@ -156,6 +168,7 @@ func (b CodexBackend) Start(_ context.Context, spec StartSpec) (Process, error) 
 	cmd.Dir = spec.workDir()
 	cmd.Env = env
 	mapper := newCodexMapper(spec.SessionID)
+	mapper.codexHome = codexHomeFromEnv(env)
 	mapper.readOnlyWorker = spec.Lead == nil && policy == "never"
 	mapper.worker = spec.Lead == nil
 	if attach {
@@ -456,21 +469,25 @@ func codexMode(mode string) (sandbox, policy string, err error) {
 // start, which has no lead spec to read the daemon's version from.
 const codexWorkerClientVersion = "worker"
 
+func codexHomeFromEnv(env []string) string {
+	var envCodexHome string
+	for _, entry := range env {
+		if k, v, ok := strings.Cut(entry, "="); ok && k == "CODEX_HOME" {
+			envCodexHome = strings.TrimSpace(v)
+		}
+	}
+	return wscred.ResolveHarnessHome(wscred.HarnessHomeOptions{
+		Harness:       BackendCodex,
+		SlotConfigDir: envCodexHome,
+		Getenv:        func(string) string { return "" },
+	})
+}
+
 // codexUserMCPServerNames reads $CODEX_HOME/config.toml (default ~/.codex/config.toml)
 // once per ephemeral slot start and returns the sorted names of user-configured
 // [mcp_servers.<name>] tables so ephemeral launches can disable them explicitly.
 func codexUserMCPServerNames(env []string) []string {
-	var codexHome string
-	for _, entry := range env {
-		if k, v, ok := strings.Cut(entry, "="); ok && k == "CODEX_HOME" {
-			codexHome = strings.TrimSpace(v)
-		}
-	}
-	if codexHome == "" {
-		if home, err := os.UserHomeDir(); err == nil && home != "" {
-			codexHome = filepath.Join(home, ".codex")
-		}
-	}
+	codexHome := codexHomeFromEnv(env)
 	if codexHome == "" {
 		return nil
 	}

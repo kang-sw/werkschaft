@@ -10,6 +10,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wsawake"
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsmeta"
@@ -301,6 +302,16 @@ type Options struct {
 	// OnHired, when not nil, notifies the daemon's in-memory hiring and label
 	// caches after SQLite MarkHired commits for a newly created hired lead.
 	OnHired func(replyID, requestID, label string)
+	// AccountSlots is the daemon's in-memory per-harness account slot registry
+	// (D11). Nil uses the implicit default slot for every conversation.
+	AccountSlots *wscred.AccountSlotRegistry
+	// ExplicitHome mirrors DaemonOptions.Home for the D10 home resolver so an
+	// explicit home suppresses inherited CODEX_HOME / CLAUDE_CONFIG_DIR env.
+	ExplicitHome string
+	// SlotAuthPreflight overrides a backend's default target-slot auth
+	// pre-flight check in tests. Nil delegates to the backend's
+	// accountSlotContinuity implementation.
+	SlotAuthPreflight func(backend, configDir string) error
 	// beforeDurableWrite injects a failed private record write in tests.
 	beforeDurableWrite     func(Record) error
 	removeRetiredPiArchive func(string) error // archive removal fault in tests

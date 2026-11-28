@@ -157,9 +157,15 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		endLog:          endLog,
 		listener:        listener,
 		log:             logw,
-		agents:          opts.Agents,
-		credentials:     credentials,
-		config:          opts.Config,
+		agents:            opts.Agents,
+		credentials:       credentials,
+		accountSlots:      opts.AccountSlots,
+		slotAuthPreflight: opts.SlotAuthPreflight,
+		slotLoginCmd:       opts.slotLoginCmd,
+		slotSignInTimeout:  opts.slotSignInTimeout,
+		harnessAuthCmd:     opts.harnessAuthCmd,
+		harnessAuthTimeout: opts.harnessAuthTimeout,
+		config:            opts.Config,
 		harnesses:       opts.Harnesses,
 		cardBound:       opts.CardBound,
 		execJobs:        opts.ExecJobs,
@@ -208,6 +214,12 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 			StartedAt:     time.Now().UTC().Format(time.RFC3339),
 		},
 	}
+	if d.accountSlots != nil {
+		if err := d.accountSlots.Load(); err != nil {
+			fmt.Fprintf(logw, "dashboard: load account slots: %v\n", err)
+		}
+		d.accountSlots.SetOnChange(d.accountChanged)
+	}
 	d.director.pool = opts.CompanionPool
 	if err := d.refreshCompanion(); err != nil {
 		fmt.Fprintf(logw, "dashboard: load companion settings: %v\n", err)
@@ -235,7 +247,10 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		} else {
 			d.planUsage = newPlanUsageStore(opts.Dir, home, getenv)
 		}
+		d.planUsage.explicitHome = opts.Home
+		d.planUsage.accountSlots = d.accountSlots
 		d.planUsage.resolveAgy = opts.AgyCommand
+		d.planUsage.onAgyChange = d.accountChanged
 		d.planUsage.harnesses = opts.Harnesses
 	}
 	d.cache = newPageCache(d.broker, stats)

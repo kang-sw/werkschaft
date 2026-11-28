@@ -46,8 +46,9 @@ type replayStateMapper interface {
 }
 
 type controlAnswer struct {
-	ok  bool
-	err string
+	ok     bool
+	err    string
+	errVal error
 	// body is a success answer's response payload, when it has one.
 	body json.RawMessage
 }
@@ -453,7 +454,13 @@ func (p *streamProcess) requestBodyIDContext(ctx context.Context, id, name strin
 	case a := <-ch:
 		if !a.ok {
 			if strings.Contains(strings.ToLower(a.err), "unsupported") {
+				if a.errVal != nil {
+					return nil, fmt.Errorf("%w: %w", ErrUnsupported, a.errVal)
+				}
 				return nil, fmt.Errorf("%w: %s", ErrUnsupported, a.err)
+			}
+			if a.errVal != nil {
+				return nil, a.errVal
 			}
 			return nil, errors.New(a.err)
 		}

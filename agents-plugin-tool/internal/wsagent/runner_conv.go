@@ -207,6 +207,10 @@ type conv struct {
 	compactContinueAtIdle, compactIdleInternal                                                                     bool
 	replayCompactEnded, replayCompactFailed                                                                        bool
 	compactStage1Active, compactStage1Resume, compactStage1Internal, compactStage1Auto, compactStage1UsageLimited  bool
+	// Account-slot boundary state (loop-owned, in-memory only).
+	accountSlotBoundaryPending bool
+	slot2aVerifyPending        bool
+	slot2aFallbackRetried      bool
 
 	// Agy model-wait watchdog state (loop-owned, in-memory only).
 	modelWaitTimeout            time.Duration
@@ -2070,7 +2074,7 @@ func (c *conv) kickInput() {
 		}
 		return
 	}
-	if c.proc == nil {
+	if c.proc == nil && !(!durable && c.hasPendingAccountSlot() && c.frontBoundaryCommandPending(held)) {
 		if c.rec.Lead && c.rec.HolderID != "" && !c.r.scanDone() {
 			// The holder the record names may still run unseen: the start
 			// waits for the first scan (holdersScanned kicks again), since
@@ -2196,6 +2200,26 @@ func (c *conv) kickInput() {
 	}
 	workerInstruction := strings.Join(workerInstructionParts, "\n\n")
 	whiteboard := slices.ContainsFunc(inputs, func(input QueuedInput) bool { return input.WhiteboardFirst })
+	if !durable && cmd != nil && cmd.Name == "clear" && c.hasPendingAccountSlot() {
+		// Intercept /clear before it reaches RunCommand (which codex does not
+		// support and claude would execute on the existing process), forcing a
+		// cold teardown + pending account slot commit + fresh respawn (D6).
+		c.update(func(rec *Record) {
+			rec.Queued = rest
+			rec.Drained, rec.Voided = c.drained, c.voided
+		})
+		if err := c.coldRestartPendingAccountSlot("clear"); err != nil {
+			c.setStatus(func() { c.lastErr = "account slot switch on /clear: " + err.Error() })
+			c.live.writeSnapshot()
+			c.r.notify(c.rec.ReplyID, c.rec.Root)
+			return
+		}
+		c.apply(wslive.Event{Kind: wslive.KindReset})
+		if len(rest) > 0 {
+			c.signalInbox()
+		}
+		return
+	}
 	if !durable && cmd != nil && cmd.Name == "compact" {
 		c.refreshCompaction()
 		if c.wsManagedLeadCompaction() {
@@ -2212,6 +2236,44 @@ func (c *conv) kickInput() {
 			}
 			return
 		}
+		if c.hasPendingAccountSlot() {
+			// Native compaction mode with a queued account slot switch: route
+			// through compactIdle so c.proc reuse is blocked and a cold restart
+			// commits the pending slot (D6).
+			c.update(func(rec *Record) {
+				rec.Queued = rest
+				rec.Drained, rec.Voided = c.drained, c.voided
+			})
+			if c.compactPending == nil && !c.compacting && !c.compactCommand {
+				c.compactPending = &compactRequest{resume: false, internal: false, auto: false, triggerPath: "account_slot_compact"}
+				c.publishCompaction(false)
+			}
+			if !c.compactIdle() {
+				c.signalInbox()
+			}
+			return
+		}
+	}
+	if c.proc == nil && !durable {
+		// Re-ensure a process when the pre-drain boundary command peek was
+		// superseded by a concurrent cancel or non-boundary input.
+		if err := c.startProcess(); err != nil {
+			var refused *admissionRefusal
+			if errors.As(err, &refused) {
+				c.refuseStart(refused)
+				if dead := c.r.deadBindingRefusal(c.record(), refused.checkout); dead != nil {
+					c.closeDeadAfterRefusal(dead)
+				}
+				return
+			}
+			c.setStatus(func() { c.lastErr, c.wakeRefused = err.Error(), false })
+			fmt.Fprintf(c.r.opts.Log, "agent %s: start: %v\n", c.rec.ReplyID, err)
+			c.live.writeSnapshot()
+			c.r.notify(c.rec.ReplyID, c.rec.Root)
+			c.settleTurn(TurnFailed, err.Error(), c.sendCount())
+			return
+		}
+		c.setStatus(func() { c.wakeRefused = false })
 	}
 	if cmd != nil {
 		mail, reports = nil, nil
@@ -2354,6 +2416,18 @@ func (c *conv) kickInput() {
 		return
 	}
 	if err != nil {
+		if !durable && ordinary && c.slot2aVerifyPending && !c.slot2aFallbackRetried && c.isSlot2aTurnRejection(err) {
+			c.slot2aVerifyPending = false
+			c.slot2aFallbackRetried = true
+			c.setStatus(func() { c.turn, c.lastErr = false, "" })
+			if fbErr := c.fallbackSlot2aTo2b(err); fbErr == nil {
+				c.sendRetried = true
+				c.signalInbox()
+				return
+			} else {
+				err = fbErr
+			}
+		}
 		// The turn never began: its process ends with no turn to close.
 		c.setStatus(func() { c.turn, c.lastErr = false, "send turn: "+err.Error() })
 		c.stopProcess("")

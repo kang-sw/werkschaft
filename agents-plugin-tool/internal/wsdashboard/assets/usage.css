@@ -135,3 +135,33 @@
 .usage-point-current { stroke-width: 2; }
 .usage-meta { font-size: 11px; }
 .usage-status { margin: 3px 0; font-size: 12px; }
+.usage-accounts { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--wb-line); display: grid; gap: 6px; }
+.usage-accounts-head { display: flex; align-items: center; gap: 6px; }
+.usage-accounts-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--wb-muted-fg); }
+.usage-manage-link { margin-left: auto; border: 0; background: transparent; padding: 2px 6px; border-radius: 6px; color: var(--wb-primary); font: 700 11px/1.3 var(--wb-sans, sans-serif); text-decoration: none; cursor: pointer; }
+.usage-manage-link:hover, .usage-manage-link:focus-visible { background: color-mix(in srgb, var(--wb-primary) 12%, transparent); text-decoration: none; }
+.usage-slot-row { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px; padding: 4px 6px; border-radius: 7px; background: color-mix(in srgb, var(--wb-bg) 50%, var(--wb-card)); }
+.usage-slot-harness { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; color: var(--wb-fg); min-width: 96px; }
+.usage-slot-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; flex: 1 1 160px; min-width: 0; }
+.usage-slot-chip { border: 0; border-radius: 999px; padding: 3px 9px; background: var(--wb-muted); color: var(--wb-fg); font: 600 11px/1.25 var(--wb-sans, sans-serif); cursor: pointer; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-slot-chip:hover:not(:disabled), .usage-slot-chip:focus-visible:not(:disabled) { background: color-mix(in srgb, var(--wb-primary) 16%, var(--wb-card)); color: var(--wb-primary); }
+.usage-slot-chip[aria-pressed="true"] { background: color-mix(in srgb, var(--wb-primary) 16%, var(--wb-card)); color: var(--wb-primary); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 38%, transparent); }
+.usage-slot-chip:disabled { opacity: .5; cursor: default; }
+.usage-slot-readonly-badge { padding: 2px 8px; border-radius: 999px; background: var(--wb-muted); color: var(--wb-muted-fg); font: 600 10.5px/1.25 var(--wb-sans, sans-serif); }
+.usage-slot-readonly-badge.warn { background: color-mix(in srgb, var(--wb-warn) 16%, var(--wb-card)); color: var(--wb-warn-ink); }
+.usage-conv-list { display: grid; gap: 4px; margin-top: 2px; }
+.usage-conv-label { font-size: 10.5px; font-weight: 700; color: var(--wb-muted-fg); padding: 0 2px; }
+.usage-conv-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 4px 6px; border-radius: 6px; background: var(--wb-wash); font-size: 11px; }
+.usage-conv-title { font-weight: 600; color: var(--wb-fg); max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-conv-badge { padding: 1px 6px; border-radius: 999px; background: var(--wb-muted); color: var(--wb-muted-fg); font-size: 10px; font-weight: 600; }
+.usage-conv-badge.queued { background: color-mix(in srgb, var(--wb-warn) 16%, var(--wb-card)); color: var(--wb-warn-ink); }
+.usage-conv-actions { margin-left: auto; display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.usage-act-btn { border: 0; border-radius: 6px; padding: 2px 7px; background: var(--wb-muted); color: var(--wb-fg); font: 600 10.5px/1.3 var(--wb-sans, sans-serif); cursor: pointer; }
+.usage-act-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--wb-primary) 15%, var(--wb-card)); color: var(--wb-primary); }
+.usage-act-btn.pri { background: color-mix(in srgb, var(--wb-primary) 16%, var(--wb-card)); color: var(--wb-primary); }
+.usage-act-btn:disabled { opacity: .5; cursor: default; }
+.usage-conv-guide { width: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding-top: 4px; margin-top: 2px; border-top: 1px solid var(--wb-line); }
+.usage-conv-guide-text { font-size: 10.5px; color: var(--wb-muted-fg); }
+.usage-accounts-note { margin: 0; font-size: 11px; color: var(--wb-muted-fg); }
+.usage-accounts-note.fail { color: var(--wb-fail); }
+.usage-accounts-note.ok { color: var(--wb-ok); }

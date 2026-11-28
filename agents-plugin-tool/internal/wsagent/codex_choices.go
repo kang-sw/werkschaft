@@ -7,35 +7,64 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/wscred"
 )
 
-func (CodexBackend) sessionChoices() ([]ModelChoice, []string) {
+func normalizeCodexHomeKey(home string) string {
+	home = strings.TrimSpace(home)
+	if home == "" {
+		home = wscred.ResolveHarnessHome(wscred.HarnessHomeOptions{Harness: BackendCodex})
+	}
+	if home == "" {
+		return ""
+	}
+	return filepath.Clean(home)
+}
+
+func (b CodexBackend) resolvedCodexHome() string {
+	if b.ResolveCodexHome != nil {
+		if home := strings.TrimSpace(b.ResolveCodexHome()); home != "" {
+			return filepath.Clean(home)
+		}
+	}
+	return normalizeCodexHomeKey("")
+}
+
+func (b CodexBackend) sessionChoices() ([]ModelChoice, []string) {
+	return b.sessionChoicesForHome(b.resolvedCodexHome())
+}
+
+func (CodexBackend) sessionChoicesForHome(home string) ([]ModelChoice, []string) {
+	key := normalizeCodexHomeKey(home)
 	codexChoices.Lock()
 	defer codexChoices.Unlock()
-	if time.Since(codexChoices.at) >= choicesTTL {
+	entry, ok := codexChoices.byHome[key]
+	if !ok || time.Since(entry.at) >= choicesTTL {
 		return nil, nil
 	}
-	return slices.Clone(codexChoices.models), slices.Clone(codexChoices.efforts)
+	return slices.Clone(entry.models), slices.Clone(entry.efforts)
 }
 
 func (b CodexBackend) hostedChoices() ([]ModelChoice, []string, error) {
-	if models, efforts := b.sessionChoices(); len(models) > 0 {
+	return b.hostedChoicesForHome(b.resolvedCodexHome())
+}
+
+func (b CodexBackend) hostedChoicesForHome(home string) ([]ModelChoice, []string, error) {
+	home = normalizeCodexHomeKey(home)
+	if models, efforts := b.sessionChoicesForHome(home); len(models) > 0 {
 		return models, efforts, nil
 	}
-	home := os.Getenv("CODEX_HOME")
 	if home == "" {
-		userHome, err := os.UserHomeDir()
-		if err != nil {
-			return nil, nil, nil
-		}
-		home = filepath.Join(userHome, ".codex")
+		return nil, nil, nil
 	}
 	// Support owns the TTL: one read per listing window, no stat/probe on
 	// render. Never log raw bytes, paths, parse errors or account metadata.
 	raw, err := os.ReadFile(filepath.Join(home, "models_cache.json"))
 	if errors.Is(err, fs.ErrNotExist) {
-		// A Codex never run on this machine has no cache: an empty list,
+		// A Codex never run on this machine/slot has no cache: an empty list,
 		// not a failure.
 		return nil, nil, nil
 	}
@@ -44,7 +73,7 @@ func (b CodexBackend) hostedChoices() ([]ModelChoice, []string, error) {
 	if err == nil {
 		models, efforts = parseCodexCache(raw)
 	}
-	if reported, levels := b.sessionChoices(); len(reported) > 0 {
+	if reported, levels := b.sessionChoicesForHome(home); len(reported) > 0 {
 		return reported, levels, nil
 	}
 	// An existing file that is unreadable, empty, or names no model is a
