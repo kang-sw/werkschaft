@@ -393,9 +393,10 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		return State{}, err
 	}
 	var seed []wslive.SlashCommand
-	if rec.Lead && rec.CompanionRole == "" {
-		// A new lead offers its playbook commands before its process
-		// first reports the harness's own.
+	if rec.Lead && (rec.CompanionRole == "" || rec.CompanionRole == companionRoleWork) {
+		// A new lead (including the Mobile Full Lead companion-work Brain)
+		// offers its playbook commands before its process first reports the
+		// harness's own.
 		seed = r.withPlaybookCommands(rec, r.lastCommands(rec))
 	}
 	var claimWidth func()

@@ -1,0 +1,296 @@
+/* ==========================================================================
+   Compact Messenger Frame Layout (:root[data-compact="1"])
+   Loaded inside Companion Messenger via /s/<brainRid>?frame=1&compact=1.
+   Strictly scoped to :root[data-compact="1"] so normal dashboard sessions
+   and standalone framed pages are completely unaffected.
+   ========================================================================== */
+
+:root[data-compact="1"] {
+  --ws-compact-bg: #f6f5f1;
+  --ws-compact-user-bg: #f6e4ad;
+  --ws-compact-user-fg: #261e0f;
+  --ws-compact-ai-bg: #ffffff;
+  --ws-compact-ai-fg: #1b1d21;
+  --ws-compact-shadow: 0 1px 3px rgb(0 0 0 / .07);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-compact="1"]:not([data-theme="light"]) {
+    --ws-compact-bg: #181a1f;
+    --ws-compact-user-bg: #3c3222;
+    --ws-compact-user-fg: #f4ead6;
+    --ws-compact-ai-bg: #272a32;
+    --ws-compact-ai-fg: #e7e7e4;
+    --ws-compact-shadow: 0 2px 6px rgb(0 0 0 / .24);
+  }
+}
+
+:root[data-compact="1"][data-theme="dark"] {
+  --ws-compact-bg: #181a1f;
+  --ws-compact-user-bg: #3c3222;
+  --ws-compact-user-fg: #f4ead6;
+  --ws-compact-ai-bg: #272a32;
+  --ws-compact-ai-fg: #e7e7e4;
+  --ws-compact-shadow: 0 2px 6px rgb(0 0 0 / .24);
+}
+
+/* Full-bleed single column: hide shell/session chrome and non-chat panes. */
+:root[data-compact="1"],
+:root[data-compact="1"] body,
+:root[data-compact="1"] .dash {
+  background: var(--ws-compact-bg);
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+:root[data-compact="1"] .dwrap {
+  height: 100vh;
+  height: 100dvh;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--ws-compact-bg);
+}
+
+:root[data-compact="1"] .top,
+:root[data-compact="1"] .rail-ph,
+:root[data-compact="1"] #rail,
+:root[data-compact="1"] #rscrim,
+:root[data-compact="1"] #tabbar,
+:root[data-compact="1"] #chead,
+:root[data-compact="1"] #bcol,
+:root[data-compact="1"] #files,
+:root[data-compact="1"] .d-tpanes,
+:root[data-compact="1"] .dcv-edge,
+:root[data-compact="1"] .d-board-dial,
+:root[data-compact="1"] .drawer,
+:root[data-compact="1"] #workpanel,
+:root[data-compact="1"] #gitpage,
+:root[data-compact="1"] .d-jump-wrap {
+  display: none !important;
+}
+
+:root[data-compact="1"] .dbody {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+:root[data-compact="1"] #grid,
+:root[data-compact="1"] .dgrid.live,
+:root[data-compact="1"] .dgrid.live[data-layout="split"],
+:root[data-compact="1"] .dgrid.live:not([data-layout="tabs"]) {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0 !important;
+  padding: 0;
+  margin: 0;
+  position: relative;
+}
+
+/* Conversation stream */
+:root[data-compact="1"] #convo,
+:root[data-compact="1"] .dgrid.live > .convo {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  display: block !important;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+  padding: 0;
+  scrollbar-width: thin;
+}
+
+:root[data-compact="1"] .conv {
+  padding: 10px 10px 8px;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.48;
+}
+
+:root[data-compact="1"] .conv.clive {
+  padding-top: 2px;
+  padding-bottom: 14px;
+}
+
+/* Messenger-density tonal bubbles */
+:root[data-compact="1"] .msg.user {
+  align-self: flex-end;
+  max-width: 86%;
+}
+
+:root[data-compact="1"] .msg.user .mh {
+  display: none;
+}
+
+:root[data-compact="1"] .msg.user .bub {
+  background: var(--ws-compact-user-bg);
+  color: var(--ws-compact-user-fg);
+  border-radius: 14px 14px 4px 14px;
+  padding: 7px 11px;
+  box-shadow: var(--ws-compact-shadow);
+  font-size: 12.5px;
+}
+
+:root[data-compact="1"] .msg.fromlead {
+  align-self: flex-start;
+  max-width: 94%;
+  width: auto;
+}
+
+:root[data-compact="1"] .msg.fromlead .mh.conv-row {
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  column-gap: 5px;
+  padding: 2px 0 3px;
+  font-size: 11px;
+}
+
+:root[data-compact="1"] .msg.fromlead .bub {
+  margin: 0;
+  background: var(--ws-compact-ai-bg);
+  color: var(--ws-compact-ai-fg);
+  border-radius: 4px 14px 14px 14px;
+  padding: 8px 11px;
+  box-shadow: var(--ws-compact-shadow);
+  font-size: 12.5px;
+}
+
+:root[data-compact="1"] .msg.fromlead > .d-acts {
+  right: 4px;
+}
+
+:root[data-compact="1"] .msg .bub.md pre {
+  font-size: 11.5px;
+  padding: 7px 9px;
+  border-radius: 8px;
+}
+
+/* Collapsible tool/exec cards & wake lines fitted to 360px width */
+:root[data-compact="1"] .conv-row {
+  grid-template-columns: 20px minmax(0, 1fr) auto 14px;
+  column-gap: 5px;
+  padding: 3px 2px;
+  font-size: 11.5px;
+}
+
+:root[data-compact="1"] .toolsline .brows,
+:root[data-compact="1"] .row-details,
+:root[data-compact="1"] .mailline > .mbody {
+  margin: 3px 0 2px;
+  width: 100%;
+  max-width: 100%;
+  padding: 6px 8px;
+  font-size: 11.5px;
+}
+
+:root[data-compact="1"] .turnline {
+  margin-left: 4px;
+  font-size: 11px;
+}
+
+:root[data-compact="1"] .wake-card {
+  padding: 6px 9px;
+  font-size: 11.5px;
+}
+
+/* Prominent 1-click approvals (#apbox) and question cards (#qcbox) */
+:root[data-compact="1"] #apbox,
+:root[data-compact="1"] #qcbox {
+  padding: 4px 10px 10px;
+  gap: 6px;
+}
+
+:root[data-compact="1"] #apbox .apcard,
+:root[data-compact="1"] #qcbox .qccard {
+  border-radius: 12px;
+  box-shadow: var(--wb-shadow-hi), inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 26%, var(--wb-line));
+}
+
+/* Subagent HUD island: slim pill bar above composer */
+:root[data-compact="1"] .dgrid.live > .agisland {
+  position: relative !important;
+  inset: auto !important;
+  left: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  top: auto !important;
+  flex: none;
+  margin: 0 8px 4px;
+  width: auto !important;
+  max-width: calc(100% - 16px);
+  border-radius: 10px;
+  z-index: 8;
+}
+
+:root[data-compact="1"] .dgrid.live > .agisland[data-mode="idle"] {
+  display: none;
+}
+
+:root[data-compact="1"] .dgrid.live > .agisland[data-mode="compact"] {
+  height: auto !important;
+  max-height: 54px;
+  overflow: hidden;
+  padding: 2px 6px;
+  box-shadow: var(--ws-compact-shadow), inset 0 0 0 1px var(--wb-line);
+}
+
+:root[data-compact="1"] .dgrid.live > .agisland[data-mode="expanded"] .agpop {
+  position: fixed;
+  inset: 8px;
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  z-index: 30;
+}
+
+/* Jump-to-bottom / steer buttons */
+:root[data-compact="1"] #convo-bottom-btn {
+  right: 10px;
+  bottom: 74px;
+}
+
+/* Compact composer footer */
+:root[data-compact="1"] .dgrid.live > .composer {
+  flex: none;
+  margin: 0;
+  padding: 6px 8px 8px;
+  border-radius: 0;
+  background: var(--ws-compact-ai-bg);
+  box-shadow: 0 -1px 0 var(--wb-wash);
+}
+
+:root[data-compact="1"] .composer .crow {
+  gap: 6px;
+}
+
+:root[data-compact="1"] .composer .cfoot {
+  padding-top: 4px;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+:root[data-compact="1"] .composer .cbadges {
+  bottom: calc(100% + 4px);
+  left: 8px;
+  right: 8px;
+}
+
+:root[data-compact="1"] .composer .wbonly-btn {
+  display: none;
+}

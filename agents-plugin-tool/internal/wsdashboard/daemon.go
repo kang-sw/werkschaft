@@ -358,6 +358,17 @@ type Daemon struct {
 	// companionAgents, when bound by cmd/ws-mcp, computes the companion tier
 	// readback (companion_agents_route.go).
 	companionAgents atomic.Pointer[func() any]
+	// companionBrain, when bound by cmd/ws-mcp, lazily ensures/attaches the
+	// Mobile Full Lead Brain session (companion_brain_route.go).
+	companionBrain atomic.Pointer[func() (CompanionBrainInfo, error)]
+	// companionBrainReplyID holds the active Brain replyID atomically for
+	// lock-free Puppeteer direct observation (companion_director.go).
+	companionBrainReplyID atomic.Pointer[string]
+	// companionPuppeteerTier, when bound by cmd/ws-mcp, resolves Puppeteer's
+	// harness/model/effort/provider from dashboard.companion_body_tier.
+	companionPuppeteerTier atomic.Pointer[func() (CompanionPuppeteerTier, error)]
+	// companionBrainStates broadcasts companion-brain-state transitions to rail streams.
+	companionBrainStates companionBrainStateHub
 	// director is the companion agent director (companion_director.go).
 	director      companionDirector
 	agents        AgentHost

@@ -105,9 +105,11 @@ func isCompanionPhoneTool(name string) bool {
 	}
 }
 
-func isCompanionPacingOrMemoryTool(name string) bool {
+// isCompanionMemoryTool reports the Soul/Episodes memory tools exclusively
+// owned by Brain (companion-work).
+func isCompanionMemoryTool(name string) bool {
 	switch name {
-	case companionActTool, companionRememberSoulTool, companionRememberEpisodeTool, companionRecallMemoryTool:
+	case companionRememberSoulTool, companionRememberEpisodeTool, companionRecallMemoryTool:
 		return true
 	default:
 		return false
@@ -115,16 +117,46 @@ func isCompanionPacingOrMemoryTool(name string) bool {
 }
 
 // isCompanionBurstCountedTool reports the Tier-1 tools subject to the
-// companionBurstMaxCalls = 12 per-turn cap (D11).
+// companionBurstMaxCalls = 12 per-turn cap (D11). Deprecated no-op aliases
+// are exempt so legacy callers never stall on burst limits.
 func isCompanionBurstCountedTool(name string) bool {
-	return isCompanionPacingOrMemoryTool(name) || name == companionDelegateWorkTool
+	return name == companionActTool
+}
+
+// isCompanionDeprecatedAlias reports legacy 2-tier phone and FIFO delegation
+// tools kept registered as safe T0 no-op/redirect aliases.
+func isCompanionDeprecatedAlias(name string) bool {
+	return isCompanionPhoneTool(name) || name == companionDelegateWorkTool || name == delegationReportTool
+}
+
+func companionDeprecatedNotice(name string) string {
+	switch name {
+	case companionDelegateWorkTool:
+		return "ws/companion.delegate_work is deprecated: Companion Messenger now connects directly to the Mobile Full Lead (Brain), which executes work and spawns subagents via ws/agent.spawn without a Body-to-Brain delegation queue."
+	case delegationReportTool:
+		return "ws/delegation.report is deprecated: Brain now replies directly to the user inside the Companion Messenger conversation instead of reporting back through a Body relay."
+	default:
+		return fmt.Sprintf("ws/%s is deprecated: Companion Messenger now connects directly to the Mobile Full Lead (Brain) and VRM choreography is driven automatically by client reflex and Puppeteer. No phone lease or call is required.", name)
+	}
+}
+
+func companionDeprecatedAliasResponse(id json.RawMessage, name string) response {
+	return toolJSONResponse(id, struct {
+		Deprecated bool   `json:"deprecated"`
+		Tool       string `json:"tool"`
+		Notice     string `json:"notice"`
+	}{
+		Deprecated: true,
+		Tool:       name,
+		Notice:     companionDeprecatedNotice(name),
+	}, nil)
 }
 
 // isCompanionBodyOnlyTool reports tools exclusively available to Tier-1
 // (companion-body) sessions and never visible/reachable by unmarked leads or
 // Tier-2 (companion-work).
 func isCompanionBodyOnlyTool(name string) bool {
-	return isCompanionPhoneTool(name) || name == companionDelegateWorkTool || isCompanionPacingOrMemoryTool(name)
+	return isCompanionPhoneTool(name) || name == companionDelegateWorkTool || name == companionActTool
 }
 
 func isDelegationReportTool(name string) bool {
@@ -194,7 +226,7 @@ func companionTools() []map[string]any {
 		},
 		{
 			"name":        companionPhonePickupTool,
-			"description": "Pick up the desk smartphone with one hand, lock the companion Embodiment Lease to phone posture, and drain unread user messenger messages. While holding the smartphone, laptop/work tools are locked until ws/companion.phone_putdown is called.",
+			"description": "[Deprecated T0 alias] Companion Messenger now connects directly to Brain and VRM phone motion is driven by client reflex and Puppeteer; returns a structured deprecation notice without acquiring a lease.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -205,7 +237,7 @@ func companionTools() []map[string]any {
 		},
 		{
 			"name":        companionPhoneReadTool,
-			"description": "Read newly arrived unread user messages while holding the smartphone. Refused while posture is laptop; call ws/companion.phone_pickup first.",
+			"description": "[Deprecated T0 alias] Companion Messenger now connects directly to Brain; returns a structured deprecation notice without blocking on phone posture.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -216,13 +248,13 @@ func companionTools() []map[string]any {
 		},
 		{
 			"name":        companionPhoneSendTool,
-			"description": "Send a companion reply to the smartphone messenger thread while holding the smartphone. Refused while posture is laptop; call ws/companion.phone_pickup first.",
+			"description": "[Deprecated T0 alias] Companion Messenger now connects directly to Brain; returns a structured deprecation notice without writing to the legacy phone store.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"session_key": stringProperty(sessionKeyPropertyDescription),
-					"text":        stringProperty("Reply message text."),
-					"tone":        stringProperty("Optional expression/reaction tone (e.g. happy, laugh, merong, annoyed, startled, focused)."),
+					"text":        stringProperty("Legacy reply message text (ignored)."),
+					"tone":        stringProperty("Legacy expression/reaction tone (ignored)."),
 					"format":      stringProperty(formatPropertyDescription),
 				},
 				"required": []string{"text"},
@@ -230,25 +262,25 @@ func companionTools() []map[string]any {
 		},
 		{
 			"name":        companionPhonePutdownTool,
-			"description": "Put the smartphone back on the desk and return to laptop posture. Set style to normal or facedown_merong, and next to ambient (release lease) or work (keep lease for laptop work).",
+			"description": "[Deprecated T0 alias] VRM phone putdown is now driven automatically by client reflex and Puppeteer; returns a structured deprecation notice without blocking on leases.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"session_key": stringProperty(sessionKeyPropertyDescription),
-					"style":       enumStringProperty(`Putdown animation style: "normal" (face-up) or "facedown_merong" (cheeky wink/merong + flip face-down). Defaults to "normal".`, []string{"normal", "facedown_merong"}),
-					"next":        enumStringProperty(`Next embodiment state: "ambient" (release Embodiment Lease to laptop_ambient, default) or "work" (keep lease in laptop_work).`, []string{"ambient", "work"}),
+					"style":       enumStringProperty(`Legacy putdown style: "normal" or "facedown_merong".`, []string{"normal", "facedown_merong"}),
+					"next":        enumStringProperty(`Legacy next state: "ambient" or "work".`, []string{"ambient", "work"}),
 					"format":      stringProperty(formatPropertyDescription),
 				},
 			},
 		},
 		{
 			"name":        companionDelegateWorkTool,
-			"description": "Hand off a lossless task brief to the hidden companion work brain without blocking. Callable only in laptop posture; returns immediately with a delegation_id while the companion shows laptop work visuals.",
+			"description": "[Deprecated T0 alias] Companion Messenger now runs directly on the Mobile Full Lead (Brain) without a Body-to-Brain FIFO; returns a structured deprecation notice.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"session_key": stringProperty(sessionKeyPropertyDescription),
-					"brief":       stringProperty("Complete, lossless task brief for the hidden work brain (all needed context, constraints, and references; no length cap)."),
+					"brief":       stringProperty("Legacy task brief (ignored)."),
 					"format":      stringProperty(formatPropertyDescription),
 				},
 				"required": []string{"brief"},
@@ -333,17 +365,17 @@ func delegationTools() []map[string]any {
 	return []map[string]any{
 		{
 			"name":        delegationReportTool,
-			"description": "Report the structured outcome of an active companion work delegation back to the embodied companion persona.",
+			"description": "[Deprecated T0 alias] Brain now replies directly to the user in Companion Messenger without a Body relay; returns a structured deprecation notice.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"session_key":   stringProperty(sessionKeyPropertyDescription),
-					"delegation_id": stringProperty("Identifier of the active delegation being reported."),
-					"status":        enumStringProperty("Outcome status of the delegation.", []string{"done", "partial", "blocked"}),
-					"result":        stringProperty("Complete, lossless technical result for the companion persona (no length cap)."),
+					"delegation_id": stringProperty("Legacy delegation identifier (ignored)."),
+					"status":        enumStringProperty("Legacy outcome status (ignored).", []string{"done", "partial", "blocked"}),
+					"result":        stringProperty("Legacy technical result (ignored)."),
 					"artifacts": map[string]any{
 						"type":        "array",
-						"description": "Optional artifact paths or links produced during the delegation.",
+						"description": "Legacy artifact paths or links (ignored).",
 						"items":       map[string]any{"type": "string"},
 					},
 					"format": stringProperty(formatPropertyDescription),
@@ -352,16 +384,6 @@ func delegationTools() []map[string]any {
 			},
 		},
 	}
-}
-
-func (s *Server) companionDelegationHost() CompanionDelegationHost {
-	if s.companionDelegation != nil {
-		return s.companionDelegation
-	}
-	if host, ok := s.companion.(CompanionDelegationHost); ok {
-		return host
-	}
-	return nil
 }
 
 func (s *Server) companionActHost() CompanionActHost {
@@ -446,6 +468,9 @@ func (s *Server) companionBurstRefusal(name, sessionKey string, entry sessionEnt
 // to companion-body sessions ((1740)). Unmarked sessions and companion-work are
 // never posture-locked.
 func (s *Server) companionPostureRefusal(name, sessionKey string, entry sessionEntry, found bool) string {
+	if isCompanionDeprecatedAlias(name) {
+		return ""
+	}
 	if s.companion == nil || !found || entry.companionRole != CompanionRoleBody {
 		return ""
 	}
@@ -502,30 +527,15 @@ func (s *Server) applyCompanionPhonePiggyback(resp response, toolName string, ca
 }
 
 func (s *Server) handleCompanionTool(ctx context.Context, id json.RawMessage, name string, args map[string]any, callerKey string, caller sessionEntry, callerFound bool) response {
-	if isCompanionBodyOnlyTool(name) && (!callerFound || caller.companionRole != CompanionRoleBody) {
+	if isCompanionMemoryTool(name) {
+		if !callerFound || caller.companionRole != CompanionRoleWork {
+			return errorResponse(id, -32601, fmt.Sprintf("tool not available in current %s MCP profile: %s", s.runtimeNamespace(), name))
+		}
+	} else if isCompanionBodyOnlyTool(name) && (!callerFound || caller.companionRole != CompanionRoleBody) {
 		return errorResponse(id, -32601, fmt.Sprintf("tool not available in current %s MCP profile: %s", s.runtimeNamespace(), name))
 	}
-	if name == companionDelegateWorkTool {
-		host := s.companionDelegationHost()
-		if host == nil {
-			return toolTextResponse(id, "", errors.New(name+": companion delegation host is not available in this session"))
-		}
-		brief, ok := args["brief"].(string)
-		if !ok || strings.TrimSpace(brief) == "" {
-			return toolTextResponse(id, "", fmt.Errorf("%s: brief must be a non-empty string", name))
-		}
-		owner := strings.TrimSpace(callerKey)
-		if owner == "" {
-			return toolTextResponse(id, "", fmt.Errorf("%s: session_key is required", name))
-		}
-		ack, err := host.CompanionDelegateWork(owner, brief)
-		if err != nil {
-			return toolErrorTextResponse(id, err.Error())
-		}
-		if wantsJSON(args) {
-			return toolJSONResponse(id, ack, nil)
-		}
-		return toolTextResponse(id, fmt.Sprintf("delegation_id: %s\nstatus: %s\n", ack.DelegationID, ack.Status), nil)
+	if isCompanionDeprecatedAlias(name) {
+		return companionDeprecatedAliasResponse(id, name)
 	}
 	if name == companionActTool {
 		host := s.companionActHost()
@@ -545,15 +555,18 @@ func (s *Server) handleCompanionTool(ctx context.Context, id json.RawMessage, na
 		if hasDelay {
 			delayMS = intFromArgument(rawDelay, 0)
 		}
+		cosmeticOnly, _ := args["cosmetic_only"].(bool)
 		req := wsdashboard.CompanionActRequest{
-			SessionID:  "*",
-			Expression: strings.TrimSpace(stringValue(args["expression"])),
-			Gesture:    strings.TrimSpace(stringValue(args["gesture"])),
-			Prop:       strings.TrimSpace(stringValue(args["prop"])),
-			FX:         strings.TrimSpace(stringValue(args["fx"])),
-			Speech:     strings.TrimSpace(speech),
-			DelayMS:    delayMS,
-			HasDelay:   hasDelay,
+			SessionID:    "*",
+			Expression:   strings.TrimSpace(stringValue(args["expression"])),
+			Gesture:      strings.TrimSpace(stringValue(args["gesture"])),
+			Prop:         strings.TrimSpace(stringValue(args["prop"])),
+			FX:           strings.TrimSpace(stringValue(args["fx"])),
+			Speech:       strings.TrimSpace(speech),
+			DelayMS:      delayMS,
+			HasDelay:     hasDelay,
+			CosmeticOnly: cosmeticOnly,
+			Priority:     strings.TrimSpace(stringValue(args["priority"])),
 		}
 		waitCtx, cancel := mergeDone(ctx, s.drainContext())
 		defer cancel()
@@ -634,10 +647,6 @@ func (s *Server) handleCompanionTool(ctx context.Context, id json.RawMessage, na
 	if s.companion == nil {
 		return toolTextResponse(id, "", errors.New(name+": companion host is not available in this session"))
 	}
-	owner := strings.TrimSpace(callerKey)
-	if isCompanionPhoneTool(name) && owner == "" {
-		return toolTextResponse(id, "", fmt.Errorf("%s: session_key is required", name))
-	}
 	ttlMS := intFromArgument(args["ttl_ms"], 0)
 
 	switch name {
@@ -666,53 +675,6 @@ func (s *Server) handleCompanionTool(ctx context.Context, id json.RawMessage, na
 		s.companion.CompanionMotion("*", gesture, prop, ttlMS)
 		return toolTextResponse(id, "ok\n", nil)
 
-	case companionPhonePickupTool:
-		res, err := s.companion.CompanionPhonePickup(owner)
-		if err != nil {
-			return toolErrorTextResponse(id, err.Error())
-		}
-		if wantsJSON(args) {
-			return toolJSONResponse(id, res, nil)
-		}
-		return toolTextResponse(id, formatCompanionPhoneRead("picked up smartphone", res), nil)
-
-	case companionPhoneReadTool:
-		res, err := s.companion.CompanionPhoneRead(owner)
-		if err != nil {
-			return toolErrorTextResponse(id, err.Error())
-		}
-		if wantsJSON(args) {
-			return toolJSONResponse(id, res, nil)
-		}
-		return toolTextResponse(id, formatCompanionPhoneRead("phone inbox", res), nil)
-
-	case companionPhoneSendTool:
-		text, err := stringArg(name, "text", args)
-		if err != nil {
-			return toolTextResponse(id, "", err)
-		}
-		tone, _ := args["tone"].(string)
-		msg, err := s.companion.CompanionPhoneSend(owner, text, tone)
-		if err != nil {
-			return toolErrorTextResponse(id, err.Error())
-		}
-		if wantsJSON(args) {
-			return toolJSONResponse(id, msg, nil)
-		}
-		return toolTextResponse(id, fmt.Sprintf("sent %s\n", msg.ID), nil)
-
-	case companionPhonePutdownTool:
-		style, _ := args["style"].(string)
-		next, _ := args["next"].(string)
-		snap, err := s.companion.CompanionPhonePutdown(owner, style, next)
-		if err != nil {
-			return toolErrorTextResponse(id, err.Error())
-		}
-		if wantsJSON(args) {
-			return toolJSONResponse(id, snap, nil)
-		}
-		return toolTextResponse(id, fmt.Sprintf("posture: %s (state: %s)\n", snap.Posture, snap.State), nil)
-
 	default:
 		return errorResponse(id, -32602, fmt.Sprintf("unknown companion tool: %s", name))
 	}
@@ -723,54 +685,7 @@ func (s *Server) handleDelegationReport(id json.RawMessage, args map[string]any,
 	if !callerFound || caller.companionRole != CompanionRoleWork {
 		return errorResponse(id, -32601, fmt.Sprintf("tool not available in current %s MCP profile: %s", s.runtimeNamespace(), name))
 	}
-	host := s.companionDelegationHost()
-	if host == nil {
-		return toolTextResponse(id, "", errors.New(name+": companion delegation host is not available in this session"))
-	}
-	delegationID, err := stringArg(name, "delegation_id", args)
-	if err != nil {
-		return toolTextResponse(id, "", err)
-	}
-	status, err := stringArg(name, "status", args)
-	if err != nil {
-		return toolTextResponse(id, "", err)
-	}
-	switch status {
-	case "done", "partial", "blocked":
-	default:
-		return toolTextResponse(id, "", fmt.Errorf("%s: status must be done, partial, or blocked", name))
-	}
-	result, ok := args["result"].(string)
-	if !ok || strings.TrimSpace(result) == "" {
-		return toolTextResponse(id, "", fmt.Errorf("%s: result must be a non-empty string", name))
-	}
-	artifacts := stringList(args["artifacts"])
-	ack, err := host.CompanionDelegationReport(strings.TrimSpace(callerKey), delegationID, status, result, artifacts)
-	if err != nil {
-		return toolErrorTextResponse(id, err.Error())
-	}
-	if wantsJSON(args) {
-		return toolJSONResponse(id, ack, nil)
-	}
-	return toolTextResponse(id, fmt.Sprintf("delegation_id: %s\nstatus: %s\n", ack.DelegationID, ack.Status), nil)
-}
-
-func formatCompanionPhoneRead(header string, res wsdashboard.CompanionPhoneReadResult) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s (posture: %s, state: %s, unread: %d)\n", header, res.Posture, res.State, len(res.Unread))
-	if len(res.Unread) > 0 {
-		b.WriteString("\nUnread:\n")
-		for _, m := range res.Unread {
-			fmt.Fprintf(&b, "- [%s] %s: %s\n", m.ID, m.Sender, m.Text)
-		}
-	}
-	if len(res.Recent) > 0 {
-		b.WriteString("\nRecent:\n")
-		for _, m := range res.Recent {
-			fmt.Fprintf(&b, "- [%s] %s: %s\n", m.ID, m.Sender, m.Text)
-		}
-	}
-	return b.String()
+	return companionDeprecatedAliasResponse(id, name)
 }
 
 func stringValue(v any) string {

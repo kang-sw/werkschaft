@@ -85,6 +85,7 @@ func TestCompanionActAlignsPhoneGesturesWithLease(t *testing.T) {
 	})
 	ctx := context.Background()
 	d.companionPhone.EnqueueUserMessage("hello")
+	d.companionPhone.AcquireOnWake("body")
 
 	// phone_typing without a pickup takes the phone into the owner's hand,
 	// leaving the unread inbox for phone_read.

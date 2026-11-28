@@ -193,11 +193,25 @@ func TestCompanionRailSeamlessOverlayBrowser(t *testing.T) {
 			addLive("unreg01", unreg1, "claude", wslive.PhaseIdle, 8*time.Minute)
 			addLive("unreg02", unreg2, "codex", wslive.PhaseIdle, 6*time.Minute)
 			addLive("unreg03", unreg3, "pi", wslive.PhaseIdle, 4*time.Minute)
+			addLive("brain01", wsAlpha, "pi", wslive.PhaseIdle, 2*time.Minute)
+			f.d.SetCompanionBrain(func() (CompanionBrainInfo, error) {
+				return CompanionBrainInfo{
+					ReplyID:     "brain01",
+					WSKey:       "brain01-ws-key",
+					Harness:     "pi",
+					Model:       "test-model",
+					Tier:        "medium",
+					PersonaName: "Mina",
+					Ready:       true,
+				}, nil
+			})
+			f.d.SetCompanionBrainReplyID("brain01")
 			f.d.Index().Refresh()
 			waitFor(t, "rich rail indexed", func() bool {
 				_, ok1 := f.d.Index().Session("gamma08")
 				_, ok2 := f.d.Index().Session("unreg03")
-				return ok1 && ok2
+				_, ok3 := f.d.Index().Session("brain01")
+				return ok1 && ok2 && ok3
 			})
 		}
 		return f

@@ -60,6 +60,7 @@ func waitActWaiterCount(t *testing.T, d *Daemon, want int) {
 func TestCompanionActAllWakeBranchesDeterministic(t *testing.T) {
 	t.Run("timer_and_rail_broadcast_and_clamping", func(t *testing.T) {
 		f := startPageFixture(t)
+		f.d.CompanionPhone().AcquireOnWake("body-key")
 		rail := openSSE(t, f.base+"/rail/events")
 		collect(rail) // drain initial burst
 
@@ -149,6 +150,7 @@ func TestCompanionActAllWakeBranchesDeterministic(t *testing.T) {
 
 	t.Run("user_message_interrupts_and_consumes_inbox_while_idle_keeps_unread", func(t *testing.T) {
 		f := newCompanionRouteFixture(t)
+		f.d.CompanionPhone().AcquireOnWake("body-key")
 		neverTimer := make(chan time.Time)
 		f.d.SetCompanionActTimer(func(time.Duration) (<-chan time.Time, func()) {
 			return neverTimer, func() {}
@@ -203,6 +205,7 @@ func TestCompanionActAllWakeBranchesDeterministic(t *testing.T) {
 
 	t.Run("glass_knock_interrupts_act_via_route_without_touching_messenger", func(t *testing.T) {
 		f := newCompanionRouteFixture(t)
+		f.d.CompanionPhone().AcquireOnWake("body-key")
 		neverTimer := make(chan time.Time)
 		f.d.SetCompanionActTimer(func(time.Duration) (<-chan time.Time, func()) {
 			return neverTimer, func() {}
@@ -270,6 +273,7 @@ func TestCompanionActAllWakeBranchesDeterministic(t *testing.T) {
 	t.Run("cancelled_on_ctx_and_daemon_close_under_proxy_drain_budget", func(t *testing.T) {
 		// (a) Context cancellation wakes act immediately.
 		f := newCompanionRouteFixture(t)
+		f.d.CompanionPhone().AcquireOnWake("body-key")
 		neverTimer := make(chan time.Time)
 		f.d.SetCompanionActTimer(func(time.Duration) (<-chan time.Time, func()) {
 			return neverTimer, func() {}
@@ -293,6 +297,7 @@ func TestCompanionActAllWakeBranchesDeterministic(t *testing.T) {
 
 		// (b) Daemon shutdown (<-d.stop) unblocks act promptly well within proxyDrainBudget.
 		d := startPageFixture(t).d
+		d.CompanionPhone().AcquireOnWake("body-key")
 		d.SetCompanionActTimer(func(time.Duration) (<-chan time.Time, func()) {
 			return neverTimer, func() {}
 		})

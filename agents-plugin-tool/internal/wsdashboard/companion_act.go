@@ -26,6 +26,7 @@ const (
 	CompanionActWakeUserMessage = "user_message"
 	CompanionActWakeGlassKnock  = "glass_knock"
 	CompanionActWakeCancelled   = "cancelled"
+	CompanionActWakeCosmetic    = "cosmetic"
 
 	companionKnockRoute     = "/api/companion/knock"
 	companionKnockBodyLimit = 4 << 10
@@ -36,16 +37,20 @@ const (
 )
 
 // CompanionActRequest carries visual/speech beat fields and pacing delay for
-// ws/companion.act (D7).
+// ws/companion.act (D7). When CosmeticOnly is true (or when no phone lease is
+// active), CompanionAct broadcasts immediately without renewing leases,
+// consuming phone unread inbox, or sleeping.
 type CompanionActRequest struct {
-	SessionID  string `json:"session_id,omitempty"`
-	Expression string `json:"expression,omitempty"`
-	Gesture    string `json:"gesture,omitempty"`
-	Prop       string `json:"prop,omitempty"`
-	FX         string `json:"fx,omitempty"`
-	Speech     string `json:"speech,omitempty"`
-	DelayMS    int    `json:"delay_ms,omitempty"`
-	HasDelay   bool   `json:"-"`
+	SessionID    string `json:"session_id,omitempty"`
+	Expression   string `json:"expression,omitempty"`
+	Gesture      string `json:"gesture,omitempty"`
+	Prop         string `json:"prop,omitempty"`
+	FX           string `json:"fx,omitempty"`
+	Speech       string `json:"speech,omitempty"`
+	DelayMS      int    `json:"delay_ms,omitempty"`
+	HasDelay     bool   `json:"-"`
+	CosmeticOnly bool   `json:"cosmetic_only,omitempty"`
+	Priority     string `json:"priority,omitempty"`
 }
 
 // CompanionKnockEvent describes a glass-knock interaction delivered via
@@ -299,6 +304,33 @@ func (d *Daemon) CompanionAct(ctx context.Context, owner string, req CompanionAc
 	if sessionID == "" {
 		sessionID = companionPhoneBroadcastSession
 	}
+	priority := strings.TrimSpace(req.Priority)
+	if priority == "" {
+		priority = companionPriorityNormal
+	}
+
+	// Pure-cosmetic path (T0 backward compatibility): when explicitly requested
+	// OR when no Embodiment Lease is active, broadcast immediately with
+	// monotonic Seq and Priority, without renewing leases, draining phone
+	// unread inbox, or sleeping.
+	if req.CosmeticOnly || !d.companionPhone.EmbodimentLeaseActive() {
+		d.PublishCompanionCommand(CompanionCommand{
+			Priority:   priority,
+			Source:     "act",
+			SessionID:  sessionID,
+			Expression: strings.TrimSpace(req.Expression),
+			Gesture:    strings.TrimSpace(req.Gesture),
+			Prop:       strings.TrimSpace(req.Prop),
+			FX:         strings.TrimSpace(req.FX),
+			Quip:       strings.TrimSpace(req.Speech),
+			TTLms:      delayMS,
+		})
+		return CompanionActResult{
+			WakeReason: CompanionActWakeCosmetic,
+			DelayMS:    0,
+		}, nil
+	}
+
 	if owner = strings.TrimSpace(owner); owner != "" {
 		d.companionPhone.RenewLease(owner)
 	}
@@ -312,6 +344,8 @@ func (d *Daemon) CompanionAct(ctx context.Context, owner string, req CompanionAc
 	defer d.companionAct.unregister(waiter)
 
 	d.PublishCompanionCommand(CompanionCommand{
+		Priority:   priority,
+		Source:     "act",
 		SessionID:  sessionID,
 		Expression: strings.TrimSpace(req.Expression),
 		Gesture:    strings.TrimSpace(gesture),

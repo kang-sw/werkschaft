@@ -195,7 +195,6 @@ func dashboardCommand(args []string) {
 	host := &proxyHost{userCmdsReady: userCmdsReady, credentials: credentials, notes: sessions.Notes, dir: dir, port: *port, lan: *lan, buildTime: *buildTime, contentHash: contentHash, logw: logw, configPath: filepath.Clean(configPath), agents: agents, ephemeralPool: ephemeralPool, boards: boards, mailLabels: labels.label}
 	companion := newCompanionRuntime(dir, "", agents, host.live.Load, logw)
 	companionRT.Store(companion)
-	host.companion = companion
 	boards.SetChanged(func(root, key string) {
 		if d := host.live.Load(); d != nil {
 			d.Index().Reread(wsmailbox.ReplyID(key))
@@ -355,6 +354,8 @@ func dashboardCommand(args []string) {
 	daemon.SetCompanionWake(companion.OnUserWake)
 	daemon.SetCompanionMessengerClosed(companion.OnMessengerClosed)
 	daemon.SetCompanionAgents(companion.AgentsReadback)
+	daemon.SetCompanionBrain(companion.BrainEndpoint)
+	daemon.SetCompanionPuppeteerTier(companion.PuppeteerTier)
 	companion.Start()
 	execJobsChanged := func() {
 		if d := host.live.Load(); d != nil {

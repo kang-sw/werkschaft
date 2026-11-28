@@ -201,22 +201,10 @@
 .ws-companion-menu button { cursor: pointer; }
 .ws-companion-menu button:is(:hover, :focus-visible) { background: var(--wb-wash); }
 .ws-companion-menu label { display: grid; gap: 3px; padding: 5px 8px; }
-.ws-companion-prop, .ws-companion-fx, .ws-companion-quip { position: absolute; top: 0; left: 0; }
+.ws-companion-prop, .ws-companion-fx { position: absolute; top: 0; left: 0; }
 .ws-companion-fx { font: 800 17px/1 system-ui, sans-serif; text-shadow: 0 1px 2px var(--wb-card); }
 .ws-companion-fx > span { display: inline-block; }
 .ws-companion-fx[data-kind="particles"] > span:not(:first-child) { position: absolute; left: 0; }
-.ws-companion-quip {
-  max-width: 170px;
-  pointer-events: none;
-  user-select: none;
-  padding: 4px 7px;
-  border-radius: 7px;
-  background: var(--wb-card);
-  color: var(--wb-fg);
-  box-shadow: var(--wb-shadow);
-  font: 12px/1.4 var(--wb-sans, system-ui, sans-serif);
-  overflow-wrap: anywhere;
-}
 .rail[data-companion-dock="footer"] .rfoot { margin-top: var(--companion-slot); }
 
 /* Interactive laptop click target (projected from 3D Box3 or lower-center desk

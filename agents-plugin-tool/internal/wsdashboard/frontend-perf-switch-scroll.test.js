@@ -779,7 +779,7 @@ test('shell reveals frame early on ready+head without waiting for iframe load an
   let stagedCallbacksRan = 0;
   const fCtx = {
     Array, WeakMap,
-    framed: true, shHidden: false,
+    framed: true, compact: false, shHidden: false,
     mountList: [], mountTask: false, mountTimer: 0,
     frameWins: new WeakMap(),
     performance: { now: () => 0 },
