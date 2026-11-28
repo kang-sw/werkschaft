@@ -53,6 +53,23 @@ func TestParseStat(t *testing.T) {
 	}
 }
 
+func TestParseStatLargeTicksDoNotOverflow(t *testing.T) {
+	// utime+stime = 15_000_000_050 ticks; ticks*time.Second would exceed int64.
+	line := "4242 (big) S 4200 4242 4242 0 -1 4194560 100 0 0 0 15000000000 50 0 0 20 0 3 0 12345 104857600 2560 1 1 1 0 0 0 0 0 0 0 0 0 0 17 3 0 0 0 0 0\n"
+	p, err := parseStat(line, 100, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := 150000000*time.Second + 500*time.Millisecond
+	if p.CPU != want {
+		t.Fatalf("CPU = %v, want %v", p.CPU, want)
+	}
+	// A non-positive tick rate must not divide by zero.
+	if p, err := parseStat(line, 0, 4096); err != nil || p.CPU != 0 {
+		t.Fatalf("hz=0: CPU=%v err=%v, want 0 and no error", p.CPU, err)
+	}
+}
+
 func TestDescendantsAndKeep(t *testing.T) {
 	all := []Proc{
 		{PID: 1, PPID: 0}, {PID: 10, PPID: 1}, {PID: 11, PPID: 10}, {PID: 12, PPID: 10},

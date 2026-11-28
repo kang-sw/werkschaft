@@ -63,7 +63,6 @@ func (s *accountSlotSignIn) stop() {
 	s.mu.Lock()
 	s.closed = true
 	cancel := s.cancel
-	cmd := s.cmd
 	stdin := s.stdin
 	s.stdin = nil
 	s.mu.Unlock()
@@ -72,11 +71,9 @@ func (s *accountSlotSignIn) stop() {
 		_ = stdin.Close()
 		s.stdinMu.Unlock()
 	}
+	// Cancelling the context kills the process tree through cmd.Cancel.
 	if cancel != nil {
 		cancel()
-	}
-	if cmd != nil {
-		killSlotLoginProcessTree(cmd)
 	}
 }
 
@@ -269,8 +266,15 @@ func (d *Daemon) runSlotSignIn(
 		}
 	}()
 
-	cmd := exec.Command(exe, args...)
+	// CommandContext guarantees Cancel never fires after Wait has reaped the
+	// child, so the process-group kill can never hit a recycled PID/PGID.
+	cmd := exec.CommandContext(ctx, exe, args...)
 	configureSlotLoginCmd(cmd)
+	cmd.Cancel = func() error {
+		killSlotLoginProcessTree(cmd)
+		return nil
+	}
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Dir = slotDir
 	cmd.Env = replaceEnvVar(os.Environ(), envKey, slotDir)
 	stdin, err := cmd.StdinPipe()
@@ -292,6 +296,16 @@ func (d *Daemon) runSlotSignIn(
 	}
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
+		// CommandContext refuses to start once ctx is done; keep the cancel and
+		// timeout outcomes distinct from a missing CLI.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if errors.Is(ctxErr, context.DeadlineExceeded) {
+				d.finishSlotSignIn(attempt, "failed", "timed_out")
+			} else {
+				d.finishSlotSignIn(attempt, "cancelled", "")
+			}
+			return
+		}
 		d.finishSlotSignIn(attempt, "failed", "cli_unavailable")
 		return
 	}
@@ -308,16 +322,6 @@ func (d *Daemon) runSlotSignIn(
 		_ = stdin.Close()
 	}
 	s.mu.Unlock()
-
-	// Ensure context cancellation or timeout kills the entire process tree.
-	waitDone := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			killSlotLoginProcessTree(cmd)
-		case <-waitDone:
-		}
-	}()
 
 	var openOnce sync.Once
 	scanStream := func(r io.Reader) {
@@ -373,7 +377,6 @@ func (d *Daemon) runSlotSignIn(
 	scanWG.Wait()
 
 	waitErr := cmd.Wait()
-	close(waitDone)
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		if errors.Is(ctxErr, context.DeadlineExceeded) {
@@ -464,14 +467,10 @@ func (d *Daemon) handleAccountSlotSignInCancel(w http.ResponseWriter, r *http.Re
 	}
 	s.state.State = "cancelling"
 	cancel := s.cancel
-	cmd := s.cmd
 	resp := s.state
 	s.mu.Unlock()
 
 	cancel()
-	if cmd != nil {
-		killSlotLoginProcessTree(cmd)
-	}
 	writeJSON(w, http.StatusAccepted, resp)
 }
 

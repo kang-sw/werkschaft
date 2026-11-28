@@ -90,6 +90,14 @@ func isDaemonCurlForbiddenPath(cleanPath string) bool {
 		return true
 	case lower == "/auth" || strings.HasPrefix(lower, "/auth/"):
 		return true
+	case lower == strings.TrimSuffix(accountPrefix, "/") || strings.HasPrefix(lower, accountPrefix):
+		// Account routes expose live OAuth authorize_url/verify_url/user_code and
+		// mutate account credentials.
+		return true
+	case lower == "/api/config" || strings.HasPrefix(lower, "/api/config/"):
+		return true
+	case lower == strings.TrimSuffix(pprofPrefix, "/") || strings.HasPrefix(lower, pprofPrefix):
+		return true
 	case lower == "/shutdown" || strings.HasPrefix(lower, "/shutdown/"):
 		return true
 	case lower == strings.ToLower(FullStopPath) || strings.HasPrefix(lower, strings.ToLower(FullStopPath)+"/"):
@@ -146,6 +154,11 @@ func validateDaemonCurlPath(raw string) (string, error) {
 	unescaped, err := url.PathUnescape(raw)
 	if err != nil || strings.ContainsAny(unescaped, "\\?#\r\n") || strings.IndexFunc(unescaped, unicode.IsControl) >= 0 {
 		return "", &DaemonControlError{Code: "invalid_request", Message: "path contains invalid percent-encoding or control characters"}
+	}
+	// A '%' surviving one decode means double-encoding (%25xx); a later decode
+	// would resolve it to a different path than the one classified here.
+	if strings.Contains(unescaped, "%") {
+		return "", &DaemonControlError{Code: "invalid_request", Message: "path must not contain double-encoded or literal '%' sequences"}
 	}
 	for _, candidate := range []string{raw, unescaped} {
 		for _, seg := range strings.Split(candidate, "/") {
@@ -297,13 +310,17 @@ func (d *Daemon) DaemonCurl(ctx context.Context, req DaemonCurlRequest) (DaemonC
 	defer cancel()
 
 	host := "127.0.0.1:" + strconv.Itoa(d.endpoint.Port)
-	targetURL := "http://" + host + cleanPath
+	// cleanPath is already percent-decoded once by validateDaemonCurlPath. Set it
+	// as an explicit URL.Path so no second unescape can reinterpret it (parsing
+	// "http://host"+cleanPath would decode %xx again and bypass the forbidden-path
+	// classification).
+	target := url.URL{Scheme: "http", Host: host, Path: cleanPath}
 	if len(req.Query) > 0 {
 		q := url.Values{}
 		for k, v := range req.Query {
 			q.Set(k, v)
 		}
-		targetURL += "?" + q.Encode()
+		target.RawQuery = q.Encode()
 	}
 	var bodyReader *bytes.Reader
 	if req.Body != "" {
@@ -311,10 +328,11 @@ func (d *Daemon) DaemonCurl(ctx context.Context, req DaemonCurlRequest) (DaemonC
 	} else {
 		bodyReader = bytes.NewReader(nil)
 	}
-	httpReq, err := http.NewRequestWithContext(reqCtx, method, targetURL, bodyReader)
+	httpReq, err := http.NewRequestWithContext(reqCtx, method, "http://"+host+"/", bodyReader)
 	if err != nil {
 		return DaemonCurlResponse{}, &DaemonControlError{Code: "invalid_request", Message: err.Error()}
 	}
+	httpReq.URL = &target
 	httpReq.Host = host
 	httpReq.RemoteAddr = "127.0.0.1:1"
 	httpReq.Header = hdrs
@@ -326,6 +344,14 @@ func (d *Daemon) DaemonCurl(ctx context.Context, req DaemonCurlRequest) (DaemonC
 		return DaemonCurlResponse{}, &DaemonControlError{Code: "denied", Message: "localhost credential unavailable"}
 	}
 	httpReq.AddCookie(&http.Cookie{Name: localhostCookieName, Value: cookieVal})
+
+	// Defense in depth: re-classify the exact path the handler will route on.
+	if isDaemonCurlForbiddenPath(path.Clean(httpReq.URL.Path)) {
+		return DaemonCurlResponse{}, &DaemonControlError{
+			Code:    "forbidden_path",
+			Message: fmt.Sprintf("path %q is forbidden for daemon.curl", cleanPath),
+		}
+	}
 
 	rec := newBoundedCurlRecorder(daemonCurlMaxRespBytes)
 	d.Handler().ServeHTTP(rec, httpReq)
