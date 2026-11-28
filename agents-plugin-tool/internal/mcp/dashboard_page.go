@@ -725,6 +725,9 @@ func (src *DashboardSessionSource) contactsFrom(reg wsdashboard.Registration, re
 			c.LastExchange = at
 		}
 		if id, isReply := strings.CutPrefix(rec.Address, wsmailbox.ReplyIDPrefix); isReply {
+			if isKnownCompanionReplyID(id) || replies.Entries[id].Hidden {
+				continue
+			}
 			c.ReplyID = id
 			if entry, ok := replies.Entries[id]; ok {
 				if seen, err := time.Parse(time.RFC3339, entry.LastSeen); err == nil {

@@ -1,0 +1,977 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/kang-sw/devenv/internal/mcp"
+	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wsmailbox"
+)
+
+type testLogWriter struct{ t *testing.T }
+
+func (w *testLogWriter) Write(p []byte) (int, error) {
+	w.t.Log(strings.TrimRight(string(p), "\n"))
+	return len(p), nil
+}
+
+type companionTestBackend struct {
+	mu      sync.Mutex
+	procs   []*companionTestProc
+	handler func(p *companionTestProc, text string)
+}
+
+func (b *companionTestBackend) Start(_ context.Context, spec wsagent.StartSpec) (wsagent.Process, error) {
+	instr, _ := os.ReadFile(spec.Instructions)
+	instrText := string(instr)
+	wsKey := extractWSKeyFromInstructions(instrText)
+	role := mcp.CompanionRoleWork
+	if strings.Contains(instrText, "desk smartphone messenger") {
+		role = mcp.CompanionRoleBody
+	}
+	p := &companionTestProc{
+		backend:      b,
+		spec:         spec,
+		role:         role,
+		wsKey:        wsKey,
+		instructions: instrText,
+		events:       make(chan wsagent.Event, 64),
+	}
+	b.mu.Lock()
+	b.procs = append(b.procs, p)
+	b.mu.Unlock()
+	return p, nil
+}
+
+func (b *companionTestBackend) procsFor(role string) []*companionTestProc {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []*companionTestProc
+	for _, p := range b.procs {
+		if p.role == role {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+type companionTestProc struct {
+	backend      *companionTestBackend
+	spec         wsagent.StartSpec
+	role         string
+	wsKey        string
+	instructions string
+	events       chan wsagent.Event
+
+	mu        sync.Mutex
+	sends     []string
+	closed    bool
+	closeOnce sync.Once
+}
+
+func (p *companionTestProc) Events() <-chan wsagent.Event { return p.events }
+
+func (p *companionTestProc) Send(text string) error {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return errors.New("process closed")
+	}
+	p.sends = append(p.sends, text)
+	p.mu.Unlock()
+
+	p.backend.mu.Lock()
+	h := p.backend.handler
+	p.backend.mu.Unlock()
+	if h != nil {
+		go h(p, text)
+	}
+	return nil
+}
+
+func (p *companionTestProc) Interrupt() error       { return nil }
+func (p *companionTestProc) SetModel(string) error  { return nil }
+func (p *companionTestProc) SetEffort(string) error { return nil }
+func (p *companionTestProc) Close() error {
+	p.closeOnce.Do(func() {
+		p.mu.Lock()
+		p.closed = true
+		p.mu.Unlock()
+		close(p.events)
+	})
+	return nil
+}
+
+func (p *companionTestProc) emitTurn(reply, errText string) {
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if closed {
+		return
+	}
+	p.events <- wsagent.Event{TurnStart: true}
+	if reply != "" {
+		p.events <- wsagent.Event{Live: &wslive.Event{Kind: wslive.KindReply, Text: reply, Final: true}}
+	}
+	p.events <- wsagent.Event{TurnEnd: true, TurnError: errText}
+}
+
+func (p *companionTestProc) emitFatal(err error) {
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if closed {
+		return
+	}
+	p.events <- wsagent.Event{Fatal: err}
+}
+
+func (p *companionTestProc) receivedSends() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.sends...)
+}
+
+func extractWSKeyFromInstructions(text string) string {
+	_, rest, ok := strings.Cut(text, "Your ws session key is `")
+	if !ok {
+		return ""
+	}
+	key, _, _ := strings.Cut(rest, "`")
+	return strings.TrimSpace(key)
+}
+
+type companionFixture struct {
+	t          *testing.T
+	dir        string
+	root       string
+	backend    *companionTestBackend
+	agents     *wsagent.Runner
+	daemon     *wsdashboard.Daemon
+	rt         *companionRuntime
+	now        atomic.Pointer[time.Time]
+	authCookie *http.Cookie
+}
+
+func newCompanionFixture(t *testing.T, directorMode string) *companionFixture {
+	t.Helper()
+	cacheHome := t.TempDir()
+	configHome := t.TempDir()
+	t.Setenv("WS_CACHE_HOME", cacheHome)
+	t.Setenv("WS_CONFIG_HOME", configHome)
+
+	// Write global config enabling companion with the requested director mode.
+	cfgPath := filepath.Join(configHome, "config.json")
+	cfgPayload := fmt.Sprintf(`{"overrides":{"dashboard.companion_enabled":"true","dashboard.companion_director":%q}}`, directorMode)
+	if err := os.WriteFile(cfgPath, []byte(cfgPayload), 0o600); err != nil {
+		t.Fatalf("write config.json: %v", err)
+	}
+
+	dir := t.TempDir()
+	root := t.TempDir()
+	nowVal := time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC)
+
+	f := &companionFixture{
+		t:       t,
+		dir:     dir,
+		root:    root,
+		backend: &companionTestBackend{},
+	}
+	f.now.Store(&nowVal)
+
+	var rtPtr atomic.Pointer[companionRuntime]
+	var daemonPtr atomic.Pointer[wsdashboard.Daemon]
+
+	keys := mcp.NewAgentKeyStore()
+	claudeReg := wsagent.BuiltinBackendRegistrations()[wsagent.BackendClaude]
+	claudeReg.Backend = wsagent.WrapDurableBackend(f.backend)
+	claudeReg.ProcessKind = wsagent.ProcessDurable
+	regs := map[string]wsagent.BackendRegistration{
+		wsagent.BackendClaude: claudeReg,
+	}
+	logw := &testLogWriter{t: t}
+	agents := wsagent.NewRunner(wsagent.Options{
+		Dir:      dir,
+		Backends: regs,
+		Keys:     keys,
+		LeadKeys: keys,
+		Log:      logw,
+		Now:      func() time.Time { return *f.now.Load() },
+		WSMCP: func(string) (wsagent.MCPCommand, error) {
+			return wsagent.MCPCommand{Command: "/unused/ws-mcp", Env: map[string]string{}}, nil
+		},
+		DaemonMCP: func(string) (wsagent.MCPCommand, error) {
+			return wsagent.MCPCommand{Env: map[string]string{}}, nil
+		},
+		OnCompanionTurnEnd: func(role, replyID, wsKey, status, errText string) {
+			if rt := rtPtr.Load(); rt != nil {
+				rt.OnCompanionTurnEnd(role, replyID, wsKey, status, errText)
+			}
+		},
+		OnCompanionActivity: func(role, replyID, wsKey string) {
+			if rt := rtPtr.Load(); rt != nil {
+				rt.OnCompanionActivity(role, replyID, wsKey)
+			}
+		},
+		OnCompanionClose: func(role, replyID, wsKey, reason string) {
+			if rt := rtPtr.Load(); rt != nil {
+				rt.OnCompanionClose(role, replyID, wsKey, reason)
+			}
+		},
+	})
+	f.agents = agents
+
+	rt := newCompanionRuntime(dir, root, agents, daemonPtr.Load, logw)
+	rt.nowFunc = func() time.Time { return *f.now.Load() }
+	rt.resolveLaunch = func(role string) (companionLaunchSpec, bool) {
+		return companionLaunchSpec{Backend: wsagent.BackendClaude}, true
+	}
+	rtPtr.Store(rt)
+	f.rt = rt
+
+	daemon, err := wsdashboard.StartDaemon(wsdashboard.DaemonOptions{
+		Dir:      dir,
+		Port:     0,
+		Version:  version,
+		Log:      io.Discard,
+		Agents:   agents,
+		Sessions: mcp.NewDashboardSessionSource(nil),
+		Config: &wsdashboard.ConfigBackend{
+			LoadCompanion: func() (wsdashboard.CompanionConfig, error) {
+				return wsdashboard.CompanionConfig{
+					Enabled:  true,
+					Director: directorMode,
+					Pack:     "default",
+				}, nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartDaemon: %v", err)
+	}
+	daemonPtr.Store(daemon)
+	f.daemon = daemon
+	ep := daemon.Endpoint()
+	agents.SetEndpoint(fmt.Sprintf("http://127.0.0.1:%d", ep.Port))
+	daemon.SetCompanionHolderAlive(rt.IsHolderAlive)
+	daemon.SetCompanionWake(rt.OnUserWake)
+
+	// Mint the dashboard localhost session cookie via the documented machine auth route.
+	cookieReq, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/auth/cookie", ep.Port), nil)
+	if err != nil {
+		t.Fatalf("NewRequest(/auth/cookie): %v", err)
+	}
+	cookieReq.Header.Set("Authorization", "Bearer "+ep.Token)
+	cookieResp, err := http.DefaultClient.Do(cookieReq)
+	if err != nil {
+		t.Fatalf("POST /auth/cookie: %v", err)
+	}
+	var cookieBody struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(cookieResp.Body).Decode(&cookieBody); err != nil {
+		cookieResp.Body.Close()
+		t.Fatalf("decode /auth/cookie: %v", err)
+	}
+	cookieResp.Body.Close()
+	if cookieResp.StatusCode != http.StatusOK || cookieBody.Name == "" || cookieBody.Value == "" {
+		t.Fatalf("/auth/cookie status=%d body=%+v", cookieResp.StatusCode, cookieBody)
+	}
+	f.authCookie = &http.Cookie{Name: cookieBody.Name, Value: cookieBody.Value}
+
+	t.Cleanup(func() {
+		rt.Close()
+		daemon.Close()
+	})
+	return f
+}
+
+func (f *companionFixture) postUserMessage(text string) {
+	f.t.Helper()
+	ep := f.daemon.Endpoint()
+	body, _ := json.Marshal(map[string]string{"text": text})
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/companion/phone/send", ep.Port)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		f.t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", fmt.Sprintf("http://127.0.0.1:%d", ep.Port))
+	req.AddCookie(f.authCookie)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		f.t.Fatalf("POST /api/companion/phone/send: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		f.t.Fatalf("POST send status=%d body=%s", resp.StatusCode, string(raw))
+	}
+}
+
+type rpcWireResponse struct {
+	ID     json.RawMessage `json:"id"`
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
+func (f *companionFixture) callMCP(hostedKey, method string, params any) rpcWireResponse {
+	f.t.Helper()
+	envMap := map[string]string{
+		"WS_CACHE_HOME":  os.Getenv("WS_CACHE_HOME"),
+		"WS_CONFIG_HOME": os.Getenv("WS_CONFIG_HOME"),
+	}
+	convID := ""
+	if hostedKey != "" {
+		envMap[wsagent.EnvHostedSession] = "1"
+		envMap[wsagent.EnvHostedSessionKey] = hostedKey
+		convID = wsmailbox.ReplyID(hostedKey)
+	}
+	srv := mcp.NewServerWithOptions(mcp.ServerOptions{
+		Root:                f.root,
+		Version:             version,
+		Env:                 mcp.EnvFromMap(envMap),
+		Conversation:        convID,
+		Companion:           f.daemon,
+		CompanionDelegation: f.rt,
+		Agents:              f.agents,
+	})
+	defer srv.Close()
+
+	initReq := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1"}}}` + "\n"
+	callObj := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  method,
+		"params":  params,
+	}
+	callRaw, err := json.Marshal(callObj)
+	if err != nil {
+		f.t.Fatalf("marshal RPC %s: %v", method, err)
+	}
+	var out bytes.Buffer
+	if err := srv.ServeStdio(context.Background(), strings.NewReader(initReq+string(callRaw)+"\n"), &out); err != nil {
+		f.t.Fatalf("ServeStdio(%s): %v", method, err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) < 2 {
+		f.t.Fatalf("ServeStdio(%s) produced %d lines: %q", method, len(lines), out.String())
+	}
+	var resp rpcWireResponse
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &resp); err != nil {
+		f.t.Fatalf("unmarshal RPC response: %v\nraw=%s", err, lines[len(lines)-1])
+	}
+	return resp
+}
+
+func (f *companionFixture) callTool(hostedKey, name string, args map[string]any) (text string, isErr bool, rpcErr string) {
+	f.t.Helper()
+	if args == nil {
+		args = map[string]any{}
+	}
+	resp := f.callMCP(hostedKey, "tools/call", map[string]any{
+		"name":      name,
+		"arguments": args,
+	})
+	if resp.Error != nil {
+		return "", false, resp.Error.Message
+	}
+	var parsed struct {
+		IsError bool `json:"isError"`
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(resp.Result, &parsed); err != nil {
+		f.t.Fatalf("decode tool result %s: %v\nraw=%s", name, err, string(resp.Result))
+	}
+	if len(parsed.Content) > 0 {
+		text = parsed.Content[0].Text
+	}
+	return text, parsed.IsError, ""
+}
+
+func (f *companionFixture) listTools(hostedKey string) map[string]bool {
+	f.t.Helper()
+	resp := f.callMCP(hostedKey, "tools/list", map[string]any{})
+	if resp.Error != nil {
+		f.t.Fatalf("tools/list RPC error: %+v", resp.Error)
+	}
+	var parsed struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(resp.Result, &parsed); err != nil {
+		f.t.Fatalf("decode tools/list: %v", err)
+	}
+	out := make(map[string]bool, len(parsed.Tools))
+	for _, tool := range parsed.Tools {
+		out[tool.Name] = true
+	}
+	return out
+}
+
+func waitCompanionUntil(t *testing.T, timeout time.Duration, desc string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", desc)
+}
+
+func TestCompanionRuntimeEndToEndTrivialWorkCapabilitiesAndHiding(t *testing.T) {
+	f := newCompanionFixture(t, "agent")
+
+	bigBrief := "LOSS_CHECK_START\n" + strings.Repeat("preserve-every-byte-0123456789-한글-✓\n", 260) + "LOSS_CHECK_END"
+	bigResult := "RESULT_CHECK_START\n" + strings.Repeat("technical-evidence-line-abcdef-98765\n", 260) + "RESULT_CHECK_END"
+	wantArtifacts := []string{"/workspace/report.md", "file:///workspace/patch.diff"}
+
+	var (
+		mu                  sync.Mutex
+		bodyMode            = "trivial"
+		workReceivedBriefs  []string
+		bodyReceivedReports []string
+		workTurnCount       int
+		workDoneCh          = make(chan struct{}, 4)
+		bodyDoneCh          = make(chan struct{}, 4)
+		phoneLockedErrSeen  atomic.Bool
+		approvalReqSeen     atomic.Bool
+		allowlistedRan      atomic.Bool
+		midDelegationChatOK atomic.Bool
+	)
+
+	f.backend.handler = func(p *companionTestProc, text string) {
+		if p.role == mcp.CompanionRoleBody {
+			if strings.Contains(text, "[companion delegation report]") {
+				mu.Lock()
+				bodyReceivedReports = append(bodyReceivedReports, text)
+				mu.Unlock()
+				// Tier-1 briefs the user in character on receiving the report.
+				_, _, _ = f.callTool(p.wsKey, "companion.phone_pickup", map[string]any{"session_key": p.wsKey})
+				_, _, _ = f.callTool(p.wsKey, "companion.phone_send", map[string]any{"session_key": p.wsKey, "text": "All done! Here is the summary.", "tone": "happy"})
+				_, _, _ = f.callTool(p.wsKey, "companion.phone_putdown", map[string]any{"session_key": p.wsKey, "style": "normal", "next": "ambient"})
+				p.emitTurn("briefed user", "")
+				bodyDoneCh <- struct{}{}
+				return
+			}
+			mu.Lock()
+			mode := bodyMode
+			mu.Unlock()
+			switch mode {
+			case "trivial":
+				// (a) Trivial message: pickup -> send -> putdown(facedown_merong, ambient).
+				_, isErr, rpcErr := f.callTool(p.wsKey, "companion.phone_pickup", map[string]any{"session_key": p.wsKey})
+				if isErr || rpcErr != "" {
+					p.emitTurn("", "pickup failed")
+					return
+				}
+				_, _, _ = f.callTool(p.wsKey, "companion.phone_send", map[string]any{"session_key": p.wsKey, "text": "메-롱!", "tone": "merong"})
+				_, _, _ = f.callTool(p.wsKey, "companion.phone_putdown", map[string]any{"session_key": p.wsKey, "style": "facedown_merong", "next": "ambient"})
+				p.emitTurn("trivial done", "")
+				bodyDoneCh <- struct{}{}
+			case "work":
+				// (b) Work message: pickup -> delegate_work under phone posture must fail posture_locked ->
+				// ack -> putdown(work) -> delegate_work(bigBrief) in laptop posture.
+				_, _, _ = f.callTool(p.wsKey, "companion.phone_pickup", map[string]any{"session_key": p.wsKey})
+				lockTxt, lockErr, _ := f.callTool(p.wsKey, "companion.delegate_work", map[string]any{"session_key": p.wsKey, "brief": bigBrief})
+				if lockErr && strings.Contains(lockTxt, `"posture_locked"`) {
+					phoneLockedErrSeen.Store(true)
+				}
+				_, _, _ = f.callTool(p.wsKey, "companion.phone_send", map[string]any{"session_key": p.wsKey, "text": "On it!", "tone": "focused"})
+				_, _, _ = f.callTool(p.wsKey, "companion.phone_putdown", map[string]any{"session_key": p.wsKey, "style": "normal", "next": "work"})
+				_, _, _ = f.callTool(p.wsKey, "companion.delegate_work", map[string]any{"session_key": p.wsKey, "brief": bigBrief})
+				p.emitTurn("delegated work", "")
+				bodyDoneCh <- struct{}{}
+			}
+			return
+		}
+
+		// Tier-2 companion-work handler.
+		mu.Lock()
+		workReceivedBriefs = append(workReceivedBriefs, text)
+		workTurnCount++
+		turn := workTurnCount
+		mu.Unlock()
+
+		if turn == 1 {
+			// (c) High-impact tool returns approval_required; allowlisted tool runs.
+			gateTxt, gateErr, _ := f.callTool(p.wsKey, "config.tune", map[string]any{
+				"session_key": p.wsKey,
+				"key":         "workflow.lang",
+				"scope":       "global",
+				"value":       "ko",
+			})
+			if gateErr && strings.Contains(gateTxt, `"approval_required"`) {
+				approvalReqSeen.Store(true)
+			}
+			_, listErr, listRPC := f.callTool(p.wsKey, "config.list", map[string]any{"session_key": p.wsKey})
+			if !listErr && listRPC == "" {
+				allowlistedRan.Store(true)
+			}
+			// End Turn 1 WITHOUT calling delegation.report -> delegation must stay in flight!
+			p.emitTurn("waiting on background work", "")
+			workDoneCh <- struct{}{}
+		}
+	}
+
+	// --- (a) Trivial message: answered by Tier-1 alone, Tier-2 launch count = 0 ---
+	f.postUserMessage("hey just saying hi!")
+	select {
+	case <-bodyDoneCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("(a) timed out waiting for Tier-1 trivial reply")
+	}
+	waitCompanionUntil(t, 5*time.Second, "(a) lease released", func() bool {
+		snap := f.daemon.CompanionPhone().Snapshot()
+		return snap.State == wsdashboard.CompanionStateLaptopAmbient && snap.PhoneFaceDown && snap.LeaseOwner == ""
+	})
+	bodyLaunches, workLaunches := f.rt.launchCounts()
+	if bodyLaunches != 1 || workLaunches != 0 {
+		t.Fatalf("(a) launchCounts = (body=%d, work=%d), want (1, 0)", bodyLaunches, workLaunches)
+	}
+
+	// --- (b) Work message -> posture_locked under phone -> putdown(work) -> delegate_work ---
+	mu.Lock()
+	bodyMode = "work"
+	mu.Unlock()
+	f.postUserMessage("please audit the build pipeline")
+	select {
+	case <-bodyDoneCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("(b) timed out waiting for Tier-1 delegation turn")
+	}
+	select {
+	case <-workDoneCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("(c) timed out waiting for Tier-2 turn 1")
+	}
+	if !phoneLockedErrSeen.Load() {
+		t.Fatal("(b) delegate_work under phone posture did not return posture_locked")
+	}
+	if !approvalReqSeen.Load() {
+		t.Fatal("(c) Tier-2 high-impact config.tune did not return approval_required")
+	}
+	if !allowlistedRan.Load() {
+		t.Fatal("(c) Tier-2 allowlisted config.list failed")
+	}
+
+	// (c) Verify lossless byte-identical multi-kilobyte brief reached Tier-2.
+	mu.Lock()
+	if len(workReceivedBriefs) != 1 || !strings.Contains(workReceivedBriefs[0], bigBrief) {
+		t.Fatalf("(c) Tier-2 brief missing or truncated: count=%d", len(workReceivedBriefs))
+	}
+	mu.Unlock()
+
+	// (c) Tier-2 turn ended without ws/delegation.report -> delegation MUST remain in flight!
+	time.Sleep(150 * time.Millisecond)
+	snap := f.daemon.CompanionPhone().Snapshot()
+	if !snap.DelegationInFlight || snap.State != wsdashboard.CompanionStateLaptopWork {
+		t.Fatalf("(c) delegation should remain in flight after Tier-2 turn end without report: snap=%+v", snap)
+	}
+	activeDelID := f.rt.activeDelegationID()
+	if activeDelID == "" {
+		t.Fatal("(c) activeDelegationID is empty while delegation should be in flight")
+	}
+
+	bodyProcs := f.backend.procsFor(mcp.CompanionRoleBody)
+	workProcs := f.backend.procsFor(mcp.CompanionRoleWork)
+	if len(bodyProcs) != 1 || len(workProcs) != 1 {
+		t.Fatalf("expected 1 body proc and 1 work proc, got body=%d work=%d", len(bodyProcs), len(workProcs))
+	}
+	bodyKey := bodyProcs[0].wsKey
+	workKey := workProcs[0].wsKey
+
+	// --- (d) Capability tests over tools/list + tools/call on REAL minted keys ---
+	bodyTools := f.listTools(bodyKey)
+	for _, forbidden := range []string{"config.tune", "git.commit", "git.merge", "tickets.close", "exec.shell", "agent.spawn", "delegation.report"} {
+		if bodyTools[forbidden] {
+			t.Fatalf("(d) companion-body tools/list exposed forbidden tool %q", forbidden)
+		}
+		if _, _, rpcErr := f.callTool(bodyKey, forbidden, map[string]any{"session_key": bodyKey}); rpcErr == "" {
+			t.Fatalf("(d) companion-body reached forbidden tool %q", forbidden)
+		}
+	}
+	workTools := f.listTools(workKey)
+	for _, forbidden := range []string{"companion.speak", "companion.face", "companion.motion", "companion.phone_pickup", "companion.phone_read", "companion.phone_send", "companion.phone_putdown", "companion.delegate_work", "session.request_hire"} {
+		if workTools[forbidden] {
+			t.Fatalf("(d) companion-work tools/list exposed forbidden tool %q", forbidden)
+		}
+		if _, _, rpcErr := f.callTool(workKey, forbidden, map[string]any{"session_key": workKey}); rpcErr == "" {
+			t.Fatalf("(d) companion-work reached forbidden tool %q", forbidden)
+		}
+	}
+	if !workTools["delegation.report"] {
+		t.Fatal("(d) companion-work tools/list missing delegation.report")
+	}
+
+	// --- (c) Neither companion session appears in rail, roster, or direct POST send ---
+	if list := f.agents.List(); len(list) != 0 {
+		t.Fatalf("(c) companion sessions leaked into runner roster: %+v", list)
+	}
+	if f.daemon.Index() != nil {
+		for _, s := range f.daemon.Index().Sessions() {
+			if (s.ReplyID == f.rt.bodyReplyID || s.ReplyID == f.rt.workReplyID) && !s.Unlisted {
+				t.Fatalf("(c) companion session %s is listed (Unlisted=false) in daemon index", s.ReplyID)
+			}
+		}
+	}
+	// Verify the rendered dashboard HTML rail omits both companion sessions.
+	ep := f.daemon.Endpoint()
+	indexReq, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/", ep.Port), nil)
+	if err != nil {
+		t.Fatalf("NewRequest(/): %v", err)
+	}
+	indexReq.AddCookie(f.authCookie)
+	indexResp, err := http.DefaultClient.Do(indexReq)
+	if err != nil {
+		t.Fatalf("GET /: %v", err)
+	}
+	indexHTML, _ := io.ReadAll(indexResp.Body)
+	indexResp.Body.Close()
+	if strings.Contains(string(indexHTML), f.rt.bodyReplyID) || strings.Contains(string(indexHTML), f.rt.workReplyID) {
+		t.Fatalf("(c) companion session leaked into dashboard rail HTML")
+	}
+	// HTTP POST /agents/<id>/send must refuse companion sessions (403).
+	sendReq := httptest.NewRequest(http.MethodPost, wsagent.RoutePrefix+"/"+f.rt.workReplyID+"/send", strings.NewReader(`{"text":"hello"}`))
+	sendReq.RemoteAddr = "127.0.0.1:43210"
+	sendReq.Host = "127.0.0.1:8080"
+	sendRec := httptest.NewRecorder()
+	f.agents.Handler().ServeHTTP(sendRec, sendReq)
+	if sendRec.Code != http.StatusForbidden {
+		t.Fatalf("(c) POST /agents/<companion>/send status=%d, want 403", sendRec.Code)
+	}
+
+	// --- (e) Tier-1 picks up phone during in-flight delegation without blocking Tier-2 ---
+	if _, isErr, rpcErr := f.callTool(bodyKey, "companion.phone_pickup", map[string]any{"session_key": bodyKey}); isErr || rpcErr != "" {
+		t.Fatalf("(e) phone_pickup during delegation failed: isErr=%v rpcErr=%q", isErr, rpcErr)
+	}
+	if _, isErr, rpcErr := f.callTool(bodyKey, "companion.phone_send", map[string]any{"session_key": bodyKey, "text": "Still working on it!", "tone": "happy"}); isErr || rpcErr != "" {
+		t.Fatalf("(e) phone_send during delegation failed: isErr=%v rpcErr=%q", isErr, rpcErr)
+	}
+	// While Tier-1 holds the phone, Tier-2 tools must NOT be posture-blocked!
+	if txt, isErr, rpcErr := f.callTool(workKey, "config.list", map[string]any{"session_key": workKey}); isErr || rpcErr != "" || strings.Contains(txt, "posture_locked") {
+		t.Fatalf("(e) Tier-2 blocked while Tier-1 held phone: txt=%q isErr=%v rpcErr=%q", txt, isErr, rpcErr)
+	}
+	midDelegationChatOK.Store(true)
+	// putdown(normal, ambient) during in-flight delegation settles back to laptop_work with lease held!
+	if _, isErr, rpcErr := f.callTool(bodyKey, "companion.phone_putdown", map[string]any{"session_key": bodyKey, "style": "normal", "next": "ambient"}); isErr || rpcErr != "" {
+		t.Fatalf("(e) phone_putdown during delegation failed: isErr=%v rpcErr=%q", isErr, rpcErr)
+	}
+	snap = f.daemon.CompanionPhone().Snapshot()
+	if snap.State != wsdashboard.CompanionStateLaptopWork || snap.Posture != wsdashboard.CompanionPostureLaptop || !snap.DelegationInFlight || !f.daemon.CompanionPhone().EmbodimentLeaseActive() {
+		t.Fatalf("(e) putdown(normal, ambient) during delegation = %+v, want laptop_work + lease held", snap)
+	}
+	if !midDelegationChatOK.Load() {
+		t.Fatal("(e) mid-delegation chat invariant not verified")
+	}
+
+	// --- (c) Tier-2 reports verbatim multi-KB result + artifacts -> Tier-1 woken verbatim ---
+	repTxt, repErr, repRPC := f.callTool(workKey, "delegation.report", map[string]any{
+		"session_key":   workKey,
+		"delegation_id": activeDelID,
+		"status":        "done",
+		"result":        bigResult,
+		"artifacts":     wantArtifacts,
+	})
+	if repErr || repRPC != "" || !strings.Contains(repTxt, activeDelID) {
+		t.Fatalf("(c) delegation.report failed: txt=%q isErr=%v rpcErr=%q", repTxt, repErr, repRPC)
+	}
+	select {
+	case <-bodyDoneCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("(c) timed out waiting for Tier-1 to receive delegation report")
+	}
+	mu.Lock()
+	if len(bodyReceivedReports) != 1 || !strings.Contains(bodyReceivedReports[0], bigResult) || !strings.Contains(bodyReceivedReports[0], wantArtifacts[0]) || !strings.Contains(bodyReceivedReports[0], wantArtifacts[1]) {
+		t.Fatalf("(c) Tier-1 did not receive verbatim result+artifacts: %d reports", len(bodyReceivedReports))
+	}
+	mu.Unlock()
+
+	// Late/duplicate report for already-closed delegation_id is rejected.
+	dupTxt, dupErr, _ := f.callTool(workKey, "delegation.report", map[string]any{
+		"session_key":   workKey,
+		"delegation_id": activeDelID,
+		"status":        "done",
+		"result":        "duplicate",
+	})
+	if !dupErr || !strings.Contains(dupTxt, "already closed") {
+		t.Fatalf("(c) duplicate delegation.report should be rejected: txt=%q isErr=%v", dupTxt, dupErr)
+	}
+}
+
+func TestCompanionRuntimeFailsafesQueueCrashDeadlineAndRetries(t *testing.T) {
+	t.Run("turn_end_failsafe_close_relaunch_and_unread_rewake", func(t *testing.T) {
+		f := newCompanionFixture(t, "agent")
+		var turnNum atomic.Int32
+		turnDone := make(chan int32, 8)
+
+		f.backend.handler = func(p *companionTestProc, text string) {
+			n := turnNum.Add(1)
+			switch n {
+			case 1:
+				// Pick up phone and END TURN WITHOUT calling phone_putdown!
+				// While holding phone, a second user message arrives -> must re-wake after release.
+				_, _, _ = f.callTool(p.wsKey, "companion.phone_pickup", map[string]any{"session_key": p.wsKey})
+				_, _, _ = f.daemon.CompanionPhone().EnqueueUserMessage("arrived during phone_active")
+				p.emitTurn("forgot putdown", "")
+			case 2:
+				// Automatically re-woken for the unread message!
+				_, _, _ = f.callTool(p.wsKey, "companion.phone_pickup", map[string]any{"session_key": p.wsKey})
+				_, _, _ = f.callTool(p.wsKey, "companion.phone_send", map[string]any{"session_key": p.wsKey, "text": "Got your second ping!", "tone": "happy"})
+				_, _, _ = f.callTool(p.wsKey, "companion.phone_putdown", map[string]any{"session_key": p.wsKey, "style": "normal", "next": "ambient"})
+				p.emitTurn("re-wake handled", "")
+			}
+			turnDone <- n
+		}
+
+		f.postUserMessage("first ping")
+		select {
+		case <-turnDone:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for turn 1")
+		}
+		select {
+		case got := <-turnDone:
+			if got != 2 {
+				t.Fatalf("expected turn 2 re-wake, got %d", got)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("(f) timed out waiting for release-time unread re-wake turn 2")
+		}
+
+		// Close old Tier-1 while holding the phone -> relaunched Tier-1 key succeeds on phone_pickup!
+		bodyProcs := f.backend.procsFor(mcp.CompanionRoleBody)
+		oldKey := bodyProcs[0].wsKey
+		oldID := f.rt.bodyReplyID
+		if _, isErr, rpcErr := f.callTool(oldKey, "companion.phone_pickup", map[string]any{"session_key": oldKey}); isErr || rpcErr != "" {
+			t.Fatalf("old pickup failed: isErr=%v rpcErr=%q", isErr, rpcErr)
+		}
+		if _, err := f.agents.CloseConversation(oldID); err != nil {
+			t.Fatalf("CloseConversation(%s): %v", oldID, err)
+		}
+		// Relaunch a fresh Tier-1 and pick up with the new key immediately.
+		_, newKey, err := f.rt.ensureBodySession(f.daemon)
+		if err != nil {
+			t.Fatalf("relaunch ensureBodySession: %v", err)
+		}
+		if newKey == oldKey {
+			t.Fatal("expected a fresh Tier-1 key after closing old holder")
+		}
+		if txt, isErr, rpcErr := f.callTool(newKey, "companion.phone_pickup", map[string]any{"session_key": newKey}); isErr || rpcErr != "" {
+			t.Fatalf("(f) relaunched Tier-1 phone_pickup failed after old holder closed: txt=%q isErr=%v rpcErr=%q", txt, isErr, rpcErr)
+		}
+	})
+
+	t.Run("ordered_queue_two_briefs_then_crash_and_deadline_expiry", func(t *testing.T) {
+		f := newCompanionFixture(t, "agent")
+		var (
+			mu          sync.Mutex
+			workBriefs  []string
+			bodyReports []string
+			workArrived = make(chan string, 8)
+			bodyArrived = make(chan string, 8)
+		)
+		f.backend.handler = func(p *companionTestProc, text string) {
+			if p.role == mcp.CompanionRoleWork {
+				mu.Lock()
+				workBriefs = append(workBriefs, text)
+				mu.Unlock()
+				workArrived <- text
+				p.emitTurn("ack", "")
+				return
+			}
+			mu.Lock()
+			bodyReports = append(bodyReports, text)
+			mu.Unlock()
+			bodyArrived <- text
+			p.emitTurn("noted", "")
+		}
+
+		// Ensure Tier-1 exists so we have a valid body key.
+		_, bodyKey, err := f.rt.ensureBodySession(f.daemon)
+		if err != nil {
+			t.Fatalf("ensureBodySession: %v", err)
+		}
+
+		// Queue two briefs back-to-back.
+		ack1, err := f.rt.CompanionDelegateWork(bodyKey, "BRIEF_ALPHA")
+		if err != nil {
+			t.Fatalf("delegate 1: %v", err)
+		}
+		ack2, err := f.rt.CompanionDelegateWork(bodyKey, "BRIEF_BETA")
+		if err != nil {
+			t.Fatalf("delegate 2: %v", err)
+		}
+		select {
+		case b1 := <-workArrived:
+			if !strings.Contains(b1, "BRIEF_ALPHA") || !strings.Contains(b1, ack1.DelegationID) {
+				t.Fatalf("first work brief = %q, want BRIEF_ALPHA + %s", b1, ack1.DelegationID)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for brief 1")
+		}
+		// BRIEF_BETA must NOT be steered/delivered while BRIEF_ALPHA is active!
+		select {
+		case extra := <-workArrived:
+			t.Fatalf("brief 2 delivered before brief 1 reported: %q", extra)
+		case <-time.After(150 * time.Millisecond):
+		}
+
+		workProcs := f.backend.procsFor(mcp.CompanionRoleWork)
+		workKey := workProcs[0].wsKey
+
+		// Report del-1 -> del-2 should now dispatch!
+		if _, err := f.rt.CompanionDelegationReport(workKey, ack1.DelegationID, "done", "ALPHA_RESULT", nil); err != nil {
+			t.Fatalf("report 1: %v", err)
+		}
+		select {
+		case r1 := <-bodyArrived:
+			if !strings.Contains(r1, ack1.DelegationID) || !strings.Contains(r1, "ALPHA_RESULT") {
+				t.Fatalf("body report 1 = %q", r1)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for report 1 on body")
+		}
+		select {
+		case b2 := <-workArrived:
+			if !strings.Contains(b2, "BRIEF_BETA") || !strings.Contains(b2, ack2.DelegationID) {
+				t.Fatalf("second work brief = %q, want BRIEF_BETA + %s", b2, ack2.DelegationID)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for brief 2 after report 1")
+		}
+
+		// Crash Tier-2 while del-2 is active -> fails del-2 and wakes Tier-1 with status: failed!
+		workProcs[0].emitFatal(errors.New("simulated tier-2 crash"))
+		select {
+		case r2 := <-bodyArrived:
+			if !strings.Contains(r2, ack2.DelegationID) || !strings.Contains(r2, "status: failed") {
+				t.Fatalf("(f) crash report = %q, want %s + status: failed", r2, ack2.DelegationID)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("(f) timed out waiting for Tier-2 crash failure wake on Tier-1")
+		}
+		// Late report after failed must be rejected!
+		if _, err := f.rt.CompanionDelegationReport(workKey, ack2.DelegationID, "done", "too late", nil); err == nil {
+			t.Fatal("(c) late report after failed delegation should be rejected")
+		}
+
+		// Delegate del-3 -> expire in-flight 30m deadline -> wakes Tier-1 with status: failed!
+		ack3, err := f.rt.CompanionDelegateWork(bodyKey, "BRIEF_GAMMA")
+		if err != nil {
+			t.Fatalf("delegate 3: %v", err)
+		}
+		select {
+		case <-workArrived:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for brief 3")
+		}
+		future := f.now.Load().Add(wsdashboard.CompanionLeaseDelegationTimeout + time.Minute)
+		f.now.Store(&future)
+		f.rt.checkDeadlines(future)
+		select {
+		case r3 := <-bodyArrived:
+			if !strings.Contains(r3, ack3.DelegationID) || !strings.Contains(r3, "status: failed") {
+				t.Fatalf("(f) deadline expiry report = %q, want %s + status: failed", r3, ack3.DelegationID)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("(f) timed out waiting for deadline-expiry failure wake on Tier-1")
+		}
+	})
+
+	t.Run("retry_bound_unavailable_and_disabled_director_fallback", func(t *testing.T) {
+		// (f2) Disabled director leaves message unread with 0 Tier-1 launches.
+		fDisabled := newCompanionFixture(t, "rules")
+		fDisabled.postUserMessage("ping while director disabled")
+		time.Sleep(150 * time.Millisecond)
+		if b, w := fDisabled.rt.launchCounts(); b != 0 || w != 0 {
+			t.Fatalf("(f2) disabled director launched sessions: body=%d work=%d, want 0/0", b, w)
+		}
+		if got := fDisabled.daemon.CompanionPhone().UnreadAgentCount(); got != 1 {
+			t.Fatalf("(f2) disabled director dropped unread message: count=%d, want 1", got)
+		}
+
+		// (f2) Retry bound: 3 consecutive Tier-1 failures -> unavailable; next user message resets and succeeds.
+		f := newCompanionFixture(t, "agent")
+		var attempts atomic.Int32
+		var failTurns atomic.Bool
+		failTurns.Store(true)
+		succeeded := make(chan struct{}, 1)
+
+		f.backend.handler = func(p *companionTestProc, text string) {
+			attempts.Add(1)
+			if failTurns.Load() {
+				p.emitTurn("", "transient tier-1 error")
+				return
+			}
+			_, _, _ = f.callTool(p.wsKey, "companion.phone_pickup", map[string]any{"session_key": p.wsKey})
+			_, _, _ = f.callTool(p.wsKey, "companion.phone_send", map[string]any{"session_key": p.wsKey, "text": "Back online!", "tone": "happy"})
+			_, _, _ = f.callTool(p.wsKey, "companion.phone_putdown", map[string]any{"session_key": p.wsKey, "style": "normal", "next": "ambient"})
+			p.emitTurn("recovered", "")
+			succeeded <- struct{}{}
+		}
+
+		f.postUserMessage("trigger failure streak")
+		waitCompanionUntil(t, 10*time.Second, "(f2) unavailable after CompanionWakeMaxRetries", func() bool {
+			return f.daemon.CompanionPhone().Snapshot().Unavailable
+		})
+		// Ensure retries actually stopped (did not loop past CompanionWakeMaxRetries).
+		time.Sleep(150 * time.Millisecond)
+		if got := attempts.Load(); got != int32(wsdashboard.CompanionWakeMaxRetries) {
+			t.Fatalf("(f2) attempts=%d, want exactly %d", got, wsdashboard.CompanionWakeMaxRetries)
+		}
+		if got := f.daemon.CompanionPhone().UnreadAgentCount(); got != 1 {
+			t.Fatalf("(f2) message dropped during failure streak: unread=%d, want 1", got)
+		}
+
+		// Next user message resets unavailable and succeeds once Tier-1 recovers.
+		failTurns.Store(false)
+		f.postUserMessage("try again now")
+		select {
+		case <-succeeded:
+		case <-time.After(10 * time.Second):
+			t.Fatal("(f2) next user message did not reset unavailable and recover Tier-1")
+		}
+		if f.daemon.CompanionPhone().Snapshot().Unavailable {
+			t.Fatal("(f2) Unavailable still true after recovery")
+		}
+	})
+}
+
+func TestCompanionRuntimeIdlePerformsZeroHostedTurns(t *testing.T) {
+	f := newCompanionFixture(t, "agent")
+	f.rt.tickInterval = 25 * time.Millisecond
+	f.rt.Start()
+	time.Sleep(120 * time.Millisecond)
+	if b, w := f.rt.launchCounts(); b != 0 || w != 0 {
+		t.Fatalf("(g) idle daemon launched companion sessions: body=%d work=%d, want 0/0", b, w)
+	}
+	if len(f.backend.procsFor(mcp.CompanionRoleBody)) != 0 || len(f.backend.procsFor(mcp.CompanionRoleWork)) != 0 {
+		t.Fatal("(g) idle daemon started hosted companion processes")
+	}
+}

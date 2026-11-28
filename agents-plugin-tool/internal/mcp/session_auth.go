@@ -215,24 +215,29 @@ type sessionStore struct {
 	// policyParent memoizes each key's policy-parent marker read (key ->
 	// policyParentEntry); see policyParentOf.
 	policyParent sync.Map
-	// companionReplyIDs caches reply-ids known to belong to companion-body or
-	// companion-work sessions so mailbox.lookup_peers hides them from
-	// correspondents without scanning the session directory.
-	companionReplyIDs sync.Map
 }
+
+// knownCompanionReplyIDs caches reply-ids known to belong to companion-body or
+// companion-work sessions across all sessionStore instances in this process so
+// mailbox.lookup_peers and dashboard contacts hide them without scanning disk.
+var knownCompanionReplyIDs sync.Map
 
 func (s *sessionStore) rememberCompanionRole(key, companionRole string) {
 	if companionRole == "" || key == "" {
 		return
 	}
-	s.companionReplyIDs.Store(wsmailbox.ReplyID(key), struct{}{})
+	knownCompanionReplyIDs.Store(wsmailbox.ReplyID(key), struct{}{})
 }
 
 func (s *sessionStore) isCompanionReplyID(replyID string) bool {
+	return isKnownCompanionReplyID(replyID)
+}
+
+func isKnownCompanionReplyID(replyID string) bool {
 	if replyID == "" {
 		return false
 	}
-	_, ok := s.companionReplyIDs.Load(replyID)
+	_, ok := knownCompanionReplyIDs.Load(replyID)
 	return ok
 }
 

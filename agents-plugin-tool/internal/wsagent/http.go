@@ -265,6 +265,10 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 	case req.Method != http.MethodPost || action == "":
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	case action == "send":
+		if r.IsCompanion(id) {
+			http.Error(w, "companion sessions do not accept direct agent sends", http.StatusForbidden)
+			return
+		}
 		var body sendRequest
 		if !decode(w, req, &body) {
 			return

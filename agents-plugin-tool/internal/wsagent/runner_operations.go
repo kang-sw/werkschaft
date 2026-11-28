@@ -39,7 +39,8 @@ func (r *Runner) Get(id string) (State, error) {
 	return State{}, errUnknown
 }
 
-// List reads every conversation's state, oldest first.
+// List reads every visible conversation's state, oldest first.
+// Companion-managed sessions (CompanionRole != "") are hidden from the roster.
 func (r *Runner) List() []State {
 	r.mu.Lock()
 	out := make([]State, 0, len(r.convs)+len(r.closed))
@@ -48,10 +49,16 @@ func (r *Runner) List() []State {
 		convs = append(convs, c)
 	}
 	for _, rec := range r.closed {
+		if rec.CompanionRole != "" {
+			continue
+		}
 		out = append(out, r.memoryClosedState(rec))
 	}
 	r.mu.Unlock()
 	for _, c := range convs {
+		if c.record().CompanionRole != "" {
+			continue
+		}
 		out = append(out, c.memoryState())
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -61,6 +68,64 @@ func (r *Runner) List() []State {
 		return out[i].ID < out[j].ID
 	})
 	return out
+}
+
+// IsCompanion reports whether conversation id is a daemon-managed companion
+// session (companion-body or companion-work).
+func (r *Runner) IsCompanion(id string) bool {
+	rec, ok := r.recordOf(id)
+	return ok && rec.CompanionRole != ""
+}
+
+// CompanionRecord returns the persisted record snapshot for conversation id.
+func (r *Runner) CompanionRecord(id string) (Record, bool) {
+	return r.recordOf(id)
+}
+
+// IsConversationLive reports whether conversation id is currently open (not
+// closed and not handed off).
+func (r *Runner) IsConversationLive(id string) bool {
+	r.mu.Lock()
+	c, ok := r.convs[id]
+	r.mu.Unlock()
+	if !ok {
+		return false
+	}
+	c.mu.Lock()
+	live := !c.closed
+	c.mu.Unlock()
+	return live
+}
+
+// HasLiveChildren reports whether conversation parentID currently has any live
+// spawned child conversation (running, starting, or holding queued work).
+func (r *Runner) HasLiveChildren(parentID string) bool {
+	if parentID == "" {
+		return false
+	}
+	r.mu.Lock()
+	convs := make([]*conv, 0, len(r.convs))
+	for _, c := range r.convs {
+		convs = append(convs, c)
+	}
+	r.mu.Unlock()
+	for _, c := range convs {
+		c.mu.Lock()
+		isChild := !c.closed && c.rec.Parent != nil && c.rec.Parent.ReplyID == parentID
+		active := isChild && (c.turn || c.proc != nil || c.spawnPending || c.sends > max(c.settled.mark, c.voided))
+		c.mu.Unlock()
+		if active {
+			return true
+		}
+	}
+	return false
+}
+
+// CompactCompanionIdle requests a non-resuming compaction for a companion
+// session at its idle boundary via the existing hosted-session compaction path.
+func (r *Runner) CompactCompanionIdle(wsKey string) CompactResult {
+	resume := false
+	return r.Compact(wsKey, "", &resume)
 }
 
 // Send holds text as the conversation's next user message. It is submitted
@@ -221,7 +286,7 @@ func (r *Runner) IdleLeads() (idle []IdleLead, kept int) {
 	created := map[string]string{}
 	for _, c := range convs {
 		c.do(func() {
-			if !c.rec.Lead || c.closed || c.proc == nil {
+			if !c.rec.Lead || c.rec.CompanionRole != "" || c.closed || c.proc == nil {
 				return
 			}
 			if !c.sleepable() {

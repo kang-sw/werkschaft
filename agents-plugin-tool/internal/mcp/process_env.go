@@ -419,6 +419,13 @@ func (s *Server) resolveHostedSession() string {
 		return ""
 	}
 	key := strings.TrimSpace(s.getenv(envHostedSessionKey))
+	// A daemon-authenticated HTTP MCP connection (durable or external) already
+	// bound s.conversation from its per-session token; when its key's reply-id
+	// matches that authenticated conversation, honor it directly even when the
+	// durable process has no separate OS harness PID (OwnerPID == 0).
+	if s.conversation != "" && key != "" && wsmailbox.ReplyID(key) == s.conversation {
+		return key
+	}
 	row := strings.TrimSpace(s.getenv(envHostedSessionRow))
 	harness := s.harnessPID()
 	if key == "" || row == "" || harness <= 0 {

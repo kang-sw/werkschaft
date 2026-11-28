@@ -196,10 +196,11 @@ func TestShellStreamsTheRailAndItsFramesTheirRegions(t *testing.T) {
 		t.Fatal("the rail stream sent no first rail")
 	}
 	// The rail stream also carries the daemon's companion settings (event
-	// "companion", commit fa2b5d917), so the shells stay in step, and the
-	// stream's companion focus token (event "companion-focus", ticket
-	// 261122-feat-ws-companion-director Phase 2); any other non-rail event is
-	// a leak.
+	// "companion", commit fa2b5d917), so the shells stay in step, the stream's
+	// companion focus token (event "companion-focus", ticket
+	// 261122-feat-ws-companion-director Phase 2), and the initial companion
+	// smartphone/embodiment snapshot (event "companion-phone", commit
+	// b326952ee); any other non-rail event is a leak.
 	sawRail, focusTokens := false, 0
 	for _, ev := range first {
 		switch ev.Name {
@@ -208,6 +209,7 @@ func TestShellStreamsTheRailAndItsFramesTheirRegions(t *testing.T) {
 		case "event:companion":
 		case "event:companion-focus":
 			focusTokens++
+		case "event:companion-phone":
 		default:
 			t.Errorf("the rail stream sent %s", ev.Name)
 		}
