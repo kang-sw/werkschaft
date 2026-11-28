@@ -235,9 +235,9 @@ async function saveDockShot(page, name) {
         `slot (${JSON.stringify(visuals.slotRect)}) must sit flush at #rail bottom (${JSON.stringify(visuals.railRect)})`);
       assert.ok(Math.abs(visuals.hitRect.left - visuals.slotRect.left) <= 2 &&
         Math.abs(visuals.hitRect.bottom - visuals.slotRect.bottom) <= 2 &&
-        Math.abs(visuals.hitRect.width - visuals.slotRect.width) <= 2 &&
+        Math.abs(visuals.hitRect.width - (visuals.slotRect.width - 4)) <= 2 &&
         Math.abs(visuals.hitRect.height - visuals.slotRect.height) <= 2,
-        `VRM hit rect ${JSON.stringify(visuals.hitRect)} must align with #rail-companion-slot ${JSON.stringify(visuals.slotRect)}`);
+        `VRM hit rect ${JSON.stringify(visuals.hitRect)} must align with #rail-companion-slot minus 4px splitter clearance ${JSON.stringify(visuals.slotRect)}`);
       assert.equal(visuals.wrapBg, 'rgba(0, 0, 0, 0)', 'VRM wrap must have transparent borderless background');
       assert.match(visuals.wrapContain, /layout/, 'VRM wrap must declare contain: layout style');
       assert.match(visuals.maskImage, /linear-gradient/, 'VRM canvas wrap must apply bottom Digital Dissolve mask');

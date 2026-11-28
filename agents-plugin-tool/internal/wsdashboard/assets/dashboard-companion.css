@@ -5,10 +5,22 @@
   overflow: hidden;
   pointer-events: none;
 }
+:root[data-shell][data-fdim] .ws-companion,
+:root[data-shell][data-fdim] .ws-companion-hit,
+:root[data-shell][data-fdim] .ws-companion-menu {
+  pointer-events: none !important;
+}
+.ws-companion-stage-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
 .ws-companion-hit {
   position: absolute;
   top: 0;
   left: 0;
+  z-index: 1;
   overflow: visible;
   transform-origin: 50% 80%;
   pointer-events: auto;
@@ -110,7 +122,7 @@
   inset: 0;
   z-index: 2;
   pointer-events: none;
-  overflow: hidden;
+  overflow: visible;
 }
 .ws-knock-ring {
   position: absolute;
@@ -230,19 +242,40 @@
   -webkit-mask-image: linear-gradient(
     to bottom,
     #000 0%,
-    #000 74%,
-    rgb(0 0 0 / 0.72) 86%,
-    rgb(0 0 0 / 0.22) 95%,
-    transparent 100%
+    #000 var(--vrm-fade-start, 93%),
+    rgb(0 0 0 / 0.55) var(--vrm-fade-mid, 97%),
+    transparent var(--vrm-fade-end, 100%)
   );
   mask-image: linear-gradient(
     to bottom,
     #000 0%,
-    #000 74%,
-    rgb(0 0 0 / 0.72) 86%,
-    rgb(0 0 0 / 0.22) 95%,
-    transparent 100%
+    #000 var(--vrm-fade-start, 93%),
+    rgb(0 0 0 / 0.55) var(--vrm-fade-mid, 97%),
+    transparent var(--vrm-fade-end, 100%)
   );
+}
+/* In docked overlay mode, bound the masked wrapper to the slot rect (17x smaller
+   compositor mask surface) while keeping the 100vw x 100vh WebGL canvas pinned to
+   viewport (0, 0) with zero backing-store reallocation on mode switch or rail drag. */
+.ws-companion-vrm-wrap[data-overlay="1"][data-render-mode="docked"] .ws-companion-vrm-canvas-wrap {
+  position: absolute;
+  left: var(--vrm-slot-left, 0px);
+  top: var(--vrm-slot-top, 0px);
+  width: var(--vrm-slot-width, 100%);
+  height: var(--vrm-slot-height, 100%);
+  overflow: hidden;
+}
+.ws-companion-vrm-wrap[data-overlay="1"][data-render-mode="docked"] .ws-companion-vrm-canvas {
+  position: absolute;
+  left: calc(-1 * var(--vrm-slot-left, 0px));
+  top: calc(-1 * var(--vrm-slot-top, 0px));
+  width: 100vw;
+  height: 100vh;
+}
+.ws-companion-vrm-wrap[data-render-mode="bleed"] .ws-companion-vrm-canvas-wrap,
+.ws-companion-vrm-wrap[data-render-mode="roam"] .ws-companion-vrm-canvas-wrap {
+  -webkit-mask-image: none;
+  mask-image: none;
 }
 .ws-companion-vrm-canvas {
   display: block;
@@ -256,9 +289,9 @@
 }
 .ws-dissolve-grid {
   position: absolute;
-  left: 16px;
-  right: 16px;
-  bottom: 0;
+  left: calc(var(--vrm-slot-left, 0px) + 16px);
+  top: calc(var(--vrm-slot-top, 0px) + var(--vrm-slot-height, 100%) - 26px);
+  width: max(0px, calc(var(--vrm-slot-width, 100%) - 32px));
   height: 26px;
   pointer-events: none;
   opacity: 0.16;
@@ -276,9 +309,16 @@
     linear-gradient(to right, transparent 0%, #000 18%, #000 82%, transparent 100%);
   mask-composite: intersect;
 }
+.ws-companion-vrm-wrap[data-render-mode="bleed"] .ws-dissolve-grid,
+.ws-companion-vrm-wrap[data-render-mode="roam"] .ws-dissolve-grid {
+  display: none;
+}
 .ws-companion-vrm-overlay {
   position: absolute;
-  inset: 0;
+  left: var(--vrm-slot-left, 0px);
+  top: var(--vrm-slot-top, 0px);
+  width: var(--vrm-slot-width, 100%);
+  height: var(--vrm-slot-height, 100%);
   display: flex;
   align-items: center;
   justify-content: center;

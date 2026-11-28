@@ -6,7 +6,7 @@ const vm = require("node:vm");
 
 function companion(globals = {}) {
   const context = vm.createContext({ window: {}, URLSearchParams, AbortController, ...globals });
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-colead", "vrm", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-fx", "vrm-studio", "vrm-props", "vrm-pose", "vrm-colead", "vrm", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return context.window.WsCompanion;
@@ -732,7 +732,7 @@ test("companion stage creates an FX canvas for semantic-split FX and falls back 
     },
     createImageBitmap: async url => ({ id: path.basename(url.split("?")[0]), width: 128, height: 128, close() {} })
   });
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-colead", "vrm", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-fx", "vrm-studio", "vrm-props", "vrm-pose", "vrm-colead", "vrm", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   const C = context.window.WsCompanion;
@@ -946,7 +946,9 @@ test("companion gear and quick menu delegate to openSettings without creating a 
 
   const stage = C.mount({ pack: "default", preset: "" }, () => {}, opener => openedBy.push(opener));
   await new Promise(resolve => setImmediate(resolve));
-  const node = body.children[0], hit = node.children[0], menu = node.children[1];
+  const node = body.children[0];
+  const hit = node.children.find(c => c.className === "ws-companion-hit");
+  const menu = node.children.find(c => c.className === "ws-companion-menu");
   const character = hit.children.find(c => c.className === "ws-companion-character");
   const gear = hit.children.find(c => c.className === "ws-companion-gear");
   assert.equal(node.all().filter(c => c.tagName === "DIALOG").length, 0, "stage mounts no floating <dialog>");
@@ -1043,7 +1045,7 @@ test("companion live config broadcast re-dresses the mounted stage without a rel
     },
     createImageBitmap: async url => ({ id: path.basename(url.split("?")[0]), width: 128, height: 128, close() {} })
   });
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-colead", "vrm", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "vrm-fx", "vrm-studio", "vrm-props", "vrm-pose", "vrm-colead", "vrm", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   const C = win.WsCompanion;
@@ -1052,7 +1054,7 @@ test("companion live config broadcast re-dresses the mounted stage without a rel
 
   const stage = C.mount(config, () => {}, opener => openedBy.push(opener));
   await new Promise(resolve => setImmediate(resolve));
-  const node = body.children[0], hit = node.children[0];
+  const node = body.children[0], hit = node.children.find(c => c.className === "ws-companion-hit");
   const step = () => { const fn = raf; raf = null; assert.ok(fn, "expected scheduled animation frame"); now += 16; fn(now); };
   // files lists the layer files the character canvas received on its latest draw.
   const files = item => item.id ? [item.id] : (item.drawn || []).flatMap(files);

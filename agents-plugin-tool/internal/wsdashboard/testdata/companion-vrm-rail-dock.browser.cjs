@@ -171,9 +171,9 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
     assert.equal(collapsed.railBg, 'rgba(0, 0, 0, 0)', 'outer .rail must become transparent in rail-slot mode');
     assert.ok(Math.abs(collapsed.hitRect.left - collapsed.slotRect.left) <= 2 &&
       Math.abs(collapsed.hitRect.bottom - collapsed.slotRect.bottom) <= 2 &&
-      Math.abs(collapsed.hitRect.width - collapsed.slotRect.width) <= 2 &&
+      Math.abs(collapsed.hitRect.width - (collapsed.slotRect.width - 4)) <= 2 &&
       Math.abs(collapsed.hitRect.height - collapsed.slotRect.height) <= 2,
-      `VRM hit must align with #rail-companion-slot: hit=${JSON.stringify(collapsed.hitRect)} slot=${JSON.stringify(collapsed.slotRect)}`);
+      `VRM hit must align with #rail-companion-slot minus 4px splitter clearance: hit=${JSON.stringify(collapsed.hitRect)} slot=${JSON.stringify(collapsed.slotRect)}`);
 
     const vrm1CollapsedFull = shots ? await page.screenshot() : null;
     const vrm1CollapsedRail = shots ? await page.screenshot({ clip: await railFullClip() }) : null;
@@ -304,7 +304,10 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
     await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
     await page.waitForTimeout(200);
 
-    // 4. Responsive rail width check (Variant D splitter range: 220px, 280px, 360px).
+    // 4. Responsive rail width check (Variant D splitter range: 220px, 280px, 360px)
+    //    + Phase 1 overlay invariants: zero WebGL resize/context loss, .rail-splitter
+    //    hit-testability, [data-fdim] modal inertness, and docked/bleed/roam scissor transitions.
+    const resizeBefore = await page.evaluate(() => window.WsCompanion?.getVrmRenderMetrics?.()?.viewportResizeCount ?? -1);
     for (const testW of [220, 280, 360]) {
       await page.evaluate(w => {
         if (window.WsIdeShell) window.WsIdeShell.setWidth(w);
@@ -313,16 +316,140 @@ async function composeGrid(browser, outPath, title, panels, opts = {}) {
       await page.waitForFunction((expectedW) => {
         const slot = document.getElementById('rail-companion-slot')?.getBoundingClientRect();
         const hit = document.querySelector('.ws-companion-hit')?.getBoundingClientRect();
-        return !!(slot && hit && Math.abs(slot.width - expectedW) <= 2 && Math.abs(hit.width - slot.width) <= 2);
+        return !!(slot && hit && Math.abs(slot.width - expectedW) <= 2 && Math.abs(hit.width - (slot.width - 4)) <= 2);
       }, testW, { timeout: 3000 });
       const resized = await readLayout();
       assert.ok(Math.abs(resized.slotRect.width - resized.railRect.width) <= 1,
         `#rail-companion-slot must match .rail width (${resized.railRect.width}px), got ${resized.slotRect.width}`);
       assert.ok(Math.abs(resized.slotRect.width - testW) <= 2,
         `#rail-companion-slot must resize responsively to ${testW}px, got ${resized.slotRect.width}`);
-      assert.ok(Math.abs(resized.hitRect.width - resized.slotRect.width) <= 2,
-        `VRM hit must track resized slot width ${resized.slotRect.width}px, got ${resized.hitRect.width}`);
+      assert.ok(Math.abs(resized.hitRect.width - (resized.slotRect.width - 4)) <= 2,
+        `VRM hit must track resized slot width minus 4px splitter clearance (${resized.slotRect.width - 4}px), got ${resized.hitRect.width}`);
     }
+    const afterDrags = await page.evaluate(() => {
+      const m = window.WsCompanion?.getVrmRenderMetrics?.();
+      const st = window.WsCompanion?.debugStage?.();
+      const splitter = document.getElementById('rail-splitter') || document.querySelector('.rail-splitter');
+      const slot = document.getElementById('rail-companion-slot').getBoundingClientRect();
+      const sr = splitter ? splitter.getBoundingClientRect() : null;
+      const hitAtSplitter = sr ? document.elementFromPoint(Math.floor(sr.left + sr.width / 2), Math.floor(slot.top + slot.height / 2)) : null;
+      document.documentElement.setAttribute('data-fdim', '');
+      const fdimHitPe = getComputedStyle(document.querySelector('.ws-companion-hit')).pointerEvents;
+      const fdimRootPe = getComputedStyle(document.querySelector('.ws-companion')).pointerEvents;
+      const fdimMenuPe = getComputedStyle(document.querySelector('.ws-companion-menu')).pointerEvents;
+      const fdimAtSlot = document.elementFromPoint(Math.floor(slot.left + slot.width / 2), Math.floor(slot.top + slot.height / 2));
+      const fdimHitsCompanion = !!(fdimAtSlot && fdimAtSlot.closest?.('.ws-companion'));
+      document.documentElement.removeAttribute('data-fdim');
+      return {
+        resizeCount: m?.viewportResizeCount ?? -1,
+        contextLost: !!st?.vrm?.contextLost,
+        hasSplitter: !!splitter,
+        splitterHit: !!(splitter && hitAtSplitter && (hitAtSplitter === splitter || splitter.contains(hitAtSplitter))),
+        fdimHitPe,
+        fdimRootPe,
+        fdimMenuPe,
+        fdimHitsCompanion
+      };
+    });
+    assert.equal(afterDrags.resizeCount, resizeBefore, 'rail width drags 220<->360 must perform zero WebGL viewport resizes');
+    assert.equal(afterDrags.contextLost, false, 'rail width drags must cause zero WebGL context loss');
+    assert.equal(afterDrags.hasSplitter, true, 'Variant D .rail-splitter must exist in the shell');
+    assert.equal(afterDrags.splitterHit, true, '.rail-splitter must remain directly hit-testable alongside #rail-companion-slot');
+    assert.equal(afterDrags.fdimHitPe, 'none', '[data-fdim] must suppress pointer events on .ws-companion-hit');
+    assert.equal(afterDrags.fdimRootPe, 'none', '[data-fdim] must suppress pointer events on .ws-companion');
+    assert.equal(afterDrags.fdimMenuPe, 'none', '[data-fdim] must suppress pointer events on .ws-companion-menu');
+    assert.equal(afterDrags.fdimHitsCompanion, false, '[data-fdim] elementFromPoint over slot must not hit .ws-companion');
+
+    // Verify docked -> bleed -> roam -> docked scissor clamping above .shell-bottom and zero ghost pixels.
+    const scissorCheck = await page.evaluate(async () => {
+      const waitFrames = async n => {
+        for (let i = 0; i < n; i++) await new Promise(r => requestAnimationFrame(r));
+      };
+      const readMask = () => {
+        const cs = getComputedStyle(document.querySelector('.ws-companion-vrm-canvas-wrap'));
+        return cs.maskImage || cs.webkitMaskImage || '';
+      };
+      const botRect = document.querySelector('.shell-bottom')?.getBoundingClientRect();
+      const maxAllowedBottom = botRect && botRect.height > 0 ? Math.round(window.innerHeight - botRect.height) : (window.innerHeight - 26);
+      const shrinkInitial = window.WsCompanion.getVrmRenderMetrics().shrinkClearCount;
+
+      window.WsCompanion.setVrmRenderMode('bleed');
+      await waitFrames(4);
+      const bleedMetrics = window.WsCompanion.getVrmRenderMetrics();
+      const bleedMask = readMask();
+
+      window.WsCompanion.setVrmRenderMode('roam');
+      await waitFrames(4);
+      const roamMetrics = window.WsCompanion.getVrmRenderMetrics();
+      const roamMask = readMask();
+
+      window.WsCompanion.setVrmRenderMode('docked');
+      await waitFrames(4);
+      const dockedMetrics = window.WsCompanion.getVrmRenderMetrics();
+      const dockedMask = readMask();
+
+      // Explicit bleed -> docked shrink-clear check + pixel probe outside docked scissor rect.
+      window.WsCompanion.setVrmRenderMode('bleed');
+      await waitFrames(3);
+      const bleedShrinkBefore = window.WsCompanion.getVrmRenderMetrics().shrinkClearCount;
+      window.WsCompanion.setVrmRenderMode('docked');
+      await waitFrames(3);
+      const afterBleedDocked = window.WsCompanion.getVrmRenderMetrics();
+
+      let ghostPixelsOutsideDock = -1;
+      const vrmCanvas = document.querySelector('.ws-companion-vrm-canvas');
+      if (vrmCanvas && vrmCanvas.width > 0 && vrmCanvas.height > 0) {
+        const probe = document.createElement('canvas');
+        probe.width = vrmCanvas.width;
+        probe.height = vrmCanvas.height;
+        const pctx = probe.getContext('2d', { willReadFrequently: true });
+        pctx.drawImage(vrmCanvas, 0, 0);
+        const sr = afterBleedDocked.scissorRect;
+        const scaleX = vrmCanvas.width / Math.max(1, window.innerWidth);
+        const scaleY = vrmCanvas.height / Math.max(1, window.innerHeight);
+        // Sample the bleed-only strip immediately to the right of the docked scissor rect.
+        const sx = Math.min(vrmCanvas.width - 1, Math.ceil((sr.left + sr.width + 4) * scaleX));
+        const sy = Math.max(0, Math.floor(sr.top * scaleY));
+        const sw = Math.max(1, Math.min(36, vrmCanvas.width - sx));
+        const sh = Math.max(1, Math.min(Math.floor(sr.height * scaleY), vrmCanvas.height - sy));
+        const data = pctx.getImageData(sx, sy, sw, sh).data;
+        ghostPixelsOutsideDock = 0;
+        for (let i = 3; i < data.length; i += 4) {
+          if (data[i] > 4) ghostPixelsOutsideDock++;
+        }
+      }
+
+      return {
+        maxAllowedBottom,
+        shrinkInitial,
+        bleedMetrics,
+        bleedMask,
+        roamMetrics,
+        roamMask,
+        dockedMetrics,
+        dockedMask,
+        bleedShrinkBefore,
+        afterBleedDocked,
+        ghostPixelsOutsideDock
+      };
+    });
+    assert.equal(scissorCheck.bleedMetrics.mode, 'bleed');
+    assert.equal(scissorCheck.bleedMask, 'none', 'bleed mode must disable docked bottom-rim mask');
+    assert.ok(scissorCheck.bleedMetrics.scissorRect.top + scissorCheck.bleedMetrics.scissorRect.height <= scissorCheck.maxAllowedBottom,
+      `bleed scissor must clamp above .shell-bottom (${scissorCheck.maxAllowedBottom}): ${JSON.stringify(scissorCheck.bleedMetrics.scissorRect)}`);
+    assert.equal(scissorCheck.roamMetrics.mode, 'roam');
+    assert.equal(scissorCheck.roamMask, 'none', 'roam mode must disable docked bottom-rim mask');
+    assert.ok(scissorCheck.roamMetrics.scissorRect.top + scissorCheck.roamMetrics.scissorRect.height <= scissorCheck.maxAllowedBottom,
+      `roam scissor must clamp above .shell-bottom (${scissorCheck.maxAllowedBottom}): ${JSON.stringify(scissorCheck.roamMetrics.scissorRect)}`);
+    assert.equal(scissorCheck.dockedMetrics.mode, 'docked');
+    assert.match(scissorCheck.dockedMask, /linear-gradient/, 'docked mode must restore subtle bottom-rim mask');
+    assert.ok(scissorCheck.dockedMetrics.shrinkClearCount > scissorCheck.shrinkInitial,
+      'docked -> bleed -> roam -> docked cycle must trigger shrink-clear invariant');
+    assert.ok(scissorCheck.afterBleedDocked.shrinkClearCount > scissorCheck.bleedShrinkBefore,
+      'bleed -> docked return must trigger shrink-clear invariant');
+    assert.equal(scissorCheck.ghostPixelsOutsideDock, 0,
+      `expected zero ghost pixels outside docked scissor after bleed -> docked, got ${scissorCheck.ghostPixelsOutsideDock}`);
+
     await page.evaluate(() => {
       if (window.WsIdeShell) window.WsIdeShell.setWidth(280);
     });

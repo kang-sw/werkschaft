@@ -4,9 +4,11 @@
   const landmarks = ["composer-top", "whiteboard-ask", "hud-roster"];
   const dragSnapLandmarks = ["composer-top", "whiteboard-ask", "hud-roster"];
   const RAIL_MIN_WIDTH = 1600;
+  const VRM_BREAKOUT_FPS = 60;
   const VRM_ACTIVE_FPS = 30;
   const VRM_IDLE_FPS = 6;
   const VRM_IDLE_AFTER_MS = 5000;
+  const VRM_SPLITTER_TRIM_PX = 4;
   // The companion config payload fields the rig's wardrobe reads.
   const wardrobeFields = ["outfit", "hair", "eyes", "attachments", "palette"];
   const railRowSelector = ".rs[data-rid]";
@@ -227,13 +229,18 @@
     character.setAttribute("aria-label", character.title);
     character.setAttribute("aria-haspopup", "true");
     character.setAttribute("aria-expanded", "false");
+    const stageOverlay = doc.createElement("div");
+    stageOverlay.className = "ws-companion-stage-overlay";
+    stageOverlay.setAttribute("aria-hidden", "true");
+    stageOverlay.hidden = true;
     const canvas = doc.createElement("canvas");
     canvas.setAttribute("aria-hidden", "true");
     const vrmContainer = doc.createElement("div");
     vrmContainer.className = "ws-companion-vrm-wrap";
     vrmContainer.setAttribute("aria-hidden", "true");
     vrmContainer.hidden = true;
-    character.append(canvas, vrmContainer);
+    stageOverlay.append(vrmContainer);
+    character.append(canvas);
     const grip = doc.createElement("div");
     grip.className = "ws-companion-resize";
     grip.tabIndex = 0;
@@ -284,7 +291,7 @@
     menu.className = "ws-companion-menu";
     menu.setAttribute("aria-label", character.title);
     menu.hidden = true;
-    node.append(hit, menu);
+    node.append(stageOverlay, hit, menu);
     doc.body.append(node);
 
     let model, sharedPack = null, rig, view, runner = C.scenarioRunner(), timing = C.timing(), fxContext = null;
@@ -294,8 +301,9 @@
     const railEvents = railSignals(), pairs = signalPairs();
     let currentConfig = config, preset = config.preset;
     let frame = 0, idleTimer = 0, last = 0, now = 0, viewStart = 0, lastBusy = 0, nextIdle = 45000;
-    let lastVrmRenderAt = -Infinity, lastVrmActivityAt = 0, vrmIdleMode = false, lastVrmGazeX = 0, lastVrmGazeY = 0;
+    let lastVrmRenderAt = -Infinity, lastVrmActivityAt = 0, vrmIdleMode = false, vrmBreakoutActive = false, vrmTargetFps = VRM_ACTIVE_FPS, lastVrmGazeX = 0, lastVrmGazeY = 0;
     let vrmRailVisible = false, cursorSeen = false, lastVrmW = 0, lastVrmH = 0, lastVrmDpr = 0;
+    let lastVrmVw = 0, lastVrmVh = 0, lastVrmAnchorLeft = NaN, lastVrmAnchorTop = NaN;
     let beat = null, viewBeat, viewPlaying, prop, fx, propCanvas, propCtx, decoration, quip, quipWidth = 0, quipHeight = 28, fxWidth = 36, fxHeight = 24, lastCount;
     let size = 96, vrmHeight = 240, dpr = 1, vw = 0, vh = 0, dirty = true;
     let frameElement = null, frameInput = null, frameBox = null;
@@ -373,24 +381,45 @@
       node.dataset.renderer = nextIsVrm ? "vrm" : "2d";
       canvas.hidden = nextIsVrm;
       vrmContainer.hidden = !nextIsVrm;
+      stageOverlay.hidden = !nextIsVrm;
       if (propCanvas && nextIsVrm) propCanvas.hidden = true;
       vrmRailVisible = false;
       lastVrmW = 0;
       lastVrmH = 0;
       lastVrmDpr = 0;
+      lastVrmVw = 0;
+      lastVrmVh = 0;
+      lastVrmAnchorLeft = NaN;
+      lastVrmAnchorTop = NaN;
       clearRailDock();
       if (nextIsVrm) {
         layout();
-        next.mount?.(vrmContainer, { width: Math.max(160, size), height: Math.max(140, vrmHeight), dpr: Math.min(dpr, 2) });
+        const slotEl = rail?.querySelector("#rail-companion-slot");
+        const sr = slotEl && !slotEl.hidden ? slotEl.getBoundingClientRect() : null;
+        const anchorW = Math.max(160, Math.round(sr && sr.width > 0 ? sr.width : size));
+        const anchorH = Math.max(140, Math.round(sr && sr.height > 0 ? sr.height : vrmHeight));
+        const anchorL = sr && Number.isFinite(sr.left) && sr.width > 0 ? sr.left : Math.max(0, home.x - anchorW / 2);
+        const anchorT = sr && Number.isFinite(sr.top) && sr.height > 0 ? sr.top : Math.max(0, home.y - anchorH);
+        const nextDpr = Math.min(dpr, 2);
+        next.mount?.(vrmContainer, {
+          width: anchorW,
+          height: anchorH,
+          dpr: nextDpr,
+          viewport: { width: Math.max(64, Math.round(vw || window.innerWidth || anchorW)), height: Math.max(64, Math.round(vh || window.innerHeight || anchorH)), dpr: nextDpr },
+          anchorRect: { left: anchorL, top: anchorT, width: anchorW, height: anchorH }
+        });
         if (vrmRailVisible) {
           markVrmActivity();
+          stageOverlay.hidden = false;
           hit.hidden = false;
         } else {
           next.pause?.();
+          stageOverlay.hidden = true;
           hit.hidden = true;
         }
       } else {
         layout();
+        stageOverlay.hidden = true;
         hit.hidden = false;
       }
       reportFocus();
@@ -650,22 +679,32 @@
       else hit.removeAttribute("data-area");
     }
 
+    function activeVrmRenderMode() {
+      return rig?.getRenderMode?.() || rig?.getRenderMetrics?.()?.mode || "docked";
+    }
+
     function hitTestVrmPoint(clientX, clientY) {
       if (!isVrm() || !vrmRailVisible || hit.hidden) return null;
       if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+      const mode = activeVrmRenderMode();
+      const bounds = rig?.getCharacterBounds?.();
+      if (!bounds || !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height) ||
+          bounds.width <= 0 || bounds.height <= 0) {
+        return mode === "roam" ? null : "messenger";
+      }
+      if (Number.isFinite(bounds.viewportX) && Number.isFinite(bounds.viewportY)) {
+        const inside = clientX >= bounds.viewportX && clientX <= bounds.viewportX + bounds.width &&
+          clientY >= bounds.viewportY && clientY <= bounds.viewportY + bounds.height;
+        return inside ? "character" : (mode === "roam" ? null : "messenger");
+      }
+      if (!Number.isFinite(bounds.x) || !Number.isFinite(bounds.y)) return mode === "roam" ? null : "messenger";
       const bx = Number.isFinite(bodyBox.x) ? bodyBox.x : home.x - size / 2;
       const by = Number.isFinite(bodyBox.y) ? bodyBox.y : home.y - vrmHeight;
       const lx = clientX - bx;
       const ly = clientY - by;
-      const bounds = rig?.getCharacterBounds?.();
-      if (!bounds || !Number.isFinite(bounds.x) || !Number.isFinite(bounds.y) ||
-          !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height) ||
-          bounds.width <= 0 || bounds.height <= 0) {
-        return "messenger";
-      }
       const inside = lx >= bounds.x && lx <= bounds.x + bounds.width &&
         ly >= bounds.y && ly <= bounds.y + bounds.height;
-      return inside ? "character" : "messenger";
+      return inside ? "character" : (mode === "roam" ? null : "messenger");
     }
 
     function isCharacterSurfaceTarget(el) {
@@ -737,6 +776,7 @@
       setHitArea("");
       node.dataset.dock = "hidden";
       node.dataset.avoiding = "0";
+      stageOverlay.hidden = true;
       hit.hidden = true;
       controls.close();
       if (decoration) decoration.hidden = true;
@@ -790,21 +830,44 @@
         const slotRect = slotEl.getBoundingClientRect();
         const nextW = Math.max(160, Math.round(slotRect.width || railRect.width));
         const nextH = Math.max(140, Math.round(slotRect.height || targetH));
+        const nextVw = Math.max(64, Math.round(vw));
+        const nextVh = Math.max(64, Math.round(vh));
         const nextDpr = Math.min(dpr, 2);
+        const anchorLeft = Number.isFinite(slotRect.left) && slotRect.width > 0 ? slotRect.left : railRect.left;
+        const anchorBottom = Number.isFinite(slotRect.bottom) && slotRect.height > 0 ? slotRect.bottom : railRect.bottom;
+        const anchorTop = Number.isFinite(slotRect.top) && slotRect.height > 0 ? slotRect.top : (anchorBottom - nextH);
         const prevHomeX = home.x;
         const prevHomeY = home.y;
         let slotChanged = false;
         size = nextW;
         vrmHeight = nextH;
-        if (nextW !== lastVrmW || nextH !== lastVrmH || nextDpr !== lastVrmDpr) {
+        const viewportChanged = nextVw !== lastVrmVw || nextVh !== lastVrmVh || nextDpr !== lastVrmDpr;
+        const anchorChanged = nextW !== lastVrmW || nextH !== lastVrmH ||
+          !Number.isFinite(lastVrmAnchorLeft) || Math.abs(anchorLeft - lastVrmAnchorLeft) > 0.5 ||
+          !Number.isFinite(lastVrmAnchorTop) || Math.abs(anchorTop - lastVrmAnchorTop) > 0.5;
+        if (typeof rig?.setViewport === "function" && typeof rig?.setAnchorRect === "function") {
+          if (viewportChanged) {
+            lastVrmVw = nextVw;
+            lastVrmVh = nextVh;
+            lastVrmDpr = nextDpr;
+            rig.setViewport(nextVw, nextVh, nextDpr);
+            slotChanged = true;
+          }
+          if (anchorChanged) {
+            lastVrmW = nextW;
+            lastVrmH = nextH;
+            lastVrmAnchorLeft = anchorLeft;
+            lastVrmAnchorTop = anchorTop;
+            rig.setAnchorRect({ left: anchorLeft, top: anchorTop, width: nextW, height: nextH });
+            slotChanged = true;
+          }
+        } else if (nextW !== lastVrmW || nextH !== lastVrmH || nextDpr !== lastVrmDpr) {
           lastVrmW = nextW;
           lastVrmH = nextH;
           lastVrmDpr = nextDpr;
           rig?.resize?.(size, vrmHeight, nextDpr);
           slotChanged = true;
         }
-        const anchorLeft = Number.isFinite(slotRect.left) && slotRect.width > 0 ? slotRect.left : railRect.left;
-        const anchorBottom = Number.isFinite(slotRect.bottom) && slotRect.height > 0 ? slotRect.bottom : railRect.bottom;
         home = { x: anchorLeft + size / 2, y: anchorBottom, vrm: true, rail: true, hidden: false, avoiding: false };
         if (Math.abs(home.x - prevHomeX) > 0.5 || Math.abs(home.y - prevHomeY) > 0.5) slotChanged = true;
         position.x = home.x;
@@ -817,6 +880,7 @@
           lastVrmRenderAt = -Infinity;
         }
         if (!wasVisible) {
+          stageOverlay.hidden = false;
           hit.hidden = false;
           if (!doc.hidden) {
             rig?.resume?.();
@@ -940,7 +1004,18 @@
 
     function measureCharacter() {
       if (isVrm()) {
-        bodyBox.width = size;
+        if (activeVrmRenderMode() === "roam") {
+          const cb = rig?.getCharacterBounds?.();
+          if (cb && Number.isFinite(cb.viewportX) && Number.isFinite(cb.viewportY) && cb.width > 0 && cb.height > 0) {
+            bodyBox.x = cb.viewportX;
+            bodyBox.y = cb.viewportY;
+            bodyBox.width = cb.width;
+            bodyBox.height = cb.height;
+            return;
+          }
+        }
+        // Trim 4px on the right so Variant D .rail-splitter (left: calc(--rail-w - 4px)) is never blocked.
+        bodyBox.width = Math.max(0, Math.round(size) - VRM_SPLITTER_TRIM_PX);
         bodyBox.height = vrmHeight;
         bodyBox.x = position.x + physical.tx * size - size / 2;
         bodyBox.y = position.y + physical.lift * vrmHeight - vrmHeight;
@@ -956,14 +1031,18 @@
       bodyBox.y = position.y + (physical.lift + b[1] - bottom) * size;
     }
 
+    let lastHitW = "", lastHitH = "", lastHitTransform = "";
     function placeCharacter(seconds, extra) {
       const { x, y, width, height } = bodyBox, b = view.bounds;
       if (isVrm()) {
         rig.setGaze?.(gaze);
         view.render(seconds, gaze, beat.stage === "pendulum-drag" ? physics : null, extra);
-        hit.style.width = width + "px";
-        hit.style.height = height + "px";
-        hit.style.transform = "translate3d(" + x + "px," + y + "px,0) rotate(" + physical.angle + "rad) scale(" + physical.sx + "," + physical.sy + ")";
+        const wStr = width + "px";
+        const hStr = height + "px";
+        const tStr = "translate3d(" + x + "px," + y + "px,0) rotate(" + physical.angle + "rad) scale(" + physical.sx + "," + physical.sy + ")";
+        if (wStr !== lastHitW) { hit.style.width = wStr; lastHitW = wStr; }
+        if (hStr !== lastHitH) { hit.style.height = hStr; lastHitH = hStr; }
+        if (tStr !== lastHitTransform) { hit.style.transform = tStr; lastHitTransform = tStr; }
         controls.place(position.x + width / 2 + 6, y + height, vw, vh);
         return;
       }
@@ -1198,15 +1277,20 @@
       if (isVrm() && !vrmRailVisible) return;
       if (isVrm()) {
         const co = rig?.getCoLeadState?.();
-        const coActive = !!(co && (co.knockActive || co.swapActive || co.dizzyActive || (co.phoneMode && co.phoneMode !== "desk")));
+        const mode = activeVrmRenderMode();
+        const breakoutActive = !!(co?.breakoutActive || (mode && mode !== "docked"));
+        const coActive = !!(breakoutActive || (co && (co.knockActive || co.swapActive || co.dizzyActive || (co.phoneMode && co.phoneMode !== "desk"))));
         const activeNow = !!viewPlaying || !!drag?.moving || posture.activity !== "idle" || coActive ||
           Math.abs(position.x - target().x) > 0.5 || Math.abs(position.y - target().y) > 0.5;
         if (activeNow) markVrmActivity();
         const idleElapsed = performance.now() - lastVrmActivityAt;
         vrmIdleMode = !activeNow && idleElapsed >= VRM_IDLE_AFTER_MS;
-        const targetFps = vrmIdleMode ? VRM_IDLE_FPS : VRM_ACTIVE_FPS;
+        vrmBreakoutActive = breakoutActive;
+        const targetFps = breakoutActive ? VRM_BREAKOUT_FPS : (vrmIdleMode ? VRM_IDLE_FPS : VRM_ACTIVE_FPS);
+        vrmTargetFps = targetFps;
         const minInterval = 1000 / targetFps;
-        if (lastVrmRenderAt > -Infinity && stamp - lastVrmRenderAt < minInterval - 4) {
+        const jitterSlack = targetFps >= 60 ? 2 : (targetFps >= 30 ? 5.5 : 4);
+        if (lastVrmRenderAt > -Infinity && stamp - lastVrmRenderAt < minInterval - jitterSlack) {
           schedule(stamp);
           return;
         }
@@ -1461,7 +1545,12 @@
           if (ptr && (ptr.moved || ptr.button !== 0)) return;
           const hasCoords = Number.isFinite(event?.clientX) && Number.isFinite(event?.clientY) &&
             (event.clientX !== 0 || event.clientY !== 0 || !!ptr);
-          const area = ptr ? ptr.downArea : (hasCoords ? hitTestVrmPoint(event.clientX, event.clientY) : "character");
+          const renderMode = activeVrmRenderMode();
+          let area = ptr ? ptr.downArea : (hasCoords ? hitTestVrmPoint(event.clientX, event.clientY) : "character");
+          if (renderMode === "roam" && hasCoords && typeof rig?.raycastAt === "function") {
+            const ray = rig.raycastAt(event.clientX, event.clientY);
+            area = ray?.hit ? "character" : null;
+          }
           if (area === "messenger") {
             controls.close();
             window.WsCompanionMessenger?.toggle?.(chatBtn);
@@ -1540,6 +1629,15 @@
     const api = {
       apply, reset, context, trackFrame, command, phoneState, closeMenu: controls.close,
       packsChanged, resetSize, returnHome,
+      setVrmRenderMode(mode) {
+        const res = rig?.setRenderMode?.(mode) ?? "docked";
+        if (isVrm() && vrmRailVisible && !doc.hidden) {
+          markVrmActivity();
+          lastVrmRenderAt = -Infinity;
+          schedule();
+        }
+        return res;
+      },
       debugState() {
         const slotEl = rail?.querySelector("#rail-companion-slot");
         const slotRect = slotEl && !slotEl.hidden ? slotEl.getBoundingClientRect() : null;
@@ -1557,6 +1655,9 @@
           avoiding: false,
           companionHover,
           vrmIdleMode,
+          vrmBreakoutActive,
+          vrmTargetFps,
+          hitBox: { x: bodyBox.x, y: bodyBox.y, width: bodyBox.width, height: bodyBox.height },
           unreadClient: latestPhoneSnap?.unreadClient || 0,
           messengerOpen: !!window.WsCompanionMessenger?.isOpen?.(),
           vrm: rig?.debugState?.() || null,
@@ -1588,8 +1689,10 @@
     return api;
   }
 
+  const vrmSetRenderMode = C.setVrmRenderMode;
   Object.assign(C, { mount, railSignals, signalPairs, resizeControl, phoneSnapNewer,
     debugStage() { return mountedStage?.debugState?.() || null; },
+    setVrmRenderMode(mode) { return mountedStage ? mountedStage.setVrmRenderMode(mode) : (vrmSetRenderMode?.(mode) ?? "docked"); },
     phoneState(snap) { mountedStage?.phoneState?.(snap); },
     toggleMessenger() { return window.WsCompanionMessenger?.toggle?.() ?? false; },
     openMessenger() { return window.WsCompanionMessenger?.open?.() ?? false; },
