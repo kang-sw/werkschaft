@@ -25,19 +25,12 @@
   var drRoomW = -1, drGhOff = -1, drEntries = [], drWant = false, drOpen = false, drHas = false, drTop = 0;
   var drMode = "panels", drShown = "", drfold = null, drFoldW = -1, drFoldGw = -1;
   var sbody = null, shandle = null;
-  // thandle opens the ticket map (dashboard-ticketmap.js), left of the
-  // search handle; thandleSync shows it while a ticket panel exists.
-  var thandle = null;
   if (drawer) {
     sbody = doc.createElement("div"); sbody.id = "sbody"; sbody.className = "dr-search"; sbody.hidden = true;
     drsheet.appendChild(sbody);
     shandle = doc.createElement("button"); shandle.type = "button"; shandle.id = "shandle"; shandle.className = "dr-handle dr-search-handle";
     shandle.title = wsT("js.tk.qs.tip") + " (Ctrl+K)"; shandle.setAttribute("aria-label", shandle.title); shandle.setAttribute("aria-controls", "drsheet");
     shandle.appendChild(luIcon("search")); drhandle.parentNode.insertBefore(shandle, drhandle);
-    thandle = doc.createElement("button"); thandle.type = "button"; thandle.id = "thandle"; thandle.className = "dr-handle d-tm-handle"; thandle.hidden = true;
-    thandle.title = wsT("js.tmap.open"); thandle.setAttribute("aria-label", thandle.title); thandle.setAttribute("aria-controls", "tmback");
-    thandle.setAttribute("aria-haspopup", "dialog"); thandle.setAttribute("aria-expanded", "false");
-    thandle.appendChild(luIcon("network")); drhandle.parentNode.insertBefore(thandle, shandle);
   }
   // ghandle is the git handle now: a region swap replaces it.
   function ghandle() { return $("ghandle"); }
@@ -59,17 +52,12 @@
       content: el
     });
   }
-  // The todo chip reads "done/total" and the mailbox chip "N unread".
+  // The todo chip reads "done/total".
   panelTab("todo", function (count) {
     var m = /^(\d+)\/(\d+)$/.exec(count), n = m ? +m[2] - +m[1] : 0;
     return n > 0 ? { n: n, title: wsTn("js.drawer.todo", n) } : null;
   });
   panelTab("agenda");
-  panelTab("tickets");
-  panelTab("mailbox", function (count) {
-    var m = /^\D*(\d+)/.exec(count), n = m ? +m[1] : 0;
-    return n > 0 ? { n: n, title: wsT("js.drawer.unread", n) } : null;
-  });
 
   // cardTab registers one of the drawer's own cards (#p-<id>, drcards):
   // no region swap touches them.
@@ -121,71 +109,9 @@
         if (!drBooting) drApply(false);
       }
     }
-    ticketIdeaSync();
-    thandleSync();
     drFill(true);
   }
   var drBooting = false;
-  // The ticket map's handle follows the same #p-tickets gate as the idea
-  // section. A map left open over a panels swap that drops the panel stays
-  // usable until it closes.
-  function thandleSync() {
-    if (!thandle) return;
-    var on = !!$("p-tickets");
-    if (thandle.hidden === on) { thandle.hidden = !on; if (!drBooting) drRoom(); }
-  }
-  // Ideas belong to this page's demand state, not the live panels region.
-  // Reattach after a panels swap without fetching again or replacing focus
-  // in an unchanged card. A failed read leaves a retry control.
-  var ideaRows = null, ideaLoading = false, ideaError = false;
-  function ticketIdeaSync() {
-    var p = $("p-tickets"), lanes = p && p.querySelector(".lanes");
-    if (!lanes || lanes.querySelector(".d-ticket-ideas")) return;
-    var section = doc.createElement("section"); section.className = "lane d-ticket-ideas";
-    var h = doc.createElement("h4"); h.textContent = wsT("js.drawer.idea");
-    if (ideaRows !== null) {
-      var count = doc.createElement("span"); count.className = "chip"; count.textContent = String(ideaRows.length); h.appendChild(count);
-    }
-    section.appendChild(h);
-    if (ideaRows !== null) {
-      var list = doc.createElement("ul"); list.className = "kcards";
-      ideaRows.forEach(function (t) {
-        var row = doc.createElement("li"); row.className = "kcard";
-        var title = doc.createElement("span"); title.className = "ctitle";
-        var cat = doc.createElement("span"); cat.className = "chip cat"; cat.textContent = t.category;
-        var link = doc.createElement("a"); link.textContent = t.title || t.stem;
-        link.href = "/s/" + rid + "/file?path=" + encodeURIComponent(t.path); link.title = t.path; link.setAttribute("data-wl", "file"); link.setAttribute("data-rel", t.path);
-        if (t.abs) link.setAttribute("data-abs", t.abs);
-        title.appendChild(cat); title.appendChild(link); row.appendChild(title);
-        var stem = doc.createElement("span"); stem.className = "csub"; stem.textContent = t.stem; stem.title = t.stem; row.appendChild(stem);
-        list.appendChild(row);
-      });
-      if (!ideaRows.length) { var empty = doc.createElement("li"); empty.className = "none"; empty.textContent = wsT("js.drawer.idea.empty"); list.appendChild(empty); }
-      section.appendChild(list);
-    } else {
-      var button = doc.createElement("button"); button.type = "button"; button.className = "btn d-ticket-more";
-      button.disabled = ideaLoading;
-      button.textContent = wsT(ideaLoading ? "js.drawer.idea.loading" : ideaError ? "js.drawer.idea.retry" : "js.drawer.idea.more");
-      button.addEventListener("click", ticketIdeaLoad); section.appendChild(button);
-    }
-    lanes.appendChild(section);
-  }
-  function ticketIdeaLoad() {
-    if (ideaLoading || ideaRows !== null) return;
-    ideaLoading = true; ideaError = false;
-    ticketIdeaRedraw();
-    fetch("/s/" + rid + "/tickets/idea", { credentials: "same-origin", cache: "no-store" }).then(function (r) {
-      if (!r.ok) throw new Error("idea tickets");
-      return r.json();
-    }).then(function (data) {
-      ideaRows = data.tickets || []; ideaLoading = false; ticketIdeaRedraw();
-    }).catch(function () { ideaLoading = false; ideaError = true; ticketIdeaRedraw(); });
-  }
-  function ticketIdeaRedraw() {
-    var p = $("p-tickets"), old = p && p.querySelector(".d-ticket-ideas");
-    if (old) old.remove();
-    ticketIdeaSync();
-  }
   // Notes are fetched only on a panels opening or an explicit refresh. A wait
   // joins the server's existing worker rather than starting another read.
   var notesSeq = 0;
@@ -290,24 +216,18 @@
   }
   // drRoom keeps the header and the tracker's handle row clear of the
   // handles: --drhw is their width together (the header's padding and the
-  // tracker row read it), --shr, --thr and --ghr the search, ticket map and
-  // git handles' offsets from the right edge (the handles right of each and
-  // their 6px gaps, 0 when nothing is right of it or it is absent).
+  // tracker row read it), --shr and --ghr the search and git handles'
+  // offsets from the right edge (the handles right of each and their 6px
+  // gaps, 0 when nothing is right of it or it is absent).
   function drRoom() {
     var w = drHas ? Math.ceil(drhandle.getBoundingClientRect().width) : 0;
     var gw = ghandle() ? Math.ceil(gitRegion.getBoundingClientRect().width) : 0;
     var sw = shandle ? Math.ceil(shandle.getBoundingClientRect().width) : 0;
-    var tw = thandle && !thandle.hidden ? Math.ceil(thandle.getBoundingClientRect().width) : 0;
     var so = w && sw ? w + 6 : 0, afterS = sw ? so + sw : w;
-    var to = tw && afterS ? afterS + 6 : 0, beforeGit = tw ? to + tw : afterS;
-    var off = beforeGit && gw ? beforeGit + 6 : 0, all = gw ? off + gw : beforeGit;
+    var off = afterS && gw ? afterS + 6 : 0, all = gw ? off + gw : afterS;
     if (so !== drRoom._shr) {
       drRoom._shr = so;
       doc.documentElement.style.setProperty("--shr", so + "px");
-    }
-    if (to !== drRoom._thr) {
-      drRoom._thr = to;
-      doc.documentElement.style.setProperty("--thr", to + "px");
     }
     if (all !== drRoomW || off !== drGhOff) {
       drRoomW = all;
@@ -481,7 +401,6 @@
     shandle.addEventListener("click", function () {
       drSetOpen(!(drOpen && drMode === "search"), "search");
     });
-    thandle.addEventListener("click", function () { ticketMap.toggle(); });
     // The git handle toggles the git sheet, or brings it in place of the
     // panels; it is looked up per click, since a swap replaces it.
     doc.addEventListener("click", function (e) {
@@ -514,7 +433,7 @@
     doc.addEventListener("click", function (e) {
       var t = e.target;
       if (!drOpen || !t || !t.closest) return;
-      if (t.closest("#drclip, #drhandle, #shandle, #thandle, #drfold, #r-git, .lmenu, .gwin-back")) return;
+      if (t.closest("#drclip, #drhandle, #shandle, #drfold, #r-git, .lmenu, .gwin-back")) return;
       drSetOpen(false);
     }, true);
     // The header can wrap or change height (a chip appears): the sheet
@@ -538,7 +457,6 @@
         });
       });
       drRo.observe(drhandle);
-      if (thandle) drRo.observe(thandle);
       if (gitRegion) drRo.observe(gitRegion);
     }
     // The panels grid's column count follows the body's width: the last

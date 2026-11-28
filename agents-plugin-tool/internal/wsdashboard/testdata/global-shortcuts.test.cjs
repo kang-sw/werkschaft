@@ -36,9 +36,7 @@ function makeHarness(opts = {}) {
     gitDisabled: !!opts.gitDisabled,
     drOpen: !!opts.drOpen,
     drMode: opts.drMode || 'panels',
-    tmapHandlePresent: opts.tmapHandlePresent !== false,
-    tmapHandleHidden: !!opts.tmapHandleHidden,
-    tmapHandleDisabled: !!opts.tmapHandleDisabled,
+    tmapDockPresent: opts.tmapDockPresent !== false,
     tmapOpen: !!opts.tmapOpen,
     filesBtnPresent: opts.filesBtnPresent !== false,
     filesBtnVisible: opts.filesBtnVisible !== false,
@@ -54,10 +52,7 @@ function makeHarness(opts = {}) {
   const gitHandle = {
     get disabled() { return state.gitDisabled; }
   };
-  const tmapHandle = {
-    get hidden() { return state.tmapHandleHidden; },
-    get disabled() { return state.tmapHandleDisabled; }
-  };
+  const tmapDock = {};
   const tmapBack = {
     get hidden() { return !state.tmapOpen; }
   };
@@ -74,7 +69,7 @@ function makeHarness(opts = {}) {
   const doc = {
     getElementById(id) {
       if (id === 'ghandle') return state.gitPresent ? gitHandle : null;
-      if (id === 'thandle') return state.tmapHandlePresent ? tmapHandle : null;
+      if (id === 'tmdock') return state.tmapDockPresent ? tmapDock : null;
       if (id === 'tmback') return state.tmapOpen ? tmapBack : null;
       if (id === 'toolbar-files') return filesSheetEl;
       return null;
@@ -83,7 +78,7 @@ function makeHarness(opts = {}) {
       if (sel === '.board-overview') return state.overviewPresent ? overviewBtn : null;
       if (sel === '.board-files') return state.filesBtnPresent ? filesBtn : null;
       if (sel === '#ghandle') return this.getElementById('ghandle');
-      if (sel === '#thandle') return this.getElementById('thandle');
+      if (sel === '#tmdock') return this.getElementById('tmdock');
       if (sel === '#tmback') return this.getElementById('tmback');
       if (sel === '#toolbar-files') return this.getElementById('toolbar-files');
       return null;
@@ -109,9 +104,9 @@ function makeHarness(opts = {}) {
     },
     ticketMap: {
       isOpen: () => state.tmapOpen,
-      toggle: () => {
-        state.tmapOpen = !state.tmapOpen;
-        state.events.push(['tmap:toggle', state.tmapOpen]);
+      open: () => {
+        if (state.tmapOpen) return;
+        state.events.push(['tmap:open']);
       },
       close: (yieldTo) => {
         if (!state.tmapOpen) return;
@@ -202,21 +197,24 @@ test('Ctrl+G toggles git drawer via drSetOpen and ignores non-git sessions', () 
   assert.deepEqual(disabledGit.fire({ key: 'g' }), { prevented: false, events: [] });
 });
 
-test('Ctrl+B toggles Ticket Map when available and respects unavailability', () => {
+test('Ctrl+B activates the docked Ticket Map, closes the expanded one, and respects unavailability', () => {
   const h = makeHarness();
   let r = h.fire({ key: 'b' });
   assert.equal(r.prevented, true);
-  assert.deepEqual(r.events, [['tmap:toggle', true]]);
+  assert.deepEqual(r.events, [['tmap:open']], 'Ctrl+B activates and focuses the docked page');
+  r = h.fire({ key: 'b' });
+  assert.deepEqual(r.events, [['tmap:open']], 'a repeat Ctrl+B re-activates the docked page, never a modal toggle');
 
-  // Hidden #thandle (no ticket panel) does nothing when closed.
-  const hidden = makeHarness({ tmapHandleHidden: true });
-  assert.deepEqual(hidden.fire({ key: 'b' }), { prevented: false, events: [] });
+  // No docked page (#tmdock absent: no gallery) does nothing when closed.
+  const none = makeHarness({ tmapDockPresent: false });
+  assert.deepEqual(none.fire({ key: 'b' }), { prevented: false, events: [] });
 
-  // Open Ticket Map remains closable even if #thandle was hidden by a panels swap.
-  const openHidden = makeHarness({ tmapHandleHidden: true, tmapOpen: true });
-  r = openHidden.fire({ key: 'b' });
+  // The expanded #tmback closes on Ctrl+B, even with no docked page.
+  const expanded = makeHarness({ tmapDockPresent: false, tmapOpen: true });
+  r = expanded.fire({ key: 'b' });
   assert.equal(r.prevented, true);
-  assert.deepEqual(r.events, [['tmap:toggle', false]]);
+  assert.deepEqual(r.events, [['tmap:close', false]]);
+  assert.equal(expanded.state.tmapOpen, false);
 });
 
 test('open Ticket Map capture onKey closes on Ctrl+B and routes Ctrl+G/E/Q/` cleanly', () => {
@@ -344,7 +342,7 @@ test('smooth overlay switching between Overview, Git drawer, Ticket Map, and Flo
   const h2 = makeHarness({ overviewHolding: true });
   assert.deepEqual(h2.fire({ key: 'b' }), {
     prevented: true,
-    events: ['WsOverview:after', ['tmap:toggle', true]]
+    events: ['WsOverview:after', ['tmap:open']]
   });
 
   // Floating Files -> Ctrl+G dismisses Files and opens Git drawer.
@@ -393,7 +391,7 @@ test('shell forwards Ctrl+G/B/E to shown frame and WsShell validates new message
   assert.deepEqual(h.fire({ key: 'e' }), { prevented: true, events: [['shSend', 'files']] });
 
   // Unavailable target in shown frame is not forwarded or swallowed.
-  const unavail = makeHarness({ shell: true, gitPresent: false, tmapHandleHidden: true, filesBtnPresent: false });
+  const unavail = makeHarness({ shell: true, gitPresent: false, tmapDockPresent: false, filesBtnPresent: false });
   assert.deepEqual(unavail.fire({ key: 'g' }), { prevented: false, events: [] });
   assert.deepEqual(unavail.fire({ key: 'b' }), { prevented: false, events: [] });
   assert.deepEqual(unavail.fire({ key: 'e' }), { prevented: false, events: [] });

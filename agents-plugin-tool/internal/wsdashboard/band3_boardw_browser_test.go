@@ -9,12 +9,13 @@ import (
 	"time"
 )
 
-// TestBand3BoardWidthDoesNotLeakBrowser verifies in headless Chromium that a
-// persisted Band 4 board width (bb / data-boardw) does not shrink or distort
-// Band 3 (1660px and 1920px), keeps .dcv-edge resizing within the constant
-// Band 3 stage while preserving bb, and still applies bb when widened to Band 4
-// (2560px). WS_BAND3_BOARDW_SHOTS, when set to an absolute directory, writes
-// verification PNG captures there.
+// TestBand3BoardWidthDoesNotLeakBrowser verifies in headless Chromium that
+// legacy persisted bb / bw board widths are ignored under the always-open
+// Band 4 model (>= 1600px): data-boardw / --boardw are never written, #bgal
+// stays open in 4-column mode at 1660px, 1920px, and 2560px with --bgal-w,
+// and .dcv-edge shifts width between conversation and board without shrinking
+// the stage or shifting #bgal. WS_BAND3_BOARDW_SHOTS, when set to an absolute
+// directory, writes verification PNG captures there.
 func TestBand3BoardWidthDoesNotLeakBrowser(t *testing.T) {
 	if os.Getenv("WS_PLAYWRIGHT_MODULE") == "" {
 		t.Skip("set WS_PLAYWRIGHT_MODULE for Chromium acceptance")

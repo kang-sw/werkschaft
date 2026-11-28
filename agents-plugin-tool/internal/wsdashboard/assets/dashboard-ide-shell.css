@@ -568,14 +568,9 @@
   background: var(--wb-wash);
   color: var(--wb-fg);
 }
-:root[data-frame] .dr-handle > .i,
-:root[data-frame] .d-tm-handle > svg {
+:root[data-frame] .dr-handle > .i {
   width: 14px;
   height: 14px;
-}
-:root[data-frame] .d-tm-handle {
-  width: 28px;
-  padding: 0;
 }
 :root[data-frame] .dr-handle .tdot {
   top: 4px;
@@ -807,11 +802,7 @@
   }
   :root[data-frame][data-rail-collapsed="true"]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody,
   :root[data-frame][data-rail-collapsed="true"][data-overview-preview] .dbody {
-    grid-template-columns: minmax(0, min(var(--boardw, min(var(--pbw), 100% - 488px)), 100% - 288px)) minmax(280px, 1fr);
-  }
-  :root[data-frame][data-rail-collapsed="true"][data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody[data-split-grid],
-  :root[data-frame][data-rail-collapsed="true"][data-boardw][data-overview-preview] .dbody[data-split-grid] {
-    grid-template-columns: minmax(0, min(var(--cvw) + 8px + var(--boardw), 100% - 288px)) minmax(280px, 1fr);
+    grid-template-columns: minmax(0, 1fr) var(--bgal-eff-w, var(--bgal-w, 540px));
   }
   :root[data-frame][data-rail-collapsed="true"]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .bgal:not([hidden]),
   :root[data-frame][data-rail-collapsed="true"][data-overview-preview] .bgal:not([hidden]) {

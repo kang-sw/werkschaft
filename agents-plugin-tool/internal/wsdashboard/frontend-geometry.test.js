@@ -64,7 +64,7 @@ test('lifecycle post coalesces on rAF and reads layout before lifting the frame'
     removeAttribute(name) { events.push('write:lifted'); attrs.delete(name); }
   };
   const context = {
-    queued: null, head: null, headDirty: true, root, shHidden: false,
+    queued: null, head: null, headDirty: true, lastHandlesKey: '', root, shHidden: false,
     doc: { querySelector() { return top; } },
     region() { return head; },
     $(id) { return id === 'qsslot' ? qs : null; },
