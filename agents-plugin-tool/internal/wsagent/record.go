@@ -72,6 +72,9 @@ type Record struct {
 	// WSKey is a lead key, Root its canonical git root, and the fields
 	// below apply.
 	Lead bool `json:"lead,omitempty"`
+	// ConvHistoryAccess opts this lead session into the conv.* conversation
+	// history MCP tools. Additive top-level member (T0).
+	ConvHistoryAccess bool `json:"conv_history_access,omitempty"`
 	// QuotaContinuation is a hosted lead's persisted post-usage-limit resume
 	// state. Additive top-level member on Record; preserved as unknown by
 	// older daemons (T0).
@@ -231,10 +234,11 @@ type Record struct {
 	// loaded, whatever is selected now); MCPHolder the holder the token was
 	// drawn for, so a token a later start (by a daemon that keeps the
 	// members without knowing them) left behind is told from a live one.
-	MCPToken  string            `json:"mcp_token_secret,omitempty"`
-	MCPURL    string            `json:"mcp_url,omitempty"`
-	MCPEnv    map[string]string `json:"mcp_env,omitempty"`
-	MCPHolder string            `json:"mcp_holder_id,omitempty"`
+	MCPToken             string            `json:"mcp_token_secret,omitempty"`
+	MCPURL               string            `json:"mcp_url,omitempty"`
+	MCPEnv               map[string]string `json:"mcp_env,omitempty"`
+	MCPHolder            string            `json:"mcp_holder_id,omitempty"`
+	MCPConvHistoryAccess bool              `json:"mcp_conv_history_access,omitempty"`
 
 	// ActiveMs is the accumulated duration of closed child turns.
 	ActiveMs     int64           `json:"active_ms,omitempty"`

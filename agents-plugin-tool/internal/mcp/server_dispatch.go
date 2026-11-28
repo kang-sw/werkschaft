@@ -231,6 +231,9 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	if refusal := s.companionPostureRefusal(params.Name, callerKey); refusal != "" {
 		return toolErrorTextResponse(req.ID, refusal)
 	}
+	if refusal := s.convAccessRefusal(params.Name); refusal != "" {
+		return toolErrorTextResponse(req.ID, refusal)
+	}
 	if refusal, ok := s.precheckToolArguments(params.Name, params.Arguments); !ok {
 		return toolErrorTextResponse(req.ID, refusal)
 	}
@@ -1699,6 +1702,8 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	case companionSpeakTool, companionFaceTool, companionMotionTool,
 		companionPhonePickupTool, companionPhoneReadTool, companionPhoneSendTool, companionPhonePutdownTool:
 		return s.handleCompanionTool(req.ID, params.Name, params.Arguments)
+	case convSessionsTool, convSearchTool, convHistoryTool, convReadTool, convRevealTool:
+		return s.handleConvTool(ctx, req.ID, params.Name, params.Arguments, params.Meta)
 	case "mailbox.send":
 		return s.handleMailboxSend(req.ID, params.Arguments)
 	case "mailbox.recv":

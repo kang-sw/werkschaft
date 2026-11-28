@@ -126,17 +126,20 @@ type settingsRequest struct {
 	Effort *string `json:"effort"`
 	// PermissionMode is a claude lead session's only.
 	PermissionMode *string `json:"permission_mode"`
+	// ConvHistoryAccess toggles opt-in conv.* MCP access on a lead session.
+	ConvHistoryAccess *bool `json:"conv_history_access"`
 }
 
 type leadRequest struct {
 	permissionRequest
-	Root            string `json:"root"`
-	Harness         string `json:"harness"`
-	Provider        string `json:"provider,omitempty"`
-	Model           string `json:"model"`
-	Effort          string `json:"effort"`
-	PermissionMode  string `json:"permission_mode"`
-	PluginIsolation string `json:"plugin_isolation"`
+	Root              string `json:"root"`
+	Harness           string `json:"harness"`
+	Provider          string `json:"provider,omitempty"`
+	Model             string `json:"model"`
+	Effort            string `json:"effort"`
+	PermissionMode    string `json:"permission_mode"`
+	PluginIsolation   string `json:"plugin_isolation"`
+	ConvHistoryAccess bool   `json:"conv_history_access"`
 }
 
 type sleepIdleRequest struct {
@@ -231,10 +234,10 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		var body leadRequest
-		if !decodePermissionRequest(w, req, &body, action == "permission", "root", "harness", "provider", "model", "effort", "plugin_isolation") {
+		if !decodePermissionRequest(w, req, &body, action == "permission", "root", "harness", "provider", "model", "effort", "plugin_isolation", "conv_history_access") {
 			return
 		}
-		opts := LeadOptions{Model: body.Model, Provider: body.Provider, Effort: body.Effort, PermissionMode: body.PermissionMode, PluginIsolation: body.PluginIsolation}
+		opts := LeadOptions{Model: body.Model, Provider: body.Provider, Effort: body.Effort, PermissionMode: body.PermissionMode, PluginIsolation: body.PluginIsolation, ConvHistoryAccess: body.ConvHistoryAccess}
 		if action == "permission" {
 			level, ack, err := body.selection()
 			if err != nil {
@@ -297,7 +300,7 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 		writeAnswer(w, http.StatusOK, view(st), err)
 	case action == "settings/permission":
 		var body settingsRequest
-		if !decodePermissionRequest(w, req, &body, true, "model", "effort") {
+		if !decodePermissionRequest(w, req, &body, true, "model", "effort", "conv_history_access") {
 			return
 		}
 		level, ack, err := body.selection()
@@ -310,6 +313,9 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 		if err == nil && r.IsChild(id) && (body.Model != nil || body.Effort != nil) {
 			err = &requestError{status: http.StatusForbidden, msg: "child session model and effort are fixed at spawn"}
 		}
+		if err == nil && r.IsChild(id) && body.ConvHistoryAccess != nil {
+			err = &requestError{status: http.StatusForbidden, msg: "conv_history_access applies to lead sessions only"}
+		}
 		var st State
 		if err == nil {
 			st, err = r.act(id, func(c *conv) error {
@@ -320,6 +326,11 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 					return err
 				}
 				c.setSettings(body.Model, body.Effort)
+				if body.ConvHistoryAccess != nil {
+					if err := c.setConvHistoryAccess(*body.ConvHistoryAccess); err != nil {
+						return err
+					}
+				}
 				return nil
 			})
 		}
@@ -337,9 +348,18 @@ func (r *Runner) serve(w http.ResponseWriter, req *http.Request) {
 			writeAnswer(w, 0, nil, badRequest("permission selection requires settings/permission"))
 			return
 		}
-		st, err := r.SetSettings(id, body.Model, body.Effort)
+		var (
+			st  State
+			err error
+		)
+		if body.Model != nil || body.Effort != nil || (body.PermissionMode == nil && body.ConvHistoryAccess == nil) {
+			st, err = r.SetSettings(id, body.Model, body.Effort)
+		}
 		if err == nil && body.PermissionMode != nil {
 			st, err = r.setPermissionMode(id, *body.PermissionMode, local && own)
+		}
+		if err == nil && body.ConvHistoryAccess != nil {
+			st, err = r.SetConvHistoryAccess(id, *body.ConvHistoryAccess)
 		}
 		writeAnswer(w, http.StatusOK, view(st), err)
 	case action == "handoff":

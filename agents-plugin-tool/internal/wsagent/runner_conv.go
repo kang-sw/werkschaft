@@ -85,6 +85,10 @@ type conv struct {
 	// exec cutover (exec_cutover.go): its native process tools removed in
 	// favour of the ws exec tools. Set at each start and rejoin.
 	execCutover bool
+	// convHistoryAccessEffective is the conv_history_access snapshot bound
+	// when the current process attached its MCP token. Set at each start
+	// and rejoin under mu.
+	convHistoryAccessEffective bool
 	// unrequestedCmdWarn records a user-visible advisory when a native command
 	// ran without a permission request under the exec cutover; cleared when a
 	// new process starts.
@@ -1172,6 +1176,12 @@ func (c *conv) stateWithKeyCheck(checkKey bool) State {
 	}
 	st.WakeBlocked = !c.closed && (c.releasedLocked() != "" || c.r.deadBindingRefusal(c.rec, "") != nil)
 	st.Process = c.proc != nil
+	st.ConvHistoryAccess = c.rec.ConvHistoryAccess
+	if c.proc != nil {
+		st.ConvHistoryAccessEffective = c.convHistoryAccessEffective
+	} else {
+		st.ConvHistoryAccessEffective = c.rec.ConvHistoryAccess
+	}
 	selfSafe := c.safeStopSelfLocked()
 	replyID, isLead := c.rec.ReplyID, c.rec.Lead
 	st.Holding = c.holding && !c.closed

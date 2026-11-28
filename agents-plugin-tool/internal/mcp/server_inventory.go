@@ -27,7 +27,7 @@ import (
 // preserved no-op, since the pre-rename tickets.sage_record was reachable by
 // a delegate-scoped key.
 func isLeadOnlyTool(name string) bool {
-	return sessionHireTool(name) || userCommandTool(name) || isPiTool(name) || isAgentTool(name) || isCompanionTool(name) || name == bootstrapToolName || name == "workflow_manual" || name == "workflow_state" || name == "tickets.sage_stamp" || name == "tickets.index_init" || name == "git.merge" || name == "worktree.acquire" || name == "worktree.release" || name == "worktree.remove" || name == "worktree.list" || strings.HasPrefix(name, "lead.") || workflowPreferenceWriterTool(name)
+	return sessionHireTool(name) || userCommandTool(name) || isPiTool(name) || isAgentTool(name) || isCompanionTool(name) || isConvTool(name) || name == bootstrapToolName || name == "workflow_manual" || name == "workflow_state" || name == "tickets.sage_stamp" || name == "tickets.index_init" || name == "git.merge" || name == "worktree.acquire" || name == "worktree.release" || name == "worktree.remove" || name == "worktree.list" || strings.HasPrefix(name, "lead.") || workflowPreferenceWriterTool(name)
 }
 
 func workflowPreferenceWriterTool(name string) bool {
@@ -86,6 +86,11 @@ func (s *Server) filteredTools() []map[string]any {
 			// trusted binding, not a supplied key, names the session.
 			continue
 		}
+		if isConvTool(name) && !s.convToolsListed() {
+			// Advertised only to a hosted lead whose start-time snapshot
+			// enabled conv_history_access.
+			continue
+		}
 		if isAgentTool(name) {
 			// Listed where a runner answers them, the daemon's or the token
 			// route's; the agentless product mode keeps them, since
@@ -139,6 +144,9 @@ func (s *Server) callDiscoveryTools(key string, entry sessionEntry, found bool) 
 			continue
 		}
 		if s.companionPostureRefusal(name, key) != "" {
+			continue
+		}
+		if s.convAccessRefusal(name) != "" {
 			continue
 		}
 		visible = append(visible, tool)

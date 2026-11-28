@@ -648,6 +648,25 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 			commandSeq = seq
 			return sink.event(companionCommandEvent, payload) == nil && sink.flush() == nil
 		}
+		var revealWake <-chan struct{}
+		var revealSeq uint64
+		if src.key.kind == regionRail {
+			revealSeq, revealWake = d.convReveals.current()
+		}
+		sendReveal := func() bool {
+			seq, payloads, wake := d.convReveals.since(revealSeq)
+			revealWake = wake
+			if seq == revealSeq || len(payloads) == 0 {
+				return true
+			}
+			revealSeq = seq
+			for _, payload := range payloads {
+				if sink.event(convRevealEvent, payload) != nil {
+					return false
+				}
+			}
+			return sink.flush() == nil
+		}
 		var phoneWake <-chan struct{}
 		var phoneSeq uint64
 		sendPhone := func() bool {
@@ -771,6 +790,11 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 				continue
 			case <-commandWake:
 				if !sendCommand() {
+					return
+				}
+				continue
+			case <-revealWake:
+				if !sendReveal() {
 					return
 				}
 				continue
