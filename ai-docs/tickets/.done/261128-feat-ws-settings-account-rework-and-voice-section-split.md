@@ -10,6 +10,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: f60a831f4c66fdfc
 sage-review-completeness-reviewed: f60a831f4c66fdfc
+completed: 2026-11-28
 ---
 
 # Settings Account Panel Purpose/Indentation Rework and Dedicated Voice Section Split
@@ -137,3 +138,47 @@ Work order and interim checkpoints: sub-heading 1 (backend) lands first with its
   - `node --check` on all new/modified dashboard JS assets
   - `node --test` on existing and new settings/voice/account JS unit tests, placed alongside the existing dashboard asset tests under `internal/wsdashboard/` (covering section routing, legacy `?section=account&provider=voice` normalization, inline slot rename, OpenAI consent disabled state, hold-to-confirm cancellation, and preservation of `261125` Voice Providers behavior)
   - Headless Chromium live/DOM render check: capture `Settings → Account` in both Light and Dark themes (desktop `1280px` and narrow `<760px`) and compare each result capture side by side against a capture of the approved mockup `ai-docs/assets/mockups/261128/account-panel-rework/index.html` in the same theme and width. Capture `Settings → Voice` in the same four configurations and compare it side by side against the Voice Providers mockup recorded by `261125` Phase 4 (not this mockup's placeholder Voice body); in this mockup compare only the sidebar nav grouping and the OpenRouter chip/back-link. Verify 0 console errors and 0 horizontal overflow throughout.
+
+### Result (dcd23278) - 2026-11-28
+
+#### What Landed
+- **Backend (`617ecf14`):**
+  - `agents-plugin-tool/internal/wscred/account_slots.go` (+ `account_slots_test.go`): enforced 1–80 trimmed rune bound (`maxAccountSlotLabelRunes = 80`) in `AddSlot` and `UpdateSlotLabel`, returning `ErrInvalidAccountSlot` on violation while keeping `DefaultAccountSlotID` immutable (`ErrDefaultSlotImmutable`).
+  - `agents-plugin-tool/internal/wsdashboard/account_routes.go`, `account_slots_routes.go` (+ `account_slots_routes_test.go`): added T0 additive `POST /api/account/slots/rename` under `localViewer` + `POST` + `sameOrigin`/`crossSiteFetch` + 72 KiB `DisallowUnknownFields` guards; rejects unsupported harness or empty `slot_id` with `400 invalid_request`, invokes `UpdateSlotLabel` + `d.accountChanged()`, and returns `200` JSON `AccountSlot` via `ResolveSlot`.
+  - `agents-plugin-tool/internal/wsdashboard/account_slot_signin.go`: aligned sign-in start label validation to the same trimmed 80-rune bound.
+- **Settings Navigation, Voice Section Split & Account Panel Rework (`9831d2c9`, `dcd23278`):**
+  - `agents-plugin-tool/internal/wsdashboard/pages.go`: registered the split account JS modules in `SettingsScript` dependency order.
+  - `agents-plugin-tool/internal/wsdashboard/assets/dashboard-settings.js` & `dashboard-settings.css`: registered `"voice"` section, added `.snav` `계정 · 인증` (`js.settings.nav.account_auth`) group pairing `account` and `voice` (gating `voice` on `WsSettingsVoice`), normalized legacy `?section=account&provider=voice` at startup and in `selectSection`, wired Account/Voice cross-links, and cleaned up both `voice.destroy()` and `account.destroy()` on `pagehide`.
+  - `agents-plugin-tool/internal/wsdashboard/assets/dashboard-settings-voice.js` & `.css`, `dashboard-voice-ptt.js`: mounted Voice Providers independently in `Settings → Voice`, added the `Manage shared key in Account →` back-link chip (`onOpenAccount`), exposed `isSharedOpenRouterKey()`, fixed sequential `%s`/`%d` placeholder substitution in local `t()`, and updated `#cvox` unconfigured click deep-link to `/settings?section=voice`.
+  - Split `dashboard-settings-account.js` (previously 1,446 lines) into 4 cohesive modules under 1,000 lines: `dashboard-settings-account.js` (160L), `dashboard-settings-account-shared.js` (234L), `dashboard-settings-account-harness.js` (623L), `dashboard-settings-account-runtime.js` (776L), plus `dashboard-settings-account.css` (487L) implementing borderless Material tonal group cards (`① External CLI Harness Accounts`, `② Built-in Werk Runtime & API`), 36px provider indentation, `2px` `--stem` Level-2 containers, inline non-default slot rename (`Enter` save / `Esc` cancel / focus return), OpenAI SIWC `background_consent` recessed sub-setting (disabled when signed out), OpenRouter→Voice clickable chip, 1.5s hold-to-confirm with full cancellation, SSE preservation of open drawers/editors, responsive `<760px` layout, and zero `:has()`.
+  - `agents-plugin-tool/internal/wsi18n/tables/*.json`: updated all 11 locale tables (+26 new keys, -3 unused keys; exact 4,133-key parity, 0 duplicates).
+  - Tests: added `frontend-settings-account-rework.test.js` (654L), updated `frontend-voice-phase5.test.js` and `testdata/account-settings.browser.cjs`.
+- **Compatibility & File-Size Audit:**
+  - Compatibility Tier: **T0 (transparent)** — `account-slots.json` schema unchanged (`accountSlotsSchema = 1`), `POST /api/account/slots/rename` strictly additive, existing `/api/account/*` routes and envelopes untouched.
+  - Touched non-i18n files exceeding 1,000 lines: `agents-plugin-tool/internal/wsdashboard/assets/dashboard-settings.js` (1,896 lines, pre-existing) and `agents-plugin-tool/internal/wsdashboard/assets/dashboard-settings.css` (1,217 lines, pre-existing). All newly split account/voice modules are under 1,000 lines.
+
+#### Verification
+- `go test -race -count=1 ./internal/wscred/... ./internal/wsi18n/...`: PASS (`wscred` 5.28s, `wsi18n` 49.01s).
+- `go test -race -run 'TestAccount|TestSettings|TestVoice|TestPage' ./internal/wsdashboard`: PASS (10.33s).
+- 8-shard parallel compiled `-race` run across all 1,820 top-level tests in `./internal/wsdashboard`: 1,812/1,820 PASS (0 data races; 0 failures in any touched surface). The 8 failures are pre-existing unrelated `develop` failures (`TestConversationPresentationMergePreservesIdentityAndDisclosures`, `TestFreshSessionLoadClient`, `TestTrackerDrawerOverlay`, `TestFilesExplorerInstances`, `TestBoardKeepWiring`, `TestBoardGallery`, `TestBoardToolbarPlacementAndCounts`, `TestGalleryNoReservedColumnWithoutAPage`).
+- `GOOS=windows go vet ./...` and `go build -o /dev/null ./cmd/ws-mcp`: PASS.
+- `node --check` on all 7 new/modified dashboard JS files: PASS.
+- `node --test internal/wsdashboard/frontend-settings.test.js internal/wsdashboard/frontend-settings-*.test.js internal/wsdashboard/frontend-voice-*.test.js`: 52/52 PASS.
+- `TestAccountSettingsBrowser` (headless Chromium via Playwright): PASS (20.01s; 0 console errors, 0 page errors, 0 horizontal overflow across 1280px/390px and Dark/Light).
+- `python3 scripts/generate-package-assets.py --check`: PASS.
+- `python3 -m unittest discover -s agents-plugin-wsflow/tests -v`: PASS (22 tests, 2 Windows-only skipped).
+- 11-locale parity & JS key audit: 11 locales, 4,133 keys each, 0 duplicates, 0 missing JS keys across all 7 touched JS files.
+- `go test -v -run '^TestCommonCodeHasNoHarnessNameBranch$' ./...`: 0 new failures (only pre-existing `develop` failures in `cmd/ws-mcp/companion_runtime.go` and `internal/wsdashboard/plan_usage*.go`).
+- Side-by-side visual comparisons (screenshots under `/Users/kang-sw/.gemini/antigravity-cli/brain/d80995db-cbb5-43e9-b46e-c204a20353b2/scratch/shots/`):
+  - compared `account-1280-dark.png` vs `mockup-account-1280-dark.png` (+ `account-runtime-1280-dark.png` vs `mockup-account-runtime-1280-dark.png`): match
+  - compared `account-1280-light.png` vs `mockup-account-1280-light.png` (+ `account-runtime-1280-light.png` vs `mockup-account-runtime-1280-light.png`): match
+  - compared `account-390-dark.png` vs `mockup-account-390-dark.png`: match
+  - compared `account-390-light.png` vs `mockup-account-390-light.png`: match
+  - compared `voice-1280-dark.png` vs `mockup-voice-1280-dark.png`: match
+  - compared `voice-1280-light.png` vs `mockup-voice-1280-light.png`: match
+  - compared `voice-390-dark.png` vs `mockup-voice-390-dark.png`: match
+  - compared `voice-390-light.png` vs `mockup-voice-390-light.png`: match
+
+#### Review & Decisions
+- `code-review-lite` (`/Users/kang-sw/.cache/ws@kang-sw-devenv/proj/17da6bdc@e5bc9667/review-paths/8baf1e23-01-findings.md`): `clean with 3 minor remaining` (0 Critical, 0 Important). Fixed 2 Minor items in `dcd23278` (call `account.destroy()` on `pagehide` in `dashboard-settings.js`; assert focus return to `[data-slot-rename]` after save and `Escape` in `frontend-settings-account-rework.test.js`); remaining Minor item (regex-based source checks for `dashboard-settings.js` section wiring alongside live Chromium execution in `account-settings.browser.cjs`) noted.
+- Fixed pre-existing `%s` literal placeholder rendering in `dashboard-settings-voice.js` local `t()` so masked OpenRouter keys render properly (`...9f3c`), and mocked `/tracker/stores` + configured `dashboard.voice_backend_order = "native openrouter"` in `testdata/account-settings.browser.cjs` capture fixture so Chromium tests run with 0 console 404s and full 2-segment Powerline priority bar parity.
