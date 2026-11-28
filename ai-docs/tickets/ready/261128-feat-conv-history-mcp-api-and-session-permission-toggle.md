@@ -157,6 +157,24 @@ Implement the complete backend data, indexing, HTTP settings, and MCP tool layer
 5. **Verification**:
    - Go unit & integration tests (including `-race`) covering: Record T0 unknown-field round-trip, `decodePermissionRequest` allowlist acceptance and null rejection, `tools/list` + `agy` `DirectTools` opt-in/opt-out, immediate revoke block at `callTool`, incremental FTS5 insert + ring-eviction deletion + external-receiver-write and re-commit idempotency + backfill (including the `indexing: partial` marker) + 7-day prune cleanup via both prune paths, enable-before-restart callable-but-unlisted, all 5 `conv.*` tools (pagination, byte caps, prefix ambiguity, workspace scoping, child reading, lead-only revive errors, `conv-reveal` event emission), and `GOOS=windows go vet ./...`.
 
+### Result (959ab51) - 2026-11-28
+
+- **Landed (`d2388c2`, `959ab51`)**:
+  - **Session metadata & HTTP settings (`wsagent`, `wsdashboard/proxy.go`)**: Added `ConvHistoryAccess` and `MCPConvHistoryAccess` (both `omitempty`) to `wsagent.Record` preserving T0 unknown-field round-trip, projected `conv_history_access` and `conv_history_access_effective` onto `wsagent.State`, bound start-time `ConvHistoryAccess` onto the trusted MCP bearer token / `ProxyHello.ConvHistoryAccess` (`json:"-"`), derived durable-lead rejoin effective access from `rec.Lead && rec.ConvHistoryAccess`, added `conv_history_access` to `/agents/leads`, `/agents/leads/permission`, `/agents/<id>/settings`, and `/agents/<id>/settings/permission` (including both strict `decodePermissionRequest` allowlists and child 403 refusal), and persisted live toggles via `wsmeta` without stopping the running process.
+  - **Ring observer & Type 4 SQLite FTS5 index (`wslive`, `internal/wsconvidx`, `wsdashboard`)**: Added `wslive.RegisterRingObserver` (called outside `rm.mu` with added records and evicted names across `appendRingEntries`, `appendRingNamed`, and `SyncExternalRing`) plus `ReadRingRecords`; implemented sibling held-handle `conv-index.sqlite` (`wsconvidx.Store`, FTS5, `EXCLUSIVE`/`WAL`/`NORMAL`/`wal_autocheckpoint=0`/`busy_timeout=100`, 30s idle + shutdown checkpoint, 0600 Unix / owner-ACL Windows perms, 64 KiB UTF-8 rune-safe clipping, order-independent eviction tombstones + compaction, per-session high-water mark, lazy/background backfill, UTF-8 rune-safe FTS query tokenization and snippet rendering); wired daemon ownership, non-hosted first-touch reconcile without repeated disk scans, and prune cleanup in `PruneRegistrations` / `PruneRegistrationsFor` and `/meta/sessions/<id>` delete.
+  - **Per-session MCP gating & five `conv.*` tools (`internal/mcp`, `cmd/ws-mcp/proxy.go`, `wsdashboard/conv_host.go`, `wsdashboard/conv_reveal.go`, `wsdashboard/sse.go`, `agents-plugin*/runtime.json`)**: Added `conv.sessions`, `conv.search`, `conv.history`, `conv.read`, and `conv.reveal` behind `mcp.ConvHost`; gated `tools/list` and `agy` `DirectTools` on the process start-time snapshot while enforcing live persisted `ConvHistoryAccess` on both `callTool` and `callDiscoveryTools` (immediate block on revoke; callable by name while unlisted when enabled before restart per `(1643)`); wired `conv.reveal` lead-only revive and `conv-reveal` WS hub broadcasts on `regionRail`.
+- **Verification**:
+  - `go test -race ./internal/wsconvidx/... ./internal/wslive/...` — PASS
+  - `go test -race -count=1 -run "TestRecordConvHistoryAccess|TestConvHistoryAccess|TestPermissionStore" ./internal/wsagent/...` — PASS
+  - `go test -race -count=1 -run "TestDaemonConvHost" ./internal/wsdashboard/...` — PASS
+  - `go test -race -run "TestConv|TestServerInventory|TestExecCutover|TestLeadOnly" ./internal/mcp/...` — PASS
+  - `GOOS=windows go vet ./...` — PASS
+  - `python3 -m unittest agents-plugin-wsflow/tests/test_wsflow_runtime_contract.py` — PASS (3 tests)
+  - `code-review-lite` pass (`9f3b48ed-01-conv-history-phase1.md`): fixed 1 Critical, 4 Important, and 5 of 6 Minor findings; remaining Minor (notifying ring observers on partial-batch append I/O failure) deferred as benign under ring write-error semantics.
+- **Decisions**:
+  - Stored the FTS5 index in a sibling held-handle SQLite DB (`conv-index.sqlite`) under the daemon state directory instead of `metadata.sqlite` so FTS5 writes and checkpoints do not contend with `wsmeta` record transactions and can be cleanly rebuilt/migrated independently (T0).
+  - Updated `agents-plugin/runtime.json` and `agents-plugin-wsflow/runtime.json` `tool_list` inventories with the five new `conv.*` tools to satisfy the wsflow runtime contract test.
+
 ### Phase 2: Dashboard UI Toggles (New Session Modal & Session Popover) and `conv.reveal` Highlight / Entry Jump
 
 Builds on Phase 1's landed `conv_history_access` API and `conv-reveal` WS event:
