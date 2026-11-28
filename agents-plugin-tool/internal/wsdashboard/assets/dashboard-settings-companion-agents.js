@@ -4,7 +4,8 @@
   // Companion Agents card: the Lightweight (body) and Work companion tier
   // selectors with a readback of what each launches with now. The readback
   // comes from /api/companion/agents, which resolves exactly as the next
-  // companion launch does (project over global, fallback to auto).
+  // companion launch does (the global value, fallback to auto). Both keys are
+  // global-only, so other scopes show the card read-only like its siblings.
   var ROUTE = "/api/companion/agents";
   var ROLES = [
     { id: "body", key: "dashboard.companion_body_tier", hint: "js.settings.companion.agents.body_hint" },
@@ -56,17 +57,6 @@
     if (ctx.scope === "builtin") return normalized(entry.default);
     var own = ctx.selected(entry);
     return normalized(own !== undefined ? own : entry.value);
-  }
-
-  // Choosing auto resets the scope's value unless that would inherit an
-  // explicit global value under a project selection; then it pins "auto".
-  function autoOperation(ctx, entry) {
-    if (ctx.scope !== "project") return { action: "reset", value: "" };
-    var inherited = (entry.layers || []).some(function (layer) {
-      var value = normalized(layer.value);
-      return layer.scope === "global" && layer.present !== false && value && value !== AUTO;
-    });
-    return inherited ? { action: "set", value: AUTO } : { action: "reset", value: "" };
   }
 
   function bindingText(tr, item) {
@@ -124,8 +114,10 @@
     }
     select.addEventListener("change", function () {
       if (!canEdit) return;
-      var op = select.value ? { action: "set", value: select.value } : autoOperation(ctx, entry);
-      Promise.resolve(ctx.submitConfig(entry, op.action, op.value)).catch(function () { /* surfaced by settings */ })
+      // Both keys are global-only: auto resets the global value, and any
+      // other scope is read-only (canEdit above), so no project pin exists.
+      var action = select.value ? "set" : "reset";
+      Promise.resolve(ctx.submitConfig(entry, action, select.value)).catch(function () { /* surfaced by settings */ })
         .then(function () { refresh(ctx.rerender); });
     });
     return select;

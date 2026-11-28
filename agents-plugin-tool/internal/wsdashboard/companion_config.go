@@ -31,8 +31,8 @@ const (
 	CompanionSoulDirKey        = "dashboard.companion_soul_dir"
 	// CompanionBodyTierKey and CompanionWorkTierKey pick the agent tier for
 	// the Lightweight (body) and Work companion sessions. The runtime reads
-	// them at each launch (project over global), so they are not part of the
-	// shell-facing CompanionConfig.
+	// them at each launch from the global value only (the keys are
+	// global-only), so they are not part of the shell-facing CompanionConfig.
 	CompanionBodyTierKey = "dashboard.companion_body_tier"
 	CompanionWorkTierKey = "dashboard.companion_work_tier"
 
