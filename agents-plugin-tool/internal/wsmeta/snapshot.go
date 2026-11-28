@@ -20,8 +20,9 @@ type Snapshot struct {
 	RailLayout   *RailLayout // nil when no layout was imported
 	LatestUsage  map[string]LatestUsage
 	UsageHistory map[string]UsageHistory
-	Memos        map[string]MemoDoc
-	TrackerHooks map[TrackerHookKey]TrackerHookState
+	Memos          map[string]MemoDoc
+	TrackerHooks   map[TrackerHookKey]TrackerHookState
+	WerkModelUsage map[WerkModelUsageKey]WerkModelUsage
 	// ImportIssues lists legacy paths whose import status was invalid or future
 	// (keyed by dashboard-relative slash path, e.g. "plan-usage-history.json"),
 	// so owners keep schema/error protection without re-reading legacy files.
@@ -151,7 +152,8 @@ func (s *Store) Load(ctx context.Context) (*Snapshot, error) {
 		AckChecks: map[string]json.RawMessage{}, Hiring: map[string]Hiring{}, Support: Support{Stores: map[string]string{}},
 		PiProbes: map[PiProbeKey]PiProbe{}, LatestUsage: map[string]LatestUsage{}, UsageHistory: map[string]UsageHistory{},
 		Memos: map[string]MemoDoc{}, TrackerHooks: map[TrackerHookKey]TrackerHookState{},
-		ImportIssues: map[string]CaptureIssue{},
+		WerkModelUsage: map[WerkModelUsageKey]WerkModelUsage{},
+		ImportIssues:   map[string]CaptureIssue{},
 	}
 	err := s.read(ctx, func(q querier) error {
 		if err := s.requireImported(ctx, q); err != nil {
@@ -418,6 +420,19 @@ func loadSnapshot(ctx context.Context, q querier, snap *Snapshot) error {
 				return err
 			}
 			snap.ImportIssues[p] = issue
+			return nil
+		}},
+		{`SELECT provider, account_key, model, requests, input_tokens, output_tokens, cached_tokens, cache_write_tokens, reasoning_tokens, cost_usd, updated_at FROM werk_model_usage`, func(r scanner) error {
+			var u WerkModelUsage
+			if err := r.Scan(
+				&u.Provider, &u.AccountKey, &u.Model,
+				&u.Requests, &u.InputTokens, &u.OutputTokens,
+				&u.CachedTokens, &u.CacheWriteTokens, &u.ReasoningTokens,
+				&u.CostUSD, &u.UpdatedAt,
+			); err != nil {
+				return err
+			}
+			snap.WerkModelUsage[u.Key()] = u
 			return nil
 		}},
 	}

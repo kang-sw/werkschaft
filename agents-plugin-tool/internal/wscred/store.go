@@ -143,6 +143,7 @@ type Store struct {
 	// before mu. The browser wait and ordinary credential reads hold neither.
 	openAIMu             sync.Mutex
 	openAI               openAIOAuth
+	openAIUsageURL       string // tests only; production uses fixed HTTPS wham/usage origin
 	openAIAccount        openAIAccount
 	pendingOpenAIRefresh *openAIAccount
 	openAIPlanPauses     map[string]*openAIPlanPause // guarded by mu

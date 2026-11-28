@@ -77,13 +77,13 @@ type Usage struct {
 
 // Response is a completed model response.
 type Response struct {
-	ID string `json:"id"`
+	ID    string `json:"id"`
+	Model string `json:"model,omitempty"`
 	// Output are the response's items in order, as received.
 	Output       []json.RawMessage `json:"output"`
 	Usage        Usage             `json:"usage"`
 	UsageMissing bool              `json:"usage_missing,omitempty"`
 	window       int64
-	model        string
 }
 
 // webSearchesUsed reports how many server-side web searches this completed
@@ -809,6 +809,7 @@ func (s *streamState) completed(data []byte) (*Response, error) {
 	var d struct {
 		Response struct {
 			ID     string            `json:"id"`
+			Model  string            `json:"model"`
 			Output []json.RawMessage `json:"output"`
 			Usage  *usageWire        `json:"usage"`
 		} `json:"response"`
@@ -816,7 +817,7 @@ func (s *streamState) completed(data []byte) (*Response, error) {
 	if err := json.Unmarshal(data, &d); err != nil {
 		return nil, &FailedError{Code: "bad_response", Message: "the completed response is not readable"}
 	}
-	resp := &Response{ID: d.Response.ID, Output: d.Response.Output}
+	resp := &Response{ID: d.Response.ID, Model: strings.TrimSpace(d.Response.Model), Output: d.Response.Output}
 	if len(resp.Output) == 0 {
 		for _, idx := range s.sortedIndexes() {
 			resp.Output = append(resp.Output, s.items[idx])

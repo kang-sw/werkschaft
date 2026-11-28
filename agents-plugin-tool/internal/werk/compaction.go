@@ -115,6 +115,9 @@ func (a *Agent) compactModelProse(ctx context.Context, evidence string) ([]strin
 	a.mu.Lock()
 	model := a.model
 	a.mu.Unlock()
+	if a.cfg.WrapTurnContext != nil {
+		ctx = a.cfg.WrapTurnContext(ctx)
+	}
 	response, err := a.cfg.Endpoint.Respond(ctx, Request{
 		Model: model, Instructions: proseInstructions(a.cfg.Lead),
 		Input: []json.RawMessage{userItem(evidence)},
@@ -122,7 +125,25 @@ func (a *Agent) compactModelProse(ctx context.Context, evidence string) ([]strin
 	if err != nil {
 		return nil, fmt.Errorf("obtain the model summary: %w", err)
 	}
+	if response != nil {
+		if response.Model == "" {
+			response.Model = model
+		}
+		a.reportCompactionUsage(response)
+	}
 	return readCompactProse(response, a.cfg.SummarySecrets)
+}
+
+func (a *Agent) reportCompactionUsage(resp *Response) {
+	if resp == nil || resp.UsageMissing {
+		return
+	}
+	u := resp.Usage
+	a.out.line(Line{
+		T: LineUsage, Compaction: true, Response: resp.ID, Model: resp.Model,
+		InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CachedTokens: u.CachedTokens, ReasoningTokens: u.ReasoningTokens,
+		CostUSD: u.CostUSD, CacheWriteTokens: u.CacheWriteTokens,
+	})
 }
 
 func proseInstructions(lead bool) string {

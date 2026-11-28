@@ -243,6 +243,9 @@ func (d *Daemon) handleAccountKey(w http.ResponseWriter, r *http.Request, store 
 		accountStoreError(w, err)
 		return
 	}
+	if body.Provider == wscred.ProviderOpenRouter || body.Op == "recheck" {
+		d.accountChanged()
+	}
 	writeJSON(w, http.StatusOK, result)
 }
 
