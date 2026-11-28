@@ -554,7 +554,22 @@ func (r *guideMonitorRegistry) flush(m *guideMonitor, b *guideBatch) {
 	line.SuppressedCount, line.SuppressedEvents = m.takeSuppressedLocked()
 	r.mu.Unlock()
 	raw, _ := json.Marshal(line)
-	r.deliver(m, guideMonitorHeader+"\n"+string(raw))
+	r.deliverRunning(m, guideMonitorHeader+"\n"+string(raw))
+}
+
+// deliverRunning posts an event batch or summary only while m is still
+// running. The batch was built under r.mu, then released for marshalling;
+// re-checking right before the post keeps a stop or replace that landed in
+// between from producing one stale turn. (Final notices use deliver
+// directly: they are sent precisely because m stopped.)
+func (r *guideMonitorRegistry) deliverRunning(m *guideMonitor, body string) {
+	r.mu.Lock()
+	stopped := m.stopped
+	r.mu.Unlock()
+	if stopped {
+		return
+	}
+	r.deliver(m, body)
 }
 
 func (r *guideMonitorRegistry) scheduleSummaryLocked(m *guideMonitor, now time.Time) {
@@ -589,7 +604,7 @@ func (r *guideMonitorRegistry) summary(m *guideMonitor) {
 	line := guideSummaryLine{MonitorID: m.id, Event: guideEventSummary, SuppressedCount: n, SuppressedEvents: ev, RemainingSec: m.remainingSec(now)}
 	r.mu.Unlock()
 	raw, _ := json.Marshal(line)
-	r.deliver(m, guideMonitorHeader+"\n"+string(raw))
+	r.deliverRunning(m, guideMonitorHeader+"\n"+string(raw))
 }
 
 // deliver posts body to m's owner unless the owner session is gone, in which

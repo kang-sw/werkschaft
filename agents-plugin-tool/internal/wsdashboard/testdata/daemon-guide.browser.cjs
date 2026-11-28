@@ -93,6 +93,17 @@ async function deliveries() {
       ex.setAttribute('data-ws-dom-exclude', '1');
       ex.innerHTML = '<button id="dg-excluded" style="position:fixed;left:20px;top:600px;z-index:5">Excluded guide control</button>';
       document.body.appendChild(ex);
+      // User-editable content must never answer a text probe.
+      const ta = document.createElement('textarea');
+      ta.id = 'dg-draft';
+      ta.textContent = 'Private draft phrase';
+      ta.style.cssText = 'position:fixed;left:420px;top:600px;z-index:5';
+      document.body.appendChild(ta);
+      const ce = document.createElement('div');
+      ce.contentEditable = 'true';
+      ce.innerHTML = '<span>Editable draft words</span>';
+      ce.style.cssText = 'position:fixed;left:620px;top:600px;z-index:5';
+      document.body.appendChild(ce);
       window.__gaze = [];
       document.addEventListener('ws:guide-highlight-change', e => window.__gaze.push(e.detail));
     });
@@ -201,6 +212,10 @@ async function deliveries() {
     assert.equal(res.error, 'target_excluded', JSON.stringify(res));
     res = await highlight({ action: 'show', target: { selector: '#dg-nope' } });
     assert.equal(res.error, 'target_not_found', JSON.stringify(res));
+    for (const probe of ['Private draft phrase', 'draft phrase', 'Editable draft words']) {
+      res = await highlight({ action: 'show', target: { text: probe } });
+      assert.equal(res.error, 'target_not_found', 'editable content is not a text target: ' + probe + ' ' + JSON.stringify(res));
+    }
     res = await highlight({ action: 'show', target: { selector: 'button[[' } });
     assert.equal(res.error, 'invalid_request', JSON.stringify(res));
     assert.equal(res.reason, 'invalid_selector', JSON.stringify(res));

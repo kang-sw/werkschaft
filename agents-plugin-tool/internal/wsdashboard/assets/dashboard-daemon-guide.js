@@ -16,6 +16,8 @@
   var DG_ROUTE_MAX = 256;
   var DG_PAD = 4;
   var DG_TEXT_SKIP = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, LINK: 1, META: 1, IFRAME: 1, svg: 1, SVG: 1 };
+  var DG_TEXT_BUTTON_INPUTS = { button: 1, submit: 1, reset: 1 };
+  var DG_RERESOLVE_MS = 1000;
   var DG_MONITOR_EVENTS = { tab_switched: 1, section_changed: 1, modal_opened: 1, modal_closed: 1, highlight_clicked: 1 };
 
   // Frame side: the shell resolves a daemon.dom ref of this framed page by a
@@ -139,6 +141,10 @@
       for (var i = 0; i < n; i++) {
         var el = list[i];
         if (DG_TEXT_SKIP[el.tagName] || ownLayer(el)) continue;
+        // Never match on user-editable content (drafts, inputs): the
+        // found/not-found answer would otherwise leak its substrings.
+        if (el.isContentEditable || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || dcIsSensitiveInput(el)) continue;
+        if (el.tagName === "INPUT" && !DG_TEXT_BUTTON_INPUTS[String(el.type || "").toLowerCase()]) continue;
         var hit = false;
         var direct = normText(dcDirectText(el));
         if (direct && (exact ? direct === needle : direct.indexOf(needle) >= 0)) hit = true;
@@ -249,9 +255,23 @@
     }
 
     function update(slot) {
+      // A detached selector/text target re-resolves at most once per
+      // DG_RERESOLVE_MS, so a page that keeps mutating while the target is
+      // absent does not rescan the document on every tick.
       if ((!slot.el || !slot.el.isConnected) && slot.target.kind !== "ref") {
-        var again = resolve(slot.target, slot.scope);
-        if (again.el) bindTarget(slot, again.el, again.sc);
+        var now = Date.now(), wait = slot.resolvedAt ? slot.resolvedAt + DG_RERESOLVE_MS - now : 0;
+        if (wait <= 0) {
+          slot.resolvedAt = now;
+          var again = resolve(slot.target, slot.scope);
+          if (again.el) bindTarget(slot, again.el, again.sc);
+        } else if (!slot.retry) {
+          // One trailing retry, so a target that reappears inside the window
+          // is picked up even if no further mutation arrives.
+          slot.retry = setTimeout(function () {
+            slot.retry = 0;
+            if (slots.get(slot.id) === slot && !hiddenNow()) update(slot);
+          }, wait);
+        }
       }
       var p = project(slot) || { x: 0, y: 0, width: 0, height: 0, visible: false };
       var was = slot.last;
@@ -275,8 +295,11 @@
       return p;
     }
 
+    // Tracking pauses while the page is hidden; the ws-page-visibility
+    // handler re-schedules once it is shown again.
+    function hiddenNow() { return typeof pageHidden === "function" ? pageHidden() : !!doc.hidden; }
     function schedule() {
-      if (raf || !slots.size) return;
+      if (raf || !slots.size || hiddenNow()) return;
       rafCount++;
       raf = requestAnimationFrame(function () {
         raf = 0;
@@ -287,7 +310,7 @@
     // a page that keeps mutating (a ticking clock) never keeps frames
     // scheduled; update() writes styles only when the projection changed.
     function scheduleSoon() {
-      if (mutTimer || !slots.size) return;
+      if (mutTimer || !slots.size || hiddenNow()) return;
       mutTimer = setTimeout(function () {
         mutTimer = 0;
         if (!raf) slots.forEach(update);
@@ -297,6 +320,8 @@
     function unbindTarget(slot) {
       if (slot.ro) { try { slot.ro.disconnect(); } catch (_) {} slot.ro = null; }
       if (slot.mo) { try { slot.mo.disconnect(); } catch (_) {} slot.mo = null; }
+      if (slot.retry) { clearTimeout(slot.retry); slot.retry = 0; }
+      slot.resolvedAt = 0;
     }
     function bindTarget(slot, el, sc) {
       unbindTarget(slot);
@@ -441,7 +466,9 @@
     function sendFrame(obj) {
       if (!mainStream || typeof mainStream.send !== "function") return false;
       obj.tab_id = daemonTabId;
-      try { mainStream.send(obj); return true; } catch (_) { return false; }
+      // The stream answers false while its socket is not open (or the frame
+      // is oversized); report that so callers keep their state retryable.
+      try { return mainStream.send(obj) === true; } catch (_) { return false; }
     }
     function emit(name, fields) {
       if (!monitor.active || !monitor.events[name]) return;
@@ -482,10 +509,11 @@
         chip.appendChild(dot);
         chip.appendChild(label);
         chip.addEventListener("click", function () {
+          // Hide optimistically only for stops that actually went out; an
+          // unsent stop leaves the chip up so the user can click again.
           monitor.ids.forEach(function (id) {
             if (monitor.stopped[id]) return;
-            monitor.stopped[id] = true;
-            sendFrame({ event: "guide-monitor-stop", monitor_id: id });
+            if (sendFrame({ event: "guide-monitor-stop", monitor_id: id })) monitor.stopped[id] = true;
           });
           renderChip();
         });
