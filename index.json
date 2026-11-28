@@ -550,6 +550,9 @@
           "branch": "impl/develop/dove-duo-thong"
         }
       }
+    },
+    "261128-feat-ws-usage-popup-unified-2slot-graph-and-slot-hover-preview": {
+      "registered_at": "2026-11-28T05:07:36Z"
     }
   }
 }
