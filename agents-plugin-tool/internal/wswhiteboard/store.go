@@ -7,7 +7,6 @@ package wswhiteboard
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"slices"
@@ -406,25 +405,6 @@ func (s *State) TextRefs(text string) string {
 // IsSettled reports whether status is a settled status.
 func IsSettled(status string) bool {
 	return status == StatusAnswered || status == StatusWithdrawn || status == StatusSuperseded
-}
-
-func (s *State) clone() *State {
-	data, err := json.Marshal(s)
-	if err != nil {
-		panic(err) // State holds only JSON-safe values
-	}
-	var out State
-	if err := json.Unmarshal(data, &out); err != nil {
-		panic(err)
-	}
-	// JSON round-trips compact RawMessage bytes. Clone immutable payloads
-	// directly instead, including unknown members, without aliasing the source.
-	for i := range s.Topics {
-		for j, entry := range s.Topics[i].Entries {
-			out.Topics[i].Entries[j] = entry.clone()
-		}
-	}
-	return &out
 }
 
 func (s *State) index(id int) int {
