@@ -74,6 +74,7 @@
       if (typeof shell !== "undefined" && shell && typeof shOn !== "undefined" && shOn) shSend(shOn, "rail-open");
     }
     root.classList.toggle("rail-open", !!open);
+    if (!open && rp.P && rp.kind === "fold") railPopClose(false);
     if (memoPad) memoPad.open(!!open, railWide());
     if (railBtn) railBtn.setAttribute("aria-expanded", String(!!open || railWide()));
   }
@@ -672,7 +673,7 @@
       var fold = t.closest && t.closest(".rfh");
       if (fold) {
         e.preventDefault();
-        if (railSets) WsRail.foldPick(railSets, fold);
+        if (!fold.disabled) railPopOpen("fold", fold);
         return;
       }
       var stopBtn = t.closest && t.closest(".drstop");
@@ -736,6 +737,7 @@
           return;
         }
         if (!shell) { saveDraft(); if (memoPad) memoPad.remember(); }
+        if (pick.closest(".rfpop")) railPopClose(false);
         railOpen(false);
       }
     });
@@ -743,7 +745,7 @@
     // Alt they are the keyboard path's, not this).
     railEl.addEventListener("keydown", function (e) {
       if ((e.key !== "ArrowLeft" && e.key !== "ArrowRight") || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.isComposing) return;
-      var t = e.target, row = t.closest && !t.closest("input, textarea") ? t.closest(".rs") : null;
+      var t = e.target, row = t.closest && !t.closest("input, textarea, .rfpop") ? t.closest(".rs") : null;
       if (!row || !row.querySelector(".kidtog")) return;
       e.preventDefault();
       kidFold(row, e.key === "ArrowLeft");
@@ -760,7 +762,7 @@
     // ContextMenu key open the row's menu (railRowMenu).
     var RAIL_KEYS = { ArrowUp: "up", ArrowDown: "down", ArrowRight: "in", ArrowLeft: "out" };
     railEl.addEventListener("keydown", function (e) {
-      var t = e.target, row = t.closest && !t.closest("input, textarea") ? t.closest(".rs") : null;
+      var t = e.target, row = t.closest && !t.closest("input, textarea, .rfpop") ? t.closest(".rs") : null;
       if (!row || e.ctrlKey || e.metaKey || e.isComposing) return;
       if (!e.altKey && ((e.key === "F10" && e.shiftKey) || e.key === "ContextMenu")) {
         e.preventDefault();
@@ -1004,19 +1006,6 @@
         return { section: els[i].getAttribute("data-k") === "del" ? "del" : "arch", groupKey: WsRail.groupKey(els[i]), targetEl: els[i], kind: "rfh" };
       }
     }
-    var ed = over && over.closest ? over.closest(".rended.on") : null;
-    if (!ed) {
-      els = railEl.querySelectorAll(".rended.on");
-      for (i = 0; i < els.length; i++) {
-        r = els[i].getBoundingClientRect();
-        if (r.width > 0 && r.height > 0 && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
-          ed = els[i]; break;
-        }
-      }
-    }
-    if (ed && railEl.contains(ed)) {
-      return { section: ed.getAttribute("data-k") === "del" ? "del" : "arch", groupKey: WsRail.groupKey(ed), targetEl: ed, kind: "rended" };
-    }
     if (dm && (dm.section === "arch" || dm.section === "del")) {
       var row = over && over.closest ? over.closest(".rs") : null;
       if (!row && railEl.contains(over)) {
@@ -1165,7 +1154,7 @@
   function rdStart(e) {
     if (rdrag || !e.isPrimary || (e.button !== undefined && e.button !== 0)) return;
     var t = e.target, item, grip = t.closest && t.closest(".drgrip");
-    if (!t.closest) return;
+    if (!t.closest || t.closest(".rfpop")) return;
     // A mouse or pen press drags a live row from anywhere on it but its
     // buttons and its rename field; a touch drags by the grip alone (on
     // the rest of the row it scrolls the list or holds for the row menu).
@@ -1193,6 +1182,9 @@
     var d = rdrag;
     if (!rdItem(d)) { rdEnd(null); return; }
     d.on = true;
+    // an open archived/deleted popup would cover the rows and the fold
+    // buttons the drag aims at
+    if (rp.P && rp.kind === "fold") railPopClose(false);
     try { d.item.setPointerCapture(d.id); } catch (x) { /* no capture: the moves still land on the document */ }
     d.item.classList.add("rdrag");
     root.classList.add("rdragging");
