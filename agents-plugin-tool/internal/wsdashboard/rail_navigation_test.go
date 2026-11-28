@@ -23,23 +23,40 @@ func TestRailHomeButtonLocalized(t *testing.T) {
 				t.Fatalf("%s %s = %d", lang.Code, path, code)
 			}
 			label := wsi18n.T(lang.Code, "rail.home")
-			button := `<button type="button" class="btn gear rail-home" title="` + label + `" aria-label="` + label + `"><svg class="i li" aria-hidden="true"><use href="#l-house"/></svg></button>`
-			if !strings.Contains(html, button) || !strings.Contains(html, `id="l-house"`) {
+			homeBtn := `<button type="button" class="bot-btn rail-home" title="` + label + `" aria-label="` + label + `"><svg class="i li" aria-hidden="true"><use href="#l-house"/></svg><span class="bot-lbl">` + label + `</span></button>`
+			if !strings.Contains(html, homeBtn) || !strings.Contains(html, `id="l-house"`) {
 				t.Errorf("%s %s lacks the translated Home button or its existing house sprite", lang.Code, path)
 			}
-			// The footer is Settings then Home, and nothing else: plan usage
-			// moved to the header's center cluster.
-			if !strings.Contains(html, `href="#i-gear"/></svg></button>`+button+`</div>`) {
-				t.Errorf("%s %s: the rail footer is not exactly Settings then Home", lang.Code, path)
+			// Shell-framed pages place Home, global settings, and #gear in the
+			// bottom-left bar, #talert in bottom-center, and .usage-toggle in
+			// bottom-right, retiring .rfoot from the rail and .tcen from .top.
+			botIdx := strings.Index(html, `<footer class="shell-bottom" id="shell-bottom"`)
+			if botIdx < 0 {
+				t.Fatalf("%s %s lacks #shell-bottom", lang.Code, path)
+			}
+			bot := html[botIdx:]
+			if end := strings.Index(bot, `</footer>`); end >= 0 {
+				bot = bot[:end]
+			}
+			homePos := strings.Index(bot, homeBtn)
+			cfgPos := strings.Index(bot, `class="bot-btn r-config-global"`)
+			gearPos := strings.Index(bot, `class="bot-btn settings-toggle" id="gear"`)
+			if homePos < 0 || cfgPos < 0 || gearPos < 0 || !(homePos < cfgPos && cfgPos < gearPos) {
+				t.Errorf("%s %s: bottom-left bar order must be Home, global settings, then #gear: %s", lang.Code, path, bot)
+			}
+			if !strings.Contains(bot, `<div class="bot-center" id="slot-bot-center"><span class="talert" id="talert" hidden></span></div>`) {
+				t.Errorf("%s %s: bottom-center lacks #talert slot: %s", lang.Code, path, bot)
+			}
+			if !strings.Contains(bot, `<div class="bot-right" id="slot-bot-right"><button type="button" class="usage-toggle"`) {
+				t.Errorf("%s %s: bottom-right lacks .usage-toggle: %s", lang.Code, path, bot)
 			}
 			top := html[strings.Index(html, `<div class="top`):]
 			top = top[:strings.Index(top, `<div class="dbody">`)]
-			if !strings.Contains(top, `<span class="tcen"><button type="button" class="usage-toggle"`) || !strings.Contains(top, `<span class="talert" id="talert" hidden></span></span>`) {
-				t.Errorf("%s %s: the header lacks the center cluster (plan usage and the empty alert slot)", lang.Code, path)
+			if strings.Contains(top, `usage-toggle`) || strings.Contains(top, `id="talert"`) {
+				t.Errorf("%s %s: shell topbar must no longer contain usage-toggle or #talert: %s", lang.Code, path, top)
 			}
-			foot := html[strings.Index(html, `<div class="rfoot">`):]
-			if foot = foot[:strings.Index(foot, `</div>`)]; strings.Contains(foot, `usage-toggle`) || strings.Index(foot, `id="gear"`) < 0 {
-				t.Errorf("%s %s: the rail footer is not Settings and Home alone: %s", lang.Code, path, foot)
+			if strings.Contains(html, `<div class="rfoot">`) {
+				t.Errorf("%s %s: shell-framed rail must retire .rfoot", lang.Code, path)
 			}
 		}
 	}

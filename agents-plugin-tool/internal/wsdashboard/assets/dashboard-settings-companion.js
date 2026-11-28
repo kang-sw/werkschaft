@@ -17,6 +17,10 @@
     "dashboard.companion_agent_cooldown_seconds",
     "dashboard.companion_agent_hourly_cap"
   ];
+  var MEMORY_KEYS = [
+    "dashboard.companion_soul",
+    "dashboard.companion_soul_dir"
+  ];
   var WARDROBE_KEYS = [
     "dashboard.companion_preset",
     "dashboard.companion_outfit",
@@ -58,7 +62,33 @@
     zipImporting: false,
     zipListing: null,
     zipSelected: new Set(),
-    zipFeedback: null
+    zipFeedback: null,
+    // Portable Soul & Local Episodes Memory Drawer state
+    memoryTab: "soul",          // "soul" | "approvals" | "episodes" | "sync"
+    memoryKey: "",
+    soulData: null,
+    soulLoading: false,
+    soulError: "",
+    personaDraft: "",
+    profileDraft: "",
+    personaDirty: false,
+    profileDirty: false,
+    soulSavingDoc: "",          // "" | "persona.md" | "profile.md"
+    memoryFeedback: null,       // { kind: "ok"|"warn"|"err", text }
+    pendingItems: null,
+    pendingLoading: false,
+    pendingDrafts: new Map(),   // id -> edited content
+    pendingBusyId: 0,
+    episodesData: null,         // { episodes, projects, total }
+    episodesLoading: false,
+    episodesQuery: "",
+    episodesProject: "",
+    episodesPruneConfirm: false,
+    episodesBusy: false,
+    soulExporting: false,
+    soulImporting: false,
+    soulImportOverwrite: false,
+    syncFeedback: null
   };
 
   function splitTokens(raw) {
@@ -1533,6 +1563,696 @@
     return group;
   }
 
+  function loadSoulState(soulKey, rerender, force) {
+    if (!force && state.memoryKey === soulKey && (state.soulData || state.soulLoading || state.soulError)) return;
+    if (state.memoryKey !== soulKey) {
+      state.pendingItems = null;
+    }
+    state.memoryKey = soulKey;
+    state.soulLoading = true;
+    state.soulError = "";
+    fetchJson("/api/companion/soul").then(function (res) {
+      state.soulLoading = false;
+      if (res.ok && res.data) {
+        state.soulData = res.data;
+        if (!state.personaDirty || force) {
+          state.personaDraft = res.data.persona || "";
+          state.personaDirty = false;
+        }
+        if (!state.profileDirty || force) {
+          state.profileDraft = res.data.profile || "";
+          state.profileDirty = false;
+        }
+        if (state.memoryTab === "approvals" && state.pendingItems === null) {
+          loadPendingItems(rerender, true);
+        }
+      } else {
+        state.soulError = extractErrorMessage(res, "load_failed");
+      }
+      rerender();
+    }).catch(function () {
+      state.soulLoading = false;
+      state.soulError = "load_failed";
+      rerender();
+    });
+  }
+
+  function loadPendingItems(rerender, force) {
+    if (!force && (state.pendingItems !== null || state.pendingLoading)) return;
+    state.pendingLoading = true;
+    var activeSoulId = (state.soulData && state.soulData.soulId) ? String(state.soulData.soulId) : "";
+    var url = "/api/companion/memory/pending" + (activeSoulId ? "?soul=" + encodeURIComponent(activeSoulId) : "");
+    fetchJson(url).then(function (res) {
+      state.pendingLoading = false;
+      if (res.ok && res.data && Array.isArray(res.data.items)) {
+        state.pendingItems = res.data.items;
+        if (state.soulData) state.soulData.pendingCount = res.data.items.length;
+      } else {
+        state.pendingItems = [];
+      }
+      rerender();
+    }).catch(function () {
+      state.pendingLoading = false;
+      state.pendingItems = [];
+      rerender();
+    });
+  }
+
+  function loadEpisodes(rerender, force) {
+    if (!force && (state.episodesData !== null || state.episodesLoading)) return;
+    state.episodesLoading = true;
+    var qs = [];
+    if (state.episodesQuery.trim()) qs.push("q=" + encodeURIComponent(state.episodesQuery.trim()));
+    if (state.episodesProject) qs.push("project=" + encodeURIComponent(state.episodesProject));
+    var url = "/api/companion/memory/episodes" + (qs.length ? "?" + qs.join("&") : "");
+    fetchJson(url).then(function (res) {
+      state.episodesLoading = false;
+      if (res.ok && res.data) {
+        state.episodesData = res.data;
+        if (state.soulData && typeof res.data.total === "number") {
+          state.soulData.episodeCount = res.data.total;
+        }
+      } else {
+        state.episodesData = { episodes: [], projects: [], total: 0 };
+      }
+      rerender();
+    }).catch(function () {
+      state.episodesLoading = false;
+      state.episodesData = { episodes: [], projects: [], total: 0 };
+      rerender();
+    });
+  }
+
+  function renderMemoryGroup(ctx) {
+    var visibleKeys = MEMORY_KEYS.filter(function (key) {
+      var entry = ctx.byKey.get(key);
+      var spec = ctx.specFor(key);
+      return entry && spec && ctx.matches(entry, spec);
+    });
+    if (!groupMatchesFilter(ctx, MEMORY_KEYS, [
+      ctx.tr("js.settings.companion.group.memory.title"),
+      ctx.tr("js.settings.companion.group.memory.sub"),
+      "soul", "memory", "persona", "profile", "episodes", "approval", "scrubber", "zip"
+    ])) return null;
+
+    var activeSoulVal = String(effectiveValue(ctx, "dashboard.companion_soul") || "");
+    var activeDirVal = String(effectiveValue(ctx, "dashboard.companion_soul_dir") || "");
+    var soulKey = activeSoulVal + "\n" + activeDirVal;
+    loadSoulState(soulKey, ctx.rerender, false);
+
+    var canManageMemory = ctx.scope === "global" && canEditKey(ctx, "dashboard.companion_soul");
+    var pendingCount = state.pendingItems !== null
+      ? state.pendingItems.length
+      : (state.soulData && typeof state.soulData.pendingCount === "number" ? state.soulData.pendingCount : 0);
+
+    var rightPill = null;
+    if (pendingCount > 0) {
+      rightPill = ctx.el("span", "cs-pill warn", ctx.tr("js.settings.companion.memory.pending_badge", pendingCount));
+      rightPill.dataset.companionMemoryPendingBadge = String(pendingCount);
+    }
+
+    var group = makeGroup(ctx, "memory", "i-repo",
+      "js.settings.companion.group.memory.title",
+      "js.settings.companion.group.memory.sub",
+      rightPill);
+
+    if (visibleKeys.length) {
+      var rowsWrap = ctx.el("div", "cs-core-rows");
+      for (var key of visibleKeys) {
+        var entry = ctx.byKey.get(key);
+        var spec = ctx.specFor(key);
+        rowsWrap.append(ctx.renderRow(entry, spec));
+      }
+      group.append(rowsWrap);
+    }
+
+    var body = ctx.el("div", "cs-group-body cs-memory-body");
+
+    if (!canManageMemory) {
+      body.append(ctx.el("div", "cs-trust-notice", ctx.tr("js.settings.companion.memory.readonly")));
+    }
+
+    // Segmented tab bar (borderless Material tonal pills)
+    var tabBar = ctx.el("div", "cs-mem-tabs");
+    tabBar.setAttribute("role", "tablist");
+    var tabs = [
+      { id: "soul", label: ctx.tr("js.settings.companion.memory.tab.soul") },
+      { id: "approvals", label: ctx.tr("js.settings.companion.memory.tab.approvals") + (pendingCount > 0 ? " (" + pendingCount + ")" : "") },
+      { id: "episodes", label: ctx.tr("js.settings.companion.memory.tab.episodes") },
+      { id: "sync", label: ctx.tr("js.settings.companion.memory.tab.sync") }
+    ];
+    for (var tab of tabs) {
+      (function (t) {
+        var btn = ctx.button("cs-mem-tab" + (state.memoryTab === t.id ? " active" : ""), t.label, function () {
+          state.memoryTab = t.id;
+          state.episodesPruneConfirm = false;
+          if (t.id === "approvals") loadPendingItems(ctx.rerender, true);
+          if (t.id === "episodes") loadEpisodes(ctx.rerender, true);
+          ctx.rerender();
+        });
+        btn.setAttribute("role", "tab");
+        btn.setAttribute("aria-selected", String(state.memoryTab === t.id));
+        btn.dataset.companionMemoryTab = t.id;
+        tabBar.append(btn);
+      })(tab);
+    }
+    var refreshBtn = ctx.button("cs-btn sm cs-mem-refresh", ctx.tr("js.settings.companion.memory.refresh"), function () {
+      state.memoryFeedback = null;
+      state.syncFeedback = null;
+      loadSoulState(soulKey, ctx.rerender, true);
+      if (state.memoryTab === "approvals") loadPendingItems(ctx.rerender, true);
+      if (state.memoryTab === "episodes") loadEpisodes(ctx.rerender, true);
+      ctx.rerender();
+    });
+    refreshBtn.dataset.companionMemoryRefresh = "1";
+    var tabHeader = ctx.append(ctx.el("div", "cs-mem-bar"), tabBar, refreshBtn);
+    body.append(tabHeader);
+
+    if (state.memoryFeedback) {
+      var mfb = ctx.el("div", "cs-feedback " + state.memoryFeedback.kind, state.memoryFeedback.text);
+      mfb.setAttribute("role", state.memoryFeedback.kind === "err" ? "alert" : "status");
+      mfb.dataset.companionMemoryFeedback = state.memoryFeedback.kind;
+      body.append(mfb);
+    }
+
+    if (state.soulLoading && !state.soulData) {
+      body.append(ctx.el("div", "cs-mem-empty", ctx.tr("js.settings.companion.memory.loading")));
+      group.append(body);
+      return group;
+    }
+    if (state.soulError && !state.soulData) {
+      body.append(ctx.el("div", "cs-feedback err", ctx.tr("js.settings.companion.memory.load_failed")));
+      group.append(body);
+      return group;
+    }
+
+    if (state.memoryTab === "soul") {
+      body.append(renderMemorySoulTab(ctx, canManageMemory, soulKey));
+    } else if (state.memoryTab === "approvals") {
+      loadPendingItems(ctx.rerender, false);
+      body.append(renderMemoryApprovalsTab(ctx, canManageMemory, soulKey));
+    } else if (state.memoryTab === "episodes") {
+      loadEpisodes(ctx.rerender, false);
+      body.append(renderMemoryEpisodesTab(ctx, canManageMemory));
+    } else if (state.memoryTab === "sync") {
+      body.append(renderMemorySyncTab(ctx, canManageMemory, soulKey));
+    }
+
+    group.append(body);
+    return group;
+  }
+
+  function renderMemorySoulTab(ctx, canManageMemory, soulKey) {
+    var wrap = ctx.el("div", "cs-mem-pane");
+    wrap.dataset.companionMemoryPane = "soul";
+
+    var editorsGrid = ctx.el("div", "cs-mem-doc-grid");
+    var docs = [
+      {
+        target: "persona.md",
+        titleKey: "js.settings.companion.memory.persona_title",
+        hintKey: "js.settings.companion.memory.persona_hint",
+        getValue: function () { return state.personaDraft; },
+        setValue: function (v) { state.personaDraft = v; state.personaDirty = true; }
+      },
+      {
+        target: "profile.md",
+        titleKey: "js.settings.companion.memory.profile_title",
+        hintKey: "js.settings.companion.memory.profile_hint",
+        getValue: function () { return state.profileDraft; },
+        setValue: function (v) { state.profileDraft = v; state.profileDirty = true; }
+      }
+    ];
+
+    for (var doc of docs) {
+      (function (d) {
+        var card = ctx.el("div", "cs-mem-card");
+        var head = ctx.el("div", "cs-mem-card-head");
+        head.append(ctx.el("h4", "mono", ctx.tr(d.titleKey)));
+        var saveBtn = ctx.button("cs-btn sm pri",
+          state.soulSavingDoc === d.target
+            ? ctx.tr("js.settings.companion.memory.saving")
+            : ctx.tr("js.settings.companion.memory.save_doc"),
+          async function () {
+            if (!canManageMemory || state.soulSavingDoc) return;
+            state.soulSavingDoc = d.target;
+            state.memoryFeedback = null;
+            ctx.rerender();
+            try {
+              var res = await fetchJson("/api/companion/soul", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  soulId: (state.soulData && state.soulData.soulId) || "",
+                  target: d.target,
+                  content: d.getValue()
+                })
+              });
+              if (res.ok && res.data) {
+                if (res.data.status === "held_pending") {
+                  state.memoryFeedback = { kind: "warn", text: ctx.tr("js.settings.companion.memory.held_notice") };
+                  loadPendingItems(ctx.rerender, true);
+                } else {
+                  if (d.target === "persona.md") state.personaDirty = false;
+                  else state.profileDirty = false;
+                  state.memoryFeedback = { kind: "ok", text: ctx.tr("js.settings.companion.memory.saved", d.target) };
+                  loadSoulState(soulKey, ctx.rerender, true);
+                }
+              } else {
+                state.memoryFeedback = { kind: "err", text: extractErrorMessage(res, ctx.tr("js.settings.error.config_error")) };
+              }
+            } catch (e) {
+              state.memoryFeedback = { kind: "err", text: ctx.tr("js.settings.error.config_error") };
+            } finally {
+              state.soulSavingDoc = "";
+              ctx.rerender();
+            }
+          });
+        saveBtn.disabled = !canManageMemory || !!state.soulSavingDoc;
+        saveBtn.dataset.companionSoulSave = d.target;
+        head.append(saveBtn);
+
+        var ta = ctx.el("textarea", "cs-mem-textarea mono");
+        ta.rows = 6;
+        ta.value = d.getValue();
+        ta.disabled = !canManageMemory;
+        ta.dataset.companionSoulEditor = d.target;
+        ta.addEventListener("input", function () { d.setValue(ta.value); });
+
+        card.append(head, ctx.el("p", "cs-mem-hint", ctx.tr(d.hintKey)), ta);
+        editorsGrid.append(card);
+      })(doc);
+    }
+    wrap.append(editorsGrid);
+
+    // Recent Soul shards panel
+    var shardCard = ctx.el("div", "cs-mem-card");
+    var recent = (state.soulData && Array.isArray(state.soulData.recentEntries)) ? state.soulData.recentEntries : [];
+    var totalEntries = (state.soulData && state.soulData.totalEntries) || recent.length;
+    var shardCount = (state.soulData && state.soulData.shardCount) || 0;
+    var shardHead = ctx.append(ctx.el("div", "cs-mem-card-head"),
+      ctx.el("h4", "", ctx.tr("js.settings.companion.memory.shards_title")),
+      ctx.el("span", "cs-group-sub", ctx.tr("js.settings.companion.memory.shards_meta", totalEntries, shardCount)));
+    shardCard.append(shardHead);
+
+    if (!recent.length) {
+      shardCard.append(ctx.el("div", "cs-mem-empty", ctx.tr("js.settings.companion.memory.shards_empty")));
+    } else {
+      var list = ctx.el("ul", "cs-mem-list");
+      list.dataset.companionSoulShards = "1";
+      for (var item of recent) {
+        var li = ctx.el("li", "cs-mem-item");
+        var meta = ctx.el("div", "cs-mem-item-meta");
+        if (item.kind) meta.append(ctx.el("span", "cs-pill", item.kind));
+        if (item.machine_id) meta.append(ctx.el("span", "cs-mem-tag mono", item.machine_id));
+        if (item.ts) meta.append(ctx.el("span", "cs-mem-time mono", item.ts));
+        li.append(meta, ctx.el("div", "cs-mem-item-body", item.content || ""));
+        list.append(li);
+      }
+      shardCard.append(list);
+    }
+    wrap.append(shardCard);
+    return wrap;
+  }
+
+  function renderMemoryApprovalsTab(ctx, canManageMemory, soulKey) {
+    var wrap = ctx.el("div", "cs-mem-pane");
+    wrap.dataset.companionMemoryPane = "approvals";
+    wrap.append(ctx.el("p", "cs-mem-hint", ctx.tr("js.settings.companion.memory.approvals_intro")));
+
+    if (state.pendingLoading && state.pendingItems === null) {
+      wrap.append(ctx.el("div", "cs-mem-empty", ctx.tr("js.settings.companion.memory.loading")));
+      return wrap;
+    }
+    var items = Array.isArray(state.pendingItems) ? state.pendingItems : [];
+    if (!items.length) {
+      wrap.append(ctx.el("div", "cs-mem-empty", ctx.tr("js.settings.companion.memory.approvals_empty")));
+      return wrap;
+    }
+
+    var list = ctx.el("div", "cs-mem-list");
+    list.dataset.companionPendingList = "1";
+    for (var item of items) {
+      (function (it) {
+        var card = ctx.el("div", "cs-mem-card cs-mem-pending-card");
+        card.dataset.companionPendingId = String(it.id);
+
+        var meta = ctx.el("div", "cs-mem-item-meta");
+        meta.append(ctx.el("span", "cs-pill warn mono", it.target || "shard"));
+        for (var f of (it.findings || [])) {
+          meta.append(ctx.el("span", "cs-pill fail", f.category + (f.sample ? ": " + f.sample : "")));
+        }
+        if (it.createdAt) meta.append(ctx.el("span", "cs-mem-time mono", it.createdAt));
+
+        var draftVal = state.pendingDrafts.has(it.id) ? state.pendingDrafts.get(it.id) : (it.content || "");
+        var ta = ctx.el("textarea", "cs-mem-textarea mono");
+        ta.rows = 3;
+        ta.value = draftVal;
+        ta.disabled = !canManageMemory || state.pendingBusyId === it.id;
+        ta.dataset.companionPendingEditor = String(it.id);
+        ta.addEventListener("input", function () { state.pendingDrafts.set(it.id, ta.value); });
+
+        var actions = ctx.el("div", "cs-pack-actions");
+        var approveBtn = ctx.button("cs-btn sm pri", ctx.tr("js.settings.companion.memory.approve"), async function () {
+          if (!canManageMemory || state.pendingBusyId) return;
+          state.pendingBusyId = it.id;
+          state.memoryFeedback = null;
+          ctx.rerender();
+          try {
+            var edited = state.pendingDrafts.has(it.id) ? state.pendingDrafts.get(it.id) : it.content;
+            var res = await fetchJson("/api/companion/memory/pending/" + encodeURIComponent(it.id) + "/approve", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ content: edited })
+            });
+            if (res.ok) {
+              state.pendingDrafts.delete(it.id);
+              state.memoryFeedback = { kind: "ok", text: ctx.tr("js.settings.companion.memory.approved_ok") };
+              loadPendingItems(ctx.rerender, true);
+              loadSoulState(soulKey, ctx.rerender, true);
+            } else {
+              state.memoryFeedback = { kind: "err", text: extractErrorMessage(res, ctx.tr("js.settings.error.config_error")) };
+            }
+          } catch (e) {
+            state.memoryFeedback = { kind: "err", text: ctx.tr("js.settings.error.config_error") };
+          } finally {
+            state.pendingBusyId = 0;
+            ctx.rerender();
+          }
+        });
+        approveBtn.disabled = !canManageMemory || state.pendingBusyId === it.id;
+        approveBtn.dataset.companionPendingApprove = String(it.id);
+
+        var discardBtn = ctx.button("cs-btn sm danger", ctx.tr("js.settings.companion.memory.discard"), async function () {
+          if (!canManageMemory || state.pendingBusyId) return;
+          state.pendingBusyId = it.id;
+          state.memoryFeedback = null;
+          ctx.rerender();
+          try {
+            var res = await fetchJson("/api/companion/memory/pending/" + encodeURIComponent(it.id) + "/discard", {
+              method: "POST"
+            });
+            if (res.ok) {
+              state.pendingDrafts.delete(it.id);
+              state.memoryFeedback = { kind: "ok", text: ctx.tr("js.settings.companion.memory.discarded_ok") };
+              loadPendingItems(ctx.rerender, true);
+            } else {
+              state.memoryFeedback = { kind: "err", text: extractErrorMessage(res, ctx.tr("js.settings.error.config_error")) };
+            }
+          } catch (e) {
+            state.memoryFeedback = { kind: "err", text: ctx.tr("js.settings.error.config_error") };
+          } finally {
+            state.pendingBusyId = 0;
+            ctx.rerender();
+          }
+        });
+        discardBtn.disabled = !canManageMemory || state.pendingBusyId === it.id;
+        discardBtn.dataset.companionPendingDiscard = String(it.id);
+
+        actions.append(approveBtn, discardBtn);
+        card.append(meta, ta, actions);
+        list.append(card);
+      })(item);
+    }
+    wrap.append(list);
+    return wrap;
+  }
+
+  function renderMemoryEpisodesTab(ctx, canManageMemory) {
+    var wrap = ctx.el("div", "cs-mem-pane");
+    wrap.dataset.companionMemoryPane = "episodes";
+    wrap.append(ctx.el("p", "cs-mem-hint", ctx.tr("js.settings.companion.memory.episodes_intro")));
+
+    var searchForm = ctx.el("form", "cs-mem-search-row");
+    var qInput = ctx.el("input", "inp");
+    qInput.type = "search";
+    qInput.value = state.episodesQuery;
+    qInput.placeholder = ctx.tr("js.settings.companion.memory.episodes_search_placeholder");
+    qInput.dataset.companionEpisodesSearch = "1";
+    qInput.addEventListener("input", function () { state.episodesQuery = qInput.value; });
+
+    var projSel = ctx.el("select", "sel");
+    projSel.dataset.companionEpisodesProject = "1";
+    var allOpt = ctx.el("option", "", ctx.tr("js.settings.companion.memory.episodes_all_projects"));
+    allOpt.value = "";
+    projSel.append(allOpt);
+    var projects = (state.episodesData && Array.isArray(state.episodesData.projects)) ? state.episodesData.projects : [];
+    for (var p of projects) {
+      var opt = ctx.el("option", "", p);
+      opt.value = p;
+      projSel.append(opt);
+    }
+    projSel.value = state.episodesProject;
+    projSel.addEventListener("change", function () {
+      state.episodesProject = projSel.value;
+      state.episodesPruneConfirm = false;
+      loadEpisodes(ctx.rerender, true);
+      ctx.rerender();
+    });
+
+    var searchBtn = ctx.button("cs-btn sm soft-pri", ctx.tr("js.settings.companion.memory.episodes_search"));
+    searchBtn.type = "submit";
+    searchForm.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      loadEpisodes(ctx.rerender, true);
+      ctx.rerender();
+    });
+    searchForm.append(qInput, projSel, searchBtn);
+    wrap.append(searchForm);
+
+    var episodes = (state.episodesData && Array.isArray(state.episodesData.episodes)) ? state.episodesData.episodes : [];
+    if (state.episodesLoading && !state.episodesData) {
+      wrap.append(ctx.el("div", "cs-mem-empty", ctx.tr("js.settings.companion.memory.loading")));
+      return wrap;
+    }
+
+    if (!episodes.length) {
+      wrap.append(ctx.el("div", "cs-mem-empty", ctx.tr("js.settings.companion.memory.episodes_empty")));
+      return wrap;
+    }
+
+    var list = ctx.el("ul", "cs-mem-list");
+    list.dataset.companionEpisodesList = "1";
+    for (var ep of episodes) {
+      (function (item) {
+        var li = ctx.el("li", "cs-mem-item");
+        li.dataset.companionEpisodeId = String(item.id);
+        var top = ctx.el("div", "cs-mem-item-top");
+        var meta = ctx.el("div", "cs-mem-item-meta");
+        if (item.projectKey) meta.append(ctx.el("span", "cs-pill", item.projectKey));
+        for (var tag of (item.tags || [])) {
+          meta.append(ctx.el("span", "cs-mem-tag", "#" + tag));
+        }
+        if (item.createdAt) meta.append(ctx.el("span", "cs-mem-time mono", item.createdAt));
+        var delBtn = ctx.button("cs-btn sm danger", ctx.tr("js.settings.companion.memory.episodes_delete"), async function () {
+          if (!canManageMemory || state.episodesBusy) return;
+          state.episodesBusy = true;
+          ctx.rerender();
+          try {
+            var res = await fetchJson("/api/companion/memory/episodes/prune", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: item.id })
+            });
+            if (res.ok) {
+              loadEpisodes(ctx.rerender, true);
+            } else {
+              state.memoryFeedback = { kind: "err", text: extractErrorMessage(res, ctx.tr("js.settings.error.config_error")) };
+            }
+          } catch (e) {
+            state.memoryFeedback = { kind: "err", text: ctx.tr("js.settings.error.config_error") };
+          } finally {
+            state.episodesBusy = false;
+            ctx.rerender();
+          }
+        });
+        delBtn.disabled = !canManageMemory || state.episodesBusy;
+        delBtn.dataset.companionEpisodeDelete = String(item.id);
+        top.append(meta, delBtn);
+        li.append(top, ctx.el("div", "cs-mem-item-body", item.summary || ""));
+        list.append(li);
+      })(ep);
+    }
+    wrap.append(list);
+
+    // 2-step inline prune action
+    var footer = ctx.el("div", "cs-pack-actions");
+    if (!state.episodesPruneConfirm) {
+      var pruneBtn = ctx.button("cs-btn sm danger", ctx.tr("js.settings.companion.memory.episodes_prune_all"), function () {
+        state.episodesPruneConfirm = true;
+        ctx.rerender();
+      });
+      pruneBtn.disabled = !canManageMemory || state.episodesBusy;
+      pruneBtn.dataset.companionEpisodesPrune = "1";
+      footer.append(pruneBtn);
+    } else {
+      var confirmBtn = ctx.button("cs-btn sm danger", ctx.tr("js.settings.companion.memory.episodes_prune_confirm"), async function () {
+        if (!canManageMemory || state.episodesBusy) return;
+        state.episodesBusy = true;
+        state.episodesPruneConfirm = false;
+        ctx.rerender();
+        try {
+          var payload = state.episodesProject ? { project: state.episodesProject } : { all: true };
+          var res = await fetchJson("/api/companion/memory/episodes/prune", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          if (res.ok && res.data) {
+            state.memoryFeedback = { kind: "ok", text: ctx.tr("js.settings.companion.memory.episodes_pruned", res.data.deleted || 0) };
+            loadEpisodes(ctx.rerender, true);
+          } else {
+            state.memoryFeedback = { kind: "err", text: extractErrorMessage(res, ctx.tr("js.settings.error.config_error")) };
+          }
+        } catch (e) {
+          state.memoryFeedback = { kind: "err", text: ctx.tr("js.settings.error.config_error") };
+        } finally {
+          state.episodesBusy = false;
+          ctx.rerender();
+        }
+      });
+      confirmBtn.dataset.companionEpisodesPruneConfirm = "1";
+      var cancelBtn = ctx.button("cs-btn sm", ctx.tr("js.settings.companion.packs.cancel"), function () {
+        state.episodesPruneConfirm = false;
+        ctx.rerender();
+      });
+      footer.append(confirmBtn, cancelBtn);
+    }
+    wrap.append(footer);
+    return wrap;
+  }
+
+  function renderMemorySyncTab(ctx, canManageMemory, soulKey) {
+    var wrap = ctx.el("div", "cs-mem-pane");
+    wrap.dataset.companionMemoryPane = "sync";
+
+    var infoCard = ctx.el("div", "cs-mem-card");
+    var dirVal = (state.soulData && (state.soulData.soulDir || state.soulData.defaultSoulDir)) || "~/.ws/companion-soul";
+    var machineVal = (state.soulData && state.soulData.machineId) || "—";
+    var kv = ctx.el("div", "cs-mem-kv");
+    kv.append(
+      ctx.append(ctx.el("div", "cs-mem-kv-row"),
+        ctx.el("span", "cs-group-sub", ctx.tr("js.settings.companion.memory.sync_dir_label")),
+        ctx.el("code", "mono", dirVal)),
+      ctx.append(ctx.el("div", "cs-mem-kv-row"),
+        ctx.el("span", "cs-group-sub", ctx.tr("js.settings.companion.memory.sync_machine_label")),
+        ctx.el("code", "mono", machineVal)));
+    infoCard.append(kv, ctx.el("p", "cs-mem-hint", ctx.tr("js.settings.companion.memory.sync_note")));
+    wrap.append(infoCard);
+
+    var actionCard = ctx.el("div", "cs-mem-card");
+    var actions = ctx.el("div", "cs-pack-actions");
+
+    var exportBtn = ctx.button("cs-btn sm soft-pri",
+      state.soulExporting
+        ? ctx.tr("js.settings.companion.memory.exporting")
+        : ctx.tr("js.settings.companion.memory.export_zip"),
+      async function () {
+        if (!canManageMemory || state.soulExporting) return;
+        state.soulExporting = true;
+        state.syncFeedback = null;
+        ctx.rerender();
+        try {
+          var soulId = (state.soulData && state.soulData.soulId) || "default";
+          var resp = await fetch("/api/companion/soul/export?soul=" + encodeURIComponent(soulId), {
+            method: "POST",
+            credentials: "same-origin",
+            cache: "no-store"
+          });
+          if (!resp.ok) {
+            var errData = null;
+            try { errData = await resp.json(); } catch (e) { /* ignore */ }
+            state.syncFeedback = { kind: "err", text: extractErrorMessage({ data: errData }, ctx.tr("js.settings.error.config_error")) };
+          } else {
+            var blob = await resp.blob();
+            var filename = "companion-soul-" + soulId + ".zip";
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement("a");
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+            state.syncFeedback = { kind: "ok", text: ctx.tr("js.settings.companion.memory.exported", filename) };
+          }
+        } catch (e) {
+          state.syncFeedback = { kind: "err", text: ctx.tr("js.settings.error.config_error") };
+        } finally {
+          state.soulExporting = false;
+          ctx.rerender();
+        }
+      });
+    exportBtn.disabled = !canManageMemory || state.soulExporting;
+    exportBtn.dataset.companionSoulExport = "1";
+
+    var importInput = ctx.el("input", "cs-sr-only");
+    importInput.type = "file";
+    importInput.accept = ".zip,application/zip";
+    importInput.tabIndex = -1;
+    importInput.dataset.companionSoulImportInput = "1";
+    importInput.addEventListener("change", async function () {
+      var file = importInput.files && importInput.files[0];
+      importInput.value = "";
+      if (!file || !canManageMemory || state.soulImporting) return;
+      state.soulImporting = true;
+      state.syncFeedback = null;
+      ctx.rerender();
+      try {
+        var soulId = (state.soulData && state.soulData.soulId) || "";
+        var qs = "overwrite=" + (state.soulImportOverwrite ? "1" : "0") +
+          (soulId ? "&soul=" + encodeURIComponent(soulId) : "");
+        var res = await fetchJson("/api/companion/soul/import?" + qs, {
+          method: "POST",
+          headers: { "Content-Type": "application/zip" },
+          body: file
+        });
+        if (res.ok && res.data) {
+          state.syncFeedback = {
+            kind: "ok",
+            text: ctx.tr("js.settings.companion.memory.imported", res.data.soulId || "default", res.data.mergedEntries || 0)
+          };
+          loadSoulState(soulKey, ctx.rerender, true);
+        } else {
+          state.syncFeedback = { kind: "err", text: extractErrorMessage(res, ctx.tr("js.settings.error.config_error")) };
+        }
+      } catch (e) {
+        state.syncFeedback = { kind: "err", text: ctx.tr("js.settings.error.config_error") };
+      } finally {
+        state.soulImporting = false;
+        ctx.rerender();
+      }
+    });
+
+    var importBtn = ctx.button("cs-btn sm pri",
+      state.soulImporting
+        ? ctx.tr("js.settings.companion.memory.importing")
+        : ctx.tr("js.settings.companion.memory.import_zip"),
+      function () { importInput.click(); });
+    importBtn.disabled = !canManageMemory || state.soulImporting;
+    importBtn.dataset.companionSoulImport = "1";
+
+    var owChk = ctx.el("input");
+    owChk.type = "checkbox";
+    owChk.checked = state.soulImportOverwrite;
+    owChk.disabled = !canManageMemory || state.soulImporting;
+    owChk.addEventListener("change", function () { state.soulImportOverwrite = owChk.checked; });
+    var owLabel = ctx.append(ctx.el("label", "cs-inline-check"), owChk,
+      ctx.el("span", "", ctx.tr("js.settings.companion.memory.import_overwrite")));
+
+    actions.append(exportBtn, importBtn, importInput);
+    actionCard.append(actions, owLabel);
+
+    if (state.syncFeedback) {
+      var sfb = ctx.el("div", "cs-feedback " + state.syncFeedback.kind, state.syncFeedback.text);
+      sfb.setAttribute("role", state.syncFeedback.kind === "err" ? "alert" : "status");
+      actionCard.append(sfb);
+    }
+
+    wrap.append(actionCard);
+    return wrap;
+  }
+
   function render(options) {
     var ctx = Object.assign({}, options, { byKey: entryMap(options.entries) });
     ensureCatalog(ctx.rerender);
@@ -1543,6 +2263,7 @@
     var groups = [
       renderCoreGroup(ctx),
       renderAvatarGroup(ctx),
+      renderMemoryGroup(ctx),
       renderSourcesGroup(ctx),
       renderWardrobeGroup(ctx),
       renderAdvancedGroup(ctx)
@@ -1574,6 +2295,31 @@
       state.zipListing = null;
       state.zipSelected.clear();
       state.zipFeedback = null;
+      state.memoryTab = "soul";
+      state.memoryKey = "";
+      state.soulData = null;
+      state.soulLoading = false;
+      state.soulError = "";
+      state.personaDraft = "";
+      state.profileDraft = "";
+      state.personaDirty = false;
+      state.profileDirty = false;
+      state.soulSavingDoc = "";
+      state.memoryFeedback = null;
+      state.pendingItems = null;
+      state.pendingLoading = false;
+      state.pendingDrafts.clear();
+      state.pendingBusyId = 0;
+      state.episodesData = null;
+      state.episodesLoading = false;
+      state.episodesQuery = "";
+      state.episodesProject = "";
+      state.episodesPruneConfirm = false;
+      state.episodesBusy = false;
+      state.soulExporting = false;
+      state.soulImporting = false;
+      state.soulImportOverwrite = false;
+      state.syncFeedback = null;
     }
   };
 })();

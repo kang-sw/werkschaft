@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>대화창 화이트보드 업데이트 로그(L) 가독성 개선 시안</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<div class="m-shell">
+  <header class="m-bar" role="toolbar" aria-label="목업 비교 컨트롤">
+    <div class="m-bar-left">
+      <span class="m-badge">MOCKUP</span>
+      <div class="m-title-block">
+        <h1 class="m-title">대화창 화이트보드 로그(L) 가독성 시안</h1>
+        <p class="m-sub">채팅 답장·패널·정책 캡슐을 압도하지 않으면서 <code>wb:log</code>를 놓치지 않게 하는 4가지 톤 조절안</p>
+      </div>
+    </div>
+
+    <div class="m-controls">
+      <div class="m-group">
+        <span class="m-lbl">보기</span>
+        <div class="m-seg" id="ctrl-view" role="tablist" aria-label="보기 모드">
+          <button type="button" class="m-opt" data-v="compare" role="tab" aria-selected="true">전체 비교 (2×2 + 기준선)</button>
+          <button type="button" class="m-opt" data-v="context" role="tab" aria-selected="false">대화창 실문맥 (1:1 · 640px)</button>
+        </div>
+      </div>
+
+      <div class="m-group" id="grp-scenario">
+        <span class="m-lbl">카드 구성</span>
+        <div class="m-seg" id="ctrl-scenario" role="tablist" aria-label="시나리오 선택">
+          <button type="button" class="m-opt" data-v="real" role="tab" aria-selected="true">실제 스크린샷</button>
+          <button type="button" class="m-opt" data-v="mixed" role="tab" aria-selected="false">패널 + 복수 로그</button>
+        </div>
+      </div>
+
+      <div class="m-group">
+        <span class="m-lbl">테마</span>
+        <div class="m-seg" id="ctrl-theme" role="group" aria-label="테마 전환">
+          <button type="button" class="m-opt" data-v="dark" aria-pressed="true">Dark</button>
+          <button type="button" class="m-opt" data-v="light" aria-pressed="false">Light</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="m-hierarchy" aria-label="목표 시각 위계">
+    <span class="m-h-lbl">목표 시각 위계</span>
+    <div class="m-h-chain">
+      <span class="m-h-step is-1"><b>1</b> 채팅 답장 <small>14px · 100% fg</small></span>
+      <span class="m-h-sep" aria-hidden="true">›</span>
+      <span class="m-h-step is-2"><b>2</b> 정책 캡슐 · 패널 미리보기 <small>색상 틴트 · 3px 액센트</small></span>
+      <span class="m-h-sep" aria-hidden="true">›</span>
+      <span class="m-h-step is-3"><b>3</b> 로그 행 (L) <small>12.5px · 80–85% fg + 인라인 MD</small></span>
+      <span class="m-h-sep" aria-hidden="true">›</span>
+      <span class="m-h-step is-4"><b>4</b> 메타 · 시각 <small>11px · muted</small></span>
+    </div>
+  </div>
+
+  <main class="m-main" id="m-main">
+    <!-- View 1: All Compare (Baseline + 2x2 Grid) -->
+    <section class="v-compare" id="view-compare" aria-label="전체 비교 보기">
+      <div class="cmp-baseline-wrap">
+        <div class="cmp-section-head">
+          <span class="cmp-tag is-base">0 · 현재 (Baseline)</span>
+          <span class="cmp-desc">프로덕션 그대로: <code>12px</code> · <code>--wb-muted-fg</code> · 백틱 원문 노출 · <code>align-items: baseline</code></span>
+          <button type="button" class="cmp-jump-btn" data-open-context="baseline">1:1 대화창에서 보기 →</button>
+        </div>
+        <div class="cmp-baseline-grid" id="baseline-stage"></div>
+      </div>
+
+      <div class="cmp-grid" id="variants-grid"></div>
+    </section>
+
+    <!-- View 2: 1:1 Realistic Conversation Column (~640px) -->
+    <section class="v-context" id="view-context" aria-label="대화창 실문맥 미리보기" hidden>
+      <div class="ctx-toolbar">
+        <div class="ctx-pills" id="ctrl-variant" role="tablist" aria-label="시안 선택">
+          <button type="button" class="ctx-pill" data-v="baseline" role="tab" aria-selected="false"><span class="k">0</span> 현재 (Baseline)</button>
+          <button type="button" class="ctx-pill" data-v="a" role="tab" aria-selected="true"><span class="k">A</span> 인라인 MD + 톤 업</button>
+          <button type="button" class="ctx-pill" data-v="b" role="tab" aria-selected="false"><span class="k">B</span> 미세 좌측 레일</button>
+          <button type="button" class="ctx-pill" data-v="c" role="tab" aria-selected="false"><span class="k">C</span> 소프트 리세스 웰</button>
+          <button type="button" class="ctx-pill" data-v="d" role="tab" aria-selected="false"><span class="k">D</span> 스캔형 로그 칩</button>
+        </div>
+        <label class="ctx-split-toggle">
+          <input type="checkbox" id="ctrl-split">
+          <span>현재(Baseline)와 나란히 비교</span>
+        </label>
+      </div>
+
+      <div class="ctx-note-bar" id="ctx-note-bar"></div>
+
+      <div class="ctx-stage" id="ctx-stage"></div>
+    </section>
+  </main>
+</div>
+
+<script src="./app.js"></script>
+</body>
+</html>

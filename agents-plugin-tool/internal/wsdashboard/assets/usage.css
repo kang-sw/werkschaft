@@ -19,9 +19,29 @@
 .tcen .usage-pace { font-size: 9.5px; line-height: 1.1; }
 .usage-mini { display: none; color: var(--wb-muted-fg); }
 .usage-mini svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.dwrap > .top.tu .tcen > .usage-toggle { width: 34px; padding: 2px 0 0; justify-content: center; }
+.dwrap > .top.tu .tcen > .usage-toggle { width: var(--toph, 36px); padding: 2px 0 0; justify-content: center; }
 .dwrap > .top.tu .tcen > .usage-toggle > :not(.usage-mini) { display: none; }
 .dwrap > .top.tu .tcen > .usage-toggle > .usage-mini { display: inline-flex; }
+/* Relocated bottom-right global status bar usage handle (26px bar, single-line pill,
+   compact step-down via .shell-bottom.bu driven by rail.js botWatch). */
+.shell-bottom .usage-toggle { display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0 7px; border: 0; border-radius: 5px; background: color-mix(in srgb, var(--wb-fg) 4%, transparent); color: var(--wb-fg); font-size: 11px; line-height: 1; white-space: nowrap; flex: none; transition: background .12s; }
+.shell-bottom .usage-toggle:hover, .shell-bottom .usage-toggle[aria-expanded="true"] { background: color-mix(in srgb, var(--wb-fg) 10%, transparent); }
+.shell-bottom .usage-toggle[aria-expanded="true"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 38%, transparent); }
+.shell-bottom .usage-toggle:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: -1px; }
+.shell-bottom .usage-harness { gap: 4px; }
+.shell-bottom .usage-harness + .usage-harness::before { height: 11px; margin: 0 2px; }
+.shell-bottom .usage-mark { height: 14px; margin-right: 2px; }
+.shell-bottom .usage-clock { bottom: -2px; right: -3px; background: var(--d-shell-bg, var(--wb-card)); box-shadow: 0 0 0 1px var(--d-shell-bg, var(--wb-card)); }
+.shell-bottom .usage-columns { gap: 6px; }
+.shell-bottom .usage-column { flex-direction: row; align-items: baseline; gap: 2.5px; }
+.shell-bottom .usage-current { gap: 2px; }
+.shell-bottom .usage-number { font-size: 10.5px; line-height: 1; }
+.shell-bottom .usage-key, .shell-bottom .usage-percent { line-height: 1; }
+.shell-bottom .usage-pace { font-size: 9.5px; line-height: 1; }
+.shell-bottom .usage-mini svg { width: 14px; height: 14px; }
+.shell-bottom.bu .usage-toggle { width: 24px; padding: 0; justify-content: center; }
+.shell-bottom.bu .usage-toggle > :not(.usage-mini) { display: none; }
+.shell-bottom.bu .usage-toggle > .usage-mini { display: inline-flex; }
 .usage-column { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 1px; white-space: nowrap; font-family: var(--wb-mono, monospace); font-variant-numeric: tabular-nums; }
 .usage-current { display: flex; align-items: baseline; gap: 3px; }
 .usage-number { font: 700 11px/1.2 var(--wb-mono, monospace); letter-spacing: -.035em; }

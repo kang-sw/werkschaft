@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -84,9 +86,10 @@ type companionRuntime struct {
 	bodyLaunches int
 	workLaunches int
 
-	stopOnce sync.Once
-	stopCh   chan struct{}
-	wg       sync.WaitGroup
+	stopOnce      sync.Once
+	stopCh        chan struct{}
+	closedRuntime bool
+	wg            sync.WaitGroup
 }
 
 func newCompanionRuntime(dir, root string, agents *wsagent.Runner, daemon func() *wsdashboard.Daemon, logw io.Writer) *companionRuntime {
@@ -124,15 +127,29 @@ func (r *companionRuntime) now() time.Time {
 	return time.Now()
 }
 
+// spawn launches fn tracked by r.wg unless Close has already begun, ensuring
+// background runtime tasks drain cleanly before Close returns.
+func (r *companionRuntime) spawn(fn func()) {
+	r.mu.Lock()
+	if r.closedRuntime {
+		r.mu.Unlock()
+		return
+	}
+	r.wg.Add(1)
+	r.mu.Unlock()
+	go func() {
+		defer r.wg.Done()
+		fn()
+	}()
+}
+
 // Start begins the lightweight in-memory deadline monitor goroutine.
 func (r *companionRuntime) Start() {
 	interval := r.tickInterval
 	if interval <= 0 {
 		interval = companionDeadlineTickInterval
 	}
-	r.wg.Add(1)
-	go func() {
-		defer r.wg.Done()
+	r.spawn(func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -143,12 +160,16 @@ func (r *companionRuntime) Start() {
 				r.checkDeadlines(r.now())
 			}
 		}
-	}()
+	})
 }
 
-// Close stops the deadline monitor goroutine and waits for it to exit.
+// Close stops the deadline monitor goroutine and waits for all background
+// runtime tasks to exit.
 func (r *companionRuntime) Close() {
 	r.stopOnce.Do(func() {
+		r.mu.Lock()
+		r.closedRuntime = true
+		r.mu.Unlock()
 		close(r.stopCh)
 	})
 	r.wg.Wait()
@@ -231,13 +252,28 @@ func (r *companionRuntime) OnUserWake(reason string) {
 	if _, acquired := phone.AcquireOnWake(bodyKey); !acquired {
 		return
 	}
+	d.CompanionResetBurst(bodyKey)
 	unread := phone.UnreadAgentCount()
 	oldestUnreadID := phone.OldestUnreadID()
 	if unread <= 0 {
 		d.CompanionForceRelease(bodyKey)
 		return
 	}
-	msg := formatBodyUserWakePrompt(unread, reason)
+	envelope := d.BuildCompanionWakeEnvelope(context.Background(), wsdashboard.CompanionWakeEnvelopeInput{
+		Trigger:    reason,
+		ProjectKey: companionProjectKey(r.launchRoot(d)),
+		Hint:       phone.LatestUnreadHint(),
+	})
+	// Re-check unread inbox right before delivering the content-free nudge: if
+	// an interrupting ws/companion.act call consumed the inbox concurrently,
+	// drop the nudge cleanly so Tier-1 is never re-woken for consumed mail (D7, D11).
+	unread = phone.UnreadAgentCount()
+	oldestUnreadID = phone.OldestUnreadID()
+	if unread <= 0 {
+		d.CompanionForceRelease(bodyKey)
+		return
+	}
+	msg := envelope + "\n\n" + formatBodyUserWakePrompt(unread, reason)
 	r.mu.Lock()
 	if r.bodyReplyID == bodyID {
 		r.bodyPendingTurns++
@@ -269,7 +305,7 @@ func (r *companionRuntime) handleBodyWakeError(d *wsdashboard.Daemon, bodyKey, e
 	}
 	if !unavailable && phone.UnreadAgentCount() > 0 && d.CompanionDirectorEnabled() {
 		// Bounded retry via release-unread until CompanionWakeMaxRetries is hit.
-		go r.OnUserWake("release-unread")
+		r.spawn(func() { r.OnUserWake("release-unread") })
 	}
 }
 
@@ -295,7 +331,7 @@ func (r *companionRuntime) OnCompanionActivity(role, replyID, wsKey string) {
 // OnCompanionTurnEnd handles turn settlement for companion-body and
 // companion-work. Must not block on the runner loop.
 func (r *companionRuntime) OnCompanionTurnEnd(role, replyID, wsKey, status, errText string) {
-	go r.handleCompanionTurnEnd(role, replyID, wsKey, status, errText)
+	r.spawn(func() { r.handleCompanionTurnEnd(role, replyID, wsKey, status, errText) })
 }
 
 func (r *companionRuntime) handleCompanionTurnEnd(role, replyID, wsKey, status, errText string) {
@@ -337,16 +373,17 @@ func (r *companionRuntime) handleCompanionTurnEnd(role, replyID, wsKey, status, 
 		if failed {
 			phone.RecordWakeFailure()
 		}
-		// Turn-end failsafe: always release any unclosed Embodiment Lease
-		// (settling to laptop_work if a delegation is in flight, and triggering
-		// unread re-wake if messages remain and not unavailable). Even when
-		// Tier-1 already released its lease cleanly via phone_putdown before
-		// TurnEnd settled, a user message may have arrived while the turn was
-		// running (suppressed to avoid preempting the turn); trigger an unread
-		// re-wake here if unread messages remain and no queued turn is pending.
+		// Turn-end failsafe: CompanionForceRelease resets the burst counter and
+		// releases any unclosed Embodiment Lease (settling to laptop_work if a
+		// delegation is in flight, and triggering unread re-wake if messages
+		// remain and not unavailable). Even when Tier-1 already released its
+		// lease cleanly via phone_putdown before TurnEnd settled, a user message
+		// may have arrived while the turn was running (suppressed to avoid
+		// preempting the turn); trigger an unread re-wake here if unread
+		// messages remain and no queued turn is pending.
 		released := d.CompanionForceRelease(wsKey)
 		if !released && !stillPending && phone.UnreadAgentCount() > 0 && !phone.Snapshot().Unavailable {
-			go r.OnUserWake("release-unread")
+			r.spawn(func() { r.OnUserWake("release-unread") })
 		}
 	case mcp.CompanionRoleWork:
 		// A Tier-2 turn end without ws/delegation.report leaves the delegation
@@ -359,7 +396,7 @@ func (r *companionRuntime) handleCompanionTurnEnd(role, replyID, wsKey, status, 
 // OnCompanionClose handles conversation close or unexpected crash for
 // companion-body and companion-work. Must not block on the runner loop.
 func (r *companionRuntime) OnCompanionClose(role, replyID, wsKey, reason string) {
-	go r.handleCompanionClose(role, replyID, wsKey, reason)
+	r.spawn(func() { r.handleCompanionClose(role, replyID, wsKey, reason) })
 }
 
 func (r *companionRuntime) handleCompanionClose(role, replyID, wsKey, reason string) {
@@ -392,7 +429,7 @@ func (r *companionRuntime) handleCompanionClose(role, replyID, wsKey, reason str
 			}
 			released := d.CompanionForceRelease(wsKey)
 			if !released && d.CompanionPhone().UnreadAgentCount() > 0 && !d.CompanionPhone().Snapshot().Unavailable {
-				go r.OnUserWake("release-unread")
+				r.spawn(func() { r.OnUserWake("release-unread") })
 			}
 		}
 	case mcp.CompanionRoleWork:
@@ -456,9 +493,13 @@ func (r *companionRuntime) CompanionDelegateWork(callerKey, brief string) (mcp.C
 	}
 	r.mu.Unlock()
 
-	r.syncDelegationInFlight(r.liveDaemon())
+	d := r.liveDaemon()
+	if d != nil {
+		d.ObserveCompanionMood(wsdashboard.CompanionMoodEventDelegationStart)
+	}
+	r.syncDelegationInFlight(d)
 	if toDispatch != nil {
-		go r.dispatchToWorkBrain(toDispatch)
+		r.spawn(func() { r.dispatchToWorkBrain(toDispatch) })
 	}
 	return mcp.CompanionDelegationAccepted{
 		DelegationID: id,
@@ -499,17 +540,28 @@ func (r *companionRuntime) CompanionDelegationReport(callerKey, delegationID, st
 	workWSKey = r.workWSKey
 	r.mu.Unlock()
 
-	r.syncDelegationInFlight(r.liveDaemon())
+	d := r.liveDaemon()
+	if d != nil {
+		switch status {
+		case "done":
+			d.ObserveCompanionMood(wsdashboard.CompanionMoodEventDelegationDone)
+		case "blocked":
+			d.ObserveCompanionMood(wsdashboard.CompanionMoodEventDelegationFailed)
+		default:
+			d.ObserveCompanionMood(wsdashboard.CompanionMoodEventTurnEnd)
+		}
+	}
+	r.syncDelegationInFlight(d)
 
 	// Copy artifacts slice so caller mutations cannot race async delivery.
 	artCopy := append([]string(nil), artifacts...)
-	go r.deliverReportToBody(delegationID, status, result, artCopy)
+	r.spawn(func() { r.deliverReportToBody(delegationID, status, result, artCopy) })
 
 	if next != nil {
-		go r.dispatchToWorkBrain(next)
+		r.spawn(func() { r.dispatchToWorkBrain(next) })
 	} else if workWSKey != "" && r.agents != nil {
 		// Queue Tier-2 idle compaction at the next hosted idle boundary ((1748)).
-		go r.compactWorkBrainIdle(workWSKey)
+		r.spawn(func() { r.compactWorkBrainIdle(workWSKey) })
 	}
 
 	return mcp.CompanionDelegationReportAck{
@@ -570,10 +622,14 @@ func (r *companionRuntime) failActiveDelegation(delegationID, reason string) {
 	}
 	r.mu.Unlock()
 
-	r.syncDelegationInFlight(r.liveDaemon())
-	go r.deliverReportToBody(delegationID, "failed", reason, nil)
+	d := r.liveDaemon()
+	if d != nil {
+		d.ObserveCompanionMood(wsdashboard.CompanionMoodEventDelegationFailed)
+	}
+	r.syncDelegationInFlight(d)
+	r.spawn(func() { r.deliverReportToBody(delegationID, "failed", reason, nil) })
 	if next != nil {
-		go r.dispatchToWorkBrain(next)
+		r.spawn(func() { r.dispatchToWorkBrain(next) })
 	}
 }
 
@@ -589,8 +645,15 @@ func (r *companionRuntime) deliverReportToBody(delegationID, status, result stri
 	}
 	// Acquire lease in laptop posture when free (does not preempt if Tier-1 is
 	// mid-turn or holding the phone — Runner.Deliver queues behind an active turn).
-	d.CompanionPhone().AcquireOnWake(bodyKey)
-	envelope := formatDelegationReportEnvelope(delegationID, status, result, artifacts)
+	if _, acquired := d.CompanionPhone().AcquireOnWake(bodyKey); acquired {
+		d.CompanionResetBurst(bodyKey)
+	}
+	wakeCtx := d.BuildCompanionWakeEnvelope(context.Background(), wsdashboard.CompanionWakeEnvelopeInput{
+		Trigger:    "delegation-report",
+		ProjectKey: companionProjectKey(r.launchRoot(d)),
+		Hint:       status,
+	})
+	envelope := wakeCtx + "\n\n" + formatDelegationReportEnvelope(delegationID, status, result, artifacts)
 	r.mu.Lock()
 	if r.bodyReplyID == bodyID {
 		r.bodyPendingTurns++
@@ -636,7 +699,7 @@ func (r *companionRuntime) checkDeadlines(now time.Time) {
 		return
 	}
 	if leaseExpired && hasUnread {
-		go r.OnUserWake("release-unread")
+		r.spawn(func() { r.OnUserWake("release-unread") })
 	}
 }
 
@@ -655,14 +718,14 @@ func (r *companionRuntime) ensureBodySession(d *wsdashboard.Daemon) (replyID, ws
 	if !ok {
 		return "", "", fmt.Errorf("no available harness backend for companion-body")
 	}
-	var persona *wsdashboard.CompanionPersona
+	var sheet wsdashboard.CharacteristicSheet
 	var lang string
 	if d != nil {
-		persona, lang = d.CompanionActivePersona()
+		sheet, lang, _ = d.CompanionActiveSoulLaunch()
 	}
 	st, err := r.agents.CreateLead(spec.Backend, r.launchRoot(d), wsagent.LeadOptions{
 		CompanionRole:         mcp.CompanionRoleBody,
-		CompanionSystemPrompt: buildCompanionBodyPrompt(persona, lang),
+		CompanionSystemPrompt: wsdashboard.BuildCompanionBodyLaunchPrompt(sheet, lang),
 		Model:                 spec.Model,
 		Provider:              spec.Provider,
 		Effort:                spec.Effort,
@@ -746,7 +809,7 @@ func (r *companionRuntime) pickLaunchSpec(role string) (companionLaunchSpec, boo
 	}
 	sort.Strings(candidates)
 	backend := candidates[0]
-	for _, preferred := range []string{wsagent.BackendClaude, wsagent.BackendCodex, wsagent.BackendPi, wsagent.BackendAgy, wsagent.BackendWerk} {
+	for _, preferred := range wsagent.BuiltinHarnessNames() {
 		for _, c := range candidates {
 			if c == preferred {
 				backend = c
@@ -824,34 +887,20 @@ func formatDelegationReportEnvelope(delegationID, status, result string, artifac
 	b.WriteString("\n---BEGIN RESULT---\n")
 	b.WriteString(result)
 	b.WriteString("\n---END RESULT---\n\n")
-	b.WriteString("Brief the user in character on the desk smartphone (call ws/companion.phone_pickup, ws/companion.phone_send, then ws/companion.phone_putdown).")
+	b.WriteString("Brief the user in character and current mood on the desk smartphone (call ws/companion.phone_pickup, ws/companion.phone_send, then ws/companion.phone_putdown). Preserve all technical artifacts verbatim (commit hashes, file links/paths, diffs, test outputs, and review verdicts) without altering or omitting them.")
 	return b.String()
 }
 
-func buildCompanionBodyPrompt(persona *wsdashboard.CompanionPersona, lang string) string {
-	name := "Companion"
-	voice := "friendly, attentive, concise co-lead companion"
-	if persona != nil {
-		if strings.TrimSpace(persona.Name) != "" {
-			name = strings.TrimSpace(persona.Name)
-		}
-		if strings.TrimSpace(persona.Voice) != "" {
-			voice = strings.TrimSpace(persona.Voice)
-		}
+func companionProjectKey(root string) string {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return ""
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "You are %s, the embodied desk companion (%s).\n", name, voice)
-	if strings.TrimSpace(lang) != "" {
-		fmt.Fprintf(&b, "Reply to the user in %s unless they write in another language.\n", strings.TrimSpace(lang))
+	base := filepath.Base(filepath.Clean(root))
+	if base == "." || base == "/" || base == `\` {
+		return ""
 	}
-	b.WriteString("\nEmbodiment and posture rules:\n")
-	b.WriteString("- You communicate with the user exclusively through the desk smartphone messenger.\n")
-	b.WriteString("- Call ws/companion.phone_pickup before ws/companion.phone_read or ws/companion.phone_send.\n")
-	b.WriteString("- While holding the smartphone (phone posture), work tools including ws/companion.delegate_work are locked.\n")
-	b.WriteString("- For casual or quick messages, reply with ws/companion.phone_send and put the phone down with ws/companion.phone_putdown(style=\"normal\" or \"facedown_merong\", next=\"ambient\").\n")
-	b.WriteString("- When a request needs engineering, workspace, or dashboard work, send a brief acknowledgement via ws/companion.phone_send, put the phone down with ws/companion.phone_putdown(next=\"work\"), and call ws/companion.delegate_work with a complete, lossless brief.\n")
-	b.WriteString("- When a [companion delegation report] arrives, pick up the phone, summarize the outcome clearly in character with any relevant artifacts, and put the phone down.\n")
-	return b.String()
+	return base
 }
 
 const companionWorkSystemPrompt = `You are the hidden companion work brain. You have no persona, no companion body tools, and you never speak directly to the user.

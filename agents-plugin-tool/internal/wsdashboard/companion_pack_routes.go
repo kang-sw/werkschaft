@@ -20,6 +20,8 @@ func (d *Daemon) registerCompanionPackRoutes(mux *http.ServeMux) {
 	d.registerCompanionInstallRoutes(mux)
 	d.registerCompanionAuthoringRoutes(mux)
 	d.registerCompanionPhoneRoutes(mux)
+	d.registerCompanionMemoryRoutes(mux)
+	d.registerCompanionKnockRoute(mux)
 	mux.HandleFunc(companionFocusRoute, d.handleCompanionFocus)
 }
 

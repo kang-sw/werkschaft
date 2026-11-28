@@ -134,7 +134,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		return nil, err
 	}
 	if opts.Executable != "" {
-		if err := recordRunningExecutable(opts.Dir, opts.Executable, opts.Version, opts.BuildTime); err != nil {
+		if err := recordRunningExecutable(opts.Dir, opts.Executable, opts.ContentHash, opts.Version, opts.BuildTime); err != nil {
 			_ = listener.Close()
 			return nil, fmt.Errorf("record running executable: %w", err)
 		}
@@ -153,6 +153,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	stats := &streamStats{}
 	d := &Daemon{
 		dir:             opts.Dir,
+		home:            opts.Home,
 		lock:            lock,
 		endLog:          endLog,
 		listener:        listener,

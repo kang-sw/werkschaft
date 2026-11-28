@@ -44,7 +44,8 @@ const (
 
 // companionBodyBaseAllows is the fixed server-side base allowlist for Tier-1
 // (companion-body) sessions at every posture ((1740)): ws/companion.*,
-// mailbox.*, and read-only discovery. No lead-level mutating tool is reachable.
+// mailbox.*, and read-only discovery with zero ws/note.* access (D3, D8).
+// No lead-level mutating tool is reachable.
 func companionBodyBaseAllows(name string) bool {
 	if isCompanionTool(name) || strings.HasPrefix(name, "mailbox.") {
 		return true
@@ -53,7 +54,7 @@ func companionBodyBaseAllows(name string) bool {
 	case "call", "workflow_manual", "workflow_state", "runtime.read",
 		"git.status", "git.diff", "git.log", "git.merge_base", "git.followups",
 		"tickets.query", "tickets.verify",
-		"note.query", "agenda.list", "todo.list", "todo.read",
+		"agenda.list", "todo.list", "todo.read",
 		"api.list", "project.tree", "rationale.query", "review.marker",
 		"config.get", "config.list", "config.resolve_agent",
 		"infra.read", "convention.read", "playbook.read",
@@ -65,12 +66,14 @@ func companionBodyBaseAllows(name string) bool {
 }
 
 // companionBodyPhonePostureAllows is the strict allowlist enforced for
-// companion-body while holding the smartphone ((1740)): phone_* tools,
-// mailbox.*, and minimal read-only discovery (call, workflow_manual,
-// workflow_state). Every other tool, including companion.delegate_work, is a
-// work tool and is blocked with posture_locked.
+// companion-body while holding the smartphone ((1740), D8): phone_* tools,
+// interruptible pacing (companion.act), active memory tools
+// (remember_soul/remember_episode/recall_memory), mailbox.*, and minimal
+// read-only discovery (call, workflow_manual, workflow_state). Every other
+// tool, including companion.delegate_work, is a work tool and is blocked with
+// posture_locked.
 func companionBodyPhonePostureAllows(name string) bool {
-	if isCompanionPhoneTool(name) || strings.HasPrefix(name, "mailbox.") {
+	if isCompanionPhoneTool(name) || isCompanionPacingOrMemoryTool(name) || strings.HasPrefix(name, "mailbox.") {
 		return true
 	}
 	switch name {

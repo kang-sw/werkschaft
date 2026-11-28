@@ -110,6 +110,9 @@ func (d *Daemon) handleAccount(w http.ResponseWriter, r *http.Request) {
 	case "slots/remove":
 		d.handleAccountSlotsRemove(w, r)
 		return
+	case "slots/rename":
+		d.handleAccountSlotsRename(w, r)
+		return
 	case "slots/switch":
 		d.handleAccountSlotsSwitch(w, r)
 		return

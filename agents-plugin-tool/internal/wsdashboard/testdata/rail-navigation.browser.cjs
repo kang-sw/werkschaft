@@ -17,7 +17,7 @@ async function show(page, pathname) {
 }
 async function openRail(page) {
   if (!await page.locator('html').evaluate(el => el.classList.contains('rail-open'))) await page.locator('#railbtn').click();
-  await page.locator('#gear').waitFor({ state: 'visible' });
+  await page.locator('#rlist').waitFor({ state: 'visible' });
 }
 
 (async () => {
@@ -62,20 +62,22 @@ async function openRail(page) {
         await home.waitFor({ state: 'visible' });
         assert.equal(await home.count(), 1);
         assert.equal(await home.getAttribute('title'), label);
-        assert.equal(await home.evaluate(el => el.previousElementSibling.className), 'btn gear r-config-global'); // ed920bb24: the global-settings gear sits between Settings and Home
-        assert.equal(await home.evaluate(el => el.previousElementSibling.previousElementSibling.id), 'gear');
+        assert.equal(await home.evaluate(el => el.parentElement.id), 'slot-bot-left', 'Home lives in #slot-bot-left');
+        assert.equal(await home.evaluate(el => el.nextElementSibling.className), 'bot-btn r-config-global');
+        assert.equal(await home.evaluate(el => el.nextElementSibling.nextElementSibling.id), 'gear');
         assert.equal(await home.locator('use').getAttribute('href'), '#l-house');
         const gearBox = await page.locator('#gear').boundingBox(), homeBox = await home.boundingBox();
         assert.equal(homeBox.height, gearBox.height, 'Home has Settings height');
-        assert.ok(homeBox.x >= gearBox.x + gearBox.width, 'Home is right of Settings');
-        const globalBox = await page.locator('.rfoot > .r-config-global').boundingBox();
-        assert.ok(homeBox.x >= globalBox.x + globalBox.width, 'Home is immediately right of the global settings gear');
-        assert.equal(await page.locator('.rfoot').evaluate(el => el.scrollWidth <= el.clientWidth), true);
+        const globalBox = await page.locator('#slot-bot-left > .r-config-global').boundingBox();
+        assert.ok(globalBox.x >= homeBox.x + homeBox.width, 'Global settings is right of Home');
+        assert.ok(gearBox.x >= globalBox.x + globalBox.width, '#gear is right of global settings');
+        assert.equal(await page.locator('#slot-bot-left').evaluate(el => el.scrollWidth <= el.clientWidth), true);
+        assert.equal(await page.locator('#rail .rfoot').count(), 0, 'retired .rfoot is absent from shell rail');
         if (shots && !desktop) {
           fs.mkdirSync(shots, { recursive: true });
           await page.waitForTimeout(400);
           await page.screenshot({ path: path.join(shots, `after-${theme}-1280.png`) });
-          await page.locator('.rfoot').screenshot({ path: path.join(shots, `after-${theme}-footer.png`) });
+          await page.locator('#shell-bottom').screenshot({ path: path.join(shots, `after-${theme}-footer.png`) });
         }
         if (desktop) {
           assert.equal(await page.evaluate(() => Object.isFrozen(window.werkschaftDesktop.update)), true);

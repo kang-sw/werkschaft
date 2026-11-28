@@ -282,6 +282,8 @@ func dashboardCompanionConfig(catalog *wsconfigservice.Catalog, opts wsconfig.Op
 		AgentCooldownSeconds: number(wsdashboard.CompanionAgentCooldownKey),
 		AgentHourlyCap:       number(wsdashboard.CompanionAgentHourlyCapKey),
 		Sources:              text(wsdashboard.CompanionSourcesKey),
+		Soul:                 text(wsdashboard.CompanionSoulKey),
+		SoulDir:              text(wsdashboard.CompanionSoulDirKey),
 	}, nil
 }
 

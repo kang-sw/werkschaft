@@ -20,11 +20,39 @@ async function setup(page) {
   const state = {
     openrouter: {configured:false}, openai: null, sign_in: {state:'idle'},
     endpoints: demoEndpoints(), localKeys: {'lab-vllm':'...a3b7'},
+    slots: {
+      claude: [
+        {id:'default', label:'Default', kind:'default', active:true, signed_in:true, config_dir:'/Users/demo/.claude'},
+        {id:'work-1', label:'Work', kind:'managed', managed:true, active:false, signed_in:true, config_dir:'/Users/demo/.claude-work'},
+      ],
+      codex: [
+        {id:'default', label:'Default', kind:'default', active:true, signed_in:true, config_dir:'/Users/demo/.codex'},
+      ],
+    },
+    harness_auth: [
+      {harness:'agy', label:'Antigravity', probed:true, auth_required:false},
+    ],
+    voice_keys: {},
+    voiceSharedOpenRouter: false,
     keyOutcome: 'unverified', signInOutcome: 'waiting', endpointPublishFails: false, prompt: 0, polls: 0,
-    requests: [], snapshotScopes: [], errors: [],
+    requests: [], snapshotScopes: [], errors: [], consoleErrors: [], failedResponses: [],
   };
   page.setDefaultTimeout(7000);
   page.on('pageerror', error => state.errors.push(error.message));
+  page.on('console', msg => { if (msg.type() === 'error') state.consoleErrors.push(msg.text()); });
+  page.on('response', res => { if (res.status() >= 400) state.failedResponses.push(res.status() + ' ' + res.url()); });
+  await page.route(/\/tracker\/stores(?:\?|$)/, route => route.fulfill({status: 200, json: {stores: []}}));
+  await page.route(/\/api\/voice\/capabilities(?:\?|$)/, route => route.fulfill({
+    status: 200,
+    json: {
+      order: ['native', 'openrouter'],
+      backends: [
+        {id: 'native', kind: 'native', available: false},
+        {id: 'openrouter', kind: 'external', available: !!state.openrouter?.configured && state.voiceSharedOpenRouter, models: [{id: 'google/gemini-2.5-flash'}]},
+      ],
+      selected: state.openrouter?.configured && state.voiceSharedOpenRouter ? {backend: 'openrouter', model: 'google/gemini-2.5-flash'} : null,
+    },
+  }));
   let socket;
   await page.routeWebSocket(/\/rail\/events\?/, ws => {
     socket = ws;
@@ -45,7 +73,21 @@ async function setup(page) {
     state.snapshotScopes.push(scope);
     const response = await route.fetch();
     const data = await response.json();
-    if (scope === 'global') data.entries.find(entry => entry.key === 'agent.werk_endpoints').value = JSON.stringify(state.endpoints);
+    if (scope === 'global') {
+      data.entries.find(entry => entry.key === 'agent.werk_endpoints').value = JSON.stringify(state.endpoints);
+      if (state.voiceSharedOpenRouter) {
+        const shared = data.entries.find(entry => entry.key === 'dashboard.voice_openrouter_shared_key');
+        if (shared) {
+          shared.value = true;
+          shared.layers = [{scope:'global', present:true, value:true}];
+        }
+        const order = data.entries.find(entry => entry.key === 'dashboard.voice_backend_order');
+        if (order) {
+          order.value = 'native openrouter';
+          order.layers = [{scope:'global', present:true, value:'native openrouter'}];
+        }
+      }
+    }
     const models = [
       {model:'router-model', provider:'openrouter'},
       {model:'chatgpt-model', provider:'openai'},
@@ -71,7 +113,18 @@ async function setup(page) {
           openai_ready:state.openai?.signed_in && state.openai?.plan_enabled && !state.openai?.needsReauth || false,
           sign_in:state.sign_in, consent_prompt:state.prompt,
           local_keys:Object.entries(state.localKeys).map(([name, masked]) => ({provider:'local/' + name, configured:true, masked})),
+          slots:state.slots,
+          harness_auth:state.harness_auth,
+          voice_keys:state.voice_keys,
         });
+      case 'slots/rename': {
+        const list = state.slots[body.harness] || [];
+        const slot = list.find(item => item.id === body.slot_id);
+        if (!slot) return json({error:'account_slot_not_found'}, 404);
+        if (slot.id === 'default') return json({error:'default_slot_immutable'}, 400);
+        slot.label = String(body.label || '').trim();
+        return json(slot);
+      }
       case 'key':
         if (body.op === 'set') {
           if (state.keyOutcome === 'network-error') return route.abort();
@@ -273,7 +326,7 @@ async function exercise(page) {
   assert.deepEqual(state.requests.at(-1), {action:'sign-in/start', body:{enable_plan:true, client_id:'fixture-client'}});
   await oa.getByText('Signed in', {exact:true}).waitFor();
   await oa.getByText('ChatGPT plan', {exact:true}).waitFor();
-  assert.equal(await oa.getByText('operator@example.test').count(), 1);
+  assert.equal(await oa.getByText('operator@example.test', {exact:true}).count(), 1);
   const toggle = row(frame, 'openai-consent').getByRole('switch');
   await toggle.click();
   await waitFor(async () => await toggle.getAttribute('aria-checked') === 'true');
@@ -290,7 +343,9 @@ async function exercise(page) {
   await waitFor(async () => await toggle.getAttribute('aria-checked') === 'false');
   await hold(page, oa.getByRole('button', {name:/Sign out of OpenAI/}));
   await oa.getByText('Signed out', {exact:true}).waitFor();
-  assert.equal(await toggle.isVisible(), false);
+  assert.equal(await toggle.isVisible(), true);
+  assert.equal(await toggle.isDisabled(), true);
+  assert.equal(await toggle.getAttribute('aria-checked'), 'false');
 
   const endpoints = row(frame, 'local');
   assert(state.snapshotScopes.includes('global') && state.snapshotScopes.includes('builtin'));
@@ -332,40 +387,82 @@ async function exercise(page) {
   await hold(page, added.getByRole('button', {name:'Remove new-box and its saved API key'}));
   await added.waitFor({state:'detached'});
   assert.equal(Object.hasOwn(await projection(), 'new-box'), false);
+
+  // Verify inline slot rename on non-default Claude slot
+  const claude = row(frame, 'slots-claude');
+  await claude.locator('[data-slot-rename="work-1"]').click();
+  const rnInput = claude.locator('[data-slot-rename-input]');
+  await rnInput.fill('Work Renamed');
+  await rnInput.press('Enter');
+  await claude.getByText('Work Renamed', {exact:true}).waitFor();
+  assert.deepEqual(state.requests.at(-1), {action:'slots/rename', body:{harness:'claude', slot_id:'work-1', label:'Work Renamed'}});
+
+  // Verify legacy /settings?section=account&provider=voice deep link normalizes to Voice section
+  await page.goto(origin + '/settings?section=account&provider=voice');
+  await section(frame, 'voice').waitFor();
+  assert.equal(await section(frame, 'voice').getAttribute('aria-current'), 'true');
+  await frame.locator('[data-voice-section]').waitFor();
+
   assert.deepEqual(state.errors, []);
-  console.log('Account lifecycle, scope, model remedies, masked key operations, and local/LAN consent stream passed.');
+  assert.deepEqual(state.consoleErrors.filter(msg => !msg.startsWith('Failed to load resource:')), []);
+  console.log('Account lifecycle, slot rename, Voice split, scope, model remedies, masked key operations, and local/LAN consent stream passed.');
 }
 
 async function capture(browser, authenticated) {
   await fs.mkdir(shots, {recursive:true});
   const auth = await authenticated.context().storageState();
   const reference = await browser.newPage();
+  const voiceRef = await browser.newPage();
   const actual = await browser.newPage({locale:'ko-KR', storageState:auth});
   const state = await setup(actual);
   state.openrouter = configuredKey('verified');
   state.openai = {...demoAccount(), background_consent:true};
-  const mock = path.resolve('../../../ai-docs/assets/mockups/261122/provider-auth/mockup.html');
+  state.voiceSharedOpenRouter = true;
+  const accountMock = path.resolve('../../../ai-docs/assets/mockups/261128/account-panel-rework/index.html');
+  const voiceMock = path.resolve('../../../ai-docs/assets/mockups/261128/voice-provider-ui/index.html');
   for (const width of [1280, 390]) {
     for (const theme of ['dark', 'light']) {
       const viewport = {width, height:width === 390 ? 844 : 900};
       await actual.setViewportSize(viewport);
       await reference.setViewportSize(viewport);
+      await voiceRef.setViewportSize(viewport);
       await actual.emulateMedia({colorScheme:theme});
+      const name = width + '-' + theme;
+
+      // 1. Live Settings -> Account vs 261128 approved Account mockup
       await actual.goto(origin + '/settings?section=account');
       const frame = actual.frameLocator(frameSelector);
       const stage = frame.locator('[data-settings-view]');
       await row(frame, 'local').locator('[data-endpoint-name=lab-vllm]').waitFor();
       assert.equal(await section(frame, 'account').getByText('계정', {exact:true}).count(), 1);
+      assert.equal(await section(frame, 'voice').getByText('음성', {exact:true}).count(), 1);
       await row(frame, 'openai').getByText('로그인됨', {exact:true}).waitFor();
-      assert(await stage.evaluate(node => node.scrollWidth <= node.clientWidth + 1), 'Account stage has horizontal overflow');
-      const name = width + '-' + theme;
+      await frame.locator('[data-account-voice-chip]').waitFor();
+      assert(await stage.evaluate(node => node.scrollWidth <= node.clientWidth + 1), 'Account stage has horizontal overflow at ' + name);
       await stage.screenshot({path:path.join(shots, 'account-' + name + '.png'), animations:'disabled'});
-      if (width === 390) await row(frame, 'local').screenshot({path:path.join(shots, 'account-endpoints-' + name + '.png'), animations:'disabled'});
-      await reference.goto(pathToFileURL(mock).href + '?theme=' + theme);
-      await reference.locator('[data-mk=or] [data-v=saved]').click();
-      await reference.locator('[data-mk=oa] [data-v=in]').click();
-      await reference.locator('[data-mk=cs] [data-v=yes]').click();
-      await reference.locator('[data-settings-view]').screenshot({path:path.join(shots, 'mockup-' + name + '.png'), animations:'disabled'});
+      if (width === 1280) {
+        await frame.locator('[data-account-group="runtime"]').screenshot({path:path.join(shots, 'account-runtime-' + name + '.png'), animations:'disabled'});
+      }
+
+      await reference.goto(pathToFileURL(accountMock).href);
+      await reference.locator('.grp').first().waitFor();
+      await reference.locator('#simTheme button[data-theme="' + theme + '"]').click();
+      await reference.locator('.shell').screenshot({path:path.join(shots, 'mockup-account-' + name + '.png'), animations:'disabled'});
+      if (width === 1280) {
+        await reference.locator('.grp').nth(1).screenshot({path:path.join(shots, 'mockup-account-runtime-' + name + '.png'), animations:'disabled'});
+      }
+
+      // 2. Live Settings -> Voice vs 261125 Phase 4 Voice Providers mockup
+      await section(frame, 'voice').click();
+      await frame.locator('[data-voice-section]').waitFor();
+      await frame.locator('.vprow-chip-link').waitFor();
+      assert(await stage.evaluate(node => node.scrollWidth <= node.clientWidth + 1), 'Voice stage has horizontal overflow at ' + name);
+      await stage.screenshot({path:path.join(shots, 'voice-' + name + '.png'), animations:'disabled'});
+
+      await voiceRef.goto(pathToFileURL(voiceMock).href);
+      await voiceRef.locator('[data-sim="theme"][data-val="' + theme + '"]').click();
+      await voiceRef.locator('[data-sim="view"][data-val="settings"]').click();
+      await voiceRef.locator('#voiceSection').screenshot({path:path.join(shots, 'mockup-voice-' + name + '.png'), animations:'disabled'});
     }
   }
   await actual.goto(origin + '/');
@@ -375,8 +472,10 @@ async function capture(browser, authenticated) {
   assert.equal(await banner.locator('button, a').count(), 0);
   await banner.screenshot({path:path.join(shots, 'lan-consent-390-light.png'), animations:'disabled'});
   assert.deepEqual(state.errors, []);
-  await Promise.all([reference.close(), actual.close()]);
-  console.log('Captured Account and approved mockup at 1280px and 390px, dark and light, plus LAN consent.');
+  if (state.consoleErrors.length) console.error('Failed responses:', state.failedResponses);
+  assert.deepEqual(state.consoleErrors, []);
+  await Promise.all([reference.close(), voiceRef.close(), actual.close()]);
+  console.log('Captured Account, Voice, and approved mockups at 1280px and 390px, dark and light, plus LAN consent.');
 }
 
 (async () => {

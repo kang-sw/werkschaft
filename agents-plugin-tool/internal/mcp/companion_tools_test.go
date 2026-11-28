@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
@@ -16,6 +18,13 @@ type testCompanionHost struct {
 	speaks      []string
 	faces       []string
 	motions     []string
+	acts        []wsdashboard.CompanionActRequest
+	actFn       func(ctx context.Context, owner string, req wsdashboard.CompanionActRequest) (wsdashboard.CompanionActResult, error)
+	soulCalls   []string
+	epCalls     []string
+	recallCalls []string
+	burstMu     sync.Mutex
+	burstCounts map[string]int
 	delegations []struct {
 		caller string
 		brief  string
@@ -26,6 +35,68 @@ type testCompanionHost struct {
 		status    string
 		result    string
 		artifacts []string
+	}
+}
+
+func (h *testCompanionHost) CompanionAct(ctx context.Context, owner string, req wsdashboard.CompanionActRequest) (wsdashboard.CompanionActResult, error) {
+	h.acts = append(h.acts, req)
+	if h.actFn != nil {
+		return h.actFn(ctx, owner, req)
+	}
+	return wsdashboard.CompanionActResult{
+		WakeReason: wsdashboard.CompanionActWakeTimer,
+		DelayMS:    wsdashboard.ClampCompanionActDelayMS(req.DelayMS, req.HasDelay),
+	}, nil
+}
+
+func (h *testCompanionHost) CompanionRememberSoul(_ context.Context, _, content, _, _ string, _ []string) (wsdashboard.RememberSoulResult, error) {
+	h.soulCalls = append(h.soulCalls, content)
+	return wsdashboard.RememberSoulResult{
+		Status: "saved",
+		Entry:  &wsdashboard.SoulShardEntry{ID: "soul-1", Content: content},
+	}, nil
+}
+
+func (h *testCompanionHost) CompanionRememberEpisode(_ context.Context, _, projectKey, summary string, tags []string) (wsdashboard.CompanionEpisode, error) {
+	h.epCalls = append(h.epCalls, projectKey+":"+summary)
+	return wsdashboard.CompanionEpisode{ID: 7, ProjectKey: projectKey, Summary: summary, Tags: tags}, nil
+}
+
+func (h *testCompanionHost) CompanionRecallMemory(_ context.Context, query, scope, projectKey string, _ int) (wsdashboard.CompanionRecallResult, error) {
+	if scope == "" {
+		scope = "all"
+	}
+	h.recallCalls = append(h.recallCalls, scope+":"+projectKey+":"+query)
+	return wsdashboard.CompanionRecallResult{
+		Scope:      scope,
+		ProjectKey: projectKey,
+		Query:      query,
+		Snippets: []wsdashboard.CompanionRecallSnippet{
+			{Source: "soul:rapport", Timestamp: "2026-11-28T05:00:00Z", Content: "Prefers short summaries"},
+		},
+	}, nil
+}
+
+func (h *testCompanionHost) CompanionConsumeBurstCall(owner string, limit int) (int, bool) {
+	h.burstMu.Lock()
+	defer h.burstMu.Unlock()
+	if h.burstCounts == nil {
+		h.burstCounts = make(map[string]int)
+	}
+	cur := h.burstCounts[owner]
+	if cur >= limit {
+		return cur, false
+	}
+	cur++
+	h.burstCounts[owner] = cur
+	return cur, true
+}
+
+func (h *testCompanionHost) CompanionResetBurst(owner string) {
+	h.burstMu.Lock()
+	defer h.burstMu.Unlock()
+	if h.burstCounts != nil {
+		delete(h.burstCounts, owner)
 	}
 }
 
@@ -615,5 +686,211 @@ func TestCompanionApprovalSummaryRuneClampAndRedaction(t *testing.T) {
 	}
 	if utf8.RuneCountInString(clamped) > 180 {
 		t.Fatalf("companionApprovalSummary exceeded 180 runes: %d", utf8.RuneCountInString(clamped))
+	}
+}
+
+func TestCompanionPhase3ToolsPostureAccessAndNoteIsolation(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", t.TempDir())
+	root := t.TempDir()
+	host := &testCompanionHost{}
+	s := NewServer(root, "test")
+	s.descriptor = connectionDescriptor{callFallback: true}
+	s.companion = host
+
+	leadKey := mintCompanionTestKey(t, s, root, "")
+	leadEntry, _ := s.lookupSession(leadKey)
+	bodyKey := mintCompanionTestKey(t, s, root, CompanionRoleBody)
+	bodyEntry, _ := s.lookupSession(bodyKey)
+	workKey := mintCompanionTestKey(t, s, root, CompanionRoleWork)
+	workEntry, _ := s.lookupSession(workKey)
+
+	phase3Tools := []string{
+		companionActTool,
+		companionRememberSoulTool,
+		companionRememberEpisodeTool,
+		companionRecallMemoryTool,
+	}
+
+	// 1. companion-body exposes all 4 Phase 3 tools at BOTH laptop and phone postures (D8),
+	// and has ZERO access to ws/note.* (D3, D11).
+	laptopDisc := discoveryToolNames(s.callDiscoveryTools(bodyKey, bodyEntry, true))
+	for _, tool := range phase3Tools {
+		if !laptopDisc[tool] {
+			t.Fatalf("companion-body laptop discovery missing %q", tool)
+		}
+	}
+	for _, noteTool := range []string{"note.query", "note.read", "note.write", "note.delete"} {
+		if laptopDisc[noteTool] {
+			t.Fatalf("companion-body laptop discovery leaked %q", noteTool)
+		}
+		if resp := invokeCompanionTestToolRaw(t, s, noteTool, map[string]any{"session_key": bodyKey}); resp.Error == nil {
+			t.Fatalf("companion-body reached forbidden %q: %+v", noteTool, resp)
+		}
+	}
+
+	// Call all 4 tools in laptop posture.
+	if txt, isErr := invokeCompanionTestTool(t, s, companionActTool, map[string]any{"session_key": bodyKey, "expression": "happy", "fx": "sparkle", "speech": "hi"}); isErr || !strings.Contains(txt, "wake_reason: timer") || !strings.Contains(txt, "delay_ms: 3000") {
+		t.Fatalf("act on laptop = (%q, isErr=%v)", txt, isErr)
+	}
+	if txt, isErr := invokeCompanionTestTool(t, s, companionRememberSoulTool, map[string]any{"session_key": bodyKey, "content": "Likes jazz while coding"}); isErr || !strings.Contains(txt, "status: saved") {
+		t.Fatalf("remember_soul on laptop = (%q, isErr=%v)", txt, isErr)
+	}
+	if txt, isErr := invokeCompanionTestTool(t, s, companionRememberEpisodeTool, map[string]any{"session_key": bodyKey, "summary": "Verified build"}); isErr || !strings.Contains(txt, "saved episode #7") {
+		t.Fatalf("remember_episode on laptop = (%q, isErr=%v)", txt, isErr)
+	}
+	if txt, isErr := invokeCompanionTestTool(t, s, companionRecallMemoryTool, map[string]any{"session_key": bodyKey, "query": "jazz"}); isErr || !strings.Contains(txt, "Prefers short summaries") {
+		t.Fatalf("recall_memory on laptop = (%q, isErr=%v)", txt, isErr)
+	}
+
+	// Switch to phone posture: all 4 Phase 3 tools remain discoverable and callable (both direct and via call envelope).
+	if _, _, err := host.store.PhonePickup(bodyKey); err != nil {
+		t.Fatalf("PhonePickup: %v", err)
+	}
+	phoneDisc := discoveryToolNames(s.callDiscoveryTools(bodyKey, bodyEntry, true))
+	for _, tool := range phase3Tools {
+		if !phoneDisc[tool] {
+			t.Fatalf("companion-body phone discovery missing %q", tool)
+		}
+	}
+	if txt, isErr := invokeCompanionTestTool(t, s, companionActTool, map[string]any{"session_key": bodyKey, "delay_ms": 2000}); isErr || !strings.Contains(txt, "delay_ms: 2000") {
+		t.Fatalf("act on phone = (%q, isErr=%v)", txt, isErr)
+	}
+	if txt, isErr := invokeCompanionTestTool(t, s, "call", map[string]any{
+		"tool":      companionRecallMemoryTool,
+		"arguments": map[string]any{"session_key": bodyKey, "scope": "soul"},
+	}); isErr || !strings.Contains(txt, "scope: soul") {
+		t.Fatalf("call(recall_memory) on phone = (%q, isErr=%v)", txt, isErr)
+	}
+	if txt, isErr := invokeCompanionTestTool(t, s, companionRememberSoulTool, map[string]any{"session_key": bodyKey, "content": "Drinks tea in winter"}); isErr || !strings.Contains(txt, "status: saved") {
+		t.Fatalf("remember_soul on phone = (%q, isErr=%v)", txt, isErr)
+	}
+	if txt, isErr := invokeCompanionTestTool(t, s, companionRememberEpisodeTool, map[string]any{"session_key": bodyKey, "summary": "Ran race detector"}); isErr || !strings.Contains(txt, "saved episode #7") {
+		t.Fatalf("remember_episode on phone = (%q, isErr=%v)", txt, isErr)
+	}
+
+	// 2. companion-work, unmarked lead, and keyless callers must NOT discover or reach any of the 4 tools (D8).
+	workDisc := discoveryToolNames(s.callDiscoveryTools(workKey, workEntry, true))
+	leadDisc := discoveryToolNames(s.callDiscoveryTools(leadKey, leadEntry, true))
+	for _, tool := range phase3Tools {
+		if workDisc[tool] {
+			t.Fatalf("companion-work discovery exposed %q", tool)
+		}
+		if leadDisc[tool] {
+			t.Fatalf("unmarked lead discovery exposed %q", tool)
+		}
+		if resp := invokeCompanionTestToolRaw(t, s, tool, map[string]any{"session_key": workKey}); resp.Error == nil {
+			t.Fatalf("companion-work reached %q: %+v", tool, resp)
+		}
+		if resp := invokeCompanionTestToolRaw(t, s, tool, map[string]any{"session_key": leadKey}); resp.Error == nil {
+			t.Fatalf("unmarked lead reached %q: %+v", tool, resp)
+		}
+		if resp := invokeCompanionTestToolRaw(t, s, tool, map[string]any{}); resp.Error == nil {
+			t.Fatalf("keyless caller reached %q: %+v", tool, resp)
+		}
+	}
+}
+
+func TestCompanionBurstLimitEnforcementAndReset(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", t.TempDir())
+	root := t.TempDir()
+	host := &testCompanionHost{}
+	s := NewServer(root, "test")
+	s.descriptor = connectionDescriptor{callFallback: true}
+	s.companion = host
+	bodyKey := mintCompanionTestKey(t, s, root, CompanionRoleBody)
+
+	// Mix all 5 burst-counted Tier-1 tools up to companionBurstMaxCalls (12).
+	calls := []struct {
+		name string
+		args map[string]any
+	}{
+		{companionRecallMemoryTool, map[string]any{"session_key": bodyKey, "query": "a"}},
+		{companionActTool, map[string]any{"session_key": bodyKey, "expression": "happy"}},
+		{companionRememberSoulTool, map[string]any{"session_key": bodyKey, "content": "note 1"}},
+		{companionRememberEpisodeTool, map[string]any{"session_key": bodyKey, "summary": "ep 1"}},
+		{companionDelegateWorkTool, map[string]any{"session_key": bodyKey, "brief": "task 1"}},
+	}
+	for i := 0; i < companionBurstMaxCalls; i++ {
+		c := calls[i%len(calls)]
+		txt, isErr := invokeCompanionTestTool(t, s, c.name, c.args)
+		if isErr {
+			t.Fatalf("burst call %d (%s) unexpectedly failed: %s", i+1, c.name, txt)
+		}
+	}
+
+	// 13th counted call returns structured burst_limit error (both direct and via call envelope).
+	txt, isErr := invokeCompanionTestTool(t, s, companionActTool, map[string]any{"session_key": bodyKey})
+	if !isErr || !strings.Contains(txt, `"burst_limit"`) {
+		t.Fatalf("13th call (act) = (%q, isErr=%v), want burst_limit", txt, isErr)
+	}
+	txt, isErr = invokeCompanionTestTool(t, s, "call", map[string]any{
+		"tool":      companionRecallMemoryTool,
+		"arguments": map[string]any{"session_key": bodyKey},
+	})
+	if !isErr || !strings.Contains(txt, `"burst_limit"`) {
+		t.Fatalf("13th call envelope (recall_memory) = (%q, isErr=%v), want burst_limit", txt, isErr)
+	}
+
+	// Phone lifecycle tools are NOT burst-blocked so Tier-1 can still send/putdown cleanly.
+	if txt, isErr := invokeCompanionTestTool(t, s, companionPhonePickupTool, map[string]any{"session_key": bodyKey}); isErr {
+		t.Fatalf("phone_pickup blocked by burst limit: %s", txt)
+	}
+	if txt, isErr := invokeCompanionTestTool(t, s, companionPhonePutdownTool, map[string]any{"session_key": bodyKey, "style": "normal", "next": "ambient"}); isErr {
+		t.Fatalf("phone_putdown blocked by burst limit: %s", txt)
+	}
+
+	// Resetting burst on turn end restores full budget.
+	s.ResetCompanionBurst(bodyKey)
+	if txt, isErr := invokeCompanionTestTool(t, s, companionActTool, map[string]any{"session_key": bodyKey}); isErr || !strings.Contains(txt, "wake_reason: timer") {
+		t.Fatalf("act after burst reset = (%q, isErr=%v)", txt, isErr)
+	}
+}
+
+func TestCompanionActDrainContextCancellation(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", t.TempDir())
+	root := t.TempDir()
+	started := make(chan struct{}, 1)
+	host := &testCompanionHost{
+		actFn: func(ctx context.Context, _ string, req wsdashboard.CompanionActRequest) (wsdashboard.CompanionActResult, error) {
+			started <- struct{}{}
+			<-ctx.Done()
+			return wsdashboard.CompanionActResult{
+				WakeReason: wsdashboard.CompanionActWakeCancelled,
+				DelayMS:    wsdashboard.ClampCompanionActDelayMS(req.DelayMS, req.HasDelay),
+			}, nil
+		},
+	}
+	s := NewServer(root, "test")
+	s.companion = host
+	bodyKey := mintCompanionTestKey(t, s, root, CompanionRoleBody)
+
+	resultCh := make(chan string, 1)
+	go func() {
+		txt, isErr := invokeCompanionTestTool(t, s, companionActTool, map[string]any{"session_key": bodyKey, "delay_ms": 6000})
+		if isErr {
+			t.Errorf("act on drain returned error: %s", txt)
+		}
+		resultCh <- txt
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for companion.act to start")
+	}
+
+	// Server.Drain cancels s.drainContext(), unblocking companion.act immediately.
+	drainCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if !s.Drain(drainCtx) {
+		t.Fatal("Server.Drain did not finish promptly while companion.act was blocked")
+	}
+	select {
+	case txt := <-resultCh:
+		if !strings.Contains(txt, "wake_reason: cancelled") {
+			t.Fatalf("drained companion.act result = %q, want wake_reason: cancelled", txt)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for companion.act result after drain")
 	}
 }

@@ -196,6 +196,7 @@
 }
 .rail[data-companion-dock="unregistered"] details.rws-unreg { margin-top: var(--companion-slot); }
 .rail[data-companion-dock="footer"] .rfoot { margin-top: var(--companion-slot); }
+.rail[data-companion-dock="footer"]:not(:has(.rfoot)) .rail-session-panel { padding-bottom: var(--companion-slot); }
 
 /* Pure-VRM left-rail bust dock (>= 1600px): borderless transparent WebGL canvas
    anchored over #rail-companion-slot with a soft bottom dissolve fade. */

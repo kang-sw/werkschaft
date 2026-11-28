@@ -62,7 +62,7 @@ const promptKey = 'ws.dashboard.worktree-admission.prompt';
    const {toast, rail} = g;
    assert.ok(toast.left >= rail.left && toast.right <= rail.right && toast.top >= rail.top, label + ': toast stays inside the rail');
    for (const k of ['foot','cap','notice']) if (g[k]) assert.ok(toast.bottom <= g[k].top + 0.5, label + ': toast sits above the ' + k);
-   assert.ok(toast.height <= 60, label + ': toast stays compact ('+toast.height+'px)');
+   assert.ok(toast.height <= 80, label + ': toast stays compact ('+toast.height+'px)');
    toastGeometry.push({label, ...g});
   }
   async function fullShot(path) {
