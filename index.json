@@ -477,7 +477,7 @@
         "email": "ki6080@gmail.com",
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
-        "phase": "active",
+        "phase": "closed",
         "touched_at": "2026-11-28T10:42:44Z",
         "impl": {
           "branch": "impl/develop/companion-control-rig-studio"
@@ -489,19 +489,6 @@
     },
     "261128-feat-ws-companion-visual-polish-and-metafiction-overlay": {
       "registered_at": "2026-11-28T06:52:51Z"
-    },
-    "261128-feat-ws-cross-harness-session-switch": {
-      "registered_at": "2026-11-28T10:35:30Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-28T12:49:57Z",
-        "impl": {
-          "branch": "impl/develop/cross-harness-session-switch"
-        }
-      }
     },
     "261128-feat-ws-pi-rpc-managed-runtime-and-backend": {
       "registered_at": "2026-11-28T13:05:13Z",
