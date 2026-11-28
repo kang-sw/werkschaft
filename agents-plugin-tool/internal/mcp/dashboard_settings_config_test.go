@@ -148,6 +148,8 @@ func TestDashboardAdapterReadLimitsKeepHarnessKeyScopes(t *testing.T) {
 		{"agy.prefer_native_subagent", false, true},
 		{"agy.avoid_agy_subagent", false, true},
 		{DashboardPortKey, true, true},
+		{"dashboard.companion_body_tier", true, true},
+		{"dashboard.companion_work_tier", true, true},
 		{"claude.some_unlisted_key", true, true},
 		{"unrelated.key", false, false},
 	} {
