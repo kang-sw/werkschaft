@@ -902,13 +902,13 @@ func TestDashboardBoardMemoKeysEveryBoardInput(t *testing.T) {
 			t.Fatal(err)
 		}
 		// No board refresh or Index signal accompanies this direct part write.
-		waitForDashboardValidation(t)
+		waitForFileCacheValidation(t)
 	})
 	misses("agenda", func() {
 		if err := f.s.sessions.setAgenda(f.key, "plan", json.RawMessage(`{"a":1}`)); err != nil {
 			t.Fatal(err)
 		}
-		waitForDashboardValidation(t) // direct part write, no Index signal
+		waitForFileCacheValidation(t) // direct part write, no Index signal
 	})
 	misses("re-ask times", func() {
 		if err := f.s.sessions.mutateRecord(f.key, partWhiteboard, func(r *sessionRecord) error {

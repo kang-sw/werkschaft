@@ -8,6 +8,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 31282876025dc063
 sage-review-completeness-reviewed: 31282876025dc063
+completed: 2026-11-29
 ---
 
 # Wake/generation-driven invalidation for the daemon's per-second `stat` polling
@@ -366,3 +367,20 @@ Verification boundary:
   record a Windows heavy-security-software validation under
   `261111-bug-ws-dashboard-daemon-idle-cpu-windows` or as an appended Edition
   once measured on Windows.
+
+### Result (0562f065) - 2026-11-29
+
+- Replaced the 1 s daemon cache polling backstop with a 5 s fallback while
+  preserving writer-side invalidation: `FileCache`, daemon-only inbox listing
+  reads, `/nudge`, the lazy whiteboard delivery gate, and `activityMark` now
+  use the settled wake/generation paths. Authoritative inbox callers retain
+  fresh reads.
+- Restored the serialized second-read activity touch and updated direct-write
+  stream fixtures to invalidate their snapshot cache, matching the daemon's
+  real index/nudge path.
+- Verified: `go build ./...`; `go vet ./...`; `GOOS=windows go vet ./...`;
+  focused `-race` MCP and dashboard regressions; and the previously completed
+  `wsinbox` and `wswhiteboard` race suites. The requested broad dashboard
+  selection has only two unrelated stale board/browser fixture failures; the
+  broad MCP selection exposes its pre-existing concurrent `ServeStdio` test
+  race. Neither involves this ticket's changed runtime paths.

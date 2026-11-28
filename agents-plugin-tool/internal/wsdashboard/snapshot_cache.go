@@ -13,7 +13,8 @@ import (
 // SnapshotCache holds the parsed live snapshots of sessions (FileCache): a
 // page render, its refresh stamp, and a session re-read (HashLiveStores)
 // each read the snapshot of every session they name. File validation is shared
-// across those readers at most once per second, even for recent files. A hosted
+// across those readers at most once per fileCacheValidationInterval (5 s), even
+// for recent files, with explicit store-change signals invalidating immediately. A hosted
 // session's in-memory copy (SetLive) is served in place of its file, with no
 // stat, until ClearLive. The zero value is
 // ready; a nil cache reads every time.

@@ -53,24 +53,67 @@ func entryNames(dir string) ([]string, error) {
 // A listing is kept only when that time was already namesTrustAge old at the
 // stat: a change in the same timestamp tick could keep the time and hide a
 // message, and later changes stamp a later time.
+//
+// Authoritative callers always stat dir (maxAge == 0). Daemon polling sites
+// backed by /nudge invalidation may opt into NamesWithin / DrainedNamesWithin.
 func Names(dir string) ([]string, error) {
-	gen := namesGen.Load()
-	now := time.Now()
+	return NamesWithin(dir, 0)
+}
+
+// NamesWithin is Names with an opt-in fallback revalidation window maxAge.
+// When maxAge > 0, a cached listing (including a cached absence) from the
+// current in-process write generation and per-dir invalidation generation is
+// returned without statting dir until maxAge elapses or InvalidateNames / an
+// in-process inbox write invalidates it. When maxAge <= 0, dir is always
+// statted (the authoritative Names behavior).
+func NamesWithin(dir string, maxAge time.Duration) ([]string, error) {
+	dir = filepath.Clean(dir)
+	now := currentNamesTime()
+	gen, dirGen, l, hasCached := lookupNamesCache(dir)
+	if maxAge > 0 && hasCached && l.gen == gen && l.dirGen == dirGen {
+		if elapsed := now.Sub(l.checkedAt); elapsed >= 0 && elapsed < maxAge {
+			if l.missing {
+				return nil, nil
+			}
+			return slices.Clone(l.names), nil
+		}
+	}
 	info, err := wsstate.Stat(dir)
 	if errors.Is(err, fs.ErrNotExist) {
+		storeNames(dir, namesListing{
+			gen:       gen,
+			dirGen:    dirGen,
+			checkedAt: now,
+			missing:   true,
+		})
 		return nil, nil
 	}
 	if err == nil {
-		if names, ok := cachedNames(dir, gen, info.ModTime()); ok {
-			return names, nil
+		if hasCached && l.gen == gen && l.dirGen == dirGen && l.modTrusted && !l.missing && l.mod.Equal(info.ModTime()) {
+			l.checkedAt = now
+			storeNames(dir, l)
+			return slices.Clone(l.names), nil
 		}
 	}
 	names, listErr := entryNames(dir)
 	if errors.Is(listErr, fs.ErrNotExist) {
+		storeNames(dir, namesListing{
+			gen:       gen,
+			dirGen:    dirGen,
+			checkedAt: now,
+			missing:   true,
+		})
 		return nil, nil
 	}
-	if listErr == nil && err == nil && info.ModTime().Before(now.Add(-namesTrustAge)) {
-		storeNames(dir, namesListing{gen: gen, mod: info.ModTime(), names: slices.Clone(names)})
+	if listErr == nil && err == nil {
+		storeNames(dir, namesListing{
+			gen:        gen,
+			dirGen:     dirGen,
+			checkedAt:  now,
+			mod:        info.ModTime(),
+			modTrusted: info.ModTime().Before(now.Add(-namesTrustAge)),
+			names:      slices.Clone(names),
+		})
 	}
 	return names, listErr
 }
@@ -82,6 +125,16 @@ const namesTrustAge = 3 * time.Second
 // namesCacheMax bounds the reused listings; past it they are all dropped.
 const namesCacheMax = 4096
 
+// namesNow is a package-level clock test seam; nil uses time.Now.
+var namesNow = time.Now
+
+func currentNamesTime() time.Time {
+	if namesNow != nil {
+		return namesNow()
+	}
+	return time.Now()
+}
+
 // namesGen counts this process's inbox writes. Every entry name change here
 // goes through rename, remove or a commit, each bumping it once done, so a
 // listing taken before a write never passes for one taken after it.
@@ -89,30 +142,66 @@ var namesGen atomic.Uint64
 
 func bumpNames() { namesGen.Add(1) }
 
+// InvalidateNames expires cached directory listings so the next NamesWithin or
+// DrainedNamesWithin call stats disk immediately rather than waiting for its
+// fallback window. With no dirs, every cached directory is invalidated; with
+// one or more dirs, only those cleaned directory paths are invalidated. Any
+// in-flight listing that started before invalidation is fenced out by its
+// captured generation and will not repopulate stale data.
+func InvalidateNames(dirs ...string) {
+	if len(dirs) == 0 {
+		bumpNames()
+		return
+	}
+	namesCache.Lock()
+	defer namesCache.Unlock()
+	if len(namesCache.dirGen) >= namesCacheMax {
+		namesCache.m = nil
+		namesCache.dirGen = nil
+		namesGen.Add(1)
+		return
+	}
+	if namesCache.dirGen == nil {
+		namesCache.dirGen = map[string]uint64{}
+	}
+	for _, dir := range dirs {
+		clean := filepath.Clean(dir)
+		namesCache.dirGen[clean]++
+		delete(namesCache.m, clean)
+	}
+}
+
 type namesListing struct {
-	gen   uint64
-	mod   time.Time
-	names []string
+	gen        uint64
+	dirGen     uint64
+	checkedAt  time.Time
+	mod        time.Time
+	modTrusted bool
+	missing    bool
+	names      []string
 }
 
 var namesCache struct {
 	sync.Mutex
-	m map[string]namesListing
+	m      map[string]namesListing
+	dirGen map[string]uint64
 }
 
-func cachedNames(dir string, gen uint64, mod time.Time) ([]string, bool) {
+func lookupNamesCache(dir string) (gen, dirGen uint64, l namesListing, ok bool) {
 	namesCache.Lock()
 	defer namesCache.Unlock()
-	l, ok := namesCache.m[dir]
-	if !ok || l.gen != gen || !l.mod.Equal(mod) {
-		return nil, false
-	}
-	return slices.Clone(l.names), true
+	gen = namesGen.Load()
+	dirGen = namesCache.dirGen[dir]
+	l, ok = namesCache.m[dir]
+	return gen, dirGen, l, ok
 }
 
 func storeNames(dir string, l namesListing) {
 	namesCache.Lock()
 	defer namesCache.Unlock()
+	if namesGen.Load() != l.gen || namesCache.dirGen[dir] != l.dirGen {
+		return
+	}
 	if namesCache.m == nil || len(namesCache.m) >= namesCacheMax {
 		namesCache.m = map[string]namesListing{}
 	}
@@ -153,6 +242,12 @@ func InterruptNames(dir string) ([]string, error) {
 // DrainedNames returns the drained record names of the inbox at dir, oldest
 // first.
 func DrainedNames(dir string) ([]string, error) { return Names(DrainedDir(dir)) }
+
+// DrainedNamesWithin is DrainedNames with an opt-in fallback revalidation
+// window maxAge (see NamesWithin).
+func DrainedNamesWithin(dir string, maxAge time.Duration) ([]string, error) {
+	return NamesWithin(DrainedDir(dir), maxAge)
+}
 
 // Held reads the held messages at dir in queue order (queueRecords);
 // interrupt entries are left out. An entry that cannot be read (a claim took

@@ -107,6 +107,9 @@ func TestWakeRendersOnlyThePagesThatShowTheSession(t *testing.T) {
 	// delegatesess as a delegate.
 	writeSnapshot(t, f.dir, "livesession", &wslive.Snapshot{SchemaVersion: 1, Adapter: "pi", UpdatedAt: time.Now().UnixMilli(), HeartbeatMs: 30000,
 		Agents: []wslive.Agent{{ID: "a1", Label: "worker", ReplyID: "delegatesess", Status: wslive.StatusRunning}}})
+	// This direct fixture write bypasses the daemon's index/nudge path, which
+	// normally invalidates the snapshot cache before readers wake.
+	f.d.snapshots.Invalidate(f.dir, "livesession")
 
 	live := openStream(t, f.base+"/s/livesession/events")
 	loner := openStream(t, f.base+"/s/lonersession/events")
@@ -332,6 +335,9 @@ func TestRefreshTickSkipsUntilAKeyPartChanges(t *testing.T) {
 	// page back to board-first with no write and no wake.
 	f.waitSkipping(t)
 	writeSnapshot(t, f.dir, "boardsession", &wslive.Snapshot{SchemaVersion: 1, Adapter: "pi", UpdatedAt: time.Now().UnixMilli(), HeartbeatMs: 400})
+	// Match the writer-side invalidation supplied by the daemon signal path;
+	// broker wakes alone are presentation notifications, not file-cache hints.
+	f.d.snapshots.Invalidate(f.dir, "boardsession")
 	f.d.broker.wake("boardsession")
 	if ev, ok := nextRegion(t, events, 3*time.Second); !ok || ev.Name != regionMode || ev.HTML != modeLive {
 		t.Fatalf("after the snapshot got %+v (%v), want the live mode", ev, ok)

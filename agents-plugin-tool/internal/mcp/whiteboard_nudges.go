@@ -419,28 +419,78 @@ const (
 	nudgePresent
 )
 
+type memoTicketStatus struct {
+	status string
+	ok     bool
+}
+
+// memoTicketResolver shares per-stem ticket lookups across PeekNotify and
+// Notify within a single processBoard pass so a due board resolves each
+// referenced ticket at most once.
+type memoTicketResolver struct {
+	inner wswhiteboard.TicketResolver
+	seen  map[string]memoTicketStatus
+}
+
+func (m *memoTicketResolver) TicketStatus(stem string) (string, bool) {
+	if cached, hit := m.seen[stem]; hit {
+		return cached.status, cached.ok
+	}
+	status, ok := m.inner.TicketStatus(stem)
+	if m.seen == nil {
+		m.seen = map[string]memoTicketStatus{}
+	}
+	m.seen[stem] = memoTicketStatus{status: status, ok: ok}
+	return status, ok
+}
+
 func (n *WhiteboardNudges) processBoard(t nudgeTarget, now time.Time) (time.Time, nudgePresence) {
-	gate := n.deliveryGate(t)
-	store := (wsmailbox.Paths{State: wsstate.Options{CacheHome: n.cache}}).Store()
+	replyID := wsmailbox.ReplyID(t.key)
 	var tickets wswhiteboard.TicketResolver
 	if n.tickets != nil {
-		tickets = n.tickets(t.root)
+		if inner := n.tickets(t.root); inner != nil {
+			tickets = &memoTicketResolver{inner: inner}
+		}
 	}
 	var next time.Time
+	var due bool
 	presence := nudgeAbsent
 	err := n.stores.use(t.root, t.key, nil, false, func(slot *whiteboardSlot) error {
 		if slot.board == nil {
 			return nil
 		}
 		presence = nudgePresent
-		var err error
-		next, err = slot.board.Notify(wsmailbox.ReplyID(t.key), now, gate, func(message string) error {
-			return store.PostSystem(wsmailbox.ReplyID(t.key), wsmailbox.SystemLabel, message, now)
-		}, wswake.Mailbox.Wake, tickets)
-		return err
+		var peekErr error
+		next, due, peekErr = slot.board.PeekNotify(replyID, now, tickets)
+		return peekErr
 	})
+	if err == nil && (presence == nudgeAbsent || !due) {
+		if !next.IsZero() && !next.After(now) {
+			return now.Add(n.interval), presence
+		}
+		return next, presence
+	}
+	if err == nil {
+		// Construct the delivery gate outside the board lock so agents.Get runs
+		// before acquiring board locks; eligible() re-validates under the board
+		// lock immediately before enqueue.
+		gate := n.deliveryGate(t)
+		store := (wsmailbox.Paths{State: wsstate.Options{CacheHome: n.cache}}).Store()
+		presence = nudgeAbsent
+		err = n.stores.use(t.root, t.key, nil, false, func(slot *whiteboardSlot) error {
+			if slot.board == nil {
+				return nil
+			}
+			presence = nudgePresent
+			var notifyErr error
+			next, notifyErr = slot.board.Notify(replyID, now, gate, func(message string) error {
+				return store.PostSystem(replyID, wsmailbox.SystemLabel, message, now)
+			}, wswake.Mailbox.Wake, tickets)
+			return notifyErr
+		})
+	}
 	if err != nil {
-		fmt.Fprintf(n.log, "whiteboard nudges: %s: %v\n", wsmailbox.ReplyID(t.key), err)
+		fmt.Fprintf(n.log, "whiteboard nudges: %s: %v\n", replyID, err)
 	}
 	// Due-but-ineligible and failed delivery retry at recovery cadence, never
 	// spin a zero timer or advance a receipt. Precise future deadlines stay exact.

@@ -462,6 +462,7 @@ func (s *sessionStore) claimKey(d sessionDirs, key string, payload []byte) (bool
 	// for a pruned key of the same name.
 	s.sublead.Delete(key)
 	s.policyParent.Delete(key)
+	s.clearLastTouched(key)
 	return true, nil
 }
 
@@ -575,19 +576,66 @@ func activityMark(d sessionDirs, key string) (string, os.FileInfo, bool) {
 
 // touch refreshes the mtime of key's activity mark to mark it as recently
 // active, unless it was already touched within touchGuardWindow (throttling a
-// burst of keyed calls to at most one Chtimes per window). Best-effort: stat
-// and Chtimes failures are ignored, matching the non-fatal style of the other
-// read-only session lookups. Touching a legacy record file does not migrate
-// it. Callers are expected to have already validated key via a prior
-// readRecord success (loadRecord applies sessionKeyFilenamePattern), so touch
-// does not re-derive that guard.
+// burst of keyed calls to at most one stat + Chtimes per window). An in-memory
+// per-key lastTouched map (guarded by touchMu, separate from s.mu because
+// callers invoke touch both with and without s.mu held) skips the activityMark
+// stat while within touchGuardWindow; cold entries seed from info.ModTime().
+// Best-effort: stat and Chtimes failures are ignored, matching the non-fatal
+// style of the other read-only session lookups. Touching a legacy record file
+// does not migrate it. Callers are expected to have already validated key via
+// a prior readRecord success (loadRecord applies sessionKeyFilenamePattern),
+// so touch does not re-derive that guard.
 func (s *sessionStore) touch(d sessionDirs, key string) {
+	now := s.clock()
+	s.touchMu.Lock()
+	if last, ok := s.lastTouched[key]; ok {
+		if elapsed := now.Sub(last); elapsed >= 0 && elapsed < touchGuardWindow {
+			s.touchMu.Unlock()
+			return
+		}
+	}
+	s.touchMu.Unlock()
+
 	path, info, ok := activityMark(d, key)
-	if !ok || time.Since(info.ModTime()) < touchGuardWindow {
+	if !ok {
 		return
 	}
-	now := time.Now()
-	_ = os.Chtimes(path, now, now)
+	mtime := info.ModTime()
+	if now.Sub(mtime) < touchGuardWindow {
+		if mtime.After(now) {
+			mtime = now
+		}
+		s.recordLastTouched(key, mtime)
+		return
+	}
+	if err := os.Chtimes(path, now, now); err == nil {
+		s.recordLastTouched(key, now)
+	}
+}
+
+func (s *sessionStore) recordLastTouched(key string, at time.Time) {
+	s.touchMu.Lock()
+	if s.lastTouched == nil {
+		s.lastTouched = map[string]time.Time{}
+	}
+	s.lastTouched[key] = at
+	s.touchMu.Unlock()
+}
+
+func (s *sessionStore) clearLastTouched(key string) {
+	s.touchMu.Lock()
+	delete(s.lastTouched, key)
+	s.touchMu.Unlock()
+}
+
+func (s *sessionStore) sweepLastTouched(now time.Time) {
+	s.touchMu.Lock()
+	for k, at := range s.lastTouched {
+		if elapsed := now.Sub(at); elapsed < 0 || elapsed >= touchGuardWindow {
+			delete(s.lastTouched, k)
+		}
+	}
+	s.touchMu.Unlock()
 }
 
 // writeFileAtomic replaces path via a temp file in its directory and the

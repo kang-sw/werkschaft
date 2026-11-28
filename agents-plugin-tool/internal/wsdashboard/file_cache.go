@@ -13,8 +13,10 @@ import (
 
 // FileCache holds values parsed from small files that other processes
 // replace whole (an atomic temp-and-rename write), keyed by path, so a read
-// of an unchanged file validates at most once per second instead of reading
-// and parsing every time. Between validations the cached value is served;
+// of an unchanged file validates at most once per fileCacheValidationInterval
+// (5 s) instead of reading and parsing every time. Between validations the
+// cached value is served; explicit store-change / nudge signals call
+// InvalidateUnder to force immediate revalidation without waiting for the timer.
 // at validation it is kept while the file stats as it did before the read
 // that produced it: the same size and modification time, compared by
 // equality (concurrent replaces can move the time backwards). An edit that
@@ -69,10 +71,11 @@ type fileCacheCheck struct {
 // so a later edit within the same granule cannot hide behind an unchanged stamp.
 const fileCacheRacyWindow = 2 * time.Second
 
-const fileCacheValidationInterval = time.Second
+const fileCacheValidationInterval = 5 * time.Second
 
 // Load returns the value load reads from path, from the cache while path
-// stats as it did before that read, with validation at most once per second.
+// stats as it did before that read, with validation at most once per
+// fileCacheValidationInterval (5 s) unless invalidated.
 func (c *FileCache[T]) Load(path string, load func(path string) (T, error)) (T, error) {
 	return c.load(path, load, false)
 }
@@ -136,7 +139,7 @@ func (c *FileCache[T]) load(path string, load func(path string) (T, error), iden
 	info := check.info
 	if info == nil {
 		// Counted neither way. Missing/unreadable paths still reach the
-		// loader on every call, but share the failed stat for one second.
+		// loader on every call, but share the failed stat for the validation interval.
 		c.mu.Lock()
 		if c.slots[path] == slot && slot.generation == generation {
 			delete(c.entries, path)

@@ -16,6 +16,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
+	"github.com/kang-sw/devenv/internal/wsstate"
 	"github.com/kang-sw/devenv/internal/wswhiteboard"
 )
 
@@ -123,7 +124,9 @@ func assertRecordContent(t *testing.T, got, want sessionRecord) {
 func TestSplitLayoutMintLookupChildrenAndMtime(t *testing.T) {
 	cache := filepath.Join(t.TempDir(), "cache")
 	t.Setenv("WS_CACHE_HOME", cache)
+	now := time.Now()
 	s := newSessionStore()
+	s.now = func() time.Time { return now }
 	parent, err := s.mint("/work/lead", roleLead, "")
 	if err != nil {
 		t.Fatalf("mint: %v", err)
@@ -157,13 +160,16 @@ func TestSplitLayoutMintLookupChildrenAndMtime(t *testing.T) {
 		t.Fatalf("children = %+v, %v", children, err)
 	}
 
-	old := time.Now().Add(-2 * touchGuardWindow).Truncate(time.Second)
+	old := now.Add(-2 * touchGuardWindow).Truncate(time.Second)
 	if err := os.Chtimes(keyPath, old, old); err != nil {
 		t.Fatal(err)
 	}
 	if got, ok := s.recordMtime(parent); !ok || !got.Equal(old) {
 		t.Fatalf("recordMtime = %v, %v; want key.json's %v", got, ok, old)
 	}
+	// Advance past touchGuardWindow so lookup leaves the in-memory touch guard
+	// seeded by children(parent, 0) above and refreshes key.json.
+	now = now.Add(touchGuardWindow + time.Minute)
 	if _, ok := s.lookup(parent); !ok {
 		t.Fatal("lookup(parent) failed")
 	}
@@ -826,5 +832,116 @@ func TestWriteToUnknownKeyCreatesNothing(t *testing.T) {
 	}
 	if !exists(filepath.Join(d.keyDir("legacy-lock-00"), recordLockName)) || !exists(d.partPath("legacy-lock-00", partKey)) {
 		t.Fatal("a legacy write must lock in, and migrate to, the key's directory")
+	}
+}
+
+func TestActivityMarkTouchThrottleAndCleanup(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	now := time.Now().Truncate(time.Second)
+	s := newSessionStore()
+	s.now = func() time.Time { return now }
+
+	key, err := s.mint("/work", roleLead, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.dirs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPath := d.partPath(key, partKey)
+	seedMtime := now.Add(-10 * time.Minute)
+	if err := os.Chtimes(keyPath, seedMtime, seedMtime); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cold touch stats once to seed lastTouched from info.ModTime(), without Chtimes.
+	before := wsstate.FileIOCounters()
+	s.touch(d, key)
+	after := wsstate.FileIOCounters()
+	if got := after["file_io_stat"] - before["file_io_stat"]; got != 1 {
+		t.Fatalf("cold touch used %d stats, want 1", got)
+	}
+	if !mtimeOf(t, keyPath).Equal(seedMtime) {
+		t.Fatalf("cold touch within guard window altered mtime: got %v want %v", mtimeOf(t, keyPath), seedMtime)
+	}
+
+	// Repeated touches within touchGuardWindow (including while s.mu is held)
+	// perform zero stat operations and do not deadlock.
+	before = wsstate.FileIOCounters()
+	for range 10 {
+		s.touch(d, key)
+	}
+	s.mu.Lock()
+	s.touch(d, key)
+	s.mu.Unlock()
+	after = wsstate.FileIOCounters()
+	if got := after["file_io_stat"] - before["file_io_stat"]; got != 0 {
+		t.Fatalf("warm touches within touchGuardWindow used %d stats, want 0", got)
+	}
+
+	// recordMtime always performs a real stat even while lastTouched is warm.
+	backdated := now.Add(-3 * touchGuardWindow)
+	if err := os.Chtimes(keyPath, backdated, backdated); err != nil {
+		t.Fatal(err)
+	}
+	before = wsstate.FileIOCounters()
+	gotMtime, ok := s.recordMtime(key)
+	after = wsstate.FileIOCounters()
+	if !ok || !gotMtime.Equal(backdated) {
+		t.Fatalf("recordMtime = (%v, %v), want (%v, true)", gotMtime, ok, backdated)
+	}
+	if got := siteDelta(before, after, "mcp/session_layout.go:"); got != 1 {
+		t.Fatalf("recordMtime triggered %d activityMark stats in session_layout.go, want 1", got)
+	}
+
+	// Advance clock past touchGuardWindow from seeded mtime: touch stats and
+	// refreshes disk mtime to now, then suppresses subsequent stats again.
+	now = seedMtime.Add(touchGuardWindow)
+	before = wsstate.FileIOCounters()
+	s.mu.Lock()
+	s.touch(d, key)
+	s.mu.Unlock()
+	after = wsstate.FileIOCounters()
+	if got := after["file_io_stat"] - before["file_io_stat"]; got != 1 {
+		t.Fatalf("post-window touch used %d stats, want 1", got)
+	}
+	if !mtimeOf(t, keyPath).Equal(now) {
+		t.Fatalf("post-window touch mtime = %v, want %v", mtimeOf(t, keyPath), now)
+	}
+	before = wsstate.FileIOCounters()
+	s.touch(d, key)
+	after = wsstate.FileIOCounters()
+	if got := after["file_io_stat"] - before["file_io_stat"]; got != 0 {
+		t.Fatalf("re-warmed touch used %d stats, want 0", got)
+	}
+
+	// claimKey clears any stale lastTouched entry for a reclaimed key name.
+	const reclaimed = "reclaimed-key-00"
+	s.recordLastTouched(reclaimed, now)
+	claimed, err := s.claimKey(d, reclaimed, []byte(`{"schema_version":2,"root":"/work","scope":"lead"}`))
+	if err != nil || !claimed {
+		t.Fatalf("claimKey(%s) = (%v, %v)", reclaimed, claimed, err)
+	}
+	s.touchMu.Lock()
+	_, stillPresent := s.lastTouched[reclaimed]
+	s.touchMu.Unlock()
+	if stillPresent {
+		t.Fatal("claimKey did not clear stale lastTouched entry")
+	}
+
+	// maybePrune sweeps expired lastTouched entries while retaining unexpired ones.
+	s.recordLastTouched("expired-key-00", now.Add(-touchGuardWindow))
+	s.recordLastTouched("active-key-00", now)
+	s.maybePrune()
+	s.touchMu.Lock()
+	_, expiredLeft := s.lastTouched["expired-key-00"]
+	_, activeLeft := s.lastTouched["active-key-00"]
+	s.touchMu.Unlock()
+	if expiredLeft {
+		t.Fatal("maybePrune did not sweep expired lastTouched entry")
+	}
+	if !activeLeft {
+		t.Fatal("maybePrune swept active lastTouched entry")
 	}
 }

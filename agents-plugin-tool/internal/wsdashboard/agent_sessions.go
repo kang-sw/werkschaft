@@ -596,8 +596,20 @@ func (c *SnapshotCache) readLiveStoresClock(h io.Writer, stateDir, replyID strin
 			return names, err
 		}},
 		{"ring", LiveRing, func() ([]string, error) { return wslive.RingFingerprint(wslive.RingDir(sessionDir)) }},
-		{"inbox", LiveInbox, func() ([]string, error) { return wsinbox.Names(wsinbox.Dir(sessionDir)) }},
-		{"inbox-drained", LiveInbox, func() ([]string, error) { return wsinbox.DrainedNames(wsinbox.Dir(sessionDir)) }},
+		{"inbox", LiveInbox, func() ([]string, error) {
+			dir := wsinbox.Dir(sessionDir)
+			if c == nil {
+				return wsinbox.Names(dir)
+			}
+			return wsinbox.NamesWithin(dir, fileCacheValidationInterval)
+		}},
+		{"inbox-drained", LiveInbox, func() ([]string, error) {
+			dir := wsinbox.Dir(sessionDir)
+			if c == nil {
+				return wsinbox.DrainedNames(dir)
+			}
+			return wsinbox.DrainedNamesWithin(dir, fileCacheValidationInterval)
+		}},
 	} {
 		if stores&store.kind != 0 || previous.known&store.kind == 0 {
 			namesFn := store.names
