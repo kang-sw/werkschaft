@@ -122,7 +122,25 @@ def fetch_remote_canary_tags(repo: Path, core: str) -> list[str]:
     return tags
 
 
+def parse_release_tag_list(raw: str) -> list[str]:
+    """Parse a whitespace/comma-separated release tag list (``--release-tags``).
+
+    Git ref names cannot contain whitespace, so splitting on whitespace and
+    commas is lossless for tag names.
+    """
+    return [token for token in re.split(r"[\s,]+", raw) if token]
+
+
 def fetch_github_release_tags(repo: Path, github_repository: str) -> list[str]:
+    """List GitHub Release tag names via ``gh api`` using the ambient token.
+
+    NOTE: GitHub's REST API hides *draft* releases from tokens that lack push
+    access (``contents: write``). A ``contents: read`` token therefore cannot
+    see an orphaned draft left by a failed publish, and a counter chosen from
+    this list can collide with it. Callers running under a read-only token
+    (the ws-canary ``plan`` job) must instead pass a pre-scanned list through
+    ``--release-tags`` produced by a write-scoped scan job.
+    """
     if not github_repository:
         raise ValueError("--github-repository is required to inspect GitHub Releases")
     proc = subprocess.run(
@@ -319,6 +337,14 @@ def main() -> int:
     res.add_argument("--signing", default="eval", choices=("eval", "production"))
     res.add_argument("--github-repository", default="")
     res.add_argument("--github-output", type=Path)
+    res.add_argument(
+        "--release-tags",
+        default=None,
+        help=(
+            "Whitespace/comma-separated GitHub Release tag names (including drafts) "
+            "pre-scanned with a push-capable token; when given (even empty), gh api is not called"
+        ),
+    )
     res.add_argument("--skip-remote", action="store_true", help="Skip git ls-remote / gh api (local dry-run only)")
     res.add_argument("--format", choices=("text", "json"), default="text")
 
@@ -352,6 +378,11 @@ def main() -> int:
             ref=args.ref,
             signing=args.signing,
             github_repository=args.github_repository,
+            release_tags=(
+                parse_release_tag_list(args.release_tags)
+                if args.release_tags is not None
+                else None
+            ),
             skip_remote=args.skip_remote,
         )
     except (ValueError, PermissionError, RuntimeError) as exc:
